@@ -51,6 +51,18 @@
   #composer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--line); }
   #composer textarea { resize: none; height: 4.2rem; }
 
+  #archive { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 10; }
+  #archive .box { margin: auto; width: min(560px, 94vw); max-height: 80vh; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; }
+  #archive .box > .bar { padding: .75rem 1rem; color: var(--text); }
+  #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
+  .conv { display: flex; align-items: center; gap: .4rem; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 8px; }
+  .conv.current { border-color: var(--accent); }
+  .conv div { flex: 1; min-width: 0; }
+  .conv b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .conv small { color: var(--muted); }
+  .conv button { padding: .3rem .6rem; font-size: .8rem; }
+  #convTitle { cursor: pointer; }
+
   @media (max-width: 900px) {
     #app { grid-template-columns: 1fr; overflow: auto; }
     #app > section { min-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -75,6 +87,8 @@
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
+    <button class="ghost" id="saveChat" title="Save this conversation to the Archive">Save to Archive</button>
+    <button class="ghost" id="openArchive" title="Saved conversations">Archive</button>
     <button class="ghost" id="logout">Sign out</button>
   </header>
   <main id="app">
@@ -89,6 +103,7 @@
       <textarea id="editor" spellcheck="false" placeholder="Open a file from the left to edit it here."></textarea>
     </section>
     <section id="chat">
+      <div class="bar"><span id="convTitle" title="Click to rename">Unsaved conversation</span></div>
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
       <form id="composer">
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
@@ -96,6 +111,13 @@
       </form>
     </section>
   </main>
+</div>
+
+<div id="archive" hidden>
+  <div class="box">
+    <div class="bar"><span>Archive — saved conversations</span><button class="ghost" id="closeArchive">Close</button></div>
+    <div id="archiveList"></div>
+  </div>
 </div>
 
 <script>
@@ -337,7 +359,7 @@ $('composer').addEventListener('submit', async (e) => {
   const message = $('input').value.trim();
   if (!message || busy) return;
   $('input').value = '';
-  renderText(bubble('me'), message); scroll();
+  renderText(bubble('me'), message); record('me', message); scroll();
   setBusy(true);
   try {
     const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh }) });
@@ -356,14 +378,15 @@ $('composer').addEventListener('submit', async (e) => {
     }
   } catch (err) { sys(err.message, true); }
   setBusy(false); $('input').focus();
+  if (archiveId) saveToArchive(true); // keep the archived copy up to date
 });
 
 function handleEvent(ev) {
   if (ev.type === 'pc_tool') return runPcTool(ev);
   if (ev.type === 'assistant' && ev.message) {
     for (const block of ev.message.content || []) {
-      if (block.type === 'text' && block.text.trim()) renderText(bubble('claude'), block.text);
-      else if (block.type === 'tool_use') line('tool', describeTool(block));
+      if (block.type === 'text' && block.text.trim()) { renderText(bubble('claude'), block.text); record('claude', block.text); }
+      else if (block.type === 'tool_use') { const t = describeTool(block); line('tool', t); record('tool', t); }
     }
   } else if (ev.type === 'result') {
     if (ev.is_error) sys('Claude stopped with an error: ' + (ev.result || ev.subtype), true);
@@ -377,7 +400,90 @@ $('input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('composer').requestSubmit(); }
 });
 $('stop').onclick = () => api('/api/stop', { method: 'POST' }).catch(() => {});
-$('newChat').onclick = () => { fresh = true; log.innerHTML = ''; sys('New conversation — Claude starts fresh on your next message.'); };
+$('newChat').onclick = () => {
+  if (busy) return sys('Stop Claude before starting a new chat.', true);
+  fresh = true; log.innerHTML = ''; setConversation(null, null, []);
+  sys('New conversation — Claude starts fresh on your next message.');
+};
+
+// ---------- archive (saved conversations, stored on Gee's PC in Mills/Archive) ----------
+let transcript = [], archiveId = null, archiveTitle = null;
+function record(cls, text) { transcript.push({ cls, text }); }
+function setConversation(id, title, items) {
+  archiveId = id; archiveTitle = title; transcript = items;
+  $('convTitle').textContent = title ? '🗂 ' + title : 'Unsaved conversation';
+}
+async function saveToArchive(quiet) {
+  if (!transcript.length) return quiet || sys('Nothing to save yet — send a message first.', true);
+  let title = archiveTitle;
+  if (!archiveId) {
+    const first = (transcript.find((t) => t.cls === 'me') || {}).text || '';
+    title = window.prompt('Name this conversation:', first.replace(/\s+/g, ' ').slice(0, 60));
+    if (title === null) return;
+  }
+  try {
+    const d = await json('/api/archive/save', { method: 'POST', body: JSON.stringify({ id: archiveId, title, transcript }) });
+    setConversation(d.id, d.title, transcript);
+    if (!quiet) sys('Saved to Archive as "' + d.title + '".');
+  } catch (err) { sys('Could not save: ' + err.message, true); }
+}
+async function renameConversation(id, current) {
+  const title = window.prompt('Rename conversation:', current);
+  if (!title || title === current) return;
+  try {
+    const d = await json('/api/archive/rename', { method: 'POST', body: JSON.stringify({ id, title }) });
+    if (id === archiveId) setConversation(id, d.title, transcript);
+    if (!$('archive').hidden) showArchive();
+  } catch (err) { sys(err.message, true); }
+}
+async function showArchive() {
+  $('archive').hidden = false;
+  const listEl = $('archiveList'); listEl.textContent = 'Loading…';
+  try {
+    const { items } = await json('/api/archive/list', { method: 'POST' });
+    listEl.textContent = '';
+    if (!items.length) listEl.innerHTML = '<div class="sys">No saved conversations yet. Use "Save to Archive" on a chat.</div>';
+    for (const it of items) {
+      const row = document.createElement('div'); row.className = 'conv' + (it.id === archiveId ? ' current' : '');
+      const info = document.createElement('div');
+      const b = document.createElement('b'); b.textContent = it.title;
+      const s = document.createElement('small'); s.textContent = new Date(it.savedAt).toLocaleString() + ' · ' + it.count + ' entries';
+      info.append(b, s);
+      const open = document.createElement('button'); open.textContent = 'Open';
+      open.onclick = () => openConversation(it.id);
+      const ren = document.createElement('button'); ren.className = 'ghost'; ren.textContent = 'Rename';
+      ren.onclick = () => renameConversation(it.id, it.title);
+      const del = document.createElement('button'); del.className = 'ghost'; del.textContent = 'Delete';
+      del.onclick = async () => {
+        if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.textContent = 'Confirm'; setTimeout(() => { del.dataset.armed = ''; del.textContent = 'Delete'; }, 3000); return; }
+        try {
+          await json('/api/archive/delete', { method: 'POST', body: JSON.stringify({ id: it.id }) });
+          if (it.id === archiveId) setConversation(null, null, transcript); // chat stays on screen, just unsaved
+          showArchive();
+        } catch (err) { sys(err.message, true); }
+      };
+      row.append(info, open, ren, del); listEl.appendChild(row);
+    }
+  } catch (err) { listEl.textContent = ''; sys(err.message, true); $('archive').hidden = true; }
+}
+async function openConversation(id) {
+  if (busy) return sys('Stop Claude before opening another conversation.', true);
+  try {
+    const entry = await json('/api/archive/open', { method: 'POST', body: JSON.stringify({ id }) });
+    log.innerHTML = ''; fresh = false;
+    for (const t of entry.transcript) {
+      if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text);
+    }
+    setConversation(entry.id, entry.title, entry.transcript);
+    sys('Continuing "' + entry.title + '" — Claude remembers this conversation.');
+    $('archive').hidden = true; scroll();
+  } catch (err) { sys(err.message, true); }
+}
+$('saveChat').onclick = () => saveToArchive(false);
+$('openArchive').onclick = showArchive;
+$('closeArchive').onclick = () => { $('archive').hidden = true; };
+$('archive').onclick = (e) => { if (e.target.id === 'archive') $('archive').hidden = true; };
+$('convTitle').onclick = () => { if (archiveId) renameConversation(archiveId, archiveTitle); else saveToArchive(false); };
 
 connect().then((ok) => { if (ok && token) json('/api/check').then(enter).catch(() => signOut()); });
 </script>
