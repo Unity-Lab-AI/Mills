@@ -18,6 +18,7 @@ const AUTH_FILE = path.join(ROOT, 'auth.json');
 const STATE_FILE = path.join(ROOT, 'state.json');
 const CONFIG_FILE = path.join(ROOT, 'config.json');
 const MCP_RUNTIME = path.join(ROOT, '.mcp-runtime.json');
+const ARCHIVE_DIR = path.join(MILLS_DIR, 'Archive'); // saved conversations, one JSON file each
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -134,6 +135,22 @@ function stopClaude() {
   else running.kill('SIGTERM');
 }
 
+// ---------- conversation archive ----------
+// Each saved conversation keeps its transcript (for display) and the Claude session id
+// (so opening it resumes the same conversation with full context).
+const archiveFile = (id) => {
+  if (typeof id !== 'string' || !/^[a-f0-9]{16}$/.test(id)) throw new Error('Bad conversation id.');
+  return path.join(ARCHIVE_DIR, id + '.json');
+};
+const cleanTitle = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Untitled conversation';
+function listArchive() {
+  if (!fs.existsSync(ARCHIVE_DIR)) return [];
+  return fs.readdirSync(ARCHIVE_DIR).filter((f) => f.endsWith('.json'))
+    .map((f) => readJson(path.join(ARCHIVE_DIR, f), null)).filter(Boolean)
+    .map(({ id, title, savedAt, transcript }) => ({ id, title, savedAt, count: (transcript || []).length }))
+    .sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
+}
+
 // ---------- http ----------
 function send(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -231,6 +248,49 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/stop' && req.method === 'POST') { stopClaude(); return send(res, 200, { ok: true }); }
+
+    if (p === '/api/archive/list' && req.method === 'POST') return send(res, 200, { items: listArchive() });
+
+    if (p === '/api/archive/save' && req.method === 'POST') {
+      // Saving again with the same id updates that entry (newer transcript + session).
+      const { id, title, transcript } = await readBody(req);
+      if (!Array.isArray(transcript) || !transcript.length) return send(res, 400, { error: 'Nothing to save yet.' });
+      if (!state.claudeSessionId) return send(res, 400, { error: 'This conversation has no Claude session yet.' });
+      const entryId = id || crypto.randomBytes(8).toString('hex');
+      const file = archiveFile(entryId);
+      const prev = readJson(file, {});
+      fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+      const entry = {
+        id: entryId, title: cleanTitle(title || prev.title), savedAt: new Date().toISOString(),
+        sessionId: state.claudeSessionId,
+        transcript: transcript.filter((t) => t && typeof t.cls === 'string' && typeof t.text === 'string'),
+      };
+      writeJson(file, entry);
+      return send(res, 200, { id: entry.id, title: entry.title });
+    }
+
+    if (p === '/api/archive/open' && req.method === 'POST') {
+      if (running) return send(res, 409, { error: 'Claude is working. Stop it first.' });
+      const entry = readJson(archiveFile((await readBody(req)).id), null);
+      if (!entry) return send(res, 404, { error: 'Conversation not found.' });
+      state.claudeSessionId = entry.sessionId; saveState(); // next message continues it
+      return send(res, 200, entry);
+    }
+
+    if (p === '/api/archive/rename' && req.method === 'POST') {
+      const { id, title } = await readBody(req);
+      const file = archiveFile(id);
+      const entry = readJson(file, null);
+      if (!entry) return send(res, 404, { error: 'Conversation not found.' });
+      entry.title = cleanTitle(title); writeJson(file, entry);
+      return send(res, 200, { id, title: entry.title });
+    }
+
+    if (p === '/api/archive/delete' && req.method === 'POST') {
+      const file = archiveFile((await readBody(req)).id);
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      return send(res, 200, { ok: true });
+    }
 
     return send(res, 404, { error: 'Unknown endpoint' });
   } catch (e) {
