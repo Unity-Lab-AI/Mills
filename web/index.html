@@ -7,13 +7,13 @@
 <style>
   :root {
     --bg: #0f1115; --panel: #171a21; --line: #2a2f3a; --text: #e6e8ee; --muted: #8b93a7;
-    --accent: #7c9cff; --me: #23304f; --bad: #ff6b6b; --good: #4fd18b;
+    --accent: #7c9cff; --me: #23304f; --me-text: var(--text); --on-accent: #0b0d12; --bad: #ff6b6b; --good: #4fd18b;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color-scheme: dark;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
   button, input, textarea { font: inherit; color: inherit; }
-  button { background: var(--accent); color: #0b0d12; border: 0; border-radius: 8px; padding: .55rem 1rem; font-weight: 600; cursor: pointer; }
+  button { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: .55rem 1rem; font-weight: 600; cursor: pointer; }
   button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   button:disabled { opacity: .5; cursor: default; }
   input, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .75rem; width: 100%; }
@@ -43,7 +43,7 @@
 
   #log { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .6rem; }
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
-  .msg.me { background: var(--me); align-self: flex-end; max-width: 85%; }
+  .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
   .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); word-break: break-all; }
   .sys { font-size: .8rem; color: var(--muted); text-align: center; }
@@ -62,6 +62,13 @@
   .conv small { color: var(--muted); }
   .conv button { padding: .3rem .6rem; font-size: .8rem; }
   #convTitle { cursor: pointer; }
+
+  .themeWrap { position: relative; }
+  #themeMenu { position: absolute; right: 0; top: calc(100% + .3rem); z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
+  #themeMenu button { background: transparent; color: var(--text); text-align: left; font-weight: 400; padding: .4rem .6rem; border-radius: 6px; display: flex; align-items: center; gap: .5rem; }
+  #themeMenu button:hover { background: var(--line); }
+  #themeMenu button.on { outline: 1px solid var(--accent); }
+  #themeMenu i { width: 1.6rem; height: .9rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
 
   @media (max-width: 900px) {
     #app { grid-template-columns: 1fr; overflow: auto; }
@@ -89,6 +96,8 @@
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
     <button class="ghost" id="saveChat" title="Save this conversation to the Archive">Save to Archive</button>
     <button class="ghost" id="openArchive" title="Saved conversations">Archive</button>
+    <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
+      <div id="themeMenu" hidden></div></span>
     <button class="ghost" id="logout">Sign out</button>
   </header>
   <main id="app">
@@ -127,6 +136,29 @@ const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
+
+// UI colour themes — palettes taken from the shared themes collection.
+const THEMES = {"burple":{"bg":"#1E1B33","text":"#FFFFFF","panel":"#241E42","line":"#3C3272","accent":"#524696","me":"#3C3272","meText":"#FFFFFF"},"cyberpunk":{"bg":"#0D0221","text":"#FF00E2","panel":"#18033F","line":"#390978","accent":"#390978","me":"#2E0B5F","meText":"#FF00E2"},"dark":{"bg":"#121212","text":"#e0e0e0","panel":"#1e1e1e","line":"#333333","accent":"#2196f3","me":"#2c3e50","meText":"#e0e0e0"},"dracula":{"bg":"#282A36","text":"#F8F8F2","panel":"#44475A","line":"#6272A4","accent":"#6272A4","me":"#BD93F9","meText":"#282A36"},"gruvbox_dark":{"bg":"#282828","text":"#EBDBB2","panel":"#3C3836","line":"#504945","accent":"#8EC07C","me":"#8EC07C","meText":"#282828"},"gruvbox_light":{"bg":"#FBF1C7","text":"#3C3836","panel":"#F2E5BC","line":"#EBDBB2","accent":"#D5C4A1","me":"#D5C4A1","meText":"#3C3836"},"hacker":{"bg":"#000000","text":"#00ff00","panel":"#001100","line":"#005500","accent":"#005500","me":"#003300","meText":"#00ff00"},"honeycomb":{"bg":"#FFF9E3","text":"#5D4037","panel":"#FFF3E0","line":"#FFCC80","accent":"#FFD54F","me":"#FFD54F","meText":"#4E342E"},"light":{"bg":"#ffffff","text":"#333333","panel":"#f5f5f5","line":"#e0e0e0","accent":"#2196f3","me":"#e3f2fd","meText":"#333333"},"material_dark":{"bg":"#212121","text":"#ECEFF1","panel":"#2C2C2C","line":"#424242","accent":"#546E7A","me":"#546E7A","meText":"#ECEFF1"},"material_light":{"bg":"#FAFAFA","text":"#212121","panel":"#E0E0E0","line":"#BDBDBD","accent":"#90CAF9","me":"#90CAF9","meText":"#212121"},"monokai":{"bg":"#272822","text":"#F8F8F2","panel":"#3E3D32","line":"#75715E","accent":"#A6E22E","me":"#A6E22E","meText":"#272822"},"nord":{"bg":"#2E3440","text":"#D8DEE9","panel":"#3B4252","line":"#4C566A","accent":"#5E81AC","me":"#5E81AC","meText":"#ECEFF4"},"ocean_breeze":{"bg":"#006A71","text":"#CDEFF3","panel":"#00505A","line":"#00A6B2","accent":"#00A6B2","me":"#00A6B2","meText":"#00383C"},"oled":{"bg":"#000000","text":"#FFFFFF","panel":"#000000","line":"#222222","accent":"#333333","me":"#111111","meText":"#FFFFFF"},"pastel_dream":{"bg":"#EAE6FF","text":"#216869","panel":"#D6D1F2","line":"#BAADF2","accent":"#AEE6E6","me":"#AEE6E6","meText":"#2D2D34"},"pretty_pink":{"bg":"#FFC0CB","text":"#112244","panel":"#FFB1C2","line":"#EEA0B0","accent":"#FFA1B5","me":"#FFA1B5","meText":"#112244"},"rainbow_throwup":{"bg":"#FDFFB6","text":"#2C2C2C","panel":"#9BF6FF","line":"#A0C4FF","accent":"#CAFFBF","me":"#CAFFBF","meText":"#2C2C2C"},"serenity":{"bg":"#F0F8FF","text":"#2F4F4F","panel":"#E6F2F8","line":"#B0C4DE","accent":"#87CEEB","me":"#AFEEEE","meText":"#2F4F4F"},"solarized_dark":{"bg":"#002B36","text":"#EEE8D5","panel":"#073642","line":"#586E75","accent":"#268BD2","me":"#268BD2","meText":"#FDF6E3"},"solarized_light":{"bg":"#FDF6E3","text":"#657B83","panel":"#EEE8D5","line":"#D6CFBA","accent":"#B3D9A5","me":"#B3D9A5","meText":"#073642"},"subtle_light":{"bg":"#F8F6F1","text":"#2C2C2C","panel":"#F0EDE8","line":"#CCC8C0","accent":"#D7D2C7","me":"#DDDAD3","meText":"#2C2C2C"},"vintage_paper":{"bg":"#F5F1E3","text":"#5A4632","panel":"#EBE4D2","line":"#C9BEA5","accent":"#DCCBA6","me":"#DCCBA6","meText":"#4A3726"}};
+const isLight = (hex) => {
+  const h = hex.length === 4 ? hex.slice(1).split('').map((c) => c + c).join('') : hex.slice(1);
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150;
+};
+function applyTheme(name) {
+  const t = THEMES[name], s = document.documentElement.style;
+  for (const k of ['bg', 'text', 'panel', 'line', 'accent', 'me', 'me-text', 'muted', 'on-accent']) s.removeProperty('--' + k);
+  s.removeProperty('color-scheme');
+  if (t) {
+    s.setProperty('--bg', t.bg); s.setProperty('--text', t.text); s.setProperty('--panel', t.panel);
+    s.setProperty('--line', t.line); s.setProperty('--accent', t.accent); s.setProperty('--me', t.me);
+    s.setProperty('--me-text', t.meText);
+    s.setProperty('--muted', `color-mix(in srgb, ${t.text} 62%, ${t.bg})`);
+    s.setProperty('--on-accent', isLight(t.accent) ? '#111111' : '#ffffff');
+    s.setProperty('color-scheme', isLight(t.bg) ? 'light' : 'dark');
+  }
+  store.set('mills.theme', t ? name : '');
+}
+applyTheme(store.get('mills.theme'));
 
 // Stable per-browser device id — Mills locks itself to the first device that signs in.
 let deviceId = store.get('mills.device');
@@ -484,6 +516,25 @@ $('openArchive').onclick = showArchive;
 $('closeArchive').onclick = () => { $('archive').hidden = true; };
 $('archive').onclick = (e) => { if (e.target.id === 'archive') $('archive').hidden = true; };
 $('convTitle').onclick = () => { if (archiveId) renameConversation(archiveId, archiveTitle); else saveToArchive(false); };
+
+// ── Theme picker ──
+function buildThemeMenu() {
+  const menu = $('themeMenu'), current = store.get('mills.theme') || '';
+  menu.innerHTML = '';
+  const add = (name, label, t) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = name === current ? 'on' : '';
+    const sw = document.createElement('i');
+    sw.style.background = t ? `linear-gradient(90deg, ${t.bg} 50%, ${t.accent} 50%)` : 'linear-gradient(90deg, #0f1115 50%, #7c9cff 50%)';
+    b.append(sw, label);
+    b.onclick = () => { applyTheme(name); menu.hidden = true; };
+    menu.append(b);
+  };
+  add('', 'Mills default', null);
+  for (const [name, t] of Object.entries(THEMES)) add(name, name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()), t);
+}
+$('themeBtn').onclick = (e) => { e.stopPropagation(); const m = $('themeMenu'); if (m.hidden) buildThemeMenu(); m.hidden = !m.hidden; };
+document.addEventListener('click', (e) => { if (!e.target.closest('.themeWrap')) $('themeMenu').hidden = true; });
 
 connect().then((ok) => { if (ok && token) json('/api/check').then(enter).catch(() => signOut()); });
 </script>

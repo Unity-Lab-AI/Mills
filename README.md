@@ -25,6 +25,7 @@ Alfreddo's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel �
 2. Click **Open folder on my PC** and pick the folder Claude should work in.
 3. Chat with Claude. It creates and edits files in that folder, and you can also edit them yourself in the editor panel.
 4. **Save to Archive** stores the current conversation; once saved, it updates itself after every reply. **Archive** lists saved conversations: **Open** one to continue it (Claude resumes with full memory of it), **Rename** it (or click the title above the chat), or **Delete** it (click twice to confirm). Saved conversations live on Gee's PC in `Mills/Archive/` and are never committed.
+5. **Theme** opens a dropdown of 23 UI colour themes (Burple, Cyberpunk, Dracula, Nord, Solarized, …) plus the Mills default. The choice is remembered in that browser.
 
 ## Security
 
