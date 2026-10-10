@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mills</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #2a2f3a; --text: #e6e8ee; --muted: #8b93a7;
+    --accent: #7c9cff; --me: #23304f; --bad: #ff6b6b; --good: #4fd18b;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { background: var(--accent); color: #0b0d12; border: 0; border-radius: 8px; padding: .55rem 1rem; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  input, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .75rem; width: 100%; }
+  [hidden] { display: none !important; }
+
+  /* login */
+  #login { margin: auto; width: min(380px, 92vw); display: flex; flex-direction: column; gap: .75rem; }
+  #login h1 { margin: 0 0 .25rem; font-size: 1.8rem; }
+  #login p { margin: 0; color: var(--muted); font-size: .9rem; }
+  .err { color: var(--bad); font-size: .9rem; min-height: 1.2em; }
+
+  /* app */
+  header { display: flex; align-items: center; gap: .75rem; padding: .6rem 1rem; border-bottom: 1px solid var(--line); }
+  header b { font-size: 1.1rem; }
+  header .ws { color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  #app { flex: 1; display: grid; grid-template-columns: 240px 1fr 1fr; min-height: 0; }
+  #app > section { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+  .bar { display: flex; gap: .4rem; align-items: center; padding: .5rem; border-bottom: 1px solid var(--line); font-size: .85rem; color: var(--muted); }
+  .bar span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar button { padding: .3rem .6rem; font-size: .8rem; }
+
+  #tree { overflow: auto; flex: 1; padding: .25rem 0; font-size: .9rem; }
+  #tree div { padding: .25rem .75rem; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #tree div:hover { background: var(--panel); }
+
+  #editor { flex: 1; border: 0; border-radius: 0; resize: none; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; line-height: 1.45; tab-size: 2; }
+
+  #log { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .6rem; }
+  .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
+  .msg.me { background: var(--me); align-self: flex-end; max-width: 85%; }
+  .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
+  .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); }
+  .sys { font-size: .8rem; color: var(--muted); text-align: center; }
+  .sys.bad { color: var(--bad); }
+  #composer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--line); }
+  #composer textarea { resize: none; height: 4.2rem; }
+
+  @media (max-width: 900px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: auto; overflow: auto; }
+    #app > section { min-height: 60vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    #files, #edit { min-height: 40vh !important; }
+  }
+</style>
+</head>
+<body>
+
+<form id="login">
+  <h1>Mills</h1>
+  <p>Private workspace. The bridge must be running on your PC (bridge/start.bat).</p>
+  <input id="bridgeUrl" placeholder="Bridge URL" value="http://localhost:7777">
+  <input id="password" type="password" placeholder="Password" autocomplete="current-password" autofocus>
+  <button type="submit">Sign in</button>
+  <div class="err" id="loginErr"></div>
+</form>
+
+<div id="shell" hidden style="display:flex;flex-direction:column;flex:1;min-height:0">
+  <header>
+    <b>Mills</b><span class="ws" id="wsPath"></span>
+    <button class="ghost" id="newChat" title="Start a fresh Claude conversation">New chat</button>
+    <button class="ghost" id="logout">Sign out</button>
+  </header>
+  <main id="app">
+    <section id="files">
+      <div class="bar"><button class="ghost" id="up" title="Up one folder">↑</button><span id="cwd">/</span>
+        <button class="ghost" id="newFile" title="New file">+</button><button class="ghost" id="refresh" title="Refresh">⟳</button></div>
+      <div id="tree"></div>
+    </section>
+    <section id="edit">
+      <div class="bar"><span id="openName">No file open</span>
+        <button id="save" disabled>Save</button><button class="ghost" id="del" disabled>Delete</button></div>
+      <textarea id="editor" spellcheck="false" placeholder="Open a file from the left to edit it here."></textarea>
+    </section>
+    <section id="chat">
+      <div id="log"><div class="sys">Talk to Claude. It works inside your workspace folder and can build and edit files there.</div></div>
+      <form id="composer">
+        <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
+        <button type="submit" id="send">Send</button><button type="button" class="ghost" id="stop" hidden>Stop</button>
+      </form>
+    </section>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  del(k) { try { localStorage.removeItem(k); } catch {} },
+};
+
+// Stable per-browser device id — the bridge locks itself to the first device that signs in.
+let deviceId = store.get('mills.device');
+if (!deviceId) { deviceId = crypto.randomUUID() + crypto.randomUUID(); store.set('mills.device', deviceId); }
+
+let base = store.get('mills.bridge') || (location.protocol === 'http:' && location.port ? location.origin : 'http://localhost:7777');
+let token = sessionStorage.getItem('mills.token');
+$('bridgeUrl').value = base;
+
+async function api(path, opts = {}) {
+  const res = await fetch(base + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) },
+  });
+  if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
+  return res;
+}
+async function json(path, opts) {
+  const res = await api(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+// ---------- login ----------
+$('login').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('loginErr').textContent = '';
+  base = $('bridgeUrl').value.trim().replace(/\/+$/, '');
+  try {
+    const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ password: $('password').value, deviceId }) });
+    token = data.token; sessionStorage.setItem('mills.token', token); store.set('mills.bridge', base);
+    $('password').value = '';
+    enter(data.workspace);
+  } catch (err) {
+    $('loginErr').textContent = err.message === 'Failed to fetch'
+      ? 'Cannot reach the bridge. Is bridge/start.bat running on this PC?' : err.message;
+  }
+});
+
+function enter(workspace) {
+  $('login').hidden = true; $('shell').hidden = false;
+  $('wsPath').textContent = workspace || '';
+  listDir('');
+}
+function signOut() {
+  token = null; sessionStorage.removeItem('mills.token');
+  $('shell').hidden = true; $('login').hidden = false;
+}
+$('logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); } catch {} signOut(); };
+
+// ---------- files ----------
+let cwd = '', openPath = null;
+const join = (a, b) => (a ? a + '/' : '') + b;
+
+async function listDir(dir) {
+  try {
+    const { entries } = await json('/api/files?path=' + encodeURIComponent(dir));
+    cwd = dir; $('cwd').textContent = '/' + dir;
+    const tree = $('tree'); tree.textContent = '';
+    if (!entries.length) tree.innerHTML = '<div style="color:var(--muted);cursor:default">(empty)</div>';
+    for (const e of entries) {
+      const row = document.createElement('div');
+      row.textContent = (e.dir ? '📁 ' : '📄 ') + e.name;
+      row.onclick = () => e.dir ? listDir(join(dir, e.name)) : openFile(join(dir, e.name));
+      tree.appendChild(row);
+    }
+  } catch (err) { sys(err.message, true); }
+}
+async function openFile(p) {
+  try {
+    const { content } = await json('/api/file?path=' + encodeURIComponent(p));
+    openPath = p; $('editor').value = content; $('openName').textContent = p;
+    $('save').disabled = false; $('del').disabled = false;
+  } catch (err) { sys(err.message, true); }
+}
+$('save').onclick = async () => {
+  try { await json('/api/file?path=' + encodeURIComponent(openPath), { method: 'PUT', body: JSON.stringify({ content: $('editor').value }) });
+    $('openName').textContent = openPath + '  ✓ saved'; setTimeout(() => $('openName').textContent = openPath, 1500);
+  } catch (err) { sys(err.message, true); }
+};
+$('del').onclick = async () => {
+  if ($('del').dataset.armed !== '1') { $('del').dataset.armed = '1'; $('del').textContent = 'Confirm delete'; setTimeout(() => { $('del').dataset.armed = ''; $('del').textContent = 'Delete'; }, 3000); return; }
+  try { await json('/api/file?path=' + encodeURIComponent(openPath), { method: 'DELETE' });
+    openPath = null; $('editor').value = ''; $('openName').textContent = 'No file open'; $('save').disabled = $('del').disabled = true;
+    $('del').dataset.armed = ''; $('del').textContent = 'Delete'; listDir(cwd);
+  } catch (err) { sys(err.message, true); }
+};
+$('editor').addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (openPath) $('save').click(); }
+});
+$('newFile').onclick = () => {
+  const name = window.prompt ? window.prompt('New file name (relative to current folder):') : null;
+  if (!name) return;
+  const p = join(cwd, name);
+  json('/api/file?path=' + encodeURIComponent(p), { method: 'PUT', body: JSON.stringify({ content: '' }) })
+    .then(() => { listDir(cwd); openFile(p); }).catch((err) => sys(err.message, true));
+};
+$('up').onclick = () => listDir(cwd.split('/').slice(0, -1).join('/'));
+$('refresh').onclick = () => listDir(cwd);
+
+// ---------- chat ----------
+const log = $('log');
+const scroll = () => { log.scrollTop = log.scrollHeight; };
+function sys(text, bad) { const d = document.createElement('div'); d.className = 'sys' + (bad ? ' bad' : ''); d.textContent = text; log.appendChild(d); scroll(); }
+function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
+
+function renderText(el, text) {
+  // Minimal formatting: fenced code blocks; everything else is plain text.
+  el.textContent = '';
+  text.split(/```[^\n]*\n?/).forEach((part, i) => {
+    if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.appendChild(pre); }
+    else if (part) el.appendChild(document.createTextNode(part));
+  });
+}
+function describeTool(t) {
+  const i = t.input || {};
+  const target = i.file_path || i.path || i.command || i.pattern || i.url || i.query || '';
+  return '⚙ ' + t.name + (target ? '  ' + String(target).slice(0, 160) : '');
+}
+
+let busy = false, fresh = false;
+function setBusy(b) { busy = b; $('send').hidden = b; $('stop').hidden = !b; $('input').disabled = b; }
+
+$('composer').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const message = $('input').value.trim();
+  if (!message || busy) return;
+  $('input').value = '';
+  renderText(bubble('me'), message); scroll();
+  setBusy(true);
+  try {
+    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh }) });
+    fresh = false;
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (line.trim()) handleEvent(JSON.parse(line));
+      }
+    }
+  } catch (err) { sys(err.message, true); }
+  setBusy(false); listDir(cwd); $('input').focus();
+});
+
+function handleEvent(ev) {
+  if (ev.type === 'assistant' && ev.message) {
+    for (const block of ev.message.content || []) {
+      if (block.type === 'text' && block.text.trim()) renderText(bubble('claude'), block.text);
+      else if (block.type === 'tool_use') { const d = document.createElement('div'); d.className = 'tool'; d.textContent = describeTool(block); log.appendChild(d); }
+    }
+  } else if (ev.type === 'result') {
+    if (ev.is_error) sys('Claude stopped with an error: ' + (ev.result || ev.subtype), true);
+    else sys('Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + 's' : ''));
+  } else if (ev.type === 'bridge_error') sys(ev.text, true);
+  else if (ev.type === 'stderr' && /error/i.test(ev.text)) sys(ev.text.trim(), true);
+  else if (ev.type === 'bridge_done' && ev.code) sys('Claude process exited (code ' + ev.code + ')', ev.code !== 0);
+  scroll();
+}
+
+$('input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('composer').requestSubmit(); }
+});
+$('stop').onclick = () => api('/api/stop', { method: 'POST' }).catch(() => {});
+$('newChat').onclick = () => { fresh = true; log.innerHTML = ''; sys('New conversation — Claude starts fresh on your next message.'); };
+
+// Resume a live session after a page refresh.
+if (token) json('/api/files?path=').then(() => enter('')).catch(() => signOut());
+</script>
+</body>
+</html>

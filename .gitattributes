@@ -1,0 +1,35 @@
+# Cross-platform line-ending normalization for the UAL-ClaudeWorkflow template repo.
+#
+# Default behavior: every text file lives in the repo with LF line endings.
+# Git's autocrlf handles checkout on Windows clients (converts to CRLF on
+# checkout, back to LF on commit). Eliminates the recurring "LF will be
+# replaced by CRLF the next time Git touches it" warnings on a cross-platform
+# team (Windows + Linux + macOS clones all coexist cleanly).
+#
+# Platform-native exceptions: .bat + .cmd files MUST keep CRLF because cmd.exe
+# refuses to execute LF-only batch scripts. .ps1 files keep CRLF as the
+# Windows PowerShell native convention.
+#
+# Binary files are explicitly marked so Git doesn't try to text-normalize them.
+
+* text=auto eol=lf
+
+# Windows-native scripts — keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files — never normalize (Unity AI Lab atree binary etc.)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+atree binary

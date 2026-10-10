@@ -1,0 +1,8 @@
+{
+  "port": 7777,
+  "workspace": "~/Mills-Workspace",
+  "allowedOrigins": ["https://unity-lab-ai.github.io"],
+  "permissionMode": "acceptEdits",
+  "allowedTools": ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+  "model": ""
+}

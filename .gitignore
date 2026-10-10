@@ -1,0 +1,15 @@
+# Whitelist: only the Mills app is published. The UAL .claude/ template,
+# its docs, install scripts and its Forgejo history stay local (IP boundary).
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/web/
+!/bridge/
+!/.github/
+
+# Runtime state written by the bridge on Alfreddo's PC
+bridge/state.json
+bridge/workspace/
+node_modules/
+bridge/auth.json
