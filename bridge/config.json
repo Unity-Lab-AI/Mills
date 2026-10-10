@@ -1,8 +1,10 @@
 {
   "port": 7777,
-  "workspace": "~/Mills-Workspace",
   "allowedOrigins": ["https://unity-lab-ai.github.io"],
   "permissionMode": "acceptEdits",
-  "allowedTools": ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch"],
-  "model": ""
+  "allowedTools": ["mcp__pc", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch"],
+  "model": "",
+  "tunnel": true,
+  "cloudflared": "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe",
+  "gistId": ""
 }

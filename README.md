@@ -1,35 +1,33 @@
 # Mills
 
-Alfreddo's private workspace for working with Claude. Chat with Claude, and have it build and edit files on your own PC from a web page.
+Alfreddo's private workspace: talk to Claude in the browser and have it build and edit files on his own PC. There's nothing to install on his side.
 
 **Web app:** https://unity-lab-ai.github.io/Mills/ (deployed from `main` by GitHub Actions)
 
 ## How it works
 
 ```
-Browser (GitHub Pages UI)  ──password──▶  Mills bridge (bridge/server.js, on your PC, 127.0.0.1:7777)
-                                              ├─ runs Claude Code in your workspace folder
-                                              └─ reads/writes files in that folder only
+Alfreddo's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel ──▶ Mills bridge on Gee's PC
+   │  holds the folder he opened on his PC                                  └─ runs Claude Code (Gee's account) in the Mills folder
+   ◀── Claude's file edits (list/read/write/delete/mkdir) are relayed back to his browser and applied there
 ```
 
-The web page is only the interface. All the work happens on your machine through the bridge, which only listens on `localhost` and can't be reached from the internet.
+## Gee: running it
 
-## Setup (one time)
+1. Double-click **`bridge/start.bat`** and leave the window open while Alfreddo works.
+   - The first time, it asks you to set the Mills password.
+   - It starts a Cloudflare tunnel and posts the address to a gist (`Mills bridge address`) on your GitHub account, where the web app finds it automatically.
+2. Requires Node.js, Claude Code (logged in), `gh` (logged in), and `cloudflared` (path set in `bridge/config.json`).
 
-1. Install **Node.js 18+**: https://nodejs.org
-2. Install **Claude Code** and log in once:
-   ```
-   npm install -g @anthropic-ai/claude-code
-   claude
-   ```
-3. Clone this repo and double-click **`bridge/start.bat`** (Mac/Linux: `bridge/start.sh`). The first time it runs, it asks for the password you were given and stores only a hash of it locally (`bridge/auth.json`, never committed).
-4. Open https://unity-lab-ai.github.io/Mills/ and sign in with the password you were given.
-   (You can also use http://localhost:7777, which the bridge serves itself.)
+## Alfreddo: using it
+
+1. Open https://unity-lab-ai.github.io/Mills/ in **Chrome or Edge** and sign in with the password.
+2. Click **Open folder on my PC** and pick the folder Claude should work in.
+3. Chat with Claude. It creates and edits files in that folder, and you can also edit them yourself in the editor panel.
 
 ## Security
 
-- **First sign-in claims the bridge.** The first browser to sign in successfully becomes the only one allowed in. Any other device is refused, even if it has the password. To move to a new browser, run `node bridge/server.js --reset-lock` and then sign in again.
-- The password is stored only as a scrypt hash (`bridge/auth.json`). To change it, run `node bridge/set-password.js "new password"`.
-- After 5 failed attempts, sign-in is blocked for 15 minutes.
-- Claude and the file editor can only reach the workspace folder (default `~/Mills-Workspace`). To change it, edit `bridge/config.json`.
-- `permissionMode` and `allowedTools` in `bridge/config.json` control what Claude may do without asking. By default it can edit files and run shell commands inside the workspace.
+- **First sign-in claims Mills.** The first browser that signs in successfully becomes the only one allowed in, and every other device is refused. To move to a new browser, Gee runs `node bridge/server.js --reset-lock`.
+- The password is stored on Gee's PC only, as a scrypt hash (`bridge/auth.json`, never committed). To change it: `node bridge/set-password.js "new password"`.
+- After 5 failed sign-ins, sign-in is blocked for 15 minutes. Only the GitHub Pages origin may call the bridge.
+- Claude can't run shell commands by default. `allowedTools` / `permissionMode` in `bridge/config.json` control that.

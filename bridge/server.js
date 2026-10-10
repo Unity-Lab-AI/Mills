@@ -1,48 +1,47 @@
 #!/usr/bin/env node
-// Mills bridge — runs on Alfreddo's PC. Listens on 127.0.0.1 only.
-// The web UI (GitHub Pages, or http://localhost:7777 served from here) talks to it.
-// It runs Claude Code inside the workspace folder and exposes a confined file API.
+// Mills bridge — runs on Gee's PC. Runs Claude Code (Gee's account) inside the Mills
+// folder and exposes it to Alfreddo's browser through a Cloudflare quick tunnel.
+// Claude edits files on Alfreddo's PC through the "pc" MCP tools, which this bridge
+// relays to his browser (it holds the folder he opened).
 'use strict';
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const ROOT = __dirname;
-const WEB_DIR = path.join(ROOT, '..', 'web');
+const MILLS_DIR = path.join(ROOT, '..');
+const WEB_DIR = path.join(MILLS_DIR, 'web');
 const AUTH_FILE = path.join(ROOT, 'auth.json');
 const STATE_FILE = path.join(ROOT, 'state.json');
 const CONFIG_FILE = path.join(ROOT, 'config.json');
+const MCP_RUNTIME = path.join(ROOT, '.mcp-runtime.json');
 
-const config = Object.assign({
-  port: 7777,
-  workspace: path.join(os.homedir(), 'Mills-Workspace'),
-  allowedOrigins: ['https://unity-lab-ai.github.io'],
-  permissionMode: 'acceptEdits',
-  allowedTools: ['Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
-  model: '',
-}, readJson(CONFIG_FILE, {}));
-
-config.workspace = path.resolve(config.workspace.replace(/^~(?=$|[\\/])/, os.homedir()));
-fs.mkdirSync(config.workspace, { recursive: true });
-const localOrigins = [`http://localhost:${config.port}`, `http://127.0.0.1:${config.port}`];
-
-// ---------- persistence ----------
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
-function writeJson(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
+function writeJson(file, data) { fs.writeFileSync(file, JSON.stringify(data, null, 2)); }
+
+const config = Object.assign({
+  port: 7777,
+  allowedOrigins: ['https://unity-lab-ai.github.io'],
+  permissionMode: 'acceptEdits',
+  allowedTools: ['mcp__pc', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
+  model: '',
+  tunnel: true,
+  cloudflared: 'cloudflared',
+  gistId: '',
+}, readJson(CONFIG_FILE, {}));
+const localOrigins = [`http://localhost:${config.port}`, `http://127.0.0.1:${config.port}`];
+
 let state = readJson(STATE_FILE, {});
 function saveState() { writeJson(STATE_FILE, state); }
 
 if (process.argv.includes('--reset-lock')) {
   delete state.lockedDevice; delete state.lockedAt; saveState();
-  console.log('Device lock cleared. The next successful sign-in will claim this bridge.');
+  console.log('Device lock cleared. The next successful sign-in will claim Mills.');
   process.exit(0);
 }
 
@@ -54,39 +53,54 @@ function checkPassword(password) {
   const derived = crypto.scryptSync(password, Buffer.from(auth.salt, 'hex'), 64, { N: auth.N, r: auth.r, p: auth.p });
   return crypto.timingSafeEqual(derived, Buffer.from(auth.hash, 'hex'));
 }
-
-const sessions = new Map(); // token -> expiry ms
+const sessions = new Map(); // token -> expiry
 const SESSION_MS = 12 * 60 * 60 * 1000;
 let failures = 0, blockedUntil = 0;
-
 function authed(req) {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-  if (!m) return false;
-  const exp = sessions.get(m[1]);
-  if (!exp || exp < Date.now()) { sessions.delete(m[1]); return false; }
+  const exp = m && sessions.get(m[1]);
+  if (!exp || exp < Date.now()) { if (m) sessions.delete(m[1]); return false; }
   return true;
 }
 
-// ---------- workspace file access ----------
-function resolveInWorkspace(rel) {
-  const full = path.resolve(config.workspace, String(rel || '').replace(/^[\\/]+/, ''));
-  const relCheck = path.relative(config.workspace, full);
-  if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) throw new Error('Path escapes workspace');
-  return full;
-}
+// ---------- claude runner + pc tool relay ----------
+const INTERNAL_SECRET = crypto.randomBytes(24).toString('hex');
+writeJson(MCP_RUNTIME, {
+  mcpServers: {
+    pc: {
+      command: process.execPath,
+      args: [path.join(ROOT, 'pc-tools-mcp.js')],
+      env: { MILLS_BRIDGE: `http://127.0.0.1:${config.port}`, MILLS_INTERNAL: INTERNAL_SECRET },
+    },
+  },
+});
 
-// ---------- claude runner ----------
-let running = null;
+const SYSTEM_APPEND = [
+  'You are talking with Alfreddo (Unity AI Lab engineer) through the Mills web interface, running on Gee\'s account.',
+  'Alfreddo has opened a folder on HIS OWN PC in his browser. To build or edit anything on his PC, use the mcp__pc__* tools',
+  '(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on Gee\'s Mills folder, not his PC.',
+  'Shell commands cannot run on Alfreddo\'s PC; if something needs running there, tell him exactly what to run.',
+].join(' ');
+
+let running = null;        // child process
+let stream = null;         // the open NDJSON response to Alfreddo's browser
+const pending = new Map(); // tool call id -> { res, timer }
+
+function emit(ev) { if (stream) stream.write(JSON.stringify(ev) + '\n'); }
 
 function runClaude(message, fresh, res) {
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', config.permissionMode];
+  const args = ['-p', '--output-format', 'stream-json', '--verbose',
+    '--permission-mode', config.permissionMode,
+    '--mcp-config', MCP_RUNTIME, '--strict-mcp-config',
+    '--append-system-prompt', SYSTEM_APPEND];
   if (config.allowedTools.length) args.push('--allowedTools', config.allowedTools.join(','));
   if (config.model) args.push('--model', config.model);
   if (!fresh && state.claudeSessionId) args.push('--resume', state.claudeSessionId);
 
-  const child = spawn('claude', args, { cwd: config.workspace, shell: process.platform === 'win32', windowsHide: true });
-  running = child;
-  res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' });
+  const child = spawn('claude', args, { cwd: MILLS_DIR, windowsHide: true });
+  running = child; stream = res;
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+  const keepAlive = setInterval(() => emit({ type: 'ping' }), 15000);
 
   let buf = '';
   child.stdout.on('data', (chunk) => {
@@ -97,18 +111,27 @@ function runClaude(message, fresh, res) {
       if (!line) continue;
       try {
         const ev = JSON.parse(line);
-        if (ev.session_id) { state.claudeSessionId = ev.session_id; }
-        res.write(JSON.stringify(ev) + '\n');
-      } catch { res.write(JSON.stringify({ type: 'raw', text: line }) + '\n'); }
+        if (ev.session_id) state.claudeSessionId = ev.session_id;
+        emit(ev);
+      } catch { emit({ type: 'raw', text: line }); }
     }
   });
-  child.stderr.on('data', (d) => res.write(JSON.stringify({ type: 'stderr', text: String(d) }) + '\n'));
-  child.on('error', (e) => res.write(JSON.stringify({ type: 'bridge_error', text: 'Could not start claude: ' + e.message }) + '\n'));
+  child.stderr.on('data', (d) => emit({ type: 'stderr', text: String(d) }));
+  child.on('error', (e) => emit({ type: 'bridge_error', text: 'Could not start claude: ' + e.message }));
   child.on('close', (code) => {
+    clearInterval(keepAlive);
+    for (const [id, p] of pending) { clearTimeout(p.timer); send(p.res, 200, { ok: false, error: 'Run ended' }); pending.delete(id); }
     running = null; saveState();
     res.end(JSON.stringify({ type: 'bridge_done', code }) + '\n');
+    stream = null;
   });
   child.stdin.end(message);
+}
+
+function stopClaude() {
+  if (!running) return;
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(running.pid), '/T', '/F']);
+  else running.kill('SIGTERM');
 }
 
 // ---------- http ----------
@@ -124,59 +147,68 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
 const server = http.createServer(async (req, res) => {
-  const origin = req.headers.origin;
-  if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Private-Network', 'true');
-  } else if (origin) {
-    return send(res, 403, { error: 'Origin not allowed' });
-  }
-  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
-
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
 
   try {
+    // Internal channel from the MCP relay (same machine, shared secret).
+    if (p === '/internal/pc-tool') {
+      if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
+      const { name, args } = await readBody(req);
+      if (!stream) return send(res, 200, { ok: false, error: "Alfreddo's browser is not connected." });
+      const id = crypto.randomBytes(8).toString('hex');
+      const timer = setTimeout(() => { pending.delete(id); send(res, 200, { ok: false, error: 'Timed out waiting for the browser.' }); }, 120000);
+      pending.set(id, { res, timer });
+      return emit({ type: 'pc_tool', id, name, args });
+    }
+
+    const origin = req.headers.origin;
+    if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin))) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    } else if (origin) {
+      return send(res, 403, { error: 'Origin not allowed' });
+    }
+    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+
     if (!p.startsWith('/api/')) {
-      // Serve the same UI locally so it also works without GitHub Pages.
       const file = path.join(WEB_DIR, p === '/' ? 'index.html' : path.normalize(p));
       if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, { error: 'Not found' });
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
       return fs.createReadStream(file).pipe(res);
     }
 
-    if (p === '/api/status' && req.method === 'GET') {
-      return send(res, 200, { ok: true, claimed: !!state.lockedDevice, workspace: config.workspace, hasPassword: fs.existsSync(AUTH_FILE) });
-    }
+    if (p === '/api/status' && req.method === 'GET') return send(res, 200, { ok: true });
 
     if (p === '/api/login' && req.method === 'POST') {
-      if (Date.now() < blockedUntil) return send(res, 429, { error: 'Too many failed attempts. Try again later.' });
+      if (Date.now() < blockedUntil) return send(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
       const { password, deviceId } = await readBody(req);
       if (!checkPassword(password) || typeof deviceId !== 'string' || deviceId.length < 16) {
-        failures++;
-        if (failures >= 5) { blockedUntil = Date.now() + 15 * 60 * 1000; failures = 0; }
+        if (++failures >= 5) { blockedUntil = Date.now() + 15 * 60 * 1000; failures = 0; }
         return send(res, 401, { error: 'Wrong password.' });
       }
       const deviceHash = sha256(deviceId);
       if (!state.lockedDevice) {
         state.lockedDevice = deviceHash; state.lockedAt = new Date().toISOString(); saveState();
-        console.log(`[mills] Claimed by first sign-in at ${state.lockedAt}. All other devices are now locked out.`);
+        console.log(`[mills] Claimed by first sign-in at ${state.lockedAt}. Everyone else is locked out.`);
       } else if (state.lockedDevice !== deviceHash) {
-        return send(res, 403, { error: 'This Mills bridge is locked to another device.' });
+        console.log('[mills] Refused a sign-in from another device.');
+        return send(res, 403, { error: 'Mills is locked to another device.' });
       }
       failures = 0;
       const token = crypto.randomBytes(32).toString('hex');
       sessions.set(token, Date.now() + SESSION_MS);
-      return send(res, 200, { token, workspace: config.workspace });
+      return send(res, 200, { token });
     }
 
     if (!authed(req)) return send(res, 401, { error: 'Not signed in.' });
+
+    if (p === '/api/check' && req.method === 'GET') return send(res, 200, { ok: true });
 
     if (p === '/api/logout' && req.method === 'POST') {
       sessions.delete((req.headers.authorization || '').slice(7));
@@ -191,40 +223,14 @@ const server = http.createServer(async (req, res) => {
       return runClaude(message, !!fresh, res);
     }
 
-    if (p === '/api/stop' && req.method === 'POST') {
-      if (running) {
-        if (process.platform === 'win32') spawn('taskkill', ['/pid', String(running.pid), '/T', '/F']);
-        else running.kill('SIGTERM');
-      }
+    if (p === '/api/pc-result' && req.method === 'POST') {
+      const { id, ok, result, error } = await readBody(req);
+      const entry = pending.get(id);
+      if (entry) { clearTimeout(entry.timer); pending.delete(id); send(entry.res, 200, { ok: !!ok, result, error }); }
       return send(res, 200, { ok: true });
     }
 
-    if (p === '/api/files' && req.method === 'GET') {
-      const dir = resolveInWorkspace(url.searchParams.get('path'));
-      const entries = fs.readdirSync(dir, { withFileTypes: true })
-        .filter((e) => e.name !== '.git' && e.name !== 'node_modules')
-        .map((e) => ({ name: e.name, dir: e.isDirectory() }))
-        .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name));
-      return send(res, 200, { entries });
-    }
-
-    if (p === '/api/file') {
-      const file = resolveInWorkspace(url.searchParams.get('path'));
-      if (req.method === 'GET') {
-        if (fs.statSync(file).size > 5e6) return send(res, 413, { error: 'File too large to open in the editor.' });
-        return send(res, 200, { content: fs.readFileSync(file, 'utf8') });
-      }
-      if (req.method === 'PUT') {
-        const { content } = await readBody(req);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, String(content ?? ''));
-        return send(res, 200, { ok: true });
-      }
-      if (req.method === 'DELETE') {
-        fs.rmSync(file, { recursive: true, force: true });
-        return send(res, 200, { ok: true });
-      }
-    }
+    if (p === '/api/stop' && req.method === 'POST') { stopClaude(); return send(res, 200, { ok: true }); }
 
     return send(res, 404, { error: 'Unknown endpoint' });
   } catch (e) {
@@ -232,9 +238,39 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// ---------- tunnel ----------
+// The web app finds the current tunnel URL in a gist named "Mills bridge address"
+// on Gee's GitHub account (created here on first run).
+function publishUrl(publicUrl) {
+  const content = JSON.stringify({ url: publicUrl, updated: new Date().toISOString() });
+  const gistId = config.gistId || state.gistId;
+  const args = gistId
+    ? ['api', '-X', 'PATCH', `gists/${gistId}`, '-f', `files[mills-bridge.json][content]=${content}`]
+    : ['api', '-X', 'POST', 'gists', '-f', 'description=Mills bridge address', '-F', 'public=true',
+       '-f', `files[mills-bridge.json][content]=${content}`, '--jq', '.id'];
+  execFile('gh', args, (err, stdout) => {
+    if (err) return console.log('[mills] Could not publish tunnel URL (is gh logged in?): ' + err.message);
+    if (!gistId) { state.gistId = stdout.trim(); saveState(); }
+    console.log('[mills] Published tunnel URL for the web app.');
+  });
+}
+function startTunnel() {
+  const cf = spawn(config.cloudflared, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${config.port}`], { windowsHide: true });
+  let announced = false;
+  const scan = (d) => {
+    const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(String(d));
+    if (m && !announced) { announced = true; console.log('[mills] Public URL: ' + m[0]); publishUrl(m[0]); }
+  };
+  cf.stdout.on('data', scan); cf.stderr.on('data', scan);
+  cf.on('error', (e) => console.log('[mills] cloudflared failed to start: ' + e.message));
+  cf.on('close', (code) => { console.log(`[mills] Tunnel exited (${code}); restarting in 5s.`); setTimeout(startTunnel, 5000); });
+  process.on('exit', () => cf.kill());
+}
+
 server.listen(config.port, '127.0.0.1', () => {
-  console.log(`[mills] Bridge running at http://localhost:${config.port}`);
-  console.log(`[mills] Workspace: ${config.workspace}`);
-  console.log(`[mills] Device lock: ${state.lockedDevice ? 'claimed (' + state.lockedAt + ')' : 'unclaimed — first sign-in claims it'}`);
-  if (!fs.existsSync(AUTH_FILE)) console.log('[mills] WARNING: no bridge/auth.json — run "node set-password.js" first.');
+  console.log(`[mills] Bridge running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);
+  console.log(`[mills] Device lock: ${state.lockedDevice ? 'claimed ' + state.lockedAt : 'unclaimed — first sign-in claims it'}`);
+  if (!fs.existsSync(AUTH_FILE)) console.log('[mills] WARNING: no bridge/auth.json — run "node set-password.js <password>" first.');
+  if (config.tunnel && !process.argv.includes('--no-tunnel')) startTunnel();
 });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));

@@ -19,16 +19,17 @@
   input, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .75rem; width: 100%; }
   [hidden] { display: none !important; }
 
-  /* login */
-  #login { margin: auto; width: min(380px, 92vw); display: flex; flex-direction: column; gap: .75rem; }
-  #login h1 { margin: 0 0 .25rem; font-size: 1.8rem; }
-  #login p { margin: 0; color: var(--muted); font-size: .9rem; }
+  .center { margin: auto; width: min(400px, 92vw); display: flex; flex-direction: column; gap: .75rem; }
+  .center h1 { margin: 0 0 .25rem; font-size: 1.8rem; }
+  .center p { margin: 0; color: var(--muted); font-size: .9rem; line-height: 1.4; }
   .err { color: var(--bad); font-size: .9rem; min-height: 1.2em; }
+  .status { font-size: .8rem; color: var(--muted); }
+  .status.on { color: var(--good); }
 
-  /* app */
-  header { display: flex; align-items: center; gap: .75rem; padding: .6rem 1rem; border-bottom: 1px solid var(--line); }
+  #shell { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  header { display: flex; align-items: center; gap: .75rem; padding: .6rem 1rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   header b { font-size: 1.1rem; }
-  header .ws { color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  header .folder { color: var(--muted); font-size: .85rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #app { flex: 1; display: grid; grid-template-columns: 240px 1fr 1fr; min-height: 0; }
   #app > section { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
   .bar { display: flex; gap: .4rem; align-items: center; padding: .5rem; border-bottom: 1px solid var(--line); font-size: .85rem; color: var(--muted); }
@@ -38,41 +39,42 @@
   #tree { overflow: auto; flex: 1; padding: .25rem 0; font-size: .9rem; }
   #tree div { padding: .25rem .75rem; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #tree div:hover { background: var(--panel); }
-
   #editor { flex: 1; border: 0; border-radius: 0; resize: none; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; line-height: 1.45; tab-size: 2; }
 
   #log { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .6rem; }
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
-  .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); }
+  .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); word-break: break-all; }
   .sys { font-size: .8rem; color: var(--muted); text-align: center; }
   .sys.bad { color: var(--bad); }
   #composer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--line); }
   #composer textarea { resize: none; height: 4.2rem; }
 
   @media (max-width: 900px) {
-    #app { grid-template-columns: 1fr; grid-template-rows: auto; overflow: auto; }
-    #app > section { min-height: 60vh; border-right: 0; border-bottom: 1px solid var(--line); }
-    #files, #edit { min-height: 40vh !important; }
+    #app { grid-template-columns: 1fr; overflow: auto; }
+    #app > section { min-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    #chat { min-height: 70vh !important; order: -1; }
   }
 </style>
 </head>
 <body>
 
-<form id="login">
+<form id="login" class="center">
   <h1>Mills</h1>
-  <p>Private workspace. The bridge must be running on your PC (bridge/start.bat).</p>
-  <input id="bridgeUrl" placeholder="Bridge URL" value="http://localhost:7777">
+  <p>Sign in to talk to Claude and build on your PC.</p>
   <input id="password" type="password" placeholder="Password" autocomplete="current-password" autofocus>
-  <button type="submit">Sign in</button>
+  <button type="submit" id="signin">Sign in</button>
   <div class="err" id="loginErr"></div>
+  <div class="status" id="bridgeStatus">Looking for Mills…</div>
 </form>
 
-<div id="shell" hidden style="display:flex;flex-direction:column;flex:1;min-height:0">
+<div id="shell" hidden>
   <header>
-    <b>Mills</b><span class="ws" id="wsPath"></span>
-    <button class="ghost" id="newChat" title="Start a fresh Claude conversation">New chat</button>
+    <b>Mills</b>
+    <span class="folder" id="folderName">No folder open</span>
+    <button id="pickFolder">Open folder on my PC</button>
+    <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
     <button class="ghost" id="logout">Sign out</button>
   </header>
   <main id="app">
@@ -87,7 +89,7 @@
       <textarea id="editor" spellcheck="false" placeholder="Open a file from the left to edit it here."></textarea>
     </section>
     <section id="chat">
-      <div id="log"><div class="sys">Talk to Claude. It works inside your workspace folder and can build and edit files there.</div></div>
+      <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
       <form id="composer">
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <button type="submit" id="send">Send</button><button type="button" class="ghost" id="stop" hidden>Stop</button>
@@ -97,22 +99,48 @@
 </div>
 
 <script>
+const GH_USER = 'G-Fourteen';
 const $ = (id) => document.getElementById(id);
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
-  del(k) { try { localStorage.removeItem(k); } catch {} },
 };
 
-// Stable per-browser device id — the bridge locks itself to the first device that signs in.
+// Stable per-browser device id — Mills locks itself to the first device that signs in.
 let deviceId = store.get('mills.device');
 if (!deviceId) { deviceId = crypto.randomUUID() + crypto.randomUUID(); store.set('mills.device', deviceId); }
-
-let base = store.get('mills.bridge') || (location.protocol === 'http:' && location.port ? location.origin : 'http://localhost:7777');
 let token = sessionStorage.getItem('mills.token');
-$('bridgeUrl').value = base;
+let base = null;
+
+// ---------- find the bridge (its tunnel address changes each time Gee starts it) ----------
+async function findBridge() {
+  if (location.hostname === 'localhost' || location.hostname.endsWith('trycloudflare.com')) return location.origin;
+  const list = await fetch(`https://api.github.com/users/${GH_USER}/gists?per_page=100`).then((r) => r.json());
+  const gist = Array.isArray(list) && list.find((g) => g.files && g.files['mills-bridge.json']);
+  if (!gist) throw new Error('Mills is not running yet.');
+  const full = await fetch(gist.url).then((r) => r.json());
+  const url = JSON.parse(full.files['mills-bridge.json'].content).url;
+  if (!url) throw new Error('Mills is not running yet.');
+  return url;
+}
+async function connect() {
+  const s = $('bridgeStatus');
+  try {
+    base = await findBridge();
+    const ok = await fetch(base + '/api/status').then((r) => r.ok).catch(() => false);
+    if (!ok) throw new Error('Mills is offline — ask Gee to start it.');
+    s.textContent = 'Mills is online'; s.className = 'status on';
+    return true;
+  } catch (e) {
+    base = null;
+    s.textContent = e.message + ' Retrying…'; s.className = 'status';
+    setTimeout(connect, 15000);
+    return false;
+  }
+}
 
 async function api(path, opts = {}) {
+  if (!base) throw new Error('Mills is offline — ask Gee to start it.');
   const res = await fetch(base + path, {
     ...opts,
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) },
@@ -131,22 +159,17 @@ async function json(path, opts) {
 $('login').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('loginErr').textContent = '';
-  base = $('bridgeUrl').value.trim().replace(/\/+$/, '');
+  if (!base && !(await connect())) { $('loginErr').textContent = 'Mills is offline — ask Gee to start it.'; return; }
   try {
     const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ password: $('password').value, deviceId }) });
-    token = data.token; sessionStorage.setItem('mills.token', token); store.set('mills.bridge', base);
+    token = data.token; sessionStorage.setItem('mills.token', token);
     $('password').value = '';
-    enter(data.workspace);
-  } catch (err) {
-    $('loginErr').textContent = err.message === 'Failed to fetch'
-      ? 'Cannot reach the bridge. Is bridge/start.bat running on this PC?' : err.message;
-  }
+    enter();
+  } catch (err) { $('loginErr').textContent = err.message; }
 });
-
-function enter(workspace) {
+function enter() {
   $('login').hidden = true; $('shell').hidden = false;
-  $('wsPath').textContent = workspace || '';
-  listDir('');
+  restoreFolder();
 }
 function signOut() {
   token = null; sessionStorage.removeItem('mills.token');
@@ -154,13 +177,85 @@ function signOut() {
 }
 $('logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); } catch {} signOut(); };
 
-// ---------- files ----------
+// ---------- folder on Alfreddo's PC (File System Access API) ----------
+let rootHandle = null;
+const idb = {
+  open() { return new Promise((ok, no) => { const r = indexedDB.open('mills', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }); },
+  async get(k) { const db = await this.open(); return new Promise((ok) => { const r = db.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => ok(r.result); r.onerror = () => ok(null); }); },
+  async set(k, v) { const db = await this.open(); return new Promise((ok) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = ok; t.onerror = ok; }); },
+};
+
+$('pickFolder').onclick = async () => {
+  if (!window.showDirectoryPicker) { sys('This browser cannot open folders. Use Chrome or Edge on a computer.', true); return; }
+  try {
+    if (rootHandle && $('pickFolder').textContent.startsWith('Reopen') && (await rootHandle.requestPermission({ mode: 'readwrite' })) === 'granted') return setFolder(rootHandle);
+    const h = await window.showDirectoryPicker({ mode: 'readwrite' });
+    await idb.set('root', h).catch(() => {});
+    setFolder(h);
+  } catch (e) { if (e.name !== 'AbortError') sys(e.message, true); }
+};
+async function restoreFolder() {
+  try {
+    const h = await idb.get('root');
+    if (!h) return;
+    rootHandle = h;
+    if ((await h.queryPermission({ mode: 'readwrite' })) === 'granted') setFolder(h);
+    else { $('folderName').textContent = 'Click "Reopen ' + h.name + '" to allow access again'; $('pickFolder').textContent = 'Reopen ' + h.name; }
+  } catch {}
+}
+function setFolder(h) {
+  rootHandle = h;
+  $('folderName').textContent = '📁 ' + h.name;
+  $('pickFolder').textContent = 'Change folder';
+  listDir('');
+}
+
+function parts(p) {
+  const segs = String(p || '').replace(/\\/g, '/').split('/').filter((s) => s && s !== '.');
+  if (segs.includes('..')) throw new Error('Paths cannot go above the opened folder.');
+  return segs;
+}
+async function dirAt(segs, create = false) {
+  if (!rootHandle || $('pickFolder').textContent.startsWith('Reopen')) throw new Error('No folder is open on Alfreddo\'s PC yet. Ask him to click "Open folder on my PC".');
+  let d = rootHandle;
+  for (const s of segs) d = await d.getDirectoryHandle(s, { create });
+  return d;
+}
+const fsOps = {
+  async list({ path = '' }) {
+    const d = await dirAt(parts(path)); const out = [];
+    for await (const [name, h] of d.entries()) out.push(h.kind === 'directory' ? name + '/' : name);
+    return out.sort().join('\n') || '(empty folder)';
+  },
+  async read({ path }) {
+    const segs = parts(path); const d = await dirAt(segs.slice(0, -1));
+    return (await (await d.getFileHandle(segs.at(-1))).getFile()).text();
+  },
+  async write({ path, content = '' }) {
+    const segs = parts(path); if (!segs.length) throw new Error('Missing file name.');
+    const d = await dirAt(segs.slice(0, -1), true);
+    const w = await (await d.getFileHandle(segs.at(-1), { create: true })).createWritable();
+    await w.write(content); await w.close();
+    return 'Wrote ' + segs.join('/') + ' (' + content.length + ' chars)';
+  },
+  async delete({ path }) {
+    const segs = parts(path); if (!segs.length) throw new Error('Refusing to delete the whole folder.');
+    const d = await dirAt(segs.slice(0, -1));
+    await d.removeEntry(segs.at(-1), { recursive: true });
+    return 'Deleted ' + segs.join('/');
+  },
+  async mkdir({ path }) { await dirAt(parts(path), true); return 'Created folder ' + parts(path).join('/'); },
+};
+
+// ---------- file panel ----------
 let cwd = '', openPath = null;
 const join = (a, b) => (a ? a + '/' : '') + b;
-
 async function listDir(dir) {
+  if (!rootHandle) return;
   try {
-    const { entries } = await json('/api/files?path=' + encodeURIComponent(dir));
+    const d = await dirAt(parts(dir)); const entries = [];
+    for await (const [name, h] of d.entries()) entries.push({ name, dir: h.kind === 'directory' });
+    entries.sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name));
     cwd = dir; $('cwd').textContent = '/' + dir;
     const tree = $('tree'); tree.textContent = '';
     if (!entries.length) tree.innerHTML = '<div style="color:var(--muted);cursor:default">(empty)</div>';
@@ -174,32 +269,31 @@ async function listDir(dir) {
 }
 async function openFile(p) {
   try {
-    const { content } = await json('/api/file?path=' + encodeURIComponent(p));
-    openPath = p; $('editor').value = content; $('openName').textContent = p;
-    $('save').disabled = false; $('del').disabled = false;
+    $('editor').value = await fsOps.read({ path: p });
+    openPath = p; $('openName').textContent = p; $('save').disabled = $('del').disabled = false;
   } catch (err) { sys(err.message, true); }
 }
 $('save').onclick = async () => {
-  try { await json('/api/file?path=' + encodeURIComponent(openPath), { method: 'PUT', body: JSON.stringify({ content: $('editor').value }) });
+  try { await fsOps.write({ path: openPath, content: $('editor').value });
     $('openName').textContent = openPath + '  ✓ saved'; setTimeout(() => $('openName').textContent = openPath, 1500);
   } catch (err) { sys(err.message, true); }
 };
 $('del').onclick = async () => {
-  if ($('del').dataset.armed !== '1') { $('del').dataset.armed = '1'; $('del').textContent = 'Confirm delete'; setTimeout(() => { $('del').dataset.armed = ''; $('del').textContent = 'Delete'; }, 3000); return; }
-  try { await json('/api/file?path=' + encodeURIComponent(openPath), { method: 'DELETE' });
-    openPath = null; $('editor').value = ''; $('openName').textContent = 'No file open'; $('save').disabled = $('del').disabled = true;
-    $('del').dataset.armed = ''; $('del').textContent = 'Delete'; listDir(cwd);
+  const b = $('del');
+  if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Confirm delete'; setTimeout(() => { b.dataset.armed = ''; b.textContent = 'Delete'; }, 3000); return; }
+  try { await fsOps.delete({ path: openPath });
+    openPath = null; $('editor').value = ''; $('openName').textContent = 'No file open'; $('save').disabled = b.disabled = true;
+    b.dataset.armed = ''; b.textContent = 'Delete'; listDir(cwd);
   } catch (err) { sys(err.message, true); }
 };
 $('editor').addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (openPath) $('save').click(); }
 });
-$('newFile').onclick = () => {
-  const name = window.prompt ? window.prompt('New file name (relative to current folder):') : null;
+$('newFile').onclick = async () => {
+  const name = window.prompt('New file name:');
   if (!name) return;
   const p = join(cwd, name);
-  json('/api/file?path=' + encodeURIComponent(p), { method: 'PUT', body: JSON.stringify({ content: '' }) })
-    .then(() => { listDir(cwd); openFile(p); }).catch((err) => sys(err.message, true));
+  try { await fsOps.write({ path: p, content: '' }); listDir(cwd); openFile(p); } catch (err) { sys(err.message, true); }
 };
 $('up').onclick = () => listDir(cwd.split('/').slice(0, -1).join('/'));
 $('refresh').onclick = () => listDir(cwd);
@@ -208,10 +302,9 @@ $('refresh').onclick = () => listDir(cwd);
 const log = $('log');
 const scroll = () => { log.scrollTop = log.scrollHeight; };
 function sys(text, bad) { const d = document.createElement('div'); d.className = 'sys' + (bad ? ' bad' : ''); d.textContent = text; log.appendChild(d); scroll(); }
+function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
-
 function renderText(el, text) {
-  // Minimal formatting: fenced code blocks; everything else is plain text.
   el.textContent = '';
   text.split(/```[^\n]*\n?/).forEach((part, i) => {
     if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.appendChild(pre); }
@@ -220,8 +313,20 @@ function renderText(el, text) {
 }
 function describeTool(t) {
   const i = t.input || {};
-  const target = i.file_path || i.path || i.command || i.pattern || i.url || i.query || '';
-  return '⚙ ' + t.name + (target ? '  ' + String(target).slice(0, 160) : '');
+  const name = t.name.replace(/^mcp__pc__/, 'your PC › ');
+  const target = i.path ?? i.file_path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? '';
+  return '⚙ ' + name + (target !== '' ? '  ' + String(target).slice(0, 160) : '');
+}
+
+async function runPcTool(ev) {
+  let body;
+  if (!fsOps[ev.name]) body = { id: ev.id, ok: false, error: 'Unknown tool ' + ev.name };
+  else {
+    try { body = { id: ev.id, ok: true, result: await fsOps[ev.name](ev.args || {}) }; }
+    catch (e) { body = { id: ev.id, ok: false, error: e.message }; }
+  }
+  api('/api/pc-result', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+  if (ev.name !== 'read' && ev.name !== 'list') listDir(cwd);
 }
 
 let busy = false, fresh = false;
@@ -245,26 +350,26 @@ $('composer').addEventListener('submit', async (e) => {
       buf += dec.decode(value, { stream: true });
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i); buf = buf.slice(i + 1);
-        if (line.trim()) handleEvent(JSON.parse(line));
+        const l = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (l.trim()) { try { handleEvent(JSON.parse(l)); } catch {} }
       }
     }
   } catch (err) { sys(err.message, true); }
-  setBusy(false); listDir(cwd); $('input').focus();
+  setBusy(false); $('input').focus();
 });
 
 function handleEvent(ev) {
+  if (ev.type === 'pc_tool') return runPcTool(ev);
   if (ev.type === 'assistant' && ev.message) {
     for (const block of ev.message.content || []) {
       if (block.type === 'text' && block.text.trim()) renderText(bubble('claude'), block.text);
-      else if (block.type === 'tool_use') { const d = document.createElement('div'); d.className = 'tool'; d.textContent = describeTool(block); log.appendChild(d); }
+      else if (block.type === 'tool_use') line('tool', describeTool(block));
     }
   } else if (ev.type === 'result') {
     if (ev.is_error) sys('Claude stopped with an error: ' + (ev.result || ev.subtype), true);
     else sys('Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + 's' : ''));
   } else if (ev.type === 'bridge_error') sys(ev.text, true);
-  else if (ev.type === 'stderr' && /error/i.test(ev.text)) sys(ev.text.trim(), true);
-  else if (ev.type === 'bridge_done' && ev.code) sys('Claude process exited (code ' + ev.code + ')', ev.code !== 0);
+  else if (ev.type === 'bridge_done' && ev.code) sys('Claude stopped (code ' + ev.code + ')', true);
   scroll();
 }
 
@@ -274,8 +379,7 @@ $('input').addEventListener('keydown', (e) => {
 $('stop').onclick = () => api('/api/stop', { method: 'POST' }).catch(() => {});
 $('newChat').onclick = () => { fresh = true; log.innerHTML = ''; sys('New conversation — Claude starts fresh on your next message.'); };
 
-// Resume a live session after a page refresh.
-if (token) json('/api/files?path=').then(() => enter('')).catch(() => signOut());
+connect().then((ok) => { if (ok && token) json('/api/check').then(enter).catch(() => signOut()); });
 </script>
 </body>
 </html>

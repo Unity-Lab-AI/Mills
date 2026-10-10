@@ -13,3 +13,4 @@ bridge/state.json
 bridge/workspace/
 node_modules/
 bridge/auth.json
+bridge/.mcp-runtime.json
