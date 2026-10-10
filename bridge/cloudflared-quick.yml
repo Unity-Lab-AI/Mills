@@ -1,0 +1,2 @@
+# Intentionally empty: keeps the Mills quick tunnel from picking up
+# ~/.cloudflared/config.yml (a named-tunnel config makes quick tunnels return 404).

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mills bridge — runs on Gee's PC. Runs Claude Code (Gee's account) inside the Mills
+// Mills bridge â€” runs on Gee's PC. Runs Claude Code (Gee's account) inside the Mills
 // folder and exposes it to Alfreddo's browser through a Cloudflare quick tunnel.
 // Claude edits files on Alfreddo's PC through the "pc" MCP tools, which this bridge
 // relays to his browser (it holds the folder he opened).
@@ -255,7 +255,8 @@ function publishUrl(publicUrl) {
   });
 }
 function startTunnel() {
-  const cf = spawn(config.cloudflared, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${config.port}`], { windowsHide: true });
+  const cf = spawn(config.cloudflared, ['tunnel', '--config', path.join(ROOT, 'cloudflared-quick.yml'),
+  '--no-autoupdate', '--url', `http://127.0.0.1:${config.port}`], { windowsHide: true });
   let announced = false;
   const scan = (d) => {
     const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(String(d));
@@ -269,8 +270,9 @@ function startTunnel() {
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`[mills] Bridge running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);
-  console.log(`[mills] Device lock: ${state.lockedDevice ? 'claimed ' + state.lockedAt : 'unclaimed — first sign-in claims it'}`);
-  if (!fs.existsSync(AUTH_FILE)) console.log('[mills] WARNING: no bridge/auth.json — run "node set-password.js <password>" first.');
+  console.log(`[mills] Device lock: ${state.lockedDevice ? 'claimed ' + state.lockedAt : 'unclaimed â€” first sign-in claims it'}`);
+  if (!fs.existsSync(AUTH_FILE)) console.log('[mills] WARNING: no bridge/auth.json â€” run "node set-password.js <password>" first.');
   if (config.tunnel && !process.argv.includes('--no-tunnel')) startTunnel();
 });
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
+
