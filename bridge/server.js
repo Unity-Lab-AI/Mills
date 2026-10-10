@@ -334,5 +334,11 @@ server.listen(config.port, '127.0.0.1', () => {
   if (!fs.existsSync(AUTH_FILE)) console.log('[mills] WARNING: no bridge/auth.json â€” run "node set-password.js <password>" first.');
   if (config.tunnel && !process.argv.includes('--no-tunnel')) startTunnel();
 });
+server.on('error', (e) => {
+  if (e.code !== 'EADDRINUSE') throw e;
+  console.log(`[mills] Mills is ALREADY RUNNING in another window (port ${config.port} is taken).`);
+  console.log('[mills] Nothing to do: close this window. To restart, close every Mills Bridge window first, then run start.bat once.');
+  process.exit(1);
+});
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
 
