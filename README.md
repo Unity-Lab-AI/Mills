@@ -27,6 +27,24 @@ Alfreddo's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel �
 4. **Save to Archive** stores the current conversation; once saved, it updates itself after every reply. **Archive** lists saved conversations: **Open** one to continue it (Claude resumes with full memory of it), **Rename** it (or click the title above the chat), or **Delete** it (click twice to confirm). Saved conversations live on Gee's PC in `Mills/Archive/` and are never committed.
 5. **Theme** opens a dropdown of 23 UI colour themes (Burple, Cyberpunk, Dracula, Nord, Solarized, …) plus the Mills default. The choice is remembered in that browser.
 
+## Publishing updates
+
+Mills is mirrored to two remotes: GitHub (`Unity-Lab-AI/Mills`, which serves the Pages web app) and Forgejo (`git.unityailab.com/GFourteen/Mills`). One-time setup on each clone so every push goes to both:
+
+```
+git remote set-url --add --push origin https://github.com/Unity-Lab-AI/Mills.git
+git remote set-url --add --push origin git@git.unityailab.com:GFourteen/Mills.git
+git remote add forgejo git@git.unityailab.com:GFourteen/Mills.git
+```
+
+`git remote -v` should then list both push URLs under `origin`. Work follows Git Flow:
+
+1. Branch `feature/<name>` from `develop`, commit, then `git push -u origin feature/<name>`.
+2. Merge the feature into `develop` (`git merge --no-ff`) and `git push origin develop`.
+3. Merge `develop` into `main` and `git push origin main` (this redeploys the web app).
+
+`git push origin` sends each branch to GitHub and Forgejo in one go. Check that both pushes report success. Never commit `bridge/auth.json`, `bridge/state.json`, `Archive/` or `.claude/` (all are kept out by `.gitignore`).
+
 ## Security
 
 - **First sign-in claims Mills.** The first browser that signs in successfully becomes the only one allowed in, and every other device is refused. To move to a new browser, Gee runs `node bridge/server.js --reset-lock`.
