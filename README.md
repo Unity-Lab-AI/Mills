@@ -33,8 +33,8 @@ Mills is mirrored to two remotes: GitHub (`Unity-Lab-AI/Mills`, which serves the
 
 ```
 git remote set-url --add --push origin https://github.com/Unity-Lab-AI/Mills.git
-git remote set-url --add --push origin git@git.unityailab.com:GFourteen/Mills.git
-git remote add forgejo git@git.unityailab.com:GFourteen/Mills.git
+git remote set-url --add --push origin https://git.unityailab.com/GFourteen/Mills.git
+git remote add forgejo https://git.unityailab.com/GFourteen/Mills.git
 ```
 
 `git remote -v` should then list both push URLs under `origin`. Work follows Git Flow:
