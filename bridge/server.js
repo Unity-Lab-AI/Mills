@@ -38,7 +38,13 @@ const GIST_FILE = PROFILE ? `mills-bridge-${PROFILE}.json` : 'mills-bridge.json'
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
-function writeJson(file, data) { fs.writeFileSync(file, JSON.stringify(data, null, 2)); }
+function writeJson(file, data) {
+  // Write-then-rename so a crash mid-write never leaves a half-written file behind: the device
+  // lock, sign-in sessions and model choice in state.json survive any restart intact.
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, file);
+}
 
 const baseConfig = readJson(CONFIG_FILE, {});
 const profileConfig = PROFILE ? readJson(path.join(PROFILE_DIR, 'config.json'), null) : {};
@@ -53,7 +59,13 @@ const config = Object.assign({
   allowedOrigins: ['https://unity-lab-ai.github.io'],
   permissionMode: 'acceptEdits',
   allowedTools: ['mcp__pc', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
-  model: '',
+  model: '', // this bridge's default model ('' = Claude Code's own default); the web app's dropdown overrides it
+  models: [  // what the web app's model dropdown offers; id = what `claude --model` accepts
+    { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+    { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+    { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+    { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
+  ],
   tunnel: true,
   cloudflared: 'cloudflared',
   gistId: '',
@@ -63,6 +75,13 @@ const localOrigins = [`http://localhost:${config.port}`, `http://127.0.0.1:${con
 
 let state = readJson(STATE_FILE, {});
 function saveState() { writeJson(STATE_FILE, state); }
+
+// The model picked in the web app's dropdown, kept per profile in state.json so it applies to
+// the next claude run (the next message, or the first message of a new conversation) and
+// survives bridge restarts. Empty / absent = this bridge's default model from config.
+const modelIds = () => config.models.map((m) => m.id);
+if (state.model && !modelIds().includes(state.model)) delete state.model; // list changed in config: back to the default
+const effectiveModel = () => state.model || config.model;
 
 if (process.argv.includes('--reset-lock')) {
   delete state.lockedDevice; delete state.lockedAt; saveState();
@@ -78,8 +97,12 @@ function checkPassword(password) {
   const derived = crypto.scryptSync(password, Buffer.from(auth.salt, 'hex'), 64, { N: auth.N, r: auth.r, p: auth.p });
   return crypto.timingSafeEqual(derived, Buffer.from(auth.hash, 'hex'));
 }
-const sessions = new Map(); // token -> expiry
+// Sign-in sessions (token -> expiry) live in state.json as well, so restarting the bridge does
+// not sign anyone out. Passwords are never touched by a restart: auth.json only changes through
+// set-password.js, and the launchers only ask for a password when auth.json does not exist.
 const SESSION_MS = 12 * 60 * 60 * 1000;
+const sessions = new Map(Object.entries(state.sessions || {}).filter(([, exp]) => exp > Date.now()));
+function saveSessions() { state.sessions = Object.fromEntries(sessions); saveState(); }
 let failures = 0, blockedUntil = 0;
 function authed(req) {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
@@ -121,7 +144,8 @@ function runClaude(message, fresh, res) {
     '--mcp-config', MCP_RUNTIME, '--strict-mcp-config',
     '--append-system-prompt', SYSTEM_APPEND];
   if (config.allowedTools.length) args.push('--allowedTools', config.allowedTools.join(','));
-  if (config.model) args.push('--model', config.model);
+  const model = effectiveModel(); // read per run, so a dropdown change lands on the very next message
+  if (model) args.push('--model', model);
   if (!fresh && state.claudeSessionId) args.push('--resume', state.claudeSessionId);
 
   const child = spawn('claude', args, { cwd: MILLS_DIR, windowsHide: true });
@@ -245,17 +269,30 @@ const server = http.createServer(async (req, res) => {
       }
       failures = 0;
       const token = crypto.randomBytes(32).toString('hex');
-      sessions.set(token, Date.now() + SESSION_MS);
+      sessions.set(token, Date.now() + SESSION_MS); saveSessions();
       return send(res, 200, { token });
     }
 
     if (!authed(req)) return send(res, 401, { error: 'Not signed in.' });
 
-    if (p === '/api/check' && req.method === 'GET') return send(res, 200, { ok: true });
+    if (p === '/api/check' && req.method === 'GET') {
+      return send(res, 200, { ok: true, user: USER, models: config.models, model: state.model || '', defaultModel: config.model });
+    }
 
     if (p === '/api/logout' && req.method === 'POST') {
-      sessions.delete((req.headers.authorization || '').slice(7));
+      sessions.delete((req.headers.authorization || '').slice(7)); saveSessions();
       return send(res, 200, { ok: true });
+    }
+
+    if (p === '/api/model' && req.method === 'POST') {
+      // Stored, not applied to a run in progress: the next claude spawn picks it up, which is the
+      // next message (after the current turn finishes) and every new conversation from then on.
+      const { model } = await readBody(req);
+      if (typeof model !== 'string' || (model && !modelIds().includes(model))) return send(res, 400, { error: 'Unknown model.' });
+      if (model) state.model = model; else delete state.model;
+      saveState();
+      console.log(`[mills] Model set to ${effectiveModel() || 'Claude Code default'}.`);
+      return send(res, 200, { model: state.model || '', effective: effectiveModel() });
     }
 
     if (p === '/api/chat' && req.method === 'POST') {
@@ -360,6 +397,7 @@ function startTunnel() {
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`[mills] Bridge for ${USER}${PROFILE ? ` (profile "${PROFILE}")` : ''} running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);
   console.log(`[mills] Device lock: ${state.lockedDevice ? 'claimed ' + state.lockedAt : 'unclaimed — first sign-in claims it'}`);
+  console.log(`[mills] Model: ${effectiveModel() || 'Claude Code default'}${state.model ? ' (chosen in the web app)' : ''}. Sign-ins kept from before this start: ${sessions.size}.`);
   if (!fs.existsSync(AUTH_FILE)) console.log(`[mills] WARNING: no ${path.relative(MILLS_DIR, AUTH_FILE).replace(/\\/g, '/')} — run "node set-password.js${PROFILE ? ' --profile ' + PROFILE : ''} <password>" first.`);
   if (config.tunnel && !process.argv.includes('--no-tunnel')) startTunnel();
 });
