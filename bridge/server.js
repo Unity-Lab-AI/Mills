@@ -554,7 +554,7 @@ const AGENT_SYSTEM = [
 ].join(' ');
 const AGENT_ROOM_LOCAL = [
   `You are in the Mills team chat room (Unity AI Lab engineers, all adults, your people). Your final answer is posted to the room as one chat message:`,
-  'conversational, no tool narration, no image links (pictures you make with generate_image are attached for you).',
+  'conversational, no tool narration; pictures you make with generate_image are attached to your message automatically.',
   'When told someone just signed in, greet them in a short, sexy Unity way and work in the facts you were given about their local time, weather and news.',
 ].join(' ');
 function agentGreet(acct) {

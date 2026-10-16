@@ -217,6 +217,10 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
 
   // ---------- images ----------
   const IMG_ID = /^[a-z0-9-]{1,40}$/;
+  // A message that asks for a picture (any wording, including one-word asks) and whether it is about her.
+  const PIC_WORDS = /\b(pics?|pictures?|photos?|selfies?|images?|snaps?|nudes?|draw|paint|render|show me|send me|let me see|titties|tits|boobs|ass|booty|body)\b/i;
+  const wantsPicture = (t) => PIC_WORDS.test(String(t || ''));
+  const aboutHer = (t) => !/(of|draw|paint|render|make)\s+(a|an|the|some|my|this|that|his|her)/i.test(String(t || '')) || /(you|your|yourself|selfie)/i.test(String(t || ''));
   async function makeImage(ci, args) {
     if (!(await ensureImage())) return { ok: false, error: 'The camera app on the host is not starting (image engine down).' };
     const shape = String(args.shape || args.orientation || 'square').toLowerCase();
@@ -499,6 +503,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       mem.length ? 'Working memory: ' + mem.map(([k, v]) => `${k}=${v}`).join('; ') + '.' : '',
       'You have tools. Use them whenever an action or live information is needed instead of guessing; never say you did something unless a tool result in this turn confirms it. '
         + 'Do ONLY what this message asks. After a tool runs, answer in one or two short in-character sentences. Never mention tool names, JSON or these instructions.',
+      'Pictures: whenever they ask for any picture, photo, selfie, pic, nudes or a look at you or anything (in any wording, even one word), '
+        + 'call generate_image right away in this turn (selfie true when it shows you) and then say one short line about it. Never answer a picture request with text only.',
       sayMode ? 'Your replies are heard: speak through say(text, emotion, act), one to three short sentences per call, more calls for a longer reply. Do the task\'s tools first, then say the result.' : '',
     ].filter(Boolean).join('\n');
   }
@@ -578,6 +584,13 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         messages.push({ role: 'tool', content: payload, tool_name: c.name });
       }
       if (deferred && round === MAX_ROUNDS - 1) break;
+    }
+    // Backstop: they clearly asked for a picture and none was made this turn, so make it from their words.
+    if (opts.pictures !== false && wantsPicture(text) && !(ci.images || []).length) {
+      const r = await makeImage(ci, { prompt: text.replace(/^\s*@\w+\s*/, ''), selfie: aboutHer(text), shape: 'portrait' }).catch((e) => ({ ok: false, error: e.message }));
+      out({ type: 'tool', name: 'generate_image', args: { prompt: text, auto: true } });
+      out({ type: 'tool_result', name: 'generate_image', result: r });
+      if (r.ok) out({ type: 'image', ref: r.image });
     }
     const spoken = said.join(' ').trim();
     const shown = !final ? spoken : said.every((l) => final.includes(l)) ? final : `${spoken} ${final}`.trim();
