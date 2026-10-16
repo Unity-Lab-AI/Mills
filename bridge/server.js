@@ -201,9 +201,16 @@ function noteUsage(acct, ev) {
     const kind = String(info.rateLimitType || info.rate_limit_type || info.type || '').toLowerCase();
     const key = /seven|week|7d/.test(kind) ? 'seven_day' : /five|5h|session/.test(kind) ? 'five_hour' : null;
     if (key) {
-      (usage.limits || (usage.limits = {}))[key] = {
-        status: String(info.status || ''), utilization: Number.isFinite(Number(info.utilization)) ? Number(info.utilization) : null,
-        resetsAt: toMs(info.resetsAt || info.resets_at), at: Date.now(),
+      // An event may carry only some fields: keep the last known reset time / utilization for the same
+      // window instead of wiping them. Utilization is stored as a fraction 0–1 (a value above 1 is a percentage).
+      const L = usage.limits || (usage.limits = {}), prev = L[key] || {};
+      const resetsAt = toMs(info.resetsAt || info.resets_at) || (prev.resetsAt > Date.now() ? prev.resetsAt : null);
+      const raw = info.utilization ?? info.usage ?? null, u = raw == null || raw === '' ? NaN : Number(raw);
+      const sameWindow = prev.resetsAt && resetsAt === prev.resetsAt;
+      L[key] = {
+        status: String(info.status || (sameWindow ? prev.status : '') || ''),
+        utilization: Number.isFinite(u) ? Math.max(0, Math.min(1, u > 1 ? u / 100 : u)) : sameWindow ? prev.utilization ?? null : null,
+        resetsAt, at: Date.now(),
       };
       saveUsage();
     }

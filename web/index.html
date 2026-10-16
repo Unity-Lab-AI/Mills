@@ -77,7 +77,9 @@
   .uTime { font-family: ui-monospace, Consolas, monospace; }
   .uItem.est .uTime::after { content: ' est'; color: var(--muted); font-size: .62rem; }
   .uMini { width: 2.6rem; height: .42rem; border-radius: 999px; background: color-mix(in srgb, var(--line) 80%, transparent); overflow: hidden; }
-  .uMini i, .uTrack i { display: block; height: 100%; width: 0; border-radius: inherit; transition: width .6s ease, background-color .6s ease, box-shadow .6s ease; }
+  .uMini i, .uTrack i { display: block; height: 100%; width: 0; border-radius: inherit; transition: width .25s linear, background-color .25s linear, box-shadow .25s linear; }
+  .uPctS { min-width: 2.6rem; text-align: right; font-family: ui-monospace, Consolas, monospace; font-weight: 600; }
+  .uItem.est .uPctS { color: var(--muted); font-weight: 400; }
   .uCtx { flex: 1; min-width: 9rem; }
   .uTrack { flex: 1; height: .62rem; border-radius: 999px; overflow: hidden; position: relative; background: color-mix(in srgb, var(--line) 80%, transparent); box-shadow: inset 0 1px 2px rgba(0,0,0,.35); }
   .uTrack i { position: relative; overflow: hidden; }
@@ -560,8 +562,8 @@
         <svg class="ic" aria-hidden="true"><use href="#i-share"/></svg><select id="shareSel" title="Share this Work session so people in that conversation can watch it (read-only): your Claude conversation, what you type, send and queue"></select>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
       <div id="usageBar" title="Claude usage of the host account (shared by everyone) and this session's context window">
-        <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uTime">--:--:--</span></div>
-        <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uTime">--d --h --m</span></div>
+        <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--:--:--</span></div>
+        <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--d --h --m</span></div>
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
       </div>
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
@@ -1032,6 +1034,8 @@ async function send(message) {
 let runModel = '', stderrText = ''; // which model this run used (from Claude's init event) + its stderr, shown only if the run fails
 function handleEvent(ev) {
   if (ev.type === 'pc_tool') return runPcTool(ev);
+  // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
+  if ((ev.type === 'assistant' && ev.message && ev.message.usage) || /rate_limit/.test(String(ev.type || '')) || ev.type === 'result') refreshUsageSoon();
   if (ev.type === 'assistant' && ev.message) {
     for (const block of ev.message.content || []) {
       if (block.type === 'text' && block.text.trim()) { renderText(bubble('claude'), block.text); record('claude', block.text); }
@@ -1078,20 +1082,31 @@ async function refreshUsage() {
   if (!me) return;
   try { usageData = await json('/api/usage'); usageSkew = usageData.now - Date.now(); paintUsage(); } catch {}
 }
+let usageSoon = null;
+function refreshUsageSoon() { if (!usageSoon) usageSoon = setTimeout(() => { usageSoon = null; refreshUsage(); }, 1500); } // at most one fetch per 1.5 s during a reply
 const pad2 = (n) => String(n).padStart(2, '0');
-function paintWindow(el, w, len, fmt) {
-  const now = Date.now() + usageSkew, out = w.status === 'rejected';
+// One number per window drives the fill, its colour and the % text, so they can never disagree:
+// Claude's reported utilization (0–1) while its window is still running, otherwise the share of the
+// window's time already gone (marked "~" — an estimate, not usage). A window whose reset time has
+// passed is empty until new numbers arrive.
+function windowUse(w, len, now) {
   const left = w.resetsAt ? Math.max(0, w.resetsAt - now) : null;
-  // fill = how much of the window is used: Claude's own utilization when reported, else elapsed time
-  const used = w.utilization != null ? (w.utilization <= 1 ? w.utilization * 100 : w.utilization) : left != null ? 100 * (1 - left / len) : 0;
-  el.classList.toggle('est', w.source === 'estimate' && left != null);
+  if (left === 0) return { left, pct: 0, exact: false, reset: true };
+  if (w.utilization != null && w.source === 'claude') return { left, pct: Math.max(0, Math.min(100, w.utilization * 100)), exact: true };
+  return { left, pct: left != null ? Math.max(0, Math.min(100, 100 * (1 - left / len))) : 0, exact: false };
+}
+function paintWindow(el, w, len, fmt) {
+  const now = Date.now() + usageSkew, u = windowUse(w, len, now), out = w.status === 'rejected' && !u.reset;
+  const pct = out ? 100 : u.pct;
+  el.classList.toggle('est', !u.exact && u.left != null && !u.reset);
   el.classList.toggle('out', out);
-  el.querySelector('.uTime').textContent = left == null ? (out ? 'out of usage' : 'not started') : fmt(left);
+  el.querySelector('.uTime').textContent = u.reset ? 'reset' : u.left == null ? (out ? 'out of usage' : 'not started') : fmt(u.left);
+  el.querySelector('.uPctS').textContent = u.left == null && !out ? '–' : (u.exact || out ? '' : '~') + Math.round(pct) + '%';
   const bar = el.querySelector('i');
-  bar.style.width = (out ? 100 : used) + '%';
-  bar.style.backgroundColor = out ? OUT_COLOR : usageColor(used);
-  el.title = (el.id === 'u5h' ? '5-hour' : '7-day') + ' window — ' + (left == null ? 'no activity yet' : fmt(left) + ' until it resets')
-    + (w.utilization != null ? ' · ' + Math.round(used) + '% used' : '') + (w.source === 'estimate' ? ' (estimated from when Mills started using Claude; exact once Claude Code reports it)' : ' (reported by Claude Code)')
+  bar.style.width = pct + '%';
+  bar.style.backgroundColor = out ? OUT_COLOR : usageColor(pct);
+  el.title = (el.id === 'u5h' ? '5-hour' : '7-day') + ' window — ' + (u.reset ? 'just reset' : u.left == null ? 'no activity yet' : fmt(u.left) + ' until it resets')
+    + ' · ' + (u.exact ? Math.round(pct) + '% of the limit used (reported by Claude Code)' : '~' + Math.round(pct) + '% of the window\'s time gone (Claude Code has not reported usage for this window yet)')
     + (out ? ' · OUT OF USAGE' : '');
 }
 function paintUsage() {
@@ -1110,7 +1125,8 @@ function paintUsage() {
   el.title = c ? `Context window: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens used in this session (${c.model || 'model'})${out ? ' — full: start a New chat' : ''}` : 'Context window: fills up as this session goes on';
 }
 setInterval(paintUsage, 1000);            // countdowns tick every second
-setInterval(refreshUsage, 60000);         // fresh numbers every minute (and after every reply)
+setInterval(() => { if (!$('shell').hidden) refreshUsage(); }, 15000); // the limits are shared by everyone: other people's runs move them too
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUsage(); });
 
 // ---------- past sessions (saved Claude conversations, stored on the host PC in Mills/Archive) ----------
 let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSaveAt = 0;

@@ -31,6 +31,12 @@ process.stdin.on('end', async () => {
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
   }
+  // "LIMITPARTIAL": a 5h event with only a status (no utilization, no reset time), then a 7d event
+  // reporting utilization as a percentage (55) — the hub must keep the 5h numbers and read 55 as 55 %.
+  if (input.includes('LIMITPARTIAL')) {
+    out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed' } });
+    out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'seven_day', status: 'allowed', utilization: 55, resetsAt: Math.floor(Date.now() / 1000) + 86400 } });
+  }
   const usage = input.includes('USAGE');
   if (usage) out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed', utilization: 0.42, resetsAt: Math.floor(Date.now() / 1000) + 7200 } });
   out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()}` }],

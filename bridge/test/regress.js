@@ -621,6 +621,8 @@ async function run() {
   const uBefore = (await call('/api/usage', A)).data;
   const uRun = await chat(A, 'USAGE please', { fresh: true });
   const uAfter = (await call('/api/usage', A)).data, uOther = (await call('/api/usage', D)).data;
+  await chat(A, 'LIMITPARTIAL', { fresh: false });
+  const uPartial = (await call('/api/usage', A)).data;
   await chat(A, 'brand new session', { fresh: true });
   const uFresh = (await call('/api/usage', A)).data;
   const in2h = uAfter.five_hour && uAfter.five_hour.resetsAt - Date.now();
@@ -629,6 +631,11 @@ async function run() {
     && uRun.status === 200 && uAfter.five_hour.source === 'claude' && uAfter.five_hour.utilization === 0.42 && in2h > 7000e3 && in2h <= 7200e3
     && uAfter.context && uAfter.context.tokens === 54000 && uAfter.context.window === 200000 && !uOther.context && !uFresh.context,
     JSON.stringify({ five: uAfter.five_hour, ctx: uAfter.context }).slice(0, 200));
+  check('R69', 'usage sync: a limit event without numbers keeps the last utilization + reset time; a percentage (55) is read as 55 %; the page shows the 5h / 7d % from the same number as the fill, re-reads usage live during a reply and every 15 s, and empties a window once it resets',
+    uPartial.five_hour && uPartial.five_hour.utilization === 0.42 && uPartial.five_hour.resetsAt === uAfter.five_hour.resetsAt
+    && uPartial.seven_day && uPartial.seven_day.source === 'claude' && uPartial.seven_day.utilization === 0.55
+    && /<span class="uPctS">/.test(html) && /function windowUse\(/.test(html) && /refreshUsageSoon\(\)/.test(html) && /if \(left === 0\) return \{ left, pct: 0/.test(html) && /15000\); \/\/ the limits are shared/.test(html),
+    JSON.stringify({ five: uPartial.five_hour, seven: uPartial.seven_day }).slice(0, 220));
   check('R53', '[static] usage bar above the Claude messages: 5h hh:mm:ss, 7d dd/hh/mm, colour scale green → orange → yellow → red, purple when out',
     /id="usageBar"/.test(html) && html.indexOf('id="usageBar"') < html.indexOf('id="log"') && /\[0, \[46, 204, 113\]\], \[33, \[255, 159, 26\]\], \[66, \[255, 212, 59\]\], \[100, \[255, 59, 59\]\]/.test(html)
     && /OUT_COLOR = 'rgb\(160, 90, 255\)'/.test(html) && /pad2\(Math\.floor\(s \/ 3600\)\) \+ ':'/.test(html) && /'d ' \+ pad2/.test(html));
