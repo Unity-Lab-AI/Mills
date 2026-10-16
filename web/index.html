@@ -45,8 +45,15 @@
   .rmsg.new, .msg.claude, .msg.me { animation: msgIn .26s cubic-bezier(.2,.7,.2,1); }
   #menu .choices button { transition: transform .12s ease, box-shadow .15s ease, background-color .15s ease; }
   #menu .choices button:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,.28); }
-  .cv .dot { position: relative; transition: background-color .2s; }
-  .cv .dot.on::after { content: ''; position: absolute; right: -.15rem; bottom: -.15rem; width: .42rem; height: .42rem; border-radius: 50%; background: var(--good); border: 2px solid var(--panel); }
+  .cv .dot { position: relative; transition: background-color .2s, opacity .2s; }
+  .cv .dot.on::after, .cv .dot.idle::after, .pdot.on::after, .pdot.idle::after { content: ''; position: absolute; right: -.15rem; bottom: -.15rem; width: .42rem; height: .42rem; border-radius: 50%; background: var(--good); border: 2px solid var(--panel); }
+  .cv .dot.idle::after, .pdot.idle::after { background: #fcc419; }
+  .cv .dot.off, .pdot.off { opacity: .4; }
+  .menuWho { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; max-width: min(560px, 92vw); margin: -.4rem 0 .2rem; }
+  .whoLbl { width: 100%; font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .whoChip { display: inline-flex; align-items: center; gap: .4rem; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem .2rem .45rem; font-size: .82rem; animation: msgIn .25s ease; }
+  .whoChip.off { color: var(--muted); } .whoChip small { color: var(--muted); font-size: .7rem; }
+  .pdot { position: relative; width: .7rem; height: .7rem; border-radius: 50%; flex: none; }
   .roomTop .online { color: var(--good); }
   .typingLine { display: flex; align-items: center; gap: .35rem; padding: .15rem .9rem; font-size: .76rem; color: var(--muted); font-style: italic; animation: msgIn .2s ease; }
   .dots { display: inline-flex; gap: .2rem; margin-left: .35rem; align-items: center; }
@@ -483,6 +490,7 @@
 
 <div id="menu" hidden>
   <h1 id="menuUser"></h1>
+  <div id="menuWho" class="menuWho" hidden></div>
   <div class="choices">
     <button id="goWork">Work</button>
     <button id="goChat">Chat<span class="badge" id="chatBadge" hidden></span></button>
@@ -907,6 +915,7 @@ function showScreen(name) {
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
+  presenceTick(); // tell the others where you are now
   if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); }
   if (name === 'shell') refreshUsage();
   applyLayout(); // places the team chat where it belongs for this screen (and hides the floating window elsewhere)
@@ -920,7 +929,7 @@ $('goCal').onclick = () => showScreen('cal');
 $('goAdmin').onclick = () => showScreen('admin');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
-  token = null; me = null; sessionStorage.removeItem(TOKEN_KEY);
+  token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat']) $(id).hidden = true;
   BOARD.stop();
@@ -1658,7 +1667,7 @@ async function openRoom() {
 async function refreshMembers() {
   try { roomMembers = (await json('/api/room/members')).members; } catch { return; }
   checkPins();
-  renderConvList(); renderShareSel();
+  renderConvList(); renderWho(); renderShareSel();
 }
 let convListRun = 0;
 async function renderConvList() {
@@ -1667,8 +1676,9 @@ async function renderConvList() {
   const add = (conv, label, color, sub) => {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'cv' + (conv === currentConv ? ' on' : '');
     if (conv !== 'room') b.dataset.user = convPeer(conv);
-    const dot = document.createElement('span'); dot.className = 'dot' + (conv !== 'room' && onlineSet.has(convPeer(conv)) ? ' on' : ''); if (color) dot.style.background = color;
-    if (conv !== 'room') dot.title = onlineSet.has(convPeer(conv)) ? 'online now' : 'not in the chat right now';
+    const st = conv !== 'room' && !(memberOf(convPeer(conv)) || {}).agent ? statusOf(convPeer(conv)) : null;
+    const dot = document.createElement('span'); dot.className = 'dot' + (st ? ' ' + st.cls : ''); if (color) dot.style.background = color;
+    if (st) { dot.title = st.text; sub = st.text; }
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = label;
     const s = document.createElement('small'); s.textContent = sub; nm.append(s);
     const badge = document.createElement('span'); badge.className = 'badge'; badge.dataset.convBadge = conv; badge.hidden = true;
@@ -1732,7 +1742,8 @@ async function applyRoom(d) {
   if (d.keysVer && d.keysVer !== roomKeysVer) { const first = !roomKeysVer; roomKeysVer = d.keysVer; if (!first) await refreshMembers(); }
   seenMap = d.seen || {};
   onShares(d.shares || []);
-  onlineSet = new Set(d.online || []); typingList = d.typing || []; renderPresence();
+  presenceMap = Object.fromEntries((d.presence || []).map((p) => [p.user, p]));
+  onlineSet = new Set((d.presence || []).filter((p) => p.online).map((p) => p.user)); typingList = d.typing || []; renderPresence();
   for (const m of d.messages) await ingest(m, roomLoaded);
   roomLoaded = true;
   if (pinBootstrap) { pinBootstrap = false; savePins(); } // first load done: from now on only pinned keys count
@@ -2636,7 +2647,46 @@ function insertMention(u) {
 }
 $('roomInput').addEventListener('input', updateMentionList);
 // ── Presence: who is online, who is typing (renewed every 2.5 s while keys are pressed; lapses in 6 s) ──
-let onlineSet = new Set(), typingList = [], typingSentAt = 0, typingOn = false, typingTimer = null;
+let onlineSet = new Set(), presenceMap = {}, typingList = [], typingSentAt = 0, typingOn = false, typingTimer = null;
+// Hub-wide presence: the page tells the hub which screen it is on, whether it is idle (tab hidden or
+// 5 min without input), and that it is going away; online / offline itself comes from the open long poll.
+const IDLE_MS = 5 * 60000;
+let lastInput = Date.now(), sentIdle = null, sentScreen = '';
+const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin' };
+function postPresence(body) { if (me && token && base) json('/api/presence', { method: 'POST', body: JSON.stringify(body) }).catch(() => {}); }
+function presenceTick() {
+  if (!me) return;
+  const idle = document.visibilityState === 'hidden' || Date.now() - lastInput > IDLE_MS;
+  const screen = ['menu', 'shell', 'room', 'board', 'cal', 'admin'].find((id) => !$(id).hidden) || '';
+  if (idle !== sentIdle || screen !== sentScreen) { sentIdle = idle; sentScreen = screen; postPresence({ screen, idle }); }
+}
+for (const ev of ['pointerdown', 'keydown', 'pointermove', 'wheel', 'touchstart']) document.addEventListener(ev, () => { lastInput = Date.now(); if (sentIdle) presenceTick(); }, { passive: true, capture: true });
+document.addEventListener('visibilitychange', presenceTick);
+setInterval(presenceTick, 15000);
+window.addEventListener('pagehide', () => { // closing the tab: offline at once instead of after the timeout
+  if (me && token && base) fetch(base + '/api/presence', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ gone: true }) }).catch(() => {});
+});
+const ago = (ms) => { const s = Math.round((Date.now() - ms) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago'; };
+function statusOf(u) { // 'on' | 'idle' | 'off', with a sentence for tooltips and the menu
+  const p = presenceMap[u];
+  if (!p || !p.online) return { cls: 'off', text: p && p.seen ? 'offline · last seen ' + ago(p.seen) : 'offline' };
+  if (p.idle) return { cls: 'idle', text: 'away' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') };
+  return { cls: 'on', text: 'online' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') };
+}
+function renderWho() { // the main menu's "Who's here" strip
+  const box = $('menuWho'); if (!box || !me) return;
+  box.textContent = '';
+  const people = roomMembers.filter((m) => !m.agent && m.username !== me.username);
+  if (!people.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.append(Object.assign(document.createElement('span'), { className: 'whoLbl', textContent: "Who's here" }));
+  for (const m of people.sort((a, b) => (statusOf(b.username).cls === 'on') - (statusOf(a.username).cls === 'on'))) {
+    const st = statusOf(m.username), chip = document.createElement('span'); chip.className = 'whoChip ' + st.cls; chip.title = st.text;
+    const dot = document.createElement('i'); dot.className = 'pdot ' + st.cls; dot.style.background = colorOf(m.username);
+    chip.append(dot, nickOf(m.username), Object.assign(document.createElement('small'), { textContent: st.cls === 'off' ? (presenceMap[m.username] && presenceMap[m.username].seen ? ago(presenceMap[m.username].seen) : 'offline') : st.text.replace(/^(online|away)( · in )?/, '$1 ') }));
+    box.append(chip);
+  }
+}
 function sendTyping(on) {
   if (!me || (!on && !typingOn)) return;
   typingOn = on; typingSentAt = on ? Date.now() : 0;
@@ -2655,7 +2705,12 @@ function renderPresence() {
   const n = [...onlineSet].filter((u) => u !== me.username && memberOf(u) && !memberOf(u).agent).length;
   const st = $('roomStatus');
   if (chatPriv) { st.textContent = ''; st.append(ic('lock', 'lead'), 'End-to-end encrypted'); if (n) { st.append(' · '); const o = document.createElement('span'); o.className = 'online'; o.textContent = n + ' online'; st.append(o); } }
-  for (const b of $('convList').querySelectorAll('.cv[data-user]')) b.querySelector('.dot').classList.toggle('on', onlineSet.has(b.dataset.user));
+  for (const b of $('convList').querySelectorAll('.cv[data-user]')) {
+    const st = statusOf(b.dataset.user), dot = b.querySelector('.dot'), sub = b.querySelector('small');
+    dot.classList.remove('on', 'idle', 'off'); dot.classList.add(st.cls); dot.title = st.text;
+    if (sub && !(memberOf(b.dataset.user) || {}).agent) sub.textContent = st.text;
+  }
+  renderWho();
   const who = typingList.filter((t) => t.conv === currentConv).map((t) => nickOf(t.user));
   const line = $('typingLine');
   if (!who.length) { line.hidden = true; return; }

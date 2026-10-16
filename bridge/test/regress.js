@@ -559,7 +559,7 @@ async function run() {
   const tyBad = await call('/api/room/typing', D, { conv: 'dm:t-admin|t-user', on: true });
   await call('/api/room/typing', U, { conv: 'room', on: false });
   const afterOff = (await call('/api/room/messages?rev=0', A)).data;
-  const onlineOk = afterOff.online.includes('t-admin') && afterOff.online.includes('t-user') && !(afterOff.typing || []).some((t) => t.user === 't-user');
+  const onlineOk = afterOff.online.includes('t-admin') && !afterOff.online.includes('t-user') && !(afterOff.typing || []).some((t) => t.user === 't-user'); // A held a long poll, U never did
   await sleep(1500);
   const seqTy = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
   await roomSend(U, restored, '@unity SLOW ping-r72');
@@ -572,6 +572,32 @@ async function run() {
     && agentTyping && !!tyAns && agentDone
     && /id="typingLine"/.test(html) && /function showThinking\(/.test(html) && /@keyframes msgIn/.test(html) && /@keyframes dotPulse/.test(html) && /\.status\.on::before/.test(html) && /prefers-reduced-motion/.test(html),
     `typing woke ${(pWoke.typing || []).length}, dm A/D ${seesDmA}/${seesDmD}, outsider ${tyBad.status}, online ${JSON.stringify(afterOff.online)}, Unity typing ${agentTyping} → done ${agentDone}`);
+
+  // Hub-wide presence: online = a page with its long poll open; idle + screen reported by the page;
+  // offline seconds after the last connection closes, at once on "gone" or sign-out; last seen kept.
+  const presOf = async (tok, u) => ((await call('/api/room/messages?rev=0', tok)).data.presence || []).find((p) => p.user === u) || {};
+  const ac = new AbortController();
+  const dHeld = fetch(H + '/api/room/messages?rev=0&wait=1&ver=' + (await call('/api/room/messages?rev=0', D)).data.ver, { headers: { Authorization: 'Bearer ' + D }, signal: ac.signal }).catch(() => null);
+  await sleep(300);
+  const dOn = await presOf(A, 'mills');
+  await call('/api/presence', D, { screen: 'board', idle: true });
+  const dIdle = await presOf(A, 'mills');
+  ac.abort(); await dHeld; // the page went away without saying so
+  const dStillOn = await presOf(A, 'mills');
+  await sleep(9500);
+  const dOff = await presOf(A, 'mills');
+  const ac2 = new AbortController();
+  const dHeld2 = fetch(H + '/api/room/messages?rev=0&wait=1&ver=' + (await call('/api/room/messages?rev=0', D)).data.ver, { headers: { Authorization: 'Bearer ' + D }, signal: ac2.signal }).catch(() => null);
+  await sleep(300);
+  const dBack = await presOf(A, 'mills');
+  await call('/api/presence', D, { gone: true });
+  const dGone = await presOf(A, 'mills');
+  ac2.abort(); await dHeld2;
+  check('R74', 'presence: a page with its long poll open is online; idle + screen as the page reports them; a dropped connection shows offline within ~10 s (not before); back online at once on reconnect; "gone" is offline immediately; last seen kept; [static] Who\'s here strip on the menu, idle after 5 min / hidden tab, status text in the chat list',
+    dOn.online === true && dIdle.online === true && dIdle.idle === true && dIdle.screen === 'board' && dStillOn.online === true && dOff.online === false && dOff.seen > 0
+    && dBack.online === true && dBack.idle === false && dGone.online === false
+    && /id="menuWho"/.test(html) && /IDLE_MS = 5 \* 60000/.test(html) && /function statusOf\(/.test(html) && /visibilitychange', presenceTick/.test(html) && /gone: true/.test(html),
+    `on ${dOn.online}, idle ${dIdle.idle}/${dIdle.screen}, after drop ${dStillOn.online} → ${dOff.online}, back ${dBack.online}, gone ${dGone.online}`);
 
   // Hardening headers on every hub answer.
   const hr = await fetch(H + '/api/status');

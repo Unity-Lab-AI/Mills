@@ -275,12 +275,38 @@ const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv ==
 let roomVer = 1, keysVer = 1;
 const roomWaiters = new Set();
 function roomChanged() { roomVer++; for (const fn of [...roomWaiters]) fn(); }
-// Presence: who has the chat open (polled it in the last 70 s) and who is typing where. Typing is
-// per conversation and only shown to that conversation's members; an entry lapses after 6 s unless
-// the browser renews it (it renews every 2.5 s while keys are pressed).
-const TYPING_MS = 6000, ONLINE_MS = 70000;
-const lastSeen = new Map();   // username -> last chat poll
+// Presence, hub-wide: every signed-in page keeps one long poll open, so the hub knows exactly who is
+// connected. A person is online while they have a poll open, idle when their page says so (tab
+// hidden or no input for 5 minutes), and offline a few seconds after their last connection closes
+// (or at once when the page reports it is going away). Each change is pushed to everyone.
+// Typing is per conversation and only shown to that conversation's members; an entry lapses after
+// 6 s unless the browser renews it (it renews every 2.5 s while keys are pressed).
+const TYPING_MS = 6000, GONE_MS = 8000, ONLINE_MS = 70000; // ONLINE_MS: fallback if a close is never seen
+const presence = new Map();   // username -> { online, idle, screen, at (last change), seen (last contact), polls }
 const typing = new Map();     // username -> { conv, at, timer }
+function pres(user) { let p = presence.get(user); if (!p) { p = { online: false, idle: false, screen: '', at: 0, seen: 0, polls: 0 }; presence.set(user, p); } return p; }
+function setPresence(user, patch) {
+  const p = pres(user), before = JSON.stringify([p.online, p.idle, p.screen]);
+  Object.assign(p, patch); p.seen = Date.now();
+  if (JSON.stringify([p.online, p.idle, p.screen]) !== before) { p.at = Date.now(); roomChanged(); }
+}
+function pollOpened(user) { const p = pres(user); p.polls++; clearTimeout(p.gone); setPresence(user, { online: true }); }
+function pollClosed(user) { // offline once no connection has been open for GONE_MS
+  const p = pres(user); p.polls = Math.max(0, p.polls - 1);
+  if (p.polls) return;
+  clearTimeout(p.gone);
+  p.gone = setTimeout(() => { if (!p.polls) setPresence(user, { online: false, idle: false }); }, GONE_MS);
+  p.gone.unref();
+}
+function presenceList() {
+  const now = Date.now(), out = [];
+  for (const [u, p] of presence) {
+    if (!accounts.has(u)) continue;
+    if (p.online && now - p.seen > ONLINE_MS) { p.online = false; p.idle = false; p.at = now; } // never saw the close
+    out.push({ user: u, online: p.online, idle: p.online && p.idle, screen: p.online ? p.screen : '', at: p.at, seen: p.seen });
+  }
+  return out;
+}
 function setTyping(user, conv, on) {
   const prev = typing.get(user);
   if (prev) clearTimeout(prev.timer);
@@ -290,12 +316,7 @@ function setTyping(user, conv, on) {
   typing.set(user, { conv, at: Date.now(), timer });
   if (!prev || prev.conv !== conv) roomChanged();
 }
-function noteSeen(user) {
-  const was = lastSeen.get(user) || 0;
-  lastSeen.set(user, Date.now());
-  if (Date.now() - was > ONLINE_MS) roomChanged(); // came online: tell the others now, not at their next poll
-}
-const onlineUsers = () => [...lastSeen].filter(([, at]) => Date.now() - at < ONLINE_MS).map(([u]) => u);
+const onlineUsers = () => presenceList().filter((p) => p.online).map((p) => p.user);
 function typingFor(user) { // conversations this reader is in; the agent counts while composing a reply
   const out = [];
   for (const [u, t] of typing) if (u !== user && (t.conv === 'room' || t.conv.split(/[:|]/).includes(user))) out.push({ user: u, conv: t.conv });
@@ -762,7 +783,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/logout' && req.method === 'POST') {
       leaveCalls(acct.username); stopShare(acct.username); setTyping(acct.username, '', false);
-      lastSeen.delete(acct.username); roomChanged(); // offline right away
+      { const q = pres(acct.username); q.polls = 0; clearTimeout(q.gone); setPresence(acct.username, { online: false, idle: false }); } // offline right away
       sessions.delete((req.headers.authorization || '').slice(7)); saveSessions();
       return send(res, 200, { ok: true });
     }
@@ -1037,16 +1058,25 @@ const server = http.createServer(async (req, res) => {
           for (const [c, v] of Object.entries(convs)) if (c === 'room' || c.split(/[:|]/).includes(acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
         }
         send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: sharesFor(acct.username), ver: roomVer, keysVer,
-          online: onlineUsers(), typing: typingFor(acct.username) });
+          online: onlineUsers(), presence: presenceList(), typing: typingFor(acct.username) });
       };
-      noteSeen(acct.username);
-      if (url.searchParams.get('wait') !== '1' || Number(url.searchParams.get('ver')) !== roomVer) return answer();
+      if (url.searchParams.get('wait') !== '1') { pres(acct.username).seen = Date.now(); return answer(); }
+      // a long poll = a connected page: online while one is open, offline shortly after the last one closes
+      const stale = Number(url.searchParams.get('ver')) !== roomVer; // judged before our own coming-online bumps the version
+      pollOpened(acct.username);
+      if (stale) { pollClosed(acct.username); return answer(); } // re-opens at once with the next poll
       let done = false;
-      const finish = () => { if (done) return; done = true; clearTimeout(timer); roomWaiters.delete(finish); answer(); };
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); roomWaiters.delete(finish); pollClosed(acct.username); answer(); };
       const timer = setTimeout(finish, 25000);
       roomWaiters.add(finish);
-      req.on('close', () => { if (!done) { done = true; clearTimeout(timer); roomWaiters.delete(finish); } });
+      req.on('close', () => { if (!done) { done = true; clearTimeout(timer); roomWaiters.delete(finish); pollClosed(acct.username); } });
       return;
+    }
+    if (p === '/api/presence' && req.method === 'POST') { // the page reports where it is, whether it is idle, and when it goes away
+      const { screen, idle, gone } = await readBody(req);
+      if (gone) { const q = pres(acct.username); q.polls = 0; clearTimeout(q.gone); setPresence(acct.username, { online: false, idle: false }); }
+      else setPresence(acct.username, { ...(typeof screen === 'string' ? { screen: screen.slice(0, 12) } : {}), ...(idle !== undefined ? { idle: !!idle } : {}) });
+      return send(res, 200, { ok: true });
     }
     if (p === '/api/room/blob' && req.method === 'GET') { // a voice clip's ciphertext, for a reader of that message
       const m = messages.find((x) => x.seq === Number(url.searchParams.get('seq')));
