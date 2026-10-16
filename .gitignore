@@ -8,7 +8,7 @@
 !/bridge/
 !/.github/
 
-# Runtime state written by the bridge on Alfreddo's PC
+# Runtime state written by the hub on the host PC
 bridge/state.json
 bridge/workspace/
 node_modules/
@@ -21,11 +21,13 @@ bridge/hub-state.json
 bridge/profiles-deleted/
 bridge/*.tmp
 
-# Per-profile runtime state (one profile per extra person, e.g. bridge/profiles/sponge/).
-# profiles/<name>/config.json (port + display name) stays tracked.
-bridge/profiles/*/auth.json
-bridge/profiles/*/state.json
-bridge/profiles/*/.mcp-runtime.json
-bridge/profiles/*/tunnel.json
-bridge/profiles/*/.restart
-bridge/profiles/*/*.tmp
+# Accounts are local to the host: every file under bridge/profiles/ stays off the remotes
+# (display names, admin flags, password hashes, device locks, sessions).
+bridge/profiles/
+
+# Workflow state, caches and logs that must never ship
+*.log
+*.tmp
+.restart
+Chat/
+Archive/

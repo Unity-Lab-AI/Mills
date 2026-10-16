@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-rem Starts the Mills hub: one window serves every account (mills, sponge, gee, ...).
+rem Starts the Mills hub: one window serves every account .
 title Mills (leave this window open)
 where node >nul 2>nul || (echo Node.js is required: https://nodejs.org & pause & exit /b 1)
 where claude >nul 2>nul || (echo Claude Code is required. & pause & exit /b 1)

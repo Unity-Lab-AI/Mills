@@ -43,7 +43,7 @@ function startApp() {
 
 // ---------- tunnel ----------
 // The web app finds the current tunnel URL in a gist named "Mills bridge address" (or
-// "Mills bridge address (<profile>)") on Gee's GitHub account, created here on first run. Each
+// "Mills bridge address (<profile>)") on the host GitHub account (the one gh is logged in to), created here on first run. Each
 // profile has its own gist and its own file name (mills-bridge-<profile>.json). The gist id is
 // kept in tunnel.json (older bridges kept it in state.json, which is read as a fallback).
 function publishUrl(publicUrl) {

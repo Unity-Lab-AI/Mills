@@ -221,7 +221,7 @@
 </div>
 
 <script>
-const GH_USER = 'G-Fourteen';
+const GH_USER = '__MILLS_GIST_OWNER__'; // filled in at deploy time from the MILLS_GIST_OWNER repository variable
 // One Mills hub serves every account; people sign in with username + password.
 // An old ?user=<name> link still works: it just fills in the username.
 const GIST_FILE = 'mills-bridge.json';
@@ -265,8 +265,8 @@ if (!deviceId) { deviceId = crypto.randomUUID() + crypto.randomUUID(); store.set
 let token = sessionStorage.getItem(TOKEN_KEY);
 let base = null;
 
-// ---------- find the bridge (its tunnel address changes each time Gee starts it) ----------
-// Each bridge publishes its own gist file: mills-bridge.json (Alfreddo) or mills-bridge-<user>.json.
+// ---------- find the bridge (its tunnel address changes each time the hub starts) ----------
+// The hub publishes its address in the gist file mills-bridge.json.
 async function findBridge() {
   if (location.hostname === 'localhost' || location.hostname.endsWith('trycloudflare.com')) return location.origin;
   const list = await fetch(`https://api.github.com/users/${GH_USER}/gists?per_page=100`).then((r) => r.json());
@@ -282,7 +282,7 @@ async function connect() {
   try {
     base = await findBridge();
     const ok = await fetch(base + '/api/status').then((r) => r.ok).catch(() => false);
-    if (!ok) throw new Error('Mills is offline — ask Gee to start it.');
+    if (!ok) throw new Error('Mills is offline — ask the admin to start it.');
     s.textContent = 'Mills is online'; s.className = 'status on';
     return true;
   } catch (e) {
@@ -296,7 +296,7 @@ async function connect() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let reconnecting = false;
 async function api(path, opts = {}) {
-  if (!base) throw new Error('Mills is offline — ask Gee to start it.');
+  if (!base) throw new Error('Mills is offline — ask the admin to start it.');
   const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
   for (let attempt = 1; ; attempt++) {
     let res = null;
@@ -307,8 +307,8 @@ async function api(path, opts = {}) {
       return res;
     }
     // No bridge behind the address: it is restarting after a code change (back within seconds,
-    // same address) or Gee restarted its window (new address, found again via the gist).
-    if (attempt >= 40) { reconnecting = false; throw new Error('Mills is not responding — ask Gee to check it.'); }
+    // same address) or the admin restarted its window (new address, found again via the gist).
+    if (attempt >= 40) { reconnecting = false; throw new Error('Mills is not responding — ask the admin to check it.'); }
     if (!reconnecting) { reconnecting = true; sys('Mills is restarting — waiting for it to come back…'); }
     await sleep(3000);
     if (attempt % 4 === 0) { try { base = await findBridge(); } catch {} }
@@ -325,7 +325,7 @@ async function json(path, opts) {
 $('login').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('loginErr').textContent = '';
-  if (!base && !(await connect())) { $('loginErr').textContent = 'Mills is offline — ask Gee to start it.'; return; }
+  if (!base && !(await connect())) { $('loginErr').textContent = 'Mills is offline — ask the admin to start it.'; return; }
   const username = $('username').value.trim().toLowerCase(), password = $('password').value;
   if (!username || !password) { $('loginErr').textContent = 'Enter your username and password.'; return; }
   try {
@@ -632,7 +632,7 @@ $('newChat').onclick = () => {
   sys('New conversation — Claude starts fresh on your next message.');
 };
 
-// ---------- archive (saved conversations, stored on Gee's PC in Mills/Archive) ----------
+// ---------- archive (saved conversations, stored on the host PC in Mills/Archive) ----------
 let transcript = [], archiveId = null, archiveTitle = null;
 function record(cls, text) { transcript.push({ cls, text }); }
 function setConversation(id, title, items) {
@@ -889,7 +889,7 @@ $('roomComposer').addEventListener('submit', async (e) => {
 $('roomInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('roomComposer').requestSubmit(); } });
 function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.textContent = t; $('roomLog').append(d); }
 
-// ── Admin (gee): accounts + hub controls; the hub checks the admin flag on every call ──
+// ── Admin: accounts + hub controls; the hub checks the admin flag on every call ──
 const adminOut = (t) => { $('adminOut').textContent = t; };
 async function adminCall(path, body, done) {
   try { const d = await json('/api/admin/' + path, { method: 'POST', body: JSON.stringify(body || {}) }); if (done) done(d); loadAdmin(); }

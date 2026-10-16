@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Restart the Mills hub from Gee's PC. Claude runs this right after changing hub code or config,
+// Restart the Mills hub on the host PC. Claude runs this right after changing hub code or config,
 // so nobody has to go find the window.
 //
 //   node restart.js              graceful: the hub restarts itself as soon as nobody's Claude run

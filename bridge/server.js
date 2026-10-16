@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Mills hub — runs on Gee's PC under run.js (which owns the Cloudflare quick tunnel and restarts
+// Mills hub — runs on the host PC under run.js (which owns the Cloudflare quick tunnel and restarts
 // this app when asked). ONE process serves every account: username + password sign-in, the Work
-// section (Claude Code on Gee's account, editing files on the signed-in person's PC through the
-// "pc" MCP tools relayed to their browser), the end-to-end encrypted Chat room, and Gee's Admin
+// section (Claude Code on the host's account, editing files on the signed-in person's PC through the
+// "pc" MCP tools relayed to their browser), the end-to-end encrypted Chat room, and the Admin
 // section.
 //
 // Accounts are the folders the bridge always had, so existing passwords keep working:
-//   "mills" (Alfreddo)  bridge/auth.json, bridge/state.json, Mills/Archive/
+//   default ("mills") bridge/auth.json, bridge/state.json, Mills/Archive/
 //   "<name>"            bridge/profiles/<name>/{config,auth,state}.json, Mills/Archive/<name>/
 // profiles/<name>/config.json: { "user": "<display name>", "admin": true|false, "model": "..." }
 'use strict';
@@ -39,9 +39,9 @@ const newPassword = () => crypto.randomBytes(15).toString('base64url'); // 20 ch
 const accounts = new Map(); // username -> account
 function systemPrompt(name) {
   return [
-    `You are talking with ${name} (Unity AI Lab engineer) through the Mills web interface, running on Gee's account.`,
+    `You are talking with ${name} (Unity AI Lab engineer) through the Mills web interface, running on the host's Claude account.`,
     `${name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools`,
-    `(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on Gee's Mills folder, not ${name}'s PC.`,
+    `(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's Mills folder, not ${name}'s PC.`,
     `Shell commands cannot run on ${name}'s PC; if something needs running there, tell ${name} exactly what to run.`,
   ].join(' ');
 }
@@ -55,7 +55,7 @@ function loadAccounts() {
     const acct = accounts.get(username) || { running: null, stream: null, pending: new Map(), state: readJson(P.STATE_FILE, {}) };
     Object.assign(acct, {
       username, profile, files: P,
-      display: P.config.user || username, admin: !!P.config.admin, defaultModel: P.config.model || '',
+      display: P.config.user || username[0].toUpperCase() + username.slice(1), admin: !!P.config.admin, defaultModel: P.config.model || '',
     });
     if (acct.state.model && !modelIds().includes(acct.state.model)) delete acct.state.model;
     fs.mkdirSync(P.PROFILE_DIR, { recursive: true });
@@ -268,7 +268,7 @@ const server = http.createServer(async (req, res) => {
         console.log(`[mills] ${acct.username}: claimed by first sign-in at ${acct.state.lockedAt}.`);
       } else if (acct.state.lockedDevice !== deviceHash) {
         console.log(`[mills] ${acct.username}: refused a sign-in from another device.`);
-        return send(res, 403, { error: 'This account is locked to another device. Ask Gee to reset it.' });
+        return send(res, 403, { error: 'This account is locked to another device. Ask an admin to reset it.' });
       }
       failures.delete(uname);
       const token = crypto.randomBytes(32).toString('hex');
@@ -381,7 +381,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { messages: out, latest: seq });
     }
 
-    // ----- admin (accounts with "admin": true, i.e. gee) -----
+    // ----- admin (accounts with "admin": true) -----
     if (p.startsWith('/api/admin/')) {
       if (!acct.admin) return send(res, 403, { error: 'Admins only.' });
       const body = req.method === 'POST' ? await readBody(req) : {};
