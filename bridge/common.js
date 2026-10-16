@@ -21,7 +21,7 @@ function writeJson(file, data) {
 }
 
 // --profile <name> on the command line, or MILLS_PROFILE in the environment. '' = the default
-// profile (Alfreddo's original layout: bridge/auth.json, bridge/state.json, Mills/Archive).
+// account (files directly in bridge/: auth.json, state.json, Mills/Archive).
 function profileFromArgv(argv = process.argv) {
   const i = argv.indexOf('--profile');
   return (i >= 0 && argv[i + 1]) || process.env.MILLS_PROFILE || '';
@@ -42,7 +42,7 @@ function loadProfile(PROFILE) {
   if (PROFILE) { delete baseConfig.port; delete baseConfig.gistId; } // never share a port or a gist between profiles
   const config = Object.assign({
     port: 7777,
-    user: 'Alfreddo', // who sits at the browser for this bridge (shown to Claude and in messages)
+    user: '', // display name of the account ('' = its username, capitalised)
     allowedOrigins: ['https://unity-lab-ai.github.io'],
     permissionMode: 'acceptEdits',
     allowedTools: ['mcp__pc', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],

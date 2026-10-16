@@ -6,7 +6,7 @@
 
 const BRIDGE = process.env.MILLS_BRIDGE || 'http://127.0.0.1:7777';
 const SECRET = process.env.MILLS_INTERNAL || '';
-const USER = process.env.MILLS_USER || 'Alfreddo'; // display name of the person whose browser (and PC) this run is wired to
+const USER = process.env.MILLS_USER || 'the user'; // display name of the person whose browser (and PC) this run is wired to
 const ACCOUNT = process.env.MILLS_ACCOUNT || ''; // their account username: tells the hub which browser to relay to
 
 const pathProp = { path: { type: 'string', description: `Path relative to the folder ${USER} opened. Use "" for the folder itself.` } };

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Usage: node set-password.js "<new password>"                    — the "mills" account (bridge/auth.json).
 //        node set-password.js --profile <name> "<new password>"   — account <name> (bridge/profiles/<name>/auth.json).
-// Only the scrypt hash is stored. Gee's admin section in the web app can also do this.
+// Only the scrypt hash is stored. The Admin section in the web app can also do this.
 'use strict';
 const fs = require('fs');
 const path = require('path');
