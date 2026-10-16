@@ -3,6 +3,8 @@
 // throwaway hub. Speaks the same NDJSON events the web app reads, costs nothing, touches nothing.
 //   message contains "SLOW"   → waits 4 s before answering (busy / 409 / stop / deferred restart)
 //   message contains "PCTOOL" → calls the pc "list" tool through the hub, like the real MCP relay
+//   message contains "USAGE"  → reports token usage (54,000 of a 200,000 context window) and a
+//                               5-hour rate-limit event (42% used, resets in 2 h), like the real stream
 // The answer echoes the model and the working folder (cwd) so the runner can check both.
 'use strict';
 const fs = require('fs');
@@ -29,6 +31,11 @@ process.stdin.on('end', async () => {
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
   }
-  out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()}` }] } });
-  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: `echo: ${input.slice(-200)} | model=${model}` });
+  const usage = input.includes('USAGE');
+  if (usage) out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed', utilization: 0.42, resetsAt: Math.floor(Date.now() / 1000) + 7200 } });
+  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()}` }],
+    ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
+  // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
+  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
+    ...(usage ? { modelUsage: { [model]: { inputTokens: 4000, outputTokens: 300, contextWindow: 200000 } } } : {}) });
 });

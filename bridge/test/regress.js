@@ -119,7 +119,7 @@ async function call(p, token, body, extraHeaders = {}) {
 const login = (username, password, deviceId) => call('/api/login', null, { username, password, deviceId });
 // Run a chat to completion; answers pc_tool events like a browser would.
 async function chat(token, message, opts = {}) {
-  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh }) });
+  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}) }) });
   if (r.status !== 200) return { status: r.status, events: [] };
   const events = []; let buf = '';
   const reader = r.body.getReader(), dec = new TextDecoder();
@@ -142,7 +142,11 @@ const texts = (events) => events.filter((e) => e.type === 'assistant').flatMap((
 
 // ---------- chat crypto (same Web Crypto calls as web/index.html) ----------
 const subtle = globalThis.crypto.subtle;
-const rand = (n) => globalThis.crypto.getRandomValues(new Uint8Array(n));
+const rand = (n) => { // getRandomValues refuses more than 65,536 bytes per call
+  const b = new Uint8Array(n);
+  for (let i = 0; i < n; i += 65536) globalThis.crypto.getRandomValues(b.subarray(i, i + 65536));
+  return b;
+};
 const enc = new TextEncoder(), dec = new TextDecoder();
 const toB64 = (b) => Buffer.from(b).toString('base64'), fromB64 = (s) => new Uint8Array(Buffer.from(s, 'base64'));
 const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
@@ -289,15 +293,18 @@ async function run() {
   await roomSend(U, restored, 'just chatting, nobody named');
   await sleep(3000);
   const quiet = !(await agentMsgs(U, restored, seq0)).length;
-  await roomSend(U, restored, '@claude ping-r36');
+  await roomSend(U, restored, '@claude not-the-handle-r36'); // only its own @-handle calls it now
+  await sleep(3000);
+  const quiet2 = !(await agentMsgs(U, restored, seq0)).length;
+  await roomSend(U, restored, '@unity ping-r36');
   const ans = await waitAgent(U, restored, seq0, (t) => t.includes('ping-r36'));
   const ansA = ans && (await agentMsgs(A, privA, seq0)).find((x) => x.seq === ans.seq);
-  await roomSend(A, privA, '@unity ping-unity');
+  await roomSend(A, privA, '@Unity ping-unity');
   const viaUnity = await waitAgent(A, privA, seq0, (t) => t.includes('ping-unity'));
-  check('R36', 'unnamed message → no reply; @claude → one reply every member decrypts; @unity also calls it', quiet && !!ans && !!(ansA && ansA.text) && !!viaUnity);
+  check('R36', 'unnamed message → no reply; @claude → no reply; @unity → one reply every member decrypts (any capitalisation)', quiet && quiet2 && !!ans && !!(ansA && ansA.text) && !!viaUnity);
   await sleep(1500);
   const pidR = (await call('/api/status')).data.pid;
-  await roomSend(U, restored, '@claude SLOW ping-r37');
+  await roomSend(U, restored, '@unity SLOW ping-r37');
   let busySeen = false;
   for (let i = 0; i < 10 && !busySeen; i++) { await sleep(200); busySeen = (await call('/api/status')).data.busy === true; }
   fs.writeFileSync(path.join(SB, '.restart'), 'test');
@@ -350,7 +357,199 @@ async function run() {
     cmMerged = spawnSync('git', ['show', 'develop:regress-uncommitted.txt'], { cwd: SCRATCH, encoding: 'utf8' }).stdout.includes('left uncommitted');
     cmClean = spawnSync(process.execPath, [wtJs, 'commit', 't-user'], { cwd: SB, encoding: 'utf8' }).stdout;
   }
-  check('R42', 'worktree.js: commit stages + commits uncommitted work in the worktree, merge then lands it; clean → nothing to commit', /Committed on work\/t-user/.test(cm.stdout) && cmMerged && /Nothing to commit/.test(cmClean), String(cm.stdout || cm.stderr).trim());
+  check('R59', 'worktree.js: commit stages + commits uncommitted work in the worktree, merge then lands it; clean → nothing to commit', /Committed on work\/t-user/.test(cm.stdout) && cmMerged && /Nothing to commit/.test(cmClean), String(cm.stdout || cm.stderr).trim());
+  const wtList = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: SCRATCH, encoding: 'utf8' }).stdout;
+  const devFree = !/branch refs\/heads\/develop/.test(wtList) && !/_merge-|_develop/.test(wtList);
+  const syncBack = fs.existsSync(wtU) ? spawnSync(process.execPath, [path.join(SB, 'worktree.js'), 'sync', 't-user'], { cwd: SB, encoding: 'utf8' }).stdout : '';
+  check('R60', 'worktree.js: merging leaves develop free (no leftover merge checkout locks it); sync brings develop back into work/<user>', devFree && /up to date with develop/.test(syncBack), devFree ? syncBack.trim() : wtList.replace(/\s+/g, ' '));
+
+  // Chat v2: settings, private messages, edit / delete, receipts, agent privacy
+  const seal = async (tok, priv, plain, to) => { // like the page's sealFor: everyone, or only sender + recipient
+    const mem = (await call('/api/room/members', tok)).data.members, r2 = rand(32), iv2 = rand(12);
+    const body = await subtle.encrypt({ name: 'AES-GCM', iv: iv2 }, await subtle.importKey('raw', r2, 'AES-GCM', false, ['encrypt']), enc.encode(plain));
+    const ks = {};
+    for (const m of mem) if (m.pub) { const kiv = rand(12); ks[m.username] = { iv: toB64(kiv), wk: toB64(await subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await shared(priv, m.pub), r2)) }; }
+    return { iv: toB64(iv2), ct: toB64(body), keys: ks, ...(to ? { to } : {}) }; // deliberately wraps for everyone: the hub must drop extra slots
+  };
+  const v2 = (t, r) => JSON.stringify({ v: 2, t, ...(r ? { r } : {}) });
+  const pr = await call('/api/prefs', U, { nick: '  Tee\u0007 Nick  ', color: 5, toasts: false, sound: { on: true, message: 150, mention: 20 },
+    tts: { on: true, volume: 400, rate: 10, voice: 'x'.repeat(300), scope: 'weird' }, clips: { volume: -5, autoplay: 1 },
+    audio: { noise: false, echo: 1 }, call: { volume: 250, quality: 'ultra' }, autosave: 999 });
+  const ttsOk = pr.data.prefs && pr.data.prefs.tts && pr.data.prefs.tts.on === true && pr.data.prefs.tts.volume === 100 && pr.data.prefs.tts.rate === 50
+    && pr.data.prefs.tts.voice.length === 120 && pr.data.prefs.tts.scope === 'all'
+    && pr.data.prefs.clips && pr.data.prefs.clips.volume === 0 && pr.data.prefs.clips.autoplay === true
+    && pr.data.prefs.audio && pr.data.prefs.audio.noise === false && pr.data.prefs.audio.echo === true
+    && pr.data.prefs.call && pr.data.prefs.call.volume === 100 && pr.data.prefs.call.quality === 'medium' && pr.data.prefs.autosave === 120;
+  const prBad = await call('/api/prefs', A, { color: 99 });
+  const memP = ((await call('/api/room/members', A)).data.members || []).find((m) => m.username === 't-user');
+  check('R42', 'settings: nickname cleaned, colour kept, volumes / speech settings clamped, bad colour → none; others see nick + colour', pr.status === 200 && ttsOk && pr.data.prefs.nick === 'Tee Nick'
+    && pr.data.prefs.color === 5 && pr.data.prefs.sound.message === 100 && pr.data.prefs.toasts === false && prBad.data.prefs.color === null
+    && !!memP && memP.nick === 'Tee Nick' && memP.color === 5 && (await call('/api/check', U)).data.prefs.nick === 'Tee Nick');
+
+  const rev0 = (await call('/api/room/messages?rev=0', A)).data.latestRev || 0;
+  const dm = await call('/api/room/send', A, await seal(A, privA, v2('secret dm-r43'), 't-user'));
+  const self = await call('/api/room/send', A, await seal(A, privA, v2('x'), 't-admin'));
+  const nobody = await call('/api/room/send', A, await seal(A, privA, v2('x'), 'ghost'));
+  const forU = ((await call('/api/room/messages?rev=' + rev0, U)).data.messages || []).find((m) => m.seq === dm.data.seq);
+  const forD = ((await call('/api/room/messages?rev=0', D)).data.messages || []).find((m) => m.seq === dm.data.seq);
+  const onDisk = (fs.readFileSync(path.join(SCRATCH, 'Chat', 'messages.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.seq === dm.data.seq) || {});
+  check('R43', 'private message: only sender + recipient receive it, extra key slots dropped, to self / unknown → 400', dm.status === 200 && !!forU && forU.to === 't-user'
+    && (await roomRead(restored, forU)) === v2('secret dm-r43') && !forD && Object.keys(onDisk.keys || {}).sort().join() === 't-admin,t-user' && self.status === 400 && nobody.status === 400);
+
+  const mine = await call('/api/room/send', U, await seal(U, restored, v2('before edit', dm.data.seq)));
+  const revA = (await call('/api/room/messages?rev=0', A)).data.latestRev;
+  const ed = await call('/api/room/edit', U, { seq: mine.data.seq, ...(await seal(U, restored, v2('after edit', dm.data.seq))) });
+  const edOther = await call('/api/room/edit', A, { seq: mine.data.seq, ...(await seal(A, privA, v2('hijack'))) });
+  const changed = ((await call('/api/room/messages?rev=' + revA, A)).data.messages || []).find((m) => m.seq === mine.data.seq);
+  check('R44', 'edit own message: re-encrypted text, editedAt, shows up in ?rev= polling; editing someone else\'s → 403', ed.status === 200 && edOther.status === 403
+    && !!changed && !!changed.editedAt && (await roomRead(privA, changed)) === v2('after edit', dm.data.seq));
+
+  const revB = (await call('/api/room/messages?rev=0', A)).data.latestRev;
+  const delOther = await call('/api/room/delete', A, { seq: mine.data.seq });
+  const delOwn = await call('/api/room/delete', U, { seq: mine.data.seq });
+  const gone2 = ((await call('/api/room/messages?rev=' + revB, A)).data.messages || []).find((m) => m.seq === mine.data.seq);
+  const diskDel = (fs.readFileSync(path.join(SCRATCH, 'Chat', 'messages.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.seq === mine.data.seq) || {});
+  check('R45', 'delete own message: tombstone without ciphertext, polled by everyone; deleting someone else\'s → 403', delOther.status === 403 && delOwn.status === 200
+    && !!gone2 && gone2.deleted === true && !gone2.ct && !diskDel.ct && diskDel.deleted === true);
+
+  const sRoom = await call('/api/room/seen', U, { conv: 'room', seq: dm.data.seq });
+  const sDm = await call('/api/room/seen', U, { conv: 'dm:t-admin|t-user', seq: dm.data.seq });
+  const sForeign = await call('/api/room/seen', D, { conv: 'dm:t-admin|t-user', seq: 1 });
+  const sBad = await call('/api/room/seen', U, { conv: 'nowhere', seq: 1 });
+  const seenA = (await call('/api/room/messages?rev=' + revB, A)).data.seen || {}, seenD = (await call('/api/room/messages?rev=' + revB, D)).data.seen || {};
+  check('R46', 'receipts: seen per conversation reported to its members only; foreign / unknown conversation → 400', sRoom.status === 200 && sDm.status === 200
+    && sForeign.status === 400 && sBad.status === 400 && (seenA['t-user'] || {}).room === dm.data.seq && (seenA['t-user'] || {})['dm:t-admin|t-user'] === dm.data.seq
+    && !((seenD['t-user'] || {})['dm:t-admin|t-user']));
+
+  await sleep(1500);
+  const seqDm = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  await call('/api/room/send', U, await seal(U, restored, v2('private ping-r47'), 'claude'));
+  const privAns = await waitAgent(U, restored, seqDm, (t) => t.includes('ping-r47'), 20000);
+  const privMsg = privAns && ((await call('/api/room/messages?since=' + seqDm, U)).data.messages || []).find((m) => m.seq === privAns.seq);
+  const leaked = ((await call('/api/room/messages?since=' + seqDm, A)).data.messages || []).some((m) => privAns && m.seq === privAns.seq);
+  await sleep(1500);
+  const seqV2 = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  await call('/api/room/send', U, await seal(U, restored, v2('@unity ping-v2-r47')));
+  const v2Ans = await waitAgent(U, restored, seqV2, (t) => t.includes('ping-v2-r47'), 20000);
+  check('R47', 'agent: a private message gets a private answer nobody else receives; it reads the new message format', !!privAns && !!privMsg && privMsg.to === 't-user'
+    && /private message to you/.test(privAns.text) && !leaked && !!v2Ans && !v2Ans.text.includes('"v":2'));
+
+  // Voice clips: the audio travels inside the encrypted v2 payload; the hub only enforces a size cap.
+  const fakeAudio = Buffer.from(rand(600000)).toString('base64'); // ~800 KB of "audio" → ~1.1 MB encrypted + base64
+  const clipSent = await call('/api/room/send', U, await seal(U, restored, JSON.stringify({ v: 2, t: 'clip-r49', a: { m: 'audio/webm', d: fakeAudio, s: 95 } })));
+  const clipBack = clipSent.status === 200 && ((await call('/api/room/messages?since=' + (clipSent.data.seq - 1), A)).data.messages || []).find((m) => m.seq === clipSent.data.seq);
+  const clipPlain = clipBack ? JSON.parse(await roomRead(privA, clipBack) || '{}') : {};
+  const tooBig = await call('/api/room/send', U, { iv: toB64(rand(12)), ct: 'A'.repeat(1600000), keys: { 't-user': { iv: toB64(rand(12)), wk: toB64(rand(48)) } } });
+  const clipDisk = fs.readFileSync(path.join(SCRATCH, 'Chat', 'messages.jsonl'), 'utf8');
+  check('R49', 'voice clip: a ~2-minute clip is accepted and decrypts intact for others; over the cap → 413; audio never stored in the clear',
+    clipSent.status === 200 && clipPlain.a && clipPlain.a.d === fakeAudio && clipPlain.t === 'clip-r49' && tooBig.status === 413 && !clipDisk.includes(fakeAudio.slice(0, 200)),
+    `send ${clipSent.status}, too big ${tooBig.status}`);
+  // Calls: the hub only tracks who is in which call and relays opaque (encrypted) set-up messages.
+  const jA = await call('/api/call/join', A, { conv: 'room', cam: false, mic: true });
+  const pollU = (await call('/api/call/poll?after=0&ver=-1', U)).data, pollD = (await call('/api/call/poll?after=0&ver=-1', D)).data;
+  const dmJoin = await call('/api/call/join', U, { conv: 'dm:t-admin|t-user', cam: false, mic: true });
+  const dmIntruder = await call('/api/call/join', D, { conv: 'dm:t-admin|t-user' }), badConv = await call('/api/call/join', D, { conv: 'dm:zzz|aaa' });
+  const dmSeenByD = !!((await call('/api/call/poll?after=0&ver=-1', D)).data.calls || {})['dm:t-admin|t-user'];
+  await call('/api/call/join', U, { conv: 'room', cam: false, mic: true }); // one call at a time: moves U out of the private one
+  const stU = (await call('/api/call/poll?after=0&ver=-1', U)).data;
+  const opaque = { iv: toB64(rand(12)), ct: toB64(rand(300)) };
+  const sigToD = await call('/api/call/signal', A, { to: 'mills', conv: 'room', ...opaque });
+  const v0 = stU.ver, a0 = stU.after;
+  const t0 = Date.now();
+  const waiting = call(`/api/call/poll?after=${a0}&ver=${v0}`, U); // must hang until the signal arrives
+  await sleep(700);
+  const sig = await call('/api/call/signal', A, { to: 't-user', conv: 'room', ...opaque });
+  const woke = (await waiting).data, waited = Date.now() - t0;
+  const got1 = (woke.signals || []).find((s) => s.from === 't-admin');
+  const camState = await call('/api/call/state', A, { conv: 'room', cam: true, mic: false });
+  const afterCam = (((await call('/api/call/poll?after=0&ver=-1', U)).data.calls || {}).room || []).find((p) => p.user === 't-admin');
+  await call('/api/call/leave', A, {});
+  const afterLeave = (((await call('/api/call/poll?after=0&ver=-1', U)).data.calls || {}).room || []).map((p) => p.user);
+  check('R50', 'calls: presence per conversation, private calls only for their two people, one call at a time, signals relayed opaquely and only inside the call, long-poll wakes on a signal, cam/mic state, leave',
+    jA.status === 200 && Array.isArray(jA.data.iceServers) && ((pollU.calls || {}).room || []).some((p) => p.user === 't-admin') && ((pollD.calls || {}).room || []).some((p) => p.user === 't-admin')
+    && dmJoin.status === 200 && dmIntruder.status === 400 && badConv.status === 400 && !dmSeenByD && !(stU.calls || {})['dm:t-admin|t-user']
+    && sigToD.status === 409 && sig.status === 200 && !!got1 && got1.ct === opaque.ct && waited >= 600 && waited < 20000
+    && camState.status === 200 && afterCam && afterCam.cam === true && afterCam.mic === false && !afterLeave.includes('t-admin') && afterLeave.includes('t-user'),
+    `dm ${dmJoin.status}/${dmIntruder.status}, signal ${sigToD.status}/${sig.status}, waited ${waited} ms`);
+  await call('/api/call/leave', U, {});
+  // Usage bar: 5h / 7d windows (estimated, then Claude's own numbers) + per-session context window
+  const uBefore = (await call('/api/usage', A)).data;
+  const uRun = await chat(A, 'USAGE please', { fresh: true });
+  const uAfter = (await call('/api/usage', A)).data, uOther = (await call('/api/usage', D)).data;
+  await chat(A, 'brand new session', { fresh: true });
+  const uFresh = (await call('/api/usage', A)).data;
+  const in2h = uAfter.five_hour && uAfter.five_hour.resetsAt - Date.now();
+  check('R52', 'usage: windows estimated before Claude reports them, then Claude\'s utilization + reset time; context 54k/200k per account + session, cleared by a new session',
+    uBefore.five_hour && uBefore.five_hour.source === 'estimate' && uBefore.seven_day && uBefore.seven_day.resetsAt > Date.now()
+    && uRun.status === 200 && uAfter.five_hour.source === 'claude' && uAfter.five_hour.utilization === 0.42 && in2h > 7000e3 && in2h <= 7200e3
+    && uAfter.context && uAfter.context.tokens === 54000 && uAfter.context.window === 200000 && !uOther.context && !uFresh.context,
+    JSON.stringify({ five: uAfter.five_hour, ctx: uAfter.context }).slice(0, 200));
+  check('R53', '[static] usage bar above the Claude messages: 5h hh:mm:ss, 7d dd/hh/mm, colour scale green → orange → yellow → red, purple when out',
+    /id="usageBar"/.test(html) && html.indexOf('id="usageBar"') < html.indexOf('id="log"') && /\[0, \[46, 204, 113\]\], \[33, \[255, 159, 26\]\], \[66, \[255, 212, 59\]\], \[100, \[255, 59, 59\]\]/.test(html)
+    && /OUT_COLOR = 'rgb\(160, 90, 255\)'/.test(html) && /pad2\(Math\.floor\(s \/ 3600\)\) \+ ':'/.test(html) && /'d ' \+ pad2/.test(html));
+  check('R54', '[static] calls: speaking ring from a local level meter, per-person volume + mute kept only in this browser, Mute / Unmute button with M shortcut',
+    /\.tile\.speaking \{/.test(html) && /createAnalyser\(\)/.test(html) && /addMeter\(user, e\.track\)/.test(html) && /mills\.vol\.' \+ u/.test(html)
+    && /mills\.mute\.' \+ user/.test(html) && /className = 'pVol'/.test(html) && /'🔇 Mute' : '🎤 Unmute'/.test(html) && /M = mute \/ unmute yourself/.test(html));
+  check('R55', '[static] dictation in chat + Work: browser speech recognition, appends (continue), ~3 s silence stop, never auto-sends except "send message" + silence',
+    /id="roomDictate"/.test(html) && /id="workDictate"/.test(html) && /window\.SpeechRecognition \|\| window\.webkitSpeechRecognition/.test(html)
+    && /setTimeout\(dictStop, 3000\)/.test(html) && /const WAKE = \/\\s\*\\bsend message/.test(html) && /if \(box\.value\) d\.submit\(\)/.test(html)
+    && /base: base \? base \+ ' ' : ''/.test(html) && /btn\.hidden = !SpeechRec/.test(html));
+  // Unity reads at most the last 6 messages: the 5 the caller sends along + the call itself
+  await sleep(1500);
+  const seqCtx = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  const ctx8 = Array.from({ length: 8 }, (_, i) => ({ n: 'Someone', t: 'ctx-item-' + (i + 1) }));
+  await call('/api/room/send', U, await seal(U, restored, JSON.stringify({ v: 2, t: '@unity FULLECHO ping-ctx-r57', ctx: ctx8 })));
+  const ctxAns = await waitAgent(U, restored, seqCtx, (t) => t.includes('ping-ctx-r57'), 20000);
+  const ctxText = (ctxAns && ctxAns.text) || '';
+  check('R57', 'Unity: only @unity calls her; she gets the call + at most the 5 messages before it (older context dropped)',
+    !!ctxAns && ['ctx-item-4', 'ctx-item-5', 'ctx-item-6', 'ctx-item-7', 'ctx-item-8'].every((x) => ctxText.includes(x)) && !ctxText.includes('ctx-item-3') && !ctxText.includes('ctx-item-1'),
+    ctxText.slice(0, 160));
+  check('R57b', '[static] browsers encrypt for Unity only when a message @-mentions her (or is private to her), with the 5 previous messages',
+    /if \(m\.agent && !forAgent\) continue;/.test(html) && /function callsAgent\(/.test(html) && /\.slice\(-5\)/.test(html) && /ctx: agentCtx\(currentConv\)/.test(html));
+
+  // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
+  const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });
+  const shareListU = (await call('/api/room/messages?rev=0', U)).data.shares || [], shareListA = (await call('/api/room/messages?rev=0', A)).data.shares || [];
+  const wa1 = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', U)).data;
+  const seedOk = (wa1.events || []).some((e) => e.t === 'user' && e.text === 'seed-hello-r58') && (wa1.events || []).some((e) => e.t === 'claude' && e.text === 'seed-reply-r58');
+  const t58 = Date.now();
+  const wPending = call(`/api/work/watch?user=t-admin&after=${wa1.after}&ver=${wa1.ver}&since=${encodeURIComponent(wa1.since)}`, U);
+  await sleep(600);
+  const ranA = await chat(A, 'live-run-r58', { fresh: true });
+  const wa2 = (await wPending).data, waited58 = Date.now() - t58;
+  const liveRun = (wa2.events || []).some((e) => e.t === 'user' && e.text === 'live-run-r58');
+  await call('/api/work/live', A, { typing: 'typing-r58', queue: ['queued-r58'] });
+  const wa3 = (await call(`/api/work/watch?user=t-admin&after=${wa2.after}&ver=${wa2.ver}&since=${encodeURIComponent(wa2.since)}`, U)).data;
+  const ctxRun = await chat(A, 'with-context-r58', { context: 'CTX-SUMMARY-R58' });
+  const wa4 = (await call(`/api/work/watch?user=t-admin&after=${wa3.after}&ver=${wa3.ver}&since=${encodeURIComponent(wa3.since)}`, U)).data;
+  const ctxMirrored = (wa4.events || []).some((e) => e.text.includes('CTX-SUMMARY-R58') && e.t === 'user');
+  await call('/api/work/share', A, { conv: 'dm:t-admin|t-user', transcript: [] });
+  const dmD = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', D)).data, dmU = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', U)).data;
+  const selfWatch = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', A)).data;
+  await call('/api/work/share', A, { conv: '' });
+  const afterStop = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', U)).data;
+  check('R58', 'shared Work: listed for the conversation (not to yourself), seeded transcript, live run wakes watchers, typing + queue live, context reaches own Claude but not watchers, private share only for that person, stop',
+    shA.status === 200 && shareListU.some((s) => s.user === 't-admin' && s.conv === 'room') && !shareListA.some((s) => s.user === 't-admin')
+    && seedOk && liveRun && waited58 >= 500 && ranA.status === 200 && wa3.live && wa3.live.typing === 'typing-r58' && (wa3.live.queue || [])[0] === 'queued-r58'
+    && texts(ctxRun.events).includes('CTX-SUMMARY-R58') && !ctxMirrored && dmD.stopped === true && !dmU.stopped && selfWatch.stopped === true && afterStop.stopped === true,
+    `seed ${seedOk}, live ${liveRun} (${waited58} ms), dm D ${dmD.stopped}/U ${!dmU.stopped}`);
+  check('R58b', '[static] share selector, Join work banner, watch-only windows with live typing + queue, summaries in Work messages',
+    /id="shareSel"/.test(html) && /id="shareBanner"/.test(html) && /function openWatch\(/.test(html) && /\/api\/work\/watch\?user=/.test(html)
+    && /function watchContext\(/.test(html) && /context \? \{ context \} : \{\}/.test(html) && /\/api\/work\/live/.test(html));
+  check('R56', '[static] layout stays inside the viewport: page = viewport (dvh), flex children may shrink, long text wraps, floating windows clamped',
+    /height: 100dvh/.test(html) && /html \{ height: 100%; overflow: hidden; \}/.test(html) && /Stay inside the viewport/.test(html)
+    && /\.msg \{ min-width: 0; max-width: 100%; overflow-wrap: anywhere/.test(html) && /\.floatWin \{ max-width: calc\(100vw - 16px\)/.test(html));
+  check('R51', '[static] Past sessions naming + auto-save (default 5 min, auto-named, keeps overwriting the same saved session)',
+    />Past sessions<\/button>/.test(html) && />Save session<\/button>/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
+    && /autosave: p\.autosave \?\? 5/.test(html) && /saveToArchive\(true, true\)/.test(html) && /if \(auto\) title = autoName\(\)/.test(html));
+  const ids48 = ['callBtn', 'callBanner', 'callCore', 'callTiles', 'callMic', 'callCam', 'callLeave', 'callFloat', 'callSideHost', 'audNoise', 'audEcho', 'audAgc', 'callVolume', 'callQuality', 'micBtn', 'recBar', 'recSend', 'recCancel', 'clipVolume', 'clipAuto','rail', 'panes', 'roomPane', 'roomFloat', 'roomCore', 'roomSide', 'settings', 'setNick', 'setColors', 'volMessage', 'volMention', 'volReply', 'setToasts', 'toasts', 'replyBar', 'mentionList', 'railRoomBadge', 'goSettings', 'setTts', 'ttsVolume', 'ttsRate', 'ttsVoice', 'ttsScope', 'ttsStop'];
+  check('R48', '[static] Work rail + resizable / minimizable panes + floating chat, settings in menu / chat / rail, tones, toasts, receipts, edit / delete / reply / @',
+    ids48.every((id) => html.includes(`id="${id}"`)) && (html.match(/data-settings/g) || []).length >= 4 && /function bindSplit/.test(html) && /data-min="files"/.test(html)
+    && /TONES = \{ message:/.test(html) && /function toast\(/.test(html) && /function seenText/.test(html) && /\/api\/room\/edit/.test(html) && /\/api\/room\/delete/.test(html)
+    && /function insertMention/.test(html) && /PALETTE = \[/.test(html) && /timeStyle/.test(html) && /new SpeechSynthesisUtterance/.test(html) && /function ttsNext/.test(html) && /getUserMedia/.test(html) && /new MediaRecorder/.test(html) && /function enqueueClip/.test(html)
+    && /new RTCPeerConnection/.test(html) && /setCodecPreferences/.test(html) && /'video\/VP9', 'video\/AV1'/.test(html) && /useinbandfec=1/.test(html)
+    && /noiseSuppression: a\.noise/.test(html) && /audio: audioConstraints\(\)/.test(html) && /📷 Camera off<\/button>/.test(html) && /const SNAPS = /.test(html)
+    && /crypto\.subtle\.encrypt\(\{ name: 'AES-GCM', iv \}, k, enc\.encode\(JSON\.stringify\(\{ conv: call\.conv/.test(html), ids48.filter((id) => !html.includes(`id="${id}"`)).join(', '));
 
   // Admin
   check('R25', 'non-admin → 403 on admin endpoints', (await call('/api/admin/accounts', U)).status === 403 && (await call('/api/admin/create', U, { username: 'x' })).status === 403);
@@ -433,7 +632,7 @@ async function run() {
     console.log(`Throwaway hub: ${SCRATCH} on port ${PORT} (no tunnel). Production is only read.\n`);
     if (!(await startHub())) throw new Error('throwaway hub did not start; see ' + path.join(SCRATCH, 'hub.log'));
     await run();
-  } catch (e) { console.log('RUNNER ERROR: ' + e.stack); code = 2; }
+  } catch (e) { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); }
   stopHub();
   await sleep(800);
   const failed = results.filter((r) => r.status === 'FAIL'), skipped = results.filter((r) => r.status === 'SKIP');

@@ -3,8 +3,9 @@
 // change Mills at the same time without stepping on each other.
 //
 //   <Desktop>/Mills-worktrees/<username>   branch work/<username>, created from develop on first use
-//   <Desktop>/Mills-worktrees/_develop     develop, used only to merge into (unless develop is
-//                                          already checked out somewhere else, then that folder)
+//   merges into develop happen where develop is checked out (e.g. the host folder), or else in a
+//   temporary detached checkout (Mills-worktrees/_merge-<pid>) removed right after, so develop
+//   stays free for the host folder to check out
 //   Mills/ (the host folder)               the "shared folder": the running hub's own checkout
 //
 //   node bridge/worktree.js status                  every worktree, its branch and whether it has uncommitted changes
@@ -62,14 +63,16 @@ function ensure(username) {
   return { dir, branch, created: true };
 }
 
+// Where to merge into develop: the folder that has develop checked out, or else a temporary detached
+// checkout that is removed again afterwards, so develop is never left locked away from the host folder.
 function developDir() {
   const at = worktrees().find((w) => w.branch === DEVELOP);
-  if (at) return at.dir;
-  const dir = path.join(WT_ROOT, '_develop');
+  if (at) return { dir: at.dir, temp: false };
+  const dir = path.join(WT_ROOT, '_merge-' + process.pid);
   fs.mkdirSync(WT_ROOT, { recursive: true });
   tryGit(REPO, 'worktree', 'prune');
-  git(REPO, 'worktree', 'add', dir, DEVELOP);
-  return dir;
+  git(REPO, 'worktree', 'add', '--detach', dir, DEVELOP);
+  return { dir, temp: true };
 }
 
 function pushAll(dir, branch) {
@@ -100,15 +103,23 @@ function commit(username, message) {
 function merge(username) {
   const { dir, branch } = ensure(username);
   if (dirty(dir)) throw new Error(`${branch} has uncommitted changes in ${dir}. Commit them first.`);
-  const dev = developDir();
-  if (dirty(dev)) throw new Error(`develop has uncommitted changes in ${dev}. Somebody is mid-work there; sort that out first.`);
   if (git(REPO, 'rev-list', '--count', `${DEVELOP}..${branch}`) === '0') return `Nothing to merge: ${branch} has no commits that develop lacks.`;
-  const r = tryGit(dev, 'merge', '--no-ff', '-m', `Merge ${branch} into develop`, branch);
-  if (!r.ok) {
-    tryGit(dev, 'merge', '--abort');
-    return `CONFLICT: ${branch} does not merge cleanly into develop (nothing was changed). Run "node bridge/worktree.js sync ${username}", resolve the conflicts in ${dir}, commit, then merge again.\n${r.out}`;
+  const { dir: dev, temp } = developDir();
+  let head;
+  try {
+    if (dirty(dev)) throw new Error(`develop has uncommitted changes in ${dev}. Somebody is mid-work there; sort that out first.`);
+    const before = git(dev, 'rev-parse', 'HEAD');
+    const r = tryGit(dev, 'merge', '--no-ff', '-m', `Merge ${branch} into develop`, branch);
+    if (!r.ok) {
+      tryGit(dev, 'merge', '--abort');
+      return `CONFLICT: ${branch} does not merge cleanly into develop (nothing was changed). Run "node bridge/worktree.js sync ${username}", resolve the conflicts in ${dir}, commit, then merge again.\n${r.out}`;
+    }
+    head = git(dev, 'rev-parse', 'HEAD');
+    if (temp) git(REPO, 'update-ref', 'refs/heads/' + DEVELOP, head, before); // fails if develop moved meanwhile
+  } finally {
+    if (temp) { tryGit(REPO, 'worktree', 'remove', '--force', dev); tryGit(REPO, 'worktree', 'prune'); }
   }
-  const lines = [`Merged ${branch} into develop (${git(dev, 'rev-parse', '--short', 'HEAD')}).`, ...pushAll(dev, DEVELOP)];
+  const lines = [`Merged ${branch} into develop (${head.slice(0, 7)}).`, ...pushAll(REPO, DEVELOP)];
   const s = tryGit(dir, 'merge', '--ff-only', DEVELOP); // keep the worker branch level with develop
   if (s.ok) lines.push(`${branch} fast-forwarded to develop.`);
   return lines.join('\n');
