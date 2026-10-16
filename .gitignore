@@ -32,3 +32,7 @@ bridge/profiles/
 .restart
 Chat/
 Archive/
+
+# Assistant: persona prompt (host-local) and per-account data
+bridge/assistant-persona.txt
+bridge/assistant.json

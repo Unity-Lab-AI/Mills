@@ -475,7 +475,9 @@ function agentHear(msg) {
 // `node restart.js` drops bridge/.restart. As soon as nobody's Claude run is in progress the app
 // exits with code 75 and run.js starts it again under the same tunnel (same public address).
 // Nobody — no account's Work run and not the room agent — is mid-run.
-const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running;
+// The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
+const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
+const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy();
 
 // ---------- voice / video calls ----------
 // The hub only passes call set-up messages between browsers and keeps track of who is in which
@@ -579,6 +581,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   try {
+    if (p === '/internal/assistant-tool') return await assistant.internal(req, res);
     // Internal channel from the MCP relay (same machine, shared secret, names the account).
     if (p === '/internal/pc-tool') {
       if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
@@ -643,6 +646,7 @@ const server = http.createServer(async (req, res) => {
 
     const acct = sessionAccount(req);
     if (!acct) return send(res, 401, { error: 'Not signed in.' });
+    if (await assistant.route(p, req, res, acct)) return;
 
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
@@ -956,7 +960,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true });
       }
       if (p === '/api/admin/signout' && req.method === 'POST') { const t = needTarget(); if (t !== acct) dropSessions(t.username); return send(res, 200, { ok: true }); }
-      if (p === '/api/admin/stop' && req.method === 'POST') { stopClaude(needTarget()); return send(res, 200, { ok: true }); }
+      if (p === '/api/admin/stop' && req.method === 'POST') { const t = needTarget(); stopClaude(t); assistant.stop(t); return send(res, 200, { ok: true }); }
       if (p === '/api/admin/delete' && req.method === 'POST') {
         const t = needTarget();
         if (t === acct) return send(res, 400, { error: 'You cannot delete your own account.' });
