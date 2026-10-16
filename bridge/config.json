@@ -4,6 +4,12 @@
   "permissionMode": "acceptEdits",
   "allowedTools": ["mcp__pc", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch"],
   "model": "",
+  "models": [
+    { "id": "claude-fable-5-1", "label": "Fable 5.1" },
+    { "id": "claude-opus-5-5", "label": "Opus 5.5" },
+    { "id": "claude-sonnet-5-5", "label": "Sonnet 5.5" },
+    { "id": "claude-haiku-5-5", "label": "Haiku 5.5" }
+  ],
   "tunnel": true,
   "cloudflared": "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe",
   "gistId": ""

@@ -25,6 +25,8 @@ User's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel ─�
    - The first time a profile runs, it asks you to set that person's Mills password.
    - Each bridge starts its own Cloudflare tunnel and posts the address to its own gist on your GitHub account (`Mills bridge address` for Alfreddo, `Mills bridge address (sponge)` for Sponge), where the web app finds it automatically.
 2. Requires Node.js, Claude Code (logged in), `gh` (logged in), and `cloudflared` (path set in `bridge/config.json`).
+3. Restarting a bridge is safe: passwords live in `auth.json` and are only ever written by `set-password.js` (the launcher asks for one only when that file is missing), the device lock and sign-in sessions live in `state.json`, so nobody is signed out or asked for a new password when you close and reopen a bridge window. Only the tunnel address changes, and the web app picks that up by itself.
+4. The models offered in the web app's dropdown come from `models` in `bridge/config.json` (`id` = what `claude --model` accepts, `label` = what the person sees). Edit that list and restart the bridges to change it.
 
 ### Adding another person
 
@@ -33,7 +35,7 @@ User's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel ─�
 3. Run `bridge/start.bat <name>` (copy `start-sponge.bat` if you want a double-clickable launcher).
 4. Give them `https://unity-lab-ai.github.io/Mills/?user=<name>` and the password. Their saved conversations land in `Mills/Archive/<name>/`.
 
-Profile state lives in `bridge/profiles/<name>/` (`auth.json`, `state.json`, `.mcp-runtime.json` are gitignored; `config.json` is committed). Everything in `bridge/config.json` except `port` and `gistId` applies to every profile unless the profile's own `config.json` overrides it. For example, a profile can pin its own Claude model with `"model": "claude-opus-5-5"` (Sponge's profile does; an empty or missing `model` uses Claude Code's default). Config is read when the bridge starts, so restart that profile's window after changing it.
+Profile state lives in `bridge/profiles/<name>/` (`auth.json`, `state.json`, `.mcp-runtime.json` are gitignored; `config.json` is committed). Everything in `bridge/config.json` except `port` and `gistId` applies to every profile unless the profile's own `config.json` overrides it. For example, a profile can set its own default Claude model with `"model": "claude-opus-5-5"` (Sponge's profile does; an empty or missing `model` uses Claude Code's default). That default is what the web app's "Default" option means; a pick in the dropdown overrides it. Config is read when the bridge starts, so restart that profile's window after changing it.
 
 ## Alfreddo / Sponge: using it
 
@@ -42,6 +44,7 @@ Profile state lives in `bridge/profiles/<name>/` (`auth.json`, `state.json`, `.m
 3. Chat with Claude. It creates and edits files in that folder, and you can also edit them yourself in the editor panel.
 4. **Save to Archive** stores the current conversation; once saved, it updates itself after every reply. **Archive** lists saved conversations: **Open** one to continue it (Claude resumes with full memory of it), **Rename** it (or click the title above the chat), or **Delete** it (click twice to confirm). Saved conversations live on Gee's PC in `Mills/Archive/` (Alfreddo) or `Mills/Archive/<name>/` (other profiles) and are never committed.
 5. **Theme** opens a dropdown of 23 UI colour themes (Burple, Cyberpunk, Dracula, Nord, Solarized, …) plus the Mills default. The choice is remembered in that browser.
+6. The **model dropdown** in the header picks which Claude model answers you (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5, or your bridge's default). The choice is stored by your bridge, so it applies from your next message (if Claude is mid-reply, from the one after), to every new chat, and it survives bridge restarts. Each "Done" line shows which model answered.
 
 ## Publishing updates
 

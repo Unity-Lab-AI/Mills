@@ -17,6 +17,7 @@
   button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   button:disabled { opacity: .5; cursor: default; }
   input, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .75rem; width: 100%; }
+  select { font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .6rem; cursor: pointer; }
   [hidden] { display: none !important; }
 
   .center { margin: auto; width: min(400px, 92vw); display: flex; flex-direction: column; gap: .75rem; }
@@ -96,6 +97,7 @@
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
     <button class="ghost" id="saveChat" title="Save this conversation to the Archive">Save to Archive</button>
     <button class="ghost" id="openArchive" title="Saved conversations">Archive</button>
+    <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
     <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
       <div id="themeMenu" hidden></div></span>
     <button class="ghost" id="logout">Sign out</button>
@@ -232,6 +234,7 @@ $('login').addEventListener('submit', async (e) => {
 function enter() {
   $('login').hidden = true; $('shell').hidden = false;
   restoreFolder();
+  json('/api/check').then(showModels).catch(() => {});
 }
 function signOut() {
   token = null; sessionStorage.removeItem(TOKEN_KEY);
@@ -391,6 +394,29 @@ async function runPcTool(ev) {
   if (ev.name !== 'read' && ev.name !== 'list') listDir(cwd);
 }
 
+// ---------- model picker ----------
+// The bridge stores the choice per person, so it applies from the next message on (after the
+// current turn, if Claude is busy), to every new conversation, and after the bridge restarts.
+let modelLabels = {};
+const modelName = (id) => (id ? modelLabels[id] || id : 'Claude Code default');
+function showModels(d) {
+  const sel = $('model');
+  if (!Array.isArray(d.models)) { sel.hidden = true; return; } // bridge from before the picker existed
+  modelLabels = Object.fromEntries(d.models.map((m) => [m.id, m.label]));
+  sel.innerHTML = '';
+  const def = document.createElement('option');
+  def.value = ''; def.textContent = 'Default' + (d.defaultModel ? ' (' + modelName(d.defaultModel) + ')' : '');
+  sel.append(def);
+  for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
+  sel.value = d.model || ''; sel.hidden = false;
+}
+$('model').onchange = async () => {
+  try {
+    const d = await json('/api/model', { method: 'POST', body: JSON.stringify({ model: $('model').value }) });
+    sys('Model: ' + modelName(d.effective) + (busy ? ' — applies from the message after this one.' : ' — applies from your next message.'));
+  } catch (err) { sys(err.message, true); }
+};
+
 let busy = false, fresh = false;
 function setBusy(b) { busy = b; $('send').hidden = b; $('stop').hidden = !b; $('input').disabled = b; }
 
@@ -400,7 +426,7 @@ $('composer').addEventListener('submit', async (e) => {
   if (!message || busy) return;
   $('input').value = '';
   renderText(bubble('me'), message); record('me', message); scroll();
-  setBusy(true);
+  setBusy(true); runModel = ''; stderrText = '';
   try {
     const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh }) });
     fresh = false;
@@ -421,6 +447,7 @@ $('composer').addEventListener('submit', async (e) => {
   if (archiveId) saveToArchive(true); // keep the archived copy up to date
 });
 
+let runModel = '', stderrText = ''; // which model this run used (from Claude's init event) + its stderr, shown only if the run fails
 function handleEvent(ev) {
   if (ev.type === 'pc_tool') return runPcTool(ev);
   if (ev.type === 'assistant' && ev.message) {
@@ -428,11 +455,13 @@ function handleEvent(ev) {
       if (block.type === 'text' && block.text.trim()) { renderText(bubble('claude'), block.text); record('claude', block.text); }
       else if (block.type === 'tool_use') { const t = describeTool(block); line('tool', t); record('tool', t); }
     }
-  } else if (ev.type === 'result') {
+  } else if (ev.type === 'system' && ev.subtype === 'init') { if (ev.model) runModel = ev.model; }
+  else if (ev.type === 'result') {
     if (ev.is_error) sys('Claude stopped with an error: ' + (ev.result || ev.subtype), true);
-    else sys('Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + 's' : ''));
-  } else if (ev.type === 'bridge_error') sys(ev.text, true);
-  else if (ev.type === 'bridge_done' && ev.code) sys('Claude stopped (code ' + ev.code + ')', true);
+    else sys('Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
+  } else if (ev.type === 'stderr') stderrText = (stderrText + ev.text).slice(-600);
+  else if (ev.type === 'bridge_error') sys(ev.text, true);
+  else if (ev.type === 'bridge_done' && ev.code) sys('Claude stopped (code ' + ev.code + ')' + (stderrText.trim() ? ': ' + stderrText.trim() : ''), true);
   scroll();
 }
 
