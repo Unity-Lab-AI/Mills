@@ -232,6 +232,20 @@ async function run() {
   const dl = await call('/api/archive/delete', U, { id: sv.data.id });
   const gone = !((await call('/api/archive/list', U, {})).data.items || []).length;
   check('R16', 'archive save/list/rename/open/delete per account, invisible to others', sv.status === 200 && lu.length === 1 && !la.some((x) => x.id === sv.data.id) && rn.data.title === 'renamed' && op.status === 200 && dl.status === 200 && gone);
+  // Search over past sessions: titles + full transcripts, every word must match, snippets around hits, own sessions only.
+  const s1 = await call('/api/archive/save', U, { title: 'Deploy notes', transcript: [{ cls: 'me', text: 'how do I deploy the hub' }, { cls: 'claude', text: 'Run restart.js after the needle-r75 step, then verify.' }] });
+  const s2 = await call('/api/archive/save', U, { title: 'Other chat', transcript: [{ cls: 'me', text: 'nothing relevant here' }] });
+  const f1 = (await call('/api/archive/search', U, { q: 'needle-r75' })).data.items || [];
+  const f2 = (await call('/api/archive/search', U, { q: 'DEPLOY verify' })).data.items || []; // case-insensitive, both words, across title + transcript
+  const f3 = (await call('/api/archive/search', U, { q: 'deploy zzz-absent' })).data.items || [];
+  const f4 = (await call('/api/archive/search', A, { q: 'needle-r75' })).data.items || [];
+  const f5 = (await call('/api/archive/search', U, { q: '' })).data.items || [];
+  check('R75', 'past sessions search: matches titles and everything in the transcript (all words, any case), ranked by hits with snippets saying who said it, nothing from other accounts, empty query = the plain list; [static] search box + highlighted matches',
+    s1.status === 200 && s2.status === 200 && f1.length === 1 && f1[0].id === s1.data.id && f1[0].hits === 1 && f1[0].snippets.length === 1 && f1[0].snippets[0].cls === 'claude' && /needle-r75/.test(f1[0].snippets[0].text)
+    && f2.length === 1 && f2[0].id === s1.data.id && !f3.length && !f4.length && f5.length === 2
+    && /id="archiveQ"/.test(html) && /function markText\(/.test(html) && /\/api\/archive\/search/.test(html),
+    `needle ${f1.length}, two words ${f2.length}, absent ${f3.length}, other account ${f4.length}, empty ${f5.length}`);
+  for (const s of [s1, s2]) await call('/api/archive/delete', U, { id: s.data.id });
 
   // Page (static: the runner has no browser)
   const hasIds = ['username', 'password', 'menu', 'menuUser', 'goWork', 'goChat', 'goAdmin', 'room', 'admin', 'shell', 'model', 'stop', 'send'].every((id) => html.includes(`id="${id}"`));

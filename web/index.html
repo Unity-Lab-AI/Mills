@@ -269,6 +269,10 @@
   .slider input { padding: 0; }
   .slider button { padding: .2rem .55rem; font-size: .8rem; }
   #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
+  .archiveSearch { padding: .5rem .75rem 0; } .archiveSearch input { font-size: .9rem; }
+  .conv .snip { font-size: .76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .15rem; }
+  .conv .snip.me::before { content: 'you: '; color: var(--text); } .conv .snip.claude::before { content: 'Claude: '; color: var(--text); }
+  .conv mark { background: color-mix(in srgb, #ffd43b 55%, transparent); color: inherit; border-radius: 3px; padding: 0 .1rem; }
   .conv { display: flex; align-items: center; gap: .4rem; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 8px; }
   .conv.current { border-color: var(--accent); }
   .conv div { flex: 1; min-width: 0; }
@@ -734,6 +738,7 @@
 <div id="archive" hidden>
   <div class="box">
     <div class="bar"><span>Past sessions</span><button class="ghost" id="closeArchive">Close</button></div>
+    <div class="archiveSearch"><input id="archiveQ" type="search" placeholder="Search titles and everything said in your sessions…" spellcheck="false" autocomplete="off"></div>
     <div id="archiveList"></div>
   </div>
 </div>
@@ -1339,19 +1344,31 @@ async function renameConversation(id, current) {
     if (!$('archive').hidden) showArchive();
   } catch (err) { sys(err.message, true); }
 }
-async function showArchive() {
+let archiveRun = 0, archiveTimer = null;
+$('archiveQ').addEventListener('input', () => { clearTimeout(archiveTimer); archiveTimer = setTimeout(() => showArchive(true), 220); });
+$('archiveQ').addEventListener('keydown', (e) => { if (e.key === 'Escape') { if ($('archiveQ').value) { $('archiveQ').value = ''; showArchive(true); } else $('archive').hidden = true; } });
+function markText(el, text, words) { // the matched words highlighted, built from text nodes only
+  const re = words.length ? new RegExp('(' + words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'ig') : null;
+  if (!re) { el.append(text); return; }
+  for (const part of text.split(re)) { if (!part) continue; if (words.some((w) => w === part.toLowerCase())) { const m = document.createElement('mark'); m.textContent = part; el.append(m); } else el.append(part); }
+}
+async function showArchive(keepQuery) {
   $('archive').hidden = false;
+  if (!keepQuery) { $('archiveQ').value = ''; setTimeout(() => $('archiveQ').focus(), 0); }
+  const run = ++archiveRun, q = $('archiveQ').value.trim(), words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const listEl = $('archiveList'); listEl.textContent = 'Loading…';
   try {
-    const { items } = await json('/api/archive/list', { method: 'POST' });
+    const { items } = await json(q ? '/api/archive/search' : '/api/archive/list', { method: 'POST', body: JSON.stringify(q ? { q } : {}) });
+    if (run !== archiveRun) return; // a newer search took over
     listEl.textContent = '';
-    if (!items.length) listEl.innerHTML = '<div class="sys">No past sessions yet. They are saved automatically (Settings → Auto-save) or with "Save session".</div>';
+    if (!items.length) listEl.innerHTML = q ? '<div class="sys">Nothing matches that.</div>' : '<div class="sys">No past sessions yet. They are saved automatically (Settings → Auto-save) or with "Save session".</div>';
     for (const it of items) {
       const row = document.createElement('div'); row.className = 'conv' + (it.id === archiveId ? ' current' : '');
       const info = document.createElement('div');
-      const b = document.createElement('b'); b.textContent = it.title;
-      const s = document.createElement('small'); s.textContent = new Date(it.savedAt).toLocaleString() + ' · ' + it.count + ' entries';
+      const b = document.createElement('b'); markText(b, it.title, words);
+      const s = document.createElement('small'); s.textContent = new Date(it.savedAt).toLocaleString() + ' · ' + it.count + ' entries' + (q ? ' · ' + it.hits + ' match' + (it.hits === 1 ? '' : 'es') : '');
       info.append(b, s);
+      for (const sn of it.snippets || []) { const d = document.createElement('div'); d.className = 'snip ' + (sn.cls || ''); markText(d, sn.text, words); info.append(d); }
       const open = document.createElement('button'); open.textContent = 'Open';
       open.onclick = () => openConversation(it.id);
       const ren = document.createElement('button'); ren.className = 'ghost'; ren.textContent = 'Rename';
@@ -1362,7 +1379,7 @@ async function showArchive() {
         try {
           await json('/api/archive/delete', { method: 'POST', body: JSON.stringify({ id: it.id }) });
           if (it.id === archiveId) setConversation(null, null, transcript); // chat stays on screen, just unsaved
-          showArchive();
+          showArchive(true);
         } catch (err) { sys(err.message, true); }
       };
       row.append(info, open, ren, del); listEl.appendChild(row);

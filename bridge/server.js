@@ -252,6 +252,39 @@ function listArchive(acct) {
     .map(({ id, title, savedAt, transcript }) => ({ id, title, savedAt, count: (transcript || []).length }))
     .sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
 }
+// Full-text search over this account's saved sessions: every word must appear in the title or
+// somewhere in the transcript (case-insensitive). Each hit comes with short snippets around the
+// first matches, so the list shows *why* a session matched.
+function searchArchive(acct, q) {
+  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+  if (!words.length) return listArchive(acct);
+  const dir = acct.files.ARCHIVE_DIR;
+  if (!fs.existsSync(dir)) return [];
+  const out = [];
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
+    const e = readJson(path.join(dir, f), null);
+    if (!e) continue;
+    const lines = (e.transcript || []).filter((t) => t && typeof t.text === 'string');
+    const hay = (e.title + '\n' + lines.map((t) => t.text).join('\n')).toLowerCase();
+    if (!words.every((w) => hay.includes(w))) continue;
+    const snippets = [];
+    let hits = 0;
+    for (const t of lines) {
+      const low = t.text.toLowerCase();
+      for (const w of words) {
+        let i = low.indexOf(w);
+        while (i >= 0) { hits++; i = low.indexOf(w, i + w.length); }
+      }
+      const first = Math.min(...words.map((w) => low.indexOf(w)).filter((i) => i >= 0));
+      if (Number.isFinite(first) && snippets.length < 3) {
+        const start = Math.max(0, first - 60);
+        snippets.push({ cls: t.cls, text: (start ? '…' : '') + t.text.slice(start, first + 90).replace(/\s+/g, ' ') + (first + 90 < t.text.length ? '…' : '') });
+      }
+    }
+    out.push({ id: e.id, title: e.title, savedAt: e.savedAt, count: lines.length, hits, snippets });
+  }
+  return out.sort((a, b) => b.hits - a.hits || String(b.savedAt).localeCompare(String(a.savedAt)));
+}
 
 // ---------- chat room (end-to-end encrypted) ----------
 // Browsers encrypt every message with a fresh AES-GCM key and wrap that key separately for each
@@ -823,6 +856,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/stop' && req.method === 'POST') { stopClaude(acct); return send(res, 200, { ok: true }); }
 
     if (p === '/api/archive/list' && req.method === 'POST') return send(res, 200, { items: listArchive(acct) });
+    if (p === '/api/archive/search' && req.method === 'POST') { const { q } = await readBody(req); return send(res, 200, { items: searchArchive(acct, String(q || '').slice(0, 200)) }); }
     if (p === '/api/archive/save' && req.method === 'POST') {
       const { id, title, transcript } = await readBody(req);
       if (!Array.isArray(transcript) || !transcript.length) return send(res, 400, { error: 'Nothing to save yet.' });
