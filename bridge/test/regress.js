@@ -66,7 +66,8 @@ function listening(port) {
 }
 
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null;
-const fakeImagePrompts = [], fakeVoiceReqs = [];
+const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
+let fakeSawPhoto = false;
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
 //   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
 //   "TIME" → get_time, then answers with the tool result          "REMIND"      → set_reminder in 1 second
@@ -83,8 +84,9 @@ function startFakeOllama() {
       // fake voice + speech engines on the same port too
       if (req.url === '/say') { fakeVoiceReqs.push(JSON.parse(body || '{}')); res.writeHead(200, { 'Content-Type': 'audio/wav' }); return res.end(Buffer.from('RIFF0000WAVEfake')); }
       if (req.url === '/transcribe') return j({ text: body.length ? 'fake heard ' + body.length : '', language: 'en' });
-      if (req.url === '/txt2img') {
-        fakeImagePrompts.push(JSON.parse(body || '{}').prompt || '');
+      if (req.url === '/img2img' || req.url === '/inpaint') fakeEdits.push({ route: req.url, ...JSON.parse(body || '{}') });
+      if (req.url === '/txt2img' || req.url === '/img2img' || req.url === '/inpaint') {
+        if (req.url === '/txt2img') fakeImagePrompts.push(JSON.parse(body || '{}').prompt || '');
         const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
         res.writeHead(200, { 'Content-Type': 'image/png', 'X-Seconds': '0.01' }); return res.end(png);
       }
@@ -94,13 +96,16 @@ function startFakeOllama() {
       const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
       const sys = (msgs[0] || {}).content || '';
       const user = [...msgs].reverse().find((m) => m.role === 'user') || { content: '' };
+      if (Array.isArray(user.images) && user.images.length) fakeSawPhoto = true;
       if (/SLOW/.test(user.content) && last.role === 'user') return setTimeout(() => { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ message: { role: 'assistant', content: 'slow answer ' + user.content.slice(-3000) }, done: true }) + '\n'); }, 4000);
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
       const line = (m) => res.write(JSON.stringify({ message: { role: 'assistant', content: '', ...m }, done: false }) + '\n');
       const call = (name, args) => line({ tool_calls: [{ function: { name, arguments: args } }] });
       if (last.role === 'user') {
         const u = user.content, m = /TASK (.+)/.exec(u), d = /DELETE (\S+)/.exec(u);
-        if (/SELFIE/.test(u)) call('generate_image', { prompt: 'regress moment at the desk', selfie: true, shape: 'portrait' });
+        if (/EDITME/.test(u)) call('edit_image', { image: 'camera', prompt: 'regress edit scene', keep_face: true });
+        else if (/PAINTME/.test(u)) call('inpaint_image', { image: 'last', prompt: 'a red hat', box: [0.1, 0.1, 0.5, 0.5] });
+        else if (/SELFIE/.test(u)) call('generate_image', { prompt: 'regress moment at the desk', selfie: true, shape: 'portrait' });
         else if (m) call('add_task', { title: m[1] });
         else if (d) call('delete_task', { task_id: d[1] });
         else if (/TIME/.test(u)) call('get_time', {});
@@ -671,6 +676,21 @@ async function run() {
   const lisAnon = await fetch(H + '/api/assistant/listen', { method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: Buffer.alloc(10, 1) });
   check('R74', 'speech to text: a recording comes back as text; empty → 400; signed-out → 401', lis.status === 200 && lisD.text === 'fake heard 1234' && lisEmpty.status === 400 && lisAnon.status === 401, JSON.stringify(lisD));
   check('R75', '[static] Unity screen has the mic button and the voice toggle', /id="assistMic"/.test(html) && /id="assistVoice"/.test(html) && /MediaRecorder/.test(html));
+  const dot = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const up = await call('/api/assistant/upload', U, { image: dot });
+  const upBad = await call('/api/assistant/upload', U, { image: 'data:text/html;base64,PHNjcmlwdD4=' });
+  const upOther = up.data.ref ? (await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(up.data.ref), { headers: { Authorization: 'Bearer ' + A } })).status : 0;
+  check('R76', 'photo upload (webcam / file): stored as that person\'s private picture; non-images refused', /^t-user\/[a-z0-9-]+$/.test(up.data.ref || '') && upBad.status === 400 && upOther === 404, JSON.stringify(up.data));
+  fakeSawPhoto = false;
+  const ed = await (async () => { const r = await fetch(H + '/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ message: 'EDITME please', photo: up.data.ref, client: { tz: 'UTC' } }) }); return (await r.text()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l)); })();
+  const e1 = fakeEdits.find((e) => e.route === '/img2img') || {};
+  const edFinal = ed.find((e) => e.type === 'final') || {};
+  check('R77', 'sent photo: the brain sees it (vision) and edit_image works from it, keeping the face; result attached', fakeSawPhoto && e1.prompt === 'regress edit scene' && e1.face === true
+    && e1.image === dot.split(',')[1] && (edFinal.images || []).length === 1, JSON.stringify({ fakeSawPhoto, face: e1.face, images: edFinal.images }));
+  await uchat(U, 'PAINTME now');
+  const e2 = fakeEdits.find((e) => e.route === '/inpaint') || {};
+  check('R78', 'inpaint_image repaints a box of the last picture', JSON.stringify(e2.box) === '[0.1,0.1,0.5,0.5]' && e2.prompt === 'a red hat' && typeof e2.image === 'string' && e2.image.length > 10);
+  check('R79', '[static] Unity screen has camera and file buttons', /id="assistCam"/.test(html) && /id="assistFile"/.test(html) && /getUserMedia\(\{ video: true \}\)/.test(html));
   check('R67', '[static] menu has the Unity button and Unity screen', /id="goAssist">Unity</.test(html) && /<b>Unity<\/b>/.test(html));
   }
 
