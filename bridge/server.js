@@ -52,8 +52,8 @@ function systemPrompt(acct, wd) {
   const where = wd.branch
     ? [`For work on the Mills project itself you are in ${name}'s OWN git worktree: ${wd.dir}, branch ${wd.branch}.`,
        `Commit only on ${wd.branch}; never check out other branches here and never touch other people's worktrees in ${worktree.WT_ROOT}.`,
-       `Only when ${name} asks you to merge into develop, run: node "${path.join(MILLS_DIR, 'bridge', 'worktree.js')}" merge ${acct.username}`,
-       `(commit first; on a conflict run "... sync ${acct.username}", resolve, commit, merge again). Going live (develop → main in the host folder + hub restart) only when asked.`]
+       `Only when ${name} asks you to merge into develop, run (from the worktree): node bridge/worktree.js commit ${acct.username} "<message>" then node bridge/worktree.js merge ${acct.username}`,
+       `(on a conflict run "node bridge/worktree.js sync ${acct.username}", resolve, commit, merge again). Going live (develop → main in the host folder + hub restart) only when asked.`]
     : [`You are in the SHARED Mills folder (${MILLS_DIR}), the running hub's own checkout that everyone shares: follow Git Flow (feature/* off develop) and leave no uncommitted changes behind.`];
   return [
     `You are talking with ${name} (username "${acct.username}"${acct.admin ? ', admin' : ''}, Unity AI Lab engineer) through the Mills web interface, running on the host's Claude account.`,
