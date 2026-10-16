@@ -600,6 +600,7 @@ function accountSummary(a) {
     signedIn: [...sessions.values()].filter((s) => s.user === a.username && s.exp > Date.now()).length,
     busy: !!a.running, model: effectiveModel(a) || '', chatKey: !!chatKeys[a.username],
     hasPassword: fs.existsSync(a.files.AUTH_FILE),
+    unityPc: a.state.unityPc !== false, unityCode: a.state.unityCode !== false, // Unity's own-computer tools (on unless an admin turns them off)
   };
 }
 
@@ -959,6 +960,13 @@ const server = http.createServer(async (req, res) => {
       const target = body.username !== undefined ? accounts.get(String(body.username)) : null;
       const needTarget = () => { if (!target) throw new Error('No such account.'); return target; };
 
+      if (p === '/api/admin/unity-tools' && req.method === 'POST') { // switch Unity's own-computer tools for one account
+        const t = needTarget();
+        if (typeof body.pc === 'boolean') t.state.unityPc = body.pc;
+        if (typeof body.code === 'boolean') t.state.unityCode = body.code;
+        saveState(t);
+        return send(res, 200, { username: t.username, pc: t.state.unityPc !== false, code: t.state.unityCode !== false });
+      }
       if (p === '/api/admin/accounts' && req.method === 'GET') return send(res, 200, { accounts: [...accounts.values()].map(accountSummary), me: acct.username });
       if (p === '/api/admin/create' && req.method === 'POST') {
         const username = String(body.username || '').trim().toLowerCase();

@@ -352,6 +352,16 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   tool('get_weather', "Current weather and today's outlook where the person is, or in a named city.", { city: P('City, optional (default: where they are)') }, [], (a, s, ci) => weather(ci, a.city, 1));
   tool('get_forecast', 'Weather forecast for the next days where the person is, or in a named city.', { days: P('Days (1-7, default 5)', 'integer'), city: P('City, optional') }, [], (a, s, ci) => weather(ci, a.city, Number(a.days) || 5));
   tool('get_news', 'Current news headlines: local to where the person is, on a topic, or top stories in their country.', { topic: P('Topic to search, optional'), local: P('true for news about where they are', 'boolean') }, [], (a, s, ci) => news(ci, a.topic, a.local === true || a.local === 'true'));
+  // ---- the person's OWN computer, done by their browser (nothing runs on the host). Admins switch
+  // these per account (Admin: "PC files" / "Run code"); both are on unless an admin turns them off.
+  tool('pc_list', 'List files and folders in the folder they opened in Mills (on THEIR computer).', { path: P('Path inside that folder, "" for the folder itself') }, [], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'list', args: { path: String(a.path || '') } }), { group: 'pc' });
+  tool('pc_read', 'Read a text file in the folder they opened (on their computer).', { path: P('Path inside that folder') }, ['path'], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'read', args: { path: String(a.path) } }), { group: 'pc' });
+  tool('pc_write', 'Create or overwrite a text file in the folder they opened (on their computer).', { path: P('Path inside that folder'), content: P('The whole file content') }, ['path', 'content'], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'write', args: { path: String(a.path), content: String(a.content) } }), { group: 'pc' });
+  tool('pc_mkdir', 'Make a folder in the folder they opened (on their computer).', { path: P('Path inside that folder') }, ['path'], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'mkdir', args: { path: String(a.path) } }), { group: 'pc' });
+  tool('pc_delete', 'Delete a file or folder in the folder they opened (on their computer).', { path: P('Path inside that folder') }, ['path'], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'delete', args: { path: String(a.path) } }), { group: 'pc', confirm: true });
+  tool('run_code', 'Run a short JavaScript or Python program in their browser (sandboxed, on their computer, no files or network) and get its printed output.', {
+    language: P('javascript or python'), code: P('The program; print / console.log what you want back'),
+  }, ['language', 'code'], (a, s, ci) => browserCall(ci, 'run_code', { language: /py/i.test(String(a.language)) ? 'python' : 'javascript', code: String(a.code).slice(0, 20000) }), { group: 'code' });
   tool('web_search', 'Search the web; returns titles, links and snippets.', { query: P('What to search for') }, ['query'], (a) => webSearch(String(a.query).slice(0, 300)));
   tool('read_page', 'Read a public web page as text (to answer from it or summarise it).', { url: P('The http(s) address') }, ['url'], (a) => readPage(String(a.url)));
   tool('play_youtube', 'Find a YouTube video (music, clips, anything) and play it for them right in the chat.', { query: P('What to play, or a YouTube link') }, ['query'], async (a, s, ci) => {
@@ -439,10 +449,24 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   tool('forget_knowledge', 'Delete a knowledge entry by id.', { entry_id: P('Knowledge id like K004') }, ['entry_id'], (a, s) => { const i = s.knowledge.findIndex((k) => k.id.toLowerCase() === String(a.entry_id).toLowerCase()); if (i < 0) return { ok: false, error: 'No entry ' + a.entry_id }; s.knowledge.splice(i, 1); return { ok: true }; }, { confirm: true });
   tool('list_capabilities', 'What you can do for the person in Mills.', {}, [], () => ({ ok: true, tools: Object.values(TOOLS).filter((t) => t.name !== 'say').map((t) => `${t.name}: ${t.description}`) }));
 
+  // Calls that the person's browser carries out, answered through POST /api/assistant/pc-result.
+  const waiting = new Map(); // id -> { resolve, timer, user }
+  function browserCall(ci, type, payload) {
+    if (!ci.out) return { ok: false, error: 'That only works in the Unity section, with their browser open.' };
+    const id = require('crypto').randomBytes(8).toString('hex');
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { waiting.delete(id); resolve({ ok: false, error: 'Their browser did not answer in time.' }); }, 120000);
+      waiting.set(id, { resolve, timer, user: ci.acct && ci.acct.username });
+      ci.out({ type, id, ...payload });
+    });
+  }
+  const groupOn = (acct, g) => !g || (g === 'pc' ? acct.state.unityPc !== false : g === 'code' ? acct.state.unityCode !== false : true);
+  const toolsFor = (acct, ci) => Object.values(TOOLS).filter((t) => groupOn(acct, t.group) && (!t.group || ci.out));
   const schema = (t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: { type: 'object', properties: t.params, required: t.required } } });
   async function execute(acct, name, args, ci) {
     const t = TOOLS[name];
     if (!t) return { ok: false, error: `No tool called ${name}.` };
+    if (!groupOn(acct, t.group)) return { ok: false, error: `An admin has switched ${name} off for ${acct.display}.` };
     for (const r of t.required) if (args[r] === undefined || args[r] === '') return { ok: false, error: `${name} needs "${r}".` };
     const s = store(acct);
     try { const out = await t.run(args, s, ci); save(s); return out; } catch (e) { return { ok: false, error: e.message }; }
@@ -507,7 +531,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     const native = await nativeTools(model);
     const sayMode = model.startsWith('unity-brain');
     let system = persona() + '\n\n' + dynamicContext(acct, ci, sayMode);
-    const tools = Object.values(TOOLS).filter((t) => sayMode || t.name !== 'say');
+    const tools = toolsFor(acct, ci).filter((t) => sayMode || t.name !== 'say');
     if (!native) system += '\n\nTOOL USE: when you need a tool, reply with ONLY one line of JSON: {"tool": "<name>", "arguments": {...}}. You get the result next. Tools:\n' + tools.map((t) => `- ${t.name}(${Object.keys(t.params).join(', ')}): ${t.description}`).join('\n');
     const note = await resolvePending(acct, text, ci, out);
     if (opts.extraSystem) system += '\n\n' + opts.extraSystem;
@@ -595,6 +619,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     await learnClient(acct, body.client, body.ip);
     const ci = clientInfo(body.client, acct);
     acct.assistantCi = ci;
+    ci.out = (ev) => { try { res.write(JSON.stringify(ev) + '\n'); } catch {} };
     const ctl = new AbortController();
     runs.set(acct.username, { abort: ctl, child: null });
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
@@ -622,7 +647,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
 
   function overview(acct) {
     const s = store(acct);
-    return { brain: brainOf(acct), brains: brains(), local: { up: ollamaState.up, model: ollamaState.model, name: LOCAL_MODEL },
+    return { brain: brainOf(acct), brains: brains(), tools: { pc: groupOn(acct, 'pc'), code: groupOn(acct, 'code') }, local: { up: ollamaState.up, model: ollamaState.model, name: LOCAL_MODEL },
       pending: acct.assistantPending || null, notices: (acct.notices || []).splice(0),
       history: s.history.slice(-40), counts: { tasks: s.tasks.filter((t) => t.status === 'pending').length, reminders: s.reminders.filter((r) => !r.fired).length, events: s.events.filter((e) => e.at >= Date.now()).length } };
   }
@@ -656,7 +681,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
       const acct = accounts.get(String(req.headers['x-mills-account'] || ''));
       const { name, args, list } = await readBody(req);
-      if (list) return send(res, 200, { ok: true, tools: Object.values(TOOLS).filter((t) => t.name !== 'say').map((t) => ({ name: t.name, description: t.description, inputSchema: { type: 'object', properties: t.params, required: t.required } })) });
+      if (list) return send(res, 200, { ok: true, tools: (acct ? toolsFor(acct, acct.assistantCi || { out: true }) : Object.values(TOOLS)).filter((t) => t.name !== 'say').map((t) => ({ name: t.name, description: t.description, inputSchema: { type: 'object', properties: t.params, required: t.required } })) });
       if (!acct) return send(res, 200, { ok: false, error: 'Unknown account.' });
       const out = acct.assistantOut || (() => {});
       return send(res, 200, { ok: true, result: await callTool(acct, name, args || {}, acct.assistantCi || clientInfo({}, acct), out) });
@@ -681,6 +706,11 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         const { yes } = await readBody(req); const pnd = acct.assistantPending;
         if (!pnd) { send(res, 200, { ok: false, error: 'Nothing is waiting for an answer.' }); return true; }
         acct.assistantPending = null;
+        // a confirmed change on THEIR computer: the page carries it out itself (the reply stream is closed by now)
+        if (yes && TOOLS[pnd.tool] && TOOLS[pnd.tool].group === 'pc') {
+          if (!groupOn(acct, 'pc')) { send(res, 200, { ok: true, tool: pnd.tool, result: { ok: false, error: 'An admin has switched PC files off.' } }); return true; }
+          send(res, 200, { ok: true, tool: pnd.tool, browser: { name: pnd.tool.replace(/^pc_/, ''), args: pnd.args } }); return true;
+        }
         send(res, 200, yes ? { ok: true, tool: pnd.tool, result: await execute(acct, pnd.tool, pnd.args, acct.assistantCi || clientInfo({}, acct)) } : { ok: true, cancelled: pnd.tool });
         return true;
       }
@@ -702,6 +732,14 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         if (!fs.existsSync(f)) { send(res, 404, { error: 'No such picture.' }); return true; }
         res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=86400' });
         fs.createReadStream(f).pipe(res); return true;
+      }
+      if (p === '/api/assistant/pc-result' && req.method === 'POST') { // the browser's answer to a pc_tool / run_code call
+        const { id, ok, result, error } = await readBody(req);
+        const w = waiting.get(String(id || ''));
+        if (!w || w.user !== acct.username) { send(res, 404, { error: 'Nothing is waiting for that.' }); return true; }
+        clearTimeout(w.timer); waiting.delete(String(id));
+        w.resolve(ok ? { ok: true, result: typeof result === 'string' ? result.slice(0, 20000) : result } : { ok: false, error: String(error || 'failed').slice(0, 2000) });
+        send(res, 200, { ok: true }); return true;
       }
       if (p === '/api/assistant/upload' && req.method === 'POST') { // a photo from their webcam or a file → their private pictures
         const { image } = await readBody(req);
