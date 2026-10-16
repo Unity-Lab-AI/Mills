@@ -112,7 +112,11 @@ function runClaude(acct, message, fresh, res) {
   if (model) args.push('--model', model);
   if (!fresh && acct.state.claudeSessionId) args.push('--resume', acct.state.claudeSessionId);
 
-  const child = spawn('claude', args, { cwd: MILLS_DIR, windowsHide: true });
+  // claudeCommand / claudeArgs exist only so the regression runner's throwaway hub can use a fake
+  // Claude (bridge/test/fake-claude.js); production config leaves them unset → the real `claude`.
+  const command = config.claudeCommand || 'claude';
+  const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
+  const child = spawn(command, [...pre, ...args], { cwd: MILLS_DIR, windowsHide: true });
   acct.running = child; acct.stream = res;
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
   const keepAlive = setInterval(() => emit(acct, { type: 'ping' }), 15000);
@@ -164,7 +168,8 @@ function listArchive(acct) {
 // Browsers encrypt every message with a fresh AES-GCM key and wrap that key separately for each
 // member (ECDH P-256 between sender and member). This hub only stores public keys, password-
 // wrapped private-key backups it cannot open, and ciphertext. Each reader gets only their own
-// wrapped key slot.
+// wrapped key slot. Exception: the room agent's own key (below) is held here, so the hub can read
+// what members send to the agent.
 fs.mkdirSync(CHAT_DIR, { recursive: true });
 let chatKeys = readJson(KEYS_FILE, {}); // username -> { pub (JWK), backup: {salt, iv, ct}, updated }
 let messages = fs.existsSync(CHAT_FILE)
@@ -173,12 +178,106 @@ let messages = fs.existsSync(CHAT_FILE)
 let seq = messages.reduce((m, x) => Math.max(m, x.seq || 0), 0);
 const b64 = (s, max) => typeof s === 'string' && s.length <= max && /^[A-Za-z0-9+/=_-]*$/.test(s);
 const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv === 'P-256' && b64(k.x, 64) && b64(k.y, 64) && !k.d;
+function appendMessage(msg) { messages.push(msg); fs.appendFileSync(CHAT_FILE, JSON.stringify(msg) + '\n'); }
+
+// ---------- room agent ("claude") ----------
+// Claude is a room member too, but its private key lives on this hub (Chat/agent-key.json), so the
+// hub can read what is sent to it. Browsers wrap every message for every member, the agent
+// included. It stays silent unless a message names it (@claude / "claude ..."), then answers in the
+// room with a Claude Code run in the Mills folder (it may work on the Mills app itself).
+const AGENT = 'claude';
+const AGENT_KEY_FILE = path.join(CHAT_DIR, 'agent-key.json');
+const AGENT_STATE_FILE = path.join(CHAT_DIR, 'agent-state.json');
+const AGENT_CALL = /(^|[^\w@])@?claude\b/i;
+const agent = { running: null, queued: false, state: readJson(AGENT_STATE_FILE, {}) };
+let agentKey = readJson(AGENT_KEY_FILE, null);
+if (!agentKey || !agentKey.priv || !agentKey.priv.d) {
+  const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const priv = privateKey.export({ format: 'jwk' });
+  agentKey = { priv, pub: { kty: 'EC', crv: 'P-256', x: priv.x, y: priv.y } };
+  writeJson(AGENT_KEY_FILE, agentKey);
+}
+const agentPriv = crypto.createPrivateKey({ key: agentKey.priv, format: 'jwk' });
+const agentEnabled = () => !accounts.has(AGENT) && config.roomAgent !== false;
+const agentShared = (jwk) => crypto.diffieHellman({ privateKey: agentPriv, publicKey: crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' }) });
+function gcmOpen(key, iv, data) {
+  const buf = Buffer.from(data, 'base64'), d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
+  d.setAuthTag(buf.subarray(buf.length - 16));
+  return Buffer.concat([d.update(buf.subarray(0, buf.length - 16)), d.final()]);
+}
+function gcmSeal(key, data) {
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  return { iv: iv.toString('base64'), ct: Buffer.concat([c.update(data), c.final(), c.getAuthTag()]).toString('base64') };
+}
+function agentRead(m) { // plaintext of a message sent to the agent, or null
+  const slot = m.keys && m.keys[AGENT];
+  if (!slot) return null;
+  try { return gcmOpen(gcmOpen(agentShared(m.fromPub), slot.iv, slot.wk), m.iv, m.ct).toString('utf8'); } catch { return null; }
+}
+function agentSay(text) {
+  const raw = crypto.randomBytes(32), body = gcmSeal(raw, Buffer.from(text, 'utf8')), keys = {};
+  const pubs = [[AGENT, agentKey.pub], ...[...accounts.values()].filter((a) => chatKeys[a.username]).map((a) => [a.username, chatKeys[a.username].pub])];
+  for (const [u, pub] of pubs) { const w = gcmSeal(agentShared(pub), raw); keys[u] = { iv: w.iv, wk: w.ct }; }
+  appendMessage({ seq: ++seq, from: AGENT, ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys });
+}
+const nameOf = (u) => (u === AGENT ? 'Claude' : (accounts.get(u) || {}).display || u);
+function agentPrompt() {
+  const since = agent.state.lastSeq || 0;
+  const lines = messages.filter((m) => m.seq > since).slice(-60)
+    .map((m) => { const t = m.from === AGENT ? null : agentRead(m); return t === null ? null : `[${m.ts}] ${nameOf(m.from)}: ${t}`; }).filter(Boolean);
+  agent.state.lastSeq = seq;
+  return `New messages in the Mills chat room since you last spoke:\n\n${lines.join('\n')}\n\nReply to the room now.`;
+}
+const AGENT_SYSTEM = [
+  'You are Claude, a member of the Mills team chat room (the people in it are Unity AI Lab engineers).',
+  'Your whole final answer is posted to the room as one chat message: keep it short and conversational, no tool narration.',
+  'You were called because someone named you; answer what they asked. You are NOT the Work section: you cannot touch anyone\'s PC.',
+  'You run in the host\'s Mills folder and may work on the Mills app itself when asked. Follow the Mills LAWs in CLAUDE.md exactly',
+  '(throwaway-instance testing, regression list, Git Flow, never touch account files or passwords).',
+  'Other people may be using Mills at the same time: never restart the hub yourself while someone is mid-run;',
+  '`node bridge/restart.js` already waits until nobody is busy. Say in the room before you trigger a restart.',
+].join(' ');
+function runAgent() {
+  if (agent.running) { agent.queued = true; return; }
+  agent.queued = false;
+  const args = ['-p', '--output-format', 'json', '--permission-mode', config.permissionMode, '--append-system-prompt', AGENT_SYSTEM];
+  if (config.allowedTools.length) args.push('--allowedTools', config.allowedTools.filter((t) => t !== 'mcp__pc').join(','));
+  if (config.roomAgentModel) args.push('--model', config.roomAgentModel);
+  if (agent.state.sessionId) args.push('--resume', agent.state.sessionId);
+  const command = config.claudeCommand || 'claude';
+  const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
+  const child = spawn(command, [...pre, ...args], { cwd: MILLS_DIR, windowsHide: true });
+  agent.running = child;
+  let out = '', finished = false;
+  child.stdout.on('data', (c) => { out += c; });
+  child.stderr.on('data', () => {});
+  const done = (fallback) => {
+    if (finished) return; finished = true;
+    let text = fallback;
+    for (const line of out.split('\n').reverse()) { // --output-format json: one result object
+      try { const r = JSON.parse(line); if (r.session_id) agent.state.sessionId = r.session_id; if (typeof r.result === 'string') { text = r.result; break; } } catch {}
+    }
+    agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
+    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000)); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
+    if (agent.queued) runAgent(); else setTimeout(maybeRestart, 300);
+  };
+  child.on('error', (e) => done('(I could not start: ' + e.message + ')'));
+  child.on('close', () => done(''));
+  child.stdin.end(agentPrompt());
+}
+function agentHear(msg) {
+  if (!agentEnabled() || msg.from === AGENT) return;
+  const text = agentRead(msg);
+  if (text && AGENT_CALL.test(text)) runAgent();
+}
 
 // ---------- self-restart ----------
 // `node restart.js` drops bridge/.restart. As soon as nobody's Claude run is in progress the app
 // exits with code 75 and run.js starts it again under the same tunnel (same public address).
+// Nobody — no account's Work run and not the room agent — is mid-run.
+const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running;
 function maybeRestart() {
-  if ([...accounts.values()].some((a) => a.running) || !fs.existsSync(RESTART_FLAG)) return;
+  if (anyBusy() || !fs.existsSync(RESTART_FLAG)) return;
   try { fs.unlinkSync(RESTART_FLAG); } catch {}
   if (!SUPERVISED) return console.log('[mills] Restart requested, but this hub was started without run.js (start.bat / start.sh) — restart it by hand.');
   console.log('[mills] Restart requested — picking up the new code/config now.');
@@ -246,7 +345,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/status' && req.method === 'GET') {
-      return send(res, 200, { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: [...accounts.values()].some((a) => a.running) });
+      return send(res, 200, { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy() });
     }
 
     if (p === '/api/login' && req.method === 'POST') {
@@ -351,7 +450,8 @@ const server = http.createServer(async (req, res) => {
 
     // ----- chat room -----
     if (p === '/api/room/members' && req.method === 'GET') {
-      return send(res, 200, { members: [...accounts.values()].map((a) => ({ username: a.username, display: a.display, pub: chatKeys[a.username] ? chatKeys[a.username].pub : null })) });
+      return send(res, 200, { members: [...accounts.values()].map((a) => ({ username: a.username, display: a.display, pub: chatKeys[a.username] ? chatKeys[a.username].pub : null }))
+        .concat(agentEnabled() ? [{ username: AGENT, display: 'Claude', pub: agentKey.pub, agent: true }] : []) });
     }
     if (p === '/api/room/mykey' && req.method === 'GET') return send(res, 200, chatKeys[acct.username] || {});
     if (p === '/api/room/mykey' && req.method === 'POST') {
@@ -367,11 +467,11 @@ const server = http.createServer(async (req, res) => {
       if (!mine) return send(res, 400, { error: 'Your chat key is not set up yet.' });
       if (!b64(iv, 64) || !b64(ct, 400000) || !keys || typeof keys !== 'object') return send(res, 400, { error: 'Bad message.' });
       const slots = {};
-      for (const [u, k] of Object.entries(keys)) if (accounts.has(u) && k && b64(k.iv, 64) && b64(k.wk, 200)) slots[u] = { iv: k.iv, wk: k.wk };
+      for (const [u, k] of Object.entries(keys)) if ((accounts.has(u) || (u === AGENT && agentEnabled())) && k && b64(k.iv, 64) && b64(k.wk, 200)) slots[u] = { iv: k.iv, wk: k.wk };
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
       const msg = { seq: ++seq, from: acct.username, ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots };
-      messages.push(msg);
-      fs.appendFileSync(CHAT_FILE, JSON.stringify(msg) + '\n');
+      appendMessage(msg);
+      agentHear(msg);
       return send(res, 200, { seq: msg.seq });
     }
     if (p === '/api/room/messages' && req.method === 'GET') {
@@ -433,7 +533,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true, supervised: SUPERVISED });
       }
       if (p === '/api/admin/room/clear' && req.method === 'POST') {
-        messages = []; fs.writeFileSync(CHAT_FILE, '');
+        messages = []; fs.writeFileSync(CHAT_FILE, ''); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
         console.log(`[mills] ${acct.username} cleared the chat history.`);
         return send(res, 200, { ok: true });
       }
