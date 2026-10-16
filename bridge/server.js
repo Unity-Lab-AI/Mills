@@ -15,6 +15,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { spawn } = require('child_process');
 const { ROOT, MILLS_DIR, readJson, writeJson, loadProfile, allProfiles, hashPassword } = require('./common');
 const worktree = require('./worktree');
@@ -90,10 +91,13 @@ function loadAccounts() {
 const modelIds = () => config.models.map((m) => m.id);
 const saveState = (acct) => writeJson(acct.files.STATE_FILE, acct.state);
 const effectiveModel = (acct) => acct.state.model || acct.defaultModel;
-function checkPassword(acct, password) {
+// scrypt runs on libuv's thread pool, so a sign-in (or a flood of wrong ones) never freezes the hub
+// for everyone else's chat, calls and Work streams.
+const scrypt = (pw, salt, params) => new Promise((resolve, reject) => crypto.scrypt(pw, salt, 64, params, (e, k) => (e ? reject(e) : resolve(k))));
+async function checkPassword(acct, password) {
   const auth = acct && readJson(acct.files.AUTH_FILE, null);
   if (!auth || typeof password !== 'string') return false;
-  const derived = crypto.scryptSync(password, Buffer.from(auth.salt, 'hex'), 64, { N: auth.N, r: auth.r, p: auth.p });
+  const derived = await scrypt(password, Buffer.from(auth.salt, 'hex'), { N: auth.N, r: auth.r, p: auth.p });
   return crypto.timingSafeEqual(derived, Buffer.from(auth.hash, 'hex'));
 }
 loadAccounts();
@@ -256,11 +260,17 @@ let seq = messages.reduce((m, x) => Math.max(m, x.seq || 0), 0);
 let rev = messages.reduce((m, x) => Math.max(m, x.rev || x.seq || 0), 0);
 const b64 = (s, max) => typeof s === 'string' && s.length <= max && /^[A-Za-z0-9+/=_-]*$/.test(s);
 const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv === 'P-256' && b64(k.x, 64) && b64(k.y, 64) && !k.d;
-function appendMessage(msg) { msg.rev = ++rev; messages.push(msg); fs.appendFileSync(CHAT_FILE, JSON.stringify(msg) + '\n'); }
+// Long-poll for the room: browsers wait on /api/room/messages?wait=1&ver=N and are answered the moment
+// anything they show changes (a message, edit, delete, receipt, share, member key) instead of polling.
+let roomVer = 1, keysVer = 1;
+const roomWaiters = new Set();
+function roomChanged() { roomVer++; for (const fn of [...roomWaiters]) fn(); }
+function appendMessage(msg) { msg.rev = ++rev; messages.push(msg); fs.appendFileSync(CHAT_FILE, JSON.stringify(msg) + '\n'); roomChanged(); }
 function saveMessages() { // after an edit / delete: rewrite the whole (small) file atomically
   const tmp = CHAT_FILE + '.tmp';
   fs.writeFileSync(tmp, messages.map((m) => JSON.stringify(m)).join('\n') + (messages.length ? '\n' : ''));
   fs.renameSync(tmp, CHAT_FILE);
+  roomChanged();
 }
 // Direct messages: `to` names the one recipient (routing metadata only; the text stays encrypted).
 // Only the sender and the recipient ever receive them.
@@ -373,17 +383,23 @@ function payloadText(s) {
 const MAX_CT = 1600000; // room for the v3 size-bucket padding
 // Format v3 (see web/index.html): HKDF wrap keys, sender/recipient/mid as authenticated data, padding.
 const V3_INFO = Buffer.from('mills-v3 wrap');
+// Format v4 = v3 + the JSON is deflate-compressed before encryption (body = u32 length + deflate-raw +
+// zero padding), and a voice clip travels as a separate ciphertext (`blob`, its own key inside the
+// body) that is only downloaded when someone plays it.
 const MID_RE = /^[A-Za-z0-9_-]{22}$/;
+const FORMATS = [3, 4];
 const agentWrapKey = (jwk) => Buffer.from(crypto.hkdfSync('sha256', agentShared(jwk), Buffer.alloc(0), V3_INFO, 32));
-const bodyAad = (from, to, mid) => 'mills-v3|' + from + '|' + (to || '') + '|' + mid;
+const bodyAad = (from, to, mid, v = 3) => 'mills-v' + v + '|' + from + '|' + (to || '') + '|' + mid;
 function padBucket(n) { if (n > 65536) return Math.ceil(n / 65536) * 65536; let b = 256; while (b < n) b *= 2; return b; }
 function agentOpen(m) { // the decrypted payload string of a message wrapped for the agent, or null
   const slot = m.keys && m.keys[AGENT];
   if (!slot || m.deleted) return null;
   try {
-    if (m.v === 3) {
-      const aad = bodyAad(m.from, m.to, m.mid);
-      return gcmOpen(gcmOpen(agentWrapKey(m.fromPub), slot.iv, slot.wk, aad + '|' + AGENT), m.iv, m.ct, aad).toString('utf8').trimEnd();
+    if (FORMATS.includes(m.v)) {
+      const aad = bodyAad(m.from, m.to, m.mid, m.v);
+      const body = gcmOpen(gcmOpen(agentWrapKey(m.fromPub), slot.iv, slot.wk, aad + '|' + AGENT), m.iv, m.ct, aad);
+      if (m.v === 4) return zlib.inflateRawSync(body.subarray(4, 4 + body.readUInt32BE(0)), { maxOutputLength: 2e6 }).toString('utf8');
+      return body.toString('utf8').trimEnd();
     }
     return gcmOpen(gcmOpen(agentShared(m.fromPub), slot.iv, slot.wk), m.iv, m.ct).toString('utf8');
   } catch { return null; }
@@ -557,7 +573,7 @@ function mirrorEvent(acct, ev) {
 }
 const canWatch = (owner, viewer) => { const s = shares.get(owner); return !!s && owner !== viewer && convMember(s.conv, viewer); };
 const sharesFor = (user) => [...shares].filter(([o, s]) => o !== user && convMember(s.conv, user)).map(([o, s]) => ({ user: o, conv: s.conv, since: s.since }));
-function stopShare(owner) { if (shares.delete(owner)) wakeWatchers(owner); }
+function stopShare(owner) { if (shares.delete(owner)) { wakeWatchers(owner); roomChanged(); } }
 function maybeRestart() {
   if (anyBusy() || !fs.existsSync(RESTART_FLAG)) return;
   try { fs.unlinkSync(RESTART_FLAG); } catch {}
@@ -569,8 +585,10 @@ function maybeRestart() {
 setInterval(maybeRestart, 2000).unref();
 
 // ---------- http ----------
+// On every response: no MIME sniffing, no referrer, never framed by another site.
+const HARDEN = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' };
 function send(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); // API answers are never cached
   res.end(JSON.stringify(body));
 }
 function readBody(req) {
@@ -595,6 +613,7 @@ function accountSummary(a) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
+  for (const [k, v] of Object.entries(HARDEN)) res.setHeader(k, v);
   try {
     // Internal channel from the MCP relay (same machine, shared secret, names the account).
     if (p === '/internal/pc-tool') {
@@ -622,7 +641,7 @@ const server = http.createServer(async (req, res) => {
     if (!p.startsWith('/api/')) {
       const file = path.join(WEB_DIR, p === '/' ? 'index.html' : path.normalize(p));
       if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, { error: 'Not found' });
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
       return fs.createReadStream(file).pipe(res);
     }
 
@@ -633,14 +652,21 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/login' && req.method === 'POST') {
       const { username, password, deviceId } = await readBody(req);
       const uname = String(username || '').trim().toLowerCase();
-      const f = failures.get(uname) || { count: 0, blockedUntil: 0 };
-      if (Date.now() < f.blockedUntil) return send(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
+      if (failures.size > 1000 && !failures.has(uname)) failures.clear();
+      // One shared counter per username, registered before the (async) hash, so parallel guesses all
+      // count; attempts already in flight count as failures until they succeed.
+      const f = failures.get(uname) || { count: 0, blockedUntil: 0, inflight: 0 };
+      failures.set(uname, f);
+      if (Date.now() < f.blockedUntil || f.count + f.inflight >= 5) return send(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
+      f.inflight = (f.inflight || 0) + 1;
       const acct = USERNAME_RE.test(uname) ? accounts.get(uname) : null;
-      if (!acct) crypto.scryptSync(String(password || ''), 'mills-no-such-user', 64, { N: 16384, r: 8, p: 1 }); // same cost either way
-      if (!acct || !checkPassword(acct, password) || typeof deviceId !== 'string' || deviceId.length < 16) {
-        if (failures.size > 1000) failures.clear();
+      let good = false;
+      try {
+        if (!acct) await scrypt(String(password || ''), 'mills-no-such-user', { N: 16384, r: 8, p: 1 }); // same cost either way
+        good = !!acct && (await checkPassword(acct, password)) && typeof deviceId === 'string' && deviceId.length >= 16;
+      } finally { f.inflight--; }
+      if (!good) {
         if (++f.count >= 5) { f.blockedUntil = Date.now() + 15 * 60 * 1000; f.count = 0; }
-        failures.set(uname, f);
         return send(res, 401, { error: 'Wrong username or password.' });
       }
       const deviceHash = crypto.createHash('sha256').update(deviceId).digest('hex');
@@ -772,19 +798,21 @@ const server = http.createServer(async (req, res) => {
       if (!validJwk(pub) || !backup || !b64(backup.salt, 64) || !b64(backup.iv, 64) || !b64(backup.ct, 4096)) return send(res, 400, { error: 'Bad key.' });
       chatKeys[acct.username] = { pub: { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y }, backup: { salt: backup.salt, iv: backup.iv, ct: backup.ct }, updated: new Date().toISOString() };
       writeJson(KEYS_FILE, chatKeys);
+      keysVer++; roomChanged(); // browsers reload the member list (and check the key against their pins)
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/send' && req.method === 'POST') {
-      const { iv, ct, keys, to, v, mid } = await readBody(req);
+      const { iv, ct, keys, to, v, mid, blob } = await readBody(req);
       const mine = chatKeys[acct.username];
-      if (v !== undefined && !(v === 3 && MID_RE.test(mid || '') && !messages.some((x) => x.mid === mid))) return send(res, 400, { error: 'Bad message.' });
+      if (v !== undefined && !(FORMATS.includes(v) && MID_RE.test(mid || '') && !messages.some((x) => x.mid === mid))) return send(res, 400, { error: 'Bad message.' });
+      if (blob !== undefined && !(v === 4 && b64(blob, MAX_CT))) return send(res, typeof blob === 'string' && blob.length > MAX_CT ? 413 : 400, { error: 'That voice clip is too large or malformed (up to about 2 minutes).' });
       if (!mine) return send(res, 400, { error: 'Your chat key is not set up yet.' });
       if (typeof ct === 'string' && ct.length > MAX_CT) return send(res, 413, { error: 'That message is too large (voice clips can be up to about 2 minutes).' });
       if (!b64(iv, 64) || !b64(ct, MAX_CT) || !keys || typeof keys !== 'object') return send(res, 400, { error: 'Bad message.' });
       if (to !== undefined && to !== '' && (to === acct.username || !(accounts.has(to) || (to === AGENT && agentEnabled())))) return send(res, 400, { error: 'Unknown recipient.' });
       const slots = cleanSlots(keys, acct.username, to || '');
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
-      const msg = { seq: ++seq, ...(v === 3 ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots };
+      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}) };
       appendMessage(msg);
       agentHear(msg);
       return send(res, 200, { seq: msg.seq });
@@ -796,10 +824,11 @@ const server = http.createServer(async (req, res) => {
       const mine = chatKeys[acct.username];
       if (!mine || !b64(iv, 64) || !b64(ct, MAX_CT)) return send(res, 400, { error: 'Bad message.' });
       // an edit keeps the message id; a legacy message gets a fresh one when it is first edited in v3
-      if (v !== undefined && !(v === 3 && MID_RE.test(mid || '') && (m.mid ? m.mid === mid : !messages.some((x) => x.mid === mid)))) return send(res, 400, { error: 'Bad message.' });
+      if (v !== undefined && !(FORMATS.includes(v) && MID_RE.test(mid || '') && (m.mid ? m.mid === mid : !messages.some((x) => x.mid === mid)))) return send(res, 400, { error: 'Bad message.' });
+      if (m.blob && v !== 4) return send(res, 400, { error: 'Bad message.' }); // a clip's caption is edited in v4, which keeps the clip's key
       const slots = cleanSlots(keys, acct.username, m.to || '');
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
-      if (v === 3) Object.assign(m, { v, mid }); else { delete m.v; delete m.mid; }
+      if (v !== undefined) Object.assign(m, { v, mid }); else { delete m.v; delete m.mid; }
       Object.assign(m, { iv, ct, keys: slots, fromPub: mine.pub, editedAt: new Date().toISOString(), rev: ++rev });
       saveMessages();
       return send(res, 200, { seq: m.seq, rev: m.rev });
@@ -809,7 +838,7 @@ const server = http.createServer(async (req, res) => {
       const m = messages.find((x) => x.seq === target);
       if (!m || m.from !== acct.username) return send(res, 403, { error: 'You can only delete your own messages.' });
       if (!m.deleted) {
-        for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt']) delete m[k];
+        for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
         Object.assign(m, { deleted: true, keys: {}, rev: ++rev });
         saveMessages();
       }
@@ -821,7 +850,7 @@ const server = http.createServer(async (req, res) => {
       if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
       const mine = seen[acct.username] || (seen[acct.username] = {});
       const v = Math.min(Number(upTo) || 0, seq);
-      if (v > (mine[conv] || 0)) { mine[conv] = v; saveSeen(); }
+      if (v > (mine[conv] || 0)) { mine[conv] = v; saveSeen(); roomChanged(); }
       return send(res, 200, { ok: true });
     }
     // ----- shared Work sessions -----
@@ -837,6 +866,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (prev) wakeWatchers(acct.username); // watchers of the old share see it restart
       shares.set(acct.username, s);
+      roomChanged();
       return send(res, 200, { share: conv });
     }
     if (p === '/api/work/live' && req.method === 'POST') {
@@ -926,21 +956,38 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/room/messages' && req.method === 'GET') {
       // ?rev=N → every message (new, edited or deleted) changed after N; first call (0) = the latest 500.
       // ?since=N → the older form: messages with seq > N.
-      const strip = ({ keys, ...m }) => ({ ...m, key: (keys || {})[acct.username] || null }); // only the reader's own slot
-      const mineVisible = messages.filter((m) => visibleTo(m, acct.username));
-      let out;
-      if (url.searchParams.has('rev')) {
-        const after = Number(url.searchParams.get('rev')) || 0;
-        out = after ? mineVisible.filter((m) => (m.rev || m.seq) > after) : mineVisible.slice(-500);
-      } else {
-        const since = Number(url.searchParams.get('since')) || 0;
-        out = mineVisible.filter((m) => m.seq > since).slice(-300);
-      }
-      const seenOut = {}; // receipts for the conversations this reader is part of
-      for (const [u, convs] of Object.entries(seen)) {
-        for (const [c, v] of Object.entries(convs)) if (c === 'room' || c.split(/[:|]/).includes(acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
-      }
-      return send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: sharesFor(acct.username) });
+      // &wait=1&ver=V → long poll: answered at once if anything changed since room version V,
+      // otherwise held up to 25 s and answered the moment something does.
+      const answer = () => {
+        // only the reader's own key slot; a voice clip's body is left out (fetched from /api/room/blob on play)
+        const strip = ({ keys, blob, ...m }) => ({ ...m, key: (keys || {})[acct.username] || null, ...(blob ? { blobLen: blob.length } : {}) });
+        const mineVisible = messages.filter((m) => visibleTo(m, acct.username));
+        let out;
+        if (url.searchParams.has('rev')) {
+          const after = Number(url.searchParams.get('rev')) || 0;
+          out = after ? mineVisible.filter((m) => (m.rev || m.seq) > after) : mineVisible.slice(-500);
+        } else {
+          const since = Number(url.searchParams.get('since')) || 0;
+          out = mineVisible.filter((m) => m.seq > since).slice(-300);
+        }
+        const seenOut = {}; // receipts for the conversations this reader is part of
+        for (const [u, convs] of Object.entries(seen)) {
+          for (const [c, v] of Object.entries(convs)) if (c === 'room' || c.split(/[:|]/).includes(acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
+        }
+        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: sharesFor(acct.username), ver: roomVer, keysVer });
+      };
+      if (url.searchParams.get('wait') !== '1' || Number(url.searchParams.get('ver')) !== roomVer) return answer();
+      let done = false;
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); roomWaiters.delete(finish); answer(); };
+      const timer = setTimeout(finish, 25000);
+      roomWaiters.add(finish);
+      req.on('close', () => { if (!done) { done = true; clearTimeout(timer); roomWaiters.delete(finish); } });
+      return;
+    }
+    if (p === '/api/room/blob' && req.method === 'GET') { // a voice clip's ciphertext, for a reader of that message
+      const m = messages.find((x) => x.seq === Number(url.searchParams.get('seq')));
+      if (!m || !m.blob || !visibleTo(m, acct.username) || !(m.keys || {})[acct.username]) return send(res, 404, { error: 'Not found.' });
+      return send(res, 200, { blob: m.blob });
     }
 
     // ----- admin (accounts with "admin": true) -----
@@ -997,6 +1044,7 @@ const server = http.createServer(async (req, res) => {
       if (p === '/api/admin/room/clear' && req.method === 'POST') {
         messages = []; fs.writeFileSync(CHAT_FILE, ''); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
         rev = 0; seen = {}; writeJson(SEEN_FILE, seen); // browsers see latestRev drop below theirs and reload
+        roomChanged();
         console.log(`[mills] ${acct.username} cleared the chat history.`);
         return send(res, 200, { ok: true });
       }

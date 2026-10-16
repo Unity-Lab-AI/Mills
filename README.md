@@ -86,5 +86,19 @@ The app is published from `main` (GitHub Pages deploys `web/`). Work follows Git
   - **Replays refused.** The hub refuses a second message with an id it has seen. Browsers also refuse a copy of an id under a different seq, and once a sender has used v3, they refuse later old-format messages from that sender (downgrade guard).
   - **HKDF wrap keys.** Wrap keys come from HKDF-SHA256 over the ECDH secret with a fixed label, not the raw secret.
   - **Padded length.** The plaintext is padded to a size bucket (256 bytes, doubling up to 64 KiB, then 64 KiB steps), so the ciphertext length no longer shows how long a message is.
-  - Older messages still decrypt the old way. This does not stop a hub that hands out a fake public key for someone, so comparing fingerprints is still the defence against that.
+  - Older messages still decrypt the old way.
+- **Message format v4** (browsers with `CompressionStream`; older ones keep sending v3):
+  - The message JSON is deflate-compressed **before** encryption (length prefix + deflate + padding). The hub only sees compressed, padded ciphertext, and decryption and decompression happen only in browsers.
+  - A voice clip's audio is a separate ciphertext with its own key. That key travels inside the encrypted message, so editing the caption keeps the clip. The message list no longer carries clips: a clip is downloaded (`/api/room/blob`, only for that message's readers) and decrypted when someone presses play.
+  - Voice and images are already compressed formats, so they are not deflated again.
+- **Key pinning.** Each browser remembers every member's public key the first time it sees it. If the hub later hands out a different key for someone, they are marked **⚠ CHANGED** under Key fingerprints: nothing is encrypted to that key, and messages sent with it stay hidden until you compare fingerprints with them outside Mills and press **Trust new key**.
+- **Page and hub hardening:**
+  - The page has a Content-Security-Policy: it may only talk to itself, the hub's Cloudflare tunnel and the GitHub API, with no outside scripts, frames, plugins or images.
+  - The hub address read from the gist is accepted only if it is a `*.trycloudflare.com` address. The last good address is cached, so a page load skips the GitHub lookup.
+  - Hub answers carry `nosniff`, `no-referrer` and `X-Frame-Options: DENY`, and API answers are `no-store`.
+  - Password hashing runs off the main thread, so sign-ins never stall anyone else. The 5-attempt limit also counts parallel attempts.
+- **Faster and in sync:**
+  - The chat is pushed by a long poll: the hub answers the moment something changes, instead of every browser asking every 3 seconds.
+  - In calls, each person's audio and video are sent as one stream, so the browser lip-syncs them.
+  - ICE candidates are sent in batches, so connecting needs fewer round trips through the tunnel.
 - Claude can't run shell commands by default. `allowedTools` / `permissionMode` in `bridge/config.json` control that.

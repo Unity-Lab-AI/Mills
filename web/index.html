@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Network reach of this page: itself, the hub (a Cloudflare tunnel) and the GitHub API that publishes
+     the hub's address. No outside scripts, frames, plugins or images, so injected code has nowhere to
+     send anything. (The page script is inline, hence 'unsafe-inline'.) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Mills</title>
 <style>
   :root {
@@ -557,8 +561,23 @@ let base = null;
 
 // ---------- find the bridge (its tunnel address changes each time the hub starts) ----------
 // The hub publishes its address in the gist file mills-bridge.json.
-async function findBridge() {
-  if (location.hostname === 'localhost' || location.hostname.endsWith('trycloudflare.com')) return location.origin;
+// Only a Cloudflare tunnel address is ever accepted from the gist, so whoever can edit that gist
+// cannot point everyone at some other server (the CSP below enforces the same list).
+const HUB_URL_RE = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
+async function findBridge(fresh) {
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com')) return location.origin;
+  // Last good address first: skips two GitHub API round trips (and its 60-an-hour limit) on every load.
+  const cached = store.get('mills.hub');
+  if (!fresh && cached && HUB_URL_RE.test(cached)) {
+    const st = await fetch(cached + '/api/status').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (st && st.hub) return cached;
+  }
+  const url = await gistBridge();
+  if (!HUB_URL_RE.test(url)) throw new Error('The published hub address is not a Cloudflare tunnel address; refusing it.');
+  store.set('mills.hub', url);
+  return url;
+}
+async function gistBridge() {
   const list = await fetch(`https://api.github.com/users/${GH_USER}/gists?per_page=100`).then((r) => r.json());
   const gist = Array.isArray(list) && list.find((g) => g.files && g.files[GIST_FILE]);
   if (!gist) throw new Error('Mills is not running yet.');
@@ -601,7 +620,7 @@ async function api(path, opts = {}) {
     if (attempt >= 40) { reconnecting = false; throw new Error('Mills is not responding — ask the admin to check it.'); }
     if (!reconnecting) { reconnecting = true; sys('Mills is restarting — waiting for it to come back…'); }
     await sleep(3000);
-    if (attempt % 4 === 0) { try { base = await findBridge(); } catch {} }
+    if (attempt % 4 === 0) { try { base = await findBridge(true); } catch {} }
   }
 }
 async function json(path, opts) {
@@ -1187,6 +1206,42 @@ async function fingerprint(jwk) {
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(jwk.x + '.' + jwk.y)));
   return [...h.slice(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join('').match(/.{4}/g).join(' ');
 }
+// Key pinning (trust on first use): this browser remembers every member's public key the first time it
+// sees it. If the hub later hands out a different key for someone, that person is marked as changed:
+// nothing is encrypted to that key and messages signed with it are not shown until you compare
+// fingerprints and press "Trust new key". Keys trusted earlier stay trusted (their old messages still open).
+const keyId = (jwk) => jwk.x + '.' + jwk.y;
+let pins = null, pinBootstrap = false;
+const changedKeys = new Set();
+function loadPins() {
+  if (pins && pins.__user === me.username) return;
+  const raw = store.get('mills.pins.' + me.username);
+  pinBootstrap = !raw; // the very first time: also trust the keys found in the existing history
+  pins = raw ? JSON.parse(raw) : {}; pins.__user = me.username; changedKeys.clear();
+}
+const savePins = () => store.set('mills.pins.' + me.username, JSON.stringify(pins));
+function trustedPub(user, jwk) {
+  loadPins();
+  const id = keyId(jwk), list = pins[user] || (pins[user] = []);
+  if (list.includes(id)) return true;
+  if (!list.length || pinBootstrap || (user === me.username && chatPubJwk && id === keyId(chatPubJwk))) { list.push(id); savePins(); return true; }
+  return false;
+}
+function checkPins() { // after every member-list load
+  loadPins();
+  for (const m of roomMembers) {
+    if (!m.pub || (m.username === me.username && !chatPubJwk)) continue; // own key: judged once it is unlocked here
+    const was = changedKeys.has(m.username);
+    if (trustedPub(m.username, m.pub)) changedKeys.delete(m.username);
+    else if (!was) { changedKeys.add(m.username); sysRoom('⚠ ' + nickOf(m.username) + '\'s encryption key changed. Nothing is sent to them until you compare fingerprints with them (outside Mills) and press "Trust new key" under Key fingerprints.'); }
+  }
+}
+function acceptKey(user) {
+  const m = memberOf(user);
+  if (!m || !m.pub) return;
+  loadPins(); (pins[user] || (pins[user] = [])).push(keyId(m.pub)); savePins();
+  changedKeys.delete(user); resetRoomData(); pollRoom().then(() => selectConv(currentConv)); renderConvList();
+}
 async function importPub(jwk) {
   const id = jwk.x + jwk.y;
   if (!pubCache.has(id)) pubCache.set(id, await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, ECDH, false, []));
@@ -1213,7 +1268,19 @@ async function wrapWith(jwk) {
   }
   return wrapCache.get(id);
 }
-const bodyAad = (from, to, mid) => 'mills-v3|' + from + '|' + (to || '') + '|' + mid;
+const bodyAad = (from, to, mid, v = 3) => 'mills-v' + v + '|' + from + '|' + (to || '') + '|' + mid;
+const blobAad = (from, mid) => 'mills-v4-blob|' + from + '|' + mid;
+const HAS_DEFLATE = typeof CompressionStream === 'function' && typeof DecompressionStream === 'function';
+const pipeBytes = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+const deflate = (bytes) => pipeBytes(bytes, new CompressionStream('deflate-raw'));
+const inflate = (bytes) => pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+function frame(bytes) { // u32 length + bytes + zero padding up to the size bucket
+  const out = new Uint8Array(padBucket(4 + bytes.length));
+  new DataView(out.buffer).setUint32(0, bytes.length); out.set(bytes, 4);
+  return out;
+}
+function unframe(buf) { const b = new Uint8Array(buf), n = new DataView(b.buffer, b.byteOffset).getUint32(0); if (n > b.length - 4) throw new Error('bad frame'); return b.subarray(4, 4 + n); }
+function bytesToB64(bytes) { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); }
 const newMid = () => toB64(crypto.getRandomValues(new Uint8Array(16))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 function padBucket(n) { // 256, 512, ... 64 KiB, then whole 64 KiB steps
   if (n > 65536) return Math.ceil(n / 65536) * 65536;
@@ -1227,7 +1294,7 @@ const midSeen = new Map(); // mid -> seq it first appeared under
 // ── Team chat: conversations (# Everyone + private), replies, edits, deletes, @mentions, receipts ──
 // Message text travels inside the encryption as {"v":2,"t":text,"r":replyToSeq}; older messages are
 // plain text. A private message carries `to` (who it is for) and is only wrapped for the two people.
-let roomMembers = [], roomRev = 0, roomTimer = null, roomLoaded = false, seenMap = {};
+let roomMembers = [], roomRev = 0, roomLoaded = false, seenMap = {};
 const msgs = new Map(); // seq -> { m, text, r, locked, el }
 let currentConv = 'room', replyTo = null, editingSeq = null;
 const hashName = (u) => [...u].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
@@ -1270,7 +1337,10 @@ function parsePayload(s) {
       const p = JSON.parse(s);
       if (p && p.v === 2 && typeof p.t === 'string') {
         // a = voice clip { m: mime type, d: base64 audio, s: seconds }, inside the encryption like the text
-        const a = p.a && typeof p.a.d === 'string' && /^audio\/[\w.+-]+(;[\w=.,+ -]*)?$/.test(p.a.m || '') ? { m: p.a.m, d: p.a.d, s: Number(p.a.s) || 0 } : null;
+        // (v4: no d, instead k = the key of the separately stored clip ciphertext, fetched on play)
+        const okMime = p.a && /^audio\/[\w.+-]+(;[\w=.,+ -]*)?$/.test(p.a.m || '');
+        const a = okMime && typeof p.a.d === 'string' ? { m: p.a.m, d: p.a.d, s: Number(p.a.s) || 0 }
+          : okMime && typeof p.a.k === 'string' ? { m: p.a.m, k: p.a.k, s: Number(p.a.s) || 0 } : null;
         return { t: p.t, r: Number.isInteger(p.r) ? p.r : null, a };
       }
     } catch {}
@@ -1281,15 +1351,19 @@ async function decryptMsg(m) {
   if (m.deleted) return { t: '', r: null };
   if (!chatPriv) return { t: '🔒 (locked — sign in again to read)', r: null, locked: true };
   if (!m.key) return { t: '🔒 (sent before your chat key existed)', r: null, locked: true };
-  if (m.v === 3) {
+  if (m.fromPub && !trustedPub(m.from, m.fromPub)) return { t: '🔒 (sent with a key you have not verified for ' + nickOf(m.from) + ': see Key fingerprints)', r: null, locked: true };
+  if (m.v === 3 || m.v === 4) {
     if (typeof m.mid !== 'string') return { t: '🔒 (could not decrypt)', r: null, locked: true };
+    if (m.v === 4 && !HAS_DEFLATE) return { t: '🔒 (this browser is too old to open new messages: update it)', r: null, locked: true };
     const first = midSeen.get(m.mid);
     if (first !== undefined && first !== m.seq) return { t: '🔒 (replayed copy of an earlier message: refused)', r: null, locked: true };
     try {
-      const aad = bodyAad(m.from, m.to, m.mid);
+      const aad = bodyAad(m.from, m.to, m.mid, m.v);
       const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv), additionalData: enc.encode(aad + '|' + me.username) }, await wrapWith(m.fromPub), fromB64(m.key.wk));
       const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
-      const p = parsePayload(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv), additionalData: enc.encode(aad) }, k, fromB64(m.ct))).trimEnd());
+      const body = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv), additionalData: enc.encode(aad) }, k, fromB64(m.ct));
+      const p = parsePayload(m.v === 4 ? dec.decode(await inflate(unframe(body))) : dec.decode(body).trimEnd());
+      if (p.a && p.a.k && !m.blobLen) p.a = null; // a clip key without a stored clip: nothing to play
       midSeen.set(m.mid, m.seq);
       if (!(v3Since[m.from] <= m.seq)) { v3Since[m.from] = m.seq; localStorage.setItem('mills.v3since', JSON.stringify(v3Since)); }
       return p;
@@ -1319,6 +1393,7 @@ async function openRoom() {
 }
 async function refreshMembers() {
   try { roomMembers = (await json('/api/room/members')).members; } catch { return; }
+  checkPins();
   renderConvList(); renderShareSel();
 }
 let convListRun = 0;
@@ -1341,7 +1416,14 @@ async function renderConvList() {
     const fp = m.pub ? await fingerprint(m.pub) : 'no key yet';
     if (run !== convListRun) return; // a newer render took over
     const d = document.createElement('div');
-    d.textContent = nickOf(m.username) + (m.username === me.username ? ' (you)' : '') + ': ' + fp + (m.agent ? ' — AI, key held by the hub; only receives messages that write @' + m.display.toLowerCase().replace(/\s+/g, '') + ' (plus the 5 before them)' : '');
+    d.textContent = (changedKeys.has(m.username) ? '⚠ CHANGED · ' : '') + nickOf(m.username) + (m.username === me.username ? ' (you)' : '') + ': ' + fp + (m.agent ? ' — AI, key held by the hub; only receives messages that write @' + m.display.toLowerCase().replace(/\s+/g, '') + ' (plus the 5 before them)' : '');
+    if (changedKeys.has(m.username)) {
+      det.open = true;
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Trust new key';
+      b.title = 'Only after ' + nickOf(m.username) + ' read you this same fingerprint outside Mills';
+      b.onclick = () => acceptKey(m.username);
+      d.append(' ', b);
+    }
     det.append(d);
   }
   const hint = document.createElement('div'); hint.textContent = 'Compare these with each other once, outside Mills. If they match, nobody in between can read the chat.';
@@ -1363,16 +1445,40 @@ function selectConv(conv) {
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
-async function pollRoom() {
+// The room is pushed, not polled: roomLoop keeps one long-poll open (the hub answers the moment
+// anything changes, or after 25 s), and pollRoom() fetches right away (after sending, on opening).
+// Both go through one queue so a message is never decrypted / notified twice.
+let roomQueue = Promise.resolve(), roomVer = 0, roomKeysVer = 0, roomLooping = false, roomGen = 0;
+function pollRoom() {
+  const run = roomQueue.then(fetchRoom);
+  roomQueue = run.catch(() => {});
+  return roomQueue; // never throws: the long poll catches up anyway
+}
+async function fetchRoom() {
   if (!me) return;
-  let d;
-  try { d = await json('/api/room/messages?rev=' + roomRev); } catch { return; }
-  if (d.latestRev < roomRev) { resetRoomData(); return pollRoom(); } // an admin cleared the history
+  return applyRoom(await json('/api/room/messages?rev=' + roomRev));
+}
+async function applyRoom(d) {
+  if (!me) return;
+  if (d.latestRev < roomRev) { resetRoomData(); return applyRoom(await json('/api/room/messages?rev=0')); } // an admin cleared the history
+  roomVer = d.ver || 0;
+  if (d.keysVer && d.keysVer !== roomKeysVer) { const first = !roomKeysVer; roomKeysVer = d.keysVer; if (!first) await refreshMembers(); }
   seenMap = d.seen || {};
   onShares(d.shares || []);
   for (const m of d.messages) await ingest(m, roomLoaded);
   roomLoaded = true;
+  if (pinBootstrap) { pinBootstrap = false; savePins(); } // first load done: from now on only pinned keys count
   refreshReceipts(); updateUnread(); markSeen();
+}
+async function roomLoop(gen) {
+  // the long poll is held outside the queue (it may wait 25 s); its answer is applied through the queue
+  while (me && gen === roomGen) {
+    try {
+      const d = await json('/api/room/messages?rev=' + roomRev + '&wait=1&ver=' + roomVer);
+      if (gen !== roomGen) return;
+      const run = roomQueue.then(() => applyRoom(d)); roomQueue = run.catch(() => {}); await run;
+    } catch { await sleep(3000); }
+  }
 }
 async function ingest(m, live) {
   roomRev = Math.max(roomRev, m.rev || m.seq);
@@ -1422,10 +1528,12 @@ function renderMsg(rec, bulk) {
   if (m.deleted) body.textContent = 'message deleted'; else renderRich(body, rec.text);
   el.append(body);
   if (rec.audio && !m.deleted) {
-    const au = document.createElement('audio'); au.controls = true; au.preload = 'metadata';
-    au.src = clipUrl(rec); au.volume = prefs().clips.volume / 100;
-    au.onclick = (e) => e.stopPropagation();
-    el.append(au);
+    if (rec.url || rec.audio.d) {
+      const au = document.createElement('audio'); au.controls = true; au.preload = 'metadata';
+      au.volume = prefs().clips.volume / 100; clipUrl(rec).then((u) => { au.src = u; }).catch(() => {});
+      au.onclick = (e) => e.stopPropagation();
+      el.append(au);
+    } else el.append(clipPlayer(rec));
   }
   if (mine && !m.deleted) { const s = document.createElement('div'); s.className = 'seenLine'; el.append(s); }
   el.onclick = (e) => openMsgMenu(rec, e);
@@ -1521,12 +1629,31 @@ function notify(rec) {
     if (P.clips.autoplay && !watching) enqueueClip(rec);
   } else if (readIt) speak(`${who}${how}: ${rec.text}`);
 }
-function clipUrl(rec) { // decrypted audio → a local blob URL (never leaves the browser)
+async function clipUrl(rec) { // decrypted audio → a local blob URL (never leaves the browser)
   if (!rec.url) {
-    const bytes = Uint8Array.from(atob(rec.audio.d), (c) => c.charCodeAt(0));
-    rec.url = URL.createObjectURL(new Blob([bytes], { type: rec.audio.m }));
+    let bytes;
+    if (rec.audio.d) bytes = Uint8Array.from(atob(rec.audio.d), (c) => c.charCodeAt(0)); // older clips: inside the message
+    else { // v4: download the clip's own ciphertext now, decrypt with the key from the message body
+      const b = fromB64((await json('/api/room/blob?seq=' + rec.m.seq)).blob);
+      const k = await crypto.subtle.importKey('raw', fromB64(rec.audio.k), 'AES-GCM', false, ['decrypt']);
+      bytes = unframe(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.subarray(0, 12), additionalData: enc.encode(blobAad(rec.m.from, rec.m.mid)) }, k, b.subarray(12)));
+    }
+    if (!rec.url) rec.url = URL.createObjectURL(new Blob([bytes], { type: rec.audio.m }));
   }
   return rec.url;
+}
+function clipPlayer(rec) { // a play button that downloads + decrypts the clip on first press, then becomes the player
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'clipBtn';
+  b.textContent = '▶ Voice clip (' + clipLen(rec.audio.s || 0) + ')';
+  b.onclick = async (e) => {
+    e.stopPropagation(); b.disabled = true; b.textContent = 'Loading…';
+    try {
+      const au = document.createElement('audio'); au.controls = true; au.src = await clipUrl(rec); au.volume = prefs().clips.volume / 100;
+      au.onclick = (ev) => ev.stopPropagation();
+      b.replaceWith(au); au.play().catch(() => {});
+    } catch (err) { b.disabled = false; b.textContent = '▶ Voice clip: could not load (' + err.message + ')'; }
+  };
+  return b;
 }
 function enqueueClip(rec) {
   ttsQueue.push({ clip: rec });
@@ -1545,16 +1672,19 @@ function speak(text) {
   if (ttsQueue.length > 30) ttsQueue.splice(0, ttsQueue.length - 30); // never fall endlessly behind
   if (!ttsBusy) ttsNext();
 }
-let clipPlayer = null;
+let clipAudio = null;
 function ttsNext() {
   const text = ttsQueue.shift();
   if (!text) { ttsBusy = false; return; }
   ttsBusy = true;
   if (typeof text === 'object') { // a queued voice clip
-    clipPlayer = new Audio(clipUrl(text.clip));
-    clipPlayer.volume = prefs().clips.volume / 100;
-    clipPlayer.onended = clipPlayer.onerror = () => { clipPlayer = null; setTimeout(ttsNext, 250); };
-    clipPlayer.play().catch(() => { clipPlayer = null; setTimeout(ttsNext, 250); });
+    clipUrl(text.clip).then((u) => {
+      if (!ttsBusy) return; // stopped meanwhile
+      clipAudio = new Audio(u);
+      clipAudio.volume = prefs().clips.volume / 100;
+      clipAudio.onended = clipAudio.onerror = () => { clipAudio = null; setTimeout(ttsNext, 250); };
+      clipAudio.play().catch(() => { clipAudio = null; setTimeout(ttsNext, 250); });
+    }).catch(() => setTimeout(ttsNext, 250));
     return;
   }
   if (!('speechSynthesis' in window)) { setTimeout(ttsNext, 0); return; }
@@ -1567,7 +1697,7 @@ function ttsNext() {
 }
 function ttsStop() {
   ttsQueue.length = 0; ttsBusy = false;
-  if (clipPlayer) { clipPlayer.onended = clipPlayer.onerror = null; clipPlayer.pause(); clipPlayer = null; }
+  if (clipAudio) { clipAudio.onended = clipAudio.onerror = null; clipAudio.pause(); clipAudio = null; }
   if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
@@ -1611,13 +1741,16 @@ async function finishClip() {
   if (seconds < 0.5) return;
   const blob = new Blob(r.chunks, { type: r.recorder.mimeType || 'audio/webm' });
   const buf = new Uint8Array(await blob.arrayBuffer());
-  let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
   const caption = $('roomInput').value.trim();
   try {
     const to = convPeer(currentConv);
     const forAgent = callsAgent(caption, to);
-    const payload = { v: 2, t: caption, a: { m: blob.type.split(';')[0] || 'audio/webm', d: btoa(bin), s: Math.round(seconds * 10) / 10 }, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) };
-    const sealed = await sealFor(JSON.stringify(payload), to, forAgent);
+    const mime = blob.type.split(';')[0] || 'audio/webm', secs = Math.round(seconds * 10) / 10, mid = newMid();
+    // v4: the audio travels as its own ciphertext (raw bytes, fetched on play); older browsers: inside the body
+    const clip = HAS_DEFLATE ? await sealBlob(buf, mid) : null;
+    const a = clip ? { m: mime, k: clip.k, s: secs } : { m: mime, d: bytesToB64(buf), s: secs };
+    const payload = { v: 2, t: caption, a, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) };
+    const sealed = await sealFor(JSON.stringify(payload), to, forAgent, mid, clip ? clip.blob : undefined);
     await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
     if (caption) $('roomInput').value = '';
     cancelCompose(); await pollRoom();
@@ -1630,7 +1763,8 @@ async function finishClip() {
 // Codecs: Opus for voice (in-band FEC, DTX for silence, ~32 kb/s), VP9 → AV1 → VP8 → H.264 for video,
 // all decoded natively by the browser. Camera always starts OFF; the microphone uses the noise
 // suppression / echo cancellation / auto level settings (on by default).
-const call = { conv: null, peers: new Map(), mic: null, cam: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map() };
+const call = { conv: null, peers: new Map(), mic: null, cam: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map(),
+  local: typeof MediaStream === 'function' ? new MediaStream() : null }; // the one stream id our audio + video are sent under (lip-sync)
 let callInit = false;
 const VQ = { low: [320, 180, 15, 250], medium: [640, 360, 24, 700], high: [1280, 720, 30, 1800] }; // w, h, fps, kb/s
 function audioConstraints() { const a = prefs().audio; return { noiseSuppression: a.noise, echoCancellation: a.echo, autoGainControl: a.agc, channelCount: 1 }; }
@@ -1816,31 +1950,47 @@ function tuneSenders(peer) {
     s.setParameters(params).catch(() => {});
   }
 }
+// Lip-sync: browsers only synchronise audio and video that belong to the same stream (the SDP msid).
+// Both senders are tied to one local stream id, and the receiving side plays the remote stream the
+// tracks arrive in, so voice and picture stay in step instead of drifting apart.
 async function attachLocal(peer) { // put our current mic / camera on this connection's senders
   const ts = peer.pc.getTransceivers();
-  for (const t of ts) { t.direction = 'sendrecv'; preferCodecs(t, t.receiver.track.kind); } // synchronously, before any offer / answer is made
+  for (const t of ts) { // synchronously, before any offer / answer is made
+    t.direction = 'sendrecv'; preferCodecs(t, t.receiver.track.kind);
+    if (t.sender.setStreams) try { t.sender.setStreams(call.local); } catch {}
+  }
   for (const t of ts) { try { await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? call.mic : call.cam); } catch {} }
 }
 function connectPeer(user) {
   if (call.peers.has(user)) return call.peers.get(user);
   const pc = new RTCPeerConnection({ iceServers: call.ice });
-  const peer = { pc, user, offerer: me.username < user, pendingIce: [], stream: new MediaStream(), tile: makeTile(user, false) };
+  const peer = { pc, user, offerer: me.username < user, pendingIce: [], iceOut: [], iceTimer: null, stream: new MediaStream(), tile: makeTile(user, false) };
   call.peers.set(user, peer);
   $('callTiles').append(peer.tile);
   peer.tile.querySelector('video').srcObject = peer.stream;
   pc.ontrack = (e) => {
-    peer.stream.addTrack(e.track); peer.tile.querySelector('video').play().catch(() => {});
+    const v = peer.tile.querySelector('video');
+    if (e.streams && e.streams[0]) { // the sender's stream: audio + video in one, so the browser lip-syncs them
+      if (v.srcObject !== e.streams[0]) { peer.stream = e.streams[0]; v.srcObject = peer.stream; }
+    } else if (!peer.stream.getTracks().includes(e.track)) peer.stream.addTrack(e.track);
+    v.play().catch(() => {});
     if (e.track.kind === 'audio') addMeter(user, e.track);
   };
-  pc.onicecandidate = (e) => { if (e.candidate) sendSignal(user, { c: e.candidate.toJSON() }); };
+  // ICE candidates arrive in quick bursts: gather them for 40 ms and send one signal per burst (each
+  // signal is a round trip through the tunnel, so this cuts set-up time on slow links).
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) return;
+    peer.iceOut.push(e.candidate.toJSON());
+    if (!peer.iceTimer) peer.iceTimer = setTimeout(() => { peer.iceTimer = null; sendSignal(user, { cs: peer.iceOut.splice(0) }); }, 40);
+  };
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') tuneSenders(peer);
     if (pc.connectionState === 'failed' && peer.offerer) pc.restartIce();
     if (pc.connectionState === 'failed') callMsg('Could not connect to ' + nickOf(user) + ' directly (strict network). A TURN server in the hub config fixes this.');
   };
   if (peer.offerer) { // exactly one side offers, so there is never a collision
-    pc.addTransceiver('audio', { direction: 'sendrecv' });
-    pc.addTransceiver('video', { direction: 'sendrecv' });
+    pc.addTransceiver('audio', { direction: 'sendrecv', streams: [call.local] });
+    pc.addTransceiver('video', { direction: 'sendrecv', streams: [call.local] });
     attachLocal(peer);
     pc.onnegotiationneeded = async () => {
       try { await pc.setLocalDescription(); await sendSignal(user, { d: tuneSdp(pc.localDescription) }); } catch {}
@@ -1851,11 +2001,12 @@ function connectPeer(user) {
 function dropPeer(user) {
   const peer = call.peers.get(user);
   if (!peer) return;
+  clearTimeout(peer.iceTimer);
   try { peer.pc.close(); } catch {}
   removeMeter(user);
   peer.tile.remove(); call.peers.delete(user); call.gone.delete(user);
 }
-async function pairKey(user) { const m = memberOf(user); return m && m.pub && chatPriv ? sharedWith(m.pub) : null; }
+async function pairKey(user) { const m = memberOf(user); return m && m.pub && chatPriv && !changedKeys.has(user) && trustedPub(user, m.pub) ? sharedWith(m.pub) : null; }
 async function sendSignal(user, body) {
   const k = await pairKey(user);
   if (!k || !call.conv) return;
@@ -1876,8 +2027,10 @@ async function onSignal(s) {
       await pc.setRemoteDescription(msg.d);
       if (msg.d.type === 'offer') { await attachLocal(peer); await pc.setLocalDescription(); await sendSignal(s.from, { d: tuneSdp(pc.localDescription) }); }
       for (const c of peer.pendingIce.splice(0)) { try { await pc.addIceCandidate(c); } catch {} }
-    } else if (msg.c) {
-      if (pc.remoteDescription) { try { await pc.addIceCandidate(msg.c); } catch {} } else peer.pendingIce.push(msg.c);
+    } else if (msg.c || Array.isArray(msg.cs)) { // one candidate (older pages) or a batch
+      for (const c of msg.cs || [msg.c]) {
+        if (pc.remoteDescription) { try { await pc.addIceCandidate(c); } catch {} } else peer.pendingIce.push(c);
+      }
     }
   } catch (e) { callMsg('Call set-up problem with ' + nickOf(s.from) + ': ' + e.message); }
 }
@@ -2061,10 +2214,11 @@ function toast(rec, kind) {
 }
 function startRoomPolling() {
   stopRoomPolling();
-  loadLocalChatKey().then(refreshMembers).then(pollRoom).then(() => selectConv(currentConv));
-  roomTimer = setInterval(() => { pollRoom(); }, 3000); // also while the tab is in the background, so sounds still play
+  const gen = ++roomGen;
+  // also runs while the tab is in the background, so sounds still play
+  loadLocalChatKey().then(refreshMembers).then(() => pollRoom()).then(() => selectConv(currentConv)).catch(() => {}).then(() => roomLoop(gen));
 }
-function stopRoomPolling() { if (roomTimer) clearInterval(roomTimer); roomTimer = null; }
+function stopRoomPolling() { roomGen++; roomVer = 0; roomKeysVer = 0; }
 
 // Message menu: reply to anyone; edit / delete your own; receipts.
 function closeMsgMenu() { const m = $('msgMenu'); if (m) m.remove(); }
@@ -2126,23 +2280,38 @@ function agentCtx(conv) {
 }
 // Encrypt one message body for a conversation: everyone with a key, or only the two people.
 // The agent gets a copy only when forAgent is true.
-async function sealFor(plain, to, forAgent, mid = newMid()) {
+// v4 (browsers with CompressionStream): the JSON is deflated BEFORE encryption, so the hub only ever
+// sees compressed + padded ciphertext. A voice clip's audio goes as a separate ciphertext (`blob`)
+// with its own key carried inside the encrypted body; it is only downloaded when someone plays it.
+async function sealFor(plain, to, forAgent, mid = newMid(), blob) {
   await refreshMembers();
-  const aad = bodyAad(me.username, to, mid);
+  if (to && changedKeys.has(to)) throw new Error(nickOf(to) + '\'s key changed: compare fingerprints and trust the new key first (Key fingerprints).');
+  const v = HAS_DEFLATE ? 4 : 3, aad = bodyAad(me.username, to, mid, v);
   const raw = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
   const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, k, padPlain(plain));
+  const body = v === 4 ? frame(await deflate(enc.encode(plain))) : padPlain(plain);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, k, body);
   const keys = {};
   for (const m of roomMembers) {
     if (to && m.username !== to && m.username !== me.username) continue;
     if (m.agent && !forAgent) continue;
+    if (m.username !== me.username && changedKeys.has(m.username)) continue; // never encrypt to an unverified key
     const pub = m.username === me.username ? chatPubJwk : m.pub;
     if (!pub) continue;
     const kiv = crypto.getRandomValues(new Uint8Array(12));
     keys[m.username] = { iv: toB64(kiv), wk: toB64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: kiv, additionalData: enc.encode(aad + '|' + m.username) }, await wrapWith(pub), raw)) };
   }
   if (to && !keys[to]) throw new Error(nickOf(to) + ' has no chat key yet (they have not signed in since chat was added).');
-  return { v: 3, mid, iv: toB64(iv), ct: toB64(ct), keys };
+  return { v, mid, iv: toB64(iv), ct: toB64(ct), keys, ...(blob ? { blob } : {}) };
+}
+// A voice clip's audio, encrypted with its own fresh key (kept inside the message body, so editing the
+// caption re-encrypts the body but leaves the clip as it is). Bound to the sender and message id.
+async function sealBlob(bytes, mid) {
+  const bk = crypto.getRandomValues(new Uint8Array(32)), biv = crypto.getRandomValues(new Uint8Array(12));
+  const k = await crypto.subtle.importKey('raw', bk, 'AES-GCM', false, ['encrypt']);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: biv, additionalData: enc.encode(blobAad(me.username, mid)) }, k, frame(bytes)));
+  const out = new Uint8Array(12 + ct.length); out.set(biv); out.set(ct, 12);
+  return { k: toB64(bk), blob: bytesToB64(out) };
 }
 $('roomComposer').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2153,7 +2322,8 @@ $('roomComposer').addEventListener('submit', async (e) => {
     if (editingSeq) {
       const rec = msgs.get(editingSeq);
       const eto = rec ? rec.m.to || '' : '';
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined);
+      // a voice clip keeps its audio: v4 clips keep their key (the clip itself stays on the hub), older ones their data
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}), ...(rec && rec.audio ? { a: rec.audio } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined);
       await json('/api/room/edit', { method: 'POST', body: JSON.stringify({ seq: editingSeq, ...sealed }) });
     } else {
       const to = convPeer(currentConv), forAgent = callsAgent(text, to);
