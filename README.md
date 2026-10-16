@@ -33,7 +33,7 @@ User's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel ─�
 3. Run `bridge/start.bat <name>` (copy `start-sponge.bat` if you want a double-clickable launcher).
 4. Give them `https://unity-lab-ai.github.io/Mills/?user=<name>` and the password. Their saved conversations land in `Mills/Archive/<name>/`.
 
-Profile state lives in `bridge/profiles/<name>/` (`auth.json`, `state.json`, `.mcp-runtime.json` are gitignored; `config.json` is committed). Everything in `bridge/config.json` except `port` and `gistId` applies to every profile unless the profile's own `config.json` overrides it.
+Profile state lives in `bridge/profiles/<name>/` (`auth.json`, `state.json`, `.mcp-runtime.json` are gitignored; `config.json` is committed). Everything in `bridge/config.json` except `port` and `gistId` applies to every profile unless the profile's own `config.json` overrides it. For example, a profile can pin its own Claude model with `"model": "claude-opus-5-5"` (Sponge's profile does; an empty or missing `model` uses Claude Code's default). Config is read when the bridge starts, so restart that profile's window after changing it.
 
 ## Alfreddo / Sponge: using it
 

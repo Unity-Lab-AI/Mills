@@ -1,4 +1,5 @@
 {
   "port": 7778,
-  "user": "Sponge"
+  "user": "Sponge",
+  "model": "claude-opus-5-5"
 }
