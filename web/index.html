@@ -228,6 +228,7 @@
   #assistThumb { height: 56px; border-radius: 6px; }
   #assistVideo { height: 180px; border-radius: 8px; background: #000; }
   #assistMic.rec { background: var(--bad); color: #fff; }
+  .ytPlayer { display: block; width: min(100%, 480px); aspect-ratio: 16 / 9; border: 0; border-radius: 8px; margin: .3rem 0; }
   .hostImg { display: block; max-width: min(100%, 420px); max-height: 60vh; border-radius: 8px; margin: .3rem 0; cursor: pointer; }
   .confirmCard { align-self: flex-start; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: .6rem .8rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   #assistNotice { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; display: flex; flex-direction: column; gap: .5rem; }
@@ -733,7 +734,8 @@ $('assistForm').addEventListener('submit', async (e) => {
         else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = '⚙ ' + ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
         else if (ev.type === 'final') { if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
-[[image:${r}]]`).join(''));
+[[image:${r}]]`).join('') + (ev.media || []).map((v) => `
+[[youtube:${v}]]`).join(''));
         else if (ev.type === 'error') { renderText(bubble, ev.text); bubble.className = 'sys bad'; }
       }
       $('assistLog').scrollTop = $('assistLog').scrollHeight;
@@ -1022,7 +1024,7 @@ function line(cls, text) { const d = document.createElement('div'); d.className 
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
 function renderText(el, text) {
   el.textContent = '';
-  if (/\[\[image:/.test(text)) return withImages(el, text, (e, t) => renderText(e, t));
+  if (/\[\[(image|youtube):/.test(text)) return withImages(el, text, (e, t) => renderText(e, t));
   text.split(/```[^\n]*\n?/).forEach((part, i) => {
     if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.appendChild(pre); }
     else if (part) el.appendChild(document.createTextNode(part));
@@ -1572,12 +1574,18 @@ function hostImage(ref) { // a picture made by the host's image engine, loaded w
    .catch(() => { img.replaceWith(document.createTextNode('(picture no longer on the host)')); imgCache.delete(ref); });
   return img;
 }
+function ytPlayer(id) { // a YouTube video Unity picked, played right here (privacy-enhanced embed)
+  const f = document.createElement('iframe'); f.className = 'ytPlayer';
+  f.src = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) + '?autoplay=1&rel=0';
+  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen'; f.allowFullscreen = true; f.title = 'YouTube video';
+  return f;
+}
 function withImages(el, text, render) { // split out [[image:ref]] markers, render the rest as usual
-  const parts = String(text).split(/\[\[image:([a-z0-9-]+\/[a-z0-9-]+)\]\]/);
-  parts.forEach((part, i) => { if (i % 2) el.append(hostImage(part)); else if (part.trim()) { const span = document.createElement('div'); render(span, part.replace(/\n+$/, '')); el.append(span); } });
+  const parts = String(text).split(/\[\[(image:[a-z0-9-]+\/[a-z0-9-]+|youtube:[\w-]{11})\]\]/);
+  parts.forEach((part, i) => { if (i % 2) el.append(part.startsWith('youtube:') ? ytPlayer(part.slice(8)) : hostImage(part.slice(6))); else if (part.trim()) { const span = document.createElement('div'); render(span, part.replace(/\n+$/, '')); el.append(span); } });
 }
 function renderRich(el, text) { // ``` code blocks + highlighted @mentions + host pictures
-  if (/\[\[image:/.test(text)) return withImages(el, text, renderRichText);
+  if (/\[\[(image|youtube):/.test(text)) return withImages(el, text, renderRichText);
   renderRichText(el, text);
 }
 function renderRichText(el, text) {

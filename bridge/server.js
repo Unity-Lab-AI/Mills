@@ -481,7 +481,7 @@ function runAgentLocal(target, caller) {
   const prompt = agentPrompt();
   agent.running = { local: true };
   assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' })
-    .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join(''))
+    .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join('') + (r.media || []).map((v) => `\n[[youtube:${v}]]`).join(''))
     .catch((e) => `(my brain glitched: ${e.message})`)
     .then((text) => {
       agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);

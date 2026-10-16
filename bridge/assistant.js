@@ -149,6 +149,67 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     return { ok: true, about: q || 'top stories', items };
   }
 
+  // ---------- the web: search, read a page, YouTube (keyless; the host does the fetching) ----------
+  const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', 'Accept-Language': 'en-US,en;q=0.8' };
+  const SEARCH_URL = A.searchUrl || 'https://www.bing.com/search';
+  const YT_URL = A.youtubeUrl || 'https://www.youtube.com/results';
+  const unhtml = (t) => String(t || '').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<noscript[\s\S]*?<\/noscript>/gi, ' ').replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#(\d+);/g, (m, n) => String.fromCharCode(n)).replace(/\s+/g, ' ').trim();
+  function realLink(href) { // Bing wraps results as /ck/a?...&u=a1<base64url of the address>
+    href = href.replace(/&amp;/g, '&');
+    const u = /[?&]u=a1([^&]+)/.exec(href);
+    if (u) { try { return Buffer.from(u[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'); } catch {} }
+    return href;
+  }
+  async function webSearch(q) {
+    const r = await fetch(`${SEARCH_URL}?q=${encodeURIComponent(q)}&setlang=en`, { headers: UA, signal: AbortSignal.timeout(12000) });
+    if (!r.ok) throw new Error('search answered ' + r.status);
+    const html = await r.text();
+    const results = [];
+    for (const m of html.matchAll(/<li class="b_algo"[\s\S]*?<\/li>/g)) {
+      const a = /<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(m[0]);
+      if (!a) continue;
+      const snip = /<p[^>]*>([\s\S]*?)<\/p>/.exec(m[0]);
+      results.push({ title: unhtml(a[2]), url: realLink(a[1]), snippet: unhtml(snip ? snip[1] : '').slice(0, 300) });
+      if (results.length >= 8) break;
+    }
+    return { ok: true, query: q, results };
+  }
+  // read_page never reaches the host's own network (no localhost, private ranges, link-local, odd ports)
+  // unless the hub config allows it (only the regression runner's throwaway hub does).
+  async function publicUrl(raw) {
+    let u; try { u = new URL(raw); } catch { throw new Error('Not a web address.'); }
+    if (!/^https?:$/.test(u.protocol)) throw new Error('Only http and https pages.');
+    if (A.allowPrivateFetch) return u;
+    if (u.port && !['80', '443', '8080'].includes(u.port)) throw new Error('That port is not allowed.');
+    const ips = /^\[?[\d.:a-f]+\]?$/i.test(u.hostname) ? [u.hostname.replace(/[[\]]/g, '')] : (await require('dns').promises.lookup(u.hostname, { all: true })).map((x) => x.address);
+    const bad = (ip) => /^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip) || /^(::1|::$|f[cd]|fe80|::ffff:(127|10|192\.168|169\.254)\.)/i.test(ip) || ip === 'localhost';
+    if (!ips.length || ips.some(bad) || /^localhost$/i.test(u.hostname)) throw new Error('That address is on a private network; only public pages.');
+    return u;
+  }
+  async function readPage(raw) {
+    let u = await publicUrl(raw);
+    for (let hop = 0; hop < 4; hop++) { // follow redirects ourselves so every hop is checked
+      const r = await fetch(u, { headers: UA, redirect: 'manual', signal: AbortSignal.timeout(15000) });
+      if (r.status >= 300 && r.status < 400 && r.headers.get('location')) { u = await publicUrl(new URL(r.headers.get('location'), u).href); continue; }
+      if (!r.ok) throw new Error('The page answered ' + r.status);
+      const type = r.headers.get('content-type') || '';
+      if (!/text|html|json|xml/.test(type)) throw new Error('Not a text page (' + type + ').');
+      const body = (await r.text()).slice(0, 2e6);
+      const title = unhtml((/<title[^>]*>([\s\S]*?)<\/title>/i.exec(body) || [])[1] || '');
+      const main = /<(article|main)[\s\S]*?<\/\1>/i.exec(body);
+      return { ok: true, url: u.href, title, text: unhtml(main ? main[0] : body).slice(0, 6000) };
+    }
+    throw new Error('Too many redirects.');
+  }
+  async function youtube(q) {
+    const r = await fetch(`${YT_URL}?search_query=${encodeURIComponent(q)}`, { headers: UA, signal: AbortSignal.timeout(12000) });
+    const html = await r.text();
+    const m = /"videoRenderer":\{"videoId":"([\w-]{11})"[\s\S]*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/.exec(html) || /"videoId":"([\w-]{11})"/.exec(html);
+    if (!m) throw new Error('No video found for ' + q);
+    return { id: m[1], title: m[2] ? JSON.parse('"' + m[2] + '"') : q };
+  }
+
   // ---------- images ----------
   const IMG_ID = /^[a-z0-9-]{1,40}$/;
   async function makeImage(ci, args) {
@@ -291,6 +352,15 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   tool('get_weather', "Current weather and today's outlook where the person is, or in a named city.", { city: P('City, optional (default: where they are)') }, [], (a, s, ci) => weather(ci, a.city, 1));
   tool('get_forecast', 'Weather forecast for the next days where the person is, or in a named city.', { days: P('Days (1-7, default 5)', 'integer'), city: P('City, optional') }, [], (a, s, ci) => weather(ci, a.city, Number(a.days) || 5));
   tool('get_news', 'Current news headlines: local to where the person is, on a topic, or top stories in their country.', { topic: P('Topic to search, optional'), local: P('true for news about where they are', 'boolean') }, [], (a, s, ci) => news(ci, a.topic, a.local === true || a.local === 'true'));
+  tool('web_search', 'Search the web; returns titles, links and snippets.', { query: P('What to search for') }, ['query'], (a) => webSearch(String(a.query).slice(0, 300)));
+  tool('read_page', 'Read a public web page as text (to answer from it or summarise it).', { url: P('The http(s) address') }, ['url'], (a) => readPage(String(a.url)));
+  tool('play_youtube', 'Find a YouTube video (music, clips, anything) and play it for them right in the chat.', { query: P('What to play, or a YouTube link') }, ['query'], async (a, s, ci) => {
+    const q = String(a.query).trim();
+    const direct = /(?:youtu\.be\/|v=|shorts\/|embed\/)([\w-]{11})/.exec(q);
+    const v = direct ? { id: direct[1], title: q } : await youtube(q.slice(0, 200));
+    (ci.media || (ci.media = [])).push(v.id);
+    return { ok: true, playing: v.title, video: v.id, shown: 'The player is attached to your reply automatically.' };
+  });
   tool('generate_image', 'Make a picture with the image engine (photos, art, scenes, objects; selfie true for a picture of yourself). The picture is shown with your reply.', {
     prompt: P('The picture, written fresh from THIS moment, most important first: what is happening right now in the conversation, '
       + 'what you are doing, where you are, who is with you, what you are wearing for it, expression, the time of day and the weather where they are, '
@@ -537,10 +607,10 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       const reply = brain === 'local' ? await runLocal(acct, text, ci, out, ctl.signal, { photo })
         : await runClaudeBrain(acct, photo ? `${text}\n\n(They sent a photo, id ${photo}; use edit_image / inpaint_image with image "camera" to work with it.)` : text, ci, out, brain);
       const s = store(acct);
-      s.history.push({ role: 'user', content: text + (photo ? `\n[[image:${photo}]]` : '') }, { role: 'assistant', content: (reply || '(did it)') + (ci.images || []).map((r) => `\n[[image:${r}]]`).join('') });
+      s.history.push({ role: 'user', content: text + (photo ? `\n[[image:${photo}]]` : '') }, { role: 'assistant', content: (reply || '(did it)') + (ci.images || []).map((r) => `\n[[image:${r}]]`).join('') + (ci.media || []).map((v) => `\n[[youtube:${v}]]`).join('') });
       if (s.history.length > HISTORY_KEEP * 2) s.history.splice(0, s.history.length - HISTORY_KEEP * 2);
       save(s);
-      out({ type: 'final', text: reply, brain, images: ci.images || [], pending: acct.assistantPending || null });
+      out({ type: 'final', text: reply, brain, images: ci.images || [], media: ci.media || [], pending: acct.assistantPending || null });
     } catch (e) {
       out({ type: 'error', text: ctl.signal.aborted ? 'Stopped.' : e.message });
     } finally {
@@ -565,7 +635,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   async function ask(acct, text, { extraSystem = '', scope = 'room' } = {}) {
     const ci = clientInfo({}, acct); ci.scope = scope;
     const reply = await runLocal(acct, text, ci, () => {}, undefined, { extraSystem, noHistory: true });
-    return { text: reply, images: ci.images || [] };
+    return { text: reply, images: ci.images || [], media: ci.media || [] };
   }
   async function greeting(acct) { // facts for a sign-in hello: their local time, weather and headlines
     const ci = clientInfo({}, acct), facts = [`Their local time: ${localNow(ci)} (${ci.tz}).`];
