@@ -11,7 +11,9 @@
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color-scheme: dark;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+  html { height: 100%; overflow: hidden; }
+  /* the page is exactly the viewport (dvh = minus mobile browser bars); everything inside shrinks or scrolls */
+  body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; width: 100%; max-width: 100vw; overflow: hidden; display: flex; flex-direction: column; }
   button, input, textarea { font: inherit; color: inherit; }
   button { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: .55rem 1rem; font-weight: 600; cursor: pointer; }
   button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
@@ -31,8 +33,30 @@
   header { display: flex; align-items: center; gap: .75rem; padding: .6rem 1rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   header b { font-size: 1.1rem; }
   header .folder { color: var(--muted); font-size: .85rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #app { flex: 1; display: grid; grid-template-columns: 240px 1fr 1fr; min-height: 0; }
-  #app > section { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+  /* Work layout: left rail + resizable panes (files | editor | Claude | team chat) */
+  #app { flex: 1; display: flex; min-height: 0; }
+  #rail { flex: none; width: 46px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: .25rem; padding: .4rem .3rem; background: var(--panel); transition: width .15s; overflow: hidden; }
+  #rail.open { width: 170px; }
+  #rail button { background: transparent; color: var(--muted); border: 1px solid transparent; padding: .45rem .35rem; text-align: left; white-space: nowrap; display: flex; align-items: center; gap: .55rem; font-weight: 500; position: relative; }
+  #rail button i { font-style: normal; width: 1.4rem; text-align: center; flex: none; }
+  #rail button span.lbl { opacity: 0; transition: opacity .15s; }
+  #rail.open button span.lbl { opacity: 1; }
+  #rail button.on { color: var(--text); border-color: var(--line); background: var(--bg); }
+  #rail .badge { position: absolute; top: .05rem; left: 1.45rem; background: var(--bad); color: #fff; border-radius: 999px; font-size: .65rem; padding: 0 .35rem; }
+  #rail .grow { flex: 1; }
+  #panes { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; }
+  #panes > section { min-height: 0; min-width: 120px; display: flex; flex-direction: column; overflow: hidden; }
+  .split { flex: none; width: 6px; cursor: col-resize; background: var(--line); opacity: .55; touch-action: none; }
+  .split:hover, .split.drag { background: var(--accent); opacity: 1; }
+  #panesEmpty { margin: auto; color: var(--muted); font-size: .9rem; }
+  .bar .min { padding: .15rem .5rem; }
+  .paneBody { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .floatWin { position: fixed; z-index: 15; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.45); resize: both; overflow: hidden; min-width: 280px; min-height: 220px; }
+  .floatWin .winBar { cursor: move; user-select: none; }
+  #toasts { position: fixed; right: 1.2rem; bottom: 1.2rem; z-index: 30; display: flex; flex-direction: column; gap: .4rem; align-items: flex-end; pointer-events: none; }
+  .toast { pointer-events: auto; cursor: pointer; max-width: min(380px, 80vw); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: .5rem .7rem; font-size: .85rem; box-shadow: 0 6px 24px rgba(0,0,0,.35); animation: toastRise var(--toast-s, 6s) ease-in forwards; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast.mention, .toast.reply { border-width: 2px 2px 2px 4px; border-color: var(--accent); }
+  @keyframes toastRise { 0% { transform: translateY(14px); opacity: 0; } 8% { transform: translateY(0); opacity: 1; } 70% { opacity: 1; } 100% { transform: translateY(-90px); opacity: 0; } }
   .bar { display: flex; gap: .4rem; align-items: center; padding: .5rem; border-bottom: 1px solid var(--line); font-size: .85rem; color: var(--muted); }
   .bar span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar button { padding: .3rem .6rem; font-size: .8rem; }
@@ -42,6 +66,24 @@
   #tree div:hover { background: var(--panel); }
   #editor { flex: 1; border: 0; border-radius: 0; resize: none; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; line-height: 1.45; tab-size: 2; }
 
+  /* usage bar: 5h / 7d windows + context window meter (green → orange → yellow → red, purple = out of usage) */
+  #usageBar { display: flex; align-items: center; gap: .9rem; padding: .35rem .7rem; border-bottom: 1px solid var(--line); font-size: .74rem; font-variant-numeric: tabular-nums; background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 70%, transparent), transparent); }
+  .uItem { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
+  .uLbl { color: var(--muted); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: .66rem; }
+  .uTime { font-family: ui-monospace, Consolas, monospace; }
+  .uItem.est .uTime::after { content: ' est'; color: var(--muted); font-size: .62rem; }
+  .uMini { width: 2.6rem; height: .42rem; border-radius: 999px; background: color-mix(in srgb, var(--line) 80%, transparent); overflow: hidden; }
+  .uMini i, .uTrack i { display: block; height: 100%; width: 0; border-radius: inherit; transition: width .6s ease, background-color .6s ease, box-shadow .6s ease; }
+  .uCtx { flex: 1; min-width: 9rem; }
+  .uTrack { flex: 1; height: .62rem; border-radius: 999px; overflow: hidden; position: relative; background: color-mix(in srgb, var(--line) 80%, transparent); box-shadow: inset 0 1px 2px rgba(0,0,0,.35); }
+  .uTrack i { position: relative; overflow: hidden; }
+  .uTrack i::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent); transform: translateX(-100%); animation: uShine 2.8s ease-in-out infinite; }
+  .uPct { min-width: 6.5rem; text-align: right; font-family: ui-monospace, Consolas, monospace; }
+  .uItem.out .uTime, .uItem.out .uPct { color: #b06cff; font-weight: 700; }
+  .uItem.out .uTrack i, .uItem.out .uMini i { animation: uPulse 1.2s ease-in-out infinite; }
+  @keyframes uShine { 60%, 100% { transform: translateX(100%); } }
+  @keyframes uPulse { 50% { filter: brightness(1.5); } }
+  @media (max-width: 900px) { #usageBar { flex-wrap: wrap; gap: .5rem .8rem; } }
   #log { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .6rem; }
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
@@ -53,12 +95,24 @@
   #composer textarea { resize: none; height: 4.2rem; }
   .sendCol { display: flex; flex-direction: column; gap: .4rem; }
   .sendCol button { white-space: nowrap; min-width: 6.5rem; }
+  button.dictate.on { background: var(--bad); color: #fff; border-color: var(--bad); animation: recPulse 1.2s infinite; }
+  button.dictate.armed { background: var(--good); color: #111; border-color: var(--good); }
   .msg.me.queued { opacity: .6; border: 1px dashed var(--muted); }
   .msg .unqueue { float: right; margin-left: .5rem; background: transparent; color: var(--muted); padding: 0 .3rem; font-size: .8rem; border: 0; }
 
-  #archive { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 10; }
-  #archive .box { margin: auto; width: min(560px, 94vw); max-height: 80vh; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; }
-  #archive .box > .bar { padding: .75rem 1rem; color: var(--text); }
+  #archive, .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 40; }
+  #archive .box, .modal .box { margin: auto; width: min(560px, 94vw); max-height: 86vh; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; }
+  #archive .box > .bar, .modal .box > .bar { padding: .75rem 1rem; color: var(--text); }
+  .setBody { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .9rem; font-size: .9rem; }
+  .setBody label { display: flex; flex-direction: column; gap: .3rem; }
+  .setBody label.chk { flex-direction: row; align-items: center; gap: .5rem; }
+  .setBody label.chk input { width: auto; }
+  .swatches { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .3rem; }
+  .swatches button { width: 1.9rem; height: 1.9rem; padding: 0; border-radius: 50%; border: 2px solid transparent; font-size: .7rem; color: var(--text); background: var(--bg); }
+  .swatches button.on { border-color: var(--text); }
+  .slider { display: grid; grid-template-columns: 6.5rem 1fr auto; gap: .6rem; align-items: center; }
+  .slider input { padding: 0; }
+  .slider button { padding: .2rem .55rem; font-size: .8rem; }
   #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
   .conv { display: flex; align-items: center; gap: .4rem; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 8px; }
   .conv.current { border-color: var(--accent); }
@@ -85,15 +139,87 @@
 
   /* chat room + admin screens share the header style */
   .screen { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  #roomBody { flex: 1; display: grid; grid-template-columns: 1fr 230px; min-height: 0; }
-  #roomLog { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
-  #roomLog .msg small { display: block; color: var(--muted); font-size: .75rem; margin-bottom: .2rem; }
-  #roomLog .msg.me small { color: inherit; opacity: .75; }
-  #roomMembers { border-left: 1px solid var(--line); padding: .75rem; overflow: auto; font-size: .85rem; }
-  #roomMembers div { margin-bottom: .6rem; }
-  #roomMembers code { color: var(--muted); font-size: .72rem; word-break: break-all; }
-  #roomComposer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--line); }
+  #roomHost, #roomPaneBody, #roomFloatBody { flex: 1; min-height: 0; display: flex; }
+  #roomCore { flex: 1; min-width: 0; min-height: 0; display: flex; }
+  #roomSide { flex: none; width: 210px; border-right: 1px solid var(--line); overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .25rem; font-size: .85rem; }
+  #roomCore.noside #roomSide { display: none; }
+  .cv { background: transparent; color: var(--text); font-weight: 500; text-align: left; padding: .4rem .5rem; border-radius: 6px; display: flex; align-items: center; gap: .45rem; position: relative; }
+  .cv.on { background: var(--bg); outline: 1px solid var(--line); }
+  .cv .dot { width: .6rem; height: .6rem; border-radius: 50%; flex: none; background: var(--muted); }
+  .cv .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cv small { display: block; color: var(--muted); font-size: .7rem; font-weight: 400; }
+  .cv .badge { background: var(--bad); color: #fff; border-radius: 999px; font-size: .68rem; padding: 0 .4rem; }
+  #roomSide details { margin-top: .6rem; color: var(--muted); font-size: .72rem; }
+  #roomSide details div { margin: .35rem 0; word-break: break-all; }
+  .roomMain { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+  .roomTop { display: flex; align-items: center; gap: .5rem; padding: .45rem .6rem; border-bottom: 1px solid var(--line); font-size: .85rem; }
+  .roomTop button { padding: .2rem .55rem; font-size: .8rem; }
+  .roomTop #roomStatus { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
+  #roomLog { flex: 1; overflow: auto; padding: .8rem; display: flex; flex-direction: column; gap: .45rem; }
+  .rmsg { cursor: pointer; border-left: 3px solid var(--line); max-width: 92%; align-self: flex-start; }
+  .rmsg.me { align-self: flex-end; }
+  .rmsg small { display: block; color: var(--muted); font-size: .74rem; margin-bottom: .2rem; }
+  .rmsg.me small { color: inherit; opacity: .8; }
+  .rmsg.deleted .body { font-style: italic; opacity: .6; }
+  .rmsg.flash { outline: 2px solid var(--accent); }
+  .rmsg .quote { font-size: .78rem; opacity: .8; border-left: 2px solid var(--muted); padding: .1rem .45rem; margin-bottom: .3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rmsg .quote:hover { opacity: 1; text-decoration: underline; }
+  .rmsg .mention { font-weight: 700; }
+  .rmsg .mention.you { background: color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 4px; padding: 0 .15rem; }
+  .rmsg .seenLine { font-size: .7rem; opacity: .7; margin-top: .25rem; }
+  #msgMenu { position: fixed; z-index: 50; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; display: flex; flex-direction: column; min-width: 190px; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+  #msgMenu button { background: transparent; color: var(--text); text-align: left; font-weight: 400; padding: .4rem .6rem; border-radius: 6px; }
+  #msgMenu button:hover { background: var(--line); }
+  #msgMenu small { color: var(--muted); padding: .3rem .6rem; font-size: .72rem; }
+  #replyBar { display: flex; align-items: center; gap: .5rem; padding: .35rem .75rem; border-top: 1px solid var(--line); font-size: .8rem; color: var(--muted); }
+  #replyBar span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #replyBar button { padding: .1rem .5rem; font-size: .8rem; }
+  #mentionList { display: flex; gap: .3rem; flex-wrap: wrap; padding: .35rem .75rem 0; }
+  #mentionList button { padding: .2rem .55rem; font-size: .8rem; }
+  #roomComposer { display: flex; gap: .5rem; padding: .6rem .75rem .75rem; border-top: 1px solid var(--line); }
   #roomComposer textarea { resize: none; height: 3.2rem; }
+  #roomComposer .side { display: flex; flex-direction: column; gap: .35rem; }
+  #micBtn { padding: .35rem .6rem; }
+  #recBar { display: flex; align-items: center; gap: .6rem; padding: .4rem .75rem; border-top: 1px solid var(--line); font-size: .85rem; }
+  #recBar .dotRec { width: .7rem; height: .7rem; border-radius: 50%; background: var(--bad); animation: recPulse 1s infinite; }
+  #recBar span { flex: 1; }
+  #recBar button { padding: .25rem .7rem; font-size: .8rem; }
+  @keyframes recPulse { 50% { opacity: .3; } }
+  #roomSide { gap: .5rem; }
+  #convList { display: flex; flex-direction: column; gap: .25rem; }
+  #callSideHost:empty { display: none; }
+  #callCore { display: flex; flex-direction: column; gap: .4rem; font-size: .8rem; min-height: 0; flex: 1; }
+  #callFloatBody { flex: 1; min-height: 0; display: flex; padding: .4rem; overflow: auto; }
+  .callHead { display: flex; gap: .4rem; align-items: baseline; }
+  .callHead span { color: var(--muted); font-size: .72rem; }
+  #callTiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .35rem; }
+  #callSideHost #callTiles { grid-template-columns: 1fr; }
+  .tile { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; border: 2px solid transparent; }
+  .tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.nocam video { visibility: hidden; position: absolute; }
+  .tile .ava { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-size: 1.6rem; font-weight: 700; color: #fff; }
+  .tile.nocam .ava { display: flex; }
+  .tile .lbl { position: absolute; left: .3rem; bottom: .25rem; background: rgba(0,0,0,.6); color: #fff; border-radius: 4px; padding: 0 .35rem; font-size: .72rem; }
+  .tile.self video { transform: scaleX(-1); }
+  .tile { transition: box-shadow .15s ease; }
+  .tile.speaking { box-shadow: 0 0 0 3px #3ddc84, 0 0 16px 2px rgba(61, 220, 132, .75); }
+  .pCtl { position: absolute; right: .3rem; bottom: .25rem; display: flex; align-items: center; gap: .3rem; background: rgba(0,0,0,.6); border-radius: 6px; padding: .1rem .3rem; opacity: 0; transition: opacity .15s; }
+  .tile:hover .pCtl, .tile:focus-within .pCtl, .pCtl:has(.off) { opacity: 1; }
+  @media (hover: none) { .pCtl { opacity: 1; } }
+  .pCtl button { background: transparent; color: #fff; padding: 0 .2rem; font-size: .8rem; border: 0; }
+  .pCtl button.off { color: #ff8080; }
+  .pCtl input { width: 4.5rem; padding: 0; accent-color: #3ddc84; }
+  .callCtl { display: flex; flex-wrap: wrap; gap: .3rem; }
+  .callCtl button { padding: .25rem .55rem; font-size: .78rem; }
+  .callCtl button.off { color: var(--bad); border-color: var(--bad); }
+  #callLeave { background: var(--bad); color: #fff; }
+  #callMsg { color: var(--muted); font-size: .72rem; }
+  #callBanner { display: flex; align-items: center; gap: .5rem; padding: .35rem .75rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--good) 14%, transparent); font-size: .8rem; }
+  #callBanner span { flex: 1; }
+  #callBanner button { padding: .15rem .6rem; font-size: .78rem; }
+  #callFloat { min-width: 240px; min-height: 180px; width: 340px; height: 300px; transition: left .18s, top .18s; }
+  #callFloat.dragging { transition: none; }
+  .rmsg audio { display: block; margin-top: .3rem; width: min(320px, 100%); height: 2.2rem; }
   #adminBody { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
   #adminBody table { border-collapse: collapse; width: 100%; font-size: .85rem; }
   #adminBody th, #adminBody td { border-bottom: 1px solid var(--line); padding: .45rem .4rem; text-align: left; vertical-align: middle; }
@@ -103,12 +229,54 @@
   #adminOut { font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .6rem; min-height: 2.5rem; }
 
   @media (max-width: 900px) {
-    #roomBody { grid-template-columns: 1fr; }
-    #roomMembers { border-left: 0; border-top: 1px solid var(--line); order: 2; }
-    #app { grid-template-columns: 1fr; overflow: auto; }
-    #app > section { min-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    #roomSide { width: 150px; }
+    #app { flex-direction: column; }
+    #rail, #rail.open { width: auto; flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+    #rail button span.lbl, #rail .grow { display: none; }
+    #panes { flex-direction: column; overflow: auto; }
+    #panes > section { flex: none !important; min-height: 45vh; border-bottom: 1px solid var(--line); }
     #chat { min-height: 70vh !important; order: -1; }
+    .split { display: none; }
   }
+  /* shared Work sessions */
+  #shareSel { padding: .15rem .35rem; font-size: .75rem; max-width: 11rem; }
+  #shareSel.on { border-color: var(--good); color: var(--good); }
+  #shareBanner { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .35rem .75rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 14%, transparent); font-size: .8rem; }
+  #shareBanner span { flex: 1; min-width: 8rem; }
+  #shareBanner button { padding: .15rem .6rem; font-size: .78rem; }
+  .watchWin { width: 380px; height: 460px; }
+  .watchWin .wLog { flex: 1; min-height: 0; overflow: auto; padding: .6rem; display: flex; flex-direction: column; gap: .45rem; font-size: .85rem; }
+  .watchWin .wLive { border-top: 1px solid var(--line); padding: .45rem .6rem; font-size: .8rem; max-height: 35%; overflow: auto; }
+  .watchWin .wLive .typing { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font-style: italic; min-height: 1.2em; }
+  .watchWin .wLive .typing:empty::before { content: 'not typing'; color: var(--muted); }
+  .watchWin .wLive ol { margin: .3rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+  .watchWin .wNote { color: var(--muted); font-size: .7rem; padding: .25rem .6rem; border-top: 1px solid var(--line); }
+  .watchWin .busyDot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .watchWin .busyDot.on { background: var(--good); animation: recPulse 1s infinite; }
+
+  /* ── Stay inside the viewport ──
+     Flex / grid children default to min-width/min-height "auto" (= their content), which lets a long
+     line, a wide <pre> or a crowded header push the layout past the window. Everything here may
+     shrink to fit and scrolls inside itself instead. */
+  #shell, #room, #admin, #app, #panes, #panes > section, .paneBody, #roomHost, #roomPaneBody, #roomFloatBody,
+  #roomCore, .roomMain, #roomLog, #log, #chat, #edit, #files, #tree, #callFloatBody, #callCore { min-width: 0; min-height: 0; }
+  #shell, #room, #admin { overflow: hidden; }
+  #panes > section { min-width: min(120px, 22vw); }
+  #login, #menu { max-height: 100%; overflow: auto; padding: 1rem 0; }
+  header { max-height: 40vh; overflow-y: auto; }
+  header > * { min-width: 0; }
+  header select { max-width: 14rem; }
+  .msg { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+  .msg pre { max-width: 100%; overflow-x: auto; }
+  .tool, .sys, #roomStatus, #callMsg, .toast { overflow-wrap: anywhere; }
+  #editor { min-width: 0; max-width: 100%; }
+  #roomSide { max-width: 42%; }
+  #usageBar { flex-wrap: wrap; row-gap: .3rem; min-width: 0; overflow: hidden; }
+  .uCtx { min-width: min(9rem, 100%); }
+  .floatWin { max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); }
+  .modal .box, #archive .box { max-width: calc(100vw - 16px); }
+  #msgMenu { max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; }
+  img, video, audio, canvas { max-width: 100%; }
 </style>
 </head>
 <body>
@@ -129,6 +297,7 @@
     <button id="goWork">Work</button>
     <button id="goChat">Chat<span class="badge" id="chatBadge" hidden></span></button>
     <button id="goAdmin" hidden>Admin</button>
+    <button class="ghost" id="goSettings" data-settings>Settings</button>
     <button class="ghost" id="menuLogout">Sign out</button>
   </div>
 </div>
@@ -137,17 +306,98 @@
   <header>
     <button class="ghost back" data-back>← Menu</button>
     <b>Chat</b>
-    <span class="folder" id="roomStatus">End-to-end encrypted</span>
+    <span class="folder">End-to-end encrypted team chat</span>
+    <button class="ghost" data-settings title="Your nickname, colour, sounds and pop-ups">⚙ Settings</button>
   </header>
-  <div id="roomBody">
-    <div style="display:flex;flex-direction:column;min-height:0">
+  <div id="roomHost"></div>
+</div>
+
+<!-- The team chat itself. One copy, moved between the Chat screen, the Work pane and the floating window. -->
+<div id="roomPark" hidden>
+  <div id="roomCore">
+    <aside id="roomSide"><div id="callSideHost"></div><div id="convList"></div></aside>
+    <div class="roomMain">
+      <div class="roomTop">
+        <button class="ghost" id="roomSideToggle" title="Show / hide conversations">☰</button>
+        <b id="convName"># Everyone</b>
+        <span id="roomStatus">End-to-end encrypted</span>
+        <button class="ghost" id="callBtn" title="Voice / video call in this conversation (end-to-end encrypted)">📞 Call</button>
+      </div>
+      <div id="callBanner" hidden></div>
+      <div id="shareBanner" hidden></div>
       <div id="roomLog"></div>
+      <div id="replyBar" hidden><span id="replyText"></span><button type="button" class="ghost" id="replyCancel" title="Cancel (Esc)">✕</button></div>
+      <div id="mentionList" hidden></div>
+      <div id="recBar" hidden><i class="dotRec"></i><span id="recTime">Recording 0:00 / 2:00</span>
+        <button type="button" id="recSend">Send clip</button><button type="button" class="ghost" id="recCancel">Cancel</button></div>
       <form id="roomComposer">
-        <textarea id="roomInput" placeholder="Message everyone…  (Enter to send, Shift+Enter for a new line)"></textarea>
-        <button type="submit">Send</button>
+        <textarea id="roomInput" placeholder="Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)"></textarea>
+        <div class="side"><button type="submit">Send</button>
+          <button type="button" class="ghost" id="micBtn" title="Record a voice clip (uses your microphone)">🎤</button>
+          <button type="button" class="ghost dictate" id="roomDictate" hidden>🗣</button></div>
       </form>
     </div>
-    <div id="roomMembers"></div>
+  </div>
+</div>
+
+<!-- The call panel. One copy: in the chat's side bar when the chat is open, otherwise in its own snapping window. -->
+<div id="callPark" hidden>
+  <div id="callCore">
+    <div class="callHead"><b id="callTitle">Call</b><span id="callInfo"></span></div>
+    <div id="callTiles"></div>
+    <div class="callCtl">
+      <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone">🎤 Mic on</button>
+      <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)">📷 Camera off</button>
+      <button type="button" id="callLeave" title="Leave the call">Leave</button>
+    </div>
+    <div id="callMsg"></div>
+  </div>
+</div>
+<div id="callFloat" class="floatWin" hidden>
+  <div class="bar winBar"><span>Call — drag me, I snap to the nearest edge</span></div>
+  <div id="callFloatBody"></div>
+</div>
+
+<div id="roomFloat" class="floatWin" hidden>
+  <div class="bar winBar"><span>Team chat</span>
+    <button class="ghost" id="floatDock" title="Put it back into the Work layout">Dock</button>
+    <button class="ghost min" data-min="roomPane" title="Minimize">—</button></div>
+  <div id="roomFloatBody"></div>
+</div>
+
+<div id="toasts"></div>
+
+<div id="settings" class="modal" hidden>
+  <div class="box">
+    <div class="bar"><span>Settings</span><button class="ghost" id="closeSettings">Close</button></div>
+    <div class="setBody">
+      <label>Nickname (shown with your messages; others can @ you by it)
+        <input id="setNick" maxlength="32" placeholder="leave empty to use your account name"></label>
+      <div>Your colour (same for everyone, adjusts to each theme)<div class="swatches" id="setColors"></div></div>
+      <label class="chk"><input type="checkbox" id="setSound"> Sound when a chat message arrives</label>
+      <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message">▶</button></div>
+      <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention">▶</button></div>
+      <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply">▶</button></div>
+      <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
+      <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
+      <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest">▶</button></div>
+      <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
+      <label>Voice<select id="ttsVoice"></select></label>
+      <label>Read<select id="ttsScope"><option value="all">every message from others</option><option value="mine">only @mentions, private messages and replies to me</option></select></label>
+      <label class="chk"><input type="checkbox" id="audNoise"> Noise suppression for my microphone (voice clips and calls)</label>
+      <label class="chk"><input type="checkbox" id="audEcho"> Echo cancellation</label>
+      <label class="chk"><input type="checkbox" id="audAgc"> Automatic microphone level</label>
+      <div class="slider"><span>Call volume</span><input type="range" id="callVolume" min="0" max="100"><span></span></div>
+      <label>Video quality (camera in calls)<select id="callQuality"><option value="low">Low — 320×180, saves bandwidth</option><option value="medium">Medium — 640×360</option><option value="high">High — 1280×720</option></select></label>
+      <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
+      <label class="chk"><input type="checkbox" id="clipAuto"> Auto-play incoming voice clips (queued together with read-aloud)</label>
+      <div><button type="button" class="ghost" id="ttsStop">⏹ Stop reading / playing and clear the queue</button></div>
+      <label>Auto-save Claude sessions to Past sessions<select id="setAutosave">
+        <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
+        <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
+      <label>Theme (this browser)<select id="setTheme"></select></label>
+      <div><button type="button" id="saveSettings">Save</button> <span id="setMsg" class="status"></span></div>
+    </div>
   </div>
 </div>
 
@@ -181,8 +431,8 @@
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
-    <button class="ghost" id="saveChat" title="Save this conversation to the Archive">Save to Archive</button>
-    <button class="ghost" id="openArchive" title="Saved conversations">Archive</button>
+    <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
+    <button class="ghost" id="openArchive" title="Your saved Claude sessions">Past sessions</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
     <select id="workspace" title="Where Claude works on the Mills project: your own git worktree (nobody else's changes get in the way) or the shared Mills folder everyone uses" hidden>
       <option value="own">My worktree</option><option value="shared">Shared folder</option></select>
@@ -191,33 +441,61 @@
     <button class="ghost" id="logout">Sign out</button>
   </header>
   <main id="app">
+    <nav id="rail">
+      <button type="button" id="railToggle" title="Expand / collapse this bar"><i>☰</i><span class="lbl">Panels</span></button>
+      <button type="button" data-pane="files" title="Show / minimize the folder list"><i>📁</i><span class="lbl">Folder</span></button>
+      <button type="button" data-pane="edit" title="Show / minimize the file editor"><i>📝</i><span class="lbl">Editor</span></button>
+      <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i>🤖</i><span class="lbl">Claude</span></button>
+      <button type="button" data-pane="roomPane" title="Show / minimize the team chat"><i>💬</i><span class="lbl">Team chat</span><span class="badge" id="railRoomBadge" hidden></span></button>
+      <span class="grow"></span>
+      <button type="button" data-settings title="Settings"><i>⚙</i><span class="lbl">Settings</span></button>
+    </nav>
+    <div id="panes">
     <section id="files">
       <div class="bar"><button class="ghost" id="up" title="Up one folder">↑</button><span id="cwd">/</span>
-        <button class="ghost" id="newFile" title="New file">+</button><button class="ghost" id="refresh" title="Refresh">⟳</button></div>
+        <button class="ghost" id="newFile" title="New file">+</button><button class="ghost" id="refresh" title="Refresh">⟳</button>
+        <button class="ghost min" data-min="files" title="Minimize (bring it back from the left bar)">—</button></div>
       <div id="tree"></div>
     </section>
     <section id="edit">
       <div class="bar"><span id="openName">No file open</span>
-        <button id="save" disabled>Save</button><button class="ghost" id="del" disabled>Delete</button></div>
+        <button id="save" disabled>Save</button><button class="ghost" id="del" disabled>Delete</button>
+        <button class="ghost min" data-min="edit" title="Minimize">—</button></div>
       <textarea id="editor" spellcheck="false" placeholder="Open a file from the left to edit it here."></textarea>
     </section>
     <section id="chat">
-      <div class="bar"><span id="convTitle" title="Click to rename">Unsaved conversation</span></div>
+      <div class="bar"><span id="convTitle" title="Click to rename">Unsaved session</span>
+        <select id="shareSel" title="Share this Work session so people in that conversation can watch it (read-only): your Claude conversation, what you type, send and queue"></select>
+        <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
+      <div id="usageBar" title="Claude usage of the host account (shared by everyone) and this session's context window">
+        <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uTime">--:--:--</span></div>
+        <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uTime">--d --h --m</span></div>
+        <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
+      </div>
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
       <form id="composer">
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <div class="sendCol">
           <button type="submit" id="send" title="Send. While Claude is busy: queue it for right after this reply.">Send</button>
+          <button type="button" class="ghost dictate" id="workDictate" hidden>🗣 Talk</button>
           <button type="button" class="ghost" id="stop" hidden title="Stop Claude. With text in the box: stop and send that text right away.">Stop</button>
         </div>
       </form>
     </section>
+    <section id="roomPane" hidden>
+      <div class="bar"><span>Team chat</span>
+        <button class="ghost" id="roomFloatBtn" title="Pop it out into a window you can move and resize">Pop out</button>
+        <button class="ghost min" data-min="roomPane" title="Minimize">—</button></div>
+      <div id="roomPaneBody"></div>
+    </section>
+    <div id="panesEmpty" hidden>Every panel is minimized. Bring them back from the bar on the left.</div>
+    </div>
   </main>
 </div>
 
 <div id="archive" hidden>
   <div class="box">
-    <div class="bar"><span>Archive — saved conversations</span><button class="ghost" id="closeArchive">Close</button></div>
+    <div class="bar"><span>Past sessions</span><button class="ghost" id="closeArchive">Close</button></div>
     <div id="archiveList"></div>
   </div>
 </div>
@@ -245,8 +523,18 @@ const isLight = (hex) => {
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
   return 0.299 * r + 0.587 * g + 0.114 * b > 150;
 };
+// Person colours: 16 fixed, clearly different hues, each with a variant for dark and for light
+// themes, so a person keeps "their" colour in every theme. Index = their choice in Settings, or a
+// hash of their username when they have not picked one.
+const PALETTE = [['#ff6b6b', '#c0392b'], ['#ffa94d', '#c25e00'], ['#ffd43b', '#8a6d00'], ['#a9e34b', '#5a8a00'],
+  ['#51cf66', '#1e8449'], ['#38d9a9', '#0d7f63'], ['#3bc9db', '#0a7385'], ['#4dabf7', '#1c64a8'],
+  ['#748ffc', '#3446a5'], ['#9775fa', '#6236b8'], ['#da77f2', '#8b2fa3'], ['#f783ac', '#b02a63'],
+  ['#c8a27a', '#7b4f2a'], ['#ced4da', '#55606b'], ['#a5b4fc', '#26338f'], ['#d8f5a2', '#5f7300']];
+let lightTheme = false;
 function applyTheme(name) {
   const t = THEMES[name], s = document.documentElement.style;
+  lightTheme = t ? isLight(t.bg) : false;
+  if (me) recolorChat();
   for (const k of ['bg', 'text', 'panel', 'line', 'accent', 'me', 'me-text', 'muted', 'on-accent']) s.removeProperty('--' + k);
   s.removeProperty('color-scheme');
   if (t) {
@@ -348,8 +636,12 @@ async function enter() {
   $('login').hidden = true;
   showModels(me);
   if (me.workspace) { $('workspace').value = me.workspace; $('workspace').hidden = false; }
+  myShare = me.share || '';
+  loadLayout();
+  currentConv = store.get('mills.conv.' + me.username) || 'room';
   showScreen('menu');
   startRoomPolling();
+  callPollLoop();
 }
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
@@ -357,6 +649,8 @@ function showScreen(name) {
   for (const id of ['menu', 'shell', 'room', 'admin']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); }
+  if (name === 'shell') refreshUsage();
+  applyLayout(); // places the team chat where it belongs for this screen (and hides the floating window elsewhere)
   if (name === 'room') openRoom();
   if (name === 'admin') loadAdmin();
 }
@@ -366,8 +660,11 @@ $('goAdmin').onclick = () => showScreen('admin');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY);
-  stopRoomPolling(); chatPriv = null; chatPubJwk = null; roomSeq = 0; $('roomLog').innerHTML = ''; unread = 0;
-  for (const id of ['menu', 'shell', 'room', 'admin']) $(id).hidden = true;
+  stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
+  for (const id of ['menu', 'shell', 'room', 'admin', 'settings', 'roomFloat']) $(id).hidden = true;
+  for (const o of [...watching.keys()]) closeWatch(o);
+  myShare = ''; sharesList = []; sharesInit = false;
+  closeMsgMenu();
   $('login').hidden = false;
 }
 async function logoutClick() { try { await api('/api/logout', { method: 'POST' }); } catch {} signOut(); }
@@ -578,21 +875,25 @@ $('composer').addEventListener('submit', (e) => {
 function enqueue(message) {
   const el = bubble('me queued'); renderText(el, message);
   const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.textContent = '✕'; x.title = 'Remove from queue';
-  x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); };
+  x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); postLive(); };
   el.prepend(x); scroll();
   queue.push({ message, el });
+  postLive();
 }
 function drain() { // a run just ended: "Send now" text first, then the queue in order
   if (sendNowMessage) { const m = sendNowMessage; sendNowMessage = null; return send(m); }
   const next = queue.shift();
   if (next) { next.el.remove(); send(next.message); }
+  postLive();
 }
 
 async function send(message) {
   renderText(bubble('me'), message); record('me', message); scroll();
   setBusy(true); runModel = ''; stderrText = '';
   try {
-    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh }) });
+    postLive();
+    const context = watchContext(); // summaries of the shared sessions you are watching, for your own Claude
+    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh, ...(context ? { context } : {}) }) });
     fresh = false;
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
@@ -608,7 +909,9 @@ async function send(message) {
     }
   } catch (err) { sys(err.message, true); }
   setBusy(false); $('input').focus();
-  if (archiveId) saveToArchive(true); // keep the archived copy up to date
+  refreshUsage();
+  if (archiveId) saveToArchive(true); // keep the saved session up to date after every reply
+  if (!lastSaveAt) lastSaveAt = Date.now(); // the auto-save clock starts with the first reply
   drain();
 }
 
@@ -641,30 +944,100 @@ $('stop').onclick = () => {
 $('newChat').onclick = () => {
   if (busy) return sys('Stop Claude before starting a new chat.', true);
   fresh = true; log.innerHTML = ''; setConversation(null, null, []);
+  if (usageData) { usageData.context = null; paintUsage(); } // a new session starts with an empty context window
   sys('New conversation — Claude starts fresh on your next message.');
 };
 
-// ---------- archive (saved conversations, stored on the host PC in Mills/Archive) ----------
-let transcript = [], archiveId = null, archiveTitle = null;
+// ---------- usage bar: 5h (hh:mm:ss left), 7d (dd/hh/mm left), context window meter ----------
+const USAGE_STOPS = [[0, [46, 204, 113]], [33, [255, 159, 26]], [66, [255, 212, 59]], [100, [255, 59, 59]]]; // green → orange → yellow → red
+const OUT_COLOR = 'rgb(160, 90, 255)'; // purple: out of usage
+function usageColor(pct) {
+  const p = Math.max(0, Math.min(100, pct));
+  for (let i = 1; i < USAGE_STOPS.length; i++) {
+    const [p1, c1] = USAGE_STOPS[i - 1], [p2, c2] = USAGE_STOPS[i];
+    if (p <= p2) { const f = (p - p1) / (p2 - p1); return 'rgb(' + c1.map((v, k) => Math.round(v + (c2[k] - v) * f)).join(', ') + ')'; }
+  }
+  return 'rgb(255, 59, 59)';
+}
+let usageData = null, usageSkew = 0;
+async function refreshUsage() {
+  if (!me) return;
+  try { usageData = await json('/api/usage'); usageSkew = usageData.now - Date.now(); paintUsage(); } catch {}
+}
+const pad2 = (n) => String(n).padStart(2, '0');
+function paintWindow(el, w, len, fmt) {
+  const now = Date.now() + usageSkew, out = w.status === 'rejected';
+  const left = w.resetsAt ? Math.max(0, w.resetsAt - now) : null;
+  // fill = how much of the window is used: Claude's own utilization when reported, else elapsed time
+  const used = w.utilization != null ? (w.utilization <= 1 ? w.utilization * 100 : w.utilization) : left != null ? 100 * (1 - left / len) : 0;
+  el.classList.toggle('est', w.source === 'estimate' && left != null);
+  el.classList.toggle('out', out);
+  el.querySelector('.uTime').textContent = left == null ? (out ? 'out of usage' : 'not started') : fmt(left);
+  const bar = el.querySelector('i');
+  bar.style.width = (out ? 100 : used) + '%';
+  bar.style.backgroundColor = out ? OUT_COLOR : usageColor(used);
+  el.title = (el.id === 'u5h' ? '5-hour' : '7-day') + ' window — ' + (left == null ? 'no activity yet' : fmt(left) + ' until it resets')
+    + (w.utilization != null ? ' · ' + Math.round(used) + '% used' : '') + (w.source === 'estimate' ? ' (estimated from when Mills started using Claude; exact once Claude Code reports it)' : ' (reported by Claude Code)')
+    + (out ? ' · OUT OF USAGE' : '');
+}
+function paintUsage() {
+  if (!usageData || $('shell').hidden) return;
+  paintWindow($('u5h'), usageData.five_hour, 5 * 3600e3, (ms) => { const s = Math.floor(ms / 1000); return pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor(s / 60) % 60) + ':' + pad2(s % 60); });
+  paintWindow($('u7d'), usageData.seven_day, 7 * 86400e3, (ms) => { const m = Math.floor(ms / 60000); return pad2(Math.floor(m / 1440)) + 'd ' + pad2(Math.floor(m / 60) % 24) + 'h ' + pad2(m % 60) + 'm'; });
+  const c = usageData.context, el = $('uCtx'), bar = el.querySelector('i');
+  const pct = c ? (100 * c.tokens) / c.window : 0;
+  const out = !!c && pct >= 100;
+  el.classList.toggle('out', out);
+  bar.style.width = Math.min(100, pct) + '%';
+  bar.style.backgroundColor = out ? OUT_COLOR : usageColor(pct);
+  bar.style.boxShadow = c ? '0 0 10px ' + (out ? OUT_COLOR : usageColor(pct)) : 'none';
+  const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : Math.round(n / 1000) + 'k');
+  el.querySelector('.uPct').textContent = c ? Math.round(pct) + '% · ' + k(c.tokens) + '/' + k(c.window) : 'new session';
+  el.title = c ? `Context window: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens used in this session (${c.model || 'model'})${out ? ' — full: start a New chat' : ''}` : 'Context window: fills up as this session goes on';
+}
+setInterval(paintUsage, 1000);            // countdowns tick every second
+setInterval(refreshUsage, 60000);         // fresh numbers every minute (and after every reply)
+
+// ---------- past sessions (saved Claude conversations, stored on the host PC in Mills/Archive) ----------
+let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSaveAt = 0;
 function record(cls, text) { transcript.push({ cls, text }); }
 function setConversation(id, title, items) {
   archiveId = id; archiveTitle = title; transcript = items;
-  $('convTitle').textContent = title ? '🗂 ' + title : 'Unsaved conversation';
+  savedLen = items.length; // what is on screen now counts as saved (a fresh chat, an opened session, or a just-deleted one)
+  if (!id && !items.length) lastSaveAt = 0;
+  $('convTitle').textContent = title ? '🗂 ' + title : 'Unsaved session';
 }
-async function saveToArchive(quiet) {
+const autoName = () => {
+  const first = ((transcript.find((t) => t.cls === 'me') || {}).text || '').replace(/\s+/g, ' ').trim();
+  return (first.slice(0, 60) || 'Session') + ' — ' + new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+// auto = the timed auto-save: names the session itself (no prompt) the first time, then keeps
+// overwriting that same saved session, so nothing is lost even if nobody presses Save.
+async function saveToArchive(quiet, auto) {
   if (!transcript.length) return quiet || sys('Nothing to save yet — send a message first.', true);
   let title = archiveTitle;
   if (!archiveId) {
-    const first = (transcript.find((t) => t.cls === 'me') || {}).text || '';
-    title = window.prompt('Name this conversation:', first.replace(/\s+/g, ' ').slice(0, 60));
-    if (title === null) return;
+    if (auto) title = autoName();
+    else {
+      const first = (transcript.find((t) => t.cls === 'me') || {}).text || '';
+      title = window.prompt('Name this session:', first.replace(/\s+/g, ' ').slice(0, 60));
+      if (title === null) return;
+    }
   }
   try {
     const d = await json('/api/archive/save', { method: 'POST', body: JSON.stringify({ id: archiveId, title, transcript }) });
     setConversation(d.id, d.title, transcript);
-    if (!quiet) sys('Saved to Archive as "' + d.title + '".');
-  } catch (err) { sys('Could not save: ' + err.message, true); }
+    savedLen = transcript.length; lastSaveAt = Date.now();
+    if (!quiet) sys('Saved to Past sessions as "' + d.title + '".');
+    else if (auto && savedLen && !$('saveChat').dataset.autoNoted) { $('saveChat').dataset.autoNoted = '1'; sys('Auto-saved to Past sessions as "' + d.title + '" (Settings → Auto-save).'); }
+  } catch (err) { if (!auto) sys('Could not save: ' + err.message, true); } // an auto-save before Claude has answered just waits for the next round
 }
+setInterval(() => { // Settings → Auto-save (default every 5 minutes; 0 = off)
+  if (!me || busy) return;
+  const mins = prefs().autosave;
+  if (!mins || transcript.length === savedLen || Date.now() - lastSaveAt < mins * 60000) return;
+  saveToArchive(true, true);
+}, 20000);
 async function renameConversation(id, current) {
   const title = window.prompt('Rename conversation:', current);
   if (!title || title === current) return;
@@ -680,7 +1053,7 @@ async function showArchive() {
   try {
     const { items } = await json('/api/archive/list', { method: 'POST' });
     listEl.textContent = '';
-    if (!items.length) listEl.innerHTML = '<div class="sys">No saved conversations yet. Use "Save to Archive" on a chat.</div>';
+    if (!items.length) listEl.innerHTML = '<div class="sys">No past sessions yet. They are saved automatically (Settings → Auto-save) or with "Save session".</div>';
     for (const it of items) {
       const row = document.createElement('div'); row.className = 'conv' + (it.id === archiveId ? ' current' : '');
       const info = document.createElement('div');
@@ -714,6 +1087,7 @@ async function openConversation(id) {
     }
     setConversation(entry.id, entry.title, entry.transcript);
     sys('Continuing "' + entry.title + '" — Claude remembers this conversation.');
+    refreshUsage();
     $('archive').hidden = true; scroll();
   } catch (err) { sys(err.message, true); }
 }
@@ -794,6 +1168,8 @@ async function ensureChatKey(password) {
     await json('/api/room/mykey', { method: 'POST', body: JSON.stringify({ pub: { kty: 'EC', crv: 'P-256', x: local.pub.x, y: local.pub.y }, backup: await lockPrivate(local.priv, password) }) });
   }
   await useKey(local.priv, local.pub);
+  // Messages fetched before the key was ready show as locked: fetch and decrypt them again.
+  if ([...msgs.values()].some((r) => r.locked)) { resetRoomData(); await pollRoom(); selectConv(currentConv); }
   if (!$('room').hidden) openRoom();
 }
 async function loadLocalChatKey() { // after a page reload: no password, use this browser's copy
@@ -818,88 +1194,1273 @@ async function sharedWith(jwk) {
   return sharedCache.get(id);
 }
 
-let roomMembers = [], roomSeq = 0, roomTimer = null, unread = 0;
+// ── Team chat: conversations (# Everyone + private), replies, edits, deletes, @mentions, receipts ──
+// Message text travels inside the encryption as {"v":2,"t":text,"r":replyToSeq}; older messages are
+// plain text. A private message carries `to` (who it is for) and is only wrapped for the two people.
+let roomMembers = [], roomRev = 0, roomTimer = null, roomLoaded = false, seenMap = {};
+const msgs = new Map(); // seq -> { m, text, r, locked, el }
+let currentConv = 'room', replyTo = null, editingSeq = null;
+const hashName = (u) => [...u].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+const memberOf = (u) => roomMembers.find((x) => x.username === u);
+const nickOf = (u) => { const m = memberOf(u); return m ? (m.nick || m.display) : u; };
+const colorIndex = (u) => { const m = memberOf(u); return m && Number.isInteger(m.color) ? m.color : hashName(u) % PALETTE.length; };
+const colorOf = (u) => PALETTE[colorIndex(u)][lightTheme ? 1 : 0];
+const convOfMsg = (m) => (m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
+const dmConv = (u) => 'dm:' + [me.username, u].sort().join('|');
+const convPeer = (c) => (c === 'room' ? '' : c.slice(3).split('|').find((u) => u !== me.username) || '');
+const convLabel = (c) => (c === 'room' ? '# Everyone' : '@ ' + nickOf(convPeer(c)) + ' (private)');
+const clipLen = (s) => Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
+const snippet = (rec) => (rec.m.deleted ? 'message deleted'
+  : (rec.audio ? '🎤 voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
+function prefs() {
+  const p = (me && me.prefs) || {};
+  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5,
+    sound: { on: true, message: 50, mention: 70, reply: 70, ...(p.sound || {}) },
+    tts: { on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) },
+    clips: { volume: 90, autoplay: false, ...(p.clips || {}) },
+    audio: { noise: true, echo: true, agc: true, ...(p.audio || {}) }, // noise suppression on by default
+    call: { volume: 100, quality: 'medium', ...(p.call || {}) } };
+}
+function fmtTime(d) { // the reader's own time zone
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+const myHandles = () => [me.username, prefs().nick.replace(/\s+/g, '')].filter(Boolean).map((s) => s.toLowerCase());
+const mentionsMe = (t) => { const hs = myHandles(); return (String(t).match(/@([\w.-]+)/g) || []).some((x) => hs.includes(x.slice(1).toLowerCase())); };
+function handleOwner(h) { // "@username" or "@Nickname" → username
+  const k = h.toLowerCase();
+  const m = roomMembers.find((x) => x.username === k || (x.nick || '').replace(/\s+/g, '').toLowerCase() === k || (x.agent && x.display.toLowerCase() === k));
+  return m ? m.username : '';
+}
+
+function parsePayload(s) {
+  if (s && s.startsWith('{')) {
+    try {
+      const p = JSON.parse(s);
+      if (p && p.v === 2 && typeof p.t === 'string') {
+        // a = voice clip { m: mime type, d: base64 audio, s: seconds }, inside the encryption like the text
+        const a = p.a && typeof p.a.d === 'string' && /^audio\/[\w.+-]+(;[\w=.,+ -]*)?$/.test(p.a.m || '') ? { m: p.a.m, d: p.a.d, s: Number(p.a.s) || 0 } : null;
+        return { t: p.t, r: Number.isInteger(p.r) ? p.r : null, a };
+      }
+    } catch {}
+  }
+  return { t: s, r: null, a: null };
+}
+async function decryptMsg(m) {
+  if (m.deleted) return { t: '', r: null };
+  if (!chatPriv) return { t: '🔒 (locked — sign in again to read)', r: null, locked: true };
+  if (!m.key) return { t: '🔒 (sent before your chat key existed)', r: null, locked: true };
+  try {
+    const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv) }, await sharedWith(m.fromPub), fromB64(m.key.wk));
+    const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+    return parsePayload(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv) }, k, fromB64(m.ct))));
+  } catch { return { t: '🔒 (could not decrypt)', r: null, locked: true }; }
+}
+
+function resetRoomData() {
+  msgs.clear(); roomRev = 0; roomLoaded = false; seenMap = {}; replyTo = null; editingSeq = null;
+  if ($('roomLog')) $('roomLog').innerHTML = '';
+  updateUnread();
+}
 async function openRoom() {
-  unread = 0; $('chatBadge').hidden = true;
   const ok = await loadLocalChatKey();
   $('roomStatus').textContent = ok ? 'End-to-end encrypted' : 'Locked: sign out and sign in again to unlock your chat key in this browser.';
+  if (ok && [...msgs.values()].some((r) => r.locked)) { resetRoomData(); } // key just unlocked: decrypt everything again
   await refreshMembers();
   await pollRoom();
+  selectConv(currentConv);
   $('roomInput').focus();
 }
 async function refreshMembers() {
-  try {
-    roomMembers = (await json('/api/room/members')).members;
-    const box = $('roomMembers'); box.innerHTML = '<b>Members</b>';
-    for (const m of roomMembers) {
-      const d = document.createElement('div');
-      const name = document.createElement('div'); name.textContent = m.display + ' (' + m.username + ')' + (m.username === me.username ? ' · you' : '') + (m.agent ? ' · AI, answers when you write @unity or @claude (its key is held by the hub)' : '');
-      const fp = document.createElement('code'); fp.textContent = m.pub ? await fingerprint(m.pub) : 'no key yet (has not signed in since chat was added)';
-      d.append(name, fp); box.append(d);
-    }
-    const hint = document.createElement('small'); hint.style.color = 'var(--muted)';
-    hint.textContent = 'Compare fingerprints with each other out loud or elsewhere once; if they match, nobody in the middle can read the chat.';
-    box.append(hint);
-  } catch {}
+  try { roomMembers = (await json('/api/room/members')).members; } catch { return; }
+  renderConvList(); renderShareSel();
 }
+let convListRun = 0;
+async function renderConvList() {
+  const run = ++convListRun;
+  const box = $('convList'); box.textContent = '';
+  const add = (conv, label, color, sub) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'cv' + (conv === currentConv ? ' on' : '');
+    const dot = document.createElement('span'); dot.className = 'dot'; if (color) dot.style.background = color;
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = label;
+    const s = document.createElement('small'); s.textContent = sub; nm.append(s);
+    const badge = document.createElement('span'); badge.className = 'badge'; badge.dataset.convBadge = conv; badge.hidden = true;
+    b.append(dot, nm, badge); b.onclick = () => selectConv(conv); box.append(b);
+  };
+  add('room', '# Everyone', null, 'the whole team');
+  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'AI · ' : 'private · ') + '@' + m.username);
+  const det = document.createElement('details'); const sum = document.createElement('summary'); sum.textContent = 'Key fingerprints';
+  det.append(sum);
+  for (const m of roomMembers) {
+    const fp = m.pub ? await fingerprint(m.pub) : 'no key yet';
+    if (run !== convListRun) return; // a newer render took over
+    const d = document.createElement('div');
+    d.textContent = nickOf(m.username) + (m.username === me.username ? ' (you)' : '') + ': ' + fp + (m.agent ? ' — AI, key held by the hub; only receives messages that write @' + m.display.toLowerCase().replace(/\s+/g, '') + ' (plus the 5 before them)' : '');
+    det.append(d);
+  }
+  const hint = document.createElement('div'); hint.textContent = 'Compare these with each other once, outside Mills. If they match, nobody in between can read the chat.';
+  det.append(hint); box.append(det);
+  updateUnread();
+}
+function selectConv(conv) {
+  if (conv !== 'room' && !memberOf(convPeer(conv))) conv = 'room';
+  currentConv = conv; store.set('mills.conv.' + me.username, conv);
+  cancelCompose();
+  $('convName').textContent = convLabel(conv);
+  $('roomInput').placeholder = conv === 'room' ? 'Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)'
+    : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
+  const log = $('roomLog'); log.innerHTML = '';
+  for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
+  log.scrollTop = log.scrollHeight;
+  for (const b of $('convList').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
+  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner();
+}
+function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
+
 async function pollRoom() {
   if (!me) return;
+  let d;
+  try { d = await json('/api/room/messages?rev=' + roomRev); } catch { return; }
+  if (d.latestRev < roomRev) { resetRoomData(); return pollRoom(); } // an admin cleared the history
+  seenMap = d.seen || {};
+  onShares(d.shares || []);
+  for (const m of d.messages) await ingest(m, roomLoaded);
+  roomLoaded = true;
+  refreshReceipts(); updateUnread(); markSeen();
+}
+async function ingest(m, live) {
+  roomRev = Math.max(roomRev, m.rev || m.seq);
+  const prev = msgs.get(m.seq);
+  const p = await decryptMsg(m);
+  if (prev && prev.url) URL.revokeObjectURL(prev.url);
+  const rec = { m, text: p.t, r: p.r, audio: p.a || null, url: null, locked: !!p.locked, el: prev ? prev.el : null };
+  msgs.set(m.seq, rec);
+  if (convOfMsg(m) === currentConv) renderMsg(rec);
+  for (const other of msgs.values()) if (other.r === m.seq && other.el) renderMsg(other); // refresh quotes of this message
+  if (live && !prev && m.from !== me.username && !m.deleted) notify(rec);
+}
+function renderRich(el, text) { // ``` code blocks + highlighted @mentions
+  text.split(/```[^\n]*\n?/).forEach((part, i) => {
+    if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.append(pre); return; }
+    for (const bit of part.split(/(@[\w.-]+)/)) {
+      if (!/^@[\w.-]+$/.test(bit)) { if (bit) el.append(bit); continue; }
+      const owner = handleOwner(bit.slice(1));
+      if (!owner) { el.append(bit); continue; }
+      const s = document.createElement('span'); s.className = 'mention' + (owner === me.username ? ' you' : ''); s.textContent = bit; s.style.color = colorOf(owner);
+      el.append(s);
+    }
+  });
+}
+function renderMsg(rec, bulk) {
+  const { m } = rec, log = $('roomLog'), mine = m.from === me.username;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  const el = rec.el || document.createElement('div');
+  el.className = 'msg rmsg' + (mine ? ' me' : '') + (m.deleted ? ' deleted' : '');
+  el.dataset.seq = m.seq; el.style.borderLeftColor = colorOf(m.from); el.textContent = '';
+  const head = document.createElement('small');
+  const who = document.createElement('b'); who.textContent = nickOf(m.from); who.style.color = colorOf(m.from); who.title = '@' + m.from;
+  const dt = new Date(m.ts), when = document.createElement('time');
+  when.dateTime = m.ts; when.textContent = fmtTime(dt); when.title = dt.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
+  head.append(who, ' · ', when);
+  if (m.editedAt) { const e = document.createElement('span'); e.textContent = ' · edited'; e.title = 'Edited ' + new Date(m.editedAt).toLocaleString(); head.append(e); }
+  if (m.to) head.append(' · private');
+  el.append(head);
+  if (rec.r && !m.deleted) {
+    const q = msgs.get(rec.r), quote = document.createElement('div'); quote.className = 'quote';
+    quote.textContent = '↪ ' + (q ? nickOf(q.m.from) + ': ' + snippet(q) : 'an earlier message');
+    quote.title = 'Jump to the message this replies to';
+    quote.onclick = (e) => { e.stopPropagation(); jumpTo(rec.r); };
+    el.append(quote);
+  }
+  const body = document.createElement('div'); body.className = 'body';
+  if (m.deleted) body.textContent = 'message deleted'; else renderRich(body, rec.text);
+  el.append(body);
+  if (rec.audio && !m.deleted) {
+    const au = document.createElement('audio'); au.controls = true; au.preload = 'metadata';
+    au.src = clipUrl(rec); au.volume = prefs().clips.volume / 100;
+    au.onclick = (e) => e.stopPropagation();
+    el.append(au);
+  }
+  if (mine && !m.deleted) { const s = document.createElement('div'); s.className = 'seenLine'; el.append(s); }
+  el.onclick = (e) => openMsgMenu(rec, e);
+  if (!rec.el) { rec.el = el; log.append(el); if (!bulk && (atBottom || mine)) log.scrollTop = log.scrollHeight; }
+  updateSeenLine(rec);
+}
+function jumpTo(seq) {
+  const rec = msgs.get(seq);
+  if (!rec) return;
+  if (convOfMsg(rec.m) !== currentConv) selectConv(convOfMsg(rec.m));
+  if (!rec.el) return;
+  rec.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  rec.el.classList.add('flash'); setTimeout(() => rec.el && rec.el.classList.remove('flash'), 1600);
+}
+
+// Receipts: "seen alex · unseen sam" under your own messages (and in every message's menu).
+function participants(conv) {
+  if (conv === 'room') return roomMembers.filter((x) => !x.agent).map((x) => x.username);
+  return conv.slice(3).split('|').filter((u) => !(memberOf(u) || {}).agent);
+}
+function seenText(rec) {
+  const c = convOfMsg(rec.m);
+  return participants(c).filter((u) => u !== rec.m.from)
+    .map((u) => (((seenMap[u] || {})[c] || 0) >= rec.m.seq ? 'seen ' : 'unseen ') + nickOf(u)).join(' · ') || 'nobody else here yet';
+}
+function updateSeenLine(rec) { const s = rec.el && rec.el.querySelector('.seenLine'); if (s) s.textContent = seenText(rec); }
+function refreshReceipts() { for (const rec of msgs.values()) if (rec.el) updateSeenLine(rec); }
+function unreadIn(conv) {
+  const s = ((seenMap[me.username] || {})[conv]) || 0; let n = 0;
+  for (const { m } of msgs.values()) if (convOfMsg(m) === conv && m.from !== me.username && !m.deleted && m.seq > s) n++;
+  return n;
+}
+const setBadge = (el, n) => { if (!el) return; el.textContent = n > 99 ? '99+' : String(n); el.hidden = !n; };
+function updateUnread() {
+  if (!me) { setBadge($('chatBadge'), 0); setBadge($('railRoomBadge'), 0); return; }
+  const convs = new Set(['room']); for (const { m } of msgs.values()) convs.add(convOfMsg(m));
+  let total = 0; const per = {};
+  for (const c of convs) { per[c] = unreadIn(c); total += per[c]; }
+  setBadge($('chatBadge'), total); setBadge($('railRoomBadge'), total);
+  for (const b of document.querySelectorAll('[data-conv-badge]')) setBadge(b, per[b.dataset.convBadge] || 0);
+  document.title = (total ? `(${total}) ` : '') + 'Mills · ' + me.display;
+}
+function roomVisible() {
+  if (!me || document.visibilityState !== 'visible') return false;
+  if (!$('room').hidden) return true;
+  if ($('shell').hidden || !layout.show.roomPane) return false;
+  return layout.roomMode === 'float' ? !$('roomFloat').hidden : !$('roomPane').hidden;
+}
+function markSeen() {
+  if (!roomVisible() || !document.hasFocus()) return;
+  let top = 0;
+  for (const { m } of msgs.values()) if (convOfMsg(m) === currentConv) top = Math.max(top, m.seq);
+  const mine = seenMap[me.username] || (seenMap[me.username] = {});
+  if (top <= (mine[currentConv] || 0)) return;
+  mine[currentConv] = top; updateUnread();
+  json('/api/room/seen', { method: 'POST', body: JSON.stringify({ conv: currentConv, seq: top }) }).catch(() => {});
+}
+window.addEventListener('focus', markSeen);
+document.addEventListener('visibilitychange', markSeen);
+
+// Notifications: a different tone for a normal message, an @mention / private message, and a reply
+// to you; plus optional pop-ups that float up and fade while you are in Work.
+let audioCtx = null;
+const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]] };
+function playTone(kind, volume) {
+  if (!volume) return;
   try {
-    const d = await json('/api/room/messages?since=' + roomSeq);
-    for (const m of d.messages) await showRoomMessage(m);
-    if (d.latest < roomSeq) { roomSeq = 0; $('roomLog').innerHTML = ''; } // history was cleared by an admin
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const now = audioCtx.currentTime, peak = (volume / 100) * 0.35;
+    for (const [f, at, dur] of TONES[kind]) {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, now + at);
+      g.gain.exponentialRampToValueAtTime(peak, now + at + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + at + dur);
+      o.connect(g).connect(audioCtx.destination); o.start(now + at); o.stop(now + at + dur + 0.03);
+    }
   } catch {}
 }
-async function showRoomMessage(m) {
-  roomSeq = Math.max(roomSeq, m.seq);
-  let text;
-  if (!chatPriv) text = '🔒 (locked — sign in again to read)';
-  else if (!m.key) text = '🔒 (sent before your chat key existed)';
-  else {
-    try {
-      const shared = await sharedWith(m.fromPub);
-      const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv) }, shared, fromB64(m.key.wk));
-      const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
-      text = dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv) }, k, fromB64(m.ct)));
-    } catch { text = '🔒 (could not decrypt)'; }
-  }
-  const mine = m.from === me.username;
-  if ($('room').hidden && !mine) { unread++; $('chatBadge').textContent = unread; $('chatBadge').hidden = false; }
-  const log = $('roomLog'), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-  const el = document.createElement('div'); el.className = 'msg' + (mine ? ' me' : '');
-  const who = document.createElement('small');
-  const member = roomMembers.find((x) => x.username === m.from);
-  who.textContent = (member ? member.display : m.from) + ' · ' + new Date(m.ts).toLocaleString();
-  const body = document.createElement('div'); body.textContent = text;
-  el.append(who, body); log.append(el);
-  if (atBottom || mine) log.scrollTop = log.scrollHeight;
+// Browsers only allow sound after the person has interacted with the page once.
+document.addEventListener('pointerdown', () => { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === 'suspended') audioCtx.resume(); } catch {} }, { capture: true });
+function notify(rec) {
+  const { m } = rec, c = convOfMsg(m), P = prefs(), q = rec.r && msgs.get(rec.r);
+  const kind = q && q.m.from === me.username ? 'reply' : (m.to === me.username || mentionsMe(rec.text)) ? 'mention' : 'message';
+  const watching = roomVisible() && document.hasFocus() && c === currentConv;
+  if (P.sound.on && !watching) playTone(kind, P.sound[kind]);
+  if (P.toasts && !$('shell').hidden && !(roomVisible() && c === currentConv)) toast(rec, kind);
+  const who = nickOf(m.from), how = kind === 'reply' ? ' replied' : m.to ? ' privately' : '';
+  const readIt = P.tts.on && !watching && (P.tts.scope === 'all' || kind !== 'message');
+  if (rec.audio) {
+    if (readIt) speak(`${who}${how} sent a voice clip${rec.text ? ': ' + rec.text : ''}`);
+    if (P.clips.autoplay && !watching) enqueueClip(rec);
+  } else if (readIt) speak(`${who}${how}: ${rec.text}`);
 }
-function startRoomPolling() { stopRoomPolling(); loadLocalChatKey().then(pollRoom); roomTimer = setInterval(() => { if (!document.hidden) pollRoom(); }, 3000); }
+function clipUrl(rec) { // decrypted audio → a local blob URL (never leaves the browser)
+  if (!rec.url) {
+    const bytes = Uint8Array.from(atob(rec.audio.d), (c) => c.charCodeAt(0));
+    rec.url = URL.createObjectURL(new Blob([bytes], { type: rec.audio.m }));
+  }
+  return rec.url;
+}
+function enqueueClip(rec) {
+  ttsQueue.push({ clip: rec });
+  if (ttsQueue.length > 30) ttsQueue.splice(0, ttsQueue.length - 30);
+  if (!ttsBusy) ttsNext();
+}
+// Text-to-speech queue: messages are read one after another with the browser's own voices, so
+// people can keep working and just listen. The tone plays first, then the voice.
+const ttsQueue = [];
+let ttsBusy = false;
+const ttsClean = (s) => s.replace(/```[\s\S]*?```/g, ' (code) ').replace(/https?:\/\/\S+/g, ' (link) ').replace(/\s+/g, ' ').trim().slice(0, 400);
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  if (!text) return;
+  ttsQueue.push(ttsClean(text));
+  if (ttsQueue.length > 30) ttsQueue.splice(0, ttsQueue.length - 30); // never fall endlessly behind
+  if (!ttsBusy) ttsNext();
+}
+let clipPlayer = null;
+function ttsNext() {
+  const text = ttsQueue.shift();
+  if (!text) { ttsBusy = false; return; }
+  ttsBusy = true;
+  if (typeof text === 'object') { // a queued voice clip
+    clipPlayer = new Audio(clipUrl(text.clip));
+    clipPlayer.volume = prefs().clips.volume / 100;
+    clipPlayer.onended = clipPlayer.onerror = () => { clipPlayer = null; setTimeout(ttsNext, 250); };
+    clipPlayer.play().catch(() => { clipPlayer = null; setTimeout(ttsNext, 250); });
+    return;
+  }
+  if (!('speechSynthesis' in window)) { setTimeout(ttsNext, 0); return; }
+  const P = prefs().tts, u = new SpeechSynthesisUtterance(text);
+  u.volume = P.volume / 100; u.rate = P.rate / 100;
+  const v = speechSynthesis.getVoices().find((x) => x.name === P.voice);
+  if (v) u.voice = v;
+  u.onend = u.onerror = () => setTimeout(ttsNext, 250);
+  speechSynthesis.speak(u);
+}
+function ttsStop() {
+  ttsQueue.length = 0; ttsBusy = false;
+  if (clipPlayer) { clipPlayer.onended = clipPlayer.onerror = null; clipPlayer.pause(); clipPlayer = null; }
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+}
+
+// Voice clips: record with the microphone (asked for only when you press 🎤), up to 2 minutes,
+// compressed, then sent encrypted exactly like a text message.
+const CLIP_MAX_S = 120;
+let rec0 = null; // { recorder, stream, chunks, started, timer, cancelled }
+async function startClip() {
+  if (rec0) return;
+  if (!navigator.mediaDevices || !window.MediaRecorder) return sysRoom('This browser cannot record audio.');
+  if (!chatPriv) return sysRoom('Your chat key is locked in this browser. Sign out and sign in again.');
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() }); }
+  catch (e) { return sysRoom('Microphone not available: ' + (e.name === 'NotAllowedError' ? 'permission was refused (allow it in the address bar).' : e.message)); }
+  const mime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4'].find((t) => MediaRecorder.isTypeSupported(t)) || '';
+  const recorder = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 24000 });
+  rec0 = { recorder, stream, chunks: [], started: Date.now(), cancelled: false };
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size) rec0.chunks.push(e.data); };
+  recorder.onstop = finishClip;
+  recorder.start(1000);
+  $('recBar').hidden = false; $('micBtn').hidden = true;
+  rec0.timer = setInterval(() => {
+    const s = (Date.now() - rec0.started) / 1000;
+    $('recTime').textContent = 'Recording ' + clipLen(s) + ' / ' + clipLen(CLIP_MAX_S);
+    if (s >= CLIP_MAX_S) stopClip(false);
+  }, 250);
+}
+function stopClip(cancel) {
+  if (!rec0) return;
+  rec0.cancelled = cancel;
+  clearInterval(rec0.timer);
+  if (rec0.recorder.state !== 'inactive') rec0.recorder.stop(); else finishClip();
+}
+async function finishClip() {
+  const r = rec0; rec0 = null;
+  if (!r) return;
+  r.stream.getTracks().forEach((t) => t.stop()); // microphone off again
+  $('recBar').hidden = true; $('micBtn').hidden = false;
+  if (r.cancelled || !r.chunks.length) return;
+  const seconds = Math.min(CLIP_MAX_S, (Date.now() - r.started) / 1000);
+  if (seconds < 0.5) return;
+  const blob = new Blob(r.chunks, { type: r.recorder.mimeType || 'audio/webm' });
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  const caption = $('roomInput').value.trim();
+  try {
+    const to = convPeer(currentConv);
+    const forAgent = callsAgent(caption, to);
+    const payload = { v: 2, t: caption, a: { m: blob.type.split(';')[0] || 'audio/webm', d: btoa(bin), s: Math.round(seconds * 10) / 10 }, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) };
+    const sealed = await sealFor(JSON.stringify(payload), to, forAgent);
+    await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
+    if (caption) $('roomInput').value = '';
+    cancelCompose(); await pollRoom();
+  } catch (err) { sysRoom('Could not send the voice clip: ' + err.message); }
+}
+// ── Voice / video calls ──
+// WebRTC between the browsers in a call (a small mesh: everyone connects to everyone). Media is
+// DTLS-SRTP encrypted end to end; the hub only relays the set-up messages, and those are encrypted
+// with the per-pair chat keys, so the hub cannot read them or slip in its own DTLS fingerprints.
+// Codecs: Opus for voice (in-band FEC, DTX for silence, ~32 kb/s), VP9 → AV1 → VP8 → H.264 for video,
+// all decoded natively by the browser. Camera always starts OFF; the microphone uses the noise
+// suppression / echo cancellation / auto level settings (on by default).
+const call = { conv: null, peers: new Map(), mic: null, cam: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map() };
+let callInit = false;
+const VQ = { low: [320, 180, 15, 250], medium: [640, 360, 24, 700], high: [1280, 720, 30, 1800] }; // w, h, fps, kb/s
+function audioConstraints() { const a = prefs().audio; return { noiseSuppression: a.noise, echoCancellation: a.echo, autoGainControl: a.agc, channelCount: 1 }; }
+const callMsg = (t) => { $('callMsg').textContent = t || ''; };
+const inCallList = (c) => call.state[c] || [];
+
+async function callPollLoop() {
+  if (call.polling) return;
+  call.polling = true;
+  while (me) {
+    try {
+      const d = await json(`/api/call/poll?after=${call.after}&ver=${call.ver}`);
+      call.after = d.after; call.ver = d.ver;
+      await onCallState(d.calls || {});
+      for (const s of d.signals || []) await onSignal(s);
+    } catch { await sleep(3000); }
+  }
+  call.polling = false;
+}
+async function onCallState(state) {
+  const prev = call.state; call.state = state;
+  for (const [c, ps] of Object.entries(state)) for (const p of ps) { // "X is in a call" — a notification, never a ringtone
+    if (p.user === me.username || call.conv === c) continue;
+    if (callInit && !(prev[c] || []).some((x) => x.user === p.user)) callNotify(c, p.user);
+  }
+  callInit = true;
+  if (call.conv) {
+    const list = inCallList(call.conv);
+    const restarted = !list.some((p) => p.user === me.username);
+    if (restarted) { // the hub restarted (or dropped us): quietly join again, and keep the existing connections meanwhile
+      try { await json('/api/call/join', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled) }) }); } catch {}
+    }
+    const others = list.filter((p) => p.user !== me.username);
+    for (const p of others) if (!call.peers.has(p.user)) connectPeer(p.user);
+    if (!restarted) for (const u of [...call.peers.keys()]) if (!others.some((p) => p.user === u)) dropPeer(u);
+    for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); peer.tile.querySelector('.lbl').textContent = nickOf(p.user) + (p.mic ? '' : ' 🔇'); } }
+    $('callInfo').textContent = convLabel(call.conv) + ' · ' + list.length + ' in call';
+  }
+  renderCallBanner();
+}
+function callNotify(conv, user) {
+  const P = prefs();
+  if (P.sound.on) playTone('mention', P.sound.mention);
+  const t = document.createElement('div'); t.className = 'toast mention'; t.style.borderLeftColor = colorOf(user);
+  const b = document.createElement('b'); b.style.color = colorOf(user); b.textContent = '📞 ' + nickOf(user);
+  t.append(b, ' is in a ' + (conv === 'room' ? 'call in # Everyone' : 'private call with you') + ' — click to join');
+  t.style.setProperty('--toast-s', '12s');
+  t.onclick = () => { t.remove(); joinCall(conv); };
+  t.addEventListener('animationend', () => t.remove());
+  $('toasts').append(t);
+  if (P.tts.on) speak(nickOf(user) + ' is in a call');
+}
+function renderCallBanner() {
+  if (!me || !$('callBanner')) return;
+  const list = inCallList(currentConv), b = $('callBanner'), btn = $('callBtn');
+  btn.textContent = call.conv === currentConv ? '📞 In call' : list.length ? '📞 Join call (' + list.length + ')' : '📞 Call';
+  if (!list.length || call.conv === currentConv) { b.hidden = true; return; }
+  b.textContent = '';
+  const s = document.createElement('span'); s.textContent = '🔊 ' + list.map((p) => nickOf(p.user) + (p.cam ? ' 📷' : '')).join(', ') + (list.length === 1 ? ' is' : ' are') + ' in a call here';
+  const j = document.createElement('button'); j.type = 'button'; j.textContent = 'Join'; j.onclick = () => joinCall(currentConv);
+  b.append(s, j); b.hidden = false;
+}
+$('callBtn').onclick = () => { if (call.conv === currentConv) placeCall(); else joinCall(currentConv); };
+
+async function joinCall(conv) {
+  if (call.conv === conv) return;
+  if (call.conv) await leaveCall();
+  if (!chatPriv) return sysRoom('Your chat key is locked in this browser. Sign out and sign in again to call.');
+  if (!window.RTCPeerConnection) return sysRoom('This browser cannot make calls.');
+  try { call.mic = (await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() })).getAudioTracks()[0]; }
+  catch { call.mic = null; }
+  call.cam = null; call.conv = conv; call.gone.clear();
+  try {
+    const d = await json('/api/call/join', { method: 'POST', body: JSON.stringify({ conv, cam: false, mic: !!call.mic }) });
+    call.ice = d.iceServers || [];
+    $('callTiles').textContent = '';
+    $('callTiles').append(makeTile(me.username, true));
+    updateCallButtons();
+    callMsg(call.mic ? '' : 'Microphone not available or not allowed: you are listening only. Allow it in the address bar and rejoin to talk.');
+    placeCall();
+    await onCallState(d.calls || {});
+  } catch (err) { await leaveCall(true); sysRoom('Could not join the call: ' + err.message); }
+}
+async function leaveCall(quiet) {
+  if (!call.conv) return;
+  for (const u of [...call.peers.keys()]) dropPeer(u);
+  if (me) removeMeter(me.username);
+  if (call.mic) call.mic.stop();
+  if (call.cam) call.cam.stop(); // camera light goes off
+  call.mic = call.cam = null; call.conv = null;
+  placeCall(); renderCallBanner();
+  if (!quiet || me) json('/api/call/leave', { method: 'POST', body: '{}' }).catch(() => {});
+}
+$('callLeave').onclick = () => leaveCall();
+
+// Per-person volume and mute: only in this browser (they change what YOU hear, nobody else), kept
+// per username so they stick across calls. Effective volume = Settings call volume × this person's slider.
+const personVol = (u) => { const v = Number(store.get('mills.vol.' + u)); return Number.isFinite(v) && store.get('mills.vol.' + u) !== null ? v : 100; };
+const personMuted = (u) => store.get('mills.mute.' + u) === '1';
+function applyPersonAudio(tile) {
+  const u = tile.dataset.user, v = tile.querySelector('video');
+  v.volume = Math.max(0, Math.min(1, (prefs().call.volume / 100) * (personVol(u) / 100)));
+  v.muted = personMuted(u);
+  const b = tile.querySelector('.pMute'), r = tile.querySelector('.pVol');
+  if (b) { b.textContent = personMuted(u) ? '🔇' : '🔊'; b.title = (personMuted(u) ? 'Unmute ' : 'Mute ') + nickOf(u) + ' (only for you)'; b.classList.toggle('off', personMuted(u)); }
+  if (r) { r.value = personVol(u); r.title = nickOf(u) + ': ' + personVol(u) + '% (only for you)'; }
+}
+function makeTile(user, self) {
+  const t = document.createElement('div'); t.className = 'tile nocam' + (self ? ' self' : ''); t.dataset.user = user;
+  t.style.borderColor = colorOf(user);
+  const v = document.createElement('video'); v.autoplay = true; v.playsInline = true; if (self) v.muted = true;
+  const ava = document.createElement('div'); ava.className = 'ava'; ava.style.background = colorOf(user); ava.textContent = nickOf(user).slice(0, 1).toUpperCase();
+  const lbl = document.createElement('div'); lbl.className = 'lbl'; lbl.textContent = self ? 'You' : nickOf(user);
+  t.append(v, ava, lbl);
+  if (!self) {
+    const ctl = document.createElement('div'); ctl.className = 'pCtl';
+    const mute = document.createElement('button'); mute.type = 'button'; mute.className = 'pMute';
+    mute.onclick = (e) => { e.stopPropagation(); store.set('mills.mute.' + user, personMuted(user) ? '' : '1'); applyPersonAudio(t); };
+    const vol = document.createElement('input'); vol.type = 'range'; vol.className = 'pVol'; vol.min = 0; vol.max = 100;
+    vol.oninput = () => { store.set('mills.vol.' + user, vol.value); if (personMuted(user) && Number(vol.value) > 0) store.set('mills.mute.' + user, ''); applyPersonAudio(t); };
+    ctl.append(mute, vol); t.append(ctl);
+    applyPersonAudio(t);
+  }
+  return t;
+}
+
+// Speaking ring: a tiny level meter per voice (Web Audio analyser, nothing leaves the browser).
+// Someone counts as speaking while their level is above the threshold, held for a moment so the
+// ring does not flicker between words.
+const meters = new Map(); // username -> { an, src, buf, hold }
+function addMeter(user, track) {
+  removeMeter(user);
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
+    const an = audioCtx.createAnalyser(); an.fftSize = 512; an.smoothingTimeConstant = 0.3;
+    src.connect(an); // measured only, never played through here (the tile's <video> plays it)
+    meters.set(user, { an, src, buf: new Uint8Array(an.fftSize), hold: 0, track });
+  } catch {}
+}
+function removeMeter(user) { const m = meters.get(user); if (m) { try { m.src.disconnect(); } catch {} meters.delete(user); } }
+setInterval(() => {
+  if (!call.conv) return;
+  const now = Date.now();
+  for (const [user, m] of meters) {
+    m.an.getByteTimeDomainData(m.buf);
+    let sum = 0; for (const x of m.buf) { const d = (x - 128) / 128; sum += d * d; }
+    const level = Math.sqrt(sum / m.buf.length);
+    const self = user === me.username;
+    const audible = self ? !!(call.mic && call.mic.enabled) : true; // others ring even if you muted them locally (you still see who talks)
+    if (audible && m.track.enabled && m.track.readyState === 'live' && level > 0.035) m.hold = now + 350;
+    const tile = self ? selfTile() : (call.peers.get(user) || {}).tile;
+    if (tile) tile.classList.toggle('speaking', m.hold > now);
+  }
+}, 100);
+function selfTile() { return $('callTiles').querySelector('.tile.self'); }
+
+function preferCodecs(t, kind) {
+  if (!t.setCodecPreferences || !RTCRtpReceiver.getCapabilities) return;
+  const caps = RTCRtpReceiver.getCapabilities(kind);
+  if (!caps) return;
+  const order = kind === 'audio' ? ['audio/opus'] : ['video/VP9', 'video/AV1', 'video/VP8', 'video/H264'];
+  const rank = (c) => { const i = order.indexOf(c.mimeType); return i < 0 ? order.length : i; };
+  try { t.setCodecPreferences([...caps.codecs].sort((a, b) => rank(a) - rank(b))); } catch {}
+}
+function tuneSdp(desc) { // ask the other side for Opus with forward error correction + silence suppression
+  let sdp = desc.sdp;
+  const m = /a=rtpmap:(\d+) opus\/48000/i.exec(sdp);
+  if (m) sdp = sdp.replace(new RegExp('a=fmtp:' + m[1] + ' ([^\\r\\n]*)'), (line, params) => {
+    const add = ['useinbandfec=1', 'usedtx=1', 'maxaveragebitrate=32000'].filter((x) => !params.includes(x.split('=')[0]));
+    return 'a=fmtp:' + m[1] + ' ' + params + (add.length ? ';' + add.join(';') : '');
+  });
+  return { type: desc.type, sdp };
+}
+function tuneSenders(peer) {
+  const [, , fps, kbps] = VQ[prefs().call.quality] || VQ.medium;
+  for (const t of peer.pc.getTransceivers()) {
+    const s = t.sender, kind = t.receiver.track.kind, params = s.getParameters();
+    if (!params.encodings || !params.encodings.length) continue; // not negotiated yet; tried again once connected
+    params.encodings[0].maxBitrate = (kind === 'video' ? kbps : 32) * 1000;
+    if (kind === 'video') params.encodings[0].maxFramerate = fps;
+    s.setParameters(params).catch(() => {});
+  }
+}
+async function attachLocal(peer) { // put our current mic / camera on this connection's senders
+  const ts = peer.pc.getTransceivers();
+  for (const t of ts) { t.direction = 'sendrecv'; preferCodecs(t, t.receiver.track.kind); } // synchronously, before any offer / answer is made
+  for (const t of ts) { try { await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? call.mic : call.cam); } catch {} }
+}
+function connectPeer(user) {
+  if (call.peers.has(user)) return call.peers.get(user);
+  const pc = new RTCPeerConnection({ iceServers: call.ice });
+  const peer = { pc, user, offerer: me.username < user, pendingIce: [], stream: new MediaStream(), tile: makeTile(user, false) };
+  call.peers.set(user, peer);
+  $('callTiles').append(peer.tile);
+  peer.tile.querySelector('video').srcObject = peer.stream;
+  pc.ontrack = (e) => {
+    peer.stream.addTrack(e.track); peer.tile.querySelector('video').play().catch(() => {});
+    if (e.track.kind === 'audio') addMeter(user, e.track);
+  };
+  pc.onicecandidate = (e) => { if (e.candidate) sendSignal(user, { c: e.candidate.toJSON() }); };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') tuneSenders(peer);
+    if (pc.connectionState === 'failed' && peer.offerer) pc.restartIce();
+    if (pc.connectionState === 'failed') callMsg('Could not connect to ' + nickOf(user) + ' directly (strict network). A TURN server in the hub config fixes this.');
+  };
+  if (peer.offerer) { // exactly one side offers, so there is never a collision
+    pc.addTransceiver('audio', { direction: 'sendrecv' });
+    pc.addTransceiver('video', { direction: 'sendrecv' });
+    attachLocal(peer);
+    pc.onnegotiationneeded = async () => {
+      try { await pc.setLocalDescription(); await sendSignal(user, { d: tuneSdp(pc.localDescription) }); } catch {}
+    };
+  }
+  return peer;
+}
+function dropPeer(user) {
+  const peer = call.peers.get(user);
+  if (!peer) return;
+  try { peer.pc.close(); } catch {}
+  removeMeter(user);
+  peer.tile.remove(); call.peers.delete(user); call.gone.delete(user);
+}
+async function pairKey(user) { const m = memberOf(user); return m && m.pub && chatPriv ? sharedWith(m.pub) : null; }
+async function sendSignal(user, body) {
+  const k = await pairKey(user);
+  if (!k || !call.conv) return;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(JSON.stringify({ conv: call.conv, from: me.username, to: user, ...body })));
+  await json('/api/call/signal', { method: 'POST', body: JSON.stringify({ to: user, conv: call.conv, iv: toB64(iv), ct: toB64(ct) }) }).catch(() => {});
+}
+async function onSignal(s) {
+  if (!call.conv || s.conv !== call.conv) return;
+  const k = await pairKey(s.from);
+  if (!k) return;
+  let msg;
+  try { msg = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(s.iv) }, k, fromB64(s.ct)))); } catch { return; } // not from them: ignored
+  if (msg.conv !== call.conv || msg.from !== s.from || msg.to !== me.username) return; // bound to this call inside the encryption
+  const peer = connectPeer(s.from), pc = peer.pc;
+  try {
+    if (msg.d) {
+      await pc.setRemoteDescription(msg.d);
+      if (msg.d.type === 'offer') { await attachLocal(peer); await pc.setLocalDescription(); await sendSignal(s.from, { d: tuneSdp(pc.localDescription) }); }
+      for (const c of peer.pendingIce.splice(0)) { try { await pc.addIceCandidate(c); } catch {} }
+    } else if (msg.c) {
+      if (pc.remoteDescription) { try { await pc.addIceCandidate(msg.c); } catch {} } else peer.pendingIce.push(msg.c);
+    }
+  } catch (e) { callMsg('Call set-up problem with ' + nickOf(s.from) + ': ' + e.message); }
+}
+
+function updateCallButtons() {
+  const micOn = !!(call.mic && call.mic.enabled), camOn = !!call.cam;
+  $('callMic').textContent = call.mic ? (micOn ? '🔇 Mute' : '🎤 Unmute') : '🎤 Allow mic';
+  $('callMic').title = call.mic ? (micOn ? 'Mute your microphone (M)' : 'Unmute your microphone (M) — you are muted') : 'Try to use your microphone again';
+  if (call.mic && !meters.has(me.username)) addMeter(me.username, call.mic);
+  $('callMic').classList.toggle('off', !micOn);
+  $('callCam').textContent = camOn ? '📷 Camera on' : '📷 Camera off';
+  $('callCam').classList.toggle('off', !camOn);
+  const st = selfTile();
+  if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; st.querySelector('.lbl').textContent = 'You' + (micOn ? '' : ' 🔇'); }
+}
+function pushCallState() {
+  if (call.conv) json('/api/call/state', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled) }) }).catch(() => {});
+}
+$('callMic').onclick = async () => {
+  if (!call.conv) return;
+  if (!call.mic) { // permission was refused earlier: try again
+    try { call.mic = (await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() })).getAudioTracks()[0]; callMsg(''); }
+    catch { return callMsg('Microphone still not allowed.'); }
+    for (const p of call.peers.values()) await attachLocal(p);
+  } else call.mic.enabled = !call.mic.enabled;
+  updateCallButtons(); pushCallState();
+};
+document.addEventListener('keydown', (e) => { // M = mute / unmute yourself while in a call (not while typing)
+  if (!call.conv || e.ctrlKey || e.metaKey || e.altKey || (e.key !== 'm' && e.key !== 'M')) return;
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault(); $('callMic').click();
+});
+$('callCam').onclick = async () => {
+  if (!call.conv) return;
+  if (call.cam) { call.cam.stop(); call.cam = null; }
+  else {
+    const [w, h, fps] = VQ[prefs().call.quality] || VQ.medium;
+    try { call.cam = (await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps, max: fps } } })).getVideoTracks()[0]; }
+    catch (e) { return callMsg('Camera not available: ' + (e.name === 'NotAllowedError' ? 'permission was refused (allow it in the address bar).' : e.message)); }
+    call.cam.contentHint = 'motion';
+  }
+  for (const p of call.peers.values()) { await attachLocal(p); tuneSenders(p); }
+  updateCallButtons(); pushCallState();
+};
+
+// Where the call panel lives: in the chat's side bar while the chat is open (Chat screen, or the
+// team chat shown in Work with its side bar visible); otherwise in its own window that snaps to
+// the nearest edge or corner wherever it is dropped.
+function chatOpen() {
+  if (!me || $('roomCore').classList.contains('noside')) return false;
+  if (!$('room').hidden) return true;
+  return !$('shell').hidden && layout.show.roomPane;
+}
+function placeCall() {
+  const core = $('callCore');
+  if (!call.conv) { $('callPark').append(core); $('callFloat').hidden = true; return; }
+  if (chatOpen()) { $('callSideHost').append(core); $('callFloat').hidden = true; }
+  else { $('callFloatBody').append(core); $('callFloat').hidden = false; snapCall(store.get('mills.callSnap') || 'br'); }
+}
+const SNAPS = { tl: [0, 0], tc: [0.5, 0], tr: [1, 0], ml: [0, 0.5], mr: [1, 0.5], bl: [0, 1], bc: [0.5, 1], br: [1, 1] };
+function snapCall(anchor) {
+  const win = $('callFloat'), m = 12, [fx, fy] = SNAPS[anchor] || SNAPS.br;
+  const w = win.offsetWidth, h = win.offsetHeight;
+  win.style.left = Math.round(m + fx * (innerWidth - w - 2 * m)) + 'px';
+  win.style.top = Math.round(m + fy * (innerHeight - h - 2 * m)) + 'px';
+}
+(function bindCallFloat() {
+  const win = $('callFloat'), bar = win.querySelector('.winBar');
+  bar.addEventListener('pointerdown', (e) => {
+    const r = win.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+    bar.setPointerCapture(e.pointerId); win.classList.add('dragging');
+    const move = (ev) => { win.style.left = (ev.clientX - sx) + 'px'; win.style.top = (ev.clientY - sy) + 'px'; };
+    const up = () => {
+      bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); win.classList.remove('dragging');
+      const b = win.getBoundingClientRect(), cx = (b.left + b.width / 2) / innerWidth, cy = (b.top + b.height / 2) / innerHeight;
+      let best = 'br', dist = Infinity; // snap to whichever of the 8 edge / corner spots is closest
+      for (const [k, [fx, fy]] of Object.entries(SNAPS)) { const d = (fx - cx) ** 2 + (fy - cy) ** 2; if (d < dist) { dist = d; best = k; } }
+      store.set('mills.callSnap', best); snapCall(best);
+    };
+    bar.addEventListener('pointermove', move); bar.addEventListener('pointerup', up);
+  });
+  window.addEventListener('resize', () => { if (!win.hidden) snapCall(store.get('mills.callSnap') || 'br'); });
+})();
+window.addEventListener('pagehide', () => { // closing the tab leaves the call right away
+  if (call.conv && token && base) fetch(base + '/api/call/leave', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: '{}' }).catch(() => {});
+});
+
+// ── Dictation (speech to text) for the team chat box and the Claude box in Work ──
+// 🗣 starts listening and writes what you say into the box, after anything already there, so you
+// can stop, edit, and talk again to continue. It stops by itself after ~3 s without speech. It does
+// NOT send: press Send / Enter. Exception: end with the words "send message" and then stay quiet
+// for a moment — that sends it (the words themselves are removed). Uses the browser's own speech
+// recognition (in Chrome / Edge the audio is processed by the browser maker's speech service).
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const WAKE = /\s*\bsend message[.!?]?\s*$/i;
+let dict = null; // the one active dictation: { rec, box, btn, submit, base, finals, silence, wake, stopping }
+function dictStop() {
+  if (!dict) return;
+  const d = dict; d.stopping = true;
+  clearTimeout(d.silence); clearTimeout(d.wake); d.wake = null;
+  try { d.rec.stop(); } catch {}
+}
+function dictCleanup(d) {
+  if (dict === d) dict = null;
+  d.btn.classList.remove('on', 'armed');
+  d.btn.textContent = d.btn.dataset.idle;
+}
+function dictStart(box, btn, submit) {
+  if (dict) { const same = dict.btn === btn; dictStop(); if (same) return; }
+  if (!SpeechRec) return;
+  if (!store.get('mills.dictateNoted')) {
+    store.set('mills.dictateNoted', '1');
+    (box === $('roomInput') ? sysRoom : sys)('Dictation uses your browser\'s speech recognition. In Chrome and Edge your voice is sent to the browser maker\'s speech service to be turned into text (it is not part of Mills\' end-to-end encryption). The text itself is sent encrypted as usual.');
+  }
+  const rec = new SpeechRec();
+  rec.continuous = true; rec.interimResults = true; rec.lang = navigator.language || 'en-US';
+  const base = box.value.replace(/\s+$/, '');
+  const d = { rec, box, btn, submit, base: base ? base + ' ' : '', finals: '', silence: null, wake: null, stopping: false };
+  dict = d;
+  const quietStop = () => { clearTimeout(d.silence); d.silence = setTimeout(dictStop, 3000); }; // ~3 s of no speech ends it
+  rec.onresult = (e) => {
+    if (d.stopping) return; // stopped (or the message was sent): late results must not refill the box
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i], t = r[0].transcript;
+      if (r.isFinal) d.finals += (d.finals && !/^\s/.test(t) ? ' ' : '') + t.trim(); else interim += t;
+    }
+    // "send message" + silence → send. More speech after it cancels that (the words stay as text).
+    clearTimeout(d.wake); d.wake = null; btn.classList.remove('armed');
+    if (!interim && WAKE.test(d.finals)) {
+      btn.classList.add('armed'); btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '🗣 Sending…' : '📨';
+      d.wake = setTimeout(() => {
+        d.wake = null;
+        d.finals = d.finals.replace(WAKE, '');
+        box.value = (d.base + d.finals).trim();
+        dictStop(); dictCleanup(d); // cleanup is idempotent: also covers the browser having already ended recognition
+        if (box.value) d.submit();
+      }, 1300);
+    } else if (!d.stopping) btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '■ Stop' : '■';
+    box.value = d.base + d.finals + (interim ? (d.finals ? ' ' : '') + interim : '');
+    box.dispatchEvent(new Event('input')); // keeps the Stop / Send now button and @ suggestions in step
+    quietStop();
+  };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') (box === $('roomInput') ? sysRoom : sys)('Microphone / speech recognition not allowed in this browser.', true);
+    else if (e.error === 'network') (box === $('roomInput') ? sysRoom : sys)('Speech recognition needs an internet connection to the browser\'s speech service.', true);
+  };
+  rec.onend = () => { // the browser may end it on its own; a pending "send message" still fires
+    clearTimeout(d.silence);
+    if (d.wake && !d.stopping) { d.stopping = true; return; } // the wake timer sends, then dictStop → cleanup below
+    dictCleanup(d);
+  };
+  try { rec.start(); } catch { dictCleanup(d); return; }
+  btn.classList.add('on'); btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '■ Stop' : '■';
+  quietStop();
+  box.focus();
+}
+for (const [btnId, boxId, formId] of [['roomDictate', 'roomInput', 'roomComposer'], ['workDictate', 'input', 'composer']]) {
+  const btn = $(btnId);
+  btn.dataset.idle = btn.textContent;
+  btn.title = 'Talk instead of typing: click to start, click again (or ~3 s of silence) to stop. Press Send / Enter to send — or finish with "send message" and pause to send automatically.';
+  btn.hidden = !SpeechRec; // e.g. Firefox has no speech recognition
+  btn.onclick = () => dictStart($(boxId), btn, () => $(formId).requestSubmit());
+}
+// Sending (Send / Enter) ends a dictation into that box.
+for (const id of ['roomComposer', 'composer']) $(id).addEventListener('submit', () => { if (dict && $(id).contains(dict.box)) dictStop(); }, true);
+// Typing in the box while dictating ends the dictation, so the two never fight over the text.
+for (const id of ['roomInput', 'input']) $(id).addEventListener('keydown', (e) => { if (dict && dict.box === $(id) && e.isTrusted && e.key.length === 1) dictStop(); });
+
+$('micBtn').onclick = startClip;
+$('recSend').onclick = () => stopClip(false);
+$('recCancel').onclick = () => stopClip(true);
+function toast(rec, kind) {
+  const t = document.createElement('div'); t.className = 'toast ' + kind; t.style.borderLeftColor = colorOf(rec.m.from);
+  const b = document.createElement('b'); b.style.color = colorOf(rec.m.from);
+  b.textContent = nickOf(rec.m.from) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : '') + ': ';
+  t.append(b, snippet(rec)); t.title = 'Open in the team chat';
+  t.onclick = () => { showRoomInWork(); selectConv(convOfMsg(rec.m)); jumpTo(rec.m.seq); t.remove(); };
+  t.addEventListener('animationend', () => t.remove());
+  $('toasts').append(t);
+}
+function startRoomPolling() {
+  stopRoomPolling();
+  loadLocalChatKey().then(refreshMembers).then(pollRoom).then(() => selectConv(currentConv));
+  roomTimer = setInterval(() => { pollRoom(); }, 3000); // also while the tab is in the background, so sounds still play
+}
 function stopRoomPolling() { if (roomTimer) clearInterval(roomTimer); roomTimer = null; }
+
+// Message menu: reply to anyone; edit / delete your own; receipts.
+function closeMsgMenu() { const m = $('msgMenu'); if (m) m.remove(); }
+function openMsgMenu(rec, e) {
+  if (e.target.closest('.quote') || window.getSelection().toString()) return;
+  closeMsgMenu();
+  const menu = document.createElement('div'); menu.id = 'msgMenu';
+  const add = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = (ev) => { ev.stopPropagation(); fn(b); }; menu.append(b); return b; };
+  const mine = rec.m.from === me.username;
+  if (!rec.m.deleted) add('↩ Reply', () => { closeMsgMenu(); startReply(rec); });
+  if (mine && !rec.m.deleted && !rec.locked && !rec.audio) add('✎ Edit', () => { closeMsgMenu(); startEdit(rec); });
+  if (mine && !rec.m.deleted) add('🗑 Delete', (b) => {
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = '🗑 Click again to delete'; return; }
+    closeMsgMenu();
+    json('/api/room/delete', { method: 'POST', body: JSON.stringify({ seq: rec.m.seq }) }).then(pollRoom).catch((err) => sysRoom('Could not delete: ' + err.message));
+  });
+  const info = document.createElement('small');
+  info.textContent = new Date(rec.m.ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' }) + ' — ' + seenText(rec);
+  menu.append(info);
+  document.body.append(menu);
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = Math.min(e.clientX, innerWidth - w - 8) + 'px';
+  menu.style.top = Math.min(e.clientY, innerHeight - h - 8) + 'px';
+}
+document.addEventListener('click', (e) => { if (!e.target.closest('#msgMenu') && !e.target.closest('.rmsg')) closeMsgMenu(); });
+function startReply(rec) {
+  editingSeq = null; replyTo = rec.m.seq;
+  $('replyText').textContent = 'Replying to ' + nickOf(rec.m.from) + ': ' + snippet(rec);
+  $('replyBar').hidden = false; $('roomInput').focus();
+}
+function startEdit(rec) {
+  replyTo = null; editingSeq = rec.m.seq;
+  $('replyText').textContent = 'Editing your message (Esc to cancel)';
+  $('replyBar').hidden = false; $('roomInput').value = rec.text; $('roomInput').focus();
+}
+function cancelCompose() {
+  if (editingSeq) $('roomInput').value = '';
+  replyTo = null; editingSeq = null; $('replyBar').hidden = true; $('mentionList').hidden = true;
+}
+$('replyCancel').onclick = cancelCompose;
+$('roomSideToggle').onclick = () => { $('roomCore').classList.toggle('noside'); store.set('mills.roomSide', $('roomCore').classList.contains('noside') ? 'hide' : ''); placeCall(); };
+if (store.get('mills.roomSide') === 'hide') $('roomCore').classList.add('noside');
+
+// Unity (the room agent) only receives a message when it @-mentions her (or is a private message to
+// her). Then the 5 messages before it in that conversation go along inside the encryption, so she
+// reads at most the last 6 and never the rest of the chat.
+const agentMemberOf = () => roomMembers.find((m) => m.agent);
+function callsAgent(text, to) {
+  const a = agentMemberOf();
+  if (!a) return false;
+  if (to === a.username) return true;
+  const h = (a.display || 'unity').toLowerCase().replace(/\s+/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('@' + h + '\\b', 'i').test(text || '');
+}
+function agentCtx(conv) {
+  return [...msgs.values()].filter((r) => convOfMsg(r.m) === conv && !r.m.deleted && !r.locked)
+    .sort((a, b) => a.m.seq - b.m.seq).slice(-5)
+    .map((r) => ({ n: nickOf(r.m.from), t: ((r.audio ? '(voice clip) ' : '') + r.text).slice(0, 1500) }));
+}
+// Encrypt one message body for a conversation: everyone with a key, or only the two people.
+// The agent gets a copy only when forAgent is true.
+async function sealFor(plain, to, forAgent) {
+  await refreshMembers();
+  const raw = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(plain));
+  const keys = {};
+  for (const m of roomMembers) {
+    if (to && m.username !== to && m.username !== me.username) continue;
+    if (m.agent && !forAgent) continue;
+    const pub = m.username === me.username ? chatPubJwk : m.pub;
+    if (!pub) continue;
+    const kiv = crypto.getRandomValues(new Uint8Array(12));
+    keys[m.username] = { iv: toB64(kiv), wk: toB64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await sharedWith(pub), raw)) };
+  }
+  if (to && !keys[to]) throw new Error(nickOf(to) + ' has no chat key yet (they have not signed in since chat was added).');
+  return { iv: toB64(iv), ct: toB64(ct), keys };
+}
 $('roomComposer').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = $('roomInput').value.trim();
   if (!text) return;
   if (!chatPriv) return sysRoom('Your chat key is locked in this browser. Sign out and sign in again.');
   try {
-    await refreshMembers();
-    const raw = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
-    const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(text));
-    const keys = {};
-    for (const m of roomMembers) {
-      const pub = m.username === me.username ? chatPubJwk : m.pub;
-      if (!pub) continue;
-      const kiv = crypto.getRandomValues(new Uint8Array(12));
-      keys[m.username] = { iv: toB64(kiv), wk: toB64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await sharedWith(pub), raw)) };
+    if (editingSeq) {
+      const rec = msgs.get(editingSeq);
+      const eto = rec ? rec.m.to || '' : '';
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}) }), eto, callsAgent(text, eto));
+      await json('/api/room/edit', { method: 'POST', body: JSON.stringify({ seq: editingSeq, ...sealed }) });
+    } else {
+      const to = convPeer(currentConv), forAgent = callsAgent(text, to);
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) }), to, forAgent);
+      await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
     }
-    await json('/api/room/send', { method: 'POST', body: JSON.stringify({ iv: toB64(iv), ct: toB64(ct), keys }) });
-    $('roomInput').value = '';
+    editingSeq = null; $('roomInput').value = ''; cancelCompose();
     await pollRoom();
   } catch (err) { sysRoom('Could not send: ' + err.message); }
 });
-$('roomInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('roomComposer').requestSubmit(); } });
-function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.textContent = t; $('roomLog').append(d); }
+// @ autocomplete: type @ and pick a person (Tab / Enter takes the first one).
+function mentionQuery() {
+  const el = $('roomInput'), m = /(^|\s)@([\w.-]*)$/.exec(el.value.slice(0, el.selectionStart));
+  return m ? m[2].toLowerCase() : null;
+}
+function updateMentionList() {
+  const q = mentionQuery(), box = $('mentionList');
+  box.textContent = '';
+  if (q === null) { box.hidden = true; return; }
+  const hits = roomMembers.filter((m) => m.username !== me.username && (m.username.startsWith(q) || (m.nick || m.display).replace(/\s+/g, '').toLowerCase().startsWith(q))).slice(0, 6);
+  for (const m of hits) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.user = m.username;
+    b.textContent = nickOf(m.username) + ' @' + m.username; b.style.color = colorOf(m.username);
+    b.onclick = () => insertMention(m.username); box.append(b);
+  }
+  box.hidden = !hits.length;
+}
+function insertMention(u) {
+  const el = $('roomInput'), pos = el.selectionStart, before = el.value.slice(0, pos).replace(/@[\w.-]*$/, '@' + u + ' ');
+  el.value = before + el.value.slice(pos); el.selectionStart = el.selectionEnd = before.length;
+  $('mentionList').hidden = true; el.focus();
+}
+$('roomInput').addEventListener('input', updateMentionList);
+$('roomInput').addEventListener('keydown', (e) => {
+  const first = !$('mentionList').hidden && $('mentionList').querySelector('button');
+  if (first && (e.key === 'Tab' || e.key === 'Enter')) { e.preventDefault(); insertMention(first.dataset.user); return; }
+  if (e.key === 'Escape') { cancelCompose(); return; }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('roomComposer').requestSubmit(); }
+});
+function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.textContent = t; $('roomLog').append(d); $('roomLog').scrollTop = $('roomLog').scrollHeight; }
+
+// ── Work layout: left bar, resizable / minimizable panes, team chat docked or floating ──
+const PANES = ['files', 'edit', 'chat', 'roomPane'];
+const PANE_WIDTH = { files: 240, edit: 440, chat: 440, roomPane: 360 };
+const defaultLayout = () => ({ show: { files: true, edit: true, chat: true, roomPane: false }, size: {}, roomMode: 'dock', float: { x: 120, y: 120, w: 420, h: 520 }, railOpen: false });
+let layout = defaultLayout();
+const layoutKey = () => 'mills.layout.' + (me ? me.username : '');
+function loadLayout() {
+  const d = defaultLayout();
+  let saved = {};
+  try { saved = JSON.parse(store.get(layoutKey()) || '{}') || {}; } catch {}
+  layout = { ...d, ...saved, show: { ...d.show, ...(saved.show || {}) }, size: { ...(saved.size || {}) }, float: { ...d.float, ...(saved.float || {}) } };
+}
+const saveLayout = () => store.set(layoutKey(), JSON.stringify(layout));
+function applyLayout() {
+  const panes = $('panes');
+  panes.querySelectorAll('.split').forEach((s) => s.remove());
+  const inWork = !$('shell').hidden;
+  const vis = PANES.filter((id) => layout.show[id] && !(id === 'roomPane' && layout.roomMode === 'float'));
+  for (const id of PANES) $(id).hidden = !vis.includes(id);
+  vis.forEach((id, i) => {
+    const el = $(id), last = i === vis.length - 1;
+    el.style.flex = last ? '1 1 0' : `0 1 ${layout.size[id] || PANE_WIDTH[id]}px`; // may shrink so the row never overflows
+    if (!last) { const s = document.createElement('div'); s.className = 'split'; s.title = 'Drag to resize'; el.after(s); bindSplit(s, el, $(vis[i + 1])); }
+  });
+  $('panesEmpty').hidden = vis.length > 0;
+  const win = $('roomFloat');
+  win.hidden = !(inWork && layout.show.roomPane && layout.roomMode === 'float');
+  if (!win.hidden) {
+    const f = layout.float;
+    win.style.width = Math.min(f.w, innerWidth - 20) + 'px'; win.style.height = Math.min(f.h, innerHeight - 20) + 'px';
+    win.style.left = Math.max(0, Math.min(f.x, innerWidth - 120)) + 'px'; win.style.top = Math.max(0, Math.min(f.y, innerHeight - 60)) + 'px';
+  }
+  document.querySelectorAll('#rail [data-pane]').forEach((b) => b.classList.toggle('on', !!layout.show[b.dataset.pane]));
+  $('rail').classList.toggle('open', !!layout.railOpen);
+  placeRoom(); placeCall(); saveLayout(); markSeen();
+}
+function placeRoom() {
+  let host = $('roomPark');
+  if (!$('room').hidden) host = $('roomHost');
+  else if (!$('shell').hidden && layout.show.roomPane) host = layout.roomMode === 'float' ? $('roomFloatBody') : $('roomPaneBody');
+  if ($('roomCore').parentElement !== host) host.append($('roomCore'));
+  if (host !== $('roomPark') && me) { const log = $('roomLog'); log.scrollTop = log.scrollHeight; }
+}
+function bindSplit(split, left, right) {
+  split.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); split.setPointerCapture(e.pointerId); split.classList.add('drag');
+    const x0 = e.clientX, wl = left.getBoundingClientRect().width, wr = right.getBoundingClientRect().width;
+    const rightFlexible = right.style.flex.startsWith('1 1');
+    const move = (ev) => {
+      let dx = ev.clientX - x0;
+      dx = Math.max(120 - wl, Math.min(dx, wr - 120)); // both sides keep at least 120px
+      left.style.flex = `0 1 ${wl + dx}px`; layout.size[left.id] = Math.round(wl + dx);
+      if (!rightFlexible) { right.style.flex = `0 1 ${wr - dx}px`; layout.size[right.id] = Math.round(wr - dx); }
+    };
+    const up = () => { split.classList.remove('drag'); split.removeEventListener('pointermove', move); split.removeEventListener('pointerup', up); saveLayout(); };
+    split.addEventListener('pointermove', move); split.addEventListener('pointerup', up);
+  });
+}
+function togglePane(id) { layout.show[id] = !layout.show[id]; applyLayout(); }
+function showRoomInWork() { if (!layout.show.roomPane) { layout.show.roomPane = true; applyLayout(); } }
+document.querySelectorAll('#rail [data-pane]').forEach((b) => { b.onclick = () => togglePane(b.dataset.pane); });
+document.querySelectorAll('[data-min]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); layout.show[b.dataset.min] = false; applyLayout(); }; });
+$('railToggle').onclick = () => { layout.railOpen = !layout.railOpen; applyLayout(); };
+$('roomFloatBtn').onclick = () => { layout.roomMode = 'float'; applyLayout(); };
+$('floatDock').onclick = () => { layout.roomMode = 'dock'; applyLayout(); };
+(function bindFloat() {
+  const win = $('roomFloat'), bar = win.querySelector('.winBar');
+  bar.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return;
+    const r = win.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+    bar.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      win.style.left = Math.max(0, Math.min(ev.clientX - sx, innerWidth - 120)) + 'px';
+      win.style.top = Math.max(0, Math.min(ev.clientY - sy, innerHeight - 40)) + 'px';
+    };
+    const up = () => {
+      bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up);
+      const r2 = win.getBoundingClientRect(); layout.float = { x: r2.left, y: r2.top, w: r2.width, h: r2.height }; saveLayout();
+    };
+    bar.addEventListener('pointermove', move); bar.addEventListener('pointerup', up);
+  });
+  new ResizeObserver(() => {
+    if (win.hidden) return;
+    const r = win.getBoundingClientRect();
+    if (r.width && r.height) { layout.float = { ...layout.float, w: Math.round(r.width), h: Math.round(r.height) }; saveLayout(); }
+  }).observe(win);
+})();
+
+// ── Settings (main menu, chat, Work bar): nickname + colour (everyone sees them), sounds, pop-ups ──
+let pickedColor = null;
+function openSettings() {
+  const P = prefs();
+  $('setNick').value = P.nick; pickedColor = P.color;
+  const sw = $('setColors'); sw.textContent = '';
+  const auto = document.createElement('button'); auto.type = 'button'; auto.textContent = 'auto'; auto.title = 'Automatic (from your username)';
+  auto.dataset.idx = ''; sw.append(auto);
+  PALETTE.forEach((pair, i) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.idx = i; b.style.background = pair[lightTheme ? 1 : 0]; b.title = 'Colour ' + (i + 1); sw.append(b); });
+  const mark = () => sw.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(pickedColor ?? '') === b.dataset.idx));
+  sw.querySelectorAll('button').forEach((b) => { b.onclick = () => { pickedColor = b.dataset.idx === '' ? null : Number(b.dataset.idx); mark(); }; });
+  mark();
+  $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
+  $('setToasts').checked = P.toasts;
+  $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
+  $('ttsRateVal').textContent = (P.tts.rate / 100).toFixed(1) + '×';
+  fillVoices(P.tts.voice);
+  $('clipVolume').value = P.clips.volume; $('clipAuto').checked = P.clips.autoplay;
+  $('audNoise').checked = P.audio.noise; $('audEcho').checked = P.audio.echo; $('audAgc').checked = P.audio.agc;
+  $('callVolume').value = P.call.volume; $('callQuality').value = P.call.quality;
+  $('setAutosave').value = String(P.autosave);
+  const th = $('setTheme'); th.textContent = '';
+  const opt = (v, l) => { const o = document.createElement('option'); o.value = v; o.textContent = l; th.append(o); };
+  opt('', 'Mills default');
+  for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+  th.value = store.get('mills.theme') || '';
+  $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
+}
+$('setTheme').onchange = () => applyTheme($('setTheme').value);
+function fillVoices(chosen) { // voices load late in some browsers, so this also runs on voiceschanged
+  const sel = $('ttsVoice'), keep = chosen ?? sel.value;
+  sel.textContent = '';
+  const o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'System default'; sel.append(o0);
+  if (!('speechSynthesis' in window)) { o0.textContent = 'Speech is not available in this browser'; return; }
+  for (const v of speechSynthesis.getVoices()) { const o = document.createElement('option'); o.value = v.name; o.textContent = v.name + ' (' + v.lang + ')'; sel.append(o); }
+  sel.value = keep || '';
+}
+if ('speechSynthesis' in window) speechSynthesis.addEventListener('voiceschanged', () => fillVoices());
+$('ttsRate').oninput = () => { $('ttsRateVal').textContent = (Number($('ttsRate').value) / 100).toFixed(1) + '×'; };
+$('ttsStop').onclick = ttsStop;
+$('ttsTest').onclick = () => { // test with the values on screen, before saving
+  if (!('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance('This is how new chat messages will sound.');
+  u.volume = Number($('ttsVolume').value) / 100; u.rate = Number($('ttsRate').value) / 100;
+  const v = speechSynthesis.getVoices().find((x) => x.name === $('ttsVoice').value);
+  if (v) u.voice = v;
+  speechSynthesis.speak(u);
+};
+document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply' }[b.dataset.test]).value)); });
+$('saveSettings').onclick = async () => {
+  try {
+    const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
+      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autosave: Number($('setAutosave').value),
+      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value) },
+      tts: { on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
+      clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },
+      audio: { noise: $('audNoise').checked, echo: $('audEcho').checked, agc: $('audAgc').checked },
+      call: { volume: Number($('callVolume').value), quality: $('callQuality').value },
+    }) });
+    document.querySelectorAll('#callTiles .tile:not(.self)').forEach(applyPersonAudio);
+    if (call.mic) call.mic.applyConstraints(audioConstraints()).catch(() => {}); // new noise / echo settings apply to the live call too
+    document.querySelectorAll('.rmsg audio').forEach((a) => { a.volume = d.prefs.clips ? d.prefs.clips.volume / 100 : 0.9; });
+    if (!d.prefs.tts || !d.prefs.tts.on) ttsStop();
+    me.prefs = d.prefs;
+    $('setMsg').textContent = 'Saved.'; $('setMsg').className = 'status on';
+    await refreshMembers(); selectConv(currentConv);
+  } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }
+};
+$('closeSettings').onclick = () => { $('settings').hidden = true; };
+$('settings').onclick = (e) => { if (e.target.id === 'settings') $('settings').hidden = true; };
+document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = openSettings; });
+window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) applyLayout(); });
+
+// ── Shared Work sessions: share yours (watch-only for others), watch theirs in their own windows ──
+let myShare = '', sharesList = [], sharesInit = false;
+const watching = new Map(); // owner -> { win, log, live, after, ver, since, stop, events: [] }
+function renderShareSel() {
+  const sel = $('shareSel'); if (!sel || !me) return;
+  sel.textContent = '';
+  const opt = (v, l) => { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.append(o); };
+  opt('', '📡 Not shared');
+  opt('room', '📡 Shared with # Everyone');
+  for (const m of roomMembers) if (!m.agent && m.username !== me.username) opt(dmConv(m.username), '📡 Shared with ' + nickOf(m.username));
+  sel.value = myShare; if (sel.value !== myShare) sel.value = '';
+  sel.classList.toggle('on', !!myShare);
+}
+$('shareSel').onchange = async () => {
+  const conv = $('shareSel').value;
+  try {
+    const d = await json('/api/work/share', { method: 'POST', body: JSON.stringify({ conv, transcript: conv ? transcript.slice(-150) : [] }) });
+    myShare = d.share;
+    sys(myShare ? 'Your Work session is shared with ' + (myShare === 'room' ? 'everyone' : nickOf(convPeer(myShare))) + ': they can watch it (read-only), including what you type. Pick "Not shared" to stop.' : 'Your Work session is no longer shared.');
+    postLive(true);
+  } catch (err) { sys('Could not change sharing: ' + err.message, true); }
+  renderShareSel();
+};
+let liveTimer = null;
+function postLive(now) { // what you are typing + your queue, for the people watching (only while shared)
+  if (!myShare) return;
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(() => {
+    json('/api/work/live', { method: 'POST', body: JSON.stringify({ typing: $('input').value, queue: queue.map((q) => q.message) }) }).catch(() => {});
+  }, now ? 0 : 200);
+}
+$('input').addEventListener('input', () => postLive());
+
+function onShares(list) {
+  const before = new Set(sharesList.map((s) => s.user + '|' + s.since));
+  sharesList = list;
+  if (sharesInit) for (const s of list) if (!before.has(s.user + '|' + s.since) && !watching.has(s.user)) shareNotify(s);
+  sharesInit = true;
+  for (const o of [...watching.keys()]) if (!list.some((s) => s.user === o)) markStopped(o);
+  renderShareBanner();
+}
+function shareNotify(s) {
+  const t = document.createElement('div'); t.className = 'toast'; t.style.borderLeftColor = colorOf(s.user);
+  const b = document.createElement('b'); b.style.color = colorOf(s.user); b.textContent = '👀 ' + nickOf(s.user);
+  t.append(b, ' shared their Work session' + (s.conv === 'room' ? '' : ' with you') + ' — click to watch');
+  t.style.setProperty('--toast-s', '10s');
+  t.onclick = () => { t.remove(); openWatch(s.user); };
+  t.addEventListener('animationend', () => t.remove());
+  $('toasts').append(t);
+}
+function renderShareBanner() {
+  const b = $('shareBanner'); if (!b || !me) return;
+  const here = sharesList.filter((s) => s.conv === currentConv);
+  b.textContent = ''; b.hidden = !here.length;
+  if (!here.length) return;
+  const s = document.createElement('span'); s.textContent = '👀 Sharing their Work session here:'; b.append(s);
+  for (const sh of here) {
+    const j = document.createElement('button'); j.type = 'button'; j.style.color = colorOf(sh.user);
+    j.textContent = watching.has(sh.user) ? nickOf(sh.user) + ' · watching' : 'Join work · ' + nickOf(sh.user);
+    j.onclick = () => openWatch(sh.user); b.append(j);
+  }
+}
+function dragWin(win, bar) { // move a floating window by its title bar, kept on screen
+  bar.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, select, input')) return;
+    const r = win.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+    bar.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      win.style.left = Math.max(0, Math.min(ev.clientX - sx, innerWidth - 120)) + 'px';
+      win.style.top = Math.max(0, Math.min(ev.clientY - sy, innerHeight - 40)) + 'px';
+    };
+    const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); };
+    bar.addEventListener('pointermove', move); bar.addEventListener('pointerup', up);
+  });
+}
+function openWatch(owner) {
+  if (watching.has(owner)) { const w = watching.get(owner).win; w.hidden = false; w.style.zIndex = 16 + watching.size; return; }
+  const win = document.createElement('div'); win.className = 'floatWin watchWin';
+  const n = watching.size;
+  win.style.left = Math.min(innerWidth - 400, 60 + n * 36) + 'px'; win.style.top = Math.min(innerHeight - 480, 70 + n * 36) + 'px';
+  const bar = document.createElement('div'); bar.className = 'bar winBar';
+  const dot = document.createElement('i'); dot.className = 'busyDot'; dot.title = 'Claude is working';
+  const title = document.createElement('span'); title.textContent = '👀 ' + nickOf(owner) + '\'s Work (watch only)'; title.style.color = colorOf(owner);
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'ghost'; close.textContent = '✕'; close.title = 'Stop watching';
+  close.onclick = () => closeWatch(owner);
+  bar.append(dot, title, close);
+  const log = document.createElement('div'); log.className = 'wLog';
+  const live = document.createElement('div'); live.className = 'wLive';
+  const lt = document.createElement('div'); lt.innerHTML = '<small style="color:var(--muted)">Typing now:</small>';
+  const typing = document.createElement('div'); typing.className = 'typing';
+  const ql = document.createElement('ol');
+  live.append(lt, typing, ql);
+  const note = document.createElement('div'); note.className = 'wNote';
+  note.textContent = 'You can only watch here. While this window is open, your own Claude gets a short summary of this session with each message you send in Work.';
+  win.append(bar, log, live, note);
+  document.body.append(win);
+  dragWin(win, bar);
+  const w = { win, log, typing, ql, dot, after: 0, ver: -1, since: '', stop: false, events: [] };
+  watching.set(owner, w);
+  renderShareBanner();
+  (async () => {
+    while (!w.stop && me) {
+      let d;
+      try { d = await json(`/api/work/watch?user=${encodeURIComponent(owner)}&after=${w.after}&ver=${w.ver}&since=${encodeURIComponent(w.since)}`); }
+      catch { await sleep(3000); continue; }
+      if (w.stop) break;
+      if (d.stopped) { markStopped(owner); break; }
+      if (d.restart) { w.events = []; log.textContent = ''; }
+      w.since = d.since; w.after = d.after; w.ver = d.ver;
+      for (const e of d.events) { w.events.push(e); if (w.events.length > 400) w.events.shift(); renderWatchEvent(owner, w, e); }
+      typing.textContent = d.live.typing || '';
+      ql.textContent = '';
+      for (const q of d.live.queue || []) { const li = document.createElement('li'); li.textContent = 'queued: ' + q.slice(0, 300); ql.append(li); }
+      dot.classList.toggle('on', !!d.busy);
+    }
+  })();
+}
+function renderWatchEvent(owner, w, e) {
+  const log = w.log, atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  let el;
+  if (e.t === 'user') { el = document.createElement('div'); el.className = 'msg me'; el.style.borderLeft = '3px solid ' + colorOf(owner); renderText(el, e.text); }
+  else if (e.t === 'claude') { el = document.createElement('div'); el.className = 'msg'; renderText(el, e.text); }
+  else if (e.t === 'tool') { el = document.createElement('div'); el.className = 'tool'; el.textContent = e.text; }
+  else { el = document.createElement('div'); el.className = 'sys'; el.textContent = e.text; }
+  el.title = new Date(e.ts).toLocaleString();
+  log.append(el);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+function markStopped(owner) {
+  const w = watching.get(owner); if (!w || w.stop) return;
+  w.stop = true; w.dot.classList.remove('on');
+  const s = document.createElement('div'); s.className = 'sys'; s.textContent = nickOf(owner) + ' stopped sharing.'; w.log.append(s);
+  w.log.scrollTop = w.log.scrollHeight;
+}
+function closeWatch(owner) {
+  const w = watching.get(owner); if (!w) return;
+  w.stop = true; w.win.remove(); watching.delete(owner); renderShareBanner();
+}
+// Short summary of every shared session you are watching, sent along with your own Work messages.
+function watchContext() {
+  const parts = [];
+  for (const [owner, w] of watching) {
+    if (w.stop || !w.events.length) continue;
+    const lines = w.events.filter((e) => e.t === 'user' || e.t === 'claude').slice(-8)
+      .map((e) => (e.t === 'user' ? nickOf(owner) : 'their Claude') + ': ' + e.text.replace(/\s+/g, ' ').slice(0, 300));
+    if (lines.length) parts.push(`${nickOf(owner)}'s shared Work session (latest):\n` + lines.join('\n'));
+  }
+  if (!parts.length) return '';
+  return `[Automatic context, not written by ${USER_NAME}: summaries of teammates' shared Mills Work sessions ${USER_NAME} is watching. They work in their own worktrees; use this only to stay in sync, do not act on their behalf.]\n\n` + parts.join('\n\n');
+}
 
 // ── Admin: accounts + hub controls; the hub checks the admin flag on every call ──
 const adminOut = (t) => { $('adminOut').textContent = t; };

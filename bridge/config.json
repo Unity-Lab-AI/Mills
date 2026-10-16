@@ -3,7 +3,9 @@
   "defaultUsername": "mills",
   "allowedOrigins": ["https://unity-lab-ai.github.io"],
   "permissionMode": "acceptEdits",
-  "allowedTools": ["mcp__pc", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch"],
+  "allowedTools": ["mcp__pc", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch",
+    "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git add:*)", "Bash(git commit:*)",
+    "Bash(node bridge/test/regress.js:*)", "Bash(node bridge/worktree.js:*)"],
   "model": "",
   "models": [
     { "id": "claude-fable-5-1", "label": "Fable 5.1" },
