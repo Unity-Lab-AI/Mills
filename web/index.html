@@ -4,9 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- Network reach of this page: itself, the hub (a Cloudflare tunnel) and the GitHub API that publishes
-     the hub's address. No outside scripts, frames, plugins or images, so injected code has nowhere to
-     send anything. (The page script is inline, hence 'unsafe-inline'.) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
+     the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
+     anything except by loading an image; markdown images (https) are allowed for that reason only and
+     are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Mills</title>
 <style>
   :root {
@@ -241,7 +242,10 @@
   .md .mdmath { margin: .5rem 0; padding: .5rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; text-align: center; }
   .md .mdfnref { cursor: pointer; color: color-mix(in srgb, var(--accent) 55%, var(--text)); font-size: .72em; margin-left: .1rem; }
   .md .mdfns { font-size: .82em; color: var(--muted); } .md .mdfns ol { padding-left: 1.4rem; margin: .3rem 0 0; }
-  .md .mdimg { max-width: min(100%, 420px); border-radius: 6px; display: block; margin: .3rem 0; }
+  .md .mdimgwrap { display: inline-block; max-width: 100%; margin: .3rem 0; }
+  .md .mdimg { max-width: min(100%, 480px); max-height: 360px; border-radius: 8px; display: block; border: 1px solid var(--line); background: color-mix(in srgb, var(--text) 4%, transparent); transition: transform .12s ease, box-shadow .15s ease; }
+  .md a.mdimgwrap:hover .mdimg { transform: scale(1.01); box-shadow: 0 6px 20px rgba(0,0,0,.3); }
+  .md .mdimg[alt]:not([alt=""]) { min-height: 2rem; }
   .msg.me .md a, .msg.me .md .mdfnref { color: inherit; }
   .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); word-break: break-all; }
   .sys { font-size: .8rem; color: var(--muted); text-align: center; }

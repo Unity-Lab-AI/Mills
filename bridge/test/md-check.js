@@ -72,6 +72,10 @@ async function run() {
     ['hr', 'a\n\n---\n\nb', (h) => h.includes('<hr></hr>')],
     ['mention hook', 'hi @sam and @nobody', (h) => h.includes('<b class="m">@sam</b>') && h.includes('@nobody'), { mention: (x) => { if (x !== 'sam') return null; const b = new El('b'); b.className = 'm'; b.textContent = '@' + x; return b; } }],
     ['escapes', '\\*not italic\\*', (h) => !h.includes('<em>') && h.includes('*not italic*')],
+    ['https image loads (lazy, no referrer, opens full size)', '![a cat](https://img.test/cat.png)', (h) => /<a class="mdimgwrap" href="https:\/\/img\.test\/cat\.png"><img class="mdimg"><\/img><\/a>/.test(h)],
+    ['data image loads inline', '![](data:image/png;base64,iVBORw0KGgo=)', (h) => /<span class="mdimgwrap"><img class="mdimg">/.test(h)],
+    ['http (not https) image stays a link', '![x](http://img.test/x.png)', (h) => !h.includes('<img') && h.includes('href="http://img.test/x.png"')],
+    ['javascript: image refused', '![x](javascript:alert(1))', (h) => !h.includes('<img') && !h.includes('<a')],
   ];
   const failed = [];
   for (const [name, input, ok, opts] of cases) {

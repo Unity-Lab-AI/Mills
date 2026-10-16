@@ -5,7 +5,7 @@
 //
 // Supported: headings, paragraphs (single newlines kept as line breaks, chat style), **bold**,
 // *italic*, ~~strike~~, ==highlight==, `code`, links (http / https / mailto only), bare and <auto>
-// links, images (shown as links: the page's CSP allows no outside images), > quotes, GitHub alerts
+// links, images (https and inline data images load lazily without a referrer; anything else is a link), > quotes, GitHub alerts
 // (> [!NOTE] / TIP / IMPORTANT / WARNING / CAUTION), nested bullet / numbered / task lists, GFM tables
 // with column alignment, --- rules, footnotes ([^1] … [^1]: text), $$ math blocks (shown as source),
 // fenced code with a language label, light syntax colouring and a Copy button, and ```mermaid diagrams.
