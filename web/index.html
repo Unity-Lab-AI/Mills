@@ -94,6 +94,74 @@
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
+  /* ── team board, calendar, Work "My tasks" (web/board.js) ── */
+  #board header select { max-width: 12rem; }
+  #bdFilter { width: min(280px, 30vw); }
+  .bdMine { display: flex; align-items: center; gap: .3rem; font-size: .85rem; white-space: nowrap; } .bdMine input { width: auto; }
+  .bdStale { color: var(--bad); font-size: .8rem; }
+  #bdMain { flex: 1; min-height: 0; display: flex; }
+  #bdCols { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: .6rem; padding: .7rem; overflow-x: auto; }
+  .bdCol { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .bdCol header { display: flex; align-items: center; gap: .45rem; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
+  .bdColName { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .bdCount { font-size: .72rem; color: var(--muted); }
+  .bdAdd { margin-left: auto; padding: .1rem .35rem; }
+  .bdCards { flex: 1; min-height: 3rem; overflow-y: auto; padding: .5rem; display: flex; flex-direction: column; gap: .45rem; border-radius: 0 0 10px 10px; transition: background .12s; }
+  .bdCards.target { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .bdNone { font-size: .78rem; color: var(--muted); text-align: center; padding: .6rem 0; }
+  .bdCard { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .55rem; cursor: pointer; display: flex; flex-direction: column; gap: .3rem; transition: border-color .12s, transform .12s; }
+  .bdCard:hover { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
+  .bdCard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .bdCard.drag { opacity: .45; } .bdCard.insert { box-shadow: 0 -3px 0 var(--accent); }
+  .bdCard.held { border-left: 3px solid #f59f00; } .bdCard.stale { border-left: 3px solid var(--bad); }
+  .bdTop { display: flex; align-items: center; gap: .35rem; font-size: .7rem; flex-wrap: wrap; }
+  .bdId { font-family: ui-monospace, Consolas, monospace; color: var(--muted); font-size: .7rem; }
+  .bdPri { border-radius: 4px; padding: 0 .3rem; font-weight: 700; color: #111; background: #ced4da; }
+  .bdPri.p3 { background: #ffd43b; } .bdPri.p4 { background: #ffa94d; } .bdPri.p5 { background: #ff6b6b; }
+  .bdDue { border-radius: 4px; padding: 0 .3rem; background: color-mix(in srgb, var(--text) 10%, transparent); }
+  .bdDue.today { background: #ffd43b; color: #111; } .bdDue.overdue { background: #ff6b6b; color: #111; }
+  .bdRecur { color: var(--muted); display: inline-flex; }
+  .bdAva { margin-left: auto; width: 1.25rem; height: 1.25rem; border-radius: 50%; color: #111; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; font-size: .66rem; }
+  .bdTitle { font-size: .88rem; line-height: 1.35; overflow-wrap: anywhere; }
+  .bdLabels { display: flex; flex-wrap: wrap; gap: .25rem; }
+  .bdLabel { font-size: .66rem; border: 1px solid var(--line); border-radius: 999px; padding: 0 .4rem; color: var(--muted); }
+  .bdClaim { font-size: .72rem; color: #f59f00; } .bdClaim.agent { color: #3ddc84; } .bdClaim.stale { color: var(--bad); }
+  #bdDetail { width: min(400px, 42vw); flex: none; border-left: 1px solid var(--line); background: var(--panel); padding: .7rem .9rem; overflow-y: auto; display: flex; flex-direction: column; gap: .55rem; }
+  .bdDHead { display: flex; align-items: center; gap: .5rem; } .bdDHead button { margin-left: auto; padding: .2rem .4rem; }
+  .bdWarn { font-size: .8rem; color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); border-radius: 8px; padding: .45rem .6rem; }
+  .bdField { display: flex; flex-direction: column; gap: .25rem; font-size: .78rem; color: var(--muted); flex: 1; min-width: 0; }
+  .bdField input, .bdField select, .bdField textarea { color: var(--text); font-size: .88rem; }
+  .bdBodyWrap { display: flex; flex-direction: column; gap: .25rem; } .bdBodyWrap textarea { resize: vertical; min-height: 8rem; font-size: .88rem; }
+  .bdBodyHead { display: flex; justify-content: space-between; align-items: center; font-size: .78rem; color: var(--muted); }
+  .bdTiny { padding: .05rem .5rem; font-size: .72rem; }
+  .bdPrev { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; min-height: 6rem; background: var(--bg); font-size: .88rem; }
+  .bdRow { display: flex; gap: .6rem; flex-wrap: wrap; }
+  .bdPriRow { display: flex; gap: .2rem; } .bdPriRow button { flex: 1; padding: .25rem 0; font-size: .75rem; } .bdPriRow button.on { border-color: var(--accent); color: var(--accent); }
+  .bdActs { display: flex; flex-wrap: wrap; gap: .35rem; } .bdActs button { font-size: .8rem; padding: .3rem .6rem; }
+  .bdDanger { color: var(--bad); }
+  .bdMeta { font-size: .72rem; color: var(--muted); }
+  .bdLog { display: flex; flex-direction: column; gap: .2rem; font-size: .74rem; border-top: 1px solid var(--line); padding-top: .5rem; }
+  .bdAct { color: var(--muted); } .bdAct.agent { color: color-mix(in srgb, #3ddc84 70%, var(--text)); }
+  #bdFoot { display: flex; align-items: center; gap: 1rem; padding: .35rem .8rem; border-top: 1px solid var(--line); background: var(--panel); font-size: .75rem; overflow: hidden; }
+  #bdPresence { display: flex; align-items: center; gap: .35rem; flex: none; flex-wrap: wrap; }
+  #bdActivity { display: flex; gap: .9rem; overflow: hidden; white-space: nowrap; min-width: 0; }
+  .bdChip { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: .05rem .5rem; } .bdChip.agent { color: #3ddc84; }
+  .bdMuted { color: var(--muted); } .bdErr { color: var(--bad); }
+  .calTitle { font-weight: 700; min-width: 9rem; text-align: center; }
+  #calGrid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-template-rows: auto repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--line); margin: .6rem; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .calHead { background: var(--panel); text-align: center; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: .3rem 0; }
+  .calDay { background: var(--bg); padding: .25rem .3rem; display: flex; flex-direction: column; gap: .2rem; overflow: hidden; cursor: pointer; min-height: 0; }
+  .calDay:hover { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+  .calDay.other { opacity: .45; } .calDay.today .calNum { background: var(--accent); color: var(--on-accent, #fff); border-radius: 999px; padding: 0 .4rem; }
+  .calNum { font-size: .75rem; font-weight: 700; align-self: flex-start; }
+  .calTask { font-size: .72rem; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 4px; padding: .05rem .3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .calTask.s-done { opacity: .5; text-decoration: line-through; } .calTask.overdue { background: color-mix(in srgb, #ff6b6b 18%, var(--panel)); }
+  #tasks { display: flex; flex-direction: column; } #taskPaneBody { flex: 1; min-height: 0; overflow-y: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
+  .tpHead { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: .4rem; }
+  .tpNone { font-size: .78rem; color: var(--muted); }
+  .tpItem { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .4rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
+  .tpActs { display: flex; gap: .3rem; } .tpActs button { font-size: .75rem; padding: .15rem .45rem; }
+  #board, #cal { overflow: hidden; }
   /* ── icons (the sprite at the top of <body>) ── */
   .ic { width: 1.15em; height: 1.15em; flex: none; vertical-align: -.2em; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
   .ic.lead { margin-right: .4em; }
@@ -372,6 +440,11 @@
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.7"/><path d="M20.5 15.5l-4.8-4.5-9.2 8"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
   <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5.5 12h13"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M9.2 4v16M14.8 4v16M5.6 7.5h1.6M11.2 7.5h1.6M11.2 10.5h1.6M16.8 7.5h1.6"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/><circle cx="8.3" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="15.7" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="8.3" cy="17" r=".9" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-tasks" viewBox="0 0 24 24"><path d="M4 6.5l1.6 1.6L8.5 5M4 12.5l1.6 1.6 2.9-3.1M4 18.5l1.6 1.6 2.9-3.1M11.5 6.5h8.5M11.5 12.5h8.5M11.5 18.5h6"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5.5 21V4M5.5 4.5h10.5l-2 3.8 2 3.7H5.5"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 3.5l3 3-3 3M4 11.5v-1a4 4 0 0 1 4-4h12M7 20.5l-3-3 3-3M20 12.5v1a4 4 0 0 1-4 4H4"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.5H15"/></symbol>
 </svg>
 
@@ -390,6 +463,8 @@
   <div class="choices">
     <button id="goWork">Work</button>
     <button id="goChat">Chat<span class="badge" id="chatBadge" hidden></span></button>
+    <button id="goBoard"><svg class="ic lead"><use href="#i-board"/></svg>Board<span class="badge" id="boardBadge" hidden></span></button>
+    <button id="goCal"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar</button>
     <button id="goAdmin" hidden>Admin</button>
     <button class="ghost" id="goSettings" data-settings>Settings</button>
     <button class="ghost" id="menuLogout">Sign out</button>
@@ -495,6 +570,36 @@
   </div>
 </div>
 
+<div id="board" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Board</b>
+    <select id="bdBoard" title="Which board"></select>
+    <button class="ghost" id="bdNewBoard" title="Add another board"><svg class="ic lead"><use href="#i-plus"/></svg>Board</button>
+    <input id="bdFilter" type="search" placeholder="Filter by title, label, person, id…" spellcheck="false">
+    <label class="bdMine"><input type="checkbox" id="bdMine"> Mine</label>
+    <span id="bdStale" class="bdStale" hidden></span>
+  </header>
+  <div id="bdMain">
+    <div id="bdCols"></div>
+    <aside id="bdDetail" hidden></aside>
+  </div>
+  <footer id="bdFoot"><span id="bdPresence"></span><span id="bdActivity"></span></footer>
+</div>
+
+<div id="cal" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Calendar</b>
+    <button class="ghost" id="calPrev" aria-label="Previous month"><svg class="ic"><use href="#i-back"/></svg></button>
+    <span id="calTitle" class="calTitle"></span>
+    <button class="ghost" id="calNext" aria-label="Next month"><svg class="ic" style="transform:scaleX(-1)"><use href="#i-back"/></svg></button>
+    <button class="ghost" id="calToday">Today</button>
+    <span class="folder">Tasks with a due date. Click a day to add one, click a task to open it on the board.</span>
+  </header>
+  <div id="calGrid"></div>
+</div>
+
 <div id="admin" class="screen" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
@@ -540,6 +645,7 @@
       <button type="button" data-pane="files" title="Show / minimize the folder list"><i><svg class="ic"><use href="#i-folder"/></svg></i><span class="lbl">Folder</span></button>
       <button type="button" data-pane="edit" title="Show / minimize the file editor"><i><svg class="ic"><use href="#i-code"/></svg></i><span class="lbl">Editor</span></button>
       <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i><svg class="ic"><use href="#i-bot"/></svg></i><span class="lbl">Claude</span></button>
+      <button type="button" data-pane="tasks" title="Show / minimize your board tasks"><i><svg class="ic"><use href="#i-tasks"/></svg></i><span class="lbl">Tasks</span></button>
       <button type="button" data-pane="roomPane" title="Show / minimize the team chat"><i><svg class="ic"><use href="#i-chat"/></svg></i><span class="lbl">Team chat</span><span class="badge" id="railRoomBadge" hidden></span></button>
       <span class="grow"></span>
       <button type="button" data-settings title="Settings"><i><svg class="ic"><use href="#i-gear"/></svg></i><span class="lbl">Settings</span></button>
@@ -576,6 +682,12 @@
         </div>
       </form>
     </section>
+    <section id="tasks" hidden>
+      <div class="bar"><span>My tasks</span>
+        <button class="ghost" id="tpOpenBoard" title="Open the full board">Board</button>
+        <button class="ghost min" data-min="tasks" title="Minimize">—</button></div>
+      <div id="taskPaneBody"></div>
+    </section>
     <section id="roomPane" hidden>
       <div class="bar"><span>Team chat</span>
         <button class="ghost" id="roomFloatBtn" title="Pop it out into a window you can move and resize">Pop out</button>
@@ -595,6 +707,7 @@
 </div>
 
 <script src="md.js"></script>
+<script src="board.js"></script>
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
 MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
@@ -762,12 +875,14 @@ async function enter() {
   showScreen('menu');
   startRoomPolling();
   callPollLoop();
+  BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
 }
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
-  for (const id of ['menu', 'shell', 'room', 'admin']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal']) $(id).hidden = true;
   $(name).hidden = false;
+  if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
   if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); }
   if (name === 'shell') refreshUsage();
   applyLayout(); // places the team chat where it belongs for this screen (and hides the floating window elsewhere)
@@ -776,12 +891,15 @@ function showScreen(name) {
 }
 $('goWork').onclick = () => showScreen('shell');
 $('goChat').onclick = () => showScreen('room');
+$('goBoard').onclick = () => showScreen('board');
+$('goCal').onclick = () => showScreen('cal');
 $('goAdmin').onclick = () => showScreen('admin');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY);
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
-  for (const id of ['menu', 'shell', 'room', 'admin', 'settings', 'roomFloat']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat']) $(id).hidden = true;
+  BOARD.stop();
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
   closeMsgMenu();
@@ -2484,9 +2602,9 @@ $('roomInput').addEventListener('keydown', (e) => {
 function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.append(ic('warn', 'lead'), t); $('roomLog').append(d); $('roomLog').scrollTop = $('roomLog').scrollHeight; }
 
 // ── Work layout: left bar, resizable / minimizable panes, team chat docked or floating ──
-const PANES = ['files', 'edit', 'chat', 'roomPane'];
-const PANE_WIDTH = { files: 240, edit: 440, chat: 440, roomPane: 360 };
-const defaultLayout = () => ({ show: { files: true, edit: true, chat: true, roomPane: false }, size: {}, roomMode: 'dock', float: { x: 120, y: 120, w: 420, h: 520 }, railOpen: false });
+const PANES = ['files', 'edit', 'chat', 'tasks', 'roomPane'];
+const PANE_WIDTH = { files: 240, edit: 440, chat: 440, tasks: 300, roomPane: 360 };
+const defaultLayout = () => ({ show: { files: true, edit: true, chat: true, tasks: false, roomPane: false }, size: {}, roomMode: 'dock', float: { x: 120, y: 120, w: 420, h: 520 }, railOpen: false });
 let layout = defaultLayout();
 const layoutKey = () => 'mills.layout.' + (me ? me.username : '');
 function loadLayout() {

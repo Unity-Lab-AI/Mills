@@ -31,6 +31,20 @@ process.stdin.on('end', async () => {
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
   }
+  // "BOARDTOOL": act on the team board through the board MCP relay, like Claude in a Work run:
+  // create a task, claim it, add a progress note.
+  if (input.includes('BOARDTOOL')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.board.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/board', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const made = await tool('task_create', { title: 'agent task r70', labels: ['agent'] });
+    const id = made.ok ? made.result.task.id : '';
+    const claimed = await tool('task_claim', { id, minutes: 5 });
+    const noted = await tool('task_update', { id, appendNote: 'progress from the agent r70' });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'BOARD:' + JSON.stringify({ id, made: made.ok, claimed: claimed.ok, noted: noted.ok }) }] } });
+  }
   // "LIMITPARTIAL": a 5h event with only a status (no utilization, no reset time), then a 7d event
   // reporting utilization as a percentage (55) — the hub must keep the 5h numbers and read 55 as 55 %.
   if (input.includes('LIMITPARTIAL')) {

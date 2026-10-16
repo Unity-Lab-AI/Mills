@@ -172,7 +172,7 @@ async function run() {
   let pageOk = true, pageErr = '';
   const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   try { new Function(html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'))); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
-  if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', 'md.js')]).status !== 0) bad.push('md.js');
+  for (const f of ['md.js', 'board.js']) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
   check('R1', 'every bridge script passes node --check; page script (and web/md.js) parses', !bad.length && pageOk, [bad.map((f) => path.basename(f)).join(', '), pageErr].filter(Boolean).join(' '));
 
   const st = await call('/api/status');
@@ -636,6 +636,48 @@ async function run() {
     && uPartial.seven_day && uPartial.seven_day.source === 'claude' && uPartial.seven_day.utilization === 0.55
     && /<span class="uPctS">/.test(html) && /function windowUse\(/.test(html) && /refreshUsageSoon\(\)/.test(html) && /if \(left === 0\) return \{ left, pct: 0/.test(html) && /15000\); \/\/ the limits are shared/.test(html),
     JSON.stringify({ five: uPartial.five_hour, seven: uPartial.seven_day }).slice(0, 220));
+  // Team board (ideas from HyperProductivityManager): tasks, claims, revisions, recurrence, agents.
+  const bv0 = (await call('/api/board', A)).data;
+  const bHeld = call('/api/board?wait=1&ver=' + bv0.ver, U); // U's board long poll must wake on A's change
+  await sleep(500);
+  const jan31 = new Date(2031, 0, 31, 17).getTime();
+  const bt = await call('/api/board/create', A, { title: 'board task r70', body: '**hello**', status: 'todo', labels: 'x, y', priority: 4, dueAt: jan31, recur: 'monthly' });
+  const bWoke = await bHeld;
+  const tid = bt.data.task && bt.data.task.id;
+  const bClaim = await call('/api/board/claim', A, { id: tid, minutes: 10 });
+  const bBlockedU = await call('/api/board/update', U, { id: tid, title: 'hijack' }), bClaimU = await call('/api/board/claim', U, { id: tid });
+  const bStale = await call('/api/board/update', A, { id: tid, rev: 1, title: 'stale rev' });
+  const bOk = await call('/api/board/update', A, { id: tid, rev: bClaim.data.task.rev, title: 'board task r70 edited', assignee: 't-user' });
+  const bDone1 = await call('/api/board/complete', A, { id: tid });
+  const after1 = (await call('/api/board/task?id=' + tid, U)).data.task;
+  const bDone2 = await call('/api/board/complete', A, { id: tid });
+  const after2 = (await call('/api/board/task?id=' + tid, U)).data.task;
+  const d1 = new Date(after1.dueAt), d2 = new Date(after2.dueAt);
+  const nd = require(path.join(BRIDGE, 'board.js')).nextDue;
+  const leap = new Date(nd(new Date(2032, 0, 31, 17).getTime(), 'monthly', 31)).getDate();
+  const agentRun = await chat(A, 'BOARDTOOL please');
+  const agentOut = JSON.parse((texts(agentRun.events).match(/BOARD:(\{.*?\})/) || [])[1] || '{}');
+  const bList = (await call('/api/board', U)).data;
+  const agentTask = (bList.tasks || []).find((t) => t.id === agentOut.id);
+  const agentBlocks = await call('/api/board/update', A, { id: agentOut.id, title: 'human edit while the agent holds it' }); // A the human ≠ A's Claude
+  const agentDetail = (await call('/api/board/task?id=' + agentOut.id, A)).data.task || {};
+  const bDel = await call('/api/board/delete', U, { id: agentOut.id });
+  const bDel2 = await call('/api/board/delete', A, { id: tid });
+  const bGone = !((await call('/api/board', A)).data.tasks || []).some((t) => t.id === tid);
+  const onDiskB = JSON.parse(fs.readFileSync(path.join(SCRATCH, 'Board', 'board.json'), 'utf8')).tasks.find((t) => t.id === tid) || {};
+  const mcpRt = fs.readFileSync(path.join(SB, '.mcp-runtime.json'), 'utf8');
+  check('R70', 'team board: create wakes other people\'s long poll; a claim blocks others\' edits + claims; a stale revision is refused; assignee; monthly repeat re-arms month-end aware (Jan 31 → Feb 28 → Mar 31, leap Feb 29); Claude in a Work run creates / claims / notes as "<person> · Claude" and its claim blocks even its own person; delete leaves a tombstone; board MCP wired into Work runs',
+    bt.status === 200 && (bWoke.data.tasks || []).some((t) => t.id === tid) && bClaim.status === 200 && bClaim.data.task.status === 'doing'
+    && bBlockedU.status === 409 && bClaimU.status === 409 && bStale.status === 409 && bOk.status === 200 && bOk.data.task.assignee === 't-user'
+    && bDone1.status === 200 && after1.status === 'todo' && d1.getMonth() === 1 && d1.getDate() === 28 && bDone2.status === 200 && d2.getMonth() === 2 && d2.getDate() === 31 && leap === 29
+    && agentOut.made && agentOut.claimed && agentOut.noted && agentTask && agentTask.claim && agentTask.claim.agent && /· Claude$/.test(agentTask.claim.by)
+    && agentBlocks.status === 409 && /progress from the agent r70/.test(agentDetail.body || '') && bDel.status === 409 && bDel2.status === 200 && bGone && onDiskB.deleted === true
+    && /board-mcp\.js/.test(mcpRt) && /mcp__board/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8')),
+    `create ${bt.status}, claim ${bClaim.status}, blocked ${bBlockedU.status}/${bClaimU.status}, stale ${bStale.status}, due ${d1.getMonth() + 1}/${d1.getDate()} → ${d2.getMonth() + 1}/${d2.getDate()} (leap ${leap}), agent ${JSON.stringify(agentOut)}, agent-held edit ${agentBlocks.status}`);
+  check('R71', '[static] Board + Calendar in the main menu, web/board.js loaded, Board / Calendar screens, Tasks pane in Work (rail + layout), "Give to Claude", Claude told to claim before working',
+    /id="goBoard"/.test(html) && /id="goCal"/.test(html) && /<script src="board\.js"><\/script>/.test(html) && /<div id="board" class="screen"/.test(html) && /<div id="cal" class="screen"/.test(html)
+    && /data-pane="tasks"/.test(html) && /const PANES = \['files', 'edit', 'chat', 'tasks', 'roomPane'\]/.test(html) && /function giveToClaude\(/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8'))
+    && /task_claim it first/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')));
   check('R53', '[static] usage bar above the Claude messages: 5h hh:mm:ss, 7d dd/hh/mm, colour scale green → orange → yellow → red, purple when out',
     /id="usageBar"/.test(html) && html.indexOf('id="usageBar"') < html.indexOf('id="log"') && /\[0, \[46, 204, 113\]\], \[33, \[255, 159, 26\]\], \[66, \[255, 212, 59\]\], \[100, \[255, 59, 59\]\]/.test(html)
     && /OUT_COLOR = 'rgb\(160, 90, 255\)'/.test(html) && /pad2\(Math\.floor\(s \/ 3600\)\) \+ ':'/.test(html) && /'d ' \+ pad2/.test(html));

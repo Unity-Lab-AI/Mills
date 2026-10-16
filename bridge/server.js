@@ -64,6 +64,8 @@ function systemPrompt(acct, wd) {
     `${name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools`,
     `(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's Mills folder, not ${name}'s PC.`,
     `Shell commands cannot run on ${name}'s PC; if something needs running there, tell ${name} exactly what to run.`,
+    `The Mills team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as "${name} · Claude".`,
+    `When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.`,
   ].join(' ') + (hubLaws() ? '\n\n' + hubLaws() : '');
 }
 function loadAccounts() {
@@ -80,10 +82,11 @@ function loadAccounts() {
     });
     if (acct.state.model && !modelIds().includes(acct.state.model)) delete acct.state.model;
     fs.mkdirSync(P.PROFILE_DIR, { recursive: true });
-    writeJson(P.MCP_RUNTIME, { mcpServers: { pc: {
-      command: process.execPath, args: [path.join(ROOT, 'pc-tools-mcp.js')],
-      env: { MILLS_BRIDGE: `http://127.0.0.1:${config.port}`, MILLS_INTERNAL: INTERNAL_SECRET, MILLS_USER: acct.display, MILLS_ACCOUNT: username },
-    } } });
+    const mcpEnv = { MILLS_BRIDGE: `http://127.0.0.1:${config.port}`, MILLS_INTERNAL: INTERNAL_SECRET, MILLS_USER: acct.display, MILLS_ACCOUNT: username };
+    writeJson(P.MCP_RUNTIME, { mcpServers: {
+      pc: { command: process.execPath, args: [path.join(ROOT, 'pc-tools-mcp.js')], env: mcpEnv },
+      board: { command: process.execPath, args: [path.join(ROOT, 'board-mcp.js')], env: mcpEnv }, // the team board, as "<person> · Claude"
+    } });
     accounts.set(username, acct);
   }
   for (const u of [...accounts.keys()]) if (!seen.has(u)) accounts.delete(u);
@@ -342,6 +345,12 @@ function cleanPrefs(p, prev = {}) {
   return out;
 }
 const publicPrefs = (a) => ({ nick: (a.state.prefs || {}).nick || '', color: (a.state.prefs || {}).color ?? null });
+
+// ---------- team board (tasks + calendar, claims shared by people and Claude) ----------
+const board = require('./board')({
+  dir: path.join(MILLS_DIR, 'Board'), send: (...a) => send(...a), readBody: (r) => readBody(r), accounts,
+  displayOf: (u) => { const a = accounts.get(u); return a ? publicPrefs(a).nick || a.display : u; },
+});
 
 // ---------- room agent ("claude") ----------
 // Claude is a room member too, but its private key lives on this hub (Chat/agent-key.json), so the
@@ -635,6 +644,11 @@ const server = http.createServer(async (req, res) => {
       return emit(acct, { type: 'pc_tool', id, name, args });
     }
 
+    if (p === '/internal/board') { // board MCP tools of a Work run (same machine, shared secret, names the account)
+      if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
+      return board.internal(req, res, String(req.headers['x-mills-account'] || '') || DEFAULT_USERNAME);
+    }
+
     const origin = req.headers.origin;
     if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -794,6 +808,9 @@ const server = http.createServer(async (req, res) => {
       if (fs.existsSync(file)) fs.unlinkSync(file);
       return send(res, 200, { ok: true });
     }
+
+    // ----- team board -----
+    if (p === '/api/board' || p.startsWith('/api/board/')) { if (await board.handle(req, res, p, url, acct)) return; }
 
     // ----- chat room -----
     if (p === '/api/room/members' && req.method === 'GET') {
