@@ -705,7 +705,8 @@ function assistConfirm(p) {
   const label = document.createElement('span'); label.textContent = `Unity wants to ${p.tool.replace(/_/g, ' ')} ${Object.values(p.args || {}).join(' ')} — OK?`;
   const yes = document.createElement('button'); yes.textContent = 'Yes';
   const no = document.createElement('button'); no.className = 'ghost'; no.textContent = 'No';
-  const answer = async (ok) => { yes.disabled = no.disabled = true; try { const r = await json('/api/assistant/answer', { method: 'POST', body: JSON.stringify({ yes: ok }) }); label.textContent = ok ? (r.result && r.result.ok ? 'Done.' : 'Could not: ' + ((r.result && r.result.error) || r.error || '')) : 'Cancelled.'; } catch (e) { label.textContent = e.message; } };
+  const answer = async (ok) => { yes.disabled = no.disabled = true; try { const r = await json('/api/assistant/answer', { method: 'POST', body: JSON.stringify({ yes: ok }) }); if (ok && r.browser) { try { await unityPc(r.browser.name, r.browser.args); label.textContent = 'Done on your computer.'; } catch (e) { label.textContent = 'Could not: ' + e.message; } return; }
+      label.textContent = ok ? (r.result && r.result.ok ? 'Done.' : 'Could not: ' + ((r.result && r.result.error) || r.error || '')) : 'Cancelled.'; } catch (e) { label.textContent = e.message; } };
   yes.onclick = () => answer(true); no.onclick = () => answer(false);
   d.append(label, yes, no); $('assistLog').appendChild(d); $('assistLog').scrollTop = $('assistLog').scrollHeight;
 }
@@ -733,6 +734,7 @@ $('assistForm').addEventListener('submit', async (e) => {
         else if (ev.type === 'say') { said.push(ev.text); if (!shown) renderText(bubble, said.join(' ')); speakLine(ev.text, ev.emotion, ev.act); }
         else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = '⚙ ' + ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
+        else if (ev.type === 'pc_tool' || ev.type === 'run_code') answerBrowserCall(ev);
         else if (ev.type === 'final') { if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
 [[image:${r}]]`).join('') + (ev.media || []).map((v) => `
 [[youtube:${v}]]`).join(''));
@@ -813,6 +815,51 @@ $('assistCam').onclick = async () => {
 };
 $('assistCamClose').onclick = closeCam;
 $('assistSnap').onclick = () => { const v = $('assistVideo'); const d = shrink(v, v.videoWidth, v.videoHeight); closeCam(); uploadPhoto(d); };
+// ---- Unity's own-computer tools: done HERE in this browser (the folder you opened in Work, and a sandbox for code) ----
+async function unityPc(name, args) {
+  if (!fsOps[name]) throw new Error('Unknown file action ' + name);
+  try { return await fsOps[name](args || {}); }
+  catch (e) { throw new Error(/root|null|undefined|handle/i.test(e.message) ? 'No folder is open: in Work, click "Open folder on my PC" first.' : e.message); }
+}
+function jsWorkerMain() { // runs inside a Worker
+  self.onmessage = async (e) => {
+    const out = [], fmt = (a) => a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+    console.log = (...a) => out.push(fmt(a)); console.error = console.warn = (...a) => out.push('! ' + fmt(a));
+    try { const r = await (0, eval)('(async () => {' + e.data + '\n})()'); if (r !== undefined) out.push('=> ' + fmt([r])); self.postMessage({ ok: true, result: out.join('\n') }); }
+    catch (err) { self.postMessage({ ok: false, error: out.concat(String(err)).join('\n') }); }
+  };
+}
+function pyWorkerMain() { // runs inside a Worker: Python (Pyodide, loaded once per browser session)
+  importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js');
+  const ready = loadPyodide();
+  self.onmessage = async (e) => {
+    const py = await ready, out = [];
+    py.setStdout({ batched: (t) => out.push(t) }); py.setStderr({ batched: (t) => out.push('! ' + t) });
+    try { const r = await py.runPythonAsync(e.data); if (r !== undefined && r !== null) out.push('=> ' + String(r)); self.postMessage({ ok: true, result: out.join('\n') }); }
+    catch (err) { self.postMessage({ ok: false, error: out.concat(String(err)).join('\n') }); }
+  };
+}
+const JS_WORKER = '(' + jsWorkerMain + ')()', PY_WORKER = '(' + pyWorkerMain + ')()';
+let pyWorker = null;
+function runInSandbox(language, code) { // a Worker: no page, no cookies, no files; killed after its time limit
+  return new Promise((resolve) => {
+    const py = language === 'python';
+    const w = py ? (pyWorker || (pyWorker = new Worker(URL.createObjectURL(new Blob([PY_WORKER], { type: 'text/javascript' })))))
+      : new Worker(URL.createObjectURL(new Blob([JS_WORKER], { type: 'text/javascript' })));
+    const timer = setTimeout(() => { w.terminate(); if (py) pyWorker = null; resolve({ ok: false, error: 'Stopped: it ran longer than ' + (py ? 60 : 15) + ' s.' }); }, py ? 60000 : 15000);
+    w.onmessage = (e) => { clearTimeout(timer); if (!py) w.terminate(); resolve(e.data); };
+    w.onerror = (e) => { clearTimeout(timer); w.terminate(); if (py) pyWorker = null; resolve({ ok: false, error: e.message || 'failed' }); };
+    w.postMessage(code);
+  });
+}
+async function answerBrowserCall(ev) {
+  let body;
+  try {
+    if (ev.type === 'run_code') { const r = await runInSandbox(ev.language, ev.code); body = { id: ev.id, ...r }; }
+    else body = { id: ev.id, ok: true, result: await unityPc(ev.name, ev.args) };
+  } catch (e) { body = { id: ev.id, ok: false, error: e.message }; }
+  api('/api/assistant/pc-result', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+}
 function assistNotice(n) {
   const d = document.createElement('div');
   d.textContent = '⏰ ' + n.text;
@@ -2740,6 +2787,13 @@ async function loadAdmin() {
         confirmButton('Reset lock', () => adminCall('unlock', { username: a.username }, () => adminOut(`${a.username}: device lock cleared. Their next sign-in claims the account.`))),
         confirmButton('Sign out', () => adminCall('signout', { username: a.username }, () => adminOut(`${a.username}: signed out everywhere.`))),
       );
+      for (const [key, label] of [['pc', 'PC files'], ['code', 'Run code']]) { // Unity's own-computer tools for this account
+        const lab = document.createElement('label'); lab.style.cssText = 'font-size:.75rem;margin:0 .3rem;white-space:nowrap';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.style.width = 'auto'; cb.checked = key === 'pc' ? a.unityPc : a.unityCode;
+        cb.title = 'Unity may ' + (key === 'pc' ? 'read and change files in the folder this person opened on their own PC' : 'run code in the browser of this person');
+        cb.onchange = () => adminCall('unity-tools', { username: a.username, [key]: cb.checked }, (d) => adminOut(`${d.username}: Unity PC files ${d.pc ? 'on' : 'off'}, run code ${d.code ? 'on' : 'off'}.`));
+        lab.append(cb, ' Unity: ' + label); actions.append(lab);
+      }
       if (a.busy) actions.append(confirmButton('Stop Claude', () => adminCall('stop', { username: a.username }, () => adminOut(`${a.username}: Claude stopped.`))));
       if (a.username !== me.username) actions.append(confirmButton('Delete', () => adminCall('delete', { username: a.username }, () => adminOut(`${a.username}: deleted (files kept in bridge/profiles-deleted/).`))));
       rows.append(tr);
