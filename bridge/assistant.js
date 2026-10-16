@@ -26,6 +26,12 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const FALLBACK_MODEL = A.fallbackModel || '';
   const MODELFILE = A.modelfile || path.join(MILLS_DIR, '..', 'Backrooms', 'models', 'unity-brain', 'Modelfile');
   const PERSONA_FILE = path.join(ROOT, 'assistant-persona.txt');
+  const IMAGE_URL = (A.imageUrl || 'http://127.0.0.1:5124').replace(/\/$/, '');
+  const IMAGE_CKPT = A.imageCheckpoint || path.join(MILLS_DIR, '..', 'Unity 3D Equational Model', 'Unity 18+', 'models', 'realistic-vision-v51.safetensors');
+  const IMAGES_DIR = path.join(MILLS_DIR, 'Images'); // Images/<username>/<id>.png (private) and Images/room/<id>.png (team chat); gitignored
+  // Her look in pictures, added after the scene she writes so the moment leads (the engine encodes
+  // long prompts in pieces, so neither the scene nor her look is cut).
+  const SELFIE_LOOK = A.selfieLook || '25 year old emo goth woman, black hair with hot pink streaks';
   const MAX_ROUNDS = 6, MAX_RESULT = 3000, HISTORY_KEEP = 40;
 
   // ---------- host services: Ollama + the local model (started on demand, survives hub restarts) ----------
@@ -58,6 +64,98 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     return ollamaState.starting;
   }
   if (config.assistant !== false && !config.claudeCommand) ensureOllama(); // warm up at hub start (not in test hubs)
+  // The image engine (bridge/image-engine.py, local Stable Diffusion) is started the same way.
+  let imageStarting = null;
+  async function imageUp() { try { return (await fetch(IMAGE_URL + '/health', { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } }
+  function ensureImage() {
+    if (imageStarting) return imageStarting;
+    imageStarting = (async () => {
+      if (await imageUp()) return true;
+      const py = A.imagePython || (process.platform === 'win32' ? 'py' : 'python3');
+      const pre = A.imagePythonArgs || (process.platform === 'win32' && !A.imagePython ? ['-3.10'] : []);
+      const port = new URL(IMAGE_URL).port || '5124';
+      try { spawn(py, [...pre, path.join(ROOT, 'image-engine.py'), '--port', port, '--checkpoint', IMAGE_CKPT], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
+      for (let i = 0; i < 40; i++) { if (await imageUp()) return true; await new Promise((r) => setTimeout(r, 1000)); }
+      return false;
+    })().finally(() => { imageStarting = null; });
+    return imageStarting;
+  }
+  if (config.assistant !== false && !config.claudeCommand) ensureImage();
+
+  // ---------- the world around the person: place, weather, news (keyless public services) ----------
+  const cache = new Map();
+  async function getJson(url, ttl = 600000, headers = {}) {
+    const hit = cache.get(url);
+    if (hit && Date.now() - hit.t < ttl) return hit.v;
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mills/1.0 (team app)', ...headers }, signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error(`${new URL(url).host} answered ${r.status}`);
+    const v = url.includes('/rss') ? await r.text() : await r.json();
+    cache.set(url, { t: Date.now(), v });
+    return v;
+  }
+  async function ipPlace(ip) { // rough place of the address someone connects from (no browser prompt needed)
+    if (!ip || /^(127\.|::1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)) return null;
+    try { const r = await getJson('https://ipwho.is/' + encodeURIComponent(ip), 6 * 3600e3); return r.success ? { lat: r.latitude, lon: r.longitude, place: [r.city, r.region, r.country].filter(Boolean).join(', '), country: r.country_code, tz: r.timezone && r.timezone.id } : null; } catch { return null; }
+  }
+  async function placeName(lat, lon) {
+    try { const r = await getJson(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=10&lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`, 24 * 3600e3);
+      const a = r.address || {}; return { place: [a.city || a.town || a.village || a.county, a.state, a.country].filter(Boolean).join(', '), country: (a.country_code || '').toUpperCase() }; } catch { return null; }
+  }
+  async function locate(ci, city) { // → { lat, lon, place, country } for a named city or the person
+    if (city) {
+      const r = await getJson('https://geocoding-api.open-meteo.com/v1/search?count=1&name=' + encodeURIComponent(city), 24 * 3600e3);
+      const g = (r.results || [])[0]; if (!g) throw new Error('No place called ' + city);
+      return { lat: g.latitude, lon: g.longitude, place: [g.name, g.admin1, g.country].filter(Boolean).join(', '), country: g.country_code };
+    }
+    if (ci.lat === null) throw new Error('No location for them yet; ask which city.');
+    if (!ci.place) Object.assign(ci, await placeName(ci.lat, ci.lon) || {});
+    return { lat: ci.lat, lon: ci.lon, place: ci.place, country: ci.country };
+  }
+  const WMO = { 0: 'clear', 1: 'mostly clear', 2: 'partly cloudy', 3: 'overcast', 45: 'fog', 48: 'freezing fog', 51: 'light drizzle', 53: 'drizzle', 55: 'heavy drizzle', 61: 'light rain', 63: 'rain', 65: 'heavy rain', 66: 'freezing rain', 67: 'heavy freezing rain', 71: 'light snow', 73: 'snow', 75: 'heavy snow', 77: 'snow grains', 80: 'rain showers', 81: 'rain showers', 82: 'violent rain showers', 85: 'snow showers', 86: 'heavy snow showers', 95: 'thunderstorm', 96: 'thunderstorm with hail', 99: 'thunderstorm with heavy hail' };
+  const usUnits = (ci, country) => (country || '').toUpperCase() === 'US' || /-US$/i.test(ci.locale);
+  async function weather(ci, city, days = 0) {
+    const at = await locate(ci, city), us = usUnits(ci, at.country);
+    const q = `latitude=${at.lat}&longitude=${at.lon}&timezone=auto&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m`
+      + `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=${Math.min(7, Math.max(1, days || 1))}`
+      + (us ? '&temperature_unit=fahrenheit&wind_speed_unit=mph' : '');
+    const r = await getJson('https://api.open-meteo.com/v1/forecast?' + q, 600000);
+    const c = r.current || {}, d = r.daily || {}, u = us ? '°F' : '°C';
+    return { ok: true, place: at.place, now: `${WMO[c.weather_code] || 'weather code ' + c.weather_code}, ${Math.round(c.temperature_2m)}${u} (feels ${Math.round(c.apparent_temperature)}${u}), humidity ${c.relative_humidity_2m}%, wind ${Math.round(c.wind_speed_10m)} ${us ? 'mph' : 'km/h'}`,
+      days: (d.time || []).map((t, i) => `${t}: ${WMO[d.weather_code[i]] || ''}, ${Math.round(d.temperature_2m_min[i])}–${Math.round(d.temperature_2m_max[i])}${u}, rain ${d.precipitation_probability_max[i] ?? '?'}%`) };
+  }
+  async function news(ci, topic, local) {
+    const lang = (ci.locale || 'en-US').split('-')[0], gl = (ci.country || (ci.locale.split('-')[1]) || 'US').toUpperCase();
+    const base = `hl=${lang}-${gl}&gl=${gl}&ceid=${gl}:${lang}`;
+    let q = topic || '';
+    if (local && !q) { try { q = (await locate(ci)).place.split(',')[0]; } catch {} }
+    const url = q ? `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&${base}` : `https://news.google.com/rss?${base}`;
+    const xml = await getJson(url, 900000);
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 8).map((m) => {
+      const tag = (t) => ((new RegExp(`<${t}>([\\s\\S]*?)</${t}>`).exec(m[1]) || [])[1] || '').replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
+      return { title: tag('title'), when: tag('pubDate'), source: tag('source') };
+    });
+    return { ok: true, about: q || 'top stories', items };
+  }
+
+  // ---------- images ----------
+  const IMG_ID = /^[a-z0-9-]{1,40}$/;
+  async function makeImage(ci, args) {
+    if (!(await ensureImage())) return { ok: false, error: 'The camera app on the host is not starting (image engine down).' };
+    const shape = String(args.shape || args.orientation || 'square').toLowerCase();
+    const [width, height] = /portrait|tall|vertical/.test(shape) ? [576, 1024] : /landscape|wide|horizontal/.test(shape) ? [1024, 576] : [768, 768];
+    const scene = String(args.prompt || '').slice(0, 1000).trim();
+    const prompt = args.selfie ? `${scene}, she is a ${SELFIE_LOOK}, candid photo` : scene;
+    const r = await fetch(IMAGE_URL + '/txt2img', { method: 'POST', body: JSON.stringify({ prompt, width, height }), signal: AbortSignal.timeout(300000) });
+    if (!r.ok) return { ok: false, error: 'Image engine: ' + ((await r.json().catch(() => ({}))).error || r.status) };
+    const scope = ci.scope || 'room';
+    const id = Date.now().toString(36) + '-' + require('crypto').randomBytes(3).toString('hex');
+    fs.mkdirSync(path.join(IMAGES_DIR, scope), { recursive: true });
+    fs.writeFileSync(path.join(IMAGES_DIR, scope, id + '.png'), Buffer.from(await r.arrayBuffer()));
+    const ref = scope + '/' + id;
+    (ci.images || (ci.images = [])).push(ref);
+    return { ok: true, image: ref, shown: 'The picture is attached to your reply automatically.', seconds: r.headers.get('x-seconds') };
+  }
+
   let caps = null;
   async function nativeTools(model) {
     if (caps && caps.model === model) return caps.tools;
@@ -84,11 +182,34 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const brains = () => [{ id: 'local', label: 'Unity (local)' }, ...config.models.map((m) => ({ id: m.id, label: m.label + ' (Claude)' }))];
 
   // ---------- the person's own clock + place (sent by their browser) ----------
-  function clientInfo(c) {
+  function clientInfo(c, acct) {
     c = c && typeof c === 'object' ? c : {};
-    const tz = typeof c.tz === 'string' && c.tz.length < 64 ? c.tz : 'UTC';
+    const k = (acct && acct.client) || {};
     const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-    return { tz, locale: typeof c.locale === 'string' && c.locale.length < 20 ? c.locale : 'en-US', lat: num(c.lat), lon: num(c.lon), place: typeof c.place === 'string' ? c.place.slice(0, 120) : '' };
+    const okTz = (z) => { if (typeof z !== 'string' || z.length > 64) return null; try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return z; } catch { return null; } };
+    const browserLoc = num(c.lat) !== null && num(c.lon) !== null;
+    return { tz: okTz(c.tz) || k.tz || 'UTC', locale: typeof c.locale === 'string' && c.locale.length < 20 ? c.locale : k.locale || 'en-US',
+      lat: browserLoc ? num(c.lat) : k.lat ?? null, lon: browserLoc ? num(c.lon) : k.lon ?? null,
+      place: browserLoc ? '' : k.place || '', country: browserLoc ? '' : k.country || '', scope: acct ? acct.username : 'room' };
+  }
+  // What the hub knows about where someone is: their browser (time zone, locale, location if shared)
+  // and, when they come through the tunnel, the rough place of their address. Kept in memory only.
+  async function learnClient(acct, c, ip) {
+    const prev = acct.client || {};
+    const k = { ...prev };
+    if (c && typeof c === 'object') {
+      if (typeof c.tz === 'string') k.tz = c.tz.slice(0, 64);
+      if (typeof c.locale === 'string') k.locale = c.locale.slice(0, 20);
+      if (typeof c.lat === 'number' && typeof c.lon === 'number') { k.lat = c.lat; k.lon = c.lon; k.place = ''; k.country = ''; k.fromBrowser = true; }
+    }
+    if (!k.fromBrowser && ip && ip !== prev.ip) {
+      const g = await ipPlace(ip);
+      if (g) Object.assign(k, { lat: g.lat, lon: g.lon, place: g.place, country: g.country }, k.tz ? {} : { tz: g.tz });
+    }
+    k.ip = ip || prev.ip;
+    if (k.fromBrowser && !k.place && k.lat != null) Object.assign(k, await placeName(k.lat, k.lon) || {});
+    acct.client = k;
+    return k;
   }
   function localNow(ci) {
     try { return new Date().toLocaleString(ci.locale, { timeZone: ci.tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
@@ -125,8 +246,19 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     act: P('statement, wh_question, yes_no_question, exclamation, command, greeting or backchannel'),
   }, ['text'], (a) => ({ ok: true, said: a.text }));
   tool('get_time', "The person's current local date and time (their own time zone).", {}, [], (a, s, ci) => ({ ok: true, now: localNow(ci), timezone: ci.tz }));
-  tool('get_location', 'Where the person is (from their browser, if they shared it).', {}, [], (a, s, ci) => (ci.lat !== null
-    ? { ok: true, latitude: ci.lat, longitude: ci.lon, place: ci.place || undefined, timezone: ci.tz } : { ok: false, error: 'They have not shared their location; time zone is ' + ci.tz }));
+  tool('get_location', 'Where the person is (their browser location if shared, otherwise roughly from their connection).', {}, [], async (a, s, ci) => {
+    if (ci.lat === null) return { ok: false, error: 'No location for them; their time zone is ' + ci.tz };
+    const at = await locate(ci); return { ok: true, place: at.place, latitude: at.lat, longitude: at.lon, timezone: ci.tz };
+  });
+  tool('get_weather', "Current weather and today's outlook where the person is, or in a named city.", { city: P('City, optional (default: where they are)') }, [], (a, s, ci) => weather(ci, a.city, 1));
+  tool('get_forecast', 'Weather forecast for the next days where the person is, or in a named city.', { days: P('Days (1-7, default 5)', 'integer'), city: P('City, optional') }, [], (a, s, ci) => weather(ci, a.city, Number(a.days) || 5));
+  tool('get_news', 'Current news headlines: local to where the person is, on a topic, or top stories in their country.', { topic: P('Topic to search, optional'), local: P('true for news about where they are', 'boolean') }, [], (a, s, ci) => news(ci, a.topic, a.local === true || a.local === 'true'));
+  tool('generate_image', 'Make a picture with the image engine (photos, art, scenes, objects; selfie true for a picture of yourself). The picture is shown with your reply.', {
+    prompt: P('The picture, written fresh from THIS moment, most important first: what is happening right now in the conversation, '
+      + 'what you are doing, where you are, who is with you, what you are wearing for it, expression, the time of day and the weather where they are, '
+      + 'mood, lighting, camera angle. For a selfie never describe your face or hair (that is added for you): describe the moment.'),
+    selfie: P('true when the picture shows you', 'boolean'), shape: P('square (default), portrait or landscape'),
+  }, ['prompt'], (a, s, ci) => makeImage(ci, { ...a, selfie: a.selfie === true || a.selfie === 'true' }));
   tool('calculate', 'Evaluate a math expression (numbers, + - * / % ^ parentheses, sqrt, sin, cos, tan, log, ln, abs, round, pi, e).', { expression: P('The expression') }, ['expression'], (a) => {
     const expr = String(a.expression || '');
     if (!/^[\d\s+\-*/%^().,a-z]*$/i.test(expr)) return { ok: false, error: 'Only numbers and math functions are allowed.' };
@@ -190,12 +322,12 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   tool('list_capabilities', 'What you can do for the person in Mills.', {}, [], () => ({ ok: true, tools: Object.values(TOOLS).filter((t) => t.name !== 'say').map((t) => `${t.name}: ${t.description}`) }));
 
   const schema = (t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: { type: 'object', properties: t.params, required: t.required } } });
-  function execute(acct, name, args, ci) {
+  async function execute(acct, name, args, ci) {
     const t = TOOLS[name];
     if (!t) return { ok: false, error: `No tool called ${name}.` };
     for (const r of t.required) if (args[r] === undefined || args[r] === '') return { ok: false, error: `${name} needs "${r}".` };
     const s = store(acct);
-    try { const out = t.run(args, s, ci); save(s); return out; } catch (e) { return { ok: false, error: e.message }; }
+    try { const out = await t.run(args, s, ci); save(s); return out; } catch (e) { return { ok: false, error: e.message }; }
   }
 
   // ---------- reminders: due ones become notices the browser picks up ----------
@@ -215,7 +347,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     const mem = Object.entries(s.memory).slice(0, 12);
     return [
       `You are talking with ${acct.display} (Mills username "${acct.username}"). Their local time: ${localNow(ci)} (${ci.tz}).`
-        + (ci.lat !== null ? ` Their location: ${ci.place || `${ci.lat.toFixed(3)}, ${ci.lon.toFixed(3)}`}.` : ' They have not shared a location.'),
+        + (ci.lat !== null ? ` Where they are: ${ci.place || `${ci.lat.toFixed(3)}, ${ci.lon.toFixed(3)}`} (use get_weather / get_news for anything local).` : ' Their location is unknown; ask which city for local things.'),
       pending.length ? `${acct.display} has ${pending.length} pending task(s)${overdue.length ? `, ${overdue.length} overdue` : ''} (counts only; call list_tasks for the items, never invent them).` : '',
       mem.length ? 'Working memory: ' + mem.map(([k, v]) => `${k}=${v}`).join('; ') + '.' : '',
       'You have tools. Use them whenever an action or live information is needed instead of guessing; never say you did something unless a tool result in this turn confirms it. '
@@ -227,28 +359,29 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   // ---------- one run ----------
   const runs = new Map(); // username -> { abort, child }
   const YES = /^(yes|y|yeah|yep|do it|go ahead|confirm|sure|ok|okay)[.!]*$/i, NO = /^(no|n|nope|cancel|never ?mind|abort|don'?t)[.!]*$/i;
-  function resolvePending(acct, text, ci, out) {
+  async function resolvePending(acct, text, ci, out) {
     const p = acct.assistantPending;
     if (!p) return '';
-    if (YES.test(text.trim())) { acct.assistantPending = null; const r = execute(acct, p.tool, p.args, ci); out({ type: 'tool_result', name: p.tool, result: r }); return `[confirmed] ${p.tool} -> ${JSON.stringify(r).slice(0, 800)}`; }
+    if (YES.test(text.trim())) { acct.assistantPending = null; const r = await execute(acct, p.tool, p.args, ci); out({ type: 'tool_result', name: p.tool, result: r }); return `[confirmed] ${p.tool} -> ${JSON.stringify(r).slice(0, 800)}`; }
     if (NO.test(text.trim())) { acct.assistantPending = null; return `[cancelled] the user declined ${p.tool}`; }
     return '';
   }
   // A tool call from either brain. Destructive tools wait for the person's yes/no.
-  function callTool(acct, name, args, ci, out) {
+  async function callTool(acct, name, args, ci, out) {
     out({ type: 'tool', name, args });
     let result;
     if (TOOLS[name] && TOOLS[name].confirm) {
       acct.assistantPending = { tool: name, args };
       out({ type: 'confirm', tool: name, args });
       result = { ok: false, pending: true, message: `${name} needs ${acct.display}'s confirmation; ask them to say yes or no.` };
-    } else result = execute(acct, name, args, ci);
+    } else result = await execute(acct, name, args, ci);
+    if (name === 'generate_image' && result.ok) out({ type: 'image', ref: result.image });
     if (name === 'say' && args.text) out({ type: 'say', text: String(args.text), emotion: args.emotion || 'neutral', act: args.act || 'statement' });
     out({ type: 'tool_result', name, result });
     return result;
   }
 
-  async function runLocal(acct, text, ci, out, signal) {
+  async function runLocal(acct, text, ci, out, signal, opts = {}) {
     const st = await ensureOllama();
     const model = st.model ? LOCAL_MODEL : FALLBACK_MODEL;
     if (!st.up || !model) throw new Error(st.up ? `The local brain (${LOCAL_MODEL}) is not loaded on the host yet.` : 'The local brain (Ollama) is not running on the host.');
@@ -258,8 +391,9 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     let system = persona() + '\n\n' + dynamicContext(acct, ci, sayMode);
     const tools = Object.values(TOOLS).filter((t) => sayMode || t.name !== 'say');
     if (!native) system += '\n\nTOOL USE: when you need a tool, reply with ONLY one line of JSON: {"tool": "<name>", "arguments": {...}}. You get the result next. Tools:\n' + tools.map((t) => `- ${t.name}(${Object.keys(t.params).join(', ')}): ${t.description}`).join('\n');
-    const note = resolvePending(acct, text, ci, out);
-    const messages = [{ role: 'system', content: system }, ...s.history.slice(-HISTORY_KEEP), { role: 'user', content: note ? `${text}\n\n(system note: ${note})` : text }];
+    const note = await resolvePending(acct, text, ci, out);
+    if (opts.extraSystem) system += '\n\n' + opts.extraSystem;
+    const messages = [{ role: 'system', content: system }, ...(opts.noHistory ? [] : s.history.slice(-HISTORY_KEEP)), { role: 'user', content: note ? `${text}\n\n(system note: ${note})` : text }];
     const said = [], seen = new Set();
     let final = '';
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -287,7 +421,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       let deferred = false;
       for (const c of calls) {
         const sig = c.name + JSON.stringify(c.args);
-        const result = seen.has(sig) ? { ok: false, error: `${c.name} already ran with these arguments this turn; use its result.` } : callTool(acct, c.name, c.args, ci, out);
+        const result = seen.has(sig) ? { ok: false, error: `${c.name} already ran with these arguments this turn; use its result.` } : await callTool(acct, c.name, c.args, ci, out);
         seen.add(sig);
         if (c.name === 'say' && c.args.text) said.push(String(c.args.text));
         if (result.pending) deferred = true;
@@ -302,9 +436,9 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     return shown;
   }
 
-  function runClaudeBrain(acct, text, ci, out, model) {
+  async function runClaudeBrain(acct, text, ci, out, model) {
+    const note = await resolvePending(acct, text, ci, out);
     return new Promise((resolve, reject) => {
-      const note = resolvePending(acct, text, ci, out);
       acct.assistantCi = ci; acct.assistantOut = out;
       const mcp = path.join(acct.files.PROFILE_DIR, '.mcp-assistant.json');
       writeJson(mcp, { mcpServers: { assistant: { command: process.execPath, args: [path.join(ROOT, 'assistant-tools-mcp.js')], env: { MILLS_BRIDGE: `http://127.0.0.1:${config.port}`, MILLS_INTERNAL: INTERNAL_SECRET, MILLS_ACCOUNT: acct.username } } } });
@@ -338,7 +472,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     const text = String(body.message || '').trim().slice(0, 8000);
     if (!text) return send(res, 400, { error: 'Empty message.' });
     if (runs.has(acct.username)) return send(res, 409, { error: 'Unity is still answering. Stop her first.' });
-    const ci = clientInfo(body.client);
+    await learnClient(acct, body.client, body.ip);
+    const ci = clientInfo(body.client, acct);
     acct.assistantCi = ci;
     const ctl = new AbortController();
     runs.set(acct.username, { abort: ctl, child: null });
@@ -349,10 +484,10 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     try {
       const reply = brain === 'local' ? await runLocal(acct, text, ci, out, ctl.signal) : await runClaudeBrain(acct, text, ci, out, brain);
       const s = store(acct);
-      s.history.push({ role: 'user', content: text }, { role: 'assistant', content: reply || '(did it)' });
+      s.history.push({ role: 'user', content: text }, { role: 'assistant', content: (reply || '(did it)') + (ci.images || []).map((r) => `\n[[image:${r}]]`).join('') });
       if (s.history.length > HISTORY_KEEP * 2) s.history.splice(0, s.history.length - HISTORY_KEEP * 2);
       save(s);
-      out({ type: 'final', text: reply, brain, pending: acct.assistantPending || null });
+      out({ type: 'final', text: reply, brain, images: ci.images || [], pending: acct.assistantPending || null });
     } catch (e) {
       out({ type: 'error', text: ctl.signal.aborted ? 'Stopped.' : e.message });
     } finally {
@@ -369,9 +504,28 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       history: s.history.slice(-40), counts: { tasks: s.tasks.filter((t) => t.status === 'pending').length, reminders: s.reminders.filter((r) => !r.fired).length, events: s.events.filter((e) => e.at >= Date.now()).length } };
   }
 
+  const clientIp = (req) => String(req.headers['cf-connecting-ip'] || '').trim();
   function stopRun(acct) { const r = runs.get(acct.username); if (r) { r.abort.abort(); if (r.child) r.child.kill(); } }
 
+  // The team chat's Unity: one local-brain run for whoever called her (their tools, their time and
+  // place). Pictures go to Images/room (everyone in the room may see them) or the private scope given.
+  async function ask(acct, text, { extraSystem = '', scope = 'room' } = {}) {
+    const ci = clientInfo({}, acct); ci.scope = scope;
+    const reply = await runLocal(acct, text, ci, () => {}, undefined, { extraSystem, noHistory: true });
+    return { text: reply, images: ci.images || [] };
+  }
+  async function greeting(acct) { // facts for a sign-in hello: their local time, weather and headlines
+    const ci = clientInfo({}, acct), facts = [`Their local time: ${localNow(ci)} (${ci.tz}).`];
+    if (ci.lat !== null) {
+      try { const w = await weather(ci, '', 1); facts.push(`Weather in ${w.place}: ${w.now}; today ${w.days[0] || ''}.`); } catch {}
+      try { const n = await news(ci, '', true); if (n.items.length) facts.push(`Local news (${n.about}): ` + n.items.slice(0, 3).map((x) => x.title).join(' | ')); } catch {}
+    } else facts.push('Their location is unknown (no weather or local news).');
+    return facts.join('\n');
+  }
+
   return {
+    ask, greeting, learnClient,
+    localReady: async () => (await ensureOllama()).model,
     busy: () => runs.size > 0,
     stop: stopRun,
     // MCP relay for the Claude brain of the Unity section: same tools, same confirmation rule, events go to the open stream.
@@ -382,7 +536,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       if (list) return send(res, 200, { ok: true, tools: Object.values(TOOLS).filter((t) => t.name !== 'say').map((t) => ({ name: t.name, description: t.description, inputSchema: { type: 'object', properties: t.params, required: t.required } })) });
       if (!acct) return send(res, 200, { ok: false, error: 'Unknown account.' });
       const out = acct.assistantOut || (() => {});
-      return send(res, 200, { ok: true, result: callTool(acct, name, args || {}, acct.assistantCi || clientInfo({}), out) });
+      return send(res, 200, { ok: true, result: await callTool(acct, name, args || {}, acct.assistantCi || clientInfo({}, acct), out) });
     },
     async route(p, req, res, acct) {
       if (!p.startsWith('/api/assistant/')) return false;
@@ -398,19 +552,33 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         acct.state.assistantBrain = brain; writeJson(acct.files.STATE_FILE, acct.state);
         send(res, 200, { brain }); return true;
       }
-      if (p === '/api/assistant/chat' && req.method === 'POST') { await chat(acct, await readBody(req), res); return true; }
+      if (p === '/api/assistant/chat' && req.method === 'POST') { await chat(acct, { ...(await readBody(req)), ip: clientIp(req) }, res); return true; }
       if (p === '/api/assistant/stop' && req.method === 'POST') { stopRun(acct); send(res, 200, { ok: true }); return true; }
       if (p === '/api/assistant/answer' && req.method === 'POST') { // yes/no button on a confirmation card
         const { yes } = await readBody(req); const pnd = acct.assistantPending;
         if (!pnd) { send(res, 200, { ok: false, error: 'Nothing is waiting for an answer.' }); return true; }
         acct.assistantPending = null;
-        send(res, 200, yes ? { ok: true, tool: pnd.tool, result: execute(acct, pnd.tool, pnd.args, acct.assistantCi || clientInfo({})) } : { ok: true, cancelled: pnd.tool });
+        send(res, 200, yes ? { ok: true, tool: pnd.tool, result: await execute(acct, pnd.tool, pnd.args, acct.assistantCi || clientInfo({}, acct)) } : { ok: true, cancelled: pnd.tool });
         return true;
       }
       if (p === '/api/assistant/clear' && req.method === 'POST') {
         if (runs.has(acct.username)) { send(res, 409, { error: 'Wait for her to finish first.' }); return true; }
         const s = store(acct); s.history = []; save(s); delete acct.state.assistantClaudeSession; acct.assistantPending = null;
         send(res, 200, { ok: true }); return true;
+      }
+      if (p === '/api/assistant/client' && req.method === 'POST') { // the browser reports its clock / place after sign-in
+        const { client } = await readBody(req);
+        const k = await learnClient(acct, client, clientIp(req));
+        send(res, 200, { ok: true, tz: k.tz, place: k.place || '' }); return true;
+      }
+      if (p === '/api/assistant/image' && req.method === 'GET') { // ?ref=<scope>/<id>: room pictures for everyone, private ones for their owner
+        const ref = new URL(req.url, 'http://x').searchParams.get('ref') || '';
+        const [scope, id] = ref.split('/');
+        if (!IMG_ID.test(id || '') || !(scope === 'room' || scope === acct.username)) { send(res, 404, { error: 'No such picture.' }); return true; }
+        const f = path.join(IMAGES_DIR, scope, id + '.png');
+        if (!fs.existsSync(f)) { send(res, 404, { error: 'No such picture.' }); return true; }
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=86400' });
+        fs.createReadStream(f).pipe(res); return true;
       }
       if (p === '/api/assistant/data' && req.method === 'GET') { const s = store(acct); const { _file, history, ...d } = s; send(res, 200, d); return true; }
       return false;

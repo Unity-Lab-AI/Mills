@@ -66,6 +66,7 @@ function listening(port) {
 }
 
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null;
+const fakeImagePrompts = [];
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
 //   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
 //   "TIME" → get_time, then answers with the tool result          "REMIND"      → set_reminder in 1 second
@@ -77,22 +78,31 @@ function startFakeOllama() {
     req.on('end', () => {
       const j = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
       if (req.url === '/api/version') return j({ version: 'fake' });
+      // fake image engine on the same port: a 1x1 PNG for any prompt; the prompt is kept for checks
+      if (req.url === '/health') return j({ ok: true, loaded: true });
+      if (req.url === '/txt2img') {
+        fakeImagePrompts.push(JSON.parse(body || '{}').prompt || '');
+        const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+        res.writeHead(200, { 'Content-Type': 'image/png', 'X-Seconds': '0.01' }); return res.end(png);
+      }
       if (req.url === '/api/tags') return j({ models: [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
       if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
       const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
       const sys = (msgs[0] || {}).content || '';
       const user = [...msgs].reverse().find((m) => m.role === 'user') || { content: '' };
+      if (/SLOW/.test(user.content) && last.role === 'user') return setTimeout(() => { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ message: { role: 'assistant', content: 'slow answer ' + user.content.slice(-3000) }, done: true }) + '\n'); }, 4000);
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
       const line = (m) => res.write(JSON.stringify({ message: { role: 'assistant', content: '', ...m }, done: false }) + '\n');
       const call = (name, args) => line({ tool_calls: [{ function: { name, arguments: args } }] });
       if (last.role === 'user') {
         const u = user.content, m = /TASK (.+)/.exec(u), d = /DELETE (\S+)/.exec(u);
-        if (m) call('add_task', { title: m[1] });
+        if (/SELFIE/.test(u)) call('generate_image', { prompt: 'regress moment at the desk', selfie: true, shape: 'portrait' });
+        else if (m) call('add_task', { title: m[1] });
         else if (d) call('delete_task', { task_id: d[1] });
         else if (/TIME/.test(u)) call('get_time', {});
         else if (/REMIND/.test(u)) call('set_reminder', { text: 'regress reminder', when: 'in 1 second' });
-        else line({ content: 'plain answer for ' + u.slice(0, 40) });
+        else line({ content: 'plain answer for ' + u.slice(-3000) });
       } else if (last.role === 'tool' && last.tool_name !== 'say') {
         call('say', { text: 'done: ' + last.content.slice(0, 160), emotion: 'happy', act: 'statement' });
       } else {
@@ -121,7 +131,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}` }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}` }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   const sp = (args) => spawnSync(process.execPath, [path.join(SB, 'set-password.js'), ...args], { cwd: SB, encoding: 'utf8' });
   sp(['pw-default-0001']);
@@ -623,6 +633,29 @@ async function run() {
   const viaClaude = ((await call('/api/assistant/data', U)).data.tasks || []).some((t) => t.title === 'from claude brain');
   await call('/api/assistant/brain', U, { brain: 'local' });
   check('R66', 'brain dropdown: unknown → 400; Claude brain uses the same tools through the relay', badBrain.status === 400 && toClaude.status === 200 && t4.status === 200 && viaClaude, t4.err);
+  const look = (readJson(path.join(BRIDGE, 'config.json'), {}).assistant || {}).selfieLook || '';
+  const sf = await uchat(U, 'SELFIE now');
+  const imgEv = sf.events.find((e) => e.type === 'image');
+  const ownImg = imgEv ? await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(imgEv.ref), { headers: { Authorization: 'Bearer ' + U } }) : null;
+  const otherImg = imgEv ? await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(imgEv.ref), { headers: { Authorization: 'Bearer ' + A } }) : null;
+  const sentPrompt = fakeImagePrompts[fakeImagePrompts.length - 1] || '';
+  check('R68', 'selfie: picture made by the host engine, scene first then her full look, private picture only for its owner', !!imgEv && imgEv.ref.startsWith('t-user/')
+    && ownImg.status === 200 && (ownImg.headers.get('content-type') || '').includes('image/png') && otherImg.status === 404
+    && sentPrompt.startsWith('regress moment') && (!look || sentPrompt.includes(look)), sentPrompt.slice(0, 80));
+  const eng = fs.readFileSync(path.join(BRIDGE, 'image-engine.py'), 'utf8');
+  check('R69', '[static] image engine: no prompt cap (long prompts encoded in pieces), no built-in negative prompt', /def _embeds/.test(eng) && !/_tokens_fit/.test(eng) && /^NEG = ""/m.test(eng));
+  const seqI = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  await roomSend(U, restored, '@unity SELFIE for the room');
+  const roomPic = await waitAgent(U, restored, seqI, (t) => /\[\[image:room\/[a-z0-9-]+\]\]/.test(t), 20000);
+  const roomRef = roomPic && /\[\[image:(room\/[a-z0-9-]+)\]\]/.exec(roomPic.text)[1];
+  const seenByA = roomRef ? (await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(roomRef), { headers: { Authorization: 'Bearer ' + A } })).status : 0;
+  check('R70', 'chat-room @unity runs on the local brain: a room picture is attached and every member can load it', !!roomPic && seenByA === 200);
+  const cl = await call('/api/assistant/client', U, { client: { tz: 'America/Denver', locale: 'en-US' } });
+  const t5 = await uchat(U, 'TIME again', {});
+  const tr5 = (t5.events.find((e) => e.type === 'tool_result' && e.name === 'get_time') || {}).result || {};
+  check('R71', "the person's clock reported at sign-in is used when a message carries none", cl.data.tz === 'America/Denver' && tr5.timezone === 'America/Denver');
+  const pol = spawnSync('git', ['grep', '-n', '-i', '-I', 'pollinations', '--', '.', ':!bridge/test/regress.js'], { cwd: MILLS, encoding: 'utf8' });
+  check('R72', 'no hosted image service (Pollinations) anywhere in tracked files', pol.status === 1, (pol.stdout || '').split('\n')[0]);
   check('R67', '[static] menu has the Unity button and Unity screen', /id="goAssist">Unity</.test(html) && /<b>Unity<\/b>/.test(html));
   }
 
