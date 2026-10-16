@@ -566,7 +566,8 @@ function mirrorEvent(acct, ev) {
       if (b.type === 'text' && b.text && b.text.trim()) mirror(acct, 'claude', b.text);
       else if (b.type === 'tool_use') {
         const i = b.input || {}, target = i.path ?? i.file_path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? '';
-        mirror(acct, 'tool', '⚙ ' + String(b.name).replace(/^mcp__pc__/, 'their PC › ') + (target !== '' ? '  ' + String(target).slice(0, 160) : ''));
+        // (no icon in the text: the page draws the gear itself)
+        mirror(acct, 'tool', String(b.name).replace(/^mcp__pc__/, 'their PC › ') + (target !== '' ? '  ' + String(target).slice(0, 160) : ''));
       }
     }
   } else if (ev.type === 'result') mirror(acct, 'sys', ev.is_error ? 'Claude stopped with an error' : 'Done');

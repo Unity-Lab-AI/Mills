@@ -92,6 +92,14 @@
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
+  /* ── icons (the sprite at the top of <body>) ── */
+  .ic { width: 1.15em; height: 1.15em; flex: none; vertical-align: -.2em; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
+  .ic.lead { margin-right: .4em; }
+  .ic.trail { margin-left: .35em; }
+  #rail button i .ic { width: 1.25rem; height: 1.25rem; vertical-align: middle; }
+  .tool::before { content: ''; display: inline-block; width: 1em; height: 1em; margin-right: .45em; vertical-align: -.15em; background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2.8l1.7 2.4 2.9-.7.7 2.9 2.4 1.7-1.3 2.9 1.3 2.9-2.4 1.7-.7 2.9-2.9-.7L12 21.2l-1.7-2.4-2.9.7-.7-2.9-2.4-1.7L5.6 12 4.3 9.1l2.4-1.7.7-2.9 2.9.7z'/%3E%3Ccircle cx='12' cy='12' r='3.1'/%3E%3C/svg%3E") center / contain no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2.8l1.7 2.4 2.9-.7.7 2.9 2.4 1.7-1.3 2.9 1.3 2.9-2.4 1.7-.7 2.9-2.9-.7L12 21.2l-1.7-2.4-2.9.7-.7-2.9-2.4-1.7L5.6 12 4.3 9.1l2.4-1.7.7-2.9 2.9.7z'/%3E%3Ccircle cx='12' cy='12' r='3.1'/%3E%3C/svg%3E") center / contain no-repeat; }
   /* ── markdown (web/md.js), shared by the Work chat and the team chat ── */
   .msg.claude { border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); box-shadow: 0 1px 3px rgba(0,0,0,.18); }
   .md { white-space: normal; line-height: 1.55; }
@@ -327,6 +335,43 @@
 </style>
 </head>
 <body>
+<!-- Mills icon set: one sprite of custom line icons (24×24 grid, round 1.9 px strokes in the text colour,
+     so they follow every theme). Use: an svg with class "ic" holding a use of the symbol, or ic(name) in script. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5.5M11 18l-6-6 6-6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19.5V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 2.8l1.7 2.4 2.9-.7.7 2.9 2.4 1.7-1.3 2.9 1.3 2.9-2.4 1.7-.7 2.9-2.9-.7L12 21.2l-1.7-2.4-2.9.7-.7-2.9-2.4-1.7L5.6 12 4.3 9.1l2.4-1.7.7-2.9 2.9.7z"/><circle cx="12" cy="12" r="3.1"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h10"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M6.2 3.5h2.6l1.9 4.7-2.3 1.5a11.5 11.5 0 0 0 5.9 5.9l1.5-2.3 4.7 1.9v2.6a2 2 0 0 1-2.1 2A16.5 16.5 0 0 1 4.2 5.6a2 2 0 0 1 2-2.1z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.8l4.4 4.2L19 7.2"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.5M8.8 21h6.4"/></symbol>
+  <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M15 9.5V6a3 3 0 0 0-5.6-1.5M9 9v2.5a3 3 0 0 0 4.8 2.4M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 9.6 5.7M12 17.5v3.5M8.8 21h6.4M3.5 3.5l17 17"/></symbol>
+  <symbol id="i-talk" viewBox="0 0 24 24"><path d="M3.5 10.5v3M7.5 7.5v9M11.5 4v16M15.5 7.5v9M19.5 10.5v3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M20.5 3.5L3.5 10.6l6.6 3.3 3.3 6.6z"/><path d="M10.1 13.9l4.2-4.2"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3.5 8a1.5 1.5 0 0 1 1.5-1.5h2.8L9.5 4h5l1.7 2.5H19A1.5 1.5 0 0 1 20.5 8v10a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/><circle cx="12" cy="12.8" r="3.4"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.2"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7A1.5 1.5 0 0 1 5 5.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3.5h7.5l4.5 4.5v12.5h-12z"/><path d="M13.5 3.5V8.5h5M9.5 13h5M9.5 16.5h5"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M8 7.5L3.5 12 8 16.5M16 7.5l4.5 4.5-4.5 4.5M13.5 5l-3 14"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4.5" y="8" width="15" height="11.5" rx="3.5"/><path d="M12 8V5M9.3 16.3h5.4"/><circle cx="12" cy="3.8" r="1.2"/><circle cx="9.3" cy="12.6" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.7" cy="12.6" r="1.1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 5.5h15a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H10l-5.5 4v-4h0a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4.5" rx="1"/><path d="M5 9v9.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 4.3a2 2 0 0 1 3.4 0l7.2 12.6a2 2 0 0 1-1.7 3H4.8a2 2 0 0 1-1.7-3z"/><path d="M12 9.5v4.5"/><circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8.5 10.5V7.8a3.5 3.5 0 0 1 7 0v2.7M12 14.5v2.5"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="M9.5 6.5L4 12l5.5 5.5"/><path d="M4.5 12h9a6 6 0 0 1 6 6v.5"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4.5 19.5l1-4.2L15.8 5a2 2 0 0 1 2.9 0l.3.3a2 2 0 0 1 0 2.9L8.7 18.5z"/><path d="M14 6.8l3.2 3.2M4.5 19.5h15"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V4.5h5V7M6.2 7l.9 12.2a1.5 1.5 0 0 0 1.5 1.3h6.8a1.5 1.5 0 0 0 1.5-1.3L17.8 7M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1.8"/><path d="M8.6 8.6a4.8 4.8 0 0 0 0 6.8M15.4 8.6a4.8 4.8 0 0 1 0 6.8M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12.5 5v14l-5-4.5H4z"/><path d="M16 9a4.2 4.2 0 0 1 0 6M18.6 6.4a8 8 0 0 1 0 11.2"/></symbol>
+  <symbol id="i-speaker-off" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12.5 5v14l-5-4.5H4z"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.7"/><path d="M20.5 15.5l-4.8-4.5-9.2 8"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5.5 12h13"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.5H15"/></symbol>
+</svg>
 
 <form id="login" class="center">
   <h1 id="title">Mills</h1>
@@ -351,10 +396,10 @@
 
 <div id="room" class="screen" hidden>
   <header>
-    <button class="ghost back" data-back>← Menu</button>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b>Chat</b>
     <span class="folder">End-to-end encrypted team chat</span>
-    <button class="ghost" data-settings title="Your nickname, colour, sounds and pop-ups">⚙ Settings</button>
+    <button class="ghost" data-settings title="Your nickname, colour, sounds and pop-ups"><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button>
   </header>
   <div id="roomHost"></div>
 </div>
@@ -365,23 +410,23 @@
     <aside id="roomSide"><div id="callSideHost"></div><div id="convList"></div></aside>
     <div class="roomMain">
       <div class="roomTop">
-        <button class="ghost" id="roomSideToggle" title="Show / hide conversations">☰</button>
+        <button class="ghost" id="roomSideToggle" title="Show / hide conversations" aria-label="Show / hide conversations"><svg class="ic"><use href="#i-menu"/></svg></button>
         <b id="convName"># Everyone</b>
         <span id="roomStatus">End-to-end encrypted</span>
-        <button class="ghost" id="callBtn" title="Voice / video call in this conversation (end-to-end encrypted)">📞 Call</button>
+        <button class="ghost" id="callBtn" title="Voice / video call in this conversation (end-to-end encrypted)"><svg class="ic lead"><use href="#i-phone"/></svg>Call</button>
       </div>
       <div id="callBanner" hidden></div>
       <div id="shareBanner" hidden></div>
       <div id="roomLog"></div>
-      <div id="replyBar" hidden><span id="replyText"></span><button type="button" class="ghost" id="replyCancel" title="Cancel (Esc)">✕</button></div>
+      <div id="replyBar" hidden><span id="replyText"></span><button type="button" class="ghost" id="replyCancel" title="Cancel (Esc)" aria-label="Cancel"><svg class="ic"><use href="#i-close"/></svg></button></div>
       <div id="mentionList" hidden></div>
       <div id="recBar" hidden><i class="dotRec"></i><span id="recTime">Recording 0:00 / 2:00</span>
         <button type="button" id="recSend">Send clip</button><button type="button" class="ghost" id="recCancel">Cancel</button></div>
       <form id="roomComposer">
         <textarea id="roomInput" placeholder="Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)"></textarea>
         <div class="side"><button type="submit">Send</button>
-          <button type="button" class="ghost" id="micBtn" title="Record a voice clip (uses your microphone)">🎤</button>
-          <button type="button" class="ghost dictate" id="roomDictate" hidden>🗣</button></div>
+          <button type="button" class="ghost" id="micBtn" title="Record a voice clip (uses your microphone)" aria-label="Record a voice clip"><svg class="ic"><use href="#i-mic"/></svg></button>
+          <button type="button" class="ghost dictate" id="roomDictate" aria-label="Dictate" hidden><svg class="ic"><use href="#i-talk"/></svg></button></div>
       </form>
     </div>
   </div>
@@ -393,8 +438,8 @@
     <div class="callHead"><b id="callTitle">Call</b><span id="callInfo"></span></div>
     <div id="callTiles"></div>
     <div class="callCtl">
-      <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone">🎤 Mic on</button>
-      <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)">📷 Camera off</button>
+      <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone"><svg class="ic lead"><use href="#i-mic"/></svg>Mic on</button>
+      <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)"><svg class="ic lead"><use href="#i-camera"/></svg>Camera off</button>
       <button type="button" id="callLeave" title="Leave the call">Leave</button>
     </div>
     <div id="callMsg"></div>
@@ -422,12 +467,12 @@
         <input id="setNick" maxlength="32" placeholder="leave empty to use your account name"></label>
       <div>Your colour (same for everyone, adjusts to each theme)<div class="swatches" id="setColors"></div></div>
       <label class="chk"><input type="checkbox" id="setSound"> Sound when a chat message arrives</label>
-      <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message">▶</button></div>
-      <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention">▶</button></div>
-      <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply">▶</button></div>
+      <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
       <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
-      <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest">▶</button></div>
+      <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
       <label>Voice<select id="ttsVoice"></select></label>
       <label>Read<select id="ttsScope"><option value="all">every message from others</option><option value="mine">only @mentions, private messages and replies to me</option></select></label>
@@ -438,7 +483,7 @@
       <label>Video quality (camera in calls)<select id="callQuality"><option value="low">Low — 320×180, saves bandwidth</option><option value="medium">Medium — 640×360</option><option value="high">High — 1280×720</option></select></label>
       <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
       <label class="chk"><input type="checkbox" id="clipAuto"> Auto-play incoming voice clips (queued together with read-aloud)</label>
-      <div><button type="button" class="ghost" id="ttsStop">⏹ Stop reading / playing and clear the queue</button></div>
+      <div><button type="button" class="ghost" id="ttsStop"><svg class="ic lead"><use href="#i-stop"/></svg>Stop reading / playing and clear the queue</button></div>
       <label>Auto-save Claude sessions to Past sessions<select id="setAutosave">
         <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
@@ -450,7 +495,7 @@
 
 <div id="admin" class="screen" hidden>
   <header>
-    <button class="ghost back" data-back>← Menu</button>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b>Admin</b>
     <span class="folder">Accounts and hub controls</span>
   </header>
@@ -473,7 +518,7 @@
 
 <div id="shell" hidden>
   <header>
-    <button class="ghost back" data-back>← Menu</button>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b id="brand">Mills</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
@@ -489,18 +534,18 @@
   </header>
   <main id="app">
     <nav id="rail">
-      <button type="button" id="railToggle" title="Expand / collapse this bar"><i>☰</i><span class="lbl">Panels</span></button>
-      <button type="button" data-pane="files" title="Show / minimize the folder list"><i>📁</i><span class="lbl">Folder</span></button>
-      <button type="button" data-pane="edit" title="Show / minimize the file editor"><i>📝</i><span class="lbl">Editor</span></button>
-      <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i>🤖</i><span class="lbl">Claude</span></button>
-      <button type="button" data-pane="roomPane" title="Show / minimize the team chat"><i>💬</i><span class="lbl">Team chat</span><span class="badge" id="railRoomBadge" hidden></span></button>
+      <button type="button" id="railToggle" title="Expand / collapse this bar"><i><svg class="ic"><use href="#i-menu"/></svg></i><span class="lbl">Panels</span></button>
+      <button type="button" data-pane="files" title="Show / minimize the folder list"><i><svg class="ic"><use href="#i-folder"/></svg></i><span class="lbl">Folder</span></button>
+      <button type="button" data-pane="edit" title="Show / minimize the file editor"><i><svg class="ic"><use href="#i-code"/></svg></i><span class="lbl">Editor</span></button>
+      <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i><svg class="ic"><use href="#i-bot"/></svg></i><span class="lbl">Claude</span></button>
+      <button type="button" data-pane="roomPane" title="Show / minimize the team chat"><i><svg class="ic"><use href="#i-chat"/></svg></i><span class="lbl">Team chat</span><span class="badge" id="railRoomBadge" hidden></span></button>
       <span class="grow"></span>
-      <button type="button" data-settings title="Settings"><i>⚙</i><span class="lbl">Settings</span></button>
+      <button type="button" data-settings title="Settings"><i><svg class="ic"><use href="#i-gear"/></svg></i><span class="lbl">Settings</span></button>
     </nav>
     <div id="panes">
     <section id="files">
-      <div class="bar"><button class="ghost" id="up" title="Up one folder">↑</button><span id="cwd">/</span>
-        <button class="ghost" id="newFile" title="New file">+</button><button class="ghost" id="refresh" title="Refresh">⟳</button>
+      <div class="bar"><button class="ghost" id="up" title="Up one folder" aria-label="Up one folder"><svg class="ic"><use href="#i-up"/></svg></button><span id="cwd">/</span>
+        <button class="ghost" id="newFile" title="New file" aria-label="New file"><svg class="ic"><use href="#i-plus"/></svg></button><button class="ghost" id="refresh" title="Refresh" aria-label="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
         <button class="ghost min" data-min="files" title="Minimize (bring it back from the left bar)">—</button></div>
       <div id="tree"></div>
     </section>
@@ -512,7 +557,7 @@
     </section>
     <section id="chat">
       <div class="bar"><span id="convTitle" title="Click to rename">Unsaved session</span>
-        <select id="shareSel" title="Share this Work session so people in that conversation can watch it (read-only): your Claude conversation, what you type, send and queue"></select>
+        <svg class="ic" aria-hidden="true"><use href="#i-share"/></svg><select id="shareSel" title="Share this Work session so people in that conversation can watch it (read-only): your Claude conversation, what you type, send and queue"></select>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
       <div id="usageBar" title="Claude usage of the host account (shared by everyone) and this session's context window">
         <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uTime">--:--:--</span></div>
@@ -524,7 +569,7 @@
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <div class="sendCol">
           <button type="submit" id="send" title="Send. While Claude is busy: queue it for right after this reply.">Send</button>
-          <button type="button" class="ghost dictate" id="workDictate" hidden>🗣 Talk</button>
+          <button type="button" class="ghost dictate" id="workDictate" hidden><svg class="ic lead"><use href="#i-talk"/></svg>Talk</button>
           <button type="button" class="ghost" id="stop" hidden title="Stop Claude. With text in the box: stop and send that text right away.">Stop</button>
         </div>
       </form>
@@ -550,12 +595,21 @@
 <script src="md.js"></script>
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
+MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
 const GH_USER = '__MILLS_GIST_OWNER__'; // filled in at deploy time from the MILLS_GIST_OWNER repository variable
 // One Mills hub serves every account; people sign in with username + password.
 // An old ?user=<name> link still works: it just fills in the username.
 const GIST_FILE = 'mills-bridge.json';
 const TOKEN_KEY = 'mills.token';
 const $ = (id) => document.getElementById(id);
+// Icons from the sprite at the top of <body>. ic('mic') → an <svg>; label(el, 'mic', 'Mute') replaces
+// el's content with icon + text (no text = icon only).
+function ic(name, cls) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), u = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  s.setAttribute('class', 'ic' + (cls ? ' ' + cls : '')); s.setAttribute('aria-hidden', 'true'); u.setAttribute('href', '#i-' + name); s.append(u);
+  return s;
+}
+function label(el, name, text) { el.textContent = ''; el.append(ic(name, text ? 'lead' : '')); if (text) el.append(text); return el; }
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -763,7 +817,7 @@ async function restoreFolder() {
 }
 function setFolder(h) {
   rootHandle = h;
-  $('folderName').textContent = '📁 ' + h.name;
+  label($('folderName'), 'folder', h.name);
   $('pickFolder').textContent = 'Change folder';
   listDir('');
 }
@@ -819,7 +873,7 @@ async function listDir(dir) {
     if (!entries.length) tree.innerHTML = '<div style="color:var(--muted);cursor:default">(empty)</div>';
     for (const e of entries) {
       const row = document.createElement('div');
-      row.textContent = (e.dir ? '📁 ' : '📄 ') + e.name;
+      label(row, e.dir ? 'folder' : 'file', e.name);
       row.onclick = () => e.dir ? listDir(join(dir, e.name)) : openFile(join(dir, e.name));
       tree.appendChild(row);
     }
@@ -833,7 +887,7 @@ async function openFile(p) {
 }
 $('save').onclick = async () => {
   try { await fsOps.write({ path: openPath, content: $('editor').value });
-    $('openName').textContent = openPath + '  ✓ saved'; setTimeout(() => $('openName').textContent = openPath, 1500);
+    $('openName').textContent = openPath + '  '; $('openName').append(ic('check', 'lead'), 'saved'); setTimeout(() => $('openName').textContent = openPath, 1500);
   } catch (err) { sys(err.message, true); }
 };
 $('del').onclick = async () => {
@@ -860,14 +914,16 @@ $('refresh').onclick = () => listDir(cwd);
 const log = $('log');
 const scroll = () => { log.scrollTop = log.scrollHeight; };
 function sys(text, bad) { const d = document.createElement('div'); d.className = 'sys' + (bad ? ' bad' : ''); d.textContent = text; log.appendChild(d); scroll(); }
-function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; log.appendChild(d); return d; }
+// tool lines get their gear from CSS (.tool::before); older saved sessions still carry a "⚙ " prefix in the text
+const toolText = (t) => String(t).replace(/^⚙️?\s*/, '');
+function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
 function renderText(el, text) { MD.render(el, text); } // full markdown + mermaid (web/md.js)
 function describeTool(t) {
   const i = t.input || {};
   const name = t.name.replace(/^mcp__pc__/, 'your PC › ');
   const target = i.path ?? i.file_path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? '';
-  return '⚙ ' + name + (target !== '' ? '  ' + String(target).slice(0, 160) : '');
+  return name + (target !== '' ? '  ' + String(target).slice(0, 160) : '');
 }
 
 async function runPcTool(ev) {
@@ -932,7 +988,7 @@ $('composer').addEventListener('submit', (e) => {
 });
 function enqueue(message) {
   const el = bubble('me queued'); renderText(el, message);
-  const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.textContent = '✕'; x.title = 'Remove from queue';
+  const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.append(ic('close')); x.title = 'Remove from queue'; x.setAttribute('aria-label', 'Remove from queue');
   x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); postLive(); };
   el.prepend(x); scroll();
   queue.push({ message, el });
@@ -1063,7 +1119,7 @@ function setConversation(id, title, items) {
   archiveId = id; archiveTitle = title; transcript = items;
   savedLen = items.length; // what is on screen now counts as saved (a fresh chat, an opened session, or a just-deleted one)
   if (!id && !items.length) lastSaveAt = 0;
-  $('convTitle').textContent = title ? '🗂 ' + title : 'Unsaved session';
+  if (title) label($('convTitle'), 'archive', title); else $('convTitle').textContent = 'Unsaved session';
 }
 const autoName = () => {
   const first = ((transcript.find((t) => t.cls === 'me') || {}).text || '').replace(/\s+/g, ' ').trim();
@@ -1272,7 +1328,7 @@ function checkPins() { // after every member-list load
     if (!m.pub || (m.username === me.username && !chatPubJwk)) continue; // own key: judged once it is unlocked here
     const was = changedKeys.has(m.username);
     if (trustedPub(m.username, m.pub)) changedKeys.delete(m.username);
-    else if (!was) { changedKeys.add(m.username); sysRoom('⚠ ' + nickOf(m.username) + '\'s encryption key changed. Nothing is sent to them until you compare fingerprints with them (outside Mills) and press "Trust new key" under Key fingerprints.'); }
+    else if (!was) { changedKeys.add(m.username); sysRoom(nickOf(m.username) + '\'s encryption key changed. Nothing is sent to them until you compare fingerprints with them (outside Mills) and press "Trust new key" under Key fingerprints.'); }
   }
 }
 function acceptKey(user) {
@@ -1347,7 +1403,7 @@ const convPeer = (c) => (c === 'room' ? '' : c.slice(3).split('|').find((u) => u
 const convLabel = (c) => (c === 'room' ? '# Everyone' : '@ ' + nickOf(convPeer(c)) + ' (private)');
 const clipLen = (s) => Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
 const snippet = (rec) => (rec.m.deleted ? 'message deleted'
-  : (rec.audio ? '🎤 voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
+  : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
 function prefs() {
   const p = (me && me.prefs) || {};
   return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5,
@@ -1388,14 +1444,14 @@ function parsePayload(s) {
 }
 async function decryptMsg(m) {
   if (m.deleted) return { t: '', r: null };
-  if (!chatPriv) return { t: '🔒 (locked — sign in again to read)', r: null, locked: true };
-  if (!m.key) return { t: '🔒 (sent before your chat key existed)', r: null, locked: true };
-  if (m.fromPub && !trustedPub(m.from, m.fromPub)) return { t: '🔒 (sent with a key you have not verified for ' + nickOf(m.from) + ': see Key fingerprints)', r: null, locked: true };
+  if (!chatPriv) return { t: '(locked — sign in again to read)', r: null, locked: true };
+  if (!m.key) return { t: '(sent before your chat key existed)', r: null, locked: true };
+  if (m.fromPub && !trustedPub(m.from, m.fromPub)) return { t: '(sent with a key you have not verified for ' + nickOf(m.from) + ': see Key fingerprints)', r: null, locked: true };
   if (m.v === 3 || m.v === 4) {
-    if (typeof m.mid !== 'string') return { t: '🔒 (could not decrypt)', r: null, locked: true };
-    if (m.v === 4 && !HAS_DEFLATE) return { t: '🔒 (this browser is too old to open new messages: update it)', r: null, locked: true };
+    if (typeof m.mid !== 'string') return { t: '(could not decrypt)', r: null, locked: true };
+    if (m.v === 4 && !HAS_DEFLATE) return { t: '(this browser is too old to open new messages: update it)', r: null, locked: true };
     const first = midSeen.get(m.mid);
-    if (first !== undefined && first !== m.seq) return { t: '🔒 (replayed copy of an earlier message: refused)', r: null, locked: true };
+    if (first !== undefined && first !== m.seq) return { t: '(replayed copy of an earlier message: refused)', r: null, locked: true };
     try {
       const aad = bodyAad(m.from, m.to, m.mid, m.v);
       const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv), additionalData: enc.encode(aad + '|' + me.username) }, await wrapWith(m.fromPub), fromB64(m.key.wk));
@@ -1406,14 +1462,14 @@ async function decryptMsg(m) {
       midSeen.set(m.mid, m.seq);
       if (!(v3Since[m.from] <= m.seq)) { v3Since[m.from] = m.seq; localStorage.setItem('mills.v3since', JSON.stringify(v3Since)); }
       return p;
-    } catch { return { t: '🔒 (could not decrypt)', r: null, locked: true }; }
+    } catch { return { t: '(could not decrypt)', r: null, locked: true }; }
   }
-  if (v3Since[m.from] < m.seq) return { t: '🔒 (old unprotected format after this sender upgraded: refused)', r: null, locked: true };
+  if (v3Since[m.from] < m.seq) return { t: '(old unprotected format after this sender upgraded: refused)', r: null, locked: true };
   try {
     const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv) }, await sharedWith(m.fromPub), fromB64(m.key.wk));
     const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
     return parsePayload(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv) }, k, fromB64(m.ct))));
-  } catch { return { t: '🔒 (could not decrypt)', r: null, locked: true }; }
+  } catch { return { t: '(could not decrypt)', r: null, locked: true }; }
 }
 
 function resetRoomData() {
@@ -1455,7 +1511,8 @@ async function renderConvList() {
     const fp = m.pub ? await fingerprint(m.pub) : 'no key yet';
     if (run !== convListRun) return; // a newer render took over
     const d = document.createElement('div');
-    d.textContent = (changedKeys.has(m.username) ? '⚠ CHANGED · ' : '') + nickOf(m.username) + (m.username === me.username ? ' (you)' : '') + ': ' + fp + (m.agent ? ' — AI, key held by the hub; only receives messages that write @' + m.display.toLowerCase().replace(/\s+/g, '') + ' (plus the 5 before them)' : '');
+    if (changedKeys.has(m.username)) d.append(ic('warn', 'lead'), 'CHANGED · ');
+    d.append(nickOf(m.username) + (m.username === me.username ? ' (you)' : '') + ': ' + fp + (m.agent ? ' — AI, key held by the hub; only receives messages that write @' + m.display.toLowerCase().replace(/\s+/g, '') + ' (plus the 5 before them)' : ''));
     if (changedKeys.has(m.username)) {
       det.open = true;
       const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Trust new key';
@@ -1554,13 +1611,15 @@ function renderMsg(rec, bulk) {
   el.append(head);
   if (rec.r && !m.deleted) {
     const q = msgs.get(rec.r), quote = document.createElement('div'); quote.className = 'quote';
-    quote.textContent = '↪ ' + (q ? nickOf(q.m.from) + ': ' + snippet(q) : 'an earlier message');
+    label(quote, 'reply', q ? nickOf(q.m.from) + ': ' + snippet(q) : 'an earlier message');
     quote.title = 'Jump to the message this replies to';
     quote.onclick = (e) => { e.stopPropagation(); jumpTo(rec.r); };
     el.append(quote);
   }
   const body = document.createElement('div'); body.className = 'body';
-  if (m.deleted) body.textContent = 'message deleted'; else renderRich(body, rec.text);
+  if (m.deleted) body.textContent = 'message deleted';
+  else if (rec.locked) body.append(ic('lock', 'lead'), rec.text); // could not be opened: say why, never render it
+  else renderRich(body, rec.text);
   el.append(body);
   if (rec.audio && !m.deleted) {
     if (rec.url || rec.audio.d) {
@@ -1679,14 +1738,14 @@ async function clipUrl(rec) { // decrypted audio → a local blob URL (never lea
 }
 function clipPlayer(rec) { // a play button that downloads + decrypts the clip on first press, then becomes the player
   const b = document.createElement('button'); b.type = 'button'; b.className = 'clipBtn';
-  b.textContent = '▶ Voice clip (' + clipLen(rec.audio.s || 0) + ')';
+  label(b, 'play', 'Voice clip (' + clipLen(rec.audio.s || 0) + ')');
   b.onclick = async (e) => {
     e.stopPropagation(); b.disabled = true; b.textContent = 'Loading…';
     try {
       const au = document.createElement('audio'); au.controls = true; au.src = await clipUrl(rec); au.volume = prefs().clips.volume / 100;
       au.onclick = (ev) => ev.stopPropagation();
       b.replaceWith(au); au.play().catch(() => {});
-    } catch (err) { b.disabled = false; b.textContent = '▶ Voice clip: could not load (' + err.message + ')'; }
+    } catch (err) { b.disabled = false; label(b, 'play', 'Voice clip: could not load (' + err.message + ')'); }
   };
   return b;
 }
@@ -1835,7 +1894,7 @@ async function onCallState(state) {
     const others = list.filter((p) => p.user !== me.username);
     for (const p of others) if (!call.peers.has(p.user)) connectPeer(p.user);
     if (!restarted) for (const u of [...call.peers.keys()]) if (!others.some((p) => p.user === u)) dropPeer(u);
-    for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); peer.tile.querySelector('.lbl').textContent = nickOf(p.user) + (p.mic ? '' : ' 🔇'); } }
+    for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); const l = peer.tile.querySelector('.lbl'); l.textContent = nickOf(p.user); if (!p.mic) l.append(ic('mic-off', 'trail')); } }
     $('callInfo').textContent = convLabel(call.conv) + ' · ' + list.length + ' in call';
   }
   renderCallBanner();
@@ -1844,7 +1903,7 @@ function callNotify(conv, user) {
   const P = prefs();
   if (P.sound.on) playTone('mention', P.sound.mention);
   const t = document.createElement('div'); t.className = 'toast mention'; t.style.borderLeftColor = colorOf(user);
-  const b = document.createElement('b'); b.style.color = colorOf(user); b.textContent = '📞 ' + nickOf(user);
+  const b = document.createElement('b'); b.style.color = colorOf(user); label(b, 'phone', nickOf(user));
   t.append(b, ' is in a ' + (conv === 'room' ? 'call in # Everyone' : 'private call with you') + ' — click to join');
   t.style.setProperty('--toast-s', '12s');
   t.onclick = () => { t.remove(); joinCall(conv); };
@@ -1855,10 +1914,12 @@ function callNotify(conv, user) {
 function renderCallBanner() {
   if (!me || !$('callBanner')) return;
   const list = inCallList(currentConv), b = $('callBanner'), btn = $('callBtn');
-  btn.textContent = call.conv === currentConv ? '📞 In call' : list.length ? '📞 Join call (' + list.length + ')' : '📞 Call';
+  label(btn, 'phone', call.conv === currentConv ? 'In call' : list.length ? 'Join call (' + list.length + ')' : 'Call');
   if (!list.length || call.conv === currentConv) { b.hidden = true; return; }
   b.textContent = '';
-  const s = document.createElement('span'); s.textContent = '🔊 ' + list.map((p) => nickOf(p.user) + (p.cam ? ' 📷' : '')).join(', ') + (list.length === 1 ? ' is' : ' are') + ' in a call here';
+  const s = document.createElement('span'); s.append(ic('speaker', 'lead'));
+  list.forEach((p, k) => { s.append((k ? ', ' : '') + nickOf(p.user)); if (p.cam) s.append(ic('camera', 'trail')); });
+  s.append((list.length === 1 ? ' is' : ' are') + ' in a call here');
   const j = document.createElement('button'); j.type = 'button'; j.textContent = 'Join'; j.onclick = () => joinCall(currentConv);
   b.append(s, j); b.hidden = false;
 }
@@ -1904,7 +1965,7 @@ function applyPersonAudio(tile) {
   v.volume = Math.max(0, Math.min(1, (prefs().call.volume / 100) * (personVol(u) / 100)));
   v.muted = personMuted(u);
   const b = tile.querySelector('.pMute'), r = tile.querySelector('.pVol');
-  if (b) { b.textContent = personMuted(u) ? '🔇' : '🔊'; b.title = (personMuted(u) ? 'Unmute ' : 'Mute ') + nickOf(u) + ' (only for you)'; b.classList.toggle('off', personMuted(u)); }
+  if (b) { label(b, personMuted(u) ? 'speaker-off' : 'speaker'); b.title = (personMuted(u) ? 'Unmute ' : 'Mute ') + nickOf(u) + ' (only for you)'; b.classList.toggle('off', personMuted(u)); }
   if (r) { r.value = personVol(u); r.title = nickOf(u) + ': ' + personVol(u) + '% (only for you)'; }
 }
 function makeTile(user, self) {
@@ -2072,14 +2133,14 @@ async function onSignal(s) {
 
 function updateCallButtons() {
   const micOn = !!(call.mic && call.mic.enabled), camOn = !!call.cam;
-  $('callMic').textContent = call.mic ? (micOn ? '🔇 Mute' : '🎤 Unmute') : '🎤 Allow mic';
+  if (call.mic) label($('callMic'), micOn ? 'mic-off' : 'mic', micOn ? 'Mute' : 'Unmute'); else label($('callMic'), 'mic', 'Allow mic');
   $('callMic').title = call.mic ? (micOn ? 'Mute your microphone (M)' : 'Unmute your microphone (M) — you are muted') : 'Try to use your microphone again';
   if (call.mic && !meters.has(me.username)) addMeter(me.username, call.mic);
   $('callMic').classList.toggle('off', !micOn);
-  $('callCam').textContent = camOn ? '📷 Camera on' : '📷 Camera off';
+  label($('callCam'), 'camera', camOn ? 'Camera on' : 'Camera off');
   $('callCam').classList.toggle('off', !camOn);
   const st = selfTile();
-  if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; st.querySelector('.lbl').textContent = 'You' + (micOn ? '' : ' 🔇'); }
+  if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; const l = st.querySelector('.lbl'); l.textContent = 'You'; if (!micOn) l.append(ic('mic-off', 'trail')); }
 }
 function pushCallState() {
   if (call.conv) json('/api/call/state', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled) }) }).catch(() => {});
@@ -2168,10 +2229,16 @@ function dictStop() {
   clearTimeout(d.silence); clearTimeout(d.wake); d.wake = null;
   try { d.rec.stop(); } catch {}
 }
+function dictLabel(btn, state) { // idle → talk icon, listening → stop, "send message" heard → send (with words on the Work button)
+  const full = btn.dataset.full === '1';
+  if (state === 'stop') label(btn, 'stop', full ? 'Stop' : '');
+  else if (state === 'send') label(btn, 'send', full ? 'Sending…' : '');
+  else label(btn, 'talk', full ? 'Talk' : '');
+}
 function dictCleanup(d) {
   if (dict === d) dict = null;
   d.btn.classList.remove('on', 'armed');
-  d.btn.textContent = d.btn.dataset.idle;
+  dictLabel(d.btn, 'idle');
 }
 function dictStart(box, btn, submit) {
   if (dict) { const same = dict.btn === btn; dictStop(); if (same) return; }
@@ -2196,7 +2263,7 @@ function dictStart(box, btn, submit) {
     // "send message" + silence → send. More speech after it cancels that (the words stay as text).
     clearTimeout(d.wake); d.wake = null; btn.classList.remove('armed');
     if (!interim && WAKE.test(d.finals)) {
-      btn.classList.add('armed'); btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '🗣 Sending…' : '📨';
+      btn.classList.add('armed'); dictLabel(btn, 'send');
       d.wake = setTimeout(() => {
         d.wake = null;
         d.finals = d.finals.replace(WAKE, '');
@@ -2204,7 +2271,7 @@ function dictStart(box, btn, submit) {
         dictStop(); dictCleanup(d); // cleanup is idempotent: also covers the browser having already ended recognition
         if (box.value) d.submit();
       }, 1300);
-    } else if (!d.stopping) btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '■ Stop' : '■';
+    } else if (!d.stopping) dictLabel(btn, 'stop');
     box.value = d.base + d.finals + (interim ? (d.finals ? ' ' : '') + interim : '');
     box.dispatchEvent(new Event('input')); // keeps the Stop / Send now button and @ suggestions in step
     quietStop();
@@ -2219,13 +2286,13 @@ function dictStart(box, btn, submit) {
     dictCleanup(d);
   };
   try { rec.start(); } catch { dictCleanup(d); return; }
-  btn.classList.add('on'); btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '■ Stop' : '■';
+  btn.classList.add('on'); dictLabel(btn, 'stop');
   quietStop();
   box.focus();
 }
 for (const [btnId, boxId, formId] of [['roomDictate', 'roomInput', 'roomComposer'], ['workDictate', 'input', 'composer']]) {
   const btn = $(btnId);
-  btn.dataset.idle = btn.textContent;
+  btn.dataset.full = btn.textContent.trim() ? '1' : ''; // the Work button shows words next to its icon
   btn.title = 'Talk instead of typing: click to start, click again (or ~3 s of silence) to stop. Press Send / Enter to send — or finish with "send message" and pause to send automatically.';
   btn.hidden = !SpeechRec; // e.g. Firefox has no speech recognition
   btn.onclick = () => dictStart($(boxId), btn, () => $(formId).requestSubmit());
@@ -2261,12 +2328,12 @@ function openMsgMenu(rec, e) {
   if (e.target.closest('.quote') || window.getSelection().toString()) return;
   closeMsgMenu();
   const menu = document.createElement('div'); menu.id = 'msgMenu';
-  const add = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = (ev) => { ev.stopPropagation(); fn(b); }; menu.append(b); return b; };
+  const add = (icon, text, fn) => { const b = label(document.createElement('button'), icon, text); b.type = 'button'; b.onclick = (ev) => { ev.stopPropagation(); fn(b); }; menu.append(b); return b; };
   const mine = rec.m.from === me.username;
-  if (!rec.m.deleted) add('↩ Reply', () => { closeMsgMenu(); startReply(rec); });
-  if (mine && !rec.m.deleted && !rec.locked && !rec.audio) add('✎ Edit', () => { closeMsgMenu(); startEdit(rec); });
-  if (mine && !rec.m.deleted) add('🗑 Delete', (b) => {
-    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = '🗑 Click again to delete'; return; }
+  if (!rec.m.deleted) add('reply', 'Reply', () => { closeMsgMenu(); startReply(rec); });
+  if (mine && !rec.m.deleted && !rec.locked && !rec.audio) add('edit', 'Edit', () => { closeMsgMenu(); startEdit(rec); });
+  if (mine && !rec.m.deleted) add('trash', 'Delete', (b) => {
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; label(b, 'trash', 'Click again to delete'); return; }
     closeMsgMenu();
     json('/api/room/delete', { method: 'POST', body: JSON.stringify({ seq: rec.m.seq }) }).then(pollRoom).catch((err) => sysRoom('Could not delete: ' + err.message));
   });
@@ -2398,7 +2465,7 @@ $('roomInput').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { cancelCompose(); return; }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('roomComposer').requestSubmit(); }
 });
-function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.textContent = t; $('roomLog').append(d); $('roomLog').scrollTop = $('roomLog').scrollHeight; }
+function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.append(ic('warn', 'lead'), t); $('roomLog').append(d); $('roomLog').scrollTop = $('roomLog').scrollHeight; }
 
 // ── Work layout: left bar, resizable / minimizable panes, team chat docked or floating ──
 const PANES = ['files', 'edit', 'chat', 'roomPane'];
@@ -2569,9 +2636,9 @@ function renderShareSel() {
   const sel = $('shareSel'); if (!sel || !me) return;
   sel.textContent = '';
   const opt = (v, l) => { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.append(o); };
-  opt('', '📡 Not shared');
-  opt('room', '📡 Shared with # Everyone');
-  for (const m of roomMembers) if (!m.agent && m.username !== me.username) opt(dmConv(m.username), '📡 Shared with ' + nickOf(m.username));
+  opt('', 'Not shared'); // (options cannot hold graphics: the share icon sits next to the selector)
+  opt('room', 'Shared with # Everyone');
+  for (const m of roomMembers) if (!m.agent && m.username !== me.username) opt(dmConv(m.username), 'Shared with ' + nickOf(m.username));
   sel.value = myShare; if (sel.value !== myShare) sel.value = '';
   sel.classList.toggle('on', !!myShare);
 }
@@ -2605,7 +2672,7 @@ function onShares(list) {
 }
 function shareNotify(s) {
   const t = document.createElement('div'); t.className = 'toast'; t.style.borderLeftColor = colorOf(s.user);
-  const b = document.createElement('b'); b.style.color = colorOf(s.user); b.textContent = '👀 ' + nickOf(s.user);
+  const b = document.createElement('b'); b.style.color = colorOf(s.user); label(b, 'eye', nickOf(s.user));
   t.append(b, ' shared their Work session' + (s.conv === 'room' ? '' : ' with you') + ' — click to watch');
   t.style.setProperty('--toast-s', '10s');
   t.onclick = () => { t.remove(); openWatch(s.user); };
@@ -2617,7 +2684,7 @@ function renderShareBanner() {
   const here = sharesList.filter((s) => s.conv === currentConv);
   b.textContent = ''; b.hidden = !here.length;
   if (!here.length) return;
-  const s = document.createElement('span'); s.textContent = '👀 Sharing their Work session here:'; b.append(s);
+  const s = document.createElement('span'); label(s, 'eye', 'Sharing their Work session here:'); b.append(s);
   for (const sh of here) {
     const j = document.createElement('button'); j.type = 'button'; j.style.color = colorOf(sh.user);
     j.textContent = watching.has(sh.user) ? nickOf(sh.user) + ' · watching' : 'Join work · ' + nickOf(sh.user);
@@ -2644,8 +2711,8 @@ function openWatch(owner) {
   win.style.left = Math.min(innerWidth - 400, 60 + n * 36) + 'px'; win.style.top = Math.min(innerHeight - 480, 70 + n * 36) + 'px';
   const bar = document.createElement('div'); bar.className = 'bar winBar';
   const dot = document.createElement('i'); dot.className = 'busyDot'; dot.title = 'Claude is working';
-  const title = document.createElement('span'); title.textContent = '👀 ' + nickOf(owner) + '\'s Work (watch only)'; title.style.color = colorOf(owner);
-  const close = document.createElement('button'); close.type = 'button'; close.className = 'ghost'; close.textContent = '✕'; close.title = 'Stop watching';
+  const title = document.createElement('span'); label(title, 'eye', nickOf(owner) + '\'s Work (watch only)'); title.style.color = colorOf(owner);
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'ghost'; close.append(ic('close')); close.title = 'Stop watching'; close.setAttribute('aria-label', 'Stop watching');
   close.onclick = () => closeWatch(owner);
   bar.append(dot, title, close);
   const log = document.createElement('div'); log.className = 'wLog';
@@ -2684,7 +2751,7 @@ function renderWatchEvent(owner, w, e) {
   let el;
   if (e.t === 'user') { el = document.createElement('div'); el.className = 'msg me'; el.style.borderLeft = '3px solid ' + colorOf(owner); renderText(el, e.text); }
   else if (e.t === 'claude') { el = document.createElement('div'); el.className = 'msg'; renderText(el, e.text); }
-  else if (e.t === 'tool') { el = document.createElement('div'); el.className = 'tool'; el.textContent = e.text; }
+  else if (e.t === 'tool') { el = document.createElement('div'); el.className = 'tool'; el.textContent = toolText(e.text); }
   else { el = document.createElement('div'); el.className = 'sys'; el.textContent = e.text; }
   el.title = new Date(e.ts).toLocaleString();
   log.append(el);
@@ -2735,7 +2802,7 @@ async function loadAdmin() {
       const tr = document.createElement('tr');
       const td = (t) => { const c = document.createElement('td'); c.textContent = t; tr.append(c); return c; };
       td(a.display + ' (' + a.username + ')' + (a.admin ? ' · admin' : ''));
-      td([a.locked ? 'device locked' : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key ✓' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
+      td([a.locked ? 'device locked' : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key set' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
       td(modelName(a.model));
       const actions = td('');
       actions.append(

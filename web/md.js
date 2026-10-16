@@ -59,7 +59,7 @@
       else if (g.isrc !== undefined) {
         const href = safeHref(g.isrc);
         if (/^data:image\/(png|gif|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(g.isrc)) { const img = el('img', 'mdimg'); img.src = g.isrc; img.alt = g.ialt; parent.append(img); }
-        else if (href) parent.append(link(href, '🖼 ' + (g.ialt || 'image')));
+        else if (href) parent.append(link(href, MD.icon ? [MD.icon('image', 'lead'), g.ialt || 'image'] : 'Image: ' + (g.ialt || 'image')));
         else parent.append(m[0]);
       } else if (g.fn !== undefined) {
         const n = ctx.fnRef(g.fn), s = el('sup', 'mdfnref', '[' + n + ']');
