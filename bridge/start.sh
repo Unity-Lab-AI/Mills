@@ -12,5 +12,7 @@ if [ ! -f "$AUTH" ]; then
   # shellcheck disable=SC2086
   node set-password.js $ARGS "$MILLS_PW" || exit 1
 fi
+# run.js = supervisor: owns the tunnel, runs server.js under it and restarts it when asked
+# (node restart.js) or when it crashes.
 # shellcheck disable=SC2086
-exec node server.js $ARGS
+exec node run.js $ARGS
