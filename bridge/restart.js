@@ -47,7 +47,8 @@ function running(port) {
 }
 const ps = (cmd) => execFileSync('powershell', ['-NoProfile', '-Command', cmd], { encoding: 'utf8', windowsHide: true }).trim();
 function listenerPid(port) {
-  if (WIN) return Number(ps(`Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess`)) || 0;
+  // Get-NetTCPConnection exits non-zero when nothing listens on the port: that means "no pid", not a failure.
+  if (WIN) { try { return Number(ps(`Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess`)) || 0; } catch { return 0; } }
   try { return Number(execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).split('\n')[0]) || 0; } catch { return 0; }
 }
 // A window is cmd.exe (start*.bat) → node run.js → node server.js. Climb from the listener to the
