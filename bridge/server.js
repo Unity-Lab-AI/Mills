@@ -673,6 +673,14 @@ const server = http.createServer(async (req, res) => {
 
     const acct = sessionAccount(req);
     if (!acct) return send(res, 401, { error: 'Not signed in.' });
+    // A requested restart wins the gap between two replies: while it is pending (supervised hub) no
+    // NEW run starts; the page retries a 503 by itself and its message goes through on the new code.
+    // Without this, queued messages that start the next run within milliseconds could hold the
+    // restart off forever.
+    if (SUPERVISED && fs.existsSync(RESTART_FLAG) && req.method === 'POST' && (p === '/api/chat' || p === '/api/assistant/chat')) {
+      setTimeout(maybeRestart, 50);
+      return send(res, 503, { error: 'Mills is restarting; your message goes through in a moment.' });
+    }
     if (await assistant.route(p, req, res, acct)) return;
 
     if (p === '/api/check' && req.method === 'GET') {
