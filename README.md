@@ -1,60 +1,60 @@
 # Mills
 
-A private workspace for Alfreddo and Sponge: talk to Claude in the browser and have it build and edit files on your own PC. There's nothing to install on your side.
+A private workspace for Alfreddo and Sponge (plus Gee as admin): talk to Claude in the browser and have it build and edit files on your own PC, and talk to each other in an end-to-end encrypted chat room. There's nothing to install on your side.
 
-**Web app:** https://unity-lab-ai.github.io/Mills/ (deployed from `main` by GitHub Actions)
+**Web app:** https://unity-lab-ai.github.io/Mills/ (deployed from `main` by GitHub Actions). Everyone uses the same address and signs in with **username + password**.
 
-| Person | Address | Bridge window on Gee's PC |
-|--------|---------|---------------------------|
-| Alfreddo | https://unity-lab-ai.github.io/Mills/ | `bridge/start.bat` |
-| Sponge | https://unity-lab-ai.github.io/Mills/?user=sponge | `bridge/start-sponge.bat` |
+| Person | Username | Notes |
+|--------|----------|-------|
+| Alfreddo | `mills` | |
+| Sponge | `sponge` | default model Opus 5.5 |
+| Gee | `gee` | admin: extra **Admin** section |
 
-Each person has their own **profile**: their own password, device lock, Claude conversation, tunnel and Archive folder. The bridges run side by side in separate windows and never see each other's state.
+After signing in you land on the **main menu**: your username in the middle, and the **Work** and **Chat** buttons (plus **Admin** for Gee only). Every section has a **← Menu** button at the top left.
 
 ## How it works
 
 ```
-User's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel ──▶ Mills bridge on Gee's PC (one per profile)
-   │  holds the folder they opened on their PC                             └─ runs Claude Code (Gee's account) in the Mills folder
-   ◀── Claude's file edits (list/read/write/delete/mkdir) are relayed back to their browser and applied there
+Browser (GitHub Pages UI) ──username+password──▶ Cloudflare tunnel ──▶ Mills hub on Gee's PC (one process, every account)
+   │  Work: holds the folder they opened on their PC                         ├─ runs Claude Code (Gee's account) in the Mills folder, per account
+   │  Chat: encrypts/decrypts messages locally                               ├─ relays Claude's file edits to that person's browser
+   ◀── file edits (list/read/write/delete/mkdir) applied in the browser      └─ stores chat ciphertext only
 ```
 
 ## Gee: running it
 
-1. Double-click **`bridge/start.bat`** (Alfreddo) and/or **`bridge/start-sponge.bat`** (Sponge) and leave each window open while that person works.
-   - The first time a profile runs, it asks you to set that person's Mills password.
-   - Each bridge starts its own Cloudflare tunnel and posts the address to its own gist on your GitHub account (`Mills bridge address` for Alfreddo, `Mills bridge address (sponge)` for Sponge), where the web app finds it automatically.
+1. Double-click **`bridge/start.bat`** and leave the window open. One window serves everyone (`start-sponge.bat` still works and just runs the same thing).
+   - The first time, it asks for the `mills` account password if none is set.
+   - It starts a Cloudflare tunnel and posts the address to the `Mills bridge address` gist on your GitHub account, where the web app finds it automatically.
 2. Requires Node.js, Claude Code (logged in), `gh` (logged in), and `cloudflared` (path set in `bridge/config.json`).
-3. Restarting a bridge is safe: passwords live in `auth.json` and are only ever written by `set-password.js` (the launcher asks for one only when that file is missing), the device lock and sign-in sessions live in `state.json`, so nobody is signed out or asked for a new password when a bridge restarts.
-4. The models offered in the web app's dropdown come from `models` in `bridge/config.json` (`id` = what `claude --model` accepts, `label` = what the person sees). Edit that list and restart the bridges to change it.
+3. Restarting is safe: passwords live in `auth.json` files and are only written by `set-password.js` or the Admin section; device locks live in each account's `state.json`; sign-in sessions live in `bridge/hub-state.json`. Nobody is signed out or asked for a new password when the hub restarts.
+4. The models offered in the Work model dropdown come from `models` in `bridge/config.json` (`id` = what `claude --model` accepts, `label` = what the person sees).
 
 ### Restarts after code or config changes (Claude does this itself)
 
-Each window runs `bridge/run.js`, a small supervisor that owns the Cloudflare tunnel and runs `bridge/server.js` (the actual bridge) underneath it. After Claude changes bridge code or config it runs:
+The window runs `bridge/run.js`, a small supervisor that owns the Cloudflare tunnel and runs `bridge/server.js` (the hub) underneath it. After Claude changes hub code or config it runs:
 
 ```
 node bridge/restart.js
 ```
 
-Every running bridge then restarts itself the moment its current reply is finished, under the same tunnel, so the address does not change and the web app shows "Mills is restarting" for a second or two and carries on. Nobody is signed out, no password is asked, Gee does not have to touch anything. `node bridge/restart.js sponge` does one profile; `node bridge/restart.js --hard` closes the bridge windows and relaunches them with `start.bat` (new tunnel address, found again automatically) for bridges that are wedged or were started before `run.js` existed; `--hard --delay 30` does that 30 s later from a detached helper so the Claude run that asked for it can finish its reply. Progress of a hard restart is written to `bridge/restart.log`. `node bridge/restart.js --stop sponge` closes a bridge window without relaunching it.
+The hub restarts itself the moment nobody has a Claude reply in progress, under the same tunnel, so the address does not change and the web app shows "Mills is restarting" for a second and carries on. `node bridge/restart.js --hard` closes the window and relaunches `start.bat` (new tunnel address, found again automatically) for a wedged hub; `--hard --delay 30` does that 30 s later from a detached helper so the Claude run that asked for it can finish its reply; `--stop` closes it without relaunching. Progress of a hard restart is written to `bridge/restart.log`. Gee can also press **Restart hub** in the Admin section.
 
-### Adding another person
+### Accounts
 
-1. Create `bridge/profiles/<name>/config.json` with a free port and a display name, e.g. `{ "port": 7779, "user": "Red" }` (`<name>` = lowercase letters, digits, dashes).
-2. Set their password: `node bridge/set-password.js --profile <name> "their password"` (or just run `bridge/start.bat <name>`, which asks on first run).
-3. Run `bridge/start.bat <name>` (copy `start-sponge.bat` if you want a double-clickable launcher).
-4. Give them `https://unity-lab-ai.github.io/Mills/?user=<name>` and the password. Their saved conversations land in `Mills/Archive/<name>/`.
+Gee manages accounts from **Admin** in the web app: create an account (a 20-character password is generated and shown once), give someone a new password, reset a device lock, sign someone out, stop their Claude run, delete an account (its folder moves to `bridge/profiles-deleted/`, nothing is destroyed). Admin can also clear the chat history.
 
-Profile state lives in `bridge/profiles/<name>/` (`auth.json`, `state.json`, `tunnel.json`, `.mcp-runtime.json` are gitignored; `config.json` is committed). Everything in `bridge/config.json` except `port` and `gistId` applies to every profile unless the profile's own `config.json` overrides it. For example, a profile can set its own default Claude model with `"model": "claude-opus-5-5"` (Sponge's profile does; an empty or missing `model` uses Claude Code's default). That default is what the web app's "Default" option means; a pick in the dropdown overrides it. Config is read when the bridge starts, so restart that profile's window after changing it.
+On disk, the `mills` account is `bridge/auth.json` + `bridge/state.json` + `Mills/Archive/`; every other account is `bridge/profiles/<name>/` (`config.json` committed: `{ "user": "<display name>", "admin": true|false, "model": "<default model>" }`; `auth.json`, `state.json`, `.mcp-runtime.json` gitignored) + `Mills/Archive/<name>/`. From the command line: `node bridge/set-password.js --profile <name> "password"` (no `--profile` = the `mills` account). Everything in `bridge/config.json` applies to every account unless the account's own `config.json` overrides it; an account's `model` is what the Work dropdown's "Default" option means.
 
-## Alfreddo / Sponge: using it
+## Using it
 
-1. Open your address from the table above in **Chrome or Edge** (on Linux: Chrome, Chromium or Brave; Firefox cannot open folders) and sign in with your password.
-2. Click **Open folder on my PC** and pick the folder Claude should work in.
-3. Chat with Claude. It creates and edits files in that folder, and you can also edit them yourself in the editor panel. The message box never locks: while Claude is replying, **Queue** lines a message up for right after this reply (queued messages show dashed; ✕ removes one), and the second button is **Stop** when the box is empty or **Send now** when it has text, which stops the current reply and sends your text immediately, ahead of the queue.
-4. **Save to Archive** stores the current conversation; once saved, it updates itself after every reply. **Archive** lists saved conversations: **Open** one to continue it (Claude resumes with full memory of it), **Rename** it (or click the title above the chat), or **Delete** it (click twice to confirm). Saved conversations live on Gee's PC in `Mills/Archive/` (Alfreddo) or `Mills/Archive/<name>/` (other profiles) and are never committed.
-5. **Theme** opens a dropdown of 23 UI colour themes (Burple, Cyberpunk, Dracula, Nord, Solarized, …) plus the Mills default. The choice is remembered in that browser.
-6. The **model dropdown** in the header picks which Claude model answers you (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5, or your bridge's default). The choice is stored by your bridge, so it applies from your next message (if Claude is mid-reply, from the one after), to every new chat, and it survives bridge restarts. Each "Done" line shows which model answered.
+1. Open https://unity-lab-ai.github.io/Mills/ in **Chrome or Edge** (on Linux: Chrome, Chromium or Brave; Firefox cannot open folders) and sign in with your username and password.
+2. **Work** is the Claude workspace. Click **Open folder on my PC** and pick the folder Claude should work in, then chat with Claude. It creates and edits files in that folder, and you can edit them yourself in the editor panel.
+   - The message box never locks: while Claude is replying, **Queue** lines a message up for right after this reply (queued messages show dashed; ✕ removes one), and the second button is **Stop** when the box is empty or **Send now** when it has text, which stops the current reply and sends your text immediately, ahead of the queue.
+   - **Save to Archive** stores the current conversation; once saved, it updates itself after every reply. **Archive** lists saved conversations: **Open** (Claude resumes with full memory of it), **Rename**, **Delete** (click twice). Saved conversations live on Gee's PC under `Mills/Archive/` and are never committed.
+   - The **model dropdown** picks which Claude model answers you (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5, or your account's default). It applies from your next message (after the current reply), to every new chat, and survives restarts. Each "Done" line shows which model answered.
+   - **Theme** opens 23 UI colour themes plus the Mills default, remembered in that browser.
+3. **Chat** is a room shared by every account. Messages are end-to-end encrypted (see Security). A red badge on the Chat button counts new messages while you are elsewhere. The member list shows each person's key fingerprint.
 
 ## Publishing updates
 
@@ -72,11 +72,11 @@ git remote add forgejo https://git.unityailab.com/GFourteen/Mills.git
 2. Merge the feature into `develop` (`git merge --no-ff`) and `git push origin develop`.
 3. Merge `develop` into `main` and `git push origin main` (this redeploys the web app).
 
-`git push origin` sends each branch to GitHub and Forgejo in one go. Check that both pushes report success. Never commit `bridge/auth.json`, `bridge/state.json`, `bridge/profiles/*/auth.json`, `bridge/profiles/*/state.json`, `Archive/` or `.claude/` (all are kept out by `.gitignore`).
+`git push origin` sends each branch to GitHub and Forgejo in one go. Check that both pushes report success. Never commit `auth.json` / `state.json` files, `bridge/hub-state.json`, `Archive/`, `Chat/` or `.claude/` (all are kept out by `.gitignore`).
 
 ## Security
 
-- **First sign-in claims a profile.** The first browser that signs in to a profile successfully becomes the only one allowed into it, and every other device is refused. To move someone to a new browser, Gee runs `node bridge/server.js --reset-lock` (Alfreddo) or `node bridge/server.js --profile sponge --reset-lock` (Sponge).
-- Passwords are stored on Gee's PC only, as scrypt hashes (`bridge/auth.json` / `bridge/profiles/<name>/auth.json`, never committed). To change one: `node bridge/set-password.js "new password"` or `node bridge/set-password.js --profile <name> "new password"`.
-- After 5 failed sign-ins, sign-in is blocked for 15 minutes. Only the GitHub Pages origin may call the bridge.
+- **First sign-in claims an account.** The first browser that signs in to an account becomes the only one allowed into it. To move someone to a new browser, Gee uses **Reset lock** in Admin.
+- Passwords are stored on Gee's PC only, as scrypt hashes. After 5 failed sign-ins for a username, that username is blocked for 15 minutes. Only the GitHub Pages origin may call the hub. The Admin endpoints check the account's `admin` flag on every request.
+- **Chat encryption.** Each account has an ECDH P-256 key pair created in its browser. The private key stays in that browser and is also backed up on the hub encrypted with a key derived from the account password (PBKDF2, 310,000 rounds), so it follows the account to a new browser. Every message is encrypted with a fresh AES-256-GCM key, which is wrapped separately for each member. The hub (and its disk, `Mills/Chat/`) only ever holds public keys, the locked backups and ciphertext, and each reader is sent only their own wrapped key. Limits worth knowing: the hub sees your password for a moment when you sign in, so someone who controls Gee's PC *while you sign in* could unlock your backup; compare fingerprints in the member list once with each other to rule out a swapped key. A password reset done by Admin on someone who then signs in from a new browser starts a fresh key: older messages stay unreadable in that new browser.
 - Claude can't run shell commands by default. `allowedTools` / `permissionMode` in `bridge/config.json` control that.

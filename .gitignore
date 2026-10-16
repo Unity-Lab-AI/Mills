@@ -17,6 +17,8 @@ bridge/.mcp-runtime.json
 bridge/tunnel.json
 bridge/.restart
 bridge/restart.log
+bridge/hub-state.json
+bridge/profiles-deleted/
 bridge/*.tmp
 
 # Per-profile runtime state (one profile per extra person, e.g. bridge/profiles/sponge/).
