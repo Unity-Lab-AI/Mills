@@ -65,7 +65,44 @@ function listening(port) {
   });
 }
 
-let SCRATCH, SB, PORT, H, hub = null;
+let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null;
+// Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
+//   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
+//   "TIME" → get_time, then answers with the tool result          "REMIND"      → set_reminder in 1 second
+// The last answer echoes whether the system prompt carried the person's name and time zone.
+function startFakeOllama() {
+  const http = require('http');
+  ollamaSrv = http.createServer((req, res) => {
+    let body = ''; req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      const j = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+      if (req.url === '/api/version') return j({ version: 'fake' });
+      if (req.url === '/api/tags') return j({ models: [{ name: 'unity-brain:latest' }] });
+      if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
+      if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
+      const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
+      const sys = (msgs[0] || {}).content || '';
+      const user = [...msgs].reverse().find((m) => m.role === 'user') || { content: '' };
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      const line = (m) => res.write(JSON.stringify({ message: { role: 'assistant', content: '', ...m }, done: false }) + '\n');
+      const call = (name, args) => line({ tool_calls: [{ function: { name, arguments: args } }] });
+      if (last.role === 'user') {
+        const u = user.content, m = /TASK (.+)/.exec(u), d = /DELETE (\S+)/.exec(u);
+        if (m) call('add_task', { title: m[1] });
+        else if (d) call('delete_task', { task_id: d[1] });
+        else if (/TIME/.test(u)) call('get_time', {});
+        else if (/REMIND/.test(u)) call('set_reminder', { text: 'regress reminder', when: 'in 1 second' });
+        else line({ content: 'plain answer for ' + u.slice(0, 40) });
+      } else if (last.role === 'tool' && last.tool_name !== 'say') {
+        call('say', { text: 'done: ' + last.content.slice(0, 160), emotion: 'happy', act: 'statement' });
+      } else {
+        line({ content: `final sys-has-name=${/Mills username "t-user"|Mills username "t-admin"/.test(sys)} tz=${(/\(([A-Za-z_]+\/[A-Za-z_]+)\)/.exec(sys) || [])[1] || ''}` });
+      }
+      res.end(JSON.stringify({ done: true }) + '\n');
+    });
+  });
+  return new Promise((r) => ollamaSrv.listen(0, '127.0.0.1', () => { OLLAMA_PORT = ollamaSrv.address().port; r(); }));
+}
 async function setup() {
   SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'mills-test-'));
   SB = path.join(SCRATCH, 'bridge');
@@ -83,7 +120,8 @@ async function setup() {
   fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'hub.log', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
-  const cfg = { ...real, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  await startFakeOllama();
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}` }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   const sp = (args) => spawnSync(process.execPath, [path.join(SB, 'set-password.js'), ...args], { cwd: SB, encoding: 'utf8' });
   sp(['pw-default-0001']);
@@ -551,6 +589,43 @@ async function run() {
     && /noiseSuppression: a\.noise/.test(html) && /audio: audioConstraints\(\)/.test(html) && /📷 Camera off<\/button>/.test(html) && /const SNAPS = /.test(html)
     && /crypto\.subtle\.encrypt\(\{ name: 'AES-GCM', iv \}, k, enc\.encode\(JSON\.stringify\(\{ conv: call\.conv/.test(html), ids48.filter((id) => !html.includes(`id="${id}"`)).join(', '));
 
+  { // Unity section (assistant): own block so its names never clash with other checks
+  async function uchat(tok, message, client = { tz: 'Asia/Tokyo', locale: 'en-US' }) {
+    const r = await fetch(H + '/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ message, client }) });
+    if (r.status !== 200) return { status: r.status, events: [] };
+    const events = (await r.text()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    return { status: 200, events, final: (events.find((e) => e.type === 'final') || {}).text || '', err: (events.find((e) => e.type === 'error') || {}).text || '' };
+  }
+  const us = (await call('/api/assistant/state', U)).data;
+  check('R61', 'Unity section state: local brain default and loaded, Claude models offered', us.brain === 'local' && us.local && us.local.model === true && us.brains.some((b) => b.id === 'local') && us.brains.some((b) => b.id === 'claude-opus-5-5'), JSON.stringify(us.local || us));
+  const t1 = await uchat(U, 'TASK buy regress milk');
+  const dataU = (await call('/api/assistant/data', U)).data, dataA = (await call('/api/assistant/data', A)).data;
+  const said = t1.events.find((e) => e.type === 'say');
+  check('R62', 'local brain: tool call adds a task for that person only; reply spoken via say; name + their time zone in the prompt', t1.events.some((e) => e.type === 'tool' && e.name === 'add_task')
+    && (dataU.tasks || []).some((t) => t.title === 'buy regress milk') && !(dataA.tasks || []).length && !!said && /sys-has-name=true tz=Asia\/Tokyo/.test(t1.final), t1.err || t1.final);
+  const tid = ((dataU.tasks || [])[0] || {}).id;
+  const t2 = await uchat(U, 'DELETE ' + tid);
+  const waiting = (await call('/api/assistant/state', U)).data.pending;
+  const stillThere = ((await call('/api/assistant/data', U)).data.tasks || []).some((t) => t.id === tid);
+  const ans = await call('/api/assistant/answer', U, { yes: true });
+  const gone = !((await call('/api/assistant/data', U)).data.tasks || []).some((t) => t.id === tid);
+  check('R63', 'destructive tool waits for Yes: confirm event, nothing deleted until the answer', t2.events.some((e) => e.type === 'confirm') && waiting && waiting.tool === 'delete_task' && stillThere && ans.data.ok && gone);
+  const t3 = await uchat(U, 'TIME please', { tz: 'America/Chicago', locale: 'en-US' });
+  const timeRes = (t3.events.find((e) => e.type === 'tool_result' && e.name === 'get_time') || {}).result || {};
+  check('R64', "get_time answers in the person's own time zone (from their browser)", timeRes.timezone === 'America/Chicago' && /\d/.test(timeRes.now || ''));
+  await uchat(U, 'REMIND me');
+  let notice = null;
+  for (let i = 0; i < 50 && !notice; i++) { await sleep(500); notice = ((await call('/api/assistant/state', U)).data.notices || []).find((n) => n.text === 'regress reminder'); }
+  check('R65', 'a due reminder reaches that person as a notice', !!notice);
+  const badBrain = await call('/api/assistant/brain', U, { brain: 'gpt-9' });
+  const toClaude = await call('/api/assistant/brain', U, { brain: 'claude-opus-5-5' });
+  const t4 = await uchat(U, 'ASSISTTOOL add it');
+  const viaClaude = ((await call('/api/assistant/data', U)).data.tasks || []).some((t) => t.title === 'from claude brain');
+  await call('/api/assistant/brain', U, { brain: 'local' });
+  check('R66', 'brain dropdown: unknown → 400; Claude brain uses the same tools through the relay', badBrain.status === 400 && toClaude.status === 200 && t4.status === 200 && viaClaude, t4.err);
+  check('R67', '[static] menu has the Unity button and Unity screen', /id="goAssist">Unity</.test(html) && /<b>Unity<\/b>/.test(html));
+  }
+
   // Admin
   check('R25', 'non-admin → 403 on admin endpoints', (await call('/api/admin/accounts', U)).status === 403 && (await call('/api/admin/create', U, { username: 'x' })).status === 403);
   const cr = (await call('/api/admin/create', A, { username: 't-new', display: 'Tnew' })).data;
@@ -634,6 +709,7 @@ async function run() {
     await run();
   } catch (e) { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); }
   stopHub();
+  if (ollamaSrv) ollamaSrv.close();
   await sleep(800);
   const failed = results.filter((r) => r.status === 'FAIL'), skipped = results.filter((r) => r.status === 'SKIP');
   console.log(`\n${results.length - failed.length - skipped.length} passed, ${failed.length} failed, ${skipped.length} skipped.`);
