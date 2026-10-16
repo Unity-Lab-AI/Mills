@@ -32,6 +32,29 @@
   .err { color: var(--bad); font-size: .9rem; min-height: 1.2em; }
   .status { font-size: .8rem; color: var(--muted); }
   .status.on { color: var(--good); }
+  .status.on::before { content: ''; display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; background: var(--good); margin-right: .4rem; vertical-align: middle; box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); animation: livePulse 2s ease-out infinite; }
+  @keyframes livePulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); } 70% { box-shadow: 0 0 0 .5rem transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  /* ── motion: things ease in and respond to the hand, nothing jumps ── */
+  button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, transform .08s ease, box-shadow .15s ease; }
+  button:not(:disabled):hover { filter: brightness(1.08); }
+  button:not(:disabled):active { transform: scale(.97); }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
+  input, textarea, select { transition: border-color .15s ease, box-shadow .15s ease; }
+  input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+  .rmsg.new, .msg.claude, .msg.me { animation: msgIn .26s cubic-bezier(.2,.7,.2,1); }
+  #menu .choices button { transition: transform .12s ease, box-shadow .15s ease, background-color .15s ease; }
+  #menu .choices button:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,.28); }
+  .cv .dot { position: relative; transition: background-color .2s; }
+  .cv .dot.on::after { content: ''; position: absolute; right: -.15rem; bottom: -.15rem; width: .42rem; height: .42rem; border-radius: 50%; background: var(--good); border: 2px solid var(--panel); }
+  .roomTop .online { color: var(--good); }
+  .typingLine { display: flex; align-items: center; gap: .35rem; padding: .15rem .9rem; font-size: .76rem; color: var(--muted); font-style: italic; animation: msgIn .2s ease; }
+  .dots { display: inline-flex; gap: .2rem; margin-left: .35rem; align-items: center; }
+  .dots i { width: .32rem; height: .32rem; border-radius: 50%; background: currentColor; opacity: .35; animation: dotPulse 1.2s ease-in-out infinite; }
+  .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes dotPulse { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-.2rem); } }
+  .msg.thinking { color: var(--muted); font-style: italic; display: flex; align-items: center; animation: msgIn .2s ease; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
   #shell { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   header { display: flex; align-items: center; gap: .75rem; padding: .6rem 1rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -495,6 +518,7 @@
       <div id="callBanner" hidden></div>
       <div id="shareBanner" hidden></div>
       <div id="roomLog"></div>
+      <div id="typingLine" class="typingLine" hidden></div>
       <div id="replyBar" hidden><span id="replyText"></span><button type="button" class="ghost" id="replyCancel" title="Cancel (Esc)" aria-label="Cancel"><svg class="ic"><use href="#i-close"/></svg></button></div>
       <div id="mentionList" hidden></div>
       <div id="recBar" hidden><i class="dotRec"></i><span id="recTime">Recording 0:00 / 2:00</span>
@@ -1121,9 +1145,19 @@ function drain() { // a run just ended: "Send now" text first, then the queue in
   postLive();
 }
 
+// "Claude is thinking…": an animated bubble from the moment a message goes out until the first
+// words, tool call or error arrives (it is never part of the transcript).
+let thinkingEl = null;
+function showThinking() {
+  hideThinking();
+  thinkingEl = bubble('claude thinking');
+  const dots = document.createElement('span'); dots.className = 'dots'; dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  thinkingEl.append(ic('bot', 'lead'), 'Claude is thinking', dots); scroll();
+}
+function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; } }
 async function send(message) {
   renderText(bubble('me'), message); record('me', message); scroll();
-  setBusy(true); runModel = ''; stderrText = '';
+  setBusy(true); runModel = ''; stderrText = ''; showThinking();
   try {
     postLive();
     const context = watchContext(); // summaries of the shared sessions you are watching, for your own Claude
@@ -1142,7 +1176,7 @@ async function send(message) {
       }
     }
   } catch (err) { sys(err.message, true); }
-  setBusy(false); $('input').focus();
+  hideThinking(); setBusy(false); $('input').focus();
   refreshUsage();
   if (archiveId) saveToArchive(true); // keep the saved session up to date after every reply
   if (!lastSaveAt) lastSaveAt = Date.now(); // the auto-save clock starts with the first reply
@@ -1154,6 +1188,7 @@ function handleEvent(ev) {
   if (ev.type === 'pc_tool') return runPcTool(ev);
   // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
   if ((ev.type === 'assistant' && ev.message && ev.message.usage) || /rate_limit/.test(String(ev.type || '')) || ev.type === 'result') refreshUsageSoon();
+  if (ev.type === 'assistant' || ev.type === 'bridge_error' || ev.type === 'result') hideThinking();
   if (ev.type === 'assistant' && ev.message) {
     for (const block of ev.message.content || []) {
       if (block.type === 'text' && block.text.trim()) { renderText(bubble('claude'), block.text); record('claude', block.text); }
@@ -1631,7 +1666,9 @@ async function renderConvList() {
   const box = $('convList'); box.textContent = '';
   const add = (conv, label, color, sub) => {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'cv' + (conv === currentConv ? ' on' : '');
-    const dot = document.createElement('span'); dot.className = 'dot'; if (color) dot.style.background = color;
+    if (conv !== 'room') b.dataset.user = convPeer(conv);
+    const dot = document.createElement('span'); dot.className = 'dot' + (conv !== 'room' && onlineSet.has(convPeer(conv)) ? ' on' : ''); if (color) dot.style.background = color;
+    if (conv !== 'room') dot.title = onlineSet.has(convPeer(conv)) ? 'online now' : 'not in the chat right now';
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = label;
     const s = document.createElement('small'); s.textContent = sub; nm.append(s);
     const badge = document.createElement('span'); badge.className = 'badge'; badge.dataset.convBadge = conv; badge.hidden = true;
@@ -1663,7 +1700,7 @@ async function renderConvList() {
 function selectConv(conv) {
   if (conv !== 'room' && !memberOf(convPeer(conv))) conv = 'room';
   currentConv = conv; store.set('mills.conv.' + me.username, conv);
-  cancelCompose();
+  cancelCompose(); sendTyping(false);
   $('convName').textContent = convLabel(conv);
   $('roomInput').placeholder = conv === 'room' ? 'Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)'
     : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
@@ -1671,7 +1708,7 @@ function selectConv(conv) {
   for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
   log.scrollTop = log.scrollHeight;
   for (const b of $('convList').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
-  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner();
+  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence();
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
@@ -1695,6 +1732,7 @@ async function applyRoom(d) {
   if (d.keysVer && d.keysVer !== roomKeysVer) { const first = !roomKeysVer; roomKeysVer = d.keysVer; if (!first) await refreshMembers(); }
   seenMap = d.seen || {};
   onShares(d.shares || []);
+  onlineSet = new Set(d.online || []); typingList = d.typing || []; renderPresence();
   for (const m of d.messages) await ingest(m, roomLoaded);
   roomLoaded = true;
   if (pinBootstrap) { pinBootstrap = false; savePins(); } // first load done: from now on only pinned keys count
@@ -1715,7 +1753,7 @@ async function ingest(m, live) {
   const prev = msgs.get(m.seq);
   const p = await decryptMsg(m);
   if (prev && prev.url) URL.revokeObjectURL(prev.url);
-  const rec = { m, text: p.t, r: p.r, audio: p.a || null, url: null, locked: !!p.locked, el: prev ? prev.el : null };
+  const rec = { m, text: p.t, r: p.r, audio: p.a || null, url: null, locked: !!p.locked, el: prev ? prev.el : null, fresh: live && !prev };
   msgs.set(m.seq, rec);
   if (convOfMsg(m) === currentConv) renderMsg(rec);
   for (const other of msgs.values()) if (other.r === m.seq && other.el) renderMsg(other); // refresh quotes of this message
@@ -1765,7 +1803,11 @@ function renderMsg(rec, bulk) {
   }
   if (mine && !m.deleted) { const s = document.createElement('div'); s.className = 'seenLine'; el.append(s); }
   el.onclick = (e) => openMsgMenu(rec, e);
-  if (!rec.el) { rec.el = el; log.append(el); if (!bulk && (atBottom || mine)) log.scrollTop = log.scrollHeight; }
+  if (!rec.el) {
+    rec.el = el; log.append(el);
+    if (rec.fresh) { el.classList.add('new'); rec.fresh = false; } // slides in once; re-renders (edits, receipts) do not replay it
+    if (!bulk && (atBottom || mine)) log.scrollTo({ top: log.scrollHeight, behavior: bulk ? 'auto' : 'smooth' });
+  }
   updateSeenLine(rec);
 }
 function jumpTo(seq) {
@@ -2593,6 +2635,36 @@ function insertMention(u) {
   $('mentionList').hidden = true; el.focus();
 }
 $('roomInput').addEventListener('input', updateMentionList);
+// ── Presence: who is online, who is typing (renewed every 2.5 s while keys are pressed; lapses in 6 s) ──
+let onlineSet = new Set(), typingList = [], typingSentAt = 0, typingOn = false, typingTimer = null;
+function sendTyping(on) {
+  if (!me || (!on && !typingOn)) return;
+  typingOn = on; typingSentAt = on ? Date.now() : 0;
+  json('/api/room/typing', { method: 'POST', body: JSON.stringify({ conv: currentConv, on }) }).catch(() => {});
+}
+$('roomInput').addEventListener('input', () => {
+  const has = !!$('roomInput').value.trim();
+  clearTimeout(typingTimer);
+  if (!has) return sendTyping(false);
+  if (Date.now() - typingSentAt > 2500) sendTyping(true);
+  typingTimer = setTimeout(() => sendTyping(false), 4000); // stopped typing without sending
+});
+$('roomComposer').addEventListener('submit', () => { clearTimeout(typingTimer); sendTyping(false); }, true);
+function renderPresence() {
+  if (!me) return;
+  const n = [...onlineSet].filter((u) => u !== me.username && memberOf(u) && !memberOf(u).agent).length;
+  const st = $('roomStatus');
+  if (chatPriv) { st.textContent = ''; st.append(ic('lock', 'lead'), 'End-to-end encrypted'); if (n) { st.append(' · '); const o = document.createElement('span'); o.className = 'online'; o.textContent = n + ' online'; st.append(o); } }
+  for (const b of $('convList').querySelectorAll('.cv[data-user]')) b.querySelector('.dot').classList.toggle('on', onlineSet.has(b.dataset.user));
+  const who = typingList.filter((t) => t.conv === currentConv).map((t) => nickOf(t.user));
+  const line = $('typingLine');
+  if (!who.length) { line.hidden = true; return; }
+  line.textContent = ''; line.hidden = false;
+  const txt = who.length === 1 ? who[0] + ' is typing' : who.length === 2 ? who.join(' and ') + ' are typing' : who.slice(0, 2).join(', ') + ' and ' + (who.length - 2) + ' more are typing';
+  const dots = document.createElement('span'); dots.className = 'dots'; dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  line.append(txt, dots);
+  const log = $('roomLog'); if (log.scrollHeight - log.scrollTop - log.clientHeight < 80) log.scrollTop = log.scrollHeight;
+}
 $('roomInput').addEventListener('keydown', (e) => {
   const first = !$('mentionList').hidden && $('mentionList').querySelector('button');
   if (first && (e.key === 'Tab' || e.key === 'Enter')) { e.preventDefault(); insertMention(first.dataset.user); return; }

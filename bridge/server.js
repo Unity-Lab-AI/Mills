@@ -275,6 +275,33 @@ const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv ==
 let roomVer = 1, keysVer = 1;
 const roomWaiters = new Set();
 function roomChanged() { roomVer++; for (const fn of [...roomWaiters]) fn(); }
+// Presence: who has the chat open (polled it in the last 70 s) and who is typing where. Typing is
+// per conversation and only shown to that conversation's members; an entry lapses after 6 s unless
+// the browser renews it (it renews every 2.5 s while keys are pressed).
+const TYPING_MS = 6000, ONLINE_MS = 70000;
+const lastSeen = new Map();   // username -> last chat poll
+const typing = new Map();     // username -> { conv, at, timer }
+function setTyping(user, conv, on) {
+  const prev = typing.get(user);
+  if (prev) clearTimeout(prev.timer);
+  if (!on) { typing.delete(user); if (prev) roomChanged(); return; }
+  const timer = setTimeout(() => { typing.delete(user); roomChanged(); }, TYPING_MS);
+  timer.unref();
+  typing.set(user, { conv, at: Date.now(), timer });
+  if (!prev || prev.conv !== conv) roomChanged();
+}
+function noteSeen(user) {
+  const was = lastSeen.get(user) || 0;
+  lastSeen.set(user, Date.now());
+  if (Date.now() - was > ONLINE_MS) roomChanged(); // came online: tell the others now, not at their next poll
+}
+const onlineUsers = () => [...lastSeen].filter(([, at]) => Date.now() - at < ONLINE_MS).map(([u]) => u);
+function typingFor(user) { // conversations this reader is in; the agent counts while composing a reply
+  const out = [];
+  for (const [u, t] of typing) if (u !== user && (t.conv === 'room' || t.conv.split(/[:|]/).includes(user))) out.push({ user: u, conv: t.conv });
+  if (agent.running && agentEnabled() && (!agent.target || agent.target === user)) out.push({ user: AGENT, conv: agent.target ? 'dm:' + [AGENT, user].sort().join('|') : 'room' });
+  return out;
+}
 function appendMessage(msg) { msg.rev = ++rev; messages.push(msg); fs.appendFileSync(CHAT_FILE, JSON.stringify(msg) + '\n'); roomChanged(); }
 function saveMessages() { // after an edit / delete: rewrite the whole (small) file atomically
   const tmp = CHAT_FILE + '.tmp';
@@ -495,6 +522,7 @@ function runAgent(target = '') { // target: username of a private conversation, 
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
   const child = spawn(command, [...pre, ...args], { cwd: MILLS_DIR, windowsHide: true });
   agent.running = child;
+  roomChanged(); // browsers show "Unity is typing…" while she composes
   let out = '', finished = false;
   child.stdout.on('data', (c) => { out += c; });
   child.stderr.on('data', () => {});
@@ -506,6 +534,7 @@ function runAgent(target = '') { // target: username of a private conversation, 
     }
     agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
     if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
+    else roomChanged(); // nothing posted: still take the typing indicator away
     if (agent.queued) runAgent(agent.nextTarget || ''); else setTimeout(maybeRestart, 300);
   };
   child.on('error', (e) => done('(I could not start: ' + e.message + ')'));
@@ -732,7 +761,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { prefs: acct.state.prefs });
     }
     if (p === '/api/logout' && req.method === 'POST') {
-      leaveCalls(acct.username); stopShare(acct.username);
+      leaveCalls(acct.username); stopShare(acct.username); setTyping(acct.username, '', false);
+      lastSeen.delete(acct.username); roomChanged(); // offline right away
       sessions.delete((req.headers.authorization || '').slice(7)); saveSessions();
       return send(res, 200, { ok: true });
     }
@@ -869,6 +899,13 @@ const server = http.createServer(async (req, res) => {
       }
       return send(res, 200, { seq: m.seq, rev: m.rev });
     }
+    if (p === '/api/room/typing' && req.method === 'POST') {
+      const { conv, on } = await readBody(req);
+      const dm = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
+      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
+      setTyping(acct.username, conv, !!on);
+      return send(res, 200, { ok: true });
+    }
     if (p === '/api/room/seen' && req.method === 'POST') {
       const { conv, seq: upTo } = await readBody(req);
       const dm = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
@@ -999,8 +1036,10 @@ const server = http.createServer(async (req, res) => {
         for (const [u, convs] of Object.entries(seen)) {
           for (const [c, v] of Object.entries(convs)) if (c === 'room' || c.split(/[:|]/).includes(acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
         }
-        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: sharesFor(acct.username), ver: roomVer, keysVer });
+        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: sharesFor(acct.username), ver: roomVer, keysVer,
+          online: onlineUsers(), typing: typingFor(acct.username) });
       };
+      noteSeen(acct.username);
       if (url.searchParams.get('wait') !== '1' || Number(url.searchParams.get('ver')) !== roomVer) return answer();
       let done = false;
       const finish = () => { if (done) return; done = true; clearTimeout(timer); roomWaiters.delete(finish); answer(); };

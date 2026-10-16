@@ -547,6 +547,32 @@ async function run() {
     && blobU.status === 200 && blobD.status === 404 && !!audioBack && audioBack.equals(audio) && ed4bad.status === 400 && ed4.status === 200 && stillBlob.status === 200 && !!ans4,
     `send ${sent4.status}, body ${list4 ? fromB64(list4.ct).length : '-'} B for ${longText.length} B text, blob U ${blobU.status} / D ${blobD.status}, edit ${ed4bad.status}/${ed4.status}, agent ${!!ans4}`);
 
+  // Presence: typing per conversation (only to its members), online list, Unity typing while composing.
+  const pv0 = (await call('/api/room/messages?rev=0', A)).data;
+  const pHeld = call('/api/room/messages?rev=' + pv0.latestRev + '&wait=1&ver=' + pv0.ver, A);
+  await sleep(400);
+  const tyOn = await call('/api/room/typing', U, { conv: 'room', on: true });
+  const pWoke = (await pHeld).data;
+  const tyDm = await call('/api/room/typing', U, { conv: 'dm:t-admin|t-user', on: true });
+  const seesDmA = ((await call('/api/room/messages?rev=0', A)).data.typing || []).some((t) => t.user === 't-user' && t.conv === 'dm:t-admin|t-user');
+  const seesDmD = ((await call('/api/room/messages?rev=0', D)).data.typing || []).some((t) => t.user === 't-user');
+  const tyBad = await call('/api/room/typing', D, { conv: 'dm:t-admin|t-user', on: true });
+  await call('/api/room/typing', U, { conv: 'room', on: false });
+  const afterOff = (await call('/api/room/messages?rev=0', A)).data;
+  const onlineOk = afterOff.online.includes('t-admin') && afterOff.online.includes('t-user') && !(afterOff.typing || []).some((t) => t.user === 't-user');
+  await sleep(1500);
+  const seqTy = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  await roomSend(U, restored, '@unity SLOW ping-r72');
+  await sleep(800);
+  const agentTyping = ((await call('/api/room/messages?rev=0', A)).data.typing || []).some((t) => t.user === 'claude' && t.conv === 'room');
+  const tyAns = await waitAgent(U, restored, seqTy, (t) => t.includes('ping-r72'), 20000);
+  const agentDone = !((await call('/api/room/messages?rev=0', A)).data.typing || []).some((t) => t.user === 'claude');
+  check('R72', 'presence: typing wakes the others\' long poll and is per conversation (a private one only to its two people; outsider → 400); off removes it; online list; Unity shows as typing while composing and stops after posting; [static] typing line, Claude-is-thinking bubble, message slide-in, live dot',
+    tyOn.status === 200 && (pWoke.typing || []).some((t) => t.user === 't-user' && t.conv === 'room') && tyDm.status === 200 && seesDmA && !seesDmD && tyBad.status === 400 && onlineOk
+    && agentTyping && !!tyAns && agentDone
+    && /id="typingLine"/.test(html) && /function showThinking\(/.test(html) && /@keyframes msgIn/.test(html) && /@keyframes dotPulse/.test(html) && /\.status\.on::before/.test(html) && /prefers-reduced-motion/.test(html),
+    `typing woke ${(pWoke.typing || []).length}, dm A/D ${seesDmA}/${seesDmD}, outsider ${tyBad.status}, online ${JSON.stringify(afterOff.online)}, Unity typing ${agentTyping} → done ${agentDone}`);
+
   // Hardening headers on every hub answer.
   const hr = await fetch(H + '/api/status');
   check('R64', 'hub answers carry nosniff, no-referrer, frame DENY; API answers are no-store',
