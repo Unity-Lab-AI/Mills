@@ -1126,8 +1126,8 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
 const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
-let chatPriv = null, chatPubJwk = null;
-const pubCache = new Map(), sharedCache = new Map();
+let chatPriv = null, chatPubJwk = null, chatPrivBits = null;
+const pubCache = new Map(), sharedCache = new Map(), wrapCache = new Map();
 
 async function passwordKey(password, salt) {
   const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -1145,7 +1145,11 @@ async function unlockPrivate(backup, password) {
   return crypto.subtle.importKey('pkcs8', pkcs8, ECDH, true, ['deriveKey']);
 }
 const samePub = (a, b) => a && b && a.x === b.x && a.y === b.y;
-async function useKey(priv, pub) { chatPriv = priv; chatPubJwk = { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y }; sharedCache.clear(); }
+async function useKey(priv, pub) {
+  chatPriv = priv; chatPubJwk = { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y }; sharedCache.clear(); wrapCache.clear();
+  // Stored keys only allow deriveKey; a deriveBits copy is needed for the HKDF wrap keys (format v3).
+  chatPrivBits = await crypto.subtle.importKey('pkcs8', await crypto.subtle.exportKey('pkcs8', priv), ECDH, false, ['deriveBits']);
+}
 
 // Called right after sign-in (the only time the password is in memory).
 async function ensureChatKey(password) {
@@ -1193,6 +1197,32 @@ async function sharedWith(jwk) {
   if (!sharedCache.has(id)) sharedCache.set(id, await crypto.subtle.deriveKey({ name: 'ECDH', public: await importPub(jwk) }, chatPriv, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']));
   return sharedCache.get(id);
 }
+// Message format v3:
+// - the per-member wrap key is HKDF-SHA256 over the ECDH secret with a fixed label, not the raw secret;
+// - sender, recipient and a random message id (mid) are authenticated data on the body and on every
+//   wrap (plus the member's name), so the hub cannot move a message to another sender or conversation;
+// - a mid seen twice under different seqs is a replay and is refused;
+// - the plaintext is padded to a size bucket so its length does not show how long the message is.
+const V3_WRAP_INFO = enc.encode('mills-v3 wrap');
+async function wrapWith(jwk) {
+  const id = jwk.x + jwk.y;
+  if (!wrapCache.has(id)) {
+    const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: await importPub(jwk) }, chatPrivBits, 256);
+    const base = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+    wrapCache.set(id, await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: V3_WRAP_INFO }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']));
+  }
+  return wrapCache.get(id);
+}
+const bodyAad = (from, to, mid) => 'mills-v3|' + from + '|' + (to || '') + '|' + mid;
+const newMid = () => toB64(crypto.getRandomValues(new Uint8Array(16))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+function padBucket(n) { // 256, 512, ... 64 KiB, then whole 64 KiB steps
+  if (n > 65536) return Math.ceil(n / 65536) * 65536;
+  let b = 256; while (b < n) b *= 2; return b;
+}
+const padPlain = (s) => { const b = enc.encode(s), out = new Uint8Array(padBucket(b.length)).fill(0x20); out.set(b); return out; }; // JSON ignores trailing spaces
+// Downgrade guard: once a sender has sent a v3 message, a later old-format message from them is refused.
+const v3Since = JSON.parse(localStorage.getItem('mills.v3since') || '{}'); // sender -> first v3 seq seen
+const midSeen = new Map(); // mid -> seq it first appeared under
 
 // ── Team chat: conversations (# Everyone + private), replies, edits, deletes, @mentions, receipts ──
 // Message text travels inside the encryption as {"v":2,"t":text,"r":replyToSeq}; older messages are
@@ -1251,6 +1281,21 @@ async function decryptMsg(m) {
   if (m.deleted) return { t: '', r: null };
   if (!chatPriv) return { t: '🔒 (locked — sign in again to read)', r: null, locked: true };
   if (!m.key) return { t: '🔒 (sent before your chat key existed)', r: null, locked: true };
+  if (m.v === 3) {
+    if (typeof m.mid !== 'string') return { t: '🔒 (could not decrypt)', r: null, locked: true };
+    const first = midSeen.get(m.mid);
+    if (first !== undefined && first !== m.seq) return { t: '🔒 (replayed copy of an earlier message: refused)', r: null, locked: true };
+    try {
+      const aad = bodyAad(m.from, m.to, m.mid);
+      const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv), additionalData: enc.encode(aad + '|' + me.username) }, await wrapWith(m.fromPub), fromB64(m.key.wk));
+      const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+      const p = parsePayload(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv), additionalData: enc.encode(aad) }, k, fromB64(m.ct))).trimEnd());
+      midSeen.set(m.mid, m.seq);
+      if (!(v3Since[m.from] <= m.seq)) { v3Since[m.from] = m.seq; localStorage.setItem('mills.v3since', JSON.stringify(v3Since)); }
+      return p;
+    } catch { return { t: '🔒 (could not decrypt)', r: null, locked: true }; }
+  }
+  if (v3Since[m.from] < m.seq) return { t: '🔒 (old unprotected format after this sender upgraded: refused)', r: null, locked: true };
   try {
     const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv) }, await sharedWith(m.fromPub), fromB64(m.key.wk));
     const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
@@ -2081,11 +2126,12 @@ function agentCtx(conv) {
 }
 // Encrypt one message body for a conversation: everyone with a key, or only the two people.
 // The agent gets a copy only when forAgent is true.
-async function sealFor(plain, to, forAgent) {
+async function sealFor(plain, to, forAgent, mid = newMid()) {
   await refreshMembers();
+  const aad = bodyAad(me.username, to, mid);
   const raw = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
   const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(plain));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, k, padPlain(plain));
   const keys = {};
   for (const m of roomMembers) {
     if (to && m.username !== to && m.username !== me.username) continue;
@@ -2093,10 +2139,10 @@ async function sealFor(plain, to, forAgent) {
     const pub = m.username === me.username ? chatPubJwk : m.pub;
     if (!pub) continue;
     const kiv = crypto.getRandomValues(new Uint8Array(12));
-    keys[m.username] = { iv: toB64(kiv), wk: toB64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await sharedWith(pub), raw)) };
+    keys[m.username] = { iv: toB64(kiv), wk: toB64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: kiv, additionalData: enc.encode(aad + '|' + m.username) }, await wrapWith(pub), raw)) };
   }
   if (to && !keys[to]) throw new Error(nickOf(to) + ' has no chat key yet (they have not signed in since chat was added).');
-  return { iv: toB64(iv), ct: toB64(ct), keys };
+  return { v: 3, mid, iv: toB64(iv), ct: toB64(ct), keys };
 }
 $('roomComposer').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2107,7 +2153,7 @@ $('roomComposer').addEventListener('submit', async (e) => {
     if (editingSeq) {
       const rec = msgs.get(editingSeq);
       const eto = rec ? rec.m.to || '' : '';
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}) }), eto, callsAgent(text, eto));
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined);
       await json('/api/room/edit', { method: 'POST', body: JSON.stringify({ seq: editingSeq, ...sealed }) });
     } else {
       const to = convPeer(currentConv), forAgent = callsAgent(text, to);

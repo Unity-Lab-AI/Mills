@@ -352,13 +352,15 @@ if (!agentKey || !agentKey.priv || !agentKey.priv.d) {
 const agentPriv = crypto.createPrivateKey({ key: agentKey.priv, format: 'jwk' });
 const agentEnabled = () => !accounts.has(AGENT) && config.roomAgent !== false;
 const agentShared = (jwk) => crypto.diffieHellman({ privateKey: agentPriv, publicKey: crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' }) });
-function gcmOpen(key, iv, data) {
+function gcmOpen(key, iv, data, aad) {
   const buf = Buffer.from(data, 'base64'), d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
+  if (aad) d.setAAD(Buffer.from(aad, 'utf8'));
   d.setAuthTag(buf.subarray(buf.length - 16));
   return Buffer.concat([d.update(buf.subarray(0, buf.length - 16)), d.final()]);
 }
-function gcmSeal(key, data) {
+function gcmSeal(key, data, aad) {
   const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  if (aad) c.setAAD(Buffer.from(aad, 'utf8'));
   return { iv: iv.toString('base64'), ct: Buffer.concat([c.update(data), c.final(), c.getAuthTag()]).toString('base64') };
 }
 // Browsers send {"v":2,"t":text,"r":replySeq} (older messages: plain text). The agent only needs the text.
@@ -368,11 +370,23 @@ function payloadText(s) {
 }
 // Encrypted message bodies: text is small, a voice clip (up to 2 minutes of compressed audio,
 // encrypted and base64'd) is larger. Anything above this is refused.
-const MAX_CT = 1500000;
+const MAX_CT = 1600000; // room for the v3 size-bucket padding
+// Format v3 (see web/index.html): HKDF wrap keys, sender/recipient/mid as authenticated data, padding.
+const V3_INFO = Buffer.from('mills-v3 wrap');
+const MID_RE = /^[A-Za-z0-9_-]{22}$/;
+const agentWrapKey = (jwk) => Buffer.from(crypto.hkdfSync('sha256', agentShared(jwk), Buffer.alloc(0), V3_INFO, 32));
+const bodyAad = (from, to, mid) => 'mills-v3|' + from + '|' + (to || '') + '|' + mid;
+function padBucket(n) { if (n > 65536) return Math.ceil(n / 65536) * 65536; let b = 256; while (b < n) b *= 2; return b; }
 function agentOpen(m) { // the decrypted payload string of a message wrapped for the agent, or null
   const slot = m.keys && m.keys[AGENT];
   if (!slot || m.deleted) return null;
-  try { return gcmOpen(gcmOpen(agentShared(m.fromPub), slot.iv, slot.wk), m.iv, m.ct).toString('utf8'); } catch { return null; }
+  try {
+    if (m.v === 3) {
+      const aad = bodyAad(m.from, m.to, m.mid);
+      return gcmOpen(gcmOpen(agentWrapKey(m.fromPub), slot.iv, slot.wk, aad + '|' + AGENT), m.iv, m.ct, aad).toString('utf8').trimEnd();
+    }
+    return gcmOpen(gcmOpen(agentShared(m.fromPub), slot.iv, slot.wk), m.iv, m.ct).toString('utf8');
+  } catch { return null; }
 }
 function agentRead(m) { const s = agentOpen(m); return s === null ? null : payloadText(s); } // text only
 function agentContext(m) { // the earlier messages the caller sent along: [{ n: name, t: text }]
@@ -385,10 +399,13 @@ function agentContext(m) { // the earlier messages the caller sent along: [{ n: 
   } catch { return []; }
 }
 function agentSay(text, to) { // to = a username for a private answer, '' for the room
-  const raw = crypto.randomBytes(32), body = gcmSeal(raw, Buffer.from(text, 'utf8')), keys = {};
+  const mid = crypto.randomBytes(16).toString('base64url'), aad = bodyAad(AGENT, to, mid);
+  const plain = Buffer.from(text, 'utf8'), padded = Buffer.alloc(padBucket(plain.length), 0x20);
+  plain.copy(padded);
+  const raw = crypto.randomBytes(32), body = gcmSeal(raw, padded, aad), keys = {};
   const pubs = [[AGENT, agentKey.pub], ...[...accounts.values()].filter((a) => chatKeys[a.username] && (!to || a.username === to)).map((a) => [a.username, chatKeys[a.username].pub])];
-  for (const [u, pub] of pubs) { const w = gcmSeal(agentShared(pub), raw); keys[u] = { iv: w.iv, wk: w.ct }; }
-  appendMessage({ seq: ++seq, from: AGENT, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys });
+  for (const [u, pub] of pubs) { const w = gcmSeal(agentWrapKey(pub), raw, aad + '|' + u); keys[u] = { iv: w.iv, wk: w.ct }; }
+  appendMessage({ seq: ++seq, v: 3, mid, from: AGENT, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys });
 }
 const nameOf = (u) => { if (u === AGENT) return AGENT_NAME; const a = accounts.get(u); return a ? publicPrefs(a).nick || a.display : u; };
 function agentPrompt() {
@@ -758,27 +775,31 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/send' && req.method === 'POST') {
-      const { iv, ct, keys, to } = await readBody(req);
+      const { iv, ct, keys, to, v, mid } = await readBody(req);
       const mine = chatKeys[acct.username];
+      if (v !== undefined && !(v === 3 && MID_RE.test(mid || '') && !messages.some((x) => x.mid === mid))) return send(res, 400, { error: 'Bad message.' });
       if (!mine) return send(res, 400, { error: 'Your chat key is not set up yet.' });
       if (typeof ct === 'string' && ct.length > MAX_CT) return send(res, 413, { error: 'That message is too large (voice clips can be up to about 2 minutes).' });
       if (!b64(iv, 64) || !b64(ct, MAX_CT) || !keys || typeof keys !== 'object') return send(res, 400, { error: 'Bad message.' });
       if (to !== undefined && to !== '' && (to === acct.username || !(accounts.has(to) || (to === AGENT && agentEnabled())))) return send(res, 400, { error: 'Unknown recipient.' });
       const slots = cleanSlots(keys, acct.username, to || '');
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
-      const msg = { seq: ++seq, from: acct.username, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots };
+      const msg = { seq: ++seq, ...(v === 3 ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots };
       appendMessage(msg);
       agentHear(msg);
       return send(res, 200, { seq: msg.seq });
     }
     if (p === '/api/room/edit' && req.method === 'POST') {
-      const { seq: target, iv, ct, keys } = await readBody(req);
+      const { seq: target, iv, ct, keys, v, mid } = await readBody(req);
       const m = messages.find((x) => x.seq === target);
       if (!m || m.from !== acct.username || m.deleted) return send(res, 403, { error: 'You can only edit your own messages.' });
       const mine = chatKeys[acct.username];
       if (!mine || !b64(iv, 64) || !b64(ct, MAX_CT)) return send(res, 400, { error: 'Bad message.' });
+      // an edit keeps the message id; a legacy message gets a fresh one when it is first edited in v3
+      if (v !== undefined && !(v === 3 && MID_RE.test(mid || '') && (m.mid ? m.mid === mid : !messages.some((x) => x.mid === mid)))) return send(res, 400, { error: 'Bad message.' });
       const slots = cleanSlots(keys, acct.username, m.to || '');
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
+      if (v === 3) Object.assign(m, { v, mid }); else { delete m.v; delete m.mid; }
       Object.assign(m, { iv, ct, keys: slots, fromPub: mine.pub, editedAt: new Date().toISOString(), rev: ++rev });
       saveMessages();
       return send(res, 200, { seq: m.seq, rev: m.rev });
