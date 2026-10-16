@@ -18,6 +18,7 @@ bridge/tunnel.json
 bridge/.restart
 bridge/restart.log
 bridge/hub-state.json
+bridge/usage.json
 bridge/profiles-deleted/
 bridge/*.tmp
 
