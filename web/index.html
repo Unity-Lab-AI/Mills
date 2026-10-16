@@ -296,8 +296,8 @@
     .split { display: none; }
   }
   /* shared Work sessions */
-  #shareSel { padding: .15rem .35rem; font-size: .75rem; max-width: 11rem; }
-  #shareSel.on { border-color: var(--good); color: var(--good); }
+  #shareBtn { padding: .2rem .6rem; font-size: .75rem; white-space: nowrap; }
+  #shareBtn.on { border-color: var(--good); color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent); }
   #shareBanner { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .35rem .75rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 14%, transparent); font-size: .8rem; }
   #shareBanner span { flex: 1; min-width: 8rem; }
   #shareBanner button { padding: .15rem .6rem; font-size: .78rem; }
@@ -559,7 +559,7 @@
     </section>
     <section id="chat">
       <div class="bar"><span id="convTitle" title="Click to rename">Unsaved session</span>
-        <svg class="ic" aria-hidden="true"><use href="#i-share"/></svg><select id="shareSel" title="Share this Work session so people in that conversation can watch it (read-only): your Claude conversation, what you type, send and queue"></select>
+        <button type="button" class="ghost" id="shareBtn" title="Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue"><svg class="ic lead"><use href="#i-share"/></svg>Share with everyone</button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
       <div id="usageBar" title="Claude usage of the host account (shared by everyone) and this session's context window">
         <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--:--:--</span></div>
@@ -2648,22 +2648,20 @@ window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) appl
 // ── Shared Work sessions: share yours (watch-only for others), watch theirs in their own windows ──
 let myShare = '', sharesList = [], sharesInit = false;
 const watching = new Map(); // owner -> { win, log, live, after, ver, since, stop, events: [] }
+// Sharing is all or nothing: one button shares with everyone, the same button stops it.
 function renderShareSel() {
-  const sel = $('shareSel'); if (!sel || !me) return;
-  sel.textContent = '';
-  const opt = (v, l) => { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.append(o); };
-  opt('', 'Not shared'); // (options cannot hold graphics: the share icon sits next to the selector)
-  opt('room', 'Shared with # Everyone');
-  for (const m of roomMembers) if (!m.agent && m.username !== me.username) opt(dmConv(m.username), 'Shared with ' + nickOf(m.username));
-  sel.value = myShare; if (sel.value !== myShare) sel.value = '';
-  sel.classList.toggle('on', !!myShare);
+  const b = $('shareBtn'); if (!b || !me) return;
+  label(b, myShare ? 'stop' : 'share', myShare ? 'Stop sharing' : 'Share with everyone');
+  b.classList.toggle('on', !!myShare);
+  b.title = myShare ? 'Everyone can watch this Work session right now (read-only). Click to stop sharing.'
+    : 'Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue';
 }
-$('shareSel').onchange = async () => {
-  const conv = $('shareSel').value;
+$('shareBtn').onclick = async () => {
+  const conv = myShare ? '' : 'room';
   try {
     const d = await json('/api/work/share', { method: 'POST', body: JSON.stringify({ conv, transcript: conv ? transcript.slice(-150) : [] }) });
     myShare = d.share;
-    sys(myShare ? 'Your Work session is shared with ' + (myShare === 'room' ? 'everyone' : nickOf(convPeer(myShare))) + ': they can watch it (read-only), including what you type. Pick "Not shared" to stop.' : 'Your Work session is no longer shared.');
+    sys(myShare ? 'Your Work session is shared with everyone: they can watch it (read-only), including what you type. Press "Stop sharing" to stop.' : 'Your Work session is no longer shared.');
     postLive(true);
   } catch (err) { sys('Could not change sharing: ' + err.message, true); }
   renderShareSel();

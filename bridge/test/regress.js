@@ -675,18 +675,18 @@ async function run() {
   const ctxRun = await chat(A, 'with-context-r58', { context: 'CTX-SUMMARY-R58' });
   const wa4 = (await call(`/api/work/watch?user=t-admin&after=${wa3.after}&ver=${wa3.ver}&since=${encodeURIComponent(wa3.since)}`, U)).data;
   const ctxMirrored = (wa4.events || []).some((e) => e.text.includes('CTX-SUMMARY-R58') && e.t === 'user');
-  await call('/api/work/share', A, { conv: 'dm:t-admin|t-user', transcript: [] });
+  const dmShare = await call('/api/work/share', A, { conv: 'dm:t-admin|t-user', transcript: [] }); // per-person sharing is gone: refused, everyone-share stays
   const dmD = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', D)).data, dmU = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', U)).data;
   const selfWatch = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', A)).data;
   await call('/api/work/share', A, { conv: '' });
   const afterStop = (await call('/api/work/watch?user=t-admin&after=0&ver=-1&since=', U)).data;
-  check('R58', 'shared Work: listed for the conversation (not to yourself), seeded transcript, live run wakes watchers, typing + queue live, context reaches own Claude but not watchers, private share only for that person, stop',
+  check('R58', 'shared Work: shared with everyone only (a per-person share → 400), listed for everyone (not to yourself), seeded transcript, live run wakes watchers, typing + queue live, context reaches own Claude but not watchers, stop',
     shA.status === 200 && shareListU.some((s) => s.user === 't-admin' && s.conv === 'room') && !shareListA.some((s) => s.user === 't-admin')
     && seedOk && liveRun && waited58 >= 500 && ranA.status === 200 && wa3.live && wa3.live.typing === 'typing-r58' && (wa3.live.queue || [])[0] === 'queued-r58'
-    && texts(ctxRun.events).includes('CTX-SUMMARY-R58') && !ctxMirrored && dmD.stopped === true && !dmU.stopped && selfWatch.stopped === true && afterStop.stopped === true,
-    `seed ${seedOk}, live ${liveRun} (${waited58} ms), dm D ${dmD.stopped}/U ${!dmU.stopped}`);
-  check('R58b', '[static] share selector, Join work banner, watch-only windows with live typing + queue, summaries in Work messages',
-    /id="shareSel"/.test(html) && /id="shareBanner"/.test(html) && /function openWatch\(/.test(html) && /\/api\/work\/watch\?user=/.test(html)
+    && texts(ctxRun.events).includes('CTX-SUMMARY-R58') && !ctxMirrored && dmShare.status === 400 && !dmD.stopped && !dmU.stopped && selfWatch.stopped === true && afterStop.stopped === true,
+    `seed ${seedOk}, live ${liveRun} (${waited58} ms), per-person share ${dmShare.status}, D watches ${!dmD.stopped}, U watches ${!dmU.stopped}`);
+  check('R58b', '[static] share button (Share with everyone / Stop sharing, no per-person choice), Join work banner, watch-only windows with live typing + queue, summaries in Work messages',
+    /id="shareBtn"/.test(html) && !/id="shareSel"/.test(html) && /'Stop sharing' : 'Share with everyone'/.test(html) && /const conv = myShare \? '' : 'room'/.test(html) && /id="shareBanner"/.test(html) && /function openWatch\(/.test(html) && /\/api\/work\/watch\?user=/.test(html)
     && /function watchContext\(/.test(html) && /context \? \{ context \} : \{\}/.test(html) && /\/api\/work\/live/.test(html));
   check('R56', '[static] layout stays inside the viewport: page = viewport (dvh), flex children may shrink, long text wraps, floating windows clamped',
     /height: 100dvh/.test(html) && /html \{ height: 100%; overflow: hidden; \}/.test(html) && /Stay inside the viewport/.test(html)

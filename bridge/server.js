@@ -865,7 +865,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/work/share' && req.method === 'POST') {
       const { conv, transcript } = await readBody(req);
       if (!conv) { stopShare(acct.username); return send(res, 200, { share: '' }); }
-      if (!validConv(conv) || !convMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
+      if (conv !== 'room') return send(res, 400, { error: 'A Work session can only be shared with everyone.' }); // no per-person shares
       const prev = shares.get(acct.username);
       const s = { conv, since: new Date().toISOString(), n: 0, log: [], live: prev ? prev.live : { typing: '', queue: [] }, ver: 0 };
       const kinds = { me: 'user', claude: 'claude', tool: 'tool', sys: 'sys' };
