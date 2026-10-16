@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Starts the Mills hub: one process serves every account (mills, sponge, gee, ...).
+# Starts the Mills hub: one process serves every account .
 cd "$(dirname "$0")"
 command -v node >/dev/null || { echo "Node.js is required: https://nodejs.org"; exit 1; }
 command -v claude >/dev/null || { echo "Claude Code is required: npm install -g @anthropic-ai/claude-code"; exit 1; }

@@ -23,6 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # The GitHub account whose gist advertises the hub address is a repository variable,
+      # not part of the source: Settings → Secrets and variables → Actions → Variables.
+      - name: Inject hub gist owner
+        env:
+          OWNER: ${{ vars.MILLS_GIST_OWNER }}
+        run: |
+          test -n "$OWNER" || { echo "Set the MILLS_GIST_OWNER repository variable."; exit 1; }
+          sed -i "s/__MILLS_GIST_OWNER__/$OWNER/" web/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
