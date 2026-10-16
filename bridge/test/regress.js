@@ -614,6 +614,16 @@ async function run() {
   const serverEmoji = /mirror\(acct, 'tool', '⚙/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'server.js'), 'utf8'));
   check('R68', '[static] no emoji shown anywhere on the site (custom SVG icon sprite instead), every icon used exists in the sprite, hub tool lines carry no emoji',
     !emojiLines.length && !missingIcons.length && symbols.size >= 30 && !serverEmoji, [emojiLines.slice(0, 8).join(' '), missingIcons.join(' ')].filter(Boolean).join(' | ') || `${symbols.size} icons`);
+  // Vendored browser libraries (web/vendor, fetched + integrity-checked by bridge/vendor.js).
+  const vendorManifest = path.join(MILLS, 'web', 'vendor', 'VENDOR.json');
+  if (!fs.existsSync(vendorManifest)) skip('R73', 'vendored Mermaid present and matching web/vendor/VENDOR.json', 'not installed yet: run `node bridge/vendor.js` in the Mills folder (diagrams show their source until then)');
+  else {
+    const vm = JSON.parse(fs.readFileSync(vendorManifest, 'utf8')), mm = vm.mermaid || {};
+    const mFile = path.join(MILLS, 'web', 'vendor', mm.file || 'mermaid.min.js');
+    const mOk = fs.existsSync(mFile) && crypto.createHash('sha256').update(fs.readFileSync(mFile)).digest('hex') === mm.sha256 && /^11\./.test(mm.version || '');
+    const mLoads = mOk && /mermaid/.test(fs.readFileSync(mFile, 'utf8').slice(0, 2000));
+    check('R73', 'vendored Mermaid 11 present, matching the sha256 in web/vendor/VENDOR.json, served from the site itself (CSP allows no outside scripts)', mOk && mLoads, `mermaid@${mm.version || '?'}`);
+  }
   check('R66', '[static] CSP, hub address pinned to the tunnel, key pinning (TOFU + Trust new key), call lip-sync + ICE batching, room long poll, v4 deflate + clips fetched on play', !missing66.length, missing66.join(', '));
   // Calls: the hub only tracks who is in which call and relays opaque (encrypted) set-up messages.
   const jA = await call('/api/call/join', A, { conv: 'room', cam: false, mic: true });
