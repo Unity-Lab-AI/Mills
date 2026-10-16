@@ -1,20 +1,18 @@
 #!/usr/bin/env node
-// Mills bridge — runs on Gee's PC. Runs Claude Code (Gee's account) inside the Mills
-// folder and exposes it to Alfreddo's browser through a Cloudflare quick tunnel.
-// Claude edits files on Alfreddo's PC through the "pc" MCP tools, which this bridge
-// relays to his browser (it holds the folder he opened).
+// Mills bridge app — runs on Gee's PC under run.js (which owns the Cloudflare quick tunnel and
+// restarts this app when asked). Runs Claude Code (Gee's account) inside the Mills folder for the
+// person at the browser. Claude edits files on that person's PC through the "pc" MCP tools,
+// which this bridge relays to their browser (it holds the folder they opened).
 'use strict';
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn, execFile } = require('child_process');
+const { spawn } = require('child_process');
+const { ROOT, MILLS_DIR, readJson, writeJson, profileFromArgv, loadProfile } = require('./common');
 
-const ROOT = __dirname;
-const MILLS_DIR = path.join(ROOT, '..');
 const WEB_DIR = path.join(MILLS_DIR, 'web');
-const CONFIG_FILE = path.join(ROOT, 'config.json');
 
 // ---------- profile ----------
 // One bridge process per person. With no --profile the bridge keeps its original layout
@@ -22,55 +20,9 @@ const CONFIG_FILE = path.join(ROOT, 'config.json');
 // own password, device lock, Claude session, tunnel address and Archive folder under
 // bridge/profiles/<name>/ and Mills/Archive/<name>/, so several people can use Mills at once,
 // each through their own bridge window and their own tunnel.
-const profileFlag = process.argv.indexOf('--profile');
-const PROFILE = (profileFlag >= 0 && process.argv[profileFlag + 1]) || process.env.MILLS_PROFILE || '';
-if (PROFILE && !/^[a-z0-9-]{1,32}$/.test(PROFILE)) {
-  console.error('Profile names use lowercase letters, digits and dashes only.');
-  process.exit(1);
-}
-const PROFILE_DIR = PROFILE ? path.join(ROOT, 'profiles', PROFILE) : ROOT;
-const AUTH_FILE = path.join(PROFILE_DIR, 'auth.json');
-const STATE_FILE = path.join(PROFILE_DIR, 'state.json');
-const MCP_RUNTIME = path.join(PROFILE_DIR, '.mcp-runtime.json');
-const ARCHIVE_DIR = PROFILE ? path.join(MILLS_DIR, 'Archive', PROFILE) : path.join(MILLS_DIR, 'Archive'); // saved conversations, one JSON file each
-const GIST_FILE = PROFILE ? `mills-bridge-${PROFILE}.json` : 'mills-bridge.json'; // what the web app looks for
-
-function readJson(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
-}
-function writeJson(file, data) {
-  // Write-then-rename so a crash mid-write never leaves a half-written file behind: the device
-  // lock, sign-in sessions and model choice in state.json survive any restart intact.
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, file);
-}
-
-const baseConfig = readJson(CONFIG_FILE, {});
-const profileConfig = PROFILE ? readJson(path.join(PROFILE_DIR, 'config.json'), null) : {};
-if (PROFILE && (!profileConfig || !profileConfig.port)) {
-  console.error(`Missing bridge/profiles/${PROFILE}/config.json with at least {"port": <number>, "user": "<name>"}.`);
-  process.exit(1);
-}
-if (PROFILE) { delete baseConfig.port; delete baseConfig.gistId; } // never share a port or a gist between profiles
-const config = Object.assign({
-  port: 7777,
-  user: 'Alfreddo', // who sits at the browser for this bridge (shown to Claude and in messages)
-  allowedOrigins: ['https://unity-lab-ai.github.io'],
-  permissionMode: 'acceptEdits',
-  allowedTools: ['mcp__pc', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
-  model: '', // this bridge's default model ('' = Claude Code's own default); the web app's dropdown overrides it
-  models: [  // what the web app's model dropdown offers; id = what `claude --model` accepts
-    { id: 'claude-fable-5-1', label: 'Fable 5.1' },
-    { id: 'claude-opus-5-5', label: 'Opus 5.5' },
-    { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-    { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
-  ],
-  tunnel: true,
-  cloudflared: 'cloudflared',
-  gistId: '',
-}, baseConfig, profileConfig);
-if (PROFILE && !profileConfig.user) config.user = PROFILE[0].toUpperCase() + PROFILE.slice(1);
+const PROFILE = profileFromArgv();
+const { PROFILE_DIR, AUTH_FILE, STATE_FILE, MCP_RUNTIME, RESTART_FLAG, ARCHIVE_DIR, config } = loadProfile(PROFILE);
+const SUPERVISED = !!process.env.MILLS_SUPERVISED; // started by run.js (start.bat / start.sh): tunnel + self-restart available
 const localOrigins = [`http://localhost:${config.port}`, `http://127.0.0.1:${config.port}`];
 
 let state = readJson(STATE_FILE, {});
@@ -175,6 +127,7 @@ function runClaude(message, fresh, res) {
     running = null; saveState();
     res.end(JSON.stringify({ type: 'bridge_done', code }) + '\n');
     stream = null;
+    setTimeout(maybeRestart, 300); // a restart requested during this run happens now that it is over
   });
   child.stdin.end(message);
 }
@@ -250,7 +203,9 @@ const server = http.createServer(async (req, res) => {
       return fs.createReadStream(file).pipe(res);
     }
 
-    if (p === '/api/status' && req.method === 'GET') return send(res, 200, { ok: true });
+    if (p === '/api/status' && req.method === 'GET') {
+      return send(res, 200, { ok: true, profile: PROFILE, user: USER, pid: process.pid, supervised: SUPERVISED, busy: !!running });
+    }
 
     if (p === '/api/login' && req.method === 'POST') {
       if (Date.now() < blockedUntil) return send(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
@@ -361,51 +316,33 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// ---------- tunnel ----------
-// The web app finds the current tunnel URL in a gist named "Mills bridge address" (or
-// "Mills bridge address (<profile>)") on Gee's GitHub account, created here on first run.
-// Each profile has its own gist and its own file name (mills-bridge-<profile>.json), which is
-// how the web app tells the bridges apart.
-function publishUrl(publicUrl) {
-  const content = JSON.stringify({ url: publicUrl, updated: new Date().toISOString() });
-  const gistId = config.gistId || state.gistId;
-  const description = 'Mills bridge address' + (PROFILE ? ` (${PROFILE})` : '');
-  const args = gistId
-    ? ['api', '-X', 'PATCH', `gists/${gistId}`, '-f', `files[${GIST_FILE}][content]=${content}`]
-    : ['api', '-X', 'POST', 'gists', '-f', `description=${description}`, '-F', 'public=true',
-       '-f', `files[${GIST_FILE}][content]=${content}`, '--jq', '.id'];
-  execFile('gh', args, (err, stdout) => {
-    if (err) return console.log('[mills] Could not publish tunnel URL (is gh logged in?): ' + err.message);
-    if (!gistId) { state.gistId = stdout.trim(); saveState(); }
-    console.log('[mills] Published tunnel URL for the web app.');
-  });
+// ---------- self-restart ----------
+// `node restart.js` (what Claude runs after changing bridge code or config) drops a .restart file
+// next to this profile's state. As soon as no Claude run is in progress the app exits with code
+// 75 and run.js starts it again under the same tunnel: same public address, the web app simply
+// reconnects. The tunnel itself lives in run.js, so it is never interrupted by this.
+function maybeRestart() {
+  if (running || !fs.existsSync(RESTART_FLAG)) return;
+  try { fs.unlinkSync(RESTART_FLAG); } catch {}
+  if (!SUPERVISED) return console.log('[mills] Restart requested, but this bridge was started without run.js (start.bat / start.sh) — restart it by hand.');
+  console.log('[mills] Restart requested — picking up the new code/config now.');
+  server.close();
+  setTimeout(() => process.exit(75), 200);
 }
-function startTunnel() {
-  const cf = spawn(config.cloudflared, ['tunnel', '--config', path.join(ROOT, 'cloudflared-quick.yml'),
-  '--no-autoupdate', '--url', `http://127.0.0.1:${config.port}`], { windowsHide: true });
-  let announced = false;
-  const scan = (d) => {
-    const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(String(d));
-    if (m && !announced) { announced = true; console.log('[mills] Public URL: ' + m[0]); publishUrl(m[0]); }
-  };
-  cf.stdout.on('data', scan); cf.stderr.on('data', scan);
-  cf.on('error', (e) => console.log('[mills] cloudflared failed to start: ' + e.message));
-  cf.on('close', (code) => { console.log(`[mills] Tunnel exited (${code}); restarting in 5s.`); setTimeout(startTunnel, 5000); });
-  process.on('exit', () => cf.kill());
-}
+setInterval(maybeRestart, 2000).unref();
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`[mills] Bridge for ${USER}${PROFILE ? ` (profile "${PROFILE}")` : ''} running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);
   console.log(`[mills] Device lock: ${state.lockedDevice ? 'claimed ' + state.lockedAt : 'unclaimed — first sign-in claims it'}`);
   console.log(`[mills] Model: ${effectiveModel() || 'Claude Code default'}${state.model ? ' (chosen in the web app)' : ''}. Sign-ins kept from before this start: ${sessions.size}.`);
   if (!fs.existsSync(AUTH_FILE)) console.log(`[mills] WARNING: no ${path.relative(MILLS_DIR, AUTH_FILE).replace(/\\/g, '/')} — run "node set-password.js${PROFILE ? ' --profile ' + PROFILE : ''} <password>" first.`);
-  if (config.tunnel && !process.argv.includes('--no-tunnel')) startTunnel();
+  if (!SUPERVISED && config.tunnel && !process.argv.includes('--no-tunnel')) console.log('[mills] Started without run.js: no tunnel and no self-restart. Use start.bat / start.sh (or "node run.js") for the full bridge.');
 });
 server.on('error', (e) => {
   if (e.code !== 'EADDRINUSE') throw e;
   console.log(`[mills] Mills${PROFILE ? ` for ${USER}` : ''} is ALREADY RUNNING in another window (port ${config.port} is taken).`);
   console.log(`[mills] Nothing to do: close this window. To restart, close every "Mills Bridge: ${USER}" window first, then run ${PROFILE ? `start.bat ${PROFILE}` : 'start.bat'} once.`);
-  process.exit(1);
+  process.exit(2); // run.js treats 2 as "stop, do not retry"
 });
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
 
