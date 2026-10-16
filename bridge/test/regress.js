@@ -1033,6 +1033,14 @@ async function run() {
   check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
   check('R106', '[static] every message you send shows its status: Work (queued / working / done / stopped / failed), Unity section, @unity in Chat (waiting / answering / answered)',
     /function msgStatus\(/.test(html) && /msgStatus\(el, 'queued'/.test(html) && /msgStatus\(mine, 'working'/.test(html) && /msgStatus\(mineU, 'working'/.test(html) && /function refreshAgentWaits/.test(html) && /'Unity answered'/.test(html));
+  const nImg = fakeImagePrompts.length;
+  const ti = await uchat(U, 'titties');
+  const tiFinal = ti.events.find((e) => e.type === 'final') || {};
+  const tiPrompt = fakeImagePrompts[nImg] || '';
+  check('R107', 'a picture ask the brain answers with text only still gets a picture (hub backstop), a picture of her with her full look', (tiFinal.images || []).length === 1 && tiPrompt.startsWith('titties') && (!look || tiPrompt.includes(look)), tiPrompt.slice(0, 80));
+  const nImg2 = fakeImagePrompts.length;
+  const wx = await uchat(U, 'whats up with you today');
+  check('R108', 'no picture when none was asked for', !((wx.events.find((e) => e.type === 'final') || {}).images || []).length && fakeImagePrompts.length === nImg2);
   check('R67', '[static] menu has the Unity button and Unity screen', /id="goAssist">(<svg[^]*?<\/svg>)?Unity</.test(html) && /<b>Unity<\/b>/.test(html));
   }
 
