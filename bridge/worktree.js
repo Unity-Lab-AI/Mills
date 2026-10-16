@@ -9,7 +9,8 @@
 //
 //   node bridge/worktree.js status                  every worktree, its branch and whether it has uncommitted changes
 //   node bridge/worktree.js ensure <username>       create the worktree if it does not exist yet, print its path
-//   node bridge/worktree.js sync <username>         merge the latest develop into work/<username>
+//   node bridge/worktree.js commit <username> [msg] stage and commit everything uncommitted in that worktree
+//   node bridge/worktree.js sync <username>        merge the latest develop into work/<username>
 //   node bridge/worktree.js merge <username>        merge work/<username> into develop and push develop
 //                                                   (refuses with uncommitted changes; on a conflict nothing is
 //                                                   left half-merged: run sync, resolve, commit, merge again)
@@ -21,7 +22,13 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { MILLS_DIR, loadProfile } = require('./common');
 
-const REPO = path.resolve(MILLS_DIR);
+// The main checkout, even when this script runs from inside one of the worktrees.
+const REPO = (() => {
+  try {
+    const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: MILLS_DIR, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return path.dirname(path.resolve(common));
+  } catch { return path.resolve(MILLS_DIR); }
+})();
 const WT_ROOT = path.resolve(loadProfile('').config.worktreeRoot || path.join(REPO, '..', 'Mills-worktrees'));
 const DEVELOP = 'develop';
 const USERNAME_RE = /^[a-z0-9-]{1,32}$/;
@@ -82,6 +89,14 @@ function sync(username) {
   return `${branch} is up to date with develop.`;
 }
 
+function commit(username, message) {
+  const { dir, branch } = ensure(username);
+  if (!dirty(dir)) return `Nothing to commit: ${branch} is clean.`;
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', message || `Work from ${username}`);
+  return `Committed on ${branch} (${git(dir, 'rev-parse', '--short', 'HEAD')}).`;
+}
+
 function merge(username) {
   const { dir, branch } = ensure(username);
   if (dirty(dir)) throw new Error(`${branch} has uncommitted changes in ${dir}. Commit them first.`);
@@ -106,12 +121,13 @@ function status() {
 module.exports = { ensure, WT_ROOT, REPO };
 
 if (require.main === module) {
-  const [cmd, user] = process.argv.slice(2);
+  const [cmd, user, ...rest] = process.argv.slice(2);
   try {
     if (cmd === 'status') console.log(status());
     else if (cmd === 'ensure') { const w = ensure(user); console.log(`${w.created ? 'Created' : 'Exists'}: ${w.dir} (${w.branch})`); }
+    else if (cmd === 'commit') console.log(commit(user, rest.join(' ')));
     else if (cmd === 'sync') console.log(sync(user));
     else if (cmd === 'merge') console.log(merge(user));
-    else { console.error('Usage: node bridge/worktree.js status | ensure <username> | sync <username> | merge <username>'); process.exit(1); }
+    else { console.error('Usage: node bridge/worktree.js status | ensure <username> | commit <username> [message] | sync <username> | merge <username>'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }
 }
