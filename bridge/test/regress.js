@@ -785,10 +785,12 @@ async function run() {
   fs.writeFileSync(path.join(SB, '.restart'), 'test');
   await sleep(1800);
   const midPid = (await call('/api/status')).data.pid;
+  const heldOff = await call('/api/chat', A, { message: 'queued right behind' }), heldOffU = await call('/api/assistant/chat', A, { message: 'queued too' });
   await slow2;
   let pid4 = midPid;
   for (let i = 0; i < 60 && (pid4 === pid3 || !pid4); i++) { await sleep(250); pid4 = (await call('/api/status')).data.pid; }
   check('R10', 'restart waits for an active run, then happens', midPid === pid3 && pid4 && pid4 !== pid3);
+  check('R89', 'while a restart is pending no NEW run starts (503, the page retries), so queued messages cannot hold it off', heldOff.status === 503 && heldOffU.status === 503);
 
   check('R11', 'account password files unchanged (scratch and production)', sha(path.join(SB, 'profiles', 't-admin', 'auth.json')) === authBefore
     && prodAccountFiles().every((f) => prodBefore[f] === sha(f)));
