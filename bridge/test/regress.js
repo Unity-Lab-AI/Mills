@@ -106,7 +106,10 @@ function startFakeOllama() {
       const call = (name, args) => line({ tool_calls: [{ function: { name, arguments: args } }] });
       if (last.role === 'user') {
         const u = user.content, m = /TASK (.+)/.exec(u), d = /DELETE (\S+)/.exec(u);
-        if (/SEARCHME/.test(u)) call('web_search', { query: 'regress query' });
+        if (/PCLIST/.test(u)) call('pc_list', { path: 'docs' });
+        else if (/RUNPY/.test(u)) call('run_code', { language: 'python', code: 'print(6*7)' });
+        else if (/DELME/.test(u)) call('pc_delete', { path: 'old.txt' });
+        else if (/SEARCHME/.test(u)) call('web_search', { query: 'regress query' });
         else if (/PLAYME/.test(u)) call('play_youtube', { query: 'regress song' });
         else if (/README/.test(u)) call('read_page', { url: 'http://127.0.0.1/secret' });
         else if (/EDITME/.test(u)) call('edit_image', { image: 'camera', prompt: 'regress edit scene', keep_face: true });
@@ -706,6 +709,43 @@ async function run() {
   const rp = toolRes(await uchat(U, 'README'), 'read_page');
   check('R82', 'read_page refuses the host\'s own network (no localhost / private addresses)', rp.ok === false && /private network/.test(rp.error || ''), rp.error);
   check('R83', '[static] page embeds [[youtube:id]] as a player', /youtube-nocookie\.com\/embed/.test(html) && /youtube:\[\\w-\]\{11\}/.test(html));
+  // the runner plays the browser: it answers her own-computer calls while the reply streams
+  async function uchatLive(tok, message, answer) {
+    const r = await fetch(H + '/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ message, client: { tz: 'UTC' } }) });
+    const events = [], reader = r.body.getReader(), td = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += td.decode(value, { stream: true }); let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
+        const ev = JSON.parse(line); events.push(ev);
+        if (ev.type === 'pc_tool' || ev.type === 'run_code') call('/api/assistant/pc-result', tok, { id: ev.id, ...answer(ev) });
+      }
+    }
+    return events;
+  }
+  const seenCalls = [];
+  const pcEv = await uchatLive(U, 'PCLIST', (ev) => { seenCalls.push(ev); return { ok: true, result: 'a.txt\nnotes/' }; });
+  const pcRes = (pcEv.find((e) => e.type === 'tool_result' && e.name === 'pc_list') || {}).result || {};
+  check('R84', "pc_list runs in the person's browser (their opened folder) and the answer comes back to her", seenCalls[0] && seenCalls[0].type === 'pc_tool' && seenCalls[0].name === 'list' && seenCalls[0].args.path === 'docs' && pcRes.ok && pcRes.result === 'a.txt\nnotes/', JSON.stringify(pcRes));
+  const pyEv = await uchatLive(U, 'RUNPY', (ev) => ({ ok: true, result: ev.language === 'python' && ev.code === 'print(6*7)' ? '42' : 'wrong' }));
+  const pyRes = (pyEv.find((e) => e.type === 'tool_result' && e.name === 'run_code') || {}).result || {};
+  const stray = await call('/api/assistant/pc-result', A, { id: 'nope', ok: true, result: 'x' });
+  check('R85', "run_code runs in the person's browser sandbox (not on the host); stray answers refused", pyRes.ok && pyRes.result === '42' && stray.status === 404, JSON.stringify(pyRes));
+  const dl = await uchatLive(U, 'DELME', () => ({ ok: true, result: 'deleted' }));
+  const dlAns = await call('/api/assistant/answer', U, { yes: true });
+  check('R86', 'pc_delete asks Yes / No first; Yes hands the delete to the page', dl.some((e) => e.type === 'confirm' && e.tool === 'pc_delete') && dlAns.data.browser && dlAns.data.browser.name === 'delete' && dlAns.data.browser.args.path === 'old.txt', JSON.stringify(dlAns.data));
+  const notAdmin = await call('/api/admin/unity-tools', U, { username: 't-user', pc: false });
+  const off = await call('/api/admin/unity-tools', A, { username: 't-user', pc: false, code: false });
+  const stOff = (await call('/api/assistant/state', U)).data.tools || {};
+  const sumOff = ((await call('/api/admin/accounts', A)).data.accounts || []).find((x) => x.username === 't-user') || {};
+  const offEv = await uchatLive(U, 'PCLIST', () => ({ ok: true, result: 'should not happen' }));
+  const offRes = (offEv.find((e) => e.type === 'tool_result' && e.name === 'pc_list') || {}).result || {};
+  await call('/api/admin/unity-tools', A, { username: 't-user', pc: true, code: true });
+  const stOn = (await call('/api/assistant/state', U)).data.tools || {};
+  check('R87', 'admin switches per account: non-admin 403; off → tools refused for that person; on again', notAdmin.status === 403 && off.data.pc === false && off.data.code === false && stOff.pc === false && sumOff.unityPc === false
+    && offRes.ok === false && /switched/.test(offRes.error || '') && !offEv.some((e) => e.type === 'pc_tool') && stOn.pc === true && stOn.code === true, JSON.stringify(offRes));
+  check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
   check('R67', '[static] menu has the Unity button and Unity screen', /id="goAssist">Unity</.test(html) && /<b>Unity<\/b>/.test(html));
   }
 
