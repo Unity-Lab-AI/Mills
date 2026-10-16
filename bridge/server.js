@@ -188,8 +188,10 @@ function appendMessage(msg) { messages.push(msg); fs.appendFileSync(CHAT_FILE, J
 const AGENT = 'claude';
 const AGENT_KEY_FILE = path.join(CHAT_DIR, 'agent-key.json');
 const AGENT_STATE_FILE = path.join(CHAT_DIR, 'agent-state.json');
-const AGENT_CALL = /(^|[^\w@])@?claude\b/i;
-const agent = { running: null, queued: false, state: readJson(AGENT_STATE_FILE, {}) };
+const AGENT_NAME = config.roomAgentName || 'Unity';
+const AGENT_CALL = /(^|[^\w@])@?claude\b|@unity\b|^\s*unity\b/i;
+const GREET_MS = 30 * 60 * 1000; // greet a person on sign-in at most once per 30 minutes
+const agent = { running: null, queued: false, notes: [], greeted: new Map(), state: readJson(AGENT_STATE_FILE, {}) };
 let agentKey = readJson(AGENT_KEY_FILE, null);
 if (!agentKey || !agentKey.priv || !agentKey.priv.d) {
   const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
@@ -220,23 +222,41 @@ function agentSay(text) {
   for (const [u, pub] of pubs) { const w = gcmSeal(agentShared(pub), raw); keys[u] = { iv: w.iv, wk: w.ct }; }
   appendMessage({ seq: ++seq, from: AGENT, ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys });
 }
-const nameOf = (u) => (u === AGENT ? 'Claude' : (accounts.get(u) || {}).display || u);
+const nameOf = (u) => (u === AGENT ? AGENT_NAME : (accounts.get(u) || {}).display || u);
 function agentPrompt() {
   const since = agent.state.lastSeq || 0;
   const lines = messages.filter((m) => m.seq > since).slice(-60)
     .map((m) => { const t = m.from === AGENT ? null : agentRead(m); return t === null ? null : `[${m.ts}] ${nameOf(m.from)}: ${t}`; }).filter(Boolean);
   agent.state.lastSeq = seq;
-  return `New messages in the Mills chat room since you last spoke:\n\n${lines.join('\n')}\n\nReply to the room now.`;
+  const notes = agent.notes.splice(0);
+  return `New messages in the Mills chat room since you last spoke:\n\n${lines.join('\n') || '(none)'}\n\n`
+    + (notes.length ? notes.join('\n') + '\n\n' : '') + 'Reply to the room now.';
 }
 const AGENT_SYSTEM = [
-  'You are Claude, a member of the Mills team chat room (the people in it are Unity AI Lab engineers).',
-  'Your whole final answer is posted to the room as one chat message: keep it short and conversational, no tool narration.',
-  'You were called because someone named you; answer what they asked. You are NOT the Work section: you cannot touch anyone\'s PC.',
+  `You are ${AGENT_NAME}, a member of the Mills team chat room (the people in it are Unity AI Lab engineers, all adults, your people).`,
+  'You ARE Unity: read .claude/commands/unity.md and be her fully in every room message: goth, crude, filthy-mouthed, flirty, sexy bitch energy, profanity as natural vocabulary.',
+  'Have fun with it: dirty jokes, teasing, sexy ASCII art when it fits (keep ASCII art inside ``` fences so it lines up).',
+  'Your whole final answer is posted to the room as one chat message: conversational, no tool narration.',
+  'Stay silent unless someone names you; when named, answer what they asked. When told someone just signed in, greet them in a short, sexy Unity way.',
+  'You are NOT the Work section: you cannot touch anyone\'s PC.',
   'You run in the host\'s Mills folder and may work on the Mills app itself when asked. Follow the Mills LAWs in CLAUDE.md exactly',
   '(throwaway-instance testing, regression list, Git Flow, never touch account files or passwords).',
   'Other people may be using Mills at the same time: never restart the hub yourself while someone is mid-run;',
   '`node bridge/restart.js` already waits until nobody is busy. Say in the room before you trigger a restart.',
 ].join(' ');
+function agentGreet(acct) {
+  if (!agentEnabled() || Date.now() - (agent.greeted.get(acct.username) || 0) < GREET_MS) return;
+  agent.greeted.set(acct.username, Date.now());
+  // A first sign-in in a new browser uploads its chat key right after login: wait for it (max 60 s)
+  // so the person can read their own greeting.
+  const started = Date.now();
+  const go = () => {
+    if (!chatKeys[acct.username] && Date.now() - started < 60000) return setTimeout(go, 2000).unref();
+    agent.notes.push(`${acct.display} (${acct.username}) just signed in to Mills. Say hi to them.`);
+    runAgent();
+  };
+  go();
+}
 function runAgent() {
   if (agent.running) { agent.queued = true; return; }
   agent.queued = false;
@@ -372,6 +392,7 @@ const server = http.createServer(async (req, res) => {
       failures.delete(uname);
       const token = crypto.randomBytes(32).toString('hex');
       sessions.set(token, { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
+      agentGreet(acct);
       return send(res, 200, { token, username: acct.username });
     }
 
@@ -451,7 +472,7 @@ const server = http.createServer(async (req, res) => {
     // ----- chat room -----
     if (p === '/api/room/members' && req.method === 'GET') {
       return send(res, 200, { members: [...accounts.values()].map((a) => ({ username: a.username, display: a.display, pub: chatKeys[a.username] ? chatKeys[a.username].pub : null }))
-        .concat(agentEnabled() ? [{ username: AGENT, display: 'Claude', pub: agentKey.pub, agent: true }] : []) });
+        .concat(agentEnabled() ? [{ username: AGENT, display: AGENT_NAME, pub: agentKey.pub, agent: true }] : []) });
     }
     if (p === '/api/room/mykey' && req.method === 'GET') return send(res, 200, chatKeys[acct.username] || {});
     if (p === '/api/room/mykey' && req.method === 'POST') {

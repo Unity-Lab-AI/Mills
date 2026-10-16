@@ -51,7 +51,7 @@ On disk, the `mills` account is `bridge/auth.json` + `bridge/state.json` + `Mill
    - The **model dropdown** picks which Claude model answers you (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5, or your account's default). It applies from your next message (after the current reply), to every new chat, and survives restarts. Each "Done" line shows which model answered.
    - **Theme** opens 23 UI colour themes plus the Mills default, remembered in that browser.
 3. **Chat** is a room shared by every account. Messages are end-to-end encrypted (see Security). A red badge on the Chat button counts new messages while you are elsewhere. The member list shows each person's key fingerprint.
-   - **Claude is in the room too.** It stays quiet until someone names it (`@claude …` or `claude, …`), then reads what was said since it last spoke and answers in the room. It works in the host's Mills folder, so it can also work on Mills itself when asked. The hub won't restart while Claude or anyone else is in the middle of a reply. Set `"roomAgent": false` in `bridge/config.json` to remove it, and `"roomAgentModel"` to choose its model.
+   - **Unity (Claude) is in the room too.** She says hi when someone signs in. Otherwise she stays quiet until someone names her (`@unity …`, a message starting with `unity`, or `@claude …`), then reads what was said since she last spoke and answers in the room in the lab's Unity persona. It works in the host's Mills folder, so it can also work on Mills itself when asked. The hub won't restart while Claude or anyone else is in the middle of a reply. Set `"roomAgent": false` in `bridge/config.json` to remove it, `"roomAgentModel"` to choose its model, and `"roomAgentName"` to rename it (default Unity).
 
 ## Publishing updates
 
