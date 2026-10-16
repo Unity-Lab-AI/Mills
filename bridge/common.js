@@ -34,7 +34,13 @@ function loadProfile(PROFILE) {
   }
   const PROFILE_DIR = PROFILE ? path.join(ROOT, 'profiles', PROFILE) : ROOT;
   const baseConfig = readJson(path.join(ROOT, 'config.json'), {});
-  const profileConfig = PROFILE ? readJson(path.join(PROFILE_DIR, 'config.json'), null) : {};
+  let profileConfig = PROFILE ? readJson(path.join(PROFILE_DIR, 'config.json'), null) : {};
+  // An account whose config.json went missing still has its password: keep it signing in
+  // (display name = username, not admin) instead of silently dropping the account.
+  if (PROFILE && !profileConfig && fs.existsSync(path.join(PROFILE_DIR, 'auth.json'))) {
+    console.error(`[mills] bridge/profiles/${PROFILE}/config.json is missing: account kept with defaults (not admin). Recreate it to restore the display name / admin flag.`);
+    profileConfig = {};
+  }
   if (PROFILE && !profileConfig) {
     console.error(`Missing bridge/profiles/${PROFILE}/config.json (at least {"user": "<display name>"}).`);
     process.exit(1);
@@ -73,10 +79,10 @@ function loadProfile(PROFILE) {
   };
 }
 
-// Every profile that has a config.json, default first.
+// Every profile that has a config.json or a password (auth.json), default first.
 function allProfiles() {
   const dir = path.join(ROOT, 'profiles');
-  const named = fs.existsSync(dir) ? fs.readdirSync(dir).filter((p) => fs.existsSync(path.join(dir, p, 'config.json'))).sort() : [];
+  const named = fs.existsSync(dir) ? fs.readdirSync(dir).filter((p) => /^[a-z0-9-]{1,32}$/.test(p) && ['config.json', 'auth.json'].some((f) => fs.existsSync(path.join(dir, p, f)))).sort() : [];
   return ['', ...named];
 }
 
