@@ -392,6 +392,11 @@
   #assistVideo { height: 180px; border-radius: 8px; background: #000; }
   #assistMic.rec { background: var(--bad); color: #fff; }
   .ytPlayer { display: block; width: min(100%, 480px); aspect-ratio: 16 / 9; border: 0; border-radius: 8px; margin: .3rem 0; }
+  .mstat { display: flex; align-items: center; gap: .3rem; margin-top: .35rem; font-size: .72rem; color: var(--muted); font-style: normal; }
+  .mstat .ic { width: .95em; height: .95em; }
+  .mstat.working .ic { animation: mstatSpin 1s linear infinite; }
+  .mstat.done { color: var(--good); } .mstat.failed { color: var(--bad); }
+  @keyframes mstatSpin { to { transform: rotate(360deg); } }
   .hostImg { display: block; max-width: min(100%, 420px); max-height: 60vh; border-radius: 8px; margin: .3rem 0; cursor: pointer; }
   .confirmCard { align-self: flex-start; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: .6rem .8rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   #assistNotice { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; display: flex; flex-direction: column; gap: .5rem; }
@@ -1046,10 +1051,12 @@ $('assistForm').addEventListener('submit', async (e) => {
   if ((!text && !assistPhoto) || assistBusy) return;
   $('assistInput').value = '';
   const photo = assistPhoto; setPhoto('');
-  assistAdd('msg me', (text || '(photo)') + (photo ? `
+  const mineU = assistAdd('msg me', (text || '(photo)') + (photo ? `
 [[image:${photo}]]` : ''));
   assistBusy = true; $('assistSend').hidden = true; $('assistStop').hidden = false;
-  const bubble = assistAdd('msg', '…'); let shown = '', said = [];
+  const bubble = assistAdd('msg', '…'); let shown = '', said = [], outcome = null;
+  const t0u = Date.now(); msgStatus(mineU, 'working', 'Unity is working on this…');
+  const ticku = setInterval(() => { if (!outcome) msgStatus(mineU, 'working', 'Unity is working on this… ' + elapsed(t0u)); }, 5000);
   try {
     const res = await api('/api/assistant/chat', { method: 'POST', body: JSON.stringify({ message: text || 'Look at this photo.', photo, client: assistClient() }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -1065,14 +1072,15 @@ $('assistForm').addEventListener('submit', async (e) => {
         else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
         else if (ev.type === 'pc_tool' || ev.type === 'run_code') answerBrowserCall(ev);
-        else if (ev.type === 'final') { if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
+        else if (ev.type === 'final') { outcome = ['done', 'Done in ' + elapsed(t0u)]; if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
 [[image:${r}]]`).join('') + (ev.media || []).map((v) => `
 [[youtube:${v}]]`).join(''));
-        else if (ev.type === 'error') { renderText(bubble, ev.text); bubble.className = 'sys bad'; }
+        else if (ev.type === 'error') { renderText(bubble, ev.text); bubble.className = 'sys bad'; outcome = ev.text === 'Stopped.' ? ['stopped', 'Stopped'] : ['failed', 'Failed: ' + ev.text]; }
       }
       $('assistLog').scrollTop = $('assistLog').scrollHeight;
     }
-  } catch (err) { renderText(bubble, err.message); bubble.className = 'sys bad'; }
+  } catch (err) { renderText(bubble, err.message); bubble.className = 'sys bad'; outcome = ['failed', 'Failed: ' + err.message]; }
+  clearInterval(ticku); msgStatus(mineU, ...(outcome || ['stopped', 'Stopped after ' + elapsed(t0u)]));
   assistBusy = false; $('assistSend').hidden = false; $('assistStop').hidden = true;
 });
 // ---- voice: her replies in her own voice (made on the host), your mic → text on the host ----
@@ -1419,6 +1427,17 @@ function describeTool(t) {
   return name + (target !== '' ? '  ' + String(target).slice(0, 160) : '');
 }
 
+// Status line under each message you send (Work, Unity section, @unity in Chat): queued, working,
+// done, stopped, failed; so you always know whether it is being worked on or finished.
+const MSTAT_ICON = { queued: 'tasks', waiting: 'tasks', working: 'refresh', done: 'check', stopped: 'stop', failed: 'warn' };
+function msgStatus(el, state, text) {
+  if (!el) return;
+  let st = [...el.children].find((c) => c.classList && c.classList.contains('mstat'));
+  if (!st) { st = document.createElement('div'); el.append(st); }
+  st.className = 'mstat ' + state; st.textContent = '';
+  st.append(ic(MSTAT_ICON[state] || 'tasks'), text);
+}
+const elapsed = (t0) => { const s = Math.round((Date.now() - t0) / 1000); return s < 60 ? s + ' s' : Math.floor(s / 60) + ' min ' + (s % 60) + ' s'; };
 async function runPcTool(ev) {
   let body;
   if (!fsOps[ev.name]) body = { id: ev.id, ok: false, error: 'Unknown tool ' + ev.name };
@@ -1480,7 +1499,7 @@ $('composer').addEventListener('submit', (e) => {
   if (busy) enqueue(message); else send(message);
 });
 function enqueue(message) {
-  const el = bubble('me queued'); renderText(el, message);
+  const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', 'Queued: goes after the current reply');
   const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.append(ic('close')); x.title = 'Remove from queue'; x.setAttribute('aria-label', 'Remove from queue');
   x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); postLive(); };
   el.prepend(x); scroll();
@@ -1504,8 +1523,12 @@ function showThinking() {
   thinkingEl.append(ic('bot', 'lead'), 'Claude is thinking', dots); scroll();
 }
 function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; } }
+let runOutcome = null; // set by handleEvent: { state, text } for the message being worked on
 async function send(message) {
-  renderText(bubble('me'), message); record('me', message); scroll();
+  const mine = bubble('me'); renderText(mine, message); record('me', message); scroll();
+  const t0 = Date.now(); runOutcome = null;
+  msgStatus(mine, 'working', 'Claude is working on this…');
+  const tick = setInterval(() => { if (!runOutcome) msgStatus(mine, 'working', 'Claude is working on this… ' + elapsed(t0)); }, 5000);
   setBusy(true); runModel = ''; stderrText = ''; showThinking();
   try {
     postLive();
@@ -1524,7 +1547,9 @@ async function send(message) {
         if (l.trim()) { try { handleEvent(JSON.parse(l)); } catch {} }
       }
     }
-  } catch (err) { sys(err.message, true); }
+  } catch (err) { sys(err.message, true); runOutcome = { state: 'failed', text: 'Failed: ' + err.message }; }
+  clearInterval(tick);
+  msgStatus(mine, ...(runOutcome ? [runOutcome.state, runOutcome.text] : ['stopped', 'Stopped after ' + elapsed(t0)]));
   hideThinking(); setBusy(false); $('input').focus();
   refreshUsage();
   if (archiveId) saveToArchive(true); // keep the saved session up to date after every reply
@@ -1545,10 +1570,11 @@ function handleEvent(ev) {
     }
   } else if (ev.type === 'system' && ev.subtype === 'init') { if (ev.model) runModel = ev.model; }
   else if (ev.type === 'result') {
+    runOutcome = ev.is_error ? { state: 'failed', text: 'Stopped with an error' } : { state: 'done', text: 'Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + ' s' : '') };
     if (ev.is_error) sys('Claude stopped with an error: ' + (ev.result || ev.subtype), true);
     else sys('Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
   } else if (ev.type === 'stderr') stderrText = (stderrText + ev.text).slice(-600);
-  else if (ev.type === 'bridge_error') sys(ev.text, true);
+  else if (ev.type === 'bridge_error') { sys(ev.text, true); runOutcome = { state: 'failed', text: 'Failed: ' + ev.text }; }
   else if (ev.type === 'bridge_done' && ev.code) sys('Claude stopped (code ' + ev.code + ')' + (stderrText.trim() ? ': ' + stderrText.trim() : ''), true);
   scroll();
 }
@@ -2101,7 +2127,27 @@ async function applyRoom(d) {
   roomLoaded = true;
   if (pinBootstrap) { pinBootstrap = false; savePins(); } // first load done: from now on only pinned keys count
   refreshReceipts(); updateUnread(); markSeen();
+  refreshAgentWaits();
 }
+// Your @unity messages: waiting → Unity is answering (her typing indicator) → answered (a reply from
+// her after yours in that conversation); "no answer yet" after 3 minutes without one.
+let agentWaitNext = null;
+const agentWaits = new Map(); // seq of your message -> { conv, at }
+function refreshAgentWaits() {
+  if (agentWaitNext) {
+    const mine = [...msgs.values()].filter((r) => r.m.from === me.username && r.m.seq > agentWaitNext.after && convOfMsg(r.m) === agentWaitNext.conv);
+    if (mine.length) { agentWaits.set(mine[mine.length - 1].m.seq, { conv: agentWaitNext.conv, at: agentWaitNext.at }); agentWaitNext = null; }
+  }
+  for (const [seq, w] of agentWaits) {
+    const rec = msgs.get(seq); if (!rec || !rec.el) continue;
+    const answered = [...msgs.values()].some((r) => r.m.from === 'claude' && r.m.seq > seq && convOfMsg(r.m) === w.conv);
+    if (answered) { msgStatus(rec.el, 'done', 'Unity answered'); agentWaits.delete(seq); continue; }
+    if (typingList.some((t) => t.user === 'claude')) msgStatus(rec.el, 'working', 'Unity is answering… ' + elapsed(w.at));
+    else if (Date.now() - w.at > 180000) msgStatus(rec.el, 'failed', 'No answer from Unity yet');
+    else msgStatus(rec.el, 'waiting', 'Sent to Unity, waiting… ' + elapsed(w.at));
+  }
+}
+setInterval(() => { if (agentWaits.size) refreshAgentWaits(); }, 5000);
 async function roomLoop(gen) {
   // the long poll is held outside the queue (it may wait 25 s); its answer is applied through the queue
   while (me && gen === roomGen) {
@@ -2996,6 +3042,7 @@ $('roomComposer').addEventListener('submit', async (e) => {
       await json('/api/room/edit', { method: 'POST', body: JSON.stringify({ seq: editingSeq, ...sealed }) });
     } else {
       const to = convPeer(currentConv), forAgent = callsAgent(text, to);
+      if (forAgent) agentWaitNext = { conv: currentConv, after: Math.max(0, ...msgs.keys()), at: Date.now() };
       const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) }), to, forAgent);
       await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
     }
