@@ -821,7 +821,7 @@ async function refreshMembers() {
     const box = $('roomMembers'); box.innerHTML = '<b>Members</b>';
     for (const m of roomMembers) {
       const d = document.createElement('div');
-      const name = document.createElement('div'); name.textContent = m.display + ' (' + m.username + ')' + (m.username === me.username ? ' · you' : '') + (m.agent ? ' · AI, answers when you write @claude (its key is held by the hub)' : '');
+      const name = document.createElement('div'); name.textContent = m.display + ' (' + m.username + ')' + (m.username === me.username ? ' · you' : '') + (m.agent ? ' · AI, answers when you write @unity or @claude (its key is held by the hub)' : '');
       const fp = document.createElement('code'); fp.textContent = m.pub ? await fingerprint(m.pub) : 'no key yet (has not signed in since chat was added)';
       d.append(name, fp); box.append(d);
     }
