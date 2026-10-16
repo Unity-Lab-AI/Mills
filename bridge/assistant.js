@@ -67,7 +67,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   // Python services on the host (Python 3.10 with torch): the image engine (bridge/image-engine.py),
   // Unity's voice (unity-voice-v2/serve.py) and the speech engine (bridge/speech-engine.py, whisper).
   // Each is started detached when it does not answer, so they survive hub restarts.
-  const PY = A.python || (process.platform === 'win32' ? 'py' : 'python3');
+  // pyw on Windows: the windowless launcher, so the services run in the background with no console windows
+  const PY = A.python || (process.platform === 'win32' ? 'pyw' : 'python3');
   const PY_ARGS = A.pythonArgs || (process.platform === 'win32' && !A.python ? ['-3.10'] : []);
   const VOICE_URL = (A.voiceUrl || 'http://127.0.0.1:5123').replace(/\/$/, '');
   const VOICE_DIR = A.voiceDir || path.join(MILLS_DIR, '..', 'Backrooms', 'models', 'unity-voice-v2');
@@ -79,7 +80,11 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     if (starting.has(url)) return starting.get(url);
     const p = (async () => {
       if (await up(url)) return true;
-      try { spawn(PY, [...PY_ARGS, ...args], { cwd, detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
+      // Windowless Python has no console, so the script's prints would crash it: run it through a
+      // two-line wrapper that sends its output nowhere first (the scripts themselves stay unchanged).
+      const [script, ...rest] = args;
+      const boot = 'import os,sys,runpy; sys.stdout = sys.stderr = open(os.devnull, "w"); sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(sys.argv[0])); runpy.run_path(sys.argv[0], run_name="__main__")';
+      try { spawn(PY, [...PY_ARGS, '-c', boot, script, ...rest], { cwd, detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
       for (let i = 0; i < 60; i++) { if (await up(url)) return true; await new Promise((r) => setTimeout(r, 1000)); }
       return false;
     })().finally(() => starting.delete(url));
