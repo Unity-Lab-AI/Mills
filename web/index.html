@@ -92,6 +92,49 @@
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
+  /* ── markdown (web/md.js), shared by the Work chat and the team chat ── */
+  .msg.claude { border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+  .md { white-space: normal; line-height: 1.55; }
+  .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+  .md p { margin: .45rem 0; }
+  .md .mdh { margin: .9rem 0 .4rem; line-height: 1.25; font-weight: 700; }
+  .md h1.mdh { font-size: 1.35rem; padding-bottom: .25rem; border-bottom: 1px solid var(--line); }
+  .md h2.mdh { font-size: 1.18rem; padding-bottom: .2rem; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  .md h3.mdh { font-size: 1.05rem; } .md h4.mdh, .md h5.mdh, .md h6.mdh { font-size: .95rem; color: var(--muted); }
+  .md a { color: color-mix(in srgb, var(--accent) 55%, var(--text)); text-decoration: underline; text-underline-offset: 2px; }
+  .md mark { background: color-mix(in srgb, #ffd43b 55%, transparent); color: inherit; border-radius: 3px; padding: 0 .15rem; }
+  .md code.mdc { font-family: ui-monospace, Consolas, monospace; font-size: .86em; background: color-mix(in srgb, var(--text) 12%, transparent); padding: .08rem .35rem; border-radius: 5px; }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
+  .md .mdlist { margin: .35rem 0; padding-left: 1.5rem; } .md .mdlist li { margin: .15rem 0; } .md .mdlist .mdlist { margin: .1rem 0; }
+  .md li.mdtask { list-style: none; margin-left: -1.3rem; } .md li.mdtask input { width: auto; margin: 0 .45rem 0 0; vertical-align: middle; }
+  .md blockquote { margin: .5rem 0; padding: .3rem .8rem; border-left: 3px solid var(--muted); color: color-mix(in srgb, var(--text) 85%, var(--muted)); background: color-mix(in srgb, var(--text) 4%, transparent); border-radius: 0 6px 6px 0; }
+  .md .mdalert { --ac: #4dabf7; border-left-color: var(--ac); background: color-mix(in srgb, var(--ac) 10%, transparent); }
+  .md .mdalert-tip { --ac: #51cf66; } .md .mdalert-important { --ac: #9775fa; } .md .mdalert-warning { --ac: #fcc419; } .md .mdalert-caution { --ac: #ff6b6b; }
+  .md .mdalert-t { font-weight: 700; color: var(--ac); margin-bottom: .15rem; }
+  .md .mdtable { overflow-x: auto; margin: .5rem 0; border: 1px solid var(--line); border-radius: 8px; }
+  .md table { border-collapse: collapse; width: 100%; font-size: .9em; }
+  .md th, .md td { padding: .35rem .6rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .md th { background: color-mix(in srgb, var(--text) 7%, transparent); font-weight: 700; }
+  .md tbody tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .md tbody tr:last-child td { border-bottom: 0; }
+  .md .mdcode { margin: .55rem 0; border: 1px solid color-mix(in srgb, var(--line) 80%, #000); border-radius: 8px; overflow: hidden; background: #0b0d12; }
+  .md .mdhead { display: flex; align-items: center; gap: .4rem; padding: .25rem .5rem; font-size: .72rem; color: #9aa4b2; background: #151922; border-bottom: 1px solid #222838; font-family: ui-monospace, Consolas, monospace; }
+  .md .mdhead span { flex: 1; text-transform: lowercase; }
+  .md .mdbtn { padding: .1rem .5rem; font-size: .7rem; background: transparent; color: #c7cfdb; border: 1px solid #2c3446; border-radius: 5px; }
+  .md .mdbtn:hover { background: #222838; }
+  .md .mdcode pre { margin: 0; padding: .65rem .75rem; background: transparent; color: #e6e9ef; border-radius: 0; font-size: .82rem; line-height: 1.5; white-space: pre; overflow-x: auto; tab-size: 2; }
+  .md .hl-kw { color: #c792ea; } .md .hl-str { color: #c3e88d; } .md .hl-num { color: #f78c6c; } .md .hl-com { color: #697098; font-style: italic; }
+  .md .hl-add { color: #8ce99a; background: rgba(81,207,102,.1); } .md .hl-del { color: #ffa8a8; background: rgba(255,107,107,.1); }
+  .md .mdmermaid { background: color-mix(in srgb, var(--bg) 80%, var(--panel)); }
+  .md .mdmbody { padding: .6rem; overflow-x: auto; text-align: center; color: var(--muted); font-size: .8rem; }
+  .md .mdmbody svg { max-width: 100%; height: auto; }
+  .md .mdmsrc { margin: 0; padding: .6rem .75rem; border-top: 1px solid var(--line); background: #0b0d12; color: #e6e9ef; font-size: .8rem; white-space: pre; overflow-x: auto; }
+  .md .mderr { color: var(--bad); }
+  .md .mdmath { margin: .5rem 0; padding: .5rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; text-align: center; }
+  .md .mdfnref { cursor: pointer; color: color-mix(in srgb, var(--accent) 55%, var(--text)); font-size: .72em; margin-left: .1rem; }
+  .md .mdfns { font-size: .82em; color: var(--muted); } .md .mdfns ol { padding-left: 1.4rem; margin: .3rem 0 0; }
+  .md .mdimg { max-width: min(100%, 420px); border-radius: 6px; display: block; margin: .3rem 0; }
+  .msg.me .md a, .msg.me .md .mdfnref { color: inherit; }
   .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); word-break: break-all; }
   .sys { font-size: .8rem; color: var(--muted); text-align: center; }
   .sys.bad { color: var(--bad); }
@@ -504,7 +547,9 @@
   </div>
 </div>
 
+<script src="md.js"></script>
 <script>
+MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
 const GH_USER = '__MILLS_GIST_OWNER__'; // filled in at deploy time from the MILLS_GIST_OWNER repository variable
 // One Mills hub serves every account; people sign in with username + password.
 // An old ?user=<name> link still works: it just fills in the username.
@@ -817,13 +862,7 @@ const scroll = () => { log.scrollTop = log.scrollHeight; };
 function sys(text, bad) { const d = document.createElement('div'); d.className = 'sys' + (bad ? ' bad' : ''); d.textContent = text; log.appendChild(d); scroll(); }
 function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
-function renderText(el, text) {
-  el.textContent = '';
-  text.split(/```[^\n]*\n?/).forEach((part, i) => {
-    if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.appendChild(pre); }
-    else if (part) el.appendChild(document.createTextNode(part));
-  });
-}
+function renderText(el, text) { MD.render(el, text); } // full markdown + mermaid (web/md.js)
 function describeTool(t) {
   const i = t.input || {};
   const name = t.name.replace(/^mcp__pc__/, 'your PC › ');
@@ -1491,17 +1530,13 @@ async function ingest(m, live) {
   for (const other of msgs.values()) if (other.r === m.seq && other.el) renderMsg(other); // refresh quotes of this message
   if (live && !prev && m.from !== me.username && !m.deleted) notify(rec);
 }
-function renderRich(el, text) { // ``` code blocks + highlighted @mentions
-  text.split(/```[^\n]*\n?/).forEach((part, i) => {
-    if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.append(pre); return; }
-    for (const bit of part.split(/(@[\w.-]+)/)) {
-      if (!/^@[\w.-]+$/.test(bit)) { if (bit) el.append(bit); continue; }
-      const owner = handleOwner(bit.slice(1));
-      if (!owner) { el.append(bit); continue; }
-      const s = document.createElement('span'); s.className = 'mention' + (owner === me.username ? ' you' : ''); s.textContent = bit; s.style.color = colorOf(owner);
-      el.append(s);
-    }
-  });
+function renderRich(el, text) { // full markdown + mermaid (web/md.js), with highlighted @mentions
+  MD.render(el, text, { mention: (h) => {
+    const owner = handleOwner(h);
+    if (!owner) return null;
+    const s = document.createElement('span'); s.className = 'mention' + (owner === me.username ? ' you' : ''); s.textContent = '@' + h; s.style.color = colorOf(owner);
+    return s;
+  } });
 }
 function renderMsg(rec, bulk) {
   const { m } = rec, log = $('roomLog'), mine = m.from === me.username;
