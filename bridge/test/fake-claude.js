@@ -3,6 +3,7 @@
 // throwaway hub. Speaks the same NDJSON events the web app reads, costs nothing, touches nothing.
 //   message contains "SLOW"   → waits 4 s before answering (busy / 409 / stop / deferred restart)
 //   message contains "PCTOOL" → calls the pc "list" tool through the hub, like the real MCP relay
+// The answer echoes the model and the working folder (cwd) so the runner can check both.
 'use strict';
 const fs = require('fs');
 const crypto = require('crypto');
@@ -28,6 +29,6 @@ process.stdin.on('end', async () => {
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
   }
-  out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: `echo: ${input} | model=${model}` }] } });
+  out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()}` }] } });
   out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: `echo: ${input.slice(-200)} | model=${model}` });
 });
