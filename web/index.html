@@ -75,7 +75,36 @@
   #themeMenu button.on { outline: 1px solid var(--accent); }
   #themeMenu i { width: 1.6rem; height: .9rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
 
+  /* main menu */
+  #menu { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 1.2rem; text-align: center; }
+  #menuUser { font-size: 2.6rem; font-weight: 700; margin: 0; letter-spacing: .02em; }
+  #menu .choices { display: flex; flex-direction: column; gap: .8rem; align-items: center; }
+  #menu .choices button { width: 220px; padding: .9rem 1rem; font-size: 1.15rem; position: relative; }
+  #menu .badge { position: absolute; top: -.4rem; right: -.4rem; background: var(--bad); color: #fff; border-radius: 999px; font-size: .75rem; padding: .1rem .45rem; }
+  button.back { margin-right: .25rem; }
+
+  /* chat room + admin screens share the header style */
+  .screen { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  #roomBody { flex: 1; display: grid; grid-template-columns: 1fr 230px; min-height: 0; }
+  #roomLog { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
+  #roomLog .msg small { display: block; color: var(--muted); font-size: .75rem; margin-bottom: .2rem; }
+  #roomLog .msg.me small { color: inherit; opacity: .75; }
+  #roomMembers { border-left: 1px solid var(--line); padding: .75rem; overflow: auto; font-size: .85rem; }
+  #roomMembers div { margin-bottom: .6rem; }
+  #roomMembers code { color: var(--muted); font-size: .72rem; word-break: break-all; }
+  #roomComposer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--line); }
+  #roomComposer textarea { resize: none; height: 3.2rem; }
+  #adminBody { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+  #adminBody table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  #adminBody th, #adminBody td { border-bottom: 1px solid var(--line); padding: .45rem .4rem; text-align: left; vertical-align: middle; }
+  #adminBody td button { padding: .25rem .5rem; font-size: .75rem; margin: .1rem; }
+  #adminBody .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  #adminBody .row input { width: auto; flex: 1; min-width: 140px; }
+  #adminOut { font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .6rem; min-height: 2.5rem; }
+
   @media (max-width: 900px) {
+    #roomBody { grid-template-columns: 1fr; }
+    #roomMembers { border-left: 0; border-top: 1px solid var(--line); order: 2; }
     #app { grid-template-columns: 1fr; overflow: auto; }
     #app > section { min-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }
     #chat { min-height: 70vh !important; order: -1; }
@@ -86,15 +115,68 @@
 
 <form id="login" class="center">
   <h1 id="title">Mills</h1>
-  <p>Sign in to talk to Claude and build on your PC.</p>
-  <input id="password" type="password" placeholder="Password" autocomplete="current-password" autofocus>
+  <p>Sign in with your Mills username and password.</p>
+  <input id="username" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>
+  <input id="password" type="password" placeholder="Password" autocomplete="current-password">
   <button type="submit" id="signin">Sign in</button>
   <div class="err" id="loginErr"></div>
   <div class="status" id="bridgeStatus">Looking for Mills…</div>
 </form>
 
+<div id="menu" hidden>
+  <h1 id="menuUser"></h1>
+  <div class="choices">
+    <button id="goWork">Work</button>
+    <button id="goChat">Chat<span class="badge" id="chatBadge" hidden></span></button>
+    <button id="goAdmin" hidden>Admin</button>
+    <button class="ghost" id="menuLogout">Sign out</button>
+  </div>
+</div>
+
+<div id="room" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back>← Menu</button>
+    <b>Chat</b>
+    <span class="folder" id="roomStatus">End-to-end encrypted</span>
+  </header>
+  <div id="roomBody">
+    <div style="display:flex;flex-direction:column;min-height:0">
+      <div id="roomLog"></div>
+      <form id="roomComposer">
+        <textarea id="roomInput" placeholder="Message everyone…  (Enter to send, Shift+Enter for a new line)"></textarea>
+        <button type="submit">Send</button>
+      </form>
+    </div>
+    <div id="roomMembers"></div>
+  </div>
+</div>
+
+<div id="admin" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back>← Menu</button>
+    <b>Admin</b>
+    <span class="folder">Accounts and hub controls</span>
+  </header>
+  <div id="adminBody">
+    <table><thead><tr><th>User</th><th>Status</th><th>Model</th><th>Actions</th></tr></thead><tbody id="adminRows"></tbody></table>
+    <div class="row">
+      <input id="newUser" placeholder="new username (a-z, 0-9, -)" autocapitalize="none" spellcheck="false">
+      <input id="newDisplay" placeholder="display name">
+      <label style="font-size:.85rem"><input type="checkbox" id="newAdmin" style="width:auto"> admin</label>
+      <button id="createUser">Create account</button>
+    </div>
+    <div class="row">
+      <button class="ghost" id="adminRestart">Restart hub</button>
+      <button class="ghost" id="adminClearChat">Clear chat history</button>
+      <button class="ghost" id="adminRefresh">Refresh</button>
+    </div>
+    <div id="adminOut">Generated passwords appear here once. Copy them before leaving this page.</div>
+  </div>
+</div>
+
 <div id="shell" hidden>
   <header>
+    <button class="ghost back" data-back>← Menu</button>
     <b id="brand">Mills</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
@@ -140,18 +222,19 @@
 
 <script>
 const GH_USER = 'G-Fourteen';
-// Which bridge this page talks to. No ?user= → Alfreddo's bridge (the original one).
-// ?user=sponge → the bridge Gee started with "start.bat sponge" (own password, lock, tunnel, Archive).
-const USER = (new URLSearchParams(location.search).get('user') || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 32);
-const USER_NAME = USER ? USER[0].toUpperCase() + USER.slice(1) : 'Alfreddo';
-const GIST_FILE = USER ? `mills-bridge-${USER}.json` : 'mills-bridge.json';
-const TOKEN_KEY = USER ? `mills.token.${USER}` : 'mills.token';
+// One Mills hub serves every account; people sign in with username + password.
+// An old ?user=<name> link still works: it just fills in the username.
+const GIST_FILE = 'mills-bridge.json';
+const TOKEN_KEY = 'mills.token';
 const $ = (id) => document.getElementById(id);
-if (USER) { document.title = `Mills · ${USER_NAME}`; $('title').textContent = `Mills · ${USER_NAME}`; $('brand').textContent = `Mills · ${USER_NAME}`; }
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
+let me = null;               // { username, display, admin, models, ... } from /api/check
+let USER_NAME = 'you';       // display name of whoever is signed in
+$('username').value = (new URLSearchParams(location.search).get('user') || store.get('mills.username') || '').toLowerCase();
+if ($('username').value) $('password').focus();
 
 // UI colour themes — palettes taken from the shared themes collection.
 const THEMES = {"burple":{"bg":"#1E1B33","text":"#FFFFFF","panel":"#241E42","line":"#3C3272","accent":"#524696","me":"#3C3272","meText":"#FFFFFF"},"cyberpunk":{"bg":"#0D0221","text":"#FF00E2","panel":"#18033F","line":"#390978","accent":"#390978","me":"#2E0B5F","meText":"#FF00E2"},"dark":{"bg":"#121212","text":"#e0e0e0","panel":"#1e1e1e","line":"#333333","accent":"#2196f3","me":"#2c3e50","meText":"#e0e0e0"},"dracula":{"bg":"#282A36","text":"#F8F8F2","panel":"#44475A","line":"#6272A4","accent":"#6272A4","me":"#BD93F9","meText":"#282A36"},"gruvbox_dark":{"bg":"#282828","text":"#EBDBB2","panel":"#3C3836","line":"#504945","accent":"#8EC07C","me":"#8EC07C","meText":"#282828"},"gruvbox_light":{"bg":"#FBF1C7","text":"#3C3836","panel":"#F2E5BC","line":"#EBDBB2","accent":"#D5C4A1","me":"#D5C4A1","meText":"#3C3836"},"hacker":{"bg":"#000000","text":"#00ff00","panel":"#001100","line":"#005500","accent":"#005500","me":"#003300","meText":"#00ff00"},"honeycomb":{"bg":"#FFF9E3","text":"#5D4037","panel":"#FFF3E0","line":"#FFCC80","accent":"#FFD54F","me":"#FFD54F","meText":"#4E342E"},"light":{"bg":"#ffffff","text":"#333333","panel":"#f5f5f5","line":"#e0e0e0","accent":"#2196f3","me":"#e3f2fd","meText":"#333333"},"material_dark":{"bg":"#212121","text":"#ECEFF1","panel":"#2C2C2C","line":"#424242","accent":"#546E7A","me":"#546E7A","meText":"#ECEFF1"},"material_light":{"bg":"#FAFAFA","text":"#212121","panel":"#E0E0E0","line":"#BDBDBD","accent":"#90CAF9","me":"#90CAF9","meText":"#212121"},"monokai":{"bg":"#272822","text":"#F8F8F2","panel":"#3E3D32","line":"#75715E","accent":"#A6E22E","me":"#A6E22E","meText":"#272822"},"nord":{"bg":"#2E3440","text":"#D8DEE9","panel":"#3B4252","line":"#4C566A","accent":"#5E81AC","me":"#5E81AC","meText":"#ECEFF4"},"ocean_breeze":{"bg":"#006A71","text":"#CDEFF3","panel":"#00505A","line":"#00A6B2","accent":"#00A6B2","me":"#00A6B2","meText":"#00383C"},"oled":{"bg":"#000000","text":"#FFFFFF","panel":"#000000","line":"#222222","accent":"#333333","me":"#111111","meText":"#FFFFFF"},"pastel_dream":{"bg":"#EAE6FF","text":"#216869","panel":"#D6D1F2","line":"#BAADF2","accent":"#AEE6E6","me":"#AEE6E6","meText":"#2D2D34"},"pretty_pink":{"bg":"#FFC0CB","text":"#112244","panel":"#FFB1C2","line":"#EEA0B0","accent":"#FFA1B5","me":"#FFA1B5","meText":"#112244"},"rainbow_throwup":{"bg":"#FDFFB6","text":"#2C2C2C","panel":"#9BF6FF","line":"#A0C4FF","accent":"#CAFFBF","me":"#CAFFBF","meText":"#2C2C2C"},"serenity":{"bg":"#F0F8FF","text":"#2F4F4F","panel":"#E6F2F8","line":"#B0C4DE","accent":"#87CEEB","me":"#AFEEEE","meText":"#2F4F4F"},"solarized_dark":{"bg":"#002B36","text":"#EEE8D5","panel":"#073642","line":"#586E75","accent":"#268BD2","me":"#268BD2","meText":"#FDF6E3"},"solarized_light":{"bg":"#FDF6E3","text":"#657B83","panel":"#EEE8D5","line":"#D6CFBA","accent":"#B3D9A5","me":"#B3D9A5","meText":"#073642"},"subtle_light":{"bg":"#F8F6F1","text":"#2C2C2C","panel":"#F0EDE8","line":"#CCC8C0","accent":"#D7D2C7","me":"#DDDAD3","meText":"#2C2C2C"},"vintage_paper":{"bg":"#F5F1E3","text":"#5A4632","panel":"#EBE4D2","line":"#C9BEA5","accent":"#DCCBA6","me":"#DCCBA6","meText":"#4A3726"}};
@@ -243,23 +326,50 @@ $('login').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('loginErr').textContent = '';
   if (!base && !(await connect())) { $('loginErr').textContent = 'Mills is offline — ask Gee to start it.'; return; }
+  const username = $('username').value.trim().toLowerCase(), password = $('password').value;
+  if (!username || !password) { $('loginErr').textContent = 'Enter your username and password.'; return; }
   try {
-    const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ password: $('password').value, deviceId }) });
-    token = data.token; sessionStorage.setItem(TOKEN_KEY, token);
+    const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ username, password, deviceId }) });
+    token = data.token; sessionStorage.setItem(TOKEN_KEY, token); store.set('mills.username', data.username);
     $('password').value = '';
-    enter();
+    await enter();
+    ensureChatKey(password).catch((e) => console.warn('chat key', e)); // unlock/create the E2E key while we have the password
   } catch (err) { $('loginErr').textContent = err.message; }
 });
-function enter() {
-  $('login').hidden = true; $('shell').hidden = false;
-  restoreFolder();
-  json('/api/check').then(showModels).catch(() => {});
+async function enter() {
+  me = await json('/api/check');
+  USER_NAME = me.display;
+  document.title = `Mills · ${me.display}`;
+  $('brand').textContent = `Mills · ${me.display}`;
+  $('menuUser').textContent = me.username;
+  $('goAdmin').hidden = !me.admin;
+  $('login').hidden = true;
+  showModels(me);
+  showScreen('menu');
+  startRoomPolling();
 }
+// Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
+let workStarted = false;
+function showScreen(name) {
+  for (const id of ['menu', 'shell', 'room', 'admin']) $(id).hidden = true;
+  $(name).hidden = false;
+  if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); }
+  if (name === 'room') openRoom();
+  if (name === 'admin') loadAdmin();
+}
+$('goWork').onclick = () => showScreen('shell');
+$('goChat').onclick = () => showScreen('room');
+$('goAdmin').onclick = () => showScreen('admin');
+document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
-  token = null; sessionStorage.removeItem(TOKEN_KEY);
-  $('shell').hidden = true; $('login').hidden = false;
+  token = null; me = null; sessionStorage.removeItem(TOKEN_KEY);
+  stopRoomPolling(); chatPriv = null; chatPubJwk = null; roomSeq = 0; $('roomLog').innerHTML = ''; unread = 0;
+  for (const id of ['menu', 'shell', 'room', 'admin']) $(id).hidden = true;
+  $('login').hidden = false;
 }
-$('logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); } catch {} signOut(); };
+async function logoutClick() { try { await api('/api/logout', { method: 'POST' }); } catch {} signOut(); }
+$('logout').onclick = logoutClick;
+$('menuLogout').onclick = logoutClick;
 
 // ---------- folder on the user's PC (File System Access API) ----------
 let rootHandle = null;
@@ -620,7 +730,210 @@ function buildThemeMenu() {
 $('themeBtn').onclick = (e) => { e.stopPropagation(); const m = $('themeMenu'); if (m.hidden) buildThemeMenu(); m.hidden = !m.hidden; };
 document.addEventListener('click', (e) => { if (!e.target.closest('.themeWrap')) $('themeMenu').hidden = true; });
 
-connect().then((ok) => { if (ok && token) json('/api/check').then(enter).catch(() => signOut()); });
+// ── Chat room: end-to-end encrypted ──
+// Each account has an ECDH P-256 key pair made in the browser. The private key stays in this
+// browser (IndexedDB) and is also backed up on the hub encrypted with a key derived from the
+// account password (PBKDF2), so it follows the account to a new browser. Every message gets a
+// fresh AES-GCM key, wrapped separately for each member with the ECDH secret between sender and
+// member. The hub only ever holds public keys, the locked backup and ciphertext.
+const enc = new TextEncoder(), dec = new TextDecoder();
+const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
+let chatPriv = null, chatPubJwk = null;
+const pubCache = new Map(), sharedCache = new Map();
+
+async function passwordKey(password, salt) {
+  const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 310000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function lockPrivate(priv, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const pkcs8 = await crypto.subtle.exportKey('pkcs8', priv);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await passwordKey(password, salt), pkcs8);
+  return { salt: toB64(salt), iv: toB64(iv), ct: toB64(ct) };
+}
+async function unlockPrivate(backup, password) {
+  const k = await passwordKey(password, fromB64(backup.salt));
+  const pkcs8 = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(backup.iv) }, k, fromB64(backup.ct));
+  return crypto.subtle.importKey('pkcs8', pkcs8, ECDH, true, ['deriveKey']);
+}
+const samePub = (a, b) => a && b && a.x === b.x && a.y === b.y;
+async function useKey(priv, pub) { chatPriv = priv; chatPubJwk = { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y }; sharedCache.clear(); }
+
+// Called right after sign-in (the only time the password is in memory).
+async function ensureChatKey(password) {
+  const slot = 'chat:' + me.username;
+  const server = await json('/api/room/mykey');
+  let local = await idb.get(slot).catch(() => null), backupOk = false;
+  if (server.pub && server.backup && !(local && samePub(local.pub, server.pub))) {
+    try { const priv = await unlockPrivate(server.backup, password); local = { priv, pub: server.pub }; backupOk = true; await idb.set(slot, local); }
+    catch {} // backup locked with an older password: fall through
+  }
+  if (local && samePub(local.pub, server.pub) && !backupOk) {
+    try { await unlockPrivate(server.backup, password); backupOk = true; } catch {} // backup still matches the current password?
+  }
+  if (!local) {
+    const pair = await crypto.subtle.generateKey(ECDH, true, ['deriveKey']);
+    local = { priv: pair.privateKey, pub: await crypto.subtle.exportKey('jwk', pair.publicKey) };
+    await idb.set(slot, local);
+  }
+  if (!backupOk || !samePub(local.pub, server.pub)) {
+    await json('/api/room/mykey', { method: 'POST', body: JSON.stringify({ pub: { kty: 'EC', crv: 'P-256', x: local.pub.x, y: local.pub.y }, backup: await lockPrivate(local.priv, password) }) });
+  }
+  await useKey(local.priv, local.pub);
+  if (!$('room').hidden) openRoom();
+}
+async function loadLocalChatKey() { // after a page reload: no password, use this browser's copy
+  if (chatPriv || !me) return !!chatPriv;
+  const local = await idb.get('chat:' + me.username).catch(() => null);
+  const server = await json('/api/room/mykey').catch(() => ({}));
+  if (local && samePub(local.pub, server.pub)) { await useKey(local.priv, local.pub); return true; }
+  return false;
+}
+async function fingerprint(jwk) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(jwk.x + '.' + jwk.y)));
+  return [...h.slice(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join('').match(/.{4}/g).join(' ');
+}
+async function importPub(jwk) {
+  const id = jwk.x + jwk.y;
+  if (!pubCache.has(id)) pubCache.set(id, await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, ECDH, false, []));
+  return pubCache.get(id);
+}
+async function sharedWith(jwk) {
+  const id = jwk.x + jwk.y;
+  if (!sharedCache.has(id)) sharedCache.set(id, await crypto.subtle.deriveKey({ name: 'ECDH', public: await importPub(jwk) }, chatPriv, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']));
+  return sharedCache.get(id);
+}
+
+let roomMembers = [], roomSeq = 0, roomTimer = null, unread = 0;
+async function openRoom() {
+  unread = 0; $('chatBadge').hidden = true;
+  const ok = await loadLocalChatKey();
+  $('roomStatus').textContent = ok ? 'End-to-end encrypted' : 'Locked: sign out and sign in again to unlock your chat key in this browser.';
+  await refreshMembers();
+  await pollRoom();
+  $('roomInput').focus();
+}
+async function refreshMembers() {
+  try {
+    roomMembers = (await json('/api/room/members')).members;
+    const box = $('roomMembers'); box.innerHTML = '<b>Members</b>';
+    for (const m of roomMembers) {
+      const d = document.createElement('div');
+      const name = document.createElement('div'); name.textContent = m.display + ' (' + m.username + ')' + (m.username === me.username ? ' · you' : '');
+      const fp = document.createElement('code'); fp.textContent = m.pub ? await fingerprint(m.pub) : 'no key yet (has not signed in since chat was added)';
+      d.append(name, fp); box.append(d);
+    }
+    const hint = document.createElement('small'); hint.style.color = 'var(--muted)';
+    hint.textContent = 'Compare fingerprints with each other out loud or elsewhere once; if they match, nobody in the middle can read the chat.';
+    box.append(hint);
+  } catch {}
+}
+async function pollRoom() {
+  if (!me) return;
+  try {
+    const d = await json('/api/room/messages?since=' + roomSeq);
+    for (const m of d.messages) await showRoomMessage(m);
+    if (d.latest < roomSeq) { roomSeq = 0; $('roomLog').innerHTML = ''; } // history was cleared by an admin
+  } catch {}
+}
+async function showRoomMessage(m) {
+  roomSeq = Math.max(roomSeq, m.seq);
+  let text;
+  if (!chatPriv) text = '🔒 (locked — sign in again to read)';
+  else if (!m.key) text = '🔒 (sent before your chat key existed)';
+  else {
+    try {
+      const shared = await sharedWith(m.fromPub);
+      const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv) }, shared, fromB64(m.key.wk));
+      const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+      text = dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv) }, k, fromB64(m.ct)));
+    } catch { text = '🔒 (could not decrypt)'; }
+  }
+  const mine = m.from === me.username;
+  if ($('room').hidden && !mine) { unread++; $('chatBadge').textContent = unread; $('chatBadge').hidden = false; }
+  const log = $('roomLog'), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  const el = document.createElement('div'); el.className = 'msg' + (mine ? ' me' : '');
+  const who = document.createElement('small');
+  const member = roomMembers.find((x) => x.username === m.from);
+  who.textContent = (member ? member.display : m.from) + ' · ' + new Date(m.ts).toLocaleString();
+  const body = document.createElement('div'); body.textContent = text;
+  el.append(who, body); log.append(el);
+  if (atBottom || mine) log.scrollTop = log.scrollHeight;
+}
+function startRoomPolling() { stopRoomPolling(); loadLocalChatKey().then(pollRoom); roomTimer = setInterval(() => { if (!document.hidden) pollRoom(); }, 3000); }
+function stopRoomPolling() { if (roomTimer) clearInterval(roomTimer); roomTimer = null; }
+$('roomComposer').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('roomInput').value.trim();
+  if (!text) return;
+  if (!chatPriv) return sysRoom('Your chat key is locked in this browser. Sign out and sign in again.');
+  try {
+    await refreshMembers();
+    const raw = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
+    const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(text));
+    const keys = {};
+    for (const m of roomMembers) {
+      const pub = m.username === me.username ? chatPubJwk : m.pub;
+      if (!pub) continue;
+      const kiv = crypto.getRandomValues(new Uint8Array(12));
+      keys[m.username] = { iv: toB64(kiv), wk: toB64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await sharedWith(pub), raw)) };
+    }
+    await json('/api/room/send', { method: 'POST', body: JSON.stringify({ iv: toB64(iv), ct: toB64(ct), keys }) });
+    $('roomInput').value = '';
+    await pollRoom();
+  } catch (err) { sysRoom('Could not send: ' + err.message); }
+});
+$('roomInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('roomComposer').requestSubmit(); } });
+function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.textContent = t; $('roomLog').append(d); }
+
+// ── Admin (gee): accounts + hub controls; the hub checks the admin flag on every call ──
+const adminOut = (t) => { $('adminOut').textContent = t; };
+async function adminCall(path, body, done) {
+  try { const d = await json('/api/admin/' + path, { method: 'POST', body: JSON.stringify(body || {}) }); if (done) done(d); loadAdmin(); }
+  catch (err) { adminOut('Error: ' + err.message); }
+}
+function confirmButton(label, fn) {
+  const b = document.createElement('button'); b.className = 'ghost'; b.textContent = label;
+  b.onclick = () => {
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Confirm ' + label.toLowerCase(); setTimeout(() => { b.dataset.armed = ''; b.textContent = label; }, 3000); return; }
+    fn();
+  };
+  return b;
+}
+async function loadAdmin() {
+  try {
+    const { accounts } = await json('/api/admin/accounts');
+    const rows = $('adminRows'); rows.innerHTML = '';
+    for (const a of accounts) {
+      const tr = document.createElement('tr');
+      const td = (t) => { const c = document.createElement('td'); c.textContent = t; tr.append(c); return c; };
+      td(a.display + ' (' + a.username + ')' + (a.admin ? ' · admin' : ''));
+      td([a.locked ? 'device locked' : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key ✓' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
+      td(modelName(a.model));
+      const actions = td('');
+      actions.append(
+        confirmButton('New password', () => adminCall('password', { username: a.username }, (d) => adminOut(`New password for ${d.username}:\n${d.password}\n\nTheir other devices are signed out. Chat history stays readable in browsers that already hold the key.`))),
+        confirmButton('Reset lock', () => adminCall('unlock', { username: a.username }, () => adminOut(`${a.username}: device lock cleared. Their next sign-in claims the account.`))),
+        confirmButton('Sign out', () => adminCall('signout', { username: a.username }, () => adminOut(`${a.username}: signed out everywhere.`))),
+      );
+      if (a.busy) actions.append(confirmButton('Stop Claude', () => adminCall('stop', { username: a.username }, () => adminOut(`${a.username}: Claude stopped.`))));
+      if (a.username !== me.username) actions.append(confirmButton('Delete', () => adminCall('delete', { username: a.username }, () => adminOut(`${a.username}: deleted (files kept in bridge/profiles-deleted/).`))));
+      rows.append(tr);
+    }
+  } catch (err) { adminOut('Error: ' + err.message); }
+}
+$('createUser').onclick = () => adminCall('create', { username: $('newUser').value.trim().toLowerCase(), display: $('newDisplay').value.trim(), admin: $('newAdmin').checked }, (d) => {
+  adminOut(`Account created.\nUsername: ${d.username}\nPassword: ${d.password}\nAddress: ${location.origin}${location.pathname}`);
+  $('newUser').value = ''; $('newDisplay').value = ''; $('newAdmin').checked = false;
+});
+$('adminRefresh').onclick = loadAdmin;
+$('adminRestart').replaceWith(confirmButton('Restart hub', () => adminCall('restart', {}, (d) => adminOut(d.supervised ? 'Restarting as soon as nobody has Claude working. The page reconnects by itself.' : 'Restart requested, but the hub was not started with start.bat; restart it by hand.'))));
+$('adminClearChat').replaceWith(confirmButton('Clear chat history', () => adminCall('room/clear', {}, () => adminOut('Chat history cleared for everyone.'))));
+
+connect().then((ok) => { if (ok && token) enter().catch(() => signOut()); });
 </script>
 </body>
 </html>

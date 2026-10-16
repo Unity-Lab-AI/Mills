@@ -1,5 +1,6 @@
 {
   "port": 7777,
+  "defaultUsername": "mills",
   "allowedOrigins": ["https://unity-lab-ai.github.io"],
   "permissionMode": "acceptEdits",
   "allowedTools": ["mcp__pc", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch"],

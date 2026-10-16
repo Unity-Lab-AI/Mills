@@ -1,3 +1,3 @@
 @echo off
-rem Double-click to run Sponge's Mills bridge (own window, own tunnel, own password).
-call "%~dp0start.bat" sponge
+rem Kept so old shortcuts still work: there is one Mills hub for everyone now.
+call "%~dp0start.bat"
