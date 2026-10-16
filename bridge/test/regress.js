@@ -66,7 +66,71 @@ function listening(port) {
   });
 }
 
-let SCRATCH, SB, PORT, H, hub = null;
+let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null;
+const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
+let fakeSawPhoto = false;
+// Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
+//   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
+//   "TIME" → get_time, then answers with the tool result          "REMIND"      → set_reminder in 1 second
+// The last answer echoes whether the system prompt carried the person's name and time zone.
+function startFakeOllama() {
+  const http = require('http');
+  ollamaSrv = http.createServer((req, res) => {
+    let body = ''; req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      const j = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+      if (req.url === '/api/version') return j({ version: 'fake' });
+      // fake image engine on the same port: a 1x1 PNG for any prompt; the prompt is kept for checks
+      if (req.url === '/health') return j({ ok: true, loaded: true });
+      // fake web search (Bing-shaped) and YouTube results page
+      if (req.url.startsWith('/search?')) { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end('<ol><li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&amp;u=a1' + Buffer.from('https://example.org/regress').toString('base64url') + '&amp;ntb=1">Regress <b>result</b></a></h2><p>snippet &amp; more</p></li></ol>'); }
+      if (req.url.startsWith('/results?')) { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end('var x = {"videoRenderer":{"videoId":"abcdefghijk","thumbnail":{},"title":{"runs":[{"text":"Regress Song"}]}}}'); }
+      // fake voice + speech engines on the same port too
+      if (req.url === '/say') { fakeVoiceReqs.push(JSON.parse(body || '{}')); res.writeHead(200, { 'Content-Type': 'audio/wav' }); return res.end(Buffer.from('RIFF0000WAVEfake')); }
+      if (req.url === '/transcribe') return j({ text: body.length ? 'fake heard ' + body.length : '', language: 'en' });
+      if (req.url === '/img2img' || req.url === '/inpaint') fakeEdits.push({ route: req.url, ...JSON.parse(body || '{}') });
+      if (req.url === '/txt2img' || req.url === '/img2img' || req.url === '/inpaint') {
+        if (req.url === '/txt2img') fakeImagePrompts.push(JSON.parse(body || '{}').prompt || '');
+        const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+        res.writeHead(200, { 'Content-Type': 'image/png', 'X-Seconds': '0.01' }); return res.end(png);
+      }
+      if (req.url === '/api/tags') return j({ models: [{ name: 'unity-brain:latest' }] });
+      if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
+      if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
+      const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
+      const sys = (msgs[0] || {}).content || '';
+      const user = [...msgs].reverse().find((m) => m.role === 'user') || { content: '' };
+      if (Array.isArray(user.images) && user.images.length) fakeSawPhoto = true;
+      if (/SLOW/.test(user.content) && last.role === 'user') return setTimeout(() => { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ message: { role: 'assistant', content: 'slow answer ' + user.content.slice(-3000) }, done: true }) + '\n'); }, 4000);
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      const line = (m) => res.write(JSON.stringify({ message: { role: 'assistant', content: '', ...m }, done: false }) + '\n');
+      const call = (name, args) => line({ tool_calls: [{ function: { name, arguments: args } }] });
+      if (last.role === 'user') {
+        const u = user.content, m = /TASK (.+)/.exec(u), d = /DELETE (\S+)/.exec(u);
+        if (/PCLIST/.test(u)) call('pc_list', { path: 'docs' });
+        else if (/RUNPY/.test(u)) call('run_code', { language: 'python', code: 'print(6*7)' });
+        else if (/DELME/.test(u)) call('pc_delete', { path: 'old.txt' });
+        else if (/SEARCHME/.test(u)) call('web_search', { query: 'regress query' });
+        else if (/PLAYME/.test(u)) call('play_youtube', { query: 'regress song' });
+        else if (/README/.test(u)) call('read_page', { url: 'http://127.0.0.1/secret' });
+        else if (/EDITME/.test(u)) call('edit_image', { image: 'camera', prompt: 'regress edit scene', keep_face: true });
+        else if (/PAINTME/.test(u)) call('inpaint_image', { image: 'last', prompt: 'a red hat', box: [0.1, 0.1, 0.5, 0.5] });
+        else if (/SELFIE/.test(u)) call('generate_image', { prompt: 'regress moment at the desk', selfie: true, shape: 'portrait' });
+        else if (m) call('add_task', { title: m[1] });
+        else if (d) call('delete_task', { task_id: d[1] });
+        else if (/TIME/.test(u)) call('get_time', {});
+        else if (/REMIND/.test(u)) call('set_reminder', { text: 'regress reminder', when: 'in 1 second' });
+        else line({ content: 'plain answer for ' + u.slice(-3000) });
+      } else if (last.role === 'tool' && last.tool_name !== 'say') {
+        call('say', { text: 'done: ' + last.content.slice(0, 160), emotion: 'happy', act: 'statement' });
+      } else {
+        line({ content: `final sys-has-name=${/Mills username "t-user"|Mills username "t-admin"/.test(sys)} tz=${(/\(([A-Za-z_]+\/[A-Za-z_]+)\)/.exec(sys) || [])[1] || ''}` });
+      }
+      res.end(JSON.stringify({ done: true }) + '\n');
+    });
+  });
+  return new Promise((r) => ollamaSrv.listen(0, '127.0.0.1', () => { OLLAMA_PORT = ollamaSrv.address().port; r(); }));
+}
 async function setup() {
   SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'mills-test-'));
   SB = path.join(SCRATCH, 'bridge');
@@ -84,7 +148,8 @@ async function setup() {
   fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'hub.log', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
-  const cfg = { ...real, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  await startFakeOllama();
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results` }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   const sp = (args) => spawnSync(process.execPath, [path.join(SB, 'set-password.js'), ...args], { cwd: SB, encoding: 'utf8' });
   sp(['pw-default-0001']);
@@ -240,7 +305,7 @@ async function run() {
   const f3 = (await call('/api/archive/search', U, { q: 'deploy zzz-absent' })).data.items || [];
   const f4 = (await call('/api/archive/search', A, { q: 'needle-r75' })).data.items || [];
   const f5 = (await call('/api/archive/search', U, { q: '' })).data.items || [];
-  check('R75', 'past sessions search: matches titles and everything in the transcript (all words, any case), ranked by hits with snippets saying who said it, nothing from other accounts, empty query = the plain list; [static] search box + highlighted matches',
+  check('R104', 'past sessions search: matches titles and everything in the transcript (all words, any case), ranked by hits with snippets saying who said it, nothing from other accounts, empty query = the plain list; [static] search box + highlighted matches',
     s1.status === 200 && s2.status === 200 && f1.length === 1 && f1[0].id === s1.data.id && f1[0].hits === 1 && f1[0].snippets.length === 1 && f1[0].snippets[0].cls === 'claude' && /needle-r75/.test(f1[0].snippets[0].text)
     && f2.length === 1 && f2[0].id === s1.data.id && !f3.length && !f4.length && f5.length === 2
     && /id="archiveQ"/.test(html) && /function markText\(/.test(html) && /\/api\/archive\/search/.test(html),
@@ -495,7 +560,7 @@ async function run() {
   await call('/api/room/send', U, await seal3(U, restored, 't-user', v2('@unity ping-v3-r61')));
   const ans3 = await waitAgent(U, restored, seq3, (t) => t.includes('ping-v3-r61'), 20000);
   const ans3Msg = ans3 && ((await call('/api/room/messages?since=' + seq3, U)).data.messages || []).find((m) => m.seq === ans3.seq);
-  check('R61', 'message format v3: decrypts with HKDF + authenticated sender/recipient/id, relabelled recipient fails, padded to a bucket, duplicate / bad id → 400, edit keeps its id, agent reads and answers in v3',
+  check('R90', 'message format v3: decrypts with HKDF + authenticated sender/recipient/id, relabelled recipient fails, padded to a bucket, duplicate / bad id → 400, edit keeps its id, agent reads and answers in v3',
     read3 === v2('v3 hello-r61') && relabel3 === null && fromB64(back3.ct).length === 256 + 16 && dupMid.status === 400 && badMid.status === 400
     && ed3.status === 200 && edNewMid.status === 400 && !!ans3 && !!ans3Msg && ans3Msg.v === 3 && /^[\w-]{22}$/.test(ans3Msg.mid || ''),
     `send ${sent3.status}, read ${read3 !== null}, dup ${dupMid.status}, bad ${badMid.status}, edit ${ed3.status}/${edNewMid.status}, agent ${!!ans3}`);
@@ -508,7 +573,7 @@ async function run() {
   const lp = await call('/api/room/send', U, await seal3(U, restored, 't-user', v2('long-poll-r62')));
   const rwoke = await held, tookMs = Date.now() - rt0;
   const stale = await call('/api/room/messages?rev=' + rv0.latestRev + '&wait=1&ver=' + (rv0.ver - 1), A); // old version → answered at once
-  check('R62', 'room long poll: held while nothing changes, answered right after a send (not on a timer), stale version answered at once',
+  check('R91', 'room long poll: held while nothing changes, answered right after a send (not on a timer), stale version answered at once',
     lp.status === 200 && tookMs >= 700 && tookMs < 3000 && (rwoke.data.messages || []).some((m) => m.seq === lp.data.seq) && rwoke.data.ver > rv0.ver && stale.status === 200,
     `woke after ${tookMs} ms`);
 
@@ -556,7 +621,7 @@ async function run() {
   const seq4 = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
   await call('/api/room/send', U, await seal4(U, restored, 't-user', { v: 2, t: '@unity ping-v4-r63' }, '', { agent: true }));
   const ans4 = await waitAgent(U, restored, seq4, (t) => t.includes('ping-v4-r63'), 20000);
-  check('R63', 'format v4: text deflated before encryption (smaller than the text), clip only via /api/room/blob for its readers (not in the list), clip intact, v3 edit of a clip → 400, v4 caption edit keeps the clip, agent reads v4',
+  check('R92', 'format v4: text deflated before encryption (smaller than the text), clip only via /api/room/blob for its readers (not in the list), clip intact, v3 edit of a clip → 400, v4 caption edit keeps the clip, agent reads v4',
     sent4.status === 200 && !!list4 && !list4.blob && list4.blobLen > 0 && p4 && p4.t === longText + 'clip-r63' && fromB64(list4.ct).length < longText.length
     && blobU.status === 200 && blobD.status === 404 && !!audioBack && audioBack.equals(audio) && ed4bad.status === 400 && ed4.status === 200 && stillBlob.status === 200 && !!ans4,
     `send ${sent4.status}, body ${list4 ? fromB64(list4.ct).length : '-'} B for ${longText.length} B text, blob U ${blobU.status} / D ${blobD.status}, edit ${ed4bad.status}/${ed4.status}, agent ${!!ans4}`);
@@ -581,7 +646,7 @@ async function run() {
   const agentTyping = ((await call('/api/room/messages?rev=0', A)).data.typing || []).some((t) => t.user === 'claude' && t.conv === 'room');
   const tyAns = await waitAgent(U, restored, seqTy, (t) => t.includes('ping-r72'), 20000);
   const agentDone = !((await call('/api/room/messages?rev=0', A)).data.typing || []).some((t) => t.user === 'claude');
-  check('R72', 'presence: typing wakes the others\' long poll and is per conversation (a private one only to its two people; outsider → 400); off removes it; online list; Unity shows as typing while composing and stops after posting; [static] typing line, Claude-is-thinking bubble, message slide-in, live dot',
+  check('R101', 'presence: typing wakes the others\' long poll and is per conversation (a private one only to its two people; outsider → 400); off removes it; online list; Unity shows as typing while composing and stops after posting; [static] typing line, Claude-is-thinking bubble, message slide-in, live dot',
     tyOn.status === 200 && (pWoke.typing || []).some((t) => t.user === 't-user' && t.conv === 'room') && tyDm.status === 200 && seesDmA && !seesDmD && tyBad.status === 400 && onlineOk
     && agentTyping && !!tyAns && agentDone
     && /id="typingLine"/.test(html) && /function showThinking\(/.test(html) && /@keyframes msgIn/.test(html) && /@keyframes dotPulse/.test(html) && /\.status\.on::before/.test(html) && /prefers-reduced-motion/.test(html),
@@ -607,7 +672,7 @@ async function run() {
   await call('/api/presence', D, { gone: true });
   const dGone = await presOf(A, 'mills');
   ac2.abort(); await dHeld2;
-  check('R74', 'presence: a page with its long poll open is online; idle + screen as the page reports them; a dropped connection shows offline within ~10 s (not before); back online at once on reconnect; "gone" is offline immediately; last seen kept; [static] Who\'s here strip on the menu, idle after 5 min / hidden tab, status text in the chat list',
+  check('R103', 'presence: a page with its long poll open is online; idle + screen as the page reports them; a dropped connection shows offline within ~10 s (not before); back online at once on reconnect; "gone" is offline immediately; last seen kept; [static] Who\'s here strip on the menu, idle after 5 min / hidden tab, status text in the chat list',
     dOn.online === true && dIdle.online === true && dIdle.idle === true && dIdle.screen === 'board' && dStillOn.online === true && dOff.online === false && dOff.seen > 0
     && dBack.online === true && dBack.idle === false && dGone.online === false
     && /id="menuWho"/.test(html) && /IDLE_MS = 5 \* 60000/.test(html) && /function statusOf\(/.test(html) && /visibilitychange', presenceTick/.test(html) && /gone: true/.test(html),
@@ -615,14 +680,14 @@ async function run() {
 
   // Hardening headers on every hub answer.
   const hr = await fetch(H + '/api/status');
-  check('R64', 'hub answers carry nosniff, no-referrer, frame DENY; API answers are no-store',
+  check('R93', 'hub answers carry nosniff, no-referrer, frame DENY; API answers are no-store',
     hr.headers.get('x-content-type-options') === 'nosniff' && hr.headers.get('referrer-policy') === 'no-referrer' && hr.headers.get('x-frame-options') === 'DENY' && /no-store/.test(hr.headers.get('cache-control') || ''));
 
   // Sign-in hashing is async now: parallel wrong guesses must still hit the 5-attempt limit.
   const burst = await Promise.all(Array.from({ length: 12 }, () => call('/api/login', null, { username: 'ghost-r65', password: 'wrong', deviceId: 'x'.repeat(32) })));
   const n401 = burst.filter((r) => r.status === 401).length, n429 = burst.filter((r) => r.status === 429).length;
   const statusDuring = await call('/api/status');
-  check('R65', 'parallel wrong sign-ins: at most 5 are checked, the rest → 429; the hub stays responsive', n401 <= 5 && n401 + n429 === 12 && statusDuring.status === 200, `${n401}×401, ${n429}×429`);
+  check('R94', 'parallel wrong sign-ins: at most 5 are checked, the rest → 429; the hub stays responsive', n401 <= 5 && n401 + n429 === 12 && statusDuring.status === 200, `${n401}×401, ${n429}×429`);
 
   const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html) || [])[1] || '';
   const missing66 = [
@@ -638,7 +703,7 @@ async function run() {
   const mdSrc = fs.readFileSync(path.join(MILLS, 'web', 'md.js'), 'utf8');
   const mdStatic = !/\.innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(mdSrc) && /securityLevel: 'strict'/.test(mdSrc) && /htmlLabels: false/.test(mdSrc)
     && /<script src="md\.js"><\/script>/.test(html) && /MD\.render\(el, text\)/.test(html) && /MD\.render\(el, text, \{ mention:/.test(html);
-  check('R67', 'markdown renderer (web/md.js): headings, emphasis, links (safe only), lists / tasks, tables, quotes / alerts, code with colouring + Copy, mermaid on demand, math, footnotes, mentions; raw HTML and javascript: links stay text; never assigns HTML; used by both chats',
+  check('R96', 'markdown renderer (web/md.js): headings, emphasis, links (safe only), lists / tasks, tables, quotes / alerts, code with colouring + Copy, mermaid on demand, math, footnotes, mentions; raw HTML and javascript: links stay text; never assigns HTML; used by both chats',
     !mdc.failed.length && mdStatic, mdc.failed.length ? mdc.failed.join(' | ') : (mdStatic ? `${mdc.total} cases` : 'static check failed'));
   // Custom SVG icons instead of emoji: nothing the page shows may be an emoji (code comments and the
   // regex that strips the old "⚙ " from saved sessions are not shown), and every icon used exists.
@@ -652,17 +717,17 @@ async function run() {
     .concat(['reply', 'edit', 'trash', 'stop', 'send', 'talk', 'image', 'mic', 'mic-off', 'speaker', 'speaker-off', 'folder', 'file'])); // via add(), dictLabel(), ternaries, md.js
   const missingIcons = [...usedIcons].filter((n) => !symbols.has(n));
   const serverEmoji = /mirror\(acct, 'tool', '⚙/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'server.js'), 'utf8'));
-  check('R68', '[static] no emoji shown anywhere on the site (custom SVG icon sprite instead), every icon used exists in the sprite, hub tool lines carry no emoji',
+  check('R97', '[static] no emoji shown anywhere on the site (custom SVG icon sprite instead), every icon used exists in the sprite, hub tool lines carry no emoji',
     !emojiLines.length && !missingIcons.length && symbols.size >= 30 && !serverEmoji, [emojiLines.slice(0, 8).join(' '), missingIcons.join(' ')].filter(Boolean).join(' | ') || `${symbols.size} icons`);
   // Vendored browser libraries (web/vendor, fetched + integrity-checked by bridge/vendor.js).
   const vendorManifest = path.join(MILLS, 'web', 'vendor', 'VENDOR.json');
-  if (!fs.existsSync(vendorManifest)) skip('R73', 'vendored Mermaid present and matching web/vendor/VENDOR.json', 'not installed yet: run `node bridge/vendor.js` in the Mills folder (diagrams show their source until then)');
+  if (!fs.existsSync(vendorManifest)) skip('R102', 'vendored Mermaid present and matching web/vendor/VENDOR.json', 'not installed yet: run `node bridge/vendor.js` in the Mills folder (diagrams show their source until then)');
   else {
     const vm = JSON.parse(fs.readFileSync(vendorManifest, 'utf8')), mm = vm.mermaid || {};
     const mFile = path.join(MILLS, 'web', 'vendor', mm.file || 'mermaid.min.js');
     const mOk = fs.existsSync(mFile) && crypto.createHash('sha256').update(fs.readFileSync(mFile)).digest('hex') === mm.sha256 && /^11\./.test(mm.version || '');
     const mLoads = mOk && /mermaid/.test(fs.readFileSync(mFile, 'utf8').slice(0, 2000));
-    check('R73', 'vendored Mermaid 11 present, matching the sha256 in web/vendor/VENDOR.json, served from the site itself (CSP allows no outside scripts)', mOk && mLoads, `mermaid@${mm.version || '?'}`);
+    check('R102', 'vendored Mermaid 11 present, matching the sha256 in web/vendor/VENDOR.json, served from the site itself (CSP allows no outside scripts)', mOk && mLoads, `mermaid@${mm.version || '?'}`);
   }
   const boardJs76 = fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8');
   const missing76 = [
@@ -678,8 +743,8 @@ async function run() {
     [/\.modal \.box, #archive \.box \{ width: 100vw;/.test(html), 'full-screen dialogs on phones'],
     [/\.floatWin \{ left: 8px !important;/.test(html), 'floating windows fill phones'],
   ].filter(([ok]) => !ok).map(([, n]) => n);
-  check('R76', '[static] responsive: phone breakpoint (drawer chat list, board sheet + swipe columns, calendar agenda, full-screen dialogs, stacked Work panes, safe-area padding, no zoom-on-focus), touch-sized controls, laptop header tightening, admin table scrolls', !missing76.length, missing76.join(', '));
-  check('R66', '[static] CSP, hub address pinned to the tunnel, key pinning (TOFU + Trust new key), call lip-sync + ICE batching, room long poll, v4 deflate + clips fetched on play', !missing66.length, missing66.join(', '));
+  check('R105', '[static] responsive: phone breakpoint (drawer chat list, board sheet + swipe columns, calendar agenda, full-screen dialogs, stacked Work panes, safe-area padding, no zoom-on-focus), touch-sized controls, laptop header tightening, admin table scrolls', !missing76.length, missing76.join(', '));
+  check('R95', '[static] CSP, hub address pinned to the tunnel, key pinning (TOFU + Trust new key), call lip-sync + ICE batching, room long poll, v4 deflate + clips fetched on play', !missing66.length, missing66.join(', '));
   // Calls: the hub only tracks who is in which call and relays opaque (encrypted) set-up messages.
   const jA = await call('/api/call/join', A, { conv: 'room', cam: false, mic: true });
   const pollU = (await call('/api/call/poll?after=0&ver=-1', U)).data, pollD = (await call('/api/call/poll?after=0&ver=-1', D)).data;
@@ -722,7 +787,7 @@ async function run() {
     && uRun.status === 200 && uAfter.five_hour.source === 'claude' && uAfter.five_hour.utilization === 0.42 && in2h > 7000e3 && in2h <= 7200e3
     && uAfter.context && uAfter.context.tokens === 54000 && uAfter.context.window === 200000 && !uOther.context && !uFresh.context,
     JSON.stringify({ five: uAfter.five_hour, ctx: uAfter.context }).slice(0, 200));
-  check('R69', 'usage sync: a limit event without numbers keeps the last utilization + reset time; a percentage (55) is read as 55 %; the page shows the 5h / 7d % from the same number as the fill, re-reads usage live during a reply and every 15 s, and empties a window once it resets',
+  check('R98', 'usage sync: a limit event without numbers keeps the last utilization + reset time; a percentage (55) is read as 55 %; the page shows the 5h / 7d % from the same number as the fill, re-reads usage live during a reply and every 15 s, and empties a window once it resets',
     uPartial.five_hour && uPartial.five_hour.utilization === 0.42 && uPartial.five_hour.resetsAt === uAfter.five_hour.resetsAt
     && uPartial.seven_day && uPartial.seven_day.source === 'claude' && uPartial.seven_day.utilization === 0.55
     && /<span class="uPctS">/.test(html) && /function windowUse\(/.test(html) && /refreshUsageSoon\(\)/.test(html) && /if \(left === 0\) return \{ left, pct: 0/.test(html) && /15000\); \/\/ the limits are shared/.test(html),
@@ -757,7 +822,7 @@ async function run() {
   const bGone = !((await call('/api/board', A)).data.tasks || []).some((t) => t.id === tid);
   const onDiskB = JSON.parse(fs.readFileSync(path.join(SCRATCH, 'Board', 'board.json'), 'utf8')).tasks.find((t) => t.id === tid) || {};
   const mcpRt = fs.readFileSync(path.join(SB, '.mcp-runtime.json'), 'utf8');
-  check('R70', 'team board: create wakes other people\'s long poll; a claim blocks others\' edits + claims; a stale revision is refused; assignee; monthly repeat re-arms month-end aware (Jan 31 → Feb 28 → Mar 31, leap Feb 29); Claude in a Work run creates / claims / notes as "<person> · Claude" and its claim blocks even its own person; delete leaves a tombstone; board MCP wired into Work runs',
+  check('R99', 'team board: create wakes other people\'s long poll; a claim blocks others\' edits + claims; a stale revision is refused; assignee; monthly repeat re-arms month-end aware (Jan 31 → Feb 28 → Mar 31, leap Feb 29); Claude in a Work run creates / claims / notes as "<person> · Claude" and its claim blocks even its own person; delete leaves a tombstone; board MCP wired into Work runs',
     bt.status === 200 && (bWoke.data.tasks || []).some((t) => t.id === tid) && bClaim.status === 200 && bClaim.data.task.status === 'doing'
     && bBlockedU.status === 409 && bClaimU.status === 409 && bStale.status === 409 && bOk.status === 200 && bOk.data.task.assignee === 't-user'
     && bDone1.status === 200 && after1.status === 'todo' && d1.getMonth() === 1 && d1.getDate() === 28 && bDone2.status === 200 && d2.getMonth() === 2 && d2.getDate() === 31 && leap === 29
@@ -765,7 +830,7 @@ async function run() {
     && agentBlocks.status === 409 && /progress from the agent r70/.test(agentDetail.body || '') && bDel.status === 409 && bDel2.status === 200 && bGone && onDiskB.deleted === true
     && /board-mcp\.js/.test(mcpRt) && /mcp__board/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8')),
     `create ${bt.status}, claim ${bClaim.status}, blocked ${bBlockedU.status}/${bClaimU.status}, stale ${bStale.status}, due ${d1.getMonth() + 1}/${d1.getDate()} → ${d2.getMonth() + 1}/${d2.getDate()} (leap ${leap}), agent ${JSON.stringify(agentOut)}, agent-held edit ${agentBlocks.status}`);
-  check('R71', '[static] Board + Calendar in the main menu, web/board.js loaded, Board / Calendar screens, Tasks pane in Work (rail + layout), "Give to Claude", Claude told to claim before working',
+  check('R100', '[static] Board + Calendar in the main menu, web/board.js loaded, Board / Calendar screens, Tasks pane in Work (rail + layout), "Give to Claude", Claude told to claim before working',
     /id="goBoard"/.test(html) && /id="goCal"/.test(html) && /<script src="board\.js"><\/script>/.test(html) && /<div id="board" class="screen"/.test(html) && /<div id="cal" class="screen"/.test(html)
     && /data-pane="tasks"/.test(html) && /const PANES = \['files', 'edit', 'chat', 'tasks', 'roomPane'\]/.test(html) && /function giveToClaude\(/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8'))
     && /task_claim it first/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')));
@@ -836,6 +901,139 @@ async function run() {
     && /noiseSuppression: a\.noise/.test(html) && /audio: audioConstraints\(\)/.test(html) && /<use href="#i-camera"\/><\/svg>Camera off<\/button>/.test(html) && /const SNAPS = /.test(html)
     && /crypto\.subtle\.encrypt\(\{ name: 'AES-GCM', iv \}, k, enc\.encode\(JSON\.stringify\(\{ conv: call\.conv/.test(html), ids48.filter((id) => !html.includes(`id="${id}"`)).join(', '));
 
+  { // Unity section (assistant): own block so its names never clash with other checks
+  async function uchat(tok, message, client = { tz: 'Asia/Tokyo', locale: 'en-US' }) {
+    const r = await fetch(H + '/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ message, client }) });
+    if (r.status !== 200) return { status: r.status, events: [] };
+    const events = (await r.text()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    return { status: 200, events, final: (events.find((e) => e.type === 'final') || {}).text || '', err: (events.find((e) => e.type === 'error') || {}).text || '' };
+  }
+  const us = (await call('/api/assistant/state', U)).data;
+  check('R61', 'Unity section state: local brain default and loaded, Claude models offered', us.brain === 'local' && us.local && us.local.model === true && us.brains.some((b) => b.id === 'local') && us.brains.some((b) => b.id === 'claude-opus-5-5'), JSON.stringify(us.local || us));
+  const t1 = await uchat(U, 'TASK buy regress milk');
+  const dataU = (await call('/api/assistant/data', U)).data, dataA = (await call('/api/assistant/data', A)).data;
+  const said = t1.events.find((e) => e.type === 'say');
+  check('R62', 'local brain: tool call adds a task for that person only; reply spoken via say; name + their time zone in the prompt', t1.events.some((e) => e.type === 'tool' && e.name === 'add_task')
+    && (dataU.tasks || []).some((t) => t.title === 'buy regress milk') && !(dataA.tasks || []).length && !!said && /sys-has-name=true tz=Asia\/Tokyo/.test(t1.final), t1.err || t1.final);
+  const tid = ((dataU.tasks || [])[0] || {}).id;
+  const t2 = await uchat(U, 'DELETE ' + tid);
+  const waiting = (await call('/api/assistant/state', U)).data.pending;
+  const stillThere = ((await call('/api/assistant/data', U)).data.tasks || []).some((t) => t.id === tid);
+  const ans = await call('/api/assistant/answer', U, { yes: true });
+  const gone = !((await call('/api/assistant/data', U)).data.tasks || []).some((t) => t.id === tid);
+  check('R63', 'destructive tool waits for Yes: confirm event, nothing deleted until the answer', t2.events.some((e) => e.type === 'confirm') && waiting && waiting.tool === 'delete_task' && stillThere && ans.data.ok && gone);
+  const t3 = await uchat(U, 'TIME please', { tz: 'America/Chicago', locale: 'en-US' });
+  const timeRes = (t3.events.find((e) => e.type === 'tool_result' && e.name === 'get_time') || {}).result || {};
+  check('R64', "get_time answers in the person's own time zone (from their browser)", timeRes.timezone === 'America/Chicago' && /\d/.test(timeRes.now || ''));
+  await uchat(U, 'REMIND me');
+  let notice = null;
+  for (let i = 0; i < 50 && !notice; i++) { await sleep(500); notice = ((await call('/api/assistant/state', U)).data.notices || []).find((n) => n.text === 'regress reminder'); }
+  check('R65', 'a due reminder reaches that person as a notice', !!notice);
+  const badBrain = await call('/api/assistant/brain', U, { brain: 'gpt-9' });
+  const toClaude = await call('/api/assistant/brain', U, { brain: 'claude-opus-5-5' });
+  const t4 = await uchat(U, 'ASSISTTOOL add it');
+  const viaClaude = ((await call('/api/assistant/data', U)).data.tasks || []).some((t) => t.title === 'from claude brain');
+  await call('/api/assistant/brain', U, { brain: 'local' });
+  check('R66', 'brain dropdown: unknown → 400; Claude brain uses the same tools through the relay', badBrain.status === 400 && toClaude.status === 200 && t4.status === 200 && viaClaude, t4.err);
+  const look = (readJson(path.join(BRIDGE, 'config.json'), {}).assistant || {}).selfieLook || '';
+  const sf = await uchat(U, 'SELFIE now');
+  const imgEv = sf.events.find((e) => e.type === 'image');
+  const ownImg = imgEv ? await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(imgEv.ref), { headers: { Authorization: 'Bearer ' + U } }) : null;
+  const otherImg = imgEv ? await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(imgEv.ref), { headers: { Authorization: 'Bearer ' + A } }) : null;
+  const sentPrompt = fakeImagePrompts[fakeImagePrompts.length - 1] || '';
+  check('R68', 'selfie: picture made by the host engine, scene first then her full look, private picture only for its owner', !!imgEv && imgEv.ref.startsWith('t-user/')
+    && ownImg.status === 200 && (ownImg.headers.get('content-type') || '').includes('image/png') && otherImg.status === 404
+    && sentPrompt.startsWith('regress moment') && (!look || sentPrompt.includes(look)), sentPrompt.slice(0, 80));
+  const eng = fs.readFileSync(path.join(BRIDGE, 'image-engine.py'), 'utf8');
+  check('R69', '[static] image engine: no prompt cap (long prompts encoded in pieces), no built-in negative prompt', /def _embeds/.test(eng) && !/_tokens_fit/.test(eng) && /^NEG = ""/m.test(eng));
+  const seqI = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  await roomSend(U, restored, '@unity SELFIE for the room');
+  const roomPic = await waitAgent(U, restored, seqI, (t) => /\[\[image:room\/[a-z0-9-]+\]\]/.test(t), 20000);
+  const roomRef = roomPic && /\[\[image:(room\/[a-z0-9-]+)\]\]/.exec(roomPic.text)[1];
+  const seenByA = roomRef ? (await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(roomRef), { headers: { Authorization: 'Bearer ' + A } })).status : 0;
+  check('R70', 'chat-room @unity runs on the local brain: a room picture is attached and every member can load it', !!roomPic && seenByA === 200);
+  const cl = await call('/api/assistant/client', U, { client: { tz: 'America/Denver', locale: 'en-US' } });
+  const t5 = await uchat(U, 'TIME again', {});
+  const tr5 = (t5.events.find((e) => e.type === 'tool_result' && e.name === 'get_time') || {}).result || {};
+  check('R71', "the person's clock reported at sign-in is used when a message carries none", cl.data.tz === 'America/Denver' && tr5.timezone === 'America/Denver');
+  const pol = spawnSync('git', ['grep', '-n', '-i', '-I', 'pollinations', '--', '.', ':!bridge/test/regress.js'], { cwd: MILLS, encoding: 'utf8' });
+  check('R72', 'no hosted image service (Pollinations) anywhere in tracked files', pol.status === 1, (pol.stdout || '').split('\n')[0]);
+  const sayR = await fetch(H + '/api/assistant/say', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ text: 'hello [[image:room/x]] *you*', emotion: 'horny', act: 'moan' }) });
+  const sayBody = Buffer.from(await sayR.arrayBuffer()).toString();
+  const sent = fakeVoiceReqs[fakeVoiceReqs.length - 1] || {};
+  const emptySay = await call('/api/assistant/say', U, { text: '   ' });
+  check('R73', 'her voice: a line comes back as audio/wav; unknown emotion/act mapped to ones the voice knows; image markers and markdown not read out', sayR.status === 200 && (sayR.headers.get('content-type') || '').includes('audio/wav')
+    && sayBody.startsWith('RIFF') && sent.emotion === 'neutral' && sent.speech_act === 'statement' && sent.text === 'hello  you' && emptySay.status === 400, JSON.stringify(sent));
+  const lis = await fetch(H + '/api/assistant/listen', { method: 'POST', headers: { 'Content-Type': 'audio/webm', Authorization: 'Bearer ' + U }, body: Buffer.alloc(1234, 7) });
+  const lisD = await lis.json().catch(() => ({}));
+  const lisEmpty = await fetch(H + '/api/assistant/listen', { method: 'POST', headers: { 'Content-Type': 'audio/webm', Authorization: 'Bearer ' + U }, body: Buffer.alloc(0) });
+  const lisAnon = await fetch(H + '/api/assistant/listen', { method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: Buffer.alloc(10, 1) });
+  check('R74', 'speech to text: a recording comes back as text; empty → 400; signed-out → 401', lis.status === 200 && lisD.text === 'fake heard 1234' && lisEmpty.status === 400 && lisAnon.status === 401, JSON.stringify(lisD));
+  check('R75', '[static] Unity screen has the mic button and the voice toggle', /id="assistMic"/.test(html) && /id="assistVoice"/.test(html) && /MediaRecorder/.test(html));
+  const dot = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const up = await call('/api/assistant/upload', U, { image: dot });
+  const upBad = await call('/api/assistant/upload', U, { image: 'data:text/html;base64,PHNjcmlwdD4=' });
+  const upOther = up.data.ref ? (await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(up.data.ref), { headers: { Authorization: 'Bearer ' + A } })).status : 0;
+  check('R76', 'photo upload (webcam / file): stored as that person\'s private picture; non-images refused', /^t-user\/[a-z0-9-]+$/.test(up.data.ref || '') && upBad.status === 400 && upOther === 404, JSON.stringify(up.data));
+  fakeSawPhoto = false;
+  const ed = await (async () => { const r = await fetch(H + '/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ message: 'EDITME please', photo: up.data.ref, client: { tz: 'UTC' } }) }); return (await r.text()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l)); })();
+  const e1 = fakeEdits.find((e) => e.route === '/img2img') || {};
+  const edFinal = ed.find((e) => e.type === 'final') || {};
+  check('R77', 'sent photo: the brain sees it (vision) and edit_image works from it, keeping the face; result attached', fakeSawPhoto && e1.prompt === 'regress edit scene' && e1.face === true
+    && e1.image === dot.split(',')[1] && (edFinal.images || []).length === 1, JSON.stringify({ fakeSawPhoto, face: e1.face, images: edFinal.images }));
+  await uchat(U, 'PAINTME now');
+  const e2 = fakeEdits.find((e) => e.route === '/inpaint') || {};
+  check('R78', 'inpaint_image repaints a box of the last picture', JSON.stringify(e2.box) === '[0.1,0.1,0.5,0.5]' && e2.prompt === 'a red hat' && typeof e2.image === 'string' && e2.image.length > 10);
+  check('R79', '[static] Unity screen has camera and file buttons', /id="assistCam"/.test(html) && /id="assistFile"/.test(html) && /getUserMedia\(\{ video: true \}\)/.test(html));
+  const toolRes = (ev, name) => (ev.events.find((e) => e.type === 'tool_result' && e.name === name) || {}).result || {};
+  const ws = toolRes(await uchat(U, 'SEARCHME'), 'web_search');
+  check('R80', 'web_search: results with the real address unwrapped, title and snippet as text', (ws.results || [])[0] && ws.results[0].url === 'https://example.org/regress' && ws.results[0].title === 'Regress result' && ws.results[0].snippet === 'snippet & more', JSON.stringify(ws).slice(0, 150));
+  const pl = await uchat(U, 'PLAYME');
+  const plr = toolRes(pl, 'play_youtube'), plf = pl.events.find((e) => e.type === 'final') || {};
+  check('R81', 'play_youtube: finds the video and attaches the player to the reply', plr.video === 'abcdefghijk' && plr.playing === 'Regress Song' && (plf.media || []).includes('abcdefghijk'));
+  const rp = toolRes(await uchat(U, 'README'), 'read_page');
+  check('R82', 'read_page refuses the host\'s own network (no localhost / private addresses)', rp.ok === false && /private network/.test(rp.error || ''), rp.error);
+  check('R83', '[static] page embeds [[youtube:id]] as a player', /youtube-nocookie\.com\/embed/.test(html) && /youtube:\[\\w-\]\{11\}/.test(html));
+  // the runner plays the browser: it answers her own-computer calls while the reply streams
+  async function uchatLive(tok, message, answer) {
+    const r = await fetch(H + '/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ message, client: { tz: 'UTC' } }) });
+    const events = [], reader = r.body.getReader(), td = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += td.decode(value, { stream: true }); let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
+        const ev = JSON.parse(line); events.push(ev);
+        if (ev.type === 'pc_tool' || ev.type === 'run_code') call('/api/assistant/pc-result', tok, { id: ev.id, ...answer(ev) });
+      }
+    }
+    return events;
+  }
+  const seenCalls = [];
+  const pcEv = await uchatLive(U, 'PCLIST', (ev) => { seenCalls.push(ev); return { ok: true, result: 'a.txt\nnotes/' }; });
+  const pcRes = (pcEv.find((e) => e.type === 'tool_result' && e.name === 'pc_list') || {}).result || {};
+  check('R84', "pc_list runs in the person's browser (their opened folder) and the answer comes back to her", seenCalls[0] && seenCalls[0].type === 'pc_tool' && seenCalls[0].name === 'list' && seenCalls[0].args.path === 'docs' && pcRes.ok && pcRes.result === 'a.txt\nnotes/', JSON.stringify(pcRes));
+  const pyEv = await uchatLive(U, 'RUNPY', (ev) => ({ ok: true, result: ev.language === 'python' && ev.code === 'print(6*7)' ? '42' : 'wrong' }));
+  const pyRes = (pyEv.find((e) => e.type === 'tool_result' && e.name === 'run_code') || {}).result || {};
+  const stray = await call('/api/assistant/pc-result', A, { id: 'nope', ok: true, result: 'x' });
+  check('R85', "run_code runs in the person's browser sandbox (not on the host); stray answers refused", pyRes.ok && pyRes.result === '42' && stray.status === 404, JSON.stringify(pyRes));
+  const dl = await uchatLive(U, 'DELME', () => ({ ok: true, result: 'deleted' }));
+  const dlAns = await call('/api/assistant/answer', U, { yes: true });
+  check('R86', 'pc_delete asks Yes / No first; Yes hands the delete to the page', dl.some((e) => e.type === 'confirm' && e.tool === 'pc_delete') && dlAns.data.browser && dlAns.data.browser.name === 'delete' && dlAns.data.browser.args.path === 'old.txt', JSON.stringify(dlAns.data));
+  const notAdmin = await call('/api/admin/unity-tools', U, { username: 't-user', pc: false });
+  const off = await call('/api/admin/unity-tools', A, { username: 't-user', pc: false, code: false });
+  const stOff = (await call('/api/assistant/state', U)).data.tools || {};
+  const sumOff = ((await call('/api/admin/accounts', A)).data.accounts || []).find((x) => x.username === 't-user') || {};
+  const offEv = await uchatLive(U, 'PCLIST', () => ({ ok: true, result: 'should not happen' }));
+  const offRes = (offEv.find((e) => e.type === 'tool_result' && e.name === 'pc_list') || {}).result || {};
+  await call('/api/admin/unity-tools', A, { username: 't-user', pc: true, code: true });
+  const stOn = (await call('/api/assistant/state', U)).data.tools || {};
+  check('R87', 'admin switches per account: non-admin 403; off → tools refused for that person; on again', notAdmin.status === 403 && off.data.pc === false && off.data.code === false && stOff.pc === false && sumOff.unityPc === false
+    && offRes.ok === false && /switched/.test(offRes.error || '') && !offEv.some((e) => e.type === 'pc_tool') && stOn.pc === true && stOn.code === true, JSON.stringify(offRes));
+  check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
+  check('R67', '[static] menu has the Unity button and Unity screen', /id="goAssist">(<svg[^]*?<\/svg>)?Unity</.test(html) && /<b>Unity<\/b>/.test(html));
+  }
+
   // Admin
   check('R25', 'non-admin → 403 on admin endpoints', (await call('/api/admin/accounts', U)).status === 403 && (await call('/api/admin/create', U, { username: 'x' })).status === 403);
   const cr = (await call('/api/admin/create', A, { username: 't-new', display: 'Tnew' })).data;
@@ -872,10 +1070,12 @@ async function run() {
   fs.writeFileSync(path.join(SB, '.restart'), 'test');
   await sleep(1800);
   const midPid = (await call('/api/status')).data.pid;
+  const heldOff = await call('/api/chat', A, { message: 'queued right behind' }), heldOffU = await call('/api/assistant/chat', A, { message: 'queued too' });
   await slow2;
   let pid4 = midPid;
   for (let i = 0; i < 60 && (pid4 === pid3 || !pid4); i++) { await sleep(250); pid4 = (await call('/api/status')).data.pid; }
   check('R10', 'restart waits for an active run, then happens', midPid === pid3 && pid4 && pid4 !== pid3);
+  check('R89', 'while a restart is pending no NEW run starts (503, the page retries), so queued messages cannot hold it off', heldOff.status === 503 && heldOffU.status === 503);
 
   check('R11', 'account password files unchanged (scratch and production)', sha(path.join(SB, 'profiles', 't-admin', 'auth.json')) === authBefore
     && prodAccountFiles().every((f) => prodBefore[f] === sha(f)));
@@ -919,6 +1119,7 @@ async function run() {
     await run();
   } catch (e) { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); }
   stopHub();
+  if (ollamaSrv) ollamaSrv.close();
   await sleep(800);
   const failed = results.filter((r) => r.status === 'FAIL'), skipped = results.filter((r) => r.status === 'SKIP');
   console.log(`\n${results.length - failed.length - skipped.length} passed, ${failed.length} failed, ${skipped.length} skipped.`);

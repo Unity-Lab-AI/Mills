@@ -58,7 +58,11 @@
       else if (g.code !== undefined) parent.append(el('code', 'mdc', g.code.length > 2 && g.code[0] === ' ' && g.code.at(-1) === ' ' ? g.code.slice(1, -1) : g.code));
       else if (g.isrc !== undefined) {
         const href = safeHref(g.isrc);
-        if (/^data:image\/(png|gif|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(g.isrc)) { const img = el('img', 'mdimg'); img.src = g.isrc; img.alt = g.ialt; parent.append(img); }
+        const img = () => { const i = el('img', 'mdimg'); i.src = g.isrc; i.alt = g.ialt; i.loading = 'lazy'; i.referrerPolicy = 'no-referrer'; i.decoding = 'async'; return i; };
+        if (/^data:image\/(png|gif|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(g.isrc)) { const w = el('span', 'mdimgwrap'); w.append(img()); parent.append(w); }
+        else if (href && /^https:\/\//i.test(href)) { // https pictures load (lazily, no referrer); a click opens the full size in a new tab
+          const a = el('a', 'mdimgwrap'); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.append(img()); parent.append(a);
+        }
         else if (href) parent.append(link(href, MD.icon ? [MD.icon('image', 'lead'), g.ialt || 'image'] : 'Image: ' + (g.ialt || 'image')));
         else parent.append(m[0]);
       } else if (g.fn !== undefined) {

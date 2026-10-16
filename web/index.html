@@ -383,6 +383,19 @@
   #callFloat { min-width: 240px; min-height: 180px; width: 340px; height: 300px; transition: left .18s, top .18s; }
   #callFloat.dragging { transition: none; }
   .rmsg audio { display: block; margin-top: .3rem; width: min(320px, 100%); height: 2.2rem; }
+  #assistLog { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
+  #assistForm { display: flex; gap: .5rem; padding: .6rem 1rem; border-top: 1px solid var(--line); }
+  #assistForm textarea { flex: 1; resize: none; min-height: 2.6rem; max-height: 10rem; }
+  #assistAttach, #assistCamBox { display: flex; gap: .6rem; align-items: center; padding: .4rem 1rem; border-top: 1px solid var(--line); }
+  #assistAttach[hidden], #assistCamBox[hidden] { display: none; }
+  #assistThumb { height: 56px; border-radius: 6px; }
+  #assistVideo { height: 180px; border-radius: 8px; background: #000; }
+  #assistMic.rec { background: var(--bad); color: #fff; }
+  .ytPlayer { display: block; width: min(100%, 480px); aspect-ratio: 16 / 9; border: 0; border-radius: 8px; margin: .3rem 0; }
+  .hostImg { display: block; max-width: min(100%, 420px); max-height: 60vh; border-radius: 8px; margin: .3rem 0; cursor: pointer; }
+  .confirmCard { align-self: flex-start; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: .6rem .8rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  #assistNotice { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; display: flex; flex-direction: column; gap: .5rem; }
+  #assistNotice div { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: .6rem .8rem; max-width: 360px; cursor: pointer; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
   #adminBody { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
   #adminBody table { border-collapse: collapse; width: 100%; font-size: .85rem; }
   #adminBody th, #adminBody td { border-bottom: 1px solid var(--line); padding: .45rem .4rem; text-align: left; vertical-align: middle; }
@@ -560,6 +573,7 @@
     <button id="goChat">Chat<span class="badge" id="chatBadge" hidden></span></button>
     <button id="goBoard"><svg class="ic lead"><use href="#i-board"/></svg>Board<span class="badge" id="boardBadge" hidden></span></button>
     <button id="goCal"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar</button>
+    <button id="goAssist"><svg class="ic lead"><use href="#i-chat"/></svg>Unity</button>
     <button id="goAdmin" hidden>Admin</button>
     <button class="ghost" id="goSettings" data-settings>Settings</button>
     <button class="ghost" id="menuLogout">Sign out</button>
@@ -695,6 +709,31 @@
   </header>
   <div id="calGrid"></div>
 </div>
+
+<div id="assist" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Unity</b>
+    <span class="folder" id="assistStatus">Unity: tasks, calendar, reminders, memory</span>
+    <select id="assistBrain" title="Which brain answers: Unity's own local model on the host, or a Claude model"></select>
+    <button class="ghost" id="assistLoc" title="Share your location so time, weather and local news are about where you are"><svg class="ic lead"><use href="#i-flag"/></svg>Share location</button>
+    <button class="ghost" id="assistVoice" title="Hear her replies in her own voice"><svg class="ic lead"><use href="#i-speaker-off"/></svg>Voice off</button>
+    <button class="ghost" id="assistClear" title="Start a new conversation (your tasks, reminders and memory stay)">New chat</button>
+  </header>
+  <div id="assistLog"></div>
+  <div id="assistAttach" hidden><img id="assistThumb" alt="photo to send"><span>Photo ready: it goes with your next message.</span><button type="button" class="ghost" id="assistDrop" aria-label="Remove photo"><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div id="assistCamBox" hidden><video id="assistVideo" autoplay playsinline muted></video><button type="button" id="assistSnap">Take photo</button><button type="button" class="ghost" id="assistCamClose">Cancel</button></div>
+  <form id="assistForm">
+    <textarea id="assistInput" placeholder="Talk to Unity… (Enter sends, Shift+Enter new line)"></textarea>
+    <button type="button" class="ghost" id="assistCam" title="Send her a webcam photo" aria-label="Webcam photo"><svg class="ic"><use href="#i-camera"/></svg></button>
+    <button type="button" class="ghost" id="assistFile" title="Send her a picture from your PC" aria-label="Picture from your PC"><svg class="ic"><use href="#i-image"/></svg></button>
+    <input type="file" id="assistPick" accept="image/png,image/jpeg,image/webp" hidden>
+    <button type="button" class="ghost" id="assistMic" title="Talk to Unity: click, speak, click again to send" aria-label="Talk"><svg class="ic"><use href="#i-mic"/></svg></button>
+    <button type="submit" id="assistSend">Send</button>
+    <button type="button" class="ghost" id="assistStop" hidden>Stop</button>
+  </form>
+</div>
+<div id="assistNotice"></div>
 
 <div id="admin" class="screen" hidden>
   <header>
@@ -941,6 +980,234 @@ async function json(path, opts) {
   return data;
 }
 
+// ---------- Unity section (Unity with tools; runs on the host) ----------
+let assistLoaded = false, assistBusy = false, assistTimer = null, assistCtl = null;
+const assistLocKey = () => 'mills.assistLoc.' + (me ? me.username : '');
+function assistClient() { // the person's own clock and (if shared) place: time and local answers are about THEM
+  const c = { tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', locale: navigator.language || 'en-US' };
+  try { const l = JSON.parse(store.get(assistLocKey()) || 'null'); if (l) Object.assign(c, l); } catch {}
+  return c;
+}
+function assistAdd(cls, text) {
+  const d = document.createElement('div'); d.className = cls; renderText(d, text); $('assistLog').appendChild(d);
+  $('assistLog').scrollTop = $('assistLog').scrollHeight; return d;
+}
+function assistSys(text, bad) { const d = assistAdd('sys' + (bad ? ' bad' : ''), text); return d; }
+function assistStatus(st) {
+  $('assistStatus').textContent = st.brain === 'local'
+    ? (st.local.model ? 'Unity on the host (local model)' : st.local.up ? 'Local model is still loading on the host…' : 'Local model is starting on the host…')
+    : 'Unity on Claude';
+}
+async function openAssist() {
+  if (assistLoaded) return;
+  try {
+    const st = await json('/api/assistant/state');
+    const sel = $('assistBrain'); sel.textContent = '';
+    for (const b of st.brains) { const o = document.createElement('option'); o.value = b.id; o.textContent = b.label; sel.append(o); }
+    sel.value = st.brain; assistStatus(st);
+    $('assistLog').textContent = '';
+    for (const m of st.history) assistAdd(m.role === 'user' ? 'msg me' : 'msg', m.content);
+    if (!st.history.length) assistSys('Talk to Unity: tasks, calendar, reminders, notes, math. Everything runs on the host; nothing to install.');
+    if (st.pending) assistConfirm(st.pending);
+    icoText($('assistLoc'), 'flag', store.get(assistLocKey()) ? 'Location shared' : 'Share location');
+    showVoice();
+    assistLoaded = true;
+    for (const n of st.notices) assistNotice(n);
+  } catch (e) { assistSys(e.message, true); }
+}
+$('assistBrain').onchange = async () => {
+  try { await json('/api/assistant/brain', { method: 'POST', body: JSON.stringify({ brain: $('assistBrain').value }) }); assistLoaded = false; await openAssist(); assistSys('Brain switched: new conversation with ' + $('assistBrain').selectedOptions[0].textContent + '.'); }
+  catch (e) { assistSys(e.message, true); assistLoaded = false; openAssist(); }
+};
+$('assistLoc').onclick = () => {
+  if (store.get(assistLocKey())) { store.set(assistLocKey(), ''); icoText($('assistLoc'), 'flag', 'Share location'); assistSys('Location no longer shared; Unity only knows your time zone.'); return; }
+  if (!navigator.geolocation) return assistSys('This browser cannot share a location.', true);
+  navigator.geolocation.getCurrentPosition((pos) => {
+    store.set(assistLocKey(), JSON.stringify({ lat: +pos.coords.latitude.toFixed(3), lon: +pos.coords.longitude.toFixed(3) }));
+    icoText($('assistLoc'), 'flag', 'Location shared'); assistSys('Location shared with Unity (rounded to about 100 m). Click again to stop.');
+  }, (err) => assistSys('Location not shared: ' + err.message, true), { timeout: 15000 });
+};
+$('assistClear').onclick = async () => { try { await json('/api/assistant/clear', { method: 'POST', body: '{}' }); $('assistLog').textContent = ''; assistSys('New conversation. Your tasks, reminders and memory are kept.'); } catch (e) { assistSys(e.message, true); } };
+$('assistStop').onclick = () => { json('/api/assistant/stop', { method: 'POST', body: '{}' }).catch(() => {}); };
+$('assistInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('assistForm').requestSubmit(); } });
+function assistConfirm(p) {
+  const d = document.createElement('div'); d.className = 'confirmCard';
+  const label = document.createElement('span'); label.textContent = `Unity wants to ${p.tool.replace(/_/g, ' ')} ${Object.values(p.args || {}).join(' ')} — OK?`;
+  const yes = document.createElement('button'); yes.textContent = 'Yes';
+  const no = document.createElement('button'); no.className = 'ghost'; no.textContent = 'No';
+  const answer = async (ok) => { yes.disabled = no.disabled = true; try { const r = await json('/api/assistant/answer', { method: 'POST', body: JSON.stringify({ yes: ok }) }); if (ok && r.browser) { try { await unityPc(r.browser.name, r.browser.args); label.textContent = 'Done on your computer.'; } catch (e) { label.textContent = 'Could not: ' + e.message; } return; }
+      label.textContent = ok ? (r.result && r.result.ok ? 'Done.' : 'Could not: ' + ((r.result && r.result.error) || r.error || '')) : 'Cancelled.'; } catch (e) { label.textContent = e.message; } };
+  yes.onclick = () => answer(true); no.onclick = () => answer(false);
+  d.append(label, yes, no); $('assistLog').appendChild(d); $('assistLog').scrollTop = $('assistLog').scrollHeight;
+}
+$('assistForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('assistInput').value.trim();
+  if ((!text && !assistPhoto) || assistBusy) return;
+  $('assistInput').value = '';
+  const photo = assistPhoto; setPhoto('');
+  assistAdd('msg me', (text || '(photo)') + (photo ? `
+[[image:${photo}]]` : ''));
+  assistBusy = true; $('assistSend').hidden = true; $('assistStop').hidden = false;
+  const bubble = assistAdd('msg', '…'); let shown = '', said = [];
+  try {
+    const res = await api('/api/assistant/chat', { method: 'POST', body: JSON.stringify({ message: text || 'Look at this photo.', photo, client: assistClient() }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true }); let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === 'token') { shown += ev.text; renderText(bubble, shown); }
+        else if (ev.type === 'say') { said.push(ev.text); if (!shown) renderText(bubble, said.join(' ')); speakLine(ev.text, ev.emotion, ev.act); }
+        else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
+        else if (ev.type === 'confirm') assistConfirm(ev);
+        else if (ev.type === 'pc_tool' || ev.type === 'run_code') answerBrowserCall(ev);
+        else if (ev.type === 'final') { if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
+[[image:${r}]]`).join('') + (ev.media || []).map((v) => `
+[[youtube:${v}]]`).join(''));
+        else if (ev.type === 'error') { renderText(bubble, ev.text); bubble.className = 'sys bad'; }
+      }
+      $('assistLog').scrollTop = $('assistLog').scrollHeight;
+    }
+  } catch (err) { renderText(bubble, err.message); bubble.className = 'sys bad'; }
+  assistBusy = false; $('assistSend').hidden = false; $('assistStop').hidden = true;
+});
+// ---- voice: her replies in her own voice (made on the host), your mic → text on the host ----
+const voiceKey = () => 'mills.assistVoice.' + (me ? me.username : '');
+const voiceOn = () => store.get(voiceKey()) === '1';
+function icoText(btn, icon, text) { btn.textContent = ''; btn.append(ic(icon, text ? 'lead' : ''), text || ''); }
+function showVoice() { icoText($('assistVoice'), voiceOn() ? 'speaker' : 'speaker-off', voiceOn() ? 'Voice on' : 'Voice off'); }
+$('assistVoice').onclick = () => { store.set(voiceKey(), voiceOn() ? '' : '1'); showVoice(); if (!voiceOn()) stopVoice(); };
+let voiceQueue = Promise.resolve(), voiceAudio = null, voiceGen = 0;
+function stopVoice() { voiceGen++; if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; } voiceQueue = Promise.resolve(); }
+function speakLine(text, emotion, act) {
+  if (!voiceOn() || !text || !text.trim()) return;
+  const gen = voiceGen;
+  const clip = api('/api/assistant/say', { method: 'POST', body: JSON.stringify({ text, emotion, act }) })
+    .then((r) => (r.ok ? r.blob() : r.json().then((d) => Promise.reject(new Error(d.error || 'voice failed')))));
+  voiceQueue = voiceQueue.then(() => clip).then((b) => new Promise((done) => {
+    if (gen !== voiceGen) return done();
+    const u = URL.createObjectURL(b); voiceAudio = new Audio(u);
+    voiceAudio.onended = voiceAudio.onerror = () => { URL.revokeObjectURL(u); done(); };
+    voiceAudio.play().catch(done);
+  })).catch((e) => assistSys(e.message, true));
+}
+let micRec = null;
+$('assistMic').onclick = async () => {
+  if (micRec) { micRec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const chunks = []; micRec = new MediaRecorder(stream);
+    micRec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    micRec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop()); micRec = null; icoText($('assistMic'), 'mic'); $('assistMic').classList.remove('rec');
+      const blob = new Blob(chunks, { type: chunks[0] ? chunks[0].type : 'audio/webm' });
+      if (!blob.size) return;
+      $('assistInput').placeholder = 'Listening…';
+      try {
+        const r = await api('/api/assistant/listen', { method: 'POST', body: blob, headers: { 'Content-Type': blob.type || 'audio/webm' } });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Speech failed');
+        if (d.text) { $('assistInput').value = d.text; $('assistForm').requestSubmit(); } else assistSys('I did not catch anything.');
+      } catch (e) { assistSys(e.message, true); }
+      $('assistInput').placeholder = 'Talk to Unity… (Enter sends, Shift+Enter new line)';
+    };
+    micRec.start(); icoText($('assistMic'), 'stop'); $('assistMic').classList.add('rec'); stopVoice();
+  } catch (e) { micRec = null; assistSys('Microphone: ' + e.message, true); }
+};
+// ---- photos: webcam snapshot or a file, sent with the next message (she sees it and can edit it) ----
+let assistPhoto = '', camStream = null;
+function setPhoto(ref, url) { assistPhoto = ref; $('assistAttach').hidden = !ref; if (url) $('assistThumb').src = url; }
+$('assistDrop').onclick = () => setPhoto('');
+async function uploadPhoto(dataUrl) {
+  try { const d = await json('/api/assistant/upload', { method: 'POST', body: JSON.stringify({ image: dataUrl }) }); setPhoto(d.ref, dataUrl); $('assistInput').focus(); }
+  catch (e) { assistSys(e.message, true); }
+}
+function shrink(img, w, h) { // long side at most 1024, JPEG: keeps uploads small
+  const k = Math.min(1, 1024 / Math.max(w, h)), c = document.createElement('canvas');
+  c.width = Math.round(w * k); c.height = Math.round(h * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.9);
+}
+$('assistFile').onclick = () => $('assistPick').click();
+$('assistPick').onchange = () => {
+  const f = $('assistPick').files[0]; $('assistPick').value = '';
+  if (!f) return;
+  const img = new Image(), u = URL.createObjectURL(f);
+  img.onload = () => { uploadPhoto(shrink(img, img.naturalWidth, img.naturalHeight)); URL.revokeObjectURL(u); };
+  img.onerror = () => assistSys('That file is not a picture this browser can open.', true);
+  img.src = u;
+};
+function closeCam() { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; $('assistCamBox').hidden = true; }
+$('assistCam').onclick = async () => {
+  try { camStream = await navigator.mediaDevices.getUserMedia({ video: true }); $('assistVideo').srcObject = camStream; $('assistCamBox').hidden = false; }
+  catch (e) { assistSys('Camera: ' + e.message, true); }
+};
+$('assistCamClose').onclick = closeCam;
+$('assistSnap').onclick = () => { const v = $('assistVideo'); const d = shrink(v, v.videoWidth, v.videoHeight); closeCam(); uploadPhoto(d); };
+// ---- Unity's own-computer tools: done HERE in this browser (the folder you opened in Work, and a sandbox for code) ----
+async function unityPc(name, args) {
+  if (!fsOps[name]) throw new Error('Unknown file action ' + name);
+  try { return await fsOps[name](args || {}); }
+  catch (e) { throw new Error(/root|null|undefined|handle/i.test(e.message) ? 'No folder is open: in Work, click "Open folder on my PC" first.' : e.message); }
+}
+function jsWorkerMain() { // runs inside a Worker
+  self.onmessage = async (e) => {
+    const out = [], fmt = (a) => a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+    console.log = (...a) => out.push(fmt(a)); console.error = console.warn = (...a) => out.push('! ' + fmt(a));
+    try { const r = await (0, eval)('(async () => {' + e.data + '\n})()'); if (r !== undefined) out.push('=> ' + fmt([r])); self.postMessage({ ok: true, result: out.join('\n') }); }
+    catch (err) { self.postMessage({ ok: false, error: out.concat(String(err)).join('\n') }); }
+  };
+}
+function pyWorkerMain() { // runs inside a Worker: Python (Pyodide, loaded once per browser session)
+  importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js');
+  const ready = loadPyodide();
+  self.onmessage = async (e) => {
+    const py = await ready, out = [];
+    py.setStdout({ batched: (t) => out.push(t) }); py.setStderr({ batched: (t) => out.push('! ' + t) });
+    try { const r = await py.runPythonAsync(e.data); if (r !== undefined && r !== null) out.push('=> ' + String(r)); self.postMessage({ ok: true, result: out.join('\n') }); }
+    catch (err) { self.postMessage({ ok: false, error: out.concat(String(err)).join('\n') }); }
+  };
+}
+const JS_WORKER = '(' + jsWorkerMain + ')()', PY_WORKER = '(' + pyWorkerMain + ')()';
+let pyWorker = null;
+function runInSandbox(language, code) { // a Worker: no page, no cookies, no files; killed after its time limit
+  return new Promise((resolve) => {
+    const py = language === 'python';
+    const w = py ? (pyWorker || (pyWorker = new Worker(URL.createObjectURL(new Blob([PY_WORKER], { type: 'text/javascript' })))))
+      : new Worker(URL.createObjectURL(new Blob([JS_WORKER], { type: 'text/javascript' })));
+    const timer = setTimeout(() => { w.terminate(); if (py) pyWorker = null; resolve({ ok: false, error: 'Stopped: it ran longer than ' + (py ? 60 : 15) + ' s.' }); }, py ? 60000 : 15000);
+    w.onmessage = (e) => { clearTimeout(timer); if (!py) w.terminate(); resolve(e.data); };
+    w.onerror = (e) => { clearTimeout(timer); w.terminate(); if (py) pyWorker = null; resolve({ ok: false, error: e.message || 'failed' }); };
+    w.postMessage(code);
+  });
+}
+async function answerBrowserCall(ev) {
+  let body;
+  try {
+    if (ev.type === 'run_code') { const r = await runInSandbox(ev.language, ev.code); body = { id: ev.id, ...r }; }
+    else body = { id: ev.id, ok: true, result: await unityPc(ev.name, ev.args) };
+  } catch (e) { body = { id: ev.id, ok: false, error: e.message }; }
+  api('/api/assistant/pc-result', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+}
+function assistNotice(n) {
+  const d = document.createElement('div');
+  d.append(ic('calendar', 'lead'), n.text);
+  d.onclick = () => d.remove();
+  $('assistNotice').appendChild(d);
+  if (!$('assist').hidden) assistSys('Reminder: ' + n.text);
+  try { if (window.Notification && Notification.permission === 'granted') new Notification('Mills reminder', { body: n.text }); } catch {}
+  setTimeout(() => d.remove(), 120000);
+}
+function startAssistNotices() {
+  clearInterval(assistTimer);
+  assistTimer = setInterval(async () => {
+    if (!token) return;
+    try { const st = await json('/api/assistant/state'); for (const n of st.notices) assistNotice(n); if (!$('assist').hidden) assistStatus(st); } catch {}
+  }, 30000);
+}
+
 // ---------- login ----------
 $('login').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -949,7 +1216,7 @@ $('login').addEventListener('submit', async (e) => {
   const username = $('username').value.trim().toLowerCase(), password = $('password').value;
   if (!username || !password) { $('loginErr').textContent = 'Enter your username and password.'; return; }
   try {
-    const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ username, password, deviceId }) });
+    const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ username, password, deviceId, client: { tz: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: navigator.language } }) });
     token = data.token; sessionStorage.setItem(TOKEN_KEY, token); store.set('mills.username', data.username);
     $('password').value = '';
     await enter();
@@ -973,11 +1240,13 @@ async function enter() {
   startRoomPolling();
   callPollLoop();
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
+  startAssistNotices();
+  json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
 }
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
   presenceTick(); // tell the others where you are now
@@ -986,18 +1255,21 @@ function showScreen(name) {
   applyLayout(); // places the team chat where it belongs for this screen (and hides the floating window elsewhere)
   if (name === 'room') openRoom();
   if (name === 'admin') loadAdmin();
+  if (name === 'assist') openAssist();
 }
 $('goWork').onclick = () => showScreen('shell');
 $('goChat').onclick = () => showScreen('room');
 $('goBoard').onclick = () => showScreen('board');
 $('goCal').onclick = () => showScreen('cal');
 $('goAdmin').onclick = () => showScreen('admin');
+$('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist']) $(id).hidden = true;
   BOARD.stop();
+  clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
   closeMsgMenu();
@@ -1136,7 +1408,10 @@ function sys(text, bad) { const d = document.createElement('div'); d.className =
 const toolText = (t) => String(t).replace(/^⚙️?\s*/, '');
 function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
-function renderText(el, text) { MD.render(el, text); } // full markdown + mermaid (web/md.js)
+function renderText(el, text) { // full markdown + mermaid (web/md.js); host pictures and YouTube players split out first
+  if (/\[\[(image|youtube):/.test(text)) { el.textContent = ''; return withImages(el, text, (e, t) => MD.render(e, t)); }
+  MD.render(el, text);
+}
 function describeTool(t) {
   const i = t.input || {};
   const name = t.name.replace(/^mcp__pc__/, 'your PC › ');
@@ -1848,7 +2123,30 @@ async function ingest(m, live) {
   for (const other of msgs.values()) if (other.r === m.seq && other.el) renderMsg(other); // refresh quotes of this message
   if (live && !prev && m.from !== me.username && !m.deleted) notify(rec);
 }
-function renderRich(el, text) { // full markdown + mermaid (web/md.js), with highlighted @mentions
+const imgCache = new Map();
+function hostImage(ref) { // a picture made by the host's image engine, loaded with the sign-in token
+  const img = document.createElement('img'); img.className = 'hostImg'; img.alt = 'picture from Unity';
+  const p = imgCache.get(ref) || api('/api/assistant/image?ref=' + encodeURIComponent(ref)).then((r) => (r.ok ? r.blob() : Promise.reject(new Error('gone')))).then((b) => URL.createObjectURL(b));
+  imgCache.set(ref, p);
+  p.then((u) => { img.src = u; img.onclick = () => { const a = document.createElement('a'); a.href = u; a.download = 'unity-' + ref.split('/').pop() + '.png'; a.click(); }; img.title = 'Click to download'; })
+   .catch(() => { img.replaceWith(document.createTextNode('(picture no longer on the host)')); imgCache.delete(ref); });
+  return img;
+}
+function ytPlayer(id) { // a YouTube video Unity picked, played right here (privacy-enhanced embed)
+  const f = document.createElement('iframe'); f.className = 'ytPlayer';
+  f.src = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) + '?autoplay=1&rel=0';
+  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen'; f.allowFullscreen = true; f.title = 'YouTube video';
+  return f;
+}
+function withImages(el, text, render) { // split out [[image:ref]] markers, render the rest as usual
+  const parts = String(text).split(/\[\[(image:[a-z0-9-]+\/[a-z0-9-]+|youtube:[\w-]{11})\]\]/);
+  parts.forEach((part, i) => { if (i % 2) el.append(part.startsWith('youtube:') ? ytPlayer(part.slice(8)) : hostImage(part.slice(6))); else if (part.trim()) { const span = document.createElement('div'); render(span, part.replace(/\n+$/, '')); el.append(span); } });
+}
+function renderRich(el, text) { // markdown + @mentions, with host pictures / YouTube players split out
+  if (/\[\[(image|youtube):/.test(text)) return withImages(el, text, renderRichText);
+  renderRichText(el, text);
+}
+function renderRichText(el, text) { // full markdown + mermaid (web/md.js), with highlighted @mentions
   MD.render(el, text, { mention: (h) => {
     const owner = handleOwner(h);
     if (!owner) return null;
@@ -3151,6 +3449,13 @@ async function loadAdmin() {
         confirmButton('Reset lock', () => adminCall('unlock', { username: a.username }, () => adminOut(`${a.username}: device lock cleared. Their next sign-in claims the account.`))),
         confirmButton('Sign out', () => adminCall('signout', { username: a.username }, () => adminOut(`${a.username}: signed out everywhere.`))),
       );
+      for (const [key, label] of [['pc', 'PC files'], ['code', 'Run code']]) { // Unity's own-computer tools for this account
+        const lab = document.createElement('label'); lab.style.cssText = 'font-size:.75rem;margin:0 .3rem;white-space:nowrap';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.style.width = 'auto'; cb.checked = key === 'pc' ? a.unityPc : a.unityCode;
+        cb.title = 'Unity may ' + (key === 'pc' ? 'read and change files in the folder this person opened on their own PC' : 'run code in the browser of this person');
+        cb.onchange = () => adminCall('unity-tools', { username: a.username, [key]: cb.checked }, (d) => adminOut(`${d.username}: Unity PC files ${d.pc ? 'on' : 'off'}, run code ${d.code ? 'on' : 'off'}.`));
+        lab.append(cb, ' Unity: ' + label); actions.append(lab);
+      }
       if (a.busy) actions.append(confirmButton('Stop Claude', () => adminCall('stop', { username: a.username }, () => adminOut(`${a.username}: Claude stopped.`))));
       if (a.username !== me.username) actions.append(confirmButton('Delete', () => adminCall('delete', { username: a.username }, () => adminOut(`${a.username}: deleted (files kept in bridge/profiles-deleted/).`))));
       rows.append(tr);
