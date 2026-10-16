@@ -1,30 +1,46 @@
 # Mills
 
-Alfreddo's private workspace: talk to Claude in the browser and have it build and edit files on his own PC. There's nothing to install on his side.
+A private workspace for Alfreddo and Sponge: talk to Claude in the browser and have it build and edit files on your own PC. There's nothing to install on your side.
 
 **Web app:** https://unity-lab-ai.github.io/Mills/ (deployed from `main` by GitHub Actions)
+
+| Person | Address | Bridge window on Gee's PC |
+|--------|---------|---------------------------|
+| Alfreddo | https://unity-lab-ai.github.io/Mills/ | `bridge/start.bat` |
+| Sponge | https://unity-lab-ai.github.io/Mills/?user=sponge | `bridge/start-sponge.bat` |
+
+Each person has their own **profile**: their own password, device lock, Claude conversation, tunnel and Archive folder. The bridges run side by side in separate windows and never see each other's state.
 
 ## How it works
 
 ```
-Alfreddo's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel ──▶ Mills bridge on Gee's PC
-   │  holds the folder he opened on his PC                                  └─ runs Claude Code (Gee's account) in the Mills folder
-   ◀── Claude's file edits (list/read/write/delete/mkdir) are relayed back to his browser and applied there
+User's browser (GitHub Pages UI) ──password──▶ Cloudflare tunnel ──▶ Mills bridge on Gee's PC (one per profile)
+   │  holds the folder they opened on their PC                             └─ runs Claude Code (Gee's account) in the Mills folder
+   ◀── Claude's file edits (list/read/write/delete/mkdir) are relayed back to their browser and applied there
 ```
 
 ## Gee: running it
 
-1. Double-click **`bridge/start.bat`** and leave the window open while Alfreddo works.
-   - The first time, it asks you to set the Mills password.
-   - It starts a Cloudflare tunnel and posts the address to a gist (`Mills bridge address`) on your GitHub account, where the web app finds it automatically.
+1. Double-click **`bridge/start.bat`** (Alfreddo) and/or **`bridge/start-sponge.bat`** (Sponge) and leave each window open while that person works.
+   - The first time a profile runs, it asks you to set that person's Mills password.
+   - Each bridge starts its own Cloudflare tunnel and posts the address to its own gist on your GitHub account (`Mills bridge address` for Alfreddo, `Mills bridge address (sponge)` for Sponge), where the web app finds it automatically.
 2. Requires Node.js, Claude Code (logged in), `gh` (logged in), and `cloudflared` (path set in `bridge/config.json`).
 
-## Alfreddo: using it
+### Adding another person
 
-1. Open https://unity-lab-ai.github.io/Mills/ in **Chrome or Edge** and sign in with the password.
+1. Create `bridge/profiles/<name>/config.json` with a free port and a display name, e.g. `{ "port": 7779, "user": "Red" }` (`<name>` = lowercase letters, digits, dashes).
+2. Set their password: `node bridge/set-password.js --profile <name> "their password"` (or just run `bridge/start.bat <name>`, which asks on first run).
+3. Run `bridge/start.bat <name>` (copy `start-sponge.bat` if you want a double-clickable launcher).
+4. Give them `https://unity-lab-ai.github.io/Mills/?user=<name>` and the password. Their saved conversations land in `Mills/Archive/<name>/`.
+
+Profile state lives in `bridge/profiles/<name>/` (`auth.json`, `state.json`, `.mcp-runtime.json` are gitignored; `config.json` is committed). Everything in `bridge/config.json` except `port` and `gistId` applies to every profile unless the profile's own `config.json` overrides it.
+
+## Alfreddo / Sponge: using it
+
+1. Open your address from the table above in **Chrome or Edge** (on Linux: Chrome, Chromium or Brave; Firefox cannot open folders) and sign in with your password.
 2. Click **Open folder on my PC** and pick the folder Claude should work in.
 3. Chat with Claude. It creates and edits files in that folder, and you can also edit them yourself in the editor panel.
-4. **Save to Archive** stores the current conversation; once saved, it updates itself after every reply. **Archive** lists saved conversations: **Open** one to continue it (Claude resumes with full memory of it), **Rename** it (or click the title above the chat), or **Delete** it (click twice to confirm). Saved conversations live on Gee's PC in `Mills/Archive/` and are never committed.
+4. **Save to Archive** stores the current conversation; once saved, it updates itself after every reply. **Archive** lists saved conversations: **Open** one to continue it (Claude resumes with full memory of it), **Rename** it (or click the title above the chat), or **Delete** it (click twice to confirm). Saved conversations live on Gee's PC in `Mills/Archive/` (Alfreddo) or `Mills/Archive/<name>/` (other profiles) and are never committed.
 5. **Theme** opens a dropdown of 23 UI colour themes (Burple, Cyberpunk, Dracula, Nord, Solarized, …) plus the Mills default. The choice is remembered in that browser.
 
 ## Publishing updates
@@ -43,11 +59,11 @@ git remote add forgejo https://git.unityailab.com/GFourteen/Mills.git
 2. Merge the feature into `develop` (`git merge --no-ff`) and `git push origin develop`.
 3. Merge `develop` into `main` and `git push origin main` (this redeploys the web app).
 
-`git push origin` sends each branch to GitHub and Forgejo in one go. Check that both pushes report success. Never commit `bridge/auth.json`, `bridge/state.json`, `Archive/` or `.claude/` (all are kept out by `.gitignore`).
+`git push origin` sends each branch to GitHub and Forgejo in one go. Check that both pushes report success. Never commit `bridge/auth.json`, `bridge/state.json`, `bridge/profiles/*/auth.json`, `bridge/profiles/*/state.json`, `Archive/` or `.claude/` (all are kept out by `.gitignore`).
 
 ## Security
 
-- **First sign-in claims Mills.** The first browser that signs in successfully becomes the only one allowed in, and every other device is refused. To move to a new browser, Gee runs `node bridge/server.js --reset-lock`.
-- The password is stored on Gee's PC only, as a scrypt hash (`bridge/auth.json`, never committed). To change it: `node bridge/set-password.js "new password"`.
+- **First sign-in claims a profile.** The first browser that signs in to a profile successfully becomes the only one allowed into it, and every other device is refused. To move someone to a new browser, Gee runs `node bridge/server.js --reset-lock` (Alfreddo) or `node bridge/server.js --profile sponge --reset-lock` (Sponge).
+- Passwords are stored on Gee's PC only, as scrypt hashes (`bridge/auth.json` / `bridge/profiles/<name>/auth.json`, never committed). To change one: `node bridge/set-password.js "new password"` or `node bridge/set-password.js --profile <name> "new password"`.
 - After 5 failed sign-ins, sign-in is blocked for 15 minutes. Only the GitHub Pages origin may call the bridge.
 - Claude can't run shell commands by default. `allowedTools` / `permissionMode` in `bridge/config.json` control that.
