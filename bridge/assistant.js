@@ -64,23 +64,35 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     return ollamaState.starting;
   }
   if (config.assistant !== false && !config.claudeCommand) ensureOllama(); // warm up at hub start (not in test hubs)
-  // The image engine (bridge/image-engine.py, local Stable Diffusion) is started the same way.
-  let imageStarting = null;
-  async function imageUp() { try { return (await fetch(IMAGE_URL + '/health', { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } }
-  function ensureImage() {
-    if (imageStarting) return imageStarting;
-    imageStarting = (async () => {
-      if (await imageUp()) return true;
-      const py = A.imagePython || (process.platform === 'win32' ? 'py' : 'python3');
-      const pre = A.imagePythonArgs || (process.platform === 'win32' && !A.imagePython ? ['-3.10'] : []);
-      const port = new URL(IMAGE_URL).port || '5124';
-      try { spawn(py, [...pre, path.join(ROOT, 'image-engine.py'), '--port', port, '--checkpoint', IMAGE_CKPT], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
-      for (let i = 0; i < 40; i++) { if (await imageUp()) return true; await new Promise((r) => setTimeout(r, 1000)); }
+  // Python services on the host (Python 3.10 with torch): the image engine (bridge/image-engine.py),
+  // Unity's voice (unity-voice-v2/serve.py) and the speech engine (bridge/speech-engine.py, whisper).
+  // Each is started detached when it does not answer, so they survive hub restarts.
+  const PY = A.python || (process.platform === 'win32' ? 'py' : 'python3');
+  const PY_ARGS = A.pythonArgs || (process.platform === 'win32' && !A.python ? ['-3.10'] : []);
+  const VOICE_URL = (A.voiceUrl || 'http://127.0.0.1:5123').replace(/\/$/, '');
+  const VOICE_DIR = A.voiceDir || path.join(MILLS_DIR, '..', 'Backrooms', 'models', 'unity-voice-v2');
+  const EARS_URL = (A.speechUrl || 'http://127.0.0.1:5125').replace(/\/$/, '');
+  const WHISPER = A.whisperModel || path.join(MILLS_DIR, '..', 'Unity 3D Equational Model', 'Unity 18+', 'models', 'whisper-small');
+  const starting = new Map();
+  async function up(url) { try { return (await fetch(url + '/health', { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } }
+  function ensureService(url, args, cwd) {
+    if (starting.has(url)) return starting.get(url);
+    const p = (async () => {
+      if (await up(url)) return true;
+      try { spawn(PY, [...PY_ARGS, ...args], { cwd, detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
+      for (let i = 0; i < 60; i++) { if (await up(url)) return true; await new Promise((r) => setTimeout(r, 1000)); }
       return false;
-    })().finally(() => { imageStarting = null; });
-    return imageStarting;
+    })().finally(() => starting.delete(url));
+    starting.set(url, p);
+    return p;
   }
-  if (config.assistant !== false && !config.claudeCommand) ensureImage();
+  const port = (url, d) => new URL(url).port || d;
+  const ensureImage = () => ensureService(IMAGE_URL, [path.join(ROOT, 'image-engine.py'), '--port', port(IMAGE_URL, '5124'), '--checkpoint', IMAGE_CKPT], ROOT);
+  const ensureVoice = () => ensureService(VOICE_URL, [path.join(VOICE_DIR, 'serve.py'), '--port', port(VOICE_URL, '5123')], VOICE_DIR);
+  const ensureEars = () => ensureService(EARS_URL, [path.join(ROOT, 'speech-engine.py'), '--port', port(EARS_URL, '5125'), '--model', WHISPER], ROOT);
+  if (config.assistant !== false && !config.claudeCommand) { ensureImage(); ensureVoice(); ensureEars(); }
+  const EMOTIONS = ['neutral', 'warm', 'happy', 'amused', 'excited', 'sad', 'concerned', 'frustrated', 'surprised'];
+  const ACTS = ['statement', 'yes_no_question', 'wh_question', 'exclamation', 'instruction', 'reassurance', 'aside'];
 
   // ---------- the world around the person: place, weather, news (keyless public services) ----------
   const cache = new Map();
@@ -242,8 +254,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   function tool(name, description, params, required, run, opts = {}) { TOOLS[name] = { name, description, params: params || {}, required: required || [], run, ...opts }; }
 
   tool('say', 'Speak a line out loud to the person (1-3 short sentences), with the emotion and speech act that fit it.', {
-    text: P('What to say'), emotion: P('neutral, happy, sad, excited, warm, amused, concerned, frustrated or surprised'),
-    act: P('statement, wh_question, yes_no_question, exclamation, command, greeting or backchannel'),
+    text: P('What to say'), emotion: P(EMOTIONS.join(', ')), act: P(ACTS.join(', ')),
   }, ['text'], (a) => ({ ok: true, said: a.text }));
   tool('get_time', "The person's current local date and time (their own time zone).", {}, [], (a, s, ci) => ({ ok: true, now: localNow(ci), timezone: ci.tz }));
   tool('get_location', 'Where the person is (their browser location if shared, otherwise roughly from their connection).', {}, [], async (a, s, ci) => {
@@ -579,6 +590,25 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         if (!fs.existsSync(f)) { send(res, 404, { error: 'No such picture.' }); return true; }
         res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=86400' });
         fs.createReadStream(f).pipe(res); return true;
+      }
+      if (p === '/api/assistant/say' && req.method === 'POST') { // her voice for one line → audio/wav
+        const { text, emotion, act } = await readBody(req);
+        const line = String(text || '').replace(/\[\[image:[^\]]*\]\]/g, '').replace(/[*_`#>]/g, '').trim().slice(0, 600);
+        if (!line) { send(res, 400, { error: 'Nothing to say.' }); return true; }
+        if (!(await ensureVoice())) { send(res, 503, { error: 'Her voice is not running on the host.' }); return true; }
+        const r = await fetch(VOICE_URL + '/say', { method: 'POST', body: JSON.stringify({ text: line, emotion: EMOTIONS.includes(emotion) ? emotion : 'neutral', speech_act: ACTS.includes(act) ? act : (/\?$/.test(line) ? 'yes_no_question' : 'statement') }), signal: AbortSignal.timeout(120000) }).catch((e) => ({ ok: false, status: 502, json: async () => ({ error: e.message }) }));
+        if (!r.ok) { send(res, 502, { error: 'Voice: ' + ((await r.json().catch(() => ({}))).error || r.status) }); return true; }
+        const wav = Buffer.from(await r.arrayBuffer());
+        res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': wav.length }); res.end(wav); return true;
+      }
+      if (p === '/api/assistant/listen' && req.method === 'POST') { // the person's mic recording → text
+        const chunks = []; let size = 0;
+        for await (const c of req) { size += c.length; if (size > 25 * 1024 * 1024) { send(res, 413, { error: 'Recording too long.' }); return true; } chunks.push(c); }
+        if (!size) { send(res, 400, { error: 'Empty recording.' }); return true; }
+        if (!(await ensureEars())) { send(res, 503, { error: 'Speech recognition is not running on the host.' }); return true; }
+        const r = await fetch(EARS_URL + '/transcribe', { method: 'POST', body: Buffer.concat(chunks), signal: AbortSignal.timeout(120000) }).catch((e) => ({ ok: false, json: async () => ({ error: e.message }) }));
+        const d = await r.json().catch(() => ({}));
+        send(res, r.ok ? 200 : 502, r.ok ? { text: d.text || '', language: d.language } : { error: 'Speech: ' + (d.error || 'failed') }); return true;
       }
       if (p === '/api/assistant/data' && req.method === 'GET') { const s = store(acct); const { _file, history, ...d } = s; send(res, 200, d); return true; }
       return false;

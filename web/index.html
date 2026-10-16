@@ -223,6 +223,7 @@
   #assistLog { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
   #assistForm { display: flex; gap: .5rem; padding: .6rem 1rem; border-top: 1px solid var(--line); }
   #assistForm textarea { flex: 1; resize: none; min-height: 2.6rem; max-height: 10rem; }
+  #assistMic.rec { background: var(--bad); color: #fff; }
   .hostImg { display: block; max-width: min(100%, 420px); max-height: 60vh; border-radius: 8px; margin: .3rem 0; cursor: pointer; }
   .confirmCard { align-self: flex-start; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: .6rem .8rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   #assistNotice { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; display: flex; flex-direction: column; gap: .5rem; }
@@ -416,11 +417,13 @@
     <span class="folder" id="assistStatus">Unity: tasks, calendar, reminders, memory</span>
     <select id="assistBrain" title="Which brain answers: Unity's own local model on the host, or a Claude model"></select>
     <button class="ghost" id="assistLoc" title="Share your location so time, weather and local news are about where you are">📍 Share location</button>
+    <button class="ghost" id="assistVoice" title="Hear her replies in her own voice">🔊 Voice off</button>
     <button class="ghost" id="assistClear" title="Start a new conversation (your tasks, reminders and memory stay)">New chat</button>
   </header>
   <div id="assistLog"></div>
   <form id="assistForm">
     <textarea id="assistInput" placeholder="Talk to Unity… (Enter sends, Shift+Enter new line)"></textarea>
+    <button type="button" class="ghost" id="assistMic" title="Talk to Unity: click, speak, click again to send">🎤</button>
     <button type="submit" id="assistSend">Send</button>
     <button type="button" class="ghost" id="assistStop" hidden>Stop</button>
   </form>
@@ -667,6 +670,7 @@ async function openAssist() {
     if (!st.history.length) assistSys('Talk to Unity: tasks, calendar, reminders, notes, math. Everything runs on the host; nothing to install.');
     if (st.pending) assistConfirm(st.pending);
     $('assistLoc').textContent = store.get(assistLocKey()) ? '📍 Location shared' : '📍 Share location';
+    showVoice();
     assistLoaded = true;
     for (const n of st.notices) assistNotice(n);
   } catch (e) { assistSys(e.message, true); }
@@ -714,10 +718,10 @@ $('assistForm').addEventListener('submit', async (e) => {
         const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
         const ev = JSON.parse(line);
         if (ev.type === 'token') { shown += ev.text; renderText(bubble, shown); }
-        else if (ev.type === 'say') { said.push(ev.text); if (!shown) renderText(bubble, said.join(' ')); }
+        else if (ev.type === 'say') { said.push(ev.text); if (!shown) renderText(bubble, said.join(' ')); speakLine(ev.text, ev.emotion, ev.act); }
         else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = '⚙ ' + ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
-        else if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
+        else if (ev.type === 'final') { if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
 [[image:${r}]]`).join(''));
         else if (ev.type === 'error') { renderText(bubble, ev.text); bubble.className = 'sys bad'; }
       }
@@ -726,6 +730,47 @@ $('assistForm').addEventListener('submit', async (e) => {
   } catch (err) { renderText(bubble, err.message); bubble.className = 'sys bad'; }
   assistBusy = false; $('assistSend').hidden = false; $('assistStop').hidden = true;
 });
+// ---- voice: her replies in her own voice (made on the host), your mic → text on the host ----
+const voiceKey = () => 'mills.assistVoice.' + (me ? me.username : '');
+const voiceOn = () => store.get(voiceKey()) === '1';
+function showVoice() { $('assistVoice').textContent = voiceOn() ? '🔊 Voice on' : '🔇 Voice off'; }
+$('assistVoice').onclick = () => { store.set(voiceKey(), voiceOn() ? '' : '1'); showVoice(); if (!voiceOn()) stopVoice(); };
+let voiceQueue = Promise.resolve(), voiceAudio = null, voiceGen = 0;
+function stopVoice() { voiceGen++; if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; } voiceQueue = Promise.resolve(); }
+function speakLine(text, emotion, act) {
+  if (!voiceOn() || !text || !text.trim()) return;
+  const gen = voiceGen;
+  const clip = api('/api/assistant/say', { method: 'POST', body: JSON.stringify({ text, emotion, act }) })
+    .then((r) => (r.ok ? r.blob() : r.json().then((d) => Promise.reject(new Error(d.error || 'voice failed')))));
+  voiceQueue = voiceQueue.then(() => clip).then((b) => new Promise((done) => {
+    if (gen !== voiceGen) return done();
+    const u = URL.createObjectURL(b); voiceAudio = new Audio(u);
+    voiceAudio.onended = voiceAudio.onerror = () => { URL.revokeObjectURL(u); done(); };
+    voiceAudio.play().catch(done);
+  })).catch((e) => assistSys(e.message, true));
+}
+let micRec = null;
+$('assistMic').onclick = async () => {
+  if (micRec) { micRec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const chunks = []; micRec = new MediaRecorder(stream);
+    micRec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    micRec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop()); micRec = null; $('assistMic').textContent = '🎤'; $('assistMic').classList.remove('rec');
+      const blob = new Blob(chunks, { type: chunks[0] ? chunks[0].type : 'audio/webm' });
+      if (!blob.size) return;
+      $('assistInput').placeholder = 'Listening…';
+      try {
+        const r = await api('/api/assistant/listen', { method: 'POST', body: blob, headers: { 'Content-Type': blob.type || 'audio/webm' } });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Speech failed');
+        if (d.text) { $('assistInput').value = d.text; $('assistForm').requestSubmit(); } else assistSys('I did not catch anything.');
+      } catch (e) { assistSys(e.message, true); }
+      $('assistInput').placeholder = 'Talk to Unity… (Enter sends, Shift+Enter new line)';
+    };
+    micRec.start(); $('assistMic').textContent = '⏹'; $('assistMic').classList.add('rec'); stopVoice();
+  } catch (e) { micRec = null; assistSys('Microphone: ' + e.message, true); }
+};
 function assistNotice(n) {
   const d = document.createElement('div');
   d.textContent = '⏰ ' + n.text;
