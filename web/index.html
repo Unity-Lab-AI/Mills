@@ -51,6 +51,10 @@
   .sys.bad { color: var(--bad); }
   #composer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--line); }
   #composer textarea { resize: none; height: 4.2rem; }
+  .sendCol { display: flex; flex-direction: column; gap: .4rem; }
+  .sendCol button { white-space: nowrap; min-width: 6.5rem; }
+  .msg.me.queued { opacity: .6; border: 1px dashed var(--muted); }
+  .msg .unqueue { float: right; margin-left: .5rem; background: transparent; color: var(--muted); padding: 0 .3rem; font-size: .8rem; border: 0; }
 
   #archive { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 10; }
   #archive .box { margin: auto; width: min(560px, 94vw); max-height: 80vh; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; }
@@ -118,7 +122,10 @@
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
       <form id="composer">
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
-        <button type="submit" id="send">Send</button><button type="button" class="ghost" id="stop" hidden>Stop</button>
+        <div class="sendCol">
+          <button type="submit" id="send" title="Send. While Claude is busy: queue it for right after this reply.">Send</button>
+          <button type="button" class="ghost" id="stop" hidden title="Stop Claude. With text in the box: stop and send that text right away.">Stop</button>
+        </div>
       </form>
     </section>
   </main>
@@ -203,14 +210,26 @@ async function connect() {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let reconnecting = false;
 async function api(path, opts = {}) {
   if (!base) throw new Error('Mills is offline — ask Gee to start it.');
-  const res = await fetch(base + path, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) },
-  });
-  if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
-  return res;
+  const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
+  for (let attempt = 1; ; attempt++) {
+    let res = null;
+    try { res = await fetch(base + path, init); } catch {}
+    if (res && ![502, 503, 504, 530].includes(res.status)) {
+      if (reconnecting) { reconnecting = false; sys('Mills is back.'); }
+      if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
+      return res;
+    }
+    // No bridge behind the address: it is restarting after a code change (back within seconds,
+    // same address) or Gee restarted its window (new address, found again via the gist).
+    if (attempt >= 40) { reconnecting = false; throw new Error('Mills is not responding — ask Gee to check it.'); }
+    if (!reconnecting) { reconnecting = true; sys('Mills is restarting — waiting for it to come back…'); }
+    await sleep(3000);
+    if (attempt % 4 === 0) { try { base = await findBridge(); } catch {} }
+  }
 }
 async function json(path, opts) {
   const res = await api(path, opts);
@@ -417,14 +436,37 @@ $('model').onchange = async () => {
   } catch (err) { sys(err.message, true); }
 };
 
-let busy = false, fresh = false;
-function setBusy(b) { busy = b; $('send').hidden = b; $('stop').hidden = !b; $('input').disabled = b; }
+// The box is always usable. While Claude is busy, Send queues the message for right after this
+// reply (queued bubbles are dashed; ✕ removes one), and the second button is Stop when the box is
+// empty or "Send now" when it has text: stop the current reply and send that text immediately,
+// ahead of anything queued.
+let busy = false, fresh = false, sendNowMessage = null;
+const queue = []; // { message, el }
+function updateStopButton() { $('stop').textContent = busy && $('input').value.trim() ? 'Send now' : 'Stop'; }
+function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); }
+$('input').addEventListener('input', updateStopButton);
 
-$('composer').addEventListener('submit', async (e) => {
+$('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const message = $('input').value.trim();
-  if (!message || busy) return;
-  $('input').value = '';
+  if (!message) return;
+  $('input').value = ''; updateStopButton();
+  if (busy) enqueue(message); else send(message);
+});
+function enqueue(message) {
+  const el = bubble('me queued'); renderText(el, message);
+  const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.textContent = '✕'; x.title = 'Remove from queue';
+  x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); };
+  el.prepend(x); scroll();
+  queue.push({ message, el });
+}
+function drain() { // a run just ended: "Send now" text first, then the queue in order
+  if (sendNowMessage) { const m = sendNowMessage; sendNowMessage = null; return send(m); }
+  const next = queue.shift();
+  if (next) { next.el.remove(); send(next.message); }
+}
+
+async function send(message) {
   renderText(bubble('me'), message); record('me', message); scroll();
   setBusy(true); runModel = ''; stderrText = '';
   try {
@@ -445,7 +487,8 @@ $('composer').addEventListener('submit', async (e) => {
   } catch (err) { sys(err.message, true); }
   setBusy(false); $('input').focus();
   if (archiveId) saveToArchive(true); // keep the archived copy up to date
-});
+  drain();
+}
 
 let runModel = '', stderrText = ''; // which model this run used (from Claude's init event) + its stderr, shown only if the run fails
 function handleEvent(ev) {
@@ -468,7 +511,11 @@ function handleEvent(ev) {
 $('input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('composer').requestSubmit(); }
 });
-$('stop').onclick = () => api('/api/stop', { method: 'POST' }).catch(() => {});
+$('stop').onclick = () => {
+  const text = $('input').value.trim();
+  if (text) { sendNowMessage = text; $('input').value = ''; updateStopButton(); sys('Stopping Claude — your message goes next.'); }
+  api('/api/stop', { method: 'POST' }).catch(() => {});
+};
 $('newChat').onclick = () => {
   if (busy) return sys('Stop Claude before starting a new chat.', true);
   fresh = true; log.innerHTML = ''; setConversation(null, null, []);

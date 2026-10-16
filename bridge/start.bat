@@ -19,5 +19,7 @@ if not exist "%AUTH%" (
   set /p MILLS_PW=Password:
   call node set-password.js %ARGS% "%%MILLS_PW%%" || (pause & exit /b 1)
 )
-node server.js %ARGS%
+rem run.js = supervisor: owns the tunnel, runs server.js under it and restarts it when asked
+rem (node restart.js) or when it crashes. Closing this window stops everything.
+node run.js %ARGS%
 pause
