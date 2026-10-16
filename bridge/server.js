@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mills bridge â€” runs on Gee's PC. Runs Claude Code (Gee's account) inside the Mills
+// Mills bridge — runs on Gee's PC. Runs Claude Code (Gee's account) inside the Mills
 // folder and exposes it to Alfreddo's browser through a Cloudflare quick tunnel.
 // Claude edits files on Alfreddo's PC through the "pc" MCP tools, which this bridge
 // relays to his browser (it holds the folder he opened).
@@ -14,19 +14,42 @@ const { spawn, execFile } = require('child_process');
 const ROOT = __dirname;
 const MILLS_DIR = path.join(ROOT, '..');
 const WEB_DIR = path.join(MILLS_DIR, 'web');
-const AUTH_FILE = path.join(ROOT, 'auth.json');
-const STATE_FILE = path.join(ROOT, 'state.json');
 const CONFIG_FILE = path.join(ROOT, 'config.json');
-const MCP_RUNTIME = path.join(ROOT, '.mcp-runtime.json');
-const ARCHIVE_DIR = path.join(MILLS_DIR, 'Archive'); // saved conversations, one JSON file each
+
+// ---------- profile ----------
+// One bridge process per person. With no --profile the bridge keeps its original layout
+// (Alfreddo: bridge/auth.json, bridge/state.json, Mills/Archive). Any other profile keeps its
+// own password, device lock, Claude session, tunnel address and Archive folder under
+// bridge/profiles/<name>/ and Mills/Archive/<name>/, so several people can use Mills at once,
+// each through their own bridge window and their own tunnel.
+const profileFlag = process.argv.indexOf('--profile');
+const PROFILE = (profileFlag >= 0 && process.argv[profileFlag + 1]) || process.env.MILLS_PROFILE || '';
+if (PROFILE && !/^[a-z0-9-]{1,32}$/.test(PROFILE)) {
+  console.error('Profile names use lowercase letters, digits and dashes only.');
+  process.exit(1);
+}
+const PROFILE_DIR = PROFILE ? path.join(ROOT, 'profiles', PROFILE) : ROOT;
+const AUTH_FILE = path.join(PROFILE_DIR, 'auth.json');
+const STATE_FILE = path.join(PROFILE_DIR, 'state.json');
+const MCP_RUNTIME = path.join(PROFILE_DIR, '.mcp-runtime.json');
+const ARCHIVE_DIR = PROFILE ? path.join(MILLS_DIR, 'Archive', PROFILE) : path.join(MILLS_DIR, 'Archive'); // saved conversations, one JSON file each
+const GIST_FILE = PROFILE ? `mills-bridge-${PROFILE}.json` : 'mills-bridge.json'; // what the web app looks for
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 function writeJson(file, data) { fs.writeFileSync(file, JSON.stringify(data, null, 2)); }
 
+const baseConfig = readJson(CONFIG_FILE, {});
+const profileConfig = PROFILE ? readJson(path.join(PROFILE_DIR, 'config.json'), null) : {};
+if (PROFILE && (!profileConfig || !profileConfig.port)) {
+  console.error(`Missing bridge/profiles/${PROFILE}/config.json with at least {"port": <number>, "user": "<name>"}.`);
+  process.exit(1);
+}
+if (PROFILE) { delete baseConfig.port; delete baseConfig.gistId; } // never share a port or a gist between profiles
 const config = Object.assign({
   port: 7777,
+  user: 'Alfreddo', // who sits at the browser for this bridge (shown to Claude and in messages)
   allowedOrigins: ['https://unity-lab-ai.github.io'],
   permissionMode: 'acceptEdits',
   allowedTools: ['mcp__pc', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
@@ -34,7 +57,8 @@ const config = Object.assign({
   tunnel: true,
   cloudflared: 'cloudflared',
   gistId: '',
-}, readJson(CONFIG_FILE, {}));
+}, baseConfig, profileConfig);
+if (PROFILE && !profileConfig.user) config.user = PROFILE[0].toUpperCase() + PROFILE.slice(1);
 const localOrigins = [`http://localhost:${config.port}`, `http://127.0.0.1:${config.port}`];
 
 let state = readJson(STATE_FILE, {});
@@ -66,21 +90,23 @@ function authed(req) {
 
 // ---------- claude runner + pc tool relay ----------
 const INTERNAL_SECRET = crypto.randomBytes(24).toString('hex');
+fs.mkdirSync(PROFILE_DIR, { recursive: true });
 writeJson(MCP_RUNTIME, {
   mcpServers: {
     pc: {
       command: process.execPath,
       args: [path.join(ROOT, 'pc-tools-mcp.js')],
-      env: { MILLS_BRIDGE: `http://127.0.0.1:${config.port}`, MILLS_INTERNAL: INTERNAL_SECRET },
+      env: { MILLS_BRIDGE: `http://127.0.0.1:${config.port}`, MILLS_INTERNAL: INTERNAL_SECRET, MILLS_USER: config.user },
     },
   },
 });
 
+const USER = config.user;
 const SYSTEM_APPEND = [
-  'You are talking with Alfreddo (Unity AI Lab engineer) through the Mills web interface, running on Gee\'s account.',
-  'Alfreddo has opened a folder on HIS OWN PC in his browser. To build or edit anything on his PC, use the mcp__pc__* tools',
-  '(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on Gee\'s Mills folder, not his PC.',
-  'Shell commands cannot run on Alfreddo\'s PC; if something needs running there, tell him exactly what to run.',
+  `You are talking with ${USER} (Unity AI Lab engineer) through the Mills web interface, running on Gee's account.`,
+  `${USER} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools`,
+  `(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on Gee's Mills folder, not ${USER}'s PC.`,
+  `Shell commands cannot run on ${USER}'s PC; if something needs running there, tell ${USER} exactly what to run.`,
 ].join(' ');
 
 let running = null;        // child process
@@ -175,7 +201,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/internal/pc-tool') {
       if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
       const { name, args } = await readBody(req);
-      if (!stream) return send(res, 200, { ok: false, error: "Alfreddo's browser is not connected." });
+      if (!stream) return send(res, 200, { ok: false, error: `${USER}'s browser is not connected.` });
       const id = crypto.randomBytes(8).toString('hex');
       const timer = setTimeout(() => { pending.delete(id); send(res, 200, { ok: false, error: 'Timed out waiting for the browser.' }); }, 120000);
       pending.set(id, { res, timer });
@@ -299,15 +325,18 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ---------- tunnel ----------
-// The web app finds the current tunnel URL in a gist named "Mills bridge address"
-// on Gee's GitHub account (created here on first run).
+// The web app finds the current tunnel URL in a gist named "Mills bridge address" (or
+// "Mills bridge address (<profile>)") on Gee's GitHub account, created here on first run.
+// Each profile has its own gist and its own file name (mills-bridge-<profile>.json), which is
+// how the web app tells the bridges apart.
 function publishUrl(publicUrl) {
   const content = JSON.stringify({ url: publicUrl, updated: new Date().toISOString() });
   const gistId = config.gistId || state.gistId;
+  const description = 'Mills bridge address' + (PROFILE ? ` (${PROFILE})` : '');
   const args = gistId
-    ? ['api', '-X', 'PATCH', `gists/${gistId}`, '-f', `files[mills-bridge.json][content]=${content}`]
-    : ['api', '-X', 'POST', 'gists', '-f', 'description=Mills bridge address', '-F', 'public=true',
-       '-f', `files[mills-bridge.json][content]=${content}`, '--jq', '.id'];
+    ? ['api', '-X', 'PATCH', `gists/${gistId}`, '-f', `files[${GIST_FILE}][content]=${content}`]
+    : ['api', '-X', 'POST', 'gists', '-f', `description=${description}`, '-F', 'public=true',
+       '-f', `files[${GIST_FILE}][content]=${content}`, '--jq', '.id'];
   execFile('gh', args, (err, stdout) => {
     if (err) return console.log('[mills] Could not publish tunnel URL (is gh logged in?): ' + err.message);
     if (!gistId) { state.gistId = stdout.trim(); saveState(); }
@@ -329,15 +358,15 @@ function startTunnel() {
 }
 
 server.listen(config.port, '127.0.0.1', () => {
-  console.log(`[mills] Bridge running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);
-  console.log(`[mills] Device lock: ${state.lockedDevice ? 'claimed ' + state.lockedAt : 'unclaimed â€” first sign-in claims it'}`);
-  if (!fs.existsSync(AUTH_FILE)) console.log('[mills] WARNING: no bridge/auth.json â€” run "node set-password.js <password>" first.');
+  console.log(`[mills] Bridge for ${USER}${PROFILE ? ` (profile "${PROFILE}")` : ''} running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);
+  console.log(`[mills] Device lock: ${state.lockedDevice ? 'claimed ' + state.lockedAt : 'unclaimed — first sign-in claims it'}`);
+  if (!fs.existsSync(AUTH_FILE)) console.log(`[mills] WARNING: no ${path.relative(MILLS_DIR, AUTH_FILE).replace(/\\/g, '/')} — run "node set-password.js${PROFILE ? ' --profile ' + PROFILE : ''} <password>" first.`);
   if (config.tunnel && !process.argv.includes('--no-tunnel')) startTunnel();
 });
 server.on('error', (e) => {
   if (e.code !== 'EADDRINUSE') throw e;
-  console.log(`[mills] Mills is ALREADY RUNNING in another window (port ${config.port} is taken).`);
-  console.log('[mills] Nothing to do: close this window. To restart, close every Mills Bridge window first, then run start.bat once.');
+  console.log(`[mills] Mills${PROFILE ? ` for ${USER}` : ''} is ALREADY RUNNING in another window (port ${config.port} is taken).`);
+  console.log(`[mills] Nothing to do: close this window. To restart, close every "Mills Bridge: ${USER}" window first, then run ${PROFILE ? `start.bat ${PROFILE}` : 'start.bat'} once.`);
   process.exit(1);
 });
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));

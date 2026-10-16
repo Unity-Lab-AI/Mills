@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 // MCP stdio server launched by Claude Code. Each tool call is relayed to the Mills
-// bridge, which forwards it to Alfreddo's browser; the browser performs it on the
-// folder he opened on his PC and posts the result back.
+// bridge, which forwards it to the user's browser; the browser performs it on the
+// folder they opened on their PC and posts the result back.
 'use strict';
 
 const BRIDGE = process.env.MILLS_BRIDGE || 'http://127.0.0.1:7777';
 const SECRET = process.env.MILLS_INTERNAL || '';
+const USER = process.env.MILLS_USER || 'Alfreddo'; // whose browser (and PC) this bridge is wired to
 
-const pathProp = { path: { type: 'string', description: 'Path relative to the folder Alfreddo opened. Use "" for the folder itself.' } };
+const pathProp = { path: { type: 'string', description: `Path relative to the folder ${USER} opened. Use "" for the folder itself.` } };
 const TOOLS = [
-  { name: 'list', description: "List files and folders in a directory on Alfreddo's PC.", inputSchema: { type: 'object', properties: pathProp } },
-  { name: 'read', description: "Read a text file on Alfreddo's PC.", inputSchema: { type: 'object', properties: pathProp, required: ['path'] } },
-  { name: 'write', description: "Create or overwrite a text file on Alfreddo's PC (parent folders are created).", inputSchema: { type: 'object', properties: { ...pathProp, content: { type: 'string' } }, required: ['path', 'content'] } },
-  { name: 'delete', description: "Delete a file or folder (recursively) on Alfreddo's PC.", inputSchema: { type: 'object', properties: pathProp, required: ['path'] } },
-  { name: 'mkdir', description: "Create a folder on Alfreddo's PC.", inputSchema: { type: 'object', properties: pathProp, required: ['path'] } },
+  { name: 'list', description: `List files and folders in a directory on ${USER}'s PC.`, inputSchema: { type: 'object', properties: pathProp } },
+  { name: 'read', description: `Read a text file on ${USER}'s PC.`, inputSchema: { type: 'object', properties: pathProp, required: ['path'] } },
+  { name: 'write', description: `Create or overwrite a text file on ${USER}'s PC (parent folders are created).`, inputSchema: { type: 'object', properties: { ...pathProp, content: { type: 'string' } }, required: ['path', 'content'] } },
+  { name: 'delete', description: `Delete a file or folder (recursively) on ${USER}'s PC.`, inputSchema: { type: 'object', properties: pathProp, required: ['path'] } },
+  { name: 'mkdir', description: `Create a folder on ${USER}'s PC.`, inputSchema: { type: 'object', properties: pathProp, required: ['path'] } },
 ];
 
 function reply(id, result) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n'); }
