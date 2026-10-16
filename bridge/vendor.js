@@ -69,13 +69,22 @@ function check() {
   return bad;
 }
 
-(async () => {
-  if (process.argv.includes('--check')) { process.exit(check() ? 1 : 0); }
+async function installAll(log = console.log) {
   const manifest = fs.existsSync(MANIFEST) ? JSON.parse(fs.readFileSync(MANIFEST, 'utf8')) : {};
   for (const [name, spec] of Object.entries(LIBS)) {
     const rec = await install(name, spec);
     manifest[name] = rec;
-    console.log(`${name}@${rec.version} → web/vendor/${rec.file} (${(rec.bytes / 1024).toFixed(0)} KB, sha256 ${rec.sha256.slice(0, 12)}…)`);
+    log(`${name}@${rec.version} → web/vendor/${rec.file} (${(rec.bytes / 1024).toFixed(0)} KB, sha256 ${rec.sha256.slice(0, 12)}…)`);
   }
   fs.writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + '\n');
-})().catch((e) => { console.error('vendor: ' + e.message); process.exit(1); });
+  return manifest;
+}
+// Also used by bridge/test/regress.js --install-vendor (the runner is a command Claude may run from a Work session).
+module.exports = { installAll, check, LIBS, VENDOR_DIR, MANIFEST };
+
+if (require.main === module) {
+  (async () => {
+    if (process.argv.includes('--check')) { process.exit(check() ? 1 : 0); }
+    await installAll();
+  })().catch((e) => { console.error('vendor: ' + e.message); process.exit(1); });
+}

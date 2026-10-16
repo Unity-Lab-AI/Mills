@@ -11,6 +11,9 @@
 //   node bridge/test/regress.js            full run, exit code 1 if anything failed
 //   node bridge/test/regress.js --keep     keep the scratch folder for inspection
 //   node bridge/test/regress.js --no-prod  skip the read-only production checks
+//   node bridge/test/regress.js --install-vendor
+//                                          first fetch + integrity-check the vendored browser libraries
+//                                          (web/vendor, via bridge/vendor.js), then run the checks
 'use strict';
 
 const fs = require('fs');
@@ -1113,6 +1116,7 @@ async function run() {
 (async () => {
   let code = 0;
   try {
+    if (process.argv.includes('--install-vendor')) { console.log('Installing vendored libraries (bridge/vendor.js)…'); await require(path.join(BRIDGE, 'vendor.js')).installAll(); console.log(''); }
     await setup();
     console.log(`Throwaway hub: ${SCRATCH} on port ${PORT} (no tunnel). Production is only read.\n`);
     if (!(await startHub())) throw new Error('throwaway hub did not start; see ' + path.join(SCRATCH, 'hub.log'));
