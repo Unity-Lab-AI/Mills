@@ -80,7 +80,7 @@
 <body>
 
 <form id="login" class="center">
-  <h1>Mills</h1>
+  <h1 id="title">Mills</h1>
   <p>Sign in to talk to Claude and build on your PC.</p>
   <input id="password" type="password" placeholder="Password" autocomplete="current-password" autofocus>
   <button type="submit" id="signin">Sign in</button>
@@ -90,7 +90,7 @@
 
 <div id="shell" hidden>
   <header>
-    <b>Mills</b>
+    <b id="brand">Mills</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
@@ -131,7 +131,14 @@
 
 <script>
 const GH_USER = 'G-Fourteen';
+// Which bridge this page talks to. No ?user= → Alfreddo's bridge (the original one).
+// ?user=sponge → the bridge Gee started with "start.bat sponge" (own password, lock, tunnel, Archive).
+const USER = (new URLSearchParams(location.search).get('user') || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 32);
+const USER_NAME = USER ? USER[0].toUpperCase() + USER.slice(1) : 'Alfreddo';
+const GIST_FILE = USER ? `mills-bridge-${USER}.json` : 'mills-bridge.json';
+const TOKEN_KEY = USER ? `mills.token.${USER}` : 'mills.token';
 const $ = (id) => document.getElementById(id);
+if (USER) { document.title = `Mills · ${USER_NAME}`; $('title').textContent = `Mills · ${USER_NAME}`; $('brand').textContent = `Mills · ${USER_NAME}`; }
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -163,17 +170,18 @@ applyTheme(store.get('mills.theme'));
 // Stable per-browser device id — Mills locks itself to the first device that signs in.
 let deviceId = store.get('mills.device');
 if (!deviceId) { deviceId = crypto.randomUUID() + crypto.randomUUID(); store.set('mills.device', deviceId); }
-let token = sessionStorage.getItem('mills.token');
+let token = sessionStorage.getItem(TOKEN_KEY);
 let base = null;
 
 // ---------- find the bridge (its tunnel address changes each time Gee starts it) ----------
+// Each bridge publishes its own gist file: mills-bridge.json (Alfreddo) or mills-bridge-<user>.json.
 async function findBridge() {
   if (location.hostname === 'localhost' || location.hostname.endsWith('trycloudflare.com')) return location.origin;
   const list = await fetch(`https://api.github.com/users/${GH_USER}/gists?per_page=100`).then((r) => r.json());
-  const gist = Array.isArray(list) && list.find((g) => g.files && g.files['mills-bridge.json']);
+  const gist = Array.isArray(list) && list.find((g) => g.files && g.files[GIST_FILE]);
   if (!gist) throw new Error('Mills is not running yet.');
   const full = await fetch(gist.url).then((r) => r.json());
-  const url = JSON.parse(full.files['mills-bridge.json'].content).url;
+  const url = JSON.parse(full.files[GIST_FILE].content).url;
   if (!url) throw new Error('Mills is not running yet.');
   return url;
 }
@@ -216,7 +224,7 @@ $('login').addEventListener('submit', async (e) => {
   if (!base && !(await connect())) { $('loginErr').textContent = 'Mills is offline — ask Gee to start it.'; return; }
   try {
     const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ password: $('password').value, deviceId }) });
-    token = data.token; sessionStorage.setItem('mills.token', token);
+    token = data.token; sessionStorage.setItem(TOKEN_KEY, token);
     $('password').value = '';
     enter();
   } catch (err) { $('loginErr').textContent = err.message; }
@@ -226,12 +234,12 @@ function enter() {
   restoreFolder();
 }
 function signOut() {
-  token = null; sessionStorage.removeItem('mills.token');
+  token = null; sessionStorage.removeItem(TOKEN_KEY);
   $('shell').hidden = true; $('login').hidden = false;
 }
 $('logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); } catch {} signOut(); };
 
-// ---------- folder on Alfreddo's PC (File System Access API) ----------
+// ---------- folder on the user's PC (File System Access API) ----------
 let rootHandle = null;
 const idb = {
   open() { return new Promise((ok, no) => { const r = indexedDB.open('mills', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }); },
@@ -270,7 +278,7 @@ function parts(p) {
   return segs;
 }
 async function dirAt(segs, create = false) {
-  if (!rootHandle || $('pickFolder').textContent.startsWith('Reopen')) throw new Error('No folder is open on Alfreddo\'s PC yet. Ask him to click "Open folder on my PC".');
+  if (!rootHandle || $('pickFolder').textContent.startsWith('Reopen')) throw new Error(`No folder is open on ${USER_NAME}'s PC yet. Ask them to click "Open folder on my PC".`);
   let d = rootHandle;
   for (const s of segs) d = await d.getDirectoryHandle(s, { create });
   return d;

@@ -14,3 +14,9 @@ bridge/workspace/
 node_modules/
 bridge/auth.json
 bridge/.mcp-runtime.json
+
+# Per-profile runtime state (one profile per extra person, e.g. bridge/profiles/sponge/).
+# profiles/<name>/config.json (port + display name) stays tracked.
+bridge/profiles/*/auth.json
+bridge/profiles/*/state.json
+bridge/profiles/*/.mcp-runtime.json
