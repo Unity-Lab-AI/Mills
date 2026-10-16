@@ -116,6 +116,10 @@ On disk, the `mills` account is `bridge/auth.json` + `bridge/state.json` + `Mill
    - **Weather and news** where you are: your rough place comes from your connection (or 📍 Share location for the exact one); weather from Open-Meteo, headlines from Google News, no keys.
    - Host setup: Ollama installed. The hub starts `ollama serve` itself and loads `unity-brain` from its Modelfile once (`assistant.modelfile` in `bridge/config.json`, default `../Backrooms/models/unity-brain/Modelfile` next to the Mills folder). Her persona text is `bridge/assistant-persona.txt` on the host (never committed); her look in pictures is `assistant.selfieLook`.
 
+### Is my message being worked on?
+
+Every message you send shows a status line under it. **Work:** *Queued* (waits for the current reply), *Claude is working on this… 1 min 20 s*, then *Done in 42 s*, *Stopped* or *Failed* (with the reason). **Unity section:** *Unity is working on this…* then *Done*, *Stopped* or *Failed*. **Chat, a message with @unity:** *Sent to Unity, waiting…*, *Unity is answering…* while she types, *Unity answered* once her reply is in, or *No answer from Unity yet* after 3 minutes.
+
 ## Publishing updates
 
 The app is published from `main` (GitHub Pages deploys `web/`). Work follows Git Flow: `feature/<name>` from `develop`, merged `--no-ff` into `develop`, then `develop` into `main`. The Pages workflow fills in the gist owner from the `MILLS_GIST_OWNER` repository variable (Settings → Secrets and variables → Actions → Variables), so no account handle lives in the source. Never commit `auth.json` / `state.json`, `bridge/profiles/`, `bridge/hub-state.json`, `Archive/`, `Chat/`, logs or `.claude/` (all kept out by `.gitignore`).
