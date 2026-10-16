@@ -223,6 +223,7 @@
   #assistLog { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
   #assistForm { display: flex; gap: .5rem; padding: .6rem 1rem; border-top: 1px solid var(--line); }
   #assistForm textarea { flex: 1; resize: none; min-height: 2.6rem; max-height: 10rem; }
+  .hostImg { display: block; max-width: min(100%, 420px); max-height: 60vh; border-radius: 8px; margin: .3rem 0; cursor: pointer; }
   .confirmCard { align-self: flex-start; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: .6rem .8rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   #assistNotice { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; display: flex; flex-direction: column; gap: .5rem; }
   #assistNotice div { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: .6rem .8rem; max-width: 360px; cursor: pointer; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
@@ -716,7 +717,8 @@ $('assistForm').addEventListener('submit', async (e) => {
         else if (ev.type === 'say') { said.push(ev.text); if (!shown) renderText(bubble, said.join(' ')); }
         else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = '⚙ ' + ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
-        else if (ev.type === 'final') renderText(bubble, ev.text || shown || said.join(' ') || '(done)');
+        else if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
+[[image:${r}]]`).join(''));
         else if (ev.type === 'error') { renderText(bubble, ev.text); bubble.className = 'sys bad'; }
       }
       $('assistLog').scrollTop = $('assistLog').scrollHeight;
@@ -749,7 +751,7 @@ $('login').addEventListener('submit', async (e) => {
   const username = $('username').value.trim().toLowerCase(), password = $('password').value;
   if (!username || !password) { $('loginErr').textContent = 'Enter your username and password.'; return; }
   try {
-    const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ username, password, deviceId }) });
+    const data = await json('/api/login', { method: 'POST', body: JSON.stringify({ username, password, deviceId, client: { tz: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: navigator.language } }) });
     token = data.token; sessionStorage.setItem(TOKEN_KEY, token); store.set('mills.username', data.username);
     $('password').value = '';
     await enter();
@@ -773,6 +775,7 @@ async function enter() {
   startRoomPolling();
   callPollLoop();
   startAssistNotices();
+  json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
 }
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
@@ -934,6 +937,7 @@ function line(cls, text) { const d = document.createElement('div'); d.className 
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
 function renderText(el, text) {
   el.textContent = '';
+  if (/\[\[image:/.test(text)) return withImages(el, text, (e, t) => renderText(e, t));
   text.split(/```[^\n]*\n?/).forEach((part, i) => {
     if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.appendChild(pre); }
     else if (part) el.appendChild(document.createTextNode(part));
@@ -1474,7 +1478,24 @@ async function ingest(m, live) {
   for (const other of msgs.values()) if (other.r === m.seq && other.el) renderMsg(other); // refresh quotes of this message
   if (live && !prev && m.from !== me.username && !m.deleted) notify(rec);
 }
-function renderRich(el, text) { // ``` code blocks + highlighted @mentions
+const imgCache = new Map();
+function hostImage(ref) { // a picture made by the host's image engine, loaded with the sign-in token
+  const img = document.createElement('img'); img.className = 'hostImg'; img.alt = 'picture from Unity';
+  const p = imgCache.get(ref) || api('/api/assistant/image?ref=' + encodeURIComponent(ref)).then((r) => (r.ok ? r.blob() : Promise.reject(new Error('gone')))).then((b) => URL.createObjectURL(b));
+  imgCache.set(ref, p);
+  p.then((u) => { img.src = u; img.onclick = () => { const a = document.createElement('a'); a.href = u; a.download = 'unity-' + ref.split('/').pop() + '.png'; a.click(); }; img.title = 'Click to download'; })
+   .catch(() => { img.replaceWith(document.createTextNode('(picture no longer on the host)')); imgCache.delete(ref); });
+  return img;
+}
+function withImages(el, text, render) { // split out [[image:ref]] markers, render the rest as usual
+  const parts = String(text).split(/\[\[image:([a-z0-9-]+\/[a-z0-9-]+)\]\]/);
+  parts.forEach((part, i) => { if (i % 2) el.append(hostImage(part)); else if (part.trim()) { const span = document.createElement('div'); render(span, part.replace(/\n+$/, '')); el.append(span); } });
+}
+function renderRich(el, text) { // ``` code blocks + highlighted @mentions + host pictures
+  if (/\[\[image:/.test(text)) return withImages(el, text, renderRichText);
+  renderRichText(el, text);
+}
+function renderRichText(el, text) {
   text.split(/```[^\n]*\n?/).forEach((part, i) => {
     if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.append(pre); return; }
     for (const bit of part.split(/(@[\w.-]+)/)) {
