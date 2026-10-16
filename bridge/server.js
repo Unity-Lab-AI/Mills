@@ -17,6 +17,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { ROOT, MILLS_DIR, readJson, writeJson, loadProfile, allProfiles, hashPassword } = require('./common');
+const worktree = require('./worktree');
 
 const WEB_DIR = path.join(MILLS_DIR, 'web');
 const HUB = loadProfile('');          // hub-wide config: port, origins, tools, models, tunnel
@@ -37,13 +38,31 @@ const newPassword = () => crypto.randomBytes(15).toString('base64url'); // 20 ch
 
 // ---------- accounts ----------
 const accounts = new Map(); // username -> account
-function systemPrompt(name) {
+// Where an account's Work runs happen: "own" = its git worktree of Mills (Mills-worktrees/<username>,
+// branch work/<username>) so people changing Mills at the same time never overlap; "shared" = the
+// host's Mills folder itself, which everyone shares.
+const workspaceOf = (acct) => (acct.state.workspace === 'shared' ? 'shared' : 'own');
+function workDir(acct) {
+  if (workspaceOf(acct) === 'shared') return { dir: MILLS_DIR, branch: '' };
+  return worktree.ensure(acct.username);
+}
+const hubLaws = () => { try { return fs.readFileSync(path.join(MILLS_DIR, 'CLAUDE.md'), 'utf8'); } catch { return ''; } };
+function systemPrompt(acct, wd) {
+  const name = acct.display;
+  const where = wd.branch
+    ? [`For work on the Mills project itself you are in ${name}'s OWN git worktree: ${wd.dir}, branch ${wd.branch}.`,
+       `Commit only on ${wd.branch}; never check out other branches here and never touch other people's worktrees in ${worktree.WT_ROOT}.`,
+       `Only when ${name} asks you to merge into develop, run: node "${path.join(MILLS_DIR, 'bridge', 'worktree.js')}" merge ${acct.username}`,
+       `(commit first; on a conflict run "... sync ${acct.username}", resolve, commit, merge again). Going live (develop → main in the host folder + hub restart) only when asked.`]
+    : [`You are in the SHARED Mills folder (${MILLS_DIR}), the running hub's own checkout that everyone shares: follow Git Flow (feature/* off develop) and leave no uncommitted changes behind.`];
   return [
-    `You are talking with ${name} (Unity AI Lab engineer) through the Mills web interface, running on the host's Claude account.`,
+    `You are talking with ${name} (username "${acct.username}"${acct.admin ? ', admin' : ''}, Unity AI Lab engineer) through the Mills web interface, running on the host's Claude account.`,
+    `Every message in this conversation comes from ${name}; address them by name and keep their work separate from everyone else's.`,
+    ...where,
     `${name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools`,
     `(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's Mills folder, not ${name}'s PC.`,
     `Shell commands cannot run on ${name}'s PC; if something needs running there, tell ${name} exactly what to run.`,
-  ].join(' ');
+  ].join(' ') + (hubLaws() ? '\n\n' + hubLaws() : '');
 }
 function loadAccounts() {
   const seen = new Set();
@@ -103,10 +122,16 @@ const failures = new Map(); // username -> { count, blockedUntil }
 // ---------- claude runner + pc tool relay (one per account) ----------
 function emit(acct, ev) { if (acct.stream) acct.stream.write(JSON.stringify(ev) + '\n'); }
 function runClaude(acct, message, fresh, res) {
+  let wd;
+  try { wd = workDir(acct); } catch (e) {
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+    res.end(JSON.stringify({ type: 'bridge_error', text: 'Could not prepare your worktree: ' + e.message + ' (switch to the shared folder or ask the host).' }) + '\n');
+    return;
+  }
   const args = ['-p', '--output-format', 'stream-json', '--verbose',
     '--permission-mode', config.permissionMode,
     '--mcp-config', acct.files.MCP_RUNTIME, '--strict-mcp-config',
-    '--append-system-prompt', systemPrompt(acct.display)];
+    '--append-system-prompt', systemPrompt(acct, wd)];
   if (config.allowedTools.length) args.push('--allowedTools', config.allowedTools.join(','));
   const model = effectiveModel(acct); // read per run, so a dropdown change lands on the very next message
   if (model) args.push('--model', model);
@@ -116,7 +141,7 @@ function runClaude(acct, message, fresh, res) {
   // Claude (bridge/test/fake-claude.js); production config leaves them unset → the real `claude`.
   const command = config.claudeCommand || 'claude';
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
-  const child = spawn(command, [...pre, ...args], { cwd: MILLS_DIR, windowsHide: true });
+  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true });
   acct.running = child; acct.stream = res;
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
   const keepAlive = setInterval(() => emit(acct, { type: 'ping' }), 15000);
@@ -401,7 +426,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
-        models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel });
+        models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct) });
     }
     if (p === '/api/logout' && req.method === 'POST') {
       sessions.delete((req.headers.authorization || '').slice(7)); saveSessions();
@@ -415,6 +440,16 @@ const server = http.createServer(async (req, res) => {
       if (model) acct.state.model = model; else delete acct.state.model;
       saveState(acct);
       return send(res, 200, { model: acct.state.model || '', effective: effectiveModel(acct) });
+    }
+    if (p === '/api/workspace' && req.method === 'POST') {
+      const { workspace } = await readBody(req);
+      if (workspace !== 'own' && workspace !== 'shared') return send(res, 400, { error: 'Unknown workspace.' });
+      if (acct.running) return send(res, 409, { error: 'Wait for the current reply (or stop it) before switching.' });
+      let dir = MILLS_DIR, branch = '';
+      if (workspace === 'own') { try { ({ dir, branch } = worktree.ensure(acct.username)); } catch (e) { return send(res, 500, { error: 'Could not prepare your worktree: ' + e.message }); } }
+      if (workspaceOf(acct) !== workspace) delete acct.state.claudeSessionId; // a Claude session belongs to one folder
+      acct.state.workspace = workspace; saveState(acct);
+      return send(res, 200, { workspace, dir, branch });
     }
     if (p === '/api/chat' && req.method === 'POST') {
       if (acct.running) return send(res, 409, { error: 'Claude is already working. Stop it first.' });

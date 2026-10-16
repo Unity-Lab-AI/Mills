@@ -184,6 +184,8 @@
     <button class="ghost" id="saveChat" title="Save this conversation to the Archive">Save to Archive</button>
     <button class="ghost" id="openArchive" title="Saved conversations">Archive</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
+    <select id="workspace" title="Where Claude works on the Mills project: your own git worktree (nobody else's changes get in the way) or the shared Mills folder everyone uses" hidden>
+      <option value="own">My worktree</option><option value="shared">Shared folder</option></select>
     <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
       <div id="themeMenu" hidden></div></span>
     <button class="ghost" id="logout">Sign out</button>
@@ -345,6 +347,7 @@ async function enter() {
   $('goAdmin').hidden = !me.admin;
   $('login').hidden = true;
   showModels(me);
+  if (me.workspace) { $('workspace').value = me.workspace; $('workspace').hidden = false; }
   showScreen('menu');
   startRoomPolling();
 }
@@ -539,6 +542,15 @@ function showModels(d) {
   for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
   sel.value = d.model || ''; sel.hidden = false;
 }
+$('workspace').onchange = async () => {
+  const sel = $('workspace'), want = sel.value;
+  try {
+    const d = await json('/api/workspace', { method: 'POST', body: JSON.stringify({ workspace: want }) });
+    fresh = true; // a Claude session belongs to one folder: the next message starts a new one
+    sys(d.workspace === 'own' ? 'Working in your own worktree: ' + d.dir + ' (branch ' + d.branch + '). Ask Claude to "merge into develop" when you are done. Next message starts a new chat.'
+      : 'Working in the shared Mills folder everyone uses. Next message starts a new chat.');
+  } catch (err) { sel.value = want === 'own' ? 'shared' : 'own'; sys(err.message, true); }
+};
 $('model').onchange = async () => {
   try {
     const d = await json('/api/model', { method: 'POST', body: JSON.stringify({ model: $('model').value }) });
