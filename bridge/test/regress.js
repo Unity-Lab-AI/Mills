@@ -664,6 +664,21 @@ async function run() {
     const mLoads = mOk && /mermaid/.test(fs.readFileSync(mFile, 'utf8').slice(0, 2000));
     check('R73', 'vendored Mermaid 11 present, matching the sha256 in web/vendor/VENDOR.json, served from the site itself (CSP allows no outside scripts)', mOk && mLoads, `mermaid@${mm.version || '?'}`);
   }
+  const boardJs76 = fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8');
+  const missing76 = [
+    [/viewport-fit=cover/.test(html), 'viewport-fit'],
+    [/@media \(max-width: 700px\) \{/.test(html) && /input, textarea, select \{ font-size: 16px; \}/.test(html), 'phone breakpoint + no zoom-on-focus'],
+    [/@media \(pointer: coarse\) \{/.test(html) && /button \{ min-height: 2\.5rem; \}/.test(html), 'touch-sized buttons'],
+    [/@media \(max-width: 1366px\)/.test(html), 'laptop breakpoint'],
+    [/#roomSide \{ position: absolute;/.test(html) && /const isNarrow = \(\) => window\.matchMedia\('\(max-width: 700px\)'\)/.test(html) && /if \(isNarrow\(\)\) \$\('roomCore'\)\.classList\.add\('noside'\)/.test(html), 'chat drawer on phones'],
+    [/#bdDetail \{ position: fixed; inset: 0;/.test(html) && /scroll-snap-type: x mandatory/.test(html), 'board sheet + column snap'],
+    [/function renderAgenda\(/.test(boardJs76) && /#calGrid\.agenda/.test(html), 'calendar agenda on phones'],
+    [/env\(safe-area-inset-bottom\)/.test(html), 'safe-area insets'],
+    [/#adminBody table \{ display: block; overflow-x: auto;/.test(html), 'admin table scrolls'],
+    [/\.modal \.box, #archive \.box \{ width: 100vw;/.test(html), 'full-screen dialogs on phones'],
+    [/\.floatWin \{ left: 8px !important;/.test(html), 'floating windows fill phones'],
+  ].filter(([ok]) => !ok).map(([, n]) => n);
+  check('R76', '[static] responsive: phone breakpoint (drawer chat list, board sheet + swipe columns, calendar agenda, full-screen dialogs, stacked Work panes, safe-area padding, no zoom-on-focus), touch-sized controls, laptop header tightening, admin table scrolls', !missing76.length, missing76.join(', '));
   check('R66', '[static] CSP, hub address pinned to the tunnel, key pinning (TOFU + Trust new key), call lip-sync + ICE batching, room long poll, v4 deflate + clips fetched on play', !missing66.length, missing66.join(', '));
   // Calls: the hub only tracks who is in which call and relays opaque (encrypted) set-up messages.
   const jA = await call('/api/call/join', A, { conv: 'room', cam: false, mic: true });

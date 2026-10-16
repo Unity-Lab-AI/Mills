@@ -205,6 +205,8 @@
     if (!B.cal) { const d = new Date(); B.cal = new Date(d.getFullYear(), d.getMonth(), 1); }
     const m = B.cal, grid = $('calGrid'); grid.textContent = '';
     $('calTitle').textContent = m.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    if (window.matchMedia('(max-width: 700px)').matches) return renderAgenda(m, grid); // phone: a list of days, not 7 cramped columns
+    grid.classList.remove('agenda');
     const first = new Date(m.getFullYear(), m.getMonth(), 1), lead = (first.getDay() + 6) % 7; // weeks start on Monday
     const start = new Date(first.getFullYear(), first.getMonth(), 1 - lead);
     for (let i = 0; i < 7; i++) grid.append(el('div', 'calHead', new Date(2024, 0, 1 + i).toLocaleDateString(undefined, { weekday: 'short' })));
@@ -227,6 +229,34 @@
       grid.append(cell);
     }
   }
+
+  function renderAgenda(m, grid) { // every day of the month that has a task, plus today; tap a day to add one
+    grid.classList.add('agenda');
+    const today = startOfDay(Date.now()), last = new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate();
+    const byDay = new Map();
+    for (const t of B.data.tasks) if (t.dueAt) { const k = startOfDay(t.dueAt); (byDay.get(k) || byDay.set(k, []).get(k)).push(t); }
+    let any = false;
+    for (let d = 1; d <= last; d++) {
+      const day = new Date(m.getFullYear(), m.getMonth(), d), k = day.getTime(), list = byDay.get(k) || [];
+      if (!list.length && k !== today) continue;
+      any = true;
+      const cell = el('div', 'agDay' + (k === today ? ' today' : ''));
+      cell.append(el('div', 'calNum', day.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) + (k === today ? ' · today' : '')));
+      for (const t of list.sort((a, b) => (b.priority || 0) - (a.priority || 0))) {
+        const c = el('div', 'calTask s-' + t.status + ' ' + dueClass(t));
+        if (t.recur) c.append(ic('repeat', 'lead'));
+        c.append(t.title + (t.assignee ? ' · ' + personName(t.assignee) : ''));
+        if (t.assignee) c.style.borderLeftColor = colorOf(t.assignee);
+        c.onclick = (e) => { e.stopPropagation(); B.board = t.board; showScreen('board'); openDetail(t.id); };
+        cell.append(c);
+      }
+      if (!list.length) cell.append(el('div', 'bdNone', 'nothing due · tap to add'));
+      cell.onclick = () => newTask('todo', new Date(day.getFullYear(), day.getMonth(), day.getDate(), 17).getTime());
+      grid.append(cell);
+    }
+    if (!any) grid.append(el('div', 'bdNone', 'Nothing due this month.'));
+  }
+  window.matchMedia('(max-width: 700px)').addEventListener('change', () => { if (B.data && !$('cal').hidden) renderCal(); });
 
   // ── Work: My tasks pane ──
   function renderTaskPane() {
