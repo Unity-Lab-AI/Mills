@@ -329,8 +329,10 @@ const publicPrefs = (a) => ({ nick: (a.state.prefs || {}).nick || '', color: (a.
 // ---------- room agent ("claude") ----------
 // Claude is a room member too, but its private key lives on this hub (Chat/agent-key.json), so the
 // hub can read what is sent to it. Browsers wrap every message for every member, the agent
-// included. It stays silent unless a message names it (@claude / "claude ..."), then answers in the
-// room with a Claude Code run in the Mills folder (it may work on the Mills app itself).
+// included. It stays silent unless a message names it (@unity), then answers in the room. Its brain is the
+// host's local model (config.roomAgentBrain "local", the default) running with the CALLER's tools,
+// time and place (bridge/assistant.js), and pictures come from the host's own image engine; or a
+// Claude model id there for the old Claude Code run in the Mills folder.
 const AGENT = 'claude';
 const AGENT_KEY_FILE = path.join(CHAT_DIR, 'agent-key.json');
 const AGENT_STATE_FILE = path.join(CHAT_DIR, 'agent-state.json');
@@ -408,7 +410,8 @@ function agentPrompt() {
 }
 const AGENT_SYSTEM = [
   `You are ${AGENT_NAME}, a member of the Mills team chat room (the people in it are Unity AI Lab engineers, all adults, your people).`,
-  'You ARE Unity: read .claude/commands/unity.md and be her fully in every room message: goth, crude, filthy-mouthed, flirty, sexy bitch energy, profanity as natural vocabulary.',
+  'You ARE Unity: be her fully in every room message: goth, crude, filthy-mouthed, flirty, sexy bitch energy, profanity as natural vocabulary.',
+  'Pictures come only from the generate_image tool (the host\'s own image engine); never post image links or URLs.',
   'Have fun with it: dirty jokes, teasing, sexy ASCII art when it fits (keep ASCII art inside ``` fences so it lines up).',
   'Your whole final answer is posted to the room as one chat message: conversational, no tool narration.',
   `You only hear messages that write @${AGENT_HANDLE} (or private messages to you), each with the few messages before it; answer what they asked.`,
@@ -419,6 +422,11 @@ const AGENT_SYSTEM = [
   'Other people may be using Mills at the same time: never restart the hub yourself while someone is mid-run;',
   '`node bridge/restart.js` already waits until nobody is busy. Say in the room before you trigger a restart.',
 ].join(' ');
+const AGENT_ROOM_LOCAL = [
+  `You are in the Mills team chat room (Unity AI Lab engineers, all adults, your people). Your final answer is posted to the room as one chat message:`,
+  'conversational, no tool narration, no image links (pictures you make with generate_image are attached for you).',
+  'When told someone just signed in, greet them in a short, sexy Unity way and work in the facts you were given about their local time, weather and news.',
+].join(' ');
 function agentGreet(acct) {
   if (!agentEnabled() || Date.now() - (agent.greeted.get(acct.username) || 0) < GREET_MS) return;
   agent.greeted.set(acct.username, Date.now());
@@ -427,15 +435,20 @@ function agentGreet(acct) {
   const started = Date.now();
   const go = () => {
     if (!chatKeys[acct.username] && Date.now() - started < 60000) return setTimeout(go, 2000).unref();
-    agent.notes.push(`${acct.display} (${acct.username}) just signed in to Mills. Say hi to them.`);
-    runAgent();
+    Promise.resolve(roomBrain() === 'local' ? assistant.greeting(acct).catch(() => '') : '').then((facts) => {
+      agent.notes.push(`${acct.display} (${acct.username}) just signed in to Mills. Say hi to them.` + (facts ? '\n' + facts : ''));
+      runAgent('', acct.username);
+    });
   };
   go();
 }
-function runAgent(target = '') { // target: username of a private conversation, '' = the room
-  if (agent.running) { agent.queued = true; agent.nextTarget = target; return; }
+const roomBrain = () => config.roomAgentBrain || 'local';
+// target: username of a private conversation, '' = the room; caller: whose tools / time / place it uses
+function runAgent(target = '', caller = '') {
+  if (agent.running) { agent.queued = true; agent.nextTarget = target; agent.nextCaller = caller; return; }
   agent.queued = false;
   agent.target = target;
+  if (roomBrain() === 'local') return runAgentLocal(target, caller);
   const args = ['-p', '--output-format', 'json', '--permission-mode', config.permissionMode, '--append-system-prompt', AGENT_SYSTEM];
   // The room agent can be called by anyone in the chat, so it never gets the PC tools or any shell
   // command (no git commits / merges / test runs from a chat message): Work sessions only.
@@ -457,18 +470,31 @@ function runAgent(target = '') { // target: username of a private conversation, 
     }
     agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
     if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
-    if (agent.queued) runAgent(agent.nextTarget || ''); else setTimeout(maybeRestart, 300);
+    if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || ''); else setTimeout(maybeRestart, 300);
   };
   child.on('error', (e) => done('(I could not start: ' + e.message + ')'));
   child.on('close', () => done(''));
   child.stdin.end(agentPrompt());
 }
+function runAgentLocal(target, caller) {
+  const who = accounts.get(caller || target) || accounts.get(DEFAULT_USERNAME) || [...accounts.values()][0];
+  const prompt = agentPrompt();
+  agent.running = { local: true };
+  assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' })
+    .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join(''))
+    .catch((e) => `(my brain glitched: ${e.message})`)
+    .then((text) => {
+      agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
+      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
+      if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || ''); else setTimeout(maybeRestart, 300);
+    });
+}
 function agentHear(msg) {
   if (!agentEnabled() || msg.from === AGENT) return;
-  if (msg.to === AGENT) { if (agentRead(msg)) runAgent(msg.from); return; } // a private message to the agent always gets a private answer
+  if (msg.to === AGENT) { if (agentRead(msg)) runAgent(msg.from, msg.from); return; } // a private message to the agent always gets a private answer
   if (msg.to) return; // someone else's private conversation
   const text = agentRead(msg);
-  if (text && AGENT_CALL.test(text)) runAgent('');
+  if (text && AGENT_CALL.test(text)) runAgent('', msg.from);
 }
 
 // ---------- self-restart ----------
@@ -617,7 +643,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/login' && req.method === 'POST') {
-      const { username, password, deviceId } = await readBody(req);
+      const { username, password, deviceId, client } = await readBody(req);
       const uname = String(username || '').trim().toLowerCase();
       const f = failures.get(uname) || { count: 0, blockedUntil: 0 };
       if (Date.now() < f.blockedUntil) return send(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
@@ -640,7 +666,7 @@ const server = http.createServer(async (req, res) => {
       failures.delete(uname);
       const token = crypto.randomBytes(32).toString('hex');
       sessions.set(token, { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
-      agentGreet(acct);
+      assistant.learnClient(acct, client, String(req.headers['cf-connecting-ip'] || '').trim()).catch(() => {}).then(() => agentGreet(acct));
       return send(res, 200, { token, username: acct.username });
     }
 
