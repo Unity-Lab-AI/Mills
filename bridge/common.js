@@ -35,8 +35,8 @@ function loadProfile(PROFILE) {
   const PROFILE_DIR = PROFILE ? path.join(ROOT, 'profiles', PROFILE) : ROOT;
   const baseConfig = readJson(path.join(ROOT, 'config.json'), {});
   const profileConfig = PROFILE ? readJson(path.join(PROFILE_DIR, 'config.json'), null) : {};
-  if (PROFILE && (!profileConfig || !profileConfig.port)) {
-    console.error(`Missing bridge/profiles/${PROFILE}/config.json with at least {"port": <number>, "user": "<name>"}.`);
+  if (PROFILE && !profileConfig) {
+    console.error(`Missing bridge/profiles/${PROFILE}/config.json (at least {"user": "<display name>"}).`);
     process.exit(1);
   }
   if (PROFILE) { delete baseConfig.port; delete baseConfig.gistId; } // never share a port or a gist between profiles
@@ -80,4 +80,13 @@ function allProfiles() {
   return ['', ...named];
 }
 
-module.exports = { ROOT, MILLS_DIR, readJson, writeJson, profileFromArgv, loadProfile, allProfiles };
+// scrypt password hash, the format auth.json has always used (N=16384 r=8 p=1, 16-byte salt).
+function hashPassword(password) {
+  const crypto = require('crypto');
+  const params = { N: 16384, r: 8, p: 1 };
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, 64, params);
+  return { ...params, salt: salt.toString('hex'), hash: hash.toString('hex') };
+}
+
+module.exports = { ROOT, MILLS_DIR, readJson, writeJson, profileFromArgv, loadProfile, allProfiles, hashPassword };

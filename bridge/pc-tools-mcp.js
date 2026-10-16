@@ -6,7 +6,8 @@
 
 const BRIDGE = process.env.MILLS_BRIDGE || 'http://127.0.0.1:7777';
 const SECRET = process.env.MILLS_INTERNAL || '';
-const USER = process.env.MILLS_USER || 'Alfreddo'; // whose browser (and PC) this bridge is wired to
+const USER = process.env.MILLS_USER || 'Alfreddo'; // display name of the person whose browser (and PC) this run is wired to
+const ACCOUNT = process.env.MILLS_ACCOUNT || ''; // their account username: tells the hub which browser to relay to
 
 const pathProp = { path: { type: 'string', description: `Path relative to the folder ${USER} opened. Use "" for the folder itself.` } };
 const TOOLS = [
@@ -23,7 +24,7 @@ function fail(id, code, message) { process.stdout.write(JSON.stringify({ jsonrpc
 async function callTool(name, args) {
   const res = await fetch(BRIDGE + '/internal/pc-tool', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': SECRET },
+    headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': SECRET, 'X-Mills-Account': ACCOUNT },
     body: JSON.stringify({ name, args: args || {} }),
   });
   return res.json();
