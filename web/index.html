@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Network reach of this page: itself, the hub (a Cloudflare tunnel) and the GitHub API that publishes
+     the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
+     anything except by loading an image; markdown images (https) are allowed for that reason only and
+     are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Mills</title>
 <style>
   :root {
@@ -28,6 +33,36 @@
   .err { color: var(--bad); font-size: .9rem; min-height: 1.2em; }
   .status { font-size: .8rem; color: var(--muted); }
   .status.on { color: var(--good); }
+  .status.on::before { content: ''; display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; background: var(--good); margin-right: .4rem; vertical-align: middle; box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); animation: livePulse 2s ease-out infinite; }
+  @keyframes livePulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); } 70% { box-shadow: 0 0 0 .5rem transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  /* ── motion: things ease in and respond to the hand, nothing jumps ── */
+  button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, transform .08s ease, box-shadow .15s ease; }
+  button:not(:disabled):hover { filter: brightness(1.08); }
+  button:not(:disabled):active { transform: scale(.97); }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
+  input, textarea, select { transition: border-color .15s ease, box-shadow .15s ease; }
+  input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+  .rmsg.new, .msg.claude, .msg.me { animation: msgIn .26s cubic-bezier(.2,.7,.2,1); }
+  #menu .choices button { transition: transform .12s ease, box-shadow .15s ease, background-color .15s ease; }
+  #menu .choices button:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,.28); }
+  .cv .dot { position: relative; transition: background-color .2s, opacity .2s; }
+  .cv .dot.on::after, .cv .dot.idle::after, .pdot.on::after, .pdot.idle::after { content: ''; position: absolute; right: -.15rem; bottom: -.15rem; width: .42rem; height: .42rem; border-radius: 50%; background: var(--good); border: 2px solid var(--panel); }
+  .cv .dot.idle::after, .pdot.idle::after { background: #fcc419; }
+  .cv .dot.off, .pdot.off { opacity: .4; }
+  .menuWho { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; max-width: min(560px, 92vw); margin: -.4rem 0 .2rem; }
+  .whoLbl { width: 100%; font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .whoChip { display: inline-flex; align-items: center; gap: .4rem; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem .2rem .45rem; font-size: .82rem; animation: msgIn .25s ease; }
+  .whoChip.off { color: var(--muted); } .whoChip small { color: var(--muted); font-size: .7rem; }
+  .pdot { position: relative; width: .7rem; height: .7rem; border-radius: 50%; flex: none; }
+  .roomTop .online { color: var(--good); }
+  .typingLine { display: flex; align-items: center; gap: .35rem; padding: .15rem .9rem; font-size: .76rem; color: var(--muted); font-style: italic; animation: msgIn .2s ease; }
+  .dots { display: inline-flex; gap: .2rem; margin-left: .35rem; align-items: center; }
+  .dots i { width: .32rem; height: .32rem; border-radius: 50%; background: currentColor; opacity: .35; animation: dotPulse 1.2s ease-in-out infinite; }
+  .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes dotPulse { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-.2rem); } }
+  .msg.thinking { color: var(--muted); font-style: italic; display: flex; align-items: center; animation: msgIn .2s ease; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
   #shell { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   header { display: flex; align-items: center; gap: .75rem; padding: .6rem 1rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -73,7 +108,9 @@
   .uTime { font-family: ui-monospace, Consolas, monospace; }
   .uItem.est .uTime::after { content: ' est'; color: var(--muted); font-size: .62rem; }
   .uMini { width: 2.6rem; height: .42rem; border-radius: 999px; background: color-mix(in srgb, var(--line) 80%, transparent); overflow: hidden; }
-  .uMini i, .uTrack i { display: block; height: 100%; width: 0; border-radius: inherit; transition: width .6s ease, background-color .6s ease, box-shadow .6s ease; }
+  .uMini i, .uTrack i { display: block; height: 100%; width: 0; border-radius: inherit; transition: width .25s linear, background-color .25s linear, box-shadow .25s linear; }
+  .uPctS { min-width: 2.6rem; text-align: right; font-family: ui-monospace, Consolas, monospace; font-weight: 600; }
+  .uItem.est .uPctS { color: var(--muted); font-weight: 400; }
   .uCtx { flex: 1; min-width: 9rem; }
   .uTrack { flex: 1; height: .62rem; border-radius: 999px; overflow: hidden; position: relative; background: color-mix(in srgb, var(--line) 80%, transparent); box-shadow: inset 0 1px 2px rgba(0,0,0,.35); }
   .uTrack i { position: relative; overflow: hidden; }
@@ -88,6 +125,128 @@
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
+  /* ── team board, calendar, Work "My tasks" (web/board.js) ── */
+  #board header select { max-width: 12rem; }
+  #bdFilter { width: min(280px, 30vw); }
+  .bdMine { display: flex; align-items: center; gap: .3rem; font-size: .85rem; white-space: nowrap; } .bdMine input { width: auto; }
+  .bdStale { color: var(--bad); font-size: .8rem; }
+  #bdMain { flex: 1; min-height: 0; display: flex; }
+  #bdCols { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: .6rem; padding: .7rem; overflow-x: auto; }
+  .bdCol { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .bdCol header { display: flex; align-items: center; gap: .45rem; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
+  .bdColName { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .bdCount { font-size: .72rem; color: var(--muted); }
+  .bdAdd { margin-left: auto; padding: .1rem .35rem; }
+  .bdCards { flex: 1; min-height: 3rem; overflow-y: auto; padding: .5rem; display: flex; flex-direction: column; gap: .45rem; border-radius: 0 0 10px 10px; transition: background .12s; }
+  .bdCards.target { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .bdNone { font-size: .78rem; color: var(--muted); text-align: center; padding: .6rem 0; }
+  .bdCard { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .55rem; cursor: pointer; display: flex; flex-direction: column; gap: .3rem; transition: border-color .12s, transform .12s; }
+  .bdCard:hover { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
+  .bdCard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .bdCard.drag { opacity: .45; } .bdCard.insert { box-shadow: 0 -3px 0 var(--accent); }
+  .bdCard.held { border-left: 3px solid #f59f00; } .bdCard.stale { border-left: 3px solid var(--bad); }
+  .bdTop { display: flex; align-items: center; gap: .35rem; font-size: .7rem; flex-wrap: wrap; }
+  .bdId { font-family: ui-monospace, Consolas, monospace; color: var(--muted); font-size: .7rem; }
+  .bdPri { border-radius: 4px; padding: 0 .3rem; font-weight: 700; color: #111; background: #ced4da; }
+  .bdPri.p3 { background: #ffd43b; } .bdPri.p4 { background: #ffa94d; } .bdPri.p5 { background: #ff6b6b; }
+  .bdDue { border-radius: 4px; padding: 0 .3rem; background: color-mix(in srgb, var(--text) 10%, transparent); }
+  .bdDue.today { background: #ffd43b; color: #111; } .bdDue.overdue { background: #ff6b6b; color: #111; }
+  .bdRecur { color: var(--muted); display: inline-flex; }
+  .bdAva { margin-left: auto; width: 1.25rem; height: 1.25rem; border-radius: 50%; color: #111; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; font-size: .66rem; }
+  .bdTitle { font-size: .88rem; line-height: 1.35; overflow-wrap: anywhere; }
+  .bdLabels { display: flex; flex-wrap: wrap; gap: .25rem; }
+  .bdLabel { font-size: .66rem; border: 1px solid var(--line); border-radius: 999px; padding: 0 .4rem; color: var(--muted); }
+  .bdClaim { font-size: .72rem; color: #f59f00; } .bdClaim.agent { color: #3ddc84; } .bdClaim.stale { color: var(--bad); }
+  #bdDetail { width: min(400px, 42vw); flex: none; border-left: 1px solid var(--line); background: var(--panel); padding: .7rem .9rem; overflow-y: auto; display: flex; flex-direction: column; gap: .55rem; }
+  .bdDHead { display: flex; align-items: center; gap: .5rem; } .bdDHead button { margin-left: auto; padding: .2rem .4rem; }
+  .bdWarn { font-size: .8rem; color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); border-radius: 8px; padding: .45rem .6rem; }
+  .bdField { display: flex; flex-direction: column; gap: .25rem; font-size: .78rem; color: var(--muted); flex: 1; min-width: 0; }
+  .bdField input, .bdField select, .bdField textarea { color: var(--text); font-size: .88rem; }
+  .bdBodyWrap { display: flex; flex-direction: column; gap: .25rem; } .bdBodyWrap textarea { resize: vertical; min-height: 8rem; font-size: .88rem; }
+  .bdBodyHead { display: flex; justify-content: space-between; align-items: center; font-size: .78rem; color: var(--muted); }
+  .bdTiny { padding: .05rem .5rem; font-size: .72rem; }
+  .bdPrev { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; min-height: 6rem; background: var(--bg); font-size: .88rem; }
+  .bdRow { display: flex; gap: .6rem; flex-wrap: wrap; }
+  .bdPriRow { display: flex; gap: .2rem; } .bdPriRow button { flex: 1; padding: .25rem 0; font-size: .75rem; } .bdPriRow button.on { border-color: var(--accent); color: var(--accent); }
+  .bdActs { display: flex; flex-wrap: wrap; gap: .35rem; } .bdActs button { font-size: .8rem; padding: .3rem .6rem; }
+  .bdDanger { color: var(--bad); }
+  .bdMeta { font-size: .72rem; color: var(--muted); }
+  .bdLog { display: flex; flex-direction: column; gap: .2rem; font-size: .74rem; border-top: 1px solid var(--line); padding-top: .5rem; }
+  .bdAct { color: var(--muted); } .bdAct.agent { color: color-mix(in srgb, #3ddc84 70%, var(--text)); }
+  #bdFoot { display: flex; align-items: center; gap: 1rem; padding: .35rem .8rem; border-top: 1px solid var(--line); background: var(--panel); font-size: .75rem; overflow: hidden; }
+  #bdPresence { display: flex; align-items: center; gap: .35rem; flex: none; flex-wrap: wrap; }
+  #bdActivity { display: flex; gap: .9rem; overflow: hidden; white-space: nowrap; min-width: 0; }
+  .bdChip { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: .05rem .5rem; } .bdChip.agent { color: #3ddc84; }
+  .bdMuted { color: var(--muted); } .bdErr { color: var(--bad); }
+  .calTitle { font-weight: 700; min-width: 9rem; text-align: center; }
+  #calGrid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-template-rows: auto repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--line); margin: .6rem; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .calHead { background: var(--panel); text-align: center; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: .3rem 0; }
+  .calDay { background: var(--bg); padding: .25rem .3rem; display: flex; flex-direction: column; gap: .2rem; overflow: hidden; cursor: pointer; min-height: 0; }
+  .calDay:hover { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+  .calDay.other { opacity: .45; } .calDay.today .calNum { background: var(--accent); color: var(--on-accent, #fff); border-radius: 999px; padding: 0 .4rem; }
+  .calNum { font-size: .75rem; font-weight: 700; align-self: flex-start; }
+  .calTask { font-size: .72rem; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 4px; padding: .05rem .3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .calTask.s-done { opacity: .5; text-decoration: line-through; } .calTask.overdue { background: color-mix(in srgb, #ff6b6b 18%, var(--panel)); }
+  #tasks { display: flex; flex-direction: column; } #taskPaneBody { flex: 1; min-height: 0; overflow-y: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
+  .tpHead { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: .4rem; }
+  .tpNone { font-size: .78rem; color: var(--muted); }
+  .tpItem { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .4rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
+  .tpActs { display: flex; gap: .3rem; } .tpActs button { font-size: .75rem; padding: .15rem .45rem; }
+  #board, #cal { overflow: hidden; }
+  /* ── icons (the sprite at the top of <body>) ── */
+  .ic { width: 1.15em; height: 1.15em; flex: none; vertical-align: -.2em; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
+  .ic.lead { margin-right: .4em; }
+  .ic.trail { margin-left: .35em; }
+  #rail button i .ic { width: 1.25rem; height: 1.25rem; vertical-align: middle; }
+  .tool::before { content: ''; display: inline-block; width: 1em; height: 1em; margin-right: .45em; vertical-align: -.15em; background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2.8l1.7 2.4 2.9-.7.7 2.9 2.4 1.7-1.3 2.9 1.3 2.9-2.4 1.7-.7 2.9-2.9-.7L12 21.2l-1.7-2.4-2.9.7-.7-2.9-2.4-1.7L5.6 12 4.3 9.1l2.4-1.7.7-2.9 2.9.7z'/%3E%3Ccircle cx='12' cy='12' r='3.1'/%3E%3C/svg%3E") center / contain no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2.8l1.7 2.4 2.9-.7.7 2.9 2.4 1.7-1.3 2.9 1.3 2.9-2.4 1.7-.7 2.9-2.9-.7L12 21.2l-1.7-2.4-2.9.7-.7-2.9-2.4-1.7L5.6 12 4.3 9.1l2.4-1.7.7-2.9 2.9.7z'/%3E%3Ccircle cx='12' cy='12' r='3.1'/%3E%3C/svg%3E") center / contain no-repeat; }
+  /* ── markdown (web/md.js), shared by the Work chat and the team chat ── */
+  .msg.claude { border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+  .md { white-space: normal; line-height: 1.55; }
+  .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+  .md p { margin: .45rem 0; }
+  .md .mdh { margin: .9rem 0 .4rem; line-height: 1.25; font-weight: 700; }
+  .md h1.mdh { font-size: 1.35rem; padding-bottom: .25rem; border-bottom: 1px solid var(--line); }
+  .md h2.mdh { font-size: 1.18rem; padding-bottom: .2rem; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  .md h3.mdh { font-size: 1.05rem; } .md h4.mdh, .md h5.mdh, .md h6.mdh { font-size: .95rem; color: var(--muted); }
+  .md a { color: color-mix(in srgb, var(--accent) 55%, var(--text)); text-decoration: underline; text-underline-offset: 2px; }
+  .md mark { background: color-mix(in srgb, #ffd43b 55%, transparent); color: inherit; border-radius: 3px; padding: 0 .15rem; }
+  .md code.mdc { font-family: ui-monospace, Consolas, monospace; font-size: .86em; background: color-mix(in srgb, var(--text) 12%, transparent); padding: .08rem .35rem; border-radius: 5px; }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
+  .md .mdlist { margin: .35rem 0; padding-left: 1.5rem; } .md .mdlist li { margin: .15rem 0; } .md .mdlist .mdlist { margin: .1rem 0; }
+  .md li.mdtask { list-style: none; margin-left: -1.3rem; } .md li.mdtask input { width: auto; margin: 0 .45rem 0 0; vertical-align: middle; }
+  .md blockquote { margin: .5rem 0; padding: .3rem .8rem; border-left: 3px solid var(--muted); color: color-mix(in srgb, var(--text) 85%, var(--muted)); background: color-mix(in srgb, var(--text) 4%, transparent); border-radius: 0 6px 6px 0; }
+  .md .mdalert { --ac: #4dabf7; border-left-color: var(--ac); background: color-mix(in srgb, var(--ac) 10%, transparent); }
+  .md .mdalert-tip { --ac: #51cf66; } .md .mdalert-important { --ac: #9775fa; } .md .mdalert-warning { --ac: #fcc419; } .md .mdalert-caution { --ac: #ff6b6b; }
+  .md .mdalert-t { font-weight: 700; color: var(--ac); margin-bottom: .15rem; }
+  .md .mdtable { overflow-x: auto; margin: .5rem 0; border: 1px solid var(--line); border-radius: 8px; }
+  .md table { border-collapse: collapse; width: 100%; font-size: .9em; }
+  .md th, .md td { padding: .35rem .6rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .md th { background: color-mix(in srgb, var(--text) 7%, transparent); font-weight: 700; }
+  .md tbody tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .md tbody tr:last-child td { border-bottom: 0; }
+  .md .mdcode { margin: .55rem 0; border: 1px solid color-mix(in srgb, var(--line) 80%, #000); border-radius: 8px; overflow: hidden; background: #0b0d12; }
+  .md .mdhead { display: flex; align-items: center; gap: .4rem; padding: .25rem .5rem; font-size: .72rem; color: #9aa4b2; background: #151922; border-bottom: 1px solid #222838; font-family: ui-monospace, Consolas, monospace; }
+  .md .mdhead span { flex: 1; text-transform: lowercase; }
+  .md .mdbtn { padding: .1rem .5rem; font-size: .7rem; background: transparent; color: #c7cfdb; border: 1px solid #2c3446; border-radius: 5px; }
+  .md .mdbtn:hover { background: #222838; }
+  .md .mdcode pre { margin: 0; padding: .65rem .75rem; background: transparent; color: #e6e9ef; border-radius: 0; font-size: .82rem; line-height: 1.5; white-space: pre; overflow-x: auto; tab-size: 2; }
+  .md .hl-kw { color: #c792ea; } .md .hl-str { color: #c3e88d; } .md .hl-num { color: #f78c6c; } .md .hl-com { color: #697098; font-style: italic; }
+  .md .hl-add { color: #8ce99a; background: rgba(81,207,102,.1); } .md .hl-del { color: #ffa8a8; background: rgba(255,107,107,.1); }
+  .md .mdmermaid { background: color-mix(in srgb, var(--bg) 80%, var(--panel)); }
+  .md .mdmbody { padding: .6rem; overflow-x: auto; text-align: center; color: var(--muted); font-size: .8rem; }
+  .md .mdmbody svg { max-width: 100%; height: auto; }
+  .md .mdmsrc { margin: 0; padding: .6rem .75rem; border-top: 1px solid var(--line); background: #0b0d12; color: #e6e9ef; font-size: .8rem; white-space: pre; overflow-x: auto; }
+  .md .mderr { color: var(--bad); }
+  .md .mdmath { margin: .5rem 0; padding: .5rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; text-align: center; }
+  .md .mdfnref { cursor: pointer; color: color-mix(in srgb, var(--accent) 55%, var(--text)); font-size: .72em; margin-left: .1rem; }
+  .md .mdfns { font-size: .82em; color: var(--muted); } .md .mdfns ol { padding-left: 1.4rem; margin: .3rem 0 0; }
+  .md .mdimgwrap { display: inline-block; max-width: 100%; margin: .3rem 0; }
+  .md .mdimg { max-width: min(100%, 480px); max-height: 360px; border-radius: 8px; display: block; border: 1px solid var(--line); background: color-mix(in srgb, var(--text) 4%, transparent); transition: transform .12s ease, box-shadow .15s ease; }
+  .md a.mdimgwrap:hover .mdimg { transform: scale(1.01); box-shadow: 0 6px 20px rgba(0,0,0,.3); }
+  .md .mdimg[alt]:not([alt=""]) { min-height: 2rem; }
+  .msg.me .md a, .msg.me .md .mdfnref { color: inherit; }
   .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); word-break: break-all; }
   .sys { font-size: .8rem; color: var(--muted); text-align: center; }
   .sys.bad { color: var(--bad); }
@@ -114,6 +273,10 @@
   .slider input { padding: 0; }
   .slider button { padding: .2rem .55rem; font-size: .8rem; }
   #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
+  .archiveSearch { padding: .5rem .75rem 0; } .archiveSearch input { font-size: .9rem; }
+  .conv .snip { font-size: .76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .15rem; }
+  .conv .snip.me::before { content: 'you: '; color: var(--text); } .conv .snip.claude::before { content: 'Claude: '; color: var(--text); }
+  .conv mark { background: color-mix(in srgb, #ffd43b 55%, transparent); color: inherit; border-radius: 3px; padding: 0 .1rem; }
   .conv { display: flex; align-items: center; gap: .4rem; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 8px; }
   .conv.current { border-color: var(--accent); }
   .conv div { flex: 1; min-width: 0; }
@@ -251,9 +414,65 @@
     #chat { min-height: 70vh !important; order: -1; }
     .split { display: none; }
   }
+  /* ── Phones and small tablets (≤ 700 px): one column, drawers instead of side bars, sheets instead of
+     side panels, touch-sized controls, no zoom-on-focus. Laptops (≤ 1366 px) only get tighter headers. ── */
+  @media (max-width: 1366px) {
+    header { padding: .45rem .7rem; gap: .5rem; }
+    #roomSide { width: 190px; }
+  }
+  @media (pointer: coarse) {
+    button { min-height: 2.5rem; }
+    .bar button, .roomTop button, .callCtl button, .tpActs button, .bdActs button, .conv button, #msgMenu button, .md .mdbtn { min-height: 2.2rem; }
+    .cv { padding: .55rem .5rem; }
+    .bdCard { padding: .6rem .65rem; }
+  }
+  @media (max-width: 700px) {
+    html { font-size: 15px; }
+    input, textarea, select { font-size: 16px; } /* below 16 px iOS zooms the page on focus */
+    header { padding: .4rem .55rem; gap: .4rem; }
+    header b { font-size: .95rem; }
+    header .folder { flex-basis: 100%; order: 9; font-size: .78rem; }
+    #shell header #pickFolder, #shell header #newChat, #shell header #saveChat, #shell header #openArchive, #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
+    #menu .choices button { width: min(320px, 86vw); }
+    .menuWho { max-width: 94vw; }
+    /* chat: the conversation list is a drawer over the messages */
+    #roomCore { position: relative; }
+    #roomSide { position: absolute; left: 0; top: 0; bottom: 0; z-index: 8; width: min(78vw, 300px); max-width: none; background: var(--panel); box-shadow: 6px 0 24px rgba(0,0,0,.35); border-right: 1px solid var(--line); }
+    #roomCore.noside #roomSide { display: none; }
+    .rmsg { max-width: 100%; }
+    #roomComposer { padding: .5rem .55rem calc(.6rem + env(safe-area-inset-bottom)); }
+    #roomComposer textarea { height: 2.9rem; }
+    #composer { padding: .5rem .55rem calc(.6rem + env(safe-area-inset-bottom)); }
+    .sendCol button { min-width: 5rem; }
+    #usageBar { gap: .4rem .6rem; padding: .3rem .5rem; }
+    /* work: stacked panes, each tall enough to use */
+    #panes > section { min-height: 60vh; }
+    #chat { min-height: 75vh !important; }
+    .floatWin { left: 8px !important; top: 8px !important; width: calc(100vw - 16px) !important; height: calc(100dvh - 16px) !important; resize: none; }
+    /* board: one column at a time, swipe sideways; the task opens as a full-screen sheet */
+    #bdCols { grid-auto-columns: 86vw; scroll-snap-type: x mandatory; padding: .5rem; gap: .5rem; }
+    .bdCol { scroll-snap-align: start; }
+    #bdDetail { position: fixed; inset: 0; width: auto; z-index: 12; border-left: 0; padding: .8rem .9rem calc(.9rem + env(safe-area-inset-bottom)); animation: sheetUp .22s ease; }
+    @keyframes sheetUp { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+    #bdFoot { flex-wrap: wrap; } #bdActivity { display: none; }
+    #bdFilter { width: 100%; order: 8; }
+    /* calendar: an agenda list instead of a 7-column grid (board.js switches the rendering) */
+    #calGrid.agenda { display: flex; flex-direction: column; gap: .4rem; background: transparent; border: 0; margin: .5rem; overflow-y: auto; padding-bottom: env(safe-area-inset-bottom); }
+    .agDay { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .45rem .6rem; display: flex; flex-direction: column; gap: .3rem; }
+    .agDay.today { border-color: var(--accent); }
+    .agDay .calNum { font-size: .8rem; }
+    .agDay .calTask { white-space: normal; }
+    /* settings and past sessions fill the screen */
+    .modal .box, #archive .box { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; border: 0; }
+    /* admin: the table scrolls sideways instead of squeezing */
+    #adminBody { padding: .6rem; } #adminBody table { display: block; overflow-x: auto; white-space: nowrap; }
+    #callTiles { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+    #toasts { right: .5rem; bottom: calc(.5rem + env(safe-area-inset-bottom)); left: .5rem; align-items: stretch; } .toast { max-width: none; }
+  }
+  @media (max-width: 700px) and (orientation: landscape) { #panes > section { min-height: 85vh; } }
   /* shared Work sessions */
-  #shareSel { padding: .15rem .35rem; font-size: .75rem; max-width: 11rem; }
-  #shareSel.on { border-color: var(--good); color: var(--good); }
+  #shareBtn { padding: .2rem .6rem; font-size: .75rem; white-space: nowrap; }
+  #shareBtn.on { border-color: var(--good); color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent); }
   #shareBanner { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .35rem .75rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 14%, transparent); font-size: .8rem; }
   #shareBanner span { flex: 1; min-width: 8rem; }
   #shareBanner button { padding: .15rem .6rem; font-size: .78rem; }
@@ -293,6 +512,48 @@
 </style>
 </head>
 <body>
+<!-- Mills icon set: one sprite of custom line icons (24×24 grid, round 1.9 px strokes in the text colour,
+     so they follow every theme). Use: an svg with class "ic" holding a use of the symbol, or ic(name) in script. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5.5M11 18l-6-6 6-6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19.5V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 2.8l1.7 2.4 2.9-.7.7 2.9 2.4 1.7-1.3 2.9 1.3 2.9-2.4 1.7-.7 2.9-2.9-.7L12 21.2l-1.7-2.4-2.9.7-.7-2.9-2.4-1.7L5.6 12 4.3 9.1l2.4-1.7.7-2.9 2.9.7z"/><circle cx="12" cy="12" r="3.1"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h10"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M6.2 3.5h2.6l1.9 4.7-2.3 1.5a11.5 11.5 0 0 0 5.9 5.9l1.5-2.3 4.7 1.9v2.6a2 2 0 0 1-2.1 2A16.5 16.5 0 0 1 4.2 5.6a2 2 0 0 1 2-2.1z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.8l4.4 4.2L19 7.2"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.5M8.8 21h6.4"/></symbol>
+  <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M15 9.5V6a3 3 0 0 0-5.6-1.5M9 9v2.5a3 3 0 0 0 4.8 2.4M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 9.6 5.7M12 17.5v3.5M8.8 21h6.4M3.5 3.5l17 17"/></symbol>
+  <symbol id="i-talk" viewBox="0 0 24 24"><path d="M3.5 10.5v3M7.5 7.5v9M11.5 4v16M15.5 7.5v9M19.5 10.5v3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M20.5 3.5L3.5 10.6l6.6 3.3 3.3 6.6z"/><path d="M10.1 13.9l4.2-4.2"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3.5 8a1.5 1.5 0 0 1 1.5-1.5h2.8L9.5 4h5l1.7 2.5H19A1.5 1.5 0 0 1 20.5 8v10a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/><circle cx="12" cy="12.8" r="3.4"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.2"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7A1.5 1.5 0 0 1 5 5.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3.5h7.5l4.5 4.5v12.5h-12z"/><path d="M13.5 3.5V8.5h5M9.5 13h5M9.5 16.5h5"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M8 7.5L3.5 12 8 16.5M16 7.5l4.5 4.5-4.5 4.5M13.5 5l-3 14"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4.5" y="8" width="15" height="11.5" rx="3.5"/><path d="M12 8V5M9.3 16.3h5.4"/><circle cx="12" cy="3.8" r="1.2"/><circle cx="9.3" cy="12.6" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.7" cy="12.6" r="1.1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 5.5h15a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H10l-5.5 4v-4h0a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4.5" rx="1"/><path d="M5 9v9.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 4.3a2 2 0 0 1 3.4 0l7.2 12.6a2 2 0 0 1-1.7 3H4.8a2 2 0 0 1-1.7-3z"/><path d="M12 9.5v4.5"/><circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8.5 10.5V7.8a3.5 3.5 0 0 1 7 0v2.7M12 14.5v2.5"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="M9.5 6.5L4 12l5.5 5.5"/><path d="M4.5 12h9a6 6 0 0 1 6 6v.5"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4.5 19.5l1-4.2L15.8 5a2 2 0 0 1 2.9 0l.3.3a2 2 0 0 1 0 2.9L8.7 18.5z"/><path d="M14 6.8l3.2 3.2M4.5 19.5h15"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V4.5h5V7M6.2 7l.9 12.2a1.5 1.5 0 0 0 1.5 1.3h6.8a1.5 1.5 0 0 0 1.5-1.3L17.8 7M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1.8"/><path d="M8.6 8.6a4.8 4.8 0 0 0 0 6.8M15.4 8.6a4.8 4.8 0 0 1 0 6.8M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12.5 5v14l-5-4.5H4z"/><path d="M16 9a4.2 4.2 0 0 1 0 6M18.6 6.4a8 8 0 0 1 0 11.2"/></symbol>
+  <symbol id="i-speaker-off" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12.5 5v14l-5-4.5H4z"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.7"/><path d="M20.5 15.5l-4.8-4.5-9.2 8"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5.5 12h13"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M9.2 4v16M14.8 4v16M5.6 7.5h1.6M11.2 7.5h1.6M11.2 10.5h1.6M16.8 7.5h1.6"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/><circle cx="8.3" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="15.7" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="8.3" cy="17" r=".9" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-tasks" viewBox="0 0 24 24"><path d="M4 6.5l1.6 1.6L8.5 5M4 12.5l1.6 1.6 2.9-3.1M4 18.5l1.6 1.6 2.9-3.1M11.5 6.5h8.5M11.5 12.5h8.5M11.5 18.5h6"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5.5 21V4M5.5 4.5h10.5l-2 3.8 2 3.7H5.5"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 3.5l3 3-3 3M4 11.5v-1a4 4 0 0 1 4-4h12M7 20.5l-3-3 3-3M20 12.5v1a4 4 0 0 1-4 4H4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.5H15"/></symbol>
+</svg>
 
 <form id="login" class="center">
   <h1 id="title">Mills</h1>
@@ -306,10 +567,13 @@
 
 <div id="menu" hidden>
   <h1 id="menuUser"></h1>
+  <div id="menuWho" class="menuWho" hidden></div>
   <div class="choices">
     <button id="goWork">Work</button>
     <button id="goChat">Chat<span class="badge" id="chatBadge" hidden></span></button>
-    <button id="goAssist">Unity</button>
+    <button id="goBoard"><svg class="ic lead"><use href="#i-board"/></svg>Board<span class="badge" id="boardBadge" hidden></span></button>
+    <button id="goCal"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar</button>
+    <button id="goAssist"><svg class="ic lead"><use href="#i-chat"/></svg>Unity</button>
     <button id="goAdmin" hidden>Admin</button>
     <button class="ghost" id="goSettings" data-settings>Settings</button>
     <button class="ghost" id="menuLogout">Sign out</button>
@@ -318,10 +582,10 @@
 
 <div id="room" class="screen" hidden>
   <header>
-    <button class="ghost back" data-back>← Menu</button>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b>Chat</b>
     <span class="folder">End-to-end encrypted team chat</span>
-    <button class="ghost" data-settings title="Your nickname, colour, sounds and pop-ups">⚙ Settings</button>
+    <button class="ghost" data-settings title="Your nickname, colour, sounds and pop-ups"><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button>
   </header>
   <div id="roomHost"></div>
 </div>
@@ -332,23 +596,24 @@
     <aside id="roomSide"><div id="callSideHost"></div><div id="convList"></div></aside>
     <div class="roomMain">
       <div class="roomTop">
-        <button class="ghost" id="roomSideToggle" title="Show / hide conversations">☰</button>
+        <button class="ghost" id="roomSideToggle" title="Show / hide conversations" aria-label="Show / hide conversations"><svg class="ic"><use href="#i-menu"/></svg></button>
         <b id="convName"># Everyone</b>
         <span id="roomStatus">End-to-end encrypted</span>
-        <button class="ghost" id="callBtn" title="Voice / video call in this conversation (end-to-end encrypted)">📞 Call</button>
+        <button class="ghost" id="callBtn" title="Voice / video call in this conversation (end-to-end encrypted)"><svg class="ic lead"><use href="#i-phone"/></svg>Call</button>
       </div>
       <div id="callBanner" hidden></div>
       <div id="shareBanner" hidden></div>
       <div id="roomLog"></div>
-      <div id="replyBar" hidden><span id="replyText"></span><button type="button" class="ghost" id="replyCancel" title="Cancel (Esc)">✕</button></div>
+      <div id="typingLine" class="typingLine" hidden></div>
+      <div id="replyBar" hidden><span id="replyText"></span><button type="button" class="ghost" id="replyCancel" title="Cancel (Esc)" aria-label="Cancel"><svg class="ic"><use href="#i-close"/></svg></button></div>
       <div id="mentionList" hidden></div>
       <div id="recBar" hidden><i class="dotRec"></i><span id="recTime">Recording 0:00 / 2:00</span>
         <button type="button" id="recSend">Send clip</button><button type="button" class="ghost" id="recCancel">Cancel</button></div>
       <form id="roomComposer">
         <textarea id="roomInput" placeholder="Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)"></textarea>
         <div class="side"><button type="submit">Send</button>
-          <button type="button" class="ghost" id="micBtn" title="Record a voice clip (uses your microphone)">🎤</button>
-          <button type="button" class="ghost dictate" id="roomDictate" hidden>🗣</button></div>
+          <button type="button" class="ghost" id="micBtn" title="Record a voice clip (uses your microphone)" aria-label="Record a voice clip"><svg class="ic"><use href="#i-mic"/></svg></button>
+          <button type="button" class="ghost dictate" id="roomDictate" aria-label="Dictate" hidden><svg class="ic"><use href="#i-talk"/></svg></button></div>
       </form>
     </div>
   </div>
@@ -360,8 +625,8 @@
     <div class="callHead"><b id="callTitle">Call</b><span id="callInfo"></span></div>
     <div id="callTiles"></div>
     <div class="callCtl">
-      <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone">🎤 Mic on</button>
-      <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)">📷 Camera off</button>
+      <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone"><svg class="ic lead"><use href="#i-mic"/></svg>Mic on</button>
+      <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)"><svg class="ic lead"><use href="#i-camera"/></svg>Camera off</button>
       <button type="button" id="callLeave" title="Leave the call">Leave</button>
     </div>
     <div id="callMsg"></div>
@@ -389,12 +654,12 @@
         <input id="setNick" maxlength="32" placeholder="leave empty to use your account name"></label>
       <div>Your colour (same for everyone, adjusts to each theme)<div class="swatches" id="setColors"></div></div>
       <label class="chk"><input type="checkbox" id="setSound"> Sound when a chat message arrives</label>
-      <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message">▶</button></div>
-      <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention">▶</button></div>
-      <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply">▶</button></div>
+      <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
       <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
-      <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest">▶</button></div>
+      <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
       <label>Voice<select id="ttsVoice"></select></label>
       <label>Read<select id="ttsScope"><option value="all">every message from others</option><option value="mine">only @mentions, private messages and replies to me</option></select></label>
@@ -405,7 +670,7 @@
       <label>Video quality (camera in calls)<select id="callQuality"><option value="low">Low — 320×180, saves bandwidth</option><option value="medium">Medium — 640×360</option><option value="high">High — 1280×720</option></select></label>
       <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
       <label class="chk"><input type="checkbox" id="clipAuto"> Auto-play incoming voice clips (queued together with read-aloud)</label>
-      <div><button type="button" class="ghost" id="ttsStop">⏹ Stop reading / playing and clear the queue</button></div>
+      <div><button type="button" class="ghost" id="ttsStop"><svg class="ic lead"><use href="#i-stop"/></svg>Stop reading / playing and clear the queue</button></div>
       <label>Auto-save Claude sessions to Past sessions<select id="setAutosave">
         <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
@@ -415,25 +680,55 @@
   </div>
 </div>
 
+<div id="board" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Board</b>
+    <select id="bdBoard" title="Which board"></select>
+    <button class="ghost" id="bdNewBoard" title="Add another board"><svg class="ic lead"><use href="#i-plus"/></svg>Board</button>
+    <input id="bdFilter" type="search" placeholder="Filter by title, label, person, id…" spellcheck="false">
+    <label class="bdMine"><input type="checkbox" id="bdMine"> Mine</label>
+    <span id="bdStale" class="bdStale" hidden></span>
+  </header>
+  <div id="bdMain">
+    <div id="bdCols"></div>
+    <aside id="bdDetail" hidden></aside>
+  </div>
+  <footer id="bdFoot"><span id="bdPresence"></span><span id="bdActivity"></span></footer>
+</div>
+
+<div id="cal" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Calendar</b>
+    <button class="ghost" id="calPrev" aria-label="Previous month"><svg class="ic"><use href="#i-back"/></svg></button>
+    <span id="calTitle" class="calTitle"></span>
+    <button class="ghost" id="calNext" aria-label="Next month"><svg class="ic" style="transform:scaleX(-1)"><use href="#i-back"/></svg></button>
+    <button class="ghost" id="calToday">Today</button>
+    <span class="folder">Tasks with a due date. Click a day to add one, click a task to open it on the board.</span>
+  </header>
+  <div id="calGrid"></div>
+</div>
+
 <div id="assist" class="screen" hidden>
   <header>
-    <button class="ghost back" data-back>← Menu</button>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b>Unity</b>
     <span class="folder" id="assistStatus">Unity: tasks, calendar, reminders, memory</span>
     <select id="assistBrain" title="Which brain answers: Unity's own local model on the host, or a Claude model"></select>
-    <button class="ghost" id="assistLoc" title="Share your location so time, weather and local news are about where you are">📍 Share location</button>
-    <button class="ghost" id="assistVoice" title="Hear her replies in her own voice">🔊 Voice off</button>
+    <button class="ghost" id="assistLoc" title="Share your location so time, weather and local news are about where you are"><svg class="ic lead"><use href="#i-flag"/></svg>Share location</button>
+    <button class="ghost" id="assistVoice" title="Hear her replies in her own voice"><svg class="ic lead"><use href="#i-speaker-off"/></svg>Voice off</button>
     <button class="ghost" id="assistClear" title="Start a new conversation (your tasks, reminders and memory stay)">New chat</button>
   </header>
   <div id="assistLog"></div>
-  <div id="assistAttach" hidden><img id="assistThumb" alt="photo to send"><span>Photo ready: it goes with your next message.</span><button type="button" class="ghost" id="assistDrop">✕</button></div>
+  <div id="assistAttach" hidden><img id="assistThumb" alt="photo to send"><span>Photo ready: it goes with your next message.</span><button type="button" class="ghost" id="assistDrop" aria-label="Remove photo"><svg class="ic"><use href="#i-close"/></svg></button></div>
   <div id="assistCamBox" hidden><video id="assistVideo" autoplay playsinline muted></video><button type="button" id="assistSnap">Take photo</button><button type="button" class="ghost" id="assistCamClose">Cancel</button></div>
   <form id="assistForm">
     <textarea id="assistInput" placeholder="Talk to Unity… (Enter sends, Shift+Enter new line)"></textarea>
-    <button type="button" class="ghost" id="assistCam" title="Send her a webcam photo">📷</button>
-    <button type="button" class="ghost" id="assistFile" title="Send her a picture from your PC">📎</button>
+    <button type="button" class="ghost" id="assistCam" title="Send her a webcam photo" aria-label="Webcam photo"><svg class="ic"><use href="#i-camera"/></svg></button>
+    <button type="button" class="ghost" id="assistFile" title="Send her a picture from your PC" aria-label="Picture from your PC"><svg class="ic"><use href="#i-image"/></svg></button>
     <input type="file" id="assistPick" accept="image/png,image/jpeg,image/webp" hidden>
-    <button type="button" class="ghost" id="assistMic" title="Talk to Unity: click, speak, click again to send">🎤</button>
+    <button type="button" class="ghost" id="assistMic" title="Talk to Unity: click, speak, click again to send" aria-label="Talk"><svg class="ic"><use href="#i-mic"/></svg></button>
     <button type="submit" id="assistSend">Send</button>
     <button type="button" class="ghost" id="assistStop" hidden>Stop</button>
   </form>
@@ -442,7 +737,7 @@
 
 <div id="admin" class="screen" hidden>
   <header>
-    <button class="ghost back" data-back>← Menu</button>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b>Admin</b>
     <span class="folder">Accounts and hub controls</span>
   </header>
@@ -465,7 +760,7 @@
 
 <div id="shell" hidden>
   <header>
-    <button class="ghost back" data-back>← Menu</button>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b id="brand">Mills</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
@@ -481,18 +776,19 @@
   </header>
   <main id="app">
     <nav id="rail">
-      <button type="button" id="railToggle" title="Expand / collapse this bar"><i>☰</i><span class="lbl">Panels</span></button>
-      <button type="button" data-pane="files" title="Show / minimize the folder list"><i>📁</i><span class="lbl">Folder</span></button>
-      <button type="button" data-pane="edit" title="Show / minimize the file editor"><i>📝</i><span class="lbl">Editor</span></button>
-      <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i>🤖</i><span class="lbl">Claude</span></button>
-      <button type="button" data-pane="roomPane" title="Show / minimize the team chat"><i>💬</i><span class="lbl">Team chat</span><span class="badge" id="railRoomBadge" hidden></span></button>
+      <button type="button" id="railToggle" title="Expand / collapse this bar"><i><svg class="ic"><use href="#i-menu"/></svg></i><span class="lbl">Panels</span></button>
+      <button type="button" data-pane="files" title="Show / minimize the folder list"><i><svg class="ic"><use href="#i-folder"/></svg></i><span class="lbl">Folder</span></button>
+      <button type="button" data-pane="edit" title="Show / minimize the file editor"><i><svg class="ic"><use href="#i-code"/></svg></i><span class="lbl">Editor</span></button>
+      <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i><svg class="ic"><use href="#i-bot"/></svg></i><span class="lbl">Claude</span></button>
+      <button type="button" data-pane="tasks" title="Show / minimize your board tasks"><i><svg class="ic"><use href="#i-tasks"/></svg></i><span class="lbl">Tasks</span></button>
+      <button type="button" data-pane="roomPane" title="Show / minimize the team chat"><i><svg class="ic"><use href="#i-chat"/></svg></i><span class="lbl">Team chat</span><span class="badge" id="railRoomBadge" hidden></span></button>
       <span class="grow"></span>
-      <button type="button" data-settings title="Settings"><i>⚙</i><span class="lbl">Settings</span></button>
+      <button type="button" data-settings title="Settings"><i><svg class="ic"><use href="#i-gear"/></svg></i><span class="lbl">Settings</span></button>
     </nav>
     <div id="panes">
     <section id="files">
-      <div class="bar"><button class="ghost" id="up" title="Up one folder">↑</button><span id="cwd">/</span>
-        <button class="ghost" id="newFile" title="New file">+</button><button class="ghost" id="refresh" title="Refresh">⟳</button>
+      <div class="bar"><button class="ghost" id="up" title="Up one folder" aria-label="Up one folder"><svg class="ic"><use href="#i-up"/></svg></button><span id="cwd">/</span>
+        <button class="ghost" id="newFile" title="New file" aria-label="New file"><svg class="ic"><use href="#i-plus"/></svg></button><button class="ghost" id="refresh" title="Refresh" aria-label="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
         <button class="ghost min" data-min="files" title="Minimize (bring it back from the left bar)">—</button></div>
       <div id="tree"></div>
     </section>
@@ -504,11 +800,11 @@
     </section>
     <section id="chat">
       <div class="bar"><span id="convTitle" title="Click to rename">Unsaved session</span>
-        <select id="shareSel" title="Share this Work session so people in that conversation can watch it (read-only): your Claude conversation, what you type, send and queue"></select>
+        <button type="button" class="ghost" id="shareBtn" title="Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue"><svg class="ic lead"><use href="#i-share"/></svg>Share with everyone</button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
       <div id="usageBar" title="Claude usage of the host account (shared by everyone) and this session's context window">
-        <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uTime">--:--:--</span></div>
-        <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uTime">--d --h --m</span></div>
+        <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--:--:--</span></div>
+        <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--d --h --m</span></div>
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
       </div>
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
@@ -516,10 +812,16 @@
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <div class="sendCol">
           <button type="submit" id="send" title="Send. While Claude is busy: queue it for right after this reply.">Send</button>
-          <button type="button" class="ghost dictate" id="workDictate" hidden>🗣 Talk</button>
+          <button type="button" class="ghost dictate" id="workDictate" hidden><svg class="ic lead"><use href="#i-talk"/></svg>Talk</button>
           <button type="button" class="ghost" id="stop" hidden title="Stop Claude. With text in the box: stop and send that text right away.">Stop</button>
         </div>
       </form>
+    </section>
+    <section id="tasks" hidden>
+      <div class="bar"><span>My tasks</span>
+        <button class="ghost" id="tpOpenBoard" title="Open the full board">Board</button>
+        <button class="ghost min" data-min="tasks" title="Minimize">—</button></div>
+      <div id="taskPaneBody"></div>
     </section>
     <section id="roomPane" hidden>
       <div class="bar"><span>Team chat</span>
@@ -535,17 +837,30 @@
 <div id="archive" hidden>
   <div class="box">
     <div class="bar"><span>Past sessions</span><button class="ghost" id="closeArchive">Close</button></div>
+    <div class="archiveSearch"><input id="archiveQ" type="search" placeholder="Search titles and everything said in your sessions…" spellcheck="false" autocomplete="off"></div>
     <div id="archiveList"></div>
   </div>
 </div>
 
+<script src="md.js"></script>
+<script src="board.js"></script>
 <script>
+MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
+MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
 const GH_USER = '__MILLS_GIST_OWNER__'; // filled in at deploy time from the MILLS_GIST_OWNER repository variable
 // One Mills hub serves every account; people sign in with username + password.
 // An old ?user=<name> link still works: it just fills in the username.
 const GIST_FILE = 'mills-bridge.json';
 const TOKEN_KEY = 'mills.token';
 const $ = (id) => document.getElementById(id);
+// Icons from the sprite at the top of <body>. ic('mic') → an <svg>; label(el, 'mic', 'Mute') replaces
+// el's content with icon + text (no text = icon only).
+function ic(name, cls) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), u = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  s.setAttribute('class', 'ic' + (cls ? ' ' + cls : '')); s.setAttribute('aria-hidden', 'true'); u.setAttribute('href', '#i-' + name); s.append(u);
+  return s;
+}
+function label(el, name, text) { el.textContent = ''; el.append(ic(name, text ? 'lead' : '')); if (text) el.append(text); return el; }
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -596,8 +911,23 @@ let base = null;
 
 // ---------- find the bridge (its tunnel address changes each time the hub starts) ----------
 // The hub publishes its address in the gist file mills-bridge.json.
-async function findBridge() {
-  if (location.hostname === 'localhost' || location.hostname.endsWith('trycloudflare.com')) return location.origin;
+// Only a Cloudflare tunnel address is ever accepted from the gist, so whoever can edit that gist
+// cannot point everyone at some other server (the CSP below enforces the same list).
+const HUB_URL_RE = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
+async function findBridge(fresh) {
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com')) return location.origin;
+  // Last good address first: skips two GitHub API round trips (and its 60-an-hour limit) on every load.
+  const cached = store.get('mills.hub');
+  if (!fresh && cached && HUB_URL_RE.test(cached)) {
+    const st = await fetch(cached + '/api/status').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (st && st.hub) return cached;
+  }
+  const url = await gistBridge();
+  if (!HUB_URL_RE.test(url)) throw new Error('The published hub address is not a Cloudflare tunnel address; refusing it.');
+  store.set('mills.hub', url);
+  return url;
+}
+async function gistBridge() {
   const list = await fetch(`https://api.github.com/users/${GH_USER}/gists?per_page=100`).then((r) => r.json());
   const gist = Array.isArray(list) && list.find((g) => g.files && g.files[GIST_FILE]);
   if (!gist) throw new Error('Mills is not running yet.');
@@ -640,7 +970,7 @@ async function api(path, opts = {}) {
     if (attempt >= 40) { reconnecting = false; throw new Error('Mills is not responding — ask the admin to check it.'); }
     if (!reconnecting) { reconnecting = true; sys('Mills is restarting — waiting for it to come back…'); }
     await sleep(3000);
-    if (attempt % 4 === 0) { try { base = await findBridge(); } catch {} }
+    if (attempt % 4 === 0) { try { base = await findBridge(true); } catch {} }
   }
 }
 async function json(path, opts) {
@@ -679,7 +1009,7 @@ async function openAssist() {
     for (const m of st.history) assistAdd(m.role === 'user' ? 'msg me' : 'msg', m.content);
     if (!st.history.length) assistSys('Talk to Unity: tasks, calendar, reminders, notes, math. Everything runs on the host; nothing to install.');
     if (st.pending) assistConfirm(st.pending);
-    $('assistLoc').textContent = store.get(assistLocKey()) ? '📍 Location shared' : '📍 Share location';
+    icoText($('assistLoc'), 'flag', store.get(assistLocKey()) ? 'Location shared' : 'Share location');
     showVoice();
     assistLoaded = true;
     for (const n of st.notices) assistNotice(n);
@@ -690,11 +1020,11 @@ $('assistBrain').onchange = async () => {
   catch (e) { assistSys(e.message, true); assistLoaded = false; openAssist(); }
 };
 $('assistLoc').onclick = () => {
-  if (store.get(assistLocKey())) { store.set(assistLocKey(), ''); $('assistLoc').textContent = '📍 Share location'; assistSys('Location no longer shared; Unity only knows your time zone.'); return; }
+  if (store.get(assistLocKey())) { store.set(assistLocKey(), ''); icoText($('assistLoc'), 'flag', 'Share location'); assistSys('Location no longer shared; Unity only knows your time zone.'); return; }
   if (!navigator.geolocation) return assistSys('This browser cannot share a location.', true);
   navigator.geolocation.getCurrentPosition((pos) => {
     store.set(assistLocKey(), JSON.stringify({ lat: +pos.coords.latitude.toFixed(3), lon: +pos.coords.longitude.toFixed(3) }));
-    $('assistLoc').textContent = '📍 Location shared'; assistSys('Location shared with Unity (rounded to about 100 m). Click again to stop.');
+    icoText($('assistLoc'), 'flag', 'Location shared'); assistSys('Location shared with Unity (rounded to about 100 m). Click again to stop.');
   }, (err) => assistSys('Location not shared: ' + err.message, true), { timeout: 15000 });
 };
 $('assistClear').onclick = async () => { try { await json('/api/assistant/clear', { method: 'POST', body: '{}' }); $('assistLog').textContent = ''; assistSys('New conversation. Your tasks, reminders and memory are kept.'); } catch (e) { assistSys(e.message, true); } };
@@ -732,7 +1062,7 @@ $('assistForm').addEventListener('submit', async (e) => {
         const ev = JSON.parse(line);
         if (ev.type === 'token') { shown += ev.text; renderText(bubble, shown); }
         else if (ev.type === 'say') { said.push(ev.text); if (!shown) renderText(bubble, said.join(' ')); speakLine(ev.text, ev.emotion, ev.act); }
-        else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = '⚙ ' + ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
+        else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
         else if (ev.type === 'pc_tool' || ev.type === 'run_code') answerBrowserCall(ev);
         else if (ev.type === 'final') { if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
@@ -748,7 +1078,8 @@ $('assistForm').addEventListener('submit', async (e) => {
 // ---- voice: her replies in her own voice (made on the host), your mic → text on the host ----
 const voiceKey = () => 'mills.assistVoice.' + (me ? me.username : '');
 const voiceOn = () => store.get(voiceKey()) === '1';
-function showVoice() { $('assistVoice').textContent = voiceOn() ? '🔊 Voice on' : '🔇 Voice off'; }
+function icoText(btn, icon, text) { btn.textContent = ''; btn.append(ic(icon, text ? 'lead' : ''), text || ''); }
+function showVoice() { icoText($('assistVoice'), voiceOn() ? 'speaker' : 'speaker-off', voiceOn() ? 'Voice on' : 'Voice off'); }
 $('assistVoice').onclick = () => { store.set(voiceKey(), voiceOn() ? '' : '1'); showVoice(); if (!voiceOn()) stopVoice(); };
 let voiceQueue = Promise.resolve(), voiceAudio = null, voiceGen = 0;
 function stopVoice() { voiceGen++; if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; } voiceQueue = Promise.resolve(); }
@@ -772,7 +1103,7 @@ $('assistMic').onclick = async () => {
     const chunks = []; micRec = new MediaRecorder(stream);
     micRec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
     micRec.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop()); micRec = null; $('assistMic').textContent = '🎤'; $('assistMic').classList.remove('rec');
+      stream.getTracks().forEach((t) => t.stop()); micRec = null; icoText($('assistMic'), 'mic'); $('assistMic').classList.remove('rec');
       const blob = new Blob(chunks, { type: chunks[0] ? chunks[0].type : 'audio/webm' });
       if (!blob.size) return;
       $('assistInput').placeholder = 'Listening…';
@@ -783,7 +1114,7 @@ $('assistMic').onclick = async () => {
       } catch (e) { assistSys(e.message, true); }
       $('assistInput').placeholder = 'Talk to Unity… (Enter sends, Shift+Enter new line)';
     };
-    micRec.start(); $('assistMic').textContent = '⏹'; $('assistMic').classList.add('rec'); stopVoice();
+    micRec.start(); icoText($('assistMic'), 'stop'); $('assistMic').classList.add('rec'); stopVoice();
   } catch (e) { micRec = null; assistSys('Microphone: ' + e.message, true); }
 };
 // ---- photos: webcam snapshot or a file, sent with the next message (she sees it and can edit it) ----
@@ -862,10 +1193,10 @@ async function answerBrowserCall(ev) {
 }
 function assistNotice(n) {
   const d = document.createElement('div');
-  d.textContent = '⏰ ' + n.text;
+  d.append(ic('calendar', 'lead'), n.text);
   d.onclick = () => d.remove();
   $('assistNotice').appendChild(d);
-  if (!$('assist').hidden) assistSys('⏰ Reminder: ' + n.text);
+  if (!$('assist').hidden) assistSys('Reminder: ' + n.text);
   try { if (window.Notification && Notification.permission === 'granted') new Notification('Mills reminder', { body: n.text }); } catch {}
   setTimeout(() => d.remove(), 120000);
 }
@@ -908,14 +1239,17 @@ async function enter() {
   showScreen('menu');
   startRoomPolling();
   callPollLoop();
+  BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
 }
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
-  for (const id of ['menu', 'shell', 'room', 'admin', 'assist']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist']) $(id).hidden = true;
   $(name).hidden = false;
+  if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
+  presenceTick(); // tell the others where you are now
   if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); }
   if (name === 'shell') refreshUsage();
   applyLayout(); // places the team chat where it belongs for this screen (and hides the floating window elsewhere)
@@ -925,13 +1259,16 @@ function showScreen(name) {
 }
 $('goWork').onclick = () => showScreen('shell');
 $('goChat').onclick = () => showScreen('room');
+$('goBoard').onclick = () => showScreen('board');
+$('goCal').onclick = () => showScreen('cal');
 $('goAdmin').onclick = () => showScreen('admin');
 $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
-  token = null; me = null; sessionStorage.removeItem(TOKEN_KEY);
+  token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
-  for (const id of ['menu', 'shell', 'room', 'admin', 'settings', 'roomFloat', 'assist']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist']) $(id).hidden = true;
+  BOARD.stop();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
@@ -970,7 +1307,7 @@ async function restoreFolder() {
 }
 function setFolder(h) {
   rootHandle = h;
-  $('folderName').textContent = '📁 ' + h.name;
+  label($('folderName'), 'folder', h.name);
   $('pickFolder').textContent = 'Change folder';
   listDir('');
 }
@@ -1026,7 +1363,7 @@ async function listDir(dir) {
     if (!entries.length) tree.innerHTML = '<div style="color:var(--muted);cursor:default">(empty)</div>';
     for (const e of entries) {
       const row = document.createElement('div');
-      row.textContent = (e.dir ? '📁 ' : '📄 ') + e.name;
+      label(row, e.dir ? 'folder' : 'file', e.name);
       row.onclick = () => e.dir ? listDir(join(dir, e.name)) : openFile(join(dir, e.name));
       tree.appendChild(row);
     }
@@ -1040,7 +1377,7 @@ async function openFile(p) {
 }
 $('save').onclick = async () => {
   try { await fsOps.write({ path: openPath, content: $('editor').value });
-    $('openName').textContent = openPath + '  ✓ saved'; setTimeout(() => $('openName').textContent = openPath, 1500);
+    $('openName').textContent = openPath + '  '; $('openName').append(ic('check', 'lead'), 'saved'); setTimeout(() => $('openName').textContent = openPath, 1500);
   } catch (err) { sys(err.message, true); }
 };
 $('del').onclick = async () => {
@@ -1067,21 +1404,19 @@ $('refresh').onclick = () => listDir(cwd);
 const log = $('log');
 const scroll = () => { log.scrollTop = log.scrollHeight; };
 function sys(text, bad) { const d = document.createElement('div'); d.className = 'sys' + (bad ? ' bad' : ''); d.textContent = text; log.appendChild(d); scroll(); }
-function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; log.appendChild(d); return d; }
+// tool lines get their gear from CSS (.tool::before); older saved sessions still carry a "⚙ " prefix in the text
+const toolText = (t) => String(t).replace(/^⚙️?\s*/, '');
+function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
-function renderText(el, text) {
-  el.textContent = '';
-  if (/\[\[(image|youtube):/.test(text)) return withImages(el, text, (e, t) => renderText(e, t));
-  text.split(/```[^\n]*\n?/).forEach((part, i) => {
-    if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.appendChild(pre); }
-    else if (part) el.appendChild(document.createTextNode(part));
-  });
+function renderText(el, text) { // full markdown + mermaid (web/md.js); host pictures and YouTube players split out first
+  if (/\[\[(image|youtube):/.test(text)) { el.textContent = ''; return withImages(el, text, (e, t) => MD.render(e, t)); }
+  MD.render(el, text);
 }
 function describeTool(t) {
   const i = t.input || {};
   const name = t.name.replace(/^mcp__pc__/, 'your PC › ');
   const target = i.path ?? i.file_path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? '';
-  return '⚙ ' + name + (target !== '' ? '  ' + String(target).slice(0, 160) : '');
+  return name + (target !== '' ? '  ' + String(target).slice(0, 160) : '');
 }
 
 async function runPcTool(ev) {
@@ -1146,7 +1481,7 @@ $('composer').addEventListener('submit', (e) => {
 });
 function enqueue(message) {
   const el = bubble('me queued'); renderText(el, message);
-  const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.textContent = '✕'; x.title = 'Remove from queue';
+  const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.append(ic('close')); x.title = 'Remove from queue'; x.setAttribute('aria-label', 'Remove from queue');
   x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); postLive(); };
   el.prepend(x); scroll();
   queue.push({ message, el });
@@ -1159,9 +1494,19 @@ function drain() { // a run just ended: "Send now" text first, then the queue in
   postLive();
 }
 
+// "Claude is thinking…": an animated bubble from the moment a message goes out until the first
+// words, tool call or error arrives (it is never part of the transcript).
+let thinkingEl = null;
+function showThinking() {
+  hideThinking();
+  thinkingEl = bubble('claude thinking');
+  const dots = document.createElement('span'); dots.className = 'dots'; dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  thinkingEl.append(ic('bot', 'lead'), 'Claude is thinking', dots); scroll();
+}
+function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; } }
 async function send(message) {
   renderText(bubble('me'), message); record('me', message); scroll();
-  setBusy(true); runModel = ''; stderrText = '';
+  setBusy(true); runModel = ''; stderrText = ''; showThinking();
   try {
     postLive();
     const context = watchContext(); // summaries of the shared sessions you are watching, for your own Claude
@@ -1180,7 +1525,7 @@ async function send(message) {
       }
     }
   } catch (err) { sys(err.message, true); }
-  setBusy(false); $('input').focus();
+  hideThinking(); setBusy(false); $('input').focus();
   refreshUsage();
   if (archiveId) saveToArchive(true); // keep the saved session up to date after every reply
   if (!lastSaveAt) lastSaveAt = Date.now(); // the auto-save clock starts with the first reply
@@ -1190,6 +1535,9 @@ async function send(message) {
 let runModel = '', stderrText = ''; // which model this run used (from Claude's init event) + its stderr, shown only if the run fails
 function handleEvent(ev) {
   if (ev.type === 'pc_tool') return runPcTool(ev);
+  // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
+  if ((ev.type === 'assistant' && ev.message && ev.message.usage) || /rate_limit/.test(String(ev.type || '')) || ev.type === 'result') refreshUsageSoon();
+  if (ev.type === 'assistant' || ev.type === 'bridge_error' || ev.type === 'result') hideThinking();
   if (ev.type === 'assistant' && ev.message) {
     for (const block of ev.message.content || []) {
       if (block.type === 'text' && block.text.trim()) { renderText(bubble('claude'), block.text); record('claude', block.text); }
@@ -1236,20 +1584,31 @@ async function refreshUsage() {
   if (!me) return;
   try { usageData = await json('/api/usage'); usageSkew = usageData.now - Date.now(); paintUsage(); } catch {}
 }
+let usageSoon = null;
+function refreshUsageSoon() { if (!usageSoon) usageSoon = setTimeout(() => { usageSoon = null; refreshUsage(); }, 1500); } // at most one fetch per 1.5 s during a reply
 const pad2 = (n) => String(n).padStart(2, '0');
-function paintWindow(el, w, len, fmt) {
-  const now = Date.now() + usageSkew, out = w.status === 'rejected';
+// One number per window drives the fill, its colour and the % text, so they can never disagree:
+// Claude's reported utilization (0–1) while its window is still running, otherwise the share of the
+// window's time already gone (marked "~" — an estimate, not usage). A window whose reset time has
+// passed is empty until new numbers arrive.
+function windowUse(w, len, now) {
   const left = w.resetsAt ? Math.max(0, w.resetsAt - now) : null;
-  // fill = how much of the window is used: Claude's own utilization when reported, else elapsed time
-  const used = w.utilization != null ? (w.utilization <= 1 ? w.utilization * 100 : w.utilization) : left != null ? 100 * (1 - left / len) : 0;
-  el.classList.toggle('est', w.source === 'estimate' && left != null);
+  if (left === 0) return { left, pct: 0, exact: false, reset: true };
+  if (w.utilization != null && w.source === 'claude') return { left, pct: Math.max(0, Math.min(100, w.utilization * 100)), exact: true };
+  return { left, pct: left != null ? Math.max(0, Math.min(100, 100 * (1 - left / len))) : 0, exact: false };
+}
+function paintWindow(el, w, len, fmt) {
+  const now = Date.now() + usageSkew, u = windowUse(w, len, now), out = w.status === 'rejected' && !u.reset;
+  const pct = out ? 100 : u.pct;
+  el.classList.toggle('est', !u.exact && u.left != null && !u.reset);
   el.classList.toggle('out', out);
-  el.querySelector('.uTime').textContent = left == null ? (out ? 'out of usage' : 'not started') : fmt(left);
+  el.querySelector('.uTime').textContent = u.reset ? 'reset' : u.left == null ? (out ? 'out of usage' : 'not started') : fmt(u.left);
+  el.querySelector('.uPctS').textContent = u.left == null && !out ? '–' : (u.exact || out ? '' : '~') + Math.round(pct) + '%';
   const bar = el.querySelector('i');
-  bar.style.width = (out ? 100 : used) + '%';
-  bar.style.backgroundColor = out ? OUT_COLOR : usageColor(used);
-  el.title = (el.id === 'u5h' ? '5-hour' : '7-day') + ' window — ' + (left == null ? 'no activity yet' : fmt(left) + ' until it resets')
-    + (w.utilization != null ? ' · ' + Math.round(used) + '% used' : '') + (w.source === 'estimate' ? ' (estimated from when Mills started using Claude; exact once Claude Code reports it)' : ' (reported by Claude Code)')
+  bar.style.width = pct + '%';
+  bar.style.backgroundColor = out ? OUT_COLOR : usageColor(pct);
+  el.title = (el.id === 'u5h' ? '5-hour' : '7-day') + ' window — ' + (u.reset ? 'just reset' : u.left == null ? 'no activity yet' : fmt(u.left) + ' until it resets')
+    + ' · ' + (u.exact ? Math.round(pct) + '% of the limit used (reported by Claude Code)' : '~' + Math.round(pct) + '% of the window\'s time gone (Claude Code has not reported usage for this window yet)')
     + (out ? ' · OUT OF USAGE' : '');
 }
 function paintUsage() {
@@ -1268,7 +1627,8 @@ function paintUsage() {
   el.title = c ? `Context window: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens used in this session (${c.model || 'model'})${out ? ' — full: start a New chat' : ''}` : 'Context window: fills up as this session goes on';
 }
 setInterval(paintUsage, 1000);            // countdowns tick every second
-setInterval(refreshUsage, 60000);         // fresh numbers every minute (and after every reply)
+setInterval(() => { if (!$('shell').hidden) refreshUsage(); }, 15000); // the limits are shared by everyone: other people's runs move them too
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUsage(); });
 
 // ---------- past sessions (saved Claude conversations, stored on the host PC in Mills/Archive) ----------
 let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSaveAt = 0;
@@ -1277,7 +1637,7 @@ function setConversation(id, title, items) {
   archiveId = id; archiveTitle = title; transcript = items;
   savedLen = items.length; // what is on screen now counts as saved (a fresh chat, an opened session, or a just-deleted one)
   if (!id && !items.length) lastSaveAt = 0;
-  $('convTitle').textContent = title ? '🗂 ' + title : 'Unsaved session';
+  if (title) label($('convTitle'), 'archive', title); else $('convTitle').textContent = 'Unsaved session';
 }
 const autoName = () => {
   const first = ((transcript.find((t) => t.cls === 'me') || {}).text || '').replace(/\s+/g, ' ').trim();
@@ -1319,19 +1679,31 @@ async function renameConversation(id, current) {
     if (!$('archive').hidden) showArchive();
   } catch (err) { sys(err.message, true); }
 }
-async function showArchive() {
+let archiveRun = 0, archiveTimer = null;
+$('archiveQ').addEventListener('input', () => { clearTimeout(archiveTimer); archiveTimer = setTimeout(() => showArchive(true), 220); });
+$('archiveQ').addEventListener('keydown', (e) => { if (e.key === 'Escape') { if ($('archiveQ').value) { $('archiveQ').value = ''; showArchive(true); } else $('archive').hidden = true; } });
+function markText(el, text, words) { // the matched words highlighted, built from text nodes only
+  const re = words.length ? new RegExp('(' + words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'ig') : null;
+  if (!re) { el.append(text); return; }
+  for (const part of text.split(re)) { if (!part) continue; if (words.some((w) => w === part.toLowerCase())) { const m = document.createElement('mark'); m.textContent = part; el.append(m); } else el.append(part); }
+}
+async function showArchive(keepQuery) {
   $('archive').hidden = false;
+  if (!keepQuery) { $('archiveQ').value = ''; setTimeout(() => $('archiveQ').focus(), 0); }
+  const run = ++archiveRun, q = $('archiveQ').value.trim(), words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const listEl = $('archiveList'); listEl.textContent = 'Loading…';
   try {
-    const { items } = await json('/api/archive/list', { method: 'POST' });
+    const { items } = await json(q ? '/api/archive/search' : '/api/archive/list', { method: 'POST', body: JSON.stringify(q ? { q } : {}) });
+    if (run !== archiveRun) return; // a newer search took over
     listEl.textContent = '';
-    if (!items.length) listEl.innerHTML = '<div class="sys">No past sessions yet. They are saved automatically (Settings → Auto-save) or with "Save session".</div>';
+    if (!items.length) listEl.innerHTML = q ? '<div class="sys">Nothing matches that.</div>' : '<div class="sys">No past sessions yet. They are saved automatically (Settings → Auto-save) or with "Save session".</div>';
     for (const it of items) {
       const row = document.createElement('div'); row.className = 'conv' + (it.id === archiveId ? ' current' : '');
       const info = document.createElement('div');
-      const b = document.createElement('b'); b.textContent = it.title;
-      const s = document.createElement('small'); s.textContent = new Date(it.savedAt).toLocaleString() + ' · ' + it.count + ' entries';
+      const b = document.createElement('b'); markText(b, it.title, words);
+      const s = document.createElement('small'); s.textContent = new Date(it.savedAt).toLocaleString() + ' · ' + it.count + ' entries' + (q ? ' · ' + it.hits + ' match' + (it.hits === 1 ? '' : 'es') : '');
       info.append(b, s);
+      for (const sn of it.snippets || []) { const d = document.createElement('div'); d.className = 'snip ' + (sn.cls || ''); markText(d, sn.text, words); info.append(d); }
       const open = document.createElement('button'); open.textContent = 'Open';
       open.onclick = () => openConversation(it.id);
       const ren = document.createElement('button'); ren.className = 'ghost'; ren.textContent = 'Rename';
@@ -1342,7 +1714,7 @@ async function showArchive() {
         try {
           await json('/api/archive/delete', { method: 'POST', body: JSON.stringify({ id: it.id }) });
           if (it.id === archiveId) setConversation(null, null, transcript); // chat stays on screen, just unsaved
-          showArchive();
+          showArchive(true);
         } catch (err) { sys(err.message, true); }
       };
       row.append(info, open, ren, del); listEl.appendChild(row);
@@ -1398,8 +1770,8 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
 const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
-let chatPriv = null, chatPubJwk = null;
-const pubCache = new Map(), sharedCache = new Map();
+let chatPriv = null, chatPubJwk = null, chatPrivBits = null;
+const pubCache = new Map(), sharedCache = new Map(), wrapCache = new Map();
 
 async function passwordKey(password, salt) {
   const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -1417,7 +1789,11 @@ async function unlockPrivate(backup, password) {
   return crypto.subtle.importKey('pkcs8', pkcs8, ECDH, true, ['deriveKey']);
 }
 const samePub = (a, b) => a && b && a.x === b.x && a.y === b.y;
-async function useKey(priv, pub) { chatPriv = priv; chatPubJwk = { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y }; sharedCache.clear(); }
+async function useKey(priv, pub) {
+  chatPriv = priv; chatPubJwk = { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y }; sharedCache.clear(); wrapCache.clear();
+  // Stored keys only allow deriveKey; a deriveBits copy is needed for the HKDF wrap keys (format v3).
+  chatPrivBits = await crypto.subtle.importKey('pkcs8', await crypto.subtle.exportKey('pkcs8', priv), ECDH, false, ['deriveBits']);
+}
 
 // Called right after sign-in (the only time the password is in memory).
 async function ensureChatKey(password) {
@@ -1455,6 +1831,42 @@ async function fingerprint(jwk) {
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(jwk.x + '.' + jwk.y)));
   return [...h.slice(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join('').match(/.{4}/g).join(' ');
 }
+// Key pinning (trust on first use): this browser remembers every member's public key the first time it
+// sees it. If the hub later hands out a different key for someone, that person is marked as changed:
+// nothing is encrypted to that key and messages signed with it are not shown until you compare
+// fingerprints and press "Trust new key". Keys trusted earlier stay trusted (their old messages still open).
+const keyId = (jwk) => jwk.x + '.' + jwk.y;
+let pins = null, pinBootstrap = false;
+const changedKeys = new Set();
+function loadPins() {
+  if (pins && pins.__user === me.username) return;
+  const raw = store.get('mills.pins.' + me.username);
+  pinBootstrap = !raw; // the very first time: also trust the keys found in the existing history
+  pins = raw ? JSON.parse(raw) : {}; pins.__user = me.username; changedKeys.clear();
+}
+const savePins = () => store.set('mills.pins.' + me.username, JSON.stringify(pins));
+function trustedPub(user, jwk) {
+  loadPins();
+  const id = keyId(jwk), list = pins[user] || (pins[user] = []);
+  if (list.includes(id)) return true;
+  if (!list.length || pinBootstrap || (user === me.username && chatPubJwk && id === keyId(chatPubJwk))) { list.push(id); savePins(); return true; }
+  return false;
+}
+function checkPins() { // after every member-list load
+  loadPins();
+  for (const m of roomMembers) {
+    if (!m.pub || (m.username === me.username && !chatPubJwk)) continue; // own key: judged once it is unlocked here
+    const was = changedKeys.has(m.username);
+    if (trustedPub(m.username, m.pub)) changedKeys.delete(m.username);
+    else if (!was) { changedKeys.add(m.username); sysRoom(nickOf(m.username) + '\'s encryption key changed. Nothing is sent to them until you compare fingerprints with them (outside Mills) and press "Trust new key" under Key fingerprints.'); }
+  }
+}
+function acceptKey(user) {
+  const m = memberOf(user);
+  if (!m || !m.pub) return;
+  loadPins(); (pins[user] || (pins[user] = [])).push(keyId(m.pub)); savePins();
+  changedKeys.delete(user); resetRoomData(); pollRoom().then(() => selectConv(currentConv)); renderConvList();
+}
 async function importPub(jwk) {
   const id = jwk.x + jwk.y;
   if (!pubCache.has(id)) pubCache.set(id, await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, ECDH, false, []));
@@ -1465,11 +1877,49 @@ async function sharedWith(jwk) {
   if (!sharedCache.has(id)) sharedCache.set(id, await crypto.subtle.deriveKey({ name: 'ECDH', public: await importPub(jwk) }, chatPriv, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']));
   return sharedCache.get(id);
 }
+// Message format v3:
+// - the per-member wrap key is HKDF-SHA256 over the ECDH secret with a fixed label, not the raw secret;
+// - sender, recipient and a random message id (mid) are authenticated data on the body and on every
+//   wrap (plus the member's name), so the hub cannot move a message to another sender or conversation;
+// - a mid seen twice under different seqs is a replay and is refused;
+// - the plaintext is padded to a size bucket so its length does not show how long the message is.
+const V3_WRAP_INFO = enc.encode('mills-v3 wrap');
+async function wrapWith(jwk) {
+  const id = jwk.x + jwk.y;
+  if (!wrapCache.has(id)) {
+    const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: await importPub(jwk) }, chatPrivBits, 256);
+    const base = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+    wrapCache.set(id, await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: V3_WRAP_INFO }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']));
+  }
+  return wrapCache.get(id);
+}
+const bodyAad = (from, to, mid, v = 3) => 'mills-v' + v + '|' + from + '|' + (to || '') + '|' + mid;
+const blobAad = (from, mid) => 'mills-v4-blob|' + from + '|' + mid;
+const HAS_DEFLATE = typeof CompressionStream === 'function' && typeof DecompressionStream === 'function';
+const pipeBytes = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+const deflate = (bytes) => pipeBytes(bytes, new CompressionStream('deflate-raw'));
+const inflate = (bytes) => pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+function frame(bytes) { // u32 length + bytes + zero padding up to the size bucket
+  const out = new Uint8Array(padBucket(4 + bytes.length));
+  new DataView(out.buffer).setUint32(0, bytes.length); out.set(bytes, 4);
+  return out;
+}
+function unframe(buf) { const b = new Uint8Array(buf), n = new DataView(b.buffer, b.byteOffset).getUint32(0); if (n > b.length - 4) throw new Error('bad frame'); return b.subarray(4, 4 + n); }
+function bytesToB64(bytes) { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); }
+const newMid = () => toB64(crypto.getRandomValues(new Uint8Array(16))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+function padBucket(n) { // 256, 512, ... 64 KiB, then whole 64 KiB steps
+  if (n > 65536) return Math.ceil(n / 65536) * 65536;
+  let b = 256; while (b < n) b *= 2; return b;
+}
+const padPlain = (s) => { const b = enc.encode(s), out = new Uint8Array(padBucket(b.length)).fill(0x20); out.set(b); return out; }; // JSON ignores trailing spaces
+// Downgrade guard: once a sender has sent a v3 message, a later old-format message from them is refused.
+const v3Since = JSON.parse(localStorage.getItem('mills.v3since') || '{}'); // sender -> first v3 seq seen
+const midSeen = new Map(); // mid -> seq it first appeared under
 
 // ── Team chat: conversations (# Everyone + private), replies, edits, deletes, @mentions, receipts ──
 // Message text travels inside the encryption as {"v":2,"t":text,"r":replyToSeq}; older messages are
 // plain text. A private message carries `to` (who it is for) and is only wrapped for the two people.
-let roomMembers = [], roomRev = 0, roomTimer = null, roomLoaded = false, seenMap = {};
+let roomMembers = [], roomRev = 0, roomLoaded = false, seenMap = {};
 const msgs = new Map(); // seq -> { m, text, r, locked, el }
 let currentConv = 'room', replyTo = null, editingSeq = null;
 const hashName = (u) => [...u].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
@@ -1483,7 +1933,7 @@ const convPeer = (c) => (c === 'room' ? '' : c.slice(3).split('|').find((u) => u
 const convLabel = (c) => (c === 'room' ? '# Everyone' : '@ ' + nickOf(convPeer(c)) + ' (private)');
 const clipLen = (s) => Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
 const snippet = (rec) => (rec.m.deleted ? 'message deleted'
-  : (rec.audio ? '🎤 voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
+  : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
 function prefs() {
   const p = (me && me.prefs) || {};
   return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5,
@@ -1512,7 +1962,10 @@ function parsePayload(s) {
       const p = JSON.parse(s);
       if (p && p.v === 2 && typeof p.t === 'string') {
         // a = voice clip { m: mime type, d: base64 audio, s: seconds }, inside the encryption like the text
-        const a = p.a && typeof p.a.d === 'string' && /^audio\/[\w.+-]+(;[\w=.,+ -]*)?$/.test(p.a.m || '') ? { m: p.a.m, d: p.a.d, s: Number(p.a.s) || 0 } : null;
+        // (v4: no d, instead k = the key of the separately stored clip ciphertext, fetched on play)
+        const okMime = p.a && /^audio\/[\w.+-]+(;[\w=.,+ -]*)?$/.test(p.a.m || '');
+        const a = okMime && typeof p.a.d === 'string' ? { m: p.a.m, d: p.a.d, s: Number(p.a.s) || 0 }
+          : okMime && typeof p.a.k === 'string' ? { m: p.a.m, k: p.a.k, s: Number(p.a.s) || 0 } : null;
         return { t: p.t, r: Number.isInteger(p.r) ? p.r : null, a };
       }
     } catch {}
@@ -1521,13 +1974,32 @@ function parsePayload(s) {
 }
 async function decryptMsg(m) {
   if (m.deleted) return { t: '', r: null };
-  if (!chatPriv) return { t: '🔒 (locked — sign in again to read)', r: null, locked: true };
-  if (!m.key) return { t: '🔒 (sent before your chat key existed)', r: null, locked: true };
+  if (!chatPriv) return { t: '(locked — sign in again to read)', r: null, locked: true };
+  if (!m.key) return { t: '(sent before your chat key existed)', r: null, locked: true };
+  if (m.fromPub && !trustedPub(m.from, m.fromPub)) return { t: '(sent with a key you have not verified for ' + nickOf(m.from) + ': see Key fingerprints)', r: null, locked: true };
+  if (m.v === 3 || m.v === 4) {
+    if (typeof m.mid !== 'string') return { t: '(could not decrypt)', r: null, locked: true };
+    if (m.v === 4 && !HAS_DEFLATE) return { t: '(this browser is too old to open new messages: update it)', r: null, locked: true };
+    const first = midSeen.get(m.mid);
+    if (first !== undefined && first !== m.seq) return { t: '(replayed copy of an earlier message: refused)', r: null, locked: true };
+    try {
+      const aad = bodyAad(m.from, m.to, m.mid, m.v);
+      const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv), additionalData: enc.encode(aad + '|' + me.username) }, await wrapWith(m.fromPub), fromB64(m.key.wk));
+      const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+      const body = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv), additionalData: enc.encode(aad) }, k, fromB64(m.ct));
+      const p = parsePayload(m.v === 4 ? dec.decode(await inflate(unframe(body))) : dec.decode(body).trimEnd());
+      if (p.a && p.a.k && !m.blobLen) p.a = null; // a clip key without a stored clip: nothing to play
+      midSeen.set(m.mid, m.seq);
+      if (!(v3Since[m.from] <= m.seq)) { v3Since[m.from] = m.seq; localStorage.setItem('mills.v3since', JSON.stringify(v3Since)); }
+      return p;
+    } catch { return { t: '(could not decrypt)', r: null, locked: true }; }
+  }
+  if (v3Since[m.from] < m.seq) return { t: '(old unprotected format after this sender upgraded: refused)', r: null, locked: true };
   try {
     const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.key.iv) }, await sharedWith(m.fromPub), fromB64(m.key.wk));
     const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
     return parsePayload(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(m.iv) }, k, fromB64(m.ct))));
-  } catch { return { t: '🔒 (could not decrypt)', r: null, locked: true }; }
+  } catch { return { t: '(could not decrypt)', r: null, locked: true }; }
 }
 
 function resetRoomData() {
@@ -1546,7 +2018,8 @@ async function openRoom() {
 }
 async function refreshMembers() {
   try { roomMembers = (await json('/api/room/members')).members; } catch { return; }
-  renderConvList(); renderShareSel();
+  checkPins();
+  renderConvList(); renderWho(); renderShareSel();
 }
 let convListRun = 0;
 async function renderConvList() {
@@ -1554,7 +2027,10 @@ async function renderConvList() {
   const box = $('convList'); box.textContent = '';
   const add = (conv, label, color, sub) => {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'cv' + (conv === currentConv ? ' on' : '');
-    const dot = document.createElement('span'); dot.className = 'dot'; if (color) dot.style.background = color;
+    if (conv !== 'room') b.dataset.user = convPeer(conv);
+    const st = conv !== 'room' && !(memberOf(convPeer(conv)) || {}).agent ? statusOf(convPeer(conv)) : null;
+    const dot = document.createElement('span'); dot.className = 'dot' + (st ? ' ' + st.cls : ''); if (color) dot.style.background = color;
+    if (st) { dot.title = st.text; sub = st.text; }
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = label;
     const s = document.createElement('small'); s.textContent = sub; nm.append(s);
     const badge = document.createElement('span'); badge.className = 'badge'; badge.dataset.convBadge = conv; badge.hidden = true;
@@ -1568,7 +2044,15 @@ async function renderConvList() {
     const fp = m.pub ? await fingerprint(m.pub) : 'no key yet';
     if (run !== convListRun) return; // a newer render took over
     const d = document.createElement('div');
-    d.textContent = nickOf(m.username) + (m.username === me.username ? ' (you)' : '') + ': ' + fp + (m.agent ? ' — AI, key held by the hub; only receives messages that write @' + m.display.toLowerCase().replace(/\s+/g, '') + ' (plus the 5 before them)' : '');
+    if (changedKeys.has(m.username)) d.append(ic('warn', 'lead'), 'CHANGED · ');
+    d.append(nickOf(m.username) + (m.username === me.username ? ' (you)' : '') + ': ' + fp + (m.agent ? ' — AI, key held by the hub; only receives messages that write @' + m.display.toLowerCase().replace(/\s+/g, '') + ' (plus the 5 before them)' : ''));
+    if (changedKeys.has(m.username)) {
+      det.open = true;
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Trust new key';
+      b.title = 'Only after ' + nickOf(m.username) + ' read you this same fingerprint outside Mills';
+      b.onclick = () => acceptKey(m.username);
+      d.append(' ', b);
+    }
     det.append(d);
   }
   const hint = document.createElement('div'); hint.textContent = 'Compare these with each other once, outside Mills. If they match, nobody in between can read the chat.';
@@ -1578,7 +2062,8 @@ async function renderConvList() {
 function selectConv(conv) {
   if (conv !== 'room' && !memberOf(convPeer(conv))) conv = 'room';
   currentConv = conv; store.set('mills.conv.' + me.username, conv);
-  cancelCompose();
+  if (isNarrow()) $('roomCore').classList.add('noside'); // phone: picking a conversation closes the drawer
+  cancelCompose(); sendTyping(false);
   $('convName').textContent = convLabel(conv);
   $('roomInput').placeholder = conv === 'room' ? 'Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)'
     : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
@@ -1586,27 +2071,53 @@ function selectConv(conv) {
   for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
   log.scrollTop = log.scrollHeight;
   for (const b of $('convList').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
-  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner();
+  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence();
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
-async function pollRoom() {
+// The room is pushed, not polled: roomLoop keeps one long-poll open (the hub answers the moment
+// anything changes, or after 25 s), and pollRoom() fetches right away (after sending, on opening).
+// Both go through one queue so a message is never decrypted / notified twice.
+let roomQueue = Promise.resolve(), roomVer = 0, roomKeysVer = 0, roomLooping = false, roomGen = 0;
+function pollRoom() {
+  const run = roomQueue.then(fetchRoom);
+  roomQueue = run.catch(() => {});
+  return roomQueue; // never throws: the long poll catches up anyway
+}
+async function fetchRoom() {
   if (!me) return;
-  let d;
-  try { d = await json('/api/room/messages?rev=' + roomRev); } catch { return; }
-  if (d.latestRev < roomRev) { resetRoomData(); return pollRoom(); } // an admin cleared the history
+  return applyRoom(await json('/api/room/messages?rev=' + roomRev));
+}
+async function applyRoom(d) {
+  if (!me) return;
+  if (d.latestRev < roomRev) { resetRoomData(); return applyRoom(await json('/api/room/messages?rev=0')); } // an admin cleared the history
+  roomVer = d.ver || 0;
+  if (d.keysVer && d.keysVer !== roomKeysVer) { const first = !roomKeysVer; roomKeysVer = d.keysVer; if (!first) await refreshMembers(); }
   seenMap = d.seen || {};
   onShares(d.shares || []);
+  presenceMap = Object.fromEntries((d.presence || []).map((p) => [p.user, p]));
+  onlineSet = new Set((d.presence || []).filter((p) => p.online).map((p) => p.user)); typingList = d.typing || []; renderPresence();
   for (const m of d.messages) await ingest(m, roomLoaded);
   roomLoaded = true;
+  if (pinBootstrap) { pinBootstrap = false; savePins(); } // first load done: from now on only pinned keys count
   refreshReceipts(); updateUnread(); markSeen();
+}
+async function roomLoop(gen) {
+  // the long poll is held outside the queue (it may wait 25 s); its answer is applied through the queue
+  while (me && gen === roomGen) {
+    try {
+      const d = await json('/api/room/messages?rev=' + roomRev + '&wait=1&ver=' + roomVer);
+      if (gen !== roomGen) return;
+      const run = roomQueue.then(() => applyRoom(d)); roomQueue = run.catch(() => {}); await run;
+    } catch { await sleep(3000); }
+  }
 }
 async function ingest(m, live) {
   roomRev = Math.max(roomRev, m.rev || m.seq);
   const prev = msgs.get(m.seq);
   const p = await decryptMsg(m);
   if (prev && prev.url) URL.revokeObjectURL(prev.url);
-  const rec = { m, text: p.t, r: p.r, audio: p.a || null, url: null, locked: !!p.locked, el: prev ? prev.el : null };
+  const rec = { m, text: p.t, r: p.r, audio: p.a || null, url: null, locked: !!p.locked, el: prev ? prev.el : null, fresh: live && !prev };
   msgs.set(m.seq, rec);
   if (convOfMsg(m) === currentConv) renderMsg(rec);
   for (const other of msgs.values()) if (other.r === m.seq && other.el) renderMsg(other); // refresh quotes of this message
@@ -1631,21 +2142,17 @@ function withImages(el, text, render) { // split out [[image:ref]] markers, rend
   const parts = String(text).split(/\[\[(image:[a-z0-9-]+\/[a-z0-9-]+|youtube:[\w-]{11})\]\]/);
   parts.forEach((part, i) => { if (i % 2) el.append(part.startsWith('youtube:') ? ytPlayer(part.slice(8)) : hostImage(part.slice(6))); else if (part.trim()) { const span = document.createElement('div'); render(span, part.replace(/\n+$/, '')); el.append(span); } });
 }
-function renderRich(el, text) { // ``` code blocks + highlighted @mentions + host pictures
+function renderRich(el, text) { // markdown + @mentions, with host pictures / YouTube players split out
   if (/\[\[(image|youtube):/.test(text)) return withImages(el, text, renderRichText);
   renderRichText(el, text);
 }
-function renderRichText(el, text) {
-  text.split(/```[^\n]*\n?/).forEach((part, i) => {
-    if (i % 2) { const pre = document.createElement('pre'); pre.textContent = part.replace(/\n$/, ''); el.append(pre); return; }
-    for (const bit of part.split(/(@[\w.-]+)/)) {
-      if (!/^@[\w.-]+$/.test(bit)) { if (bit) el.append(bit); continue; }
-      const owner = handleOwner(bit.slice(1));
-      if (!owner) { el.append(bit); continue; }
-      const s = document.createElement('span'); s.className = 'mention' + (owner === me.username ? ' you' : ''); s.textContent = bit; s.style.color = colorOf(owner);
-      el.append(s);
-    }
-  });
+function renderRichText(el, text) { // full markdown + mermaid (web/md.js), with highlighted @mentions
+  MD.render(el, text, { mention: (h) => {
+    const owner = handleOwner(h);
+    if (!owner) return null;
+    const s = document.createElement('span'); s.className = 'mention' + (owner === me.username ? ' you' : ''); s.textContent = '@' + h; s.style.color = colorOf(owner);
+    return s;
+  } });
 }
 function renderMsg(rec, bulk) {
   const { m } = rec, log = $('roomLog'), mine = m.from === me.username;
@@ -1663,23 +2170,31 @@ function renderMsg(rec, bulk) {
   el.append(head);
   if (rec.r && !m.deleted) {
     const q = msgs.get(rec.r), quote = document.createElement('div'); quote.className = 'quote';
-    quote.textContent = '↪ ' + (q ? nickOf(q.m.from) + ': ' + snippet(q) : 'an earlier message');
+    label(quote, 'reply', q ? nickOf(q.m.from) + ': ' + snippet(q) : 'an earlier message');
     quote.title = 'Jump to the message this replies to';
     quote.onclick = (e) => { e.stopPropagation(); jumpTo(rec.r); };
     el.append(quote);
   }
   const body = document.createElement('div'); body.className = 'body';
-  if (m.deleted) body.textContent = 'message deleted'; else renderRich(body, rec.text);
+  if (m.deleted) body.textContent = 'message deleted';
+  else if (rec.locked) body.append(ic('lock', 'lead'), rec.text); // could not be opened: say why, never render it
+  else renderRich(body, rec.text);
   el.append(body);
   if (rec.audio && !m.deleted) {
-    const au = document.createElement('audio'); au.controls = true; au.preload = 'metadata';
-    au.src = clipUrl(rec); au.volume = prefs().clips.volume / 100;
-    au.onclick = (e) => e.stopPropagation();
-    el.append(au);
+    if (rec.url || rec.audio.d) {
+      const au = document.createElement('audio'); au.controls = true; au.preload = 'metadata';
+      au.volume = prefs().clips.volume / 100; clipUrl(rec).then((u) => { au.src = u; }).catch(() => {});
+      au.onclick = (e) => e.stopPropagation();
+      el.append(au);
+    } else el.append(clipPlayer(rec));
   }
   if (mine && !m.deleted) { const s = document.createElement('div'); s.className = 'seenLine'; el.append(s); }
   el.onclick = (e) => openMsgMenu(rec, e);
-  if (!rec.el) { rec.el = el; log.append(el); if (!bulk && (atBottom || mine)) log.scrollTop = log.scrollHeight; }
+  if (!rec.el) {
+    rec.el = el; log.append(el);
+    if (rec.fresh) { el.classList.add('new'); rec.fresh = false; } // slides in once; re-renders (edits, receipts) do not replay it
+    if (!bulk && (atBottom || mine)) log.scrollTo({ top: log.scrollHeight, behavior: bulk ? 'auto' : 'smooth' });
+  }
   updateSeenLine(rec);
 }
 function jumpTo(seq) {
@@ -1771,12 +2286,31 @@ function notify(rec) {
     if (P.clips.autoplay && !watching) enqueueClip(rec);
   } else if (readIt) speak(`${who}${how}: ${rec.text}`);
 }
-function clipUrl(rec) { // decrypted audio → a local blob URL (never leaves the browser)
+async function clipUrl(rec) { // decrypted audio → a local blob URL (never leaves the browser)
   if (!rec.url) {
-    const bytes = Uint8Array.from(atob(rec.audio.d), (c) => c.charCodeAt(0));
-    rec.url = URL.createObjectURL(new Blob([bytes], { type: rec.audio.m }));
+    let bytes;
+    if (rec.audio.d) bytes = Uint8Array.from(atob(rec.audio.d), (c) => c.charCodeAt(0)); // older clips: inside the message
+    else { // v4: download the clip's own ciphertext now, decrypt with the key from the message body
+      const b = fromB64((await json('/api/room/blob?seq=' + rec.m.seq)).blob);
+      const k = await crypto.subtle.importKey('raw', fromB64(rec.audio.k), 'AES-GCM', false, ['decrypt']);
+      bytes = unframe(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.subarray(0, 12), additionalData: enc.encode(blobAad(rec.m.from, rec.m.mid)) }, k, b.subarray(12)));
+    }
+    if (!rec.url) rec.url = URL.createObjectURL(new Blob([bytes], { type: rec.audio.m }));
   }
   return rec.url;
+}
+function clipPlayer(rec) { // a play button that downloads + decrypts the clip on first press, then becomes the player
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'clipBtn';
+  label(b, 'play', 'Voice clip (' + clipLen(rec.audio.s || 0) + ')');
+  b.onclick = async (e) => {
+    e.stopPropagation(); b.disabled = true; b.textContent = 'Loading…';
+    try {
+      const au = document.createElement('audio'); au.controls = true; au.src = await clipUrl(rec); au.volume = prefs().clips.volume / 100;
+      au.onclick = (ev) => ev.stopPropagation();
+      b.replaceWith(au); au.play().catch(() => {});
+    } catch (err) { b.disabled = false; label(b, 'play', 'Voice clip: could not load (' + err.message + ')'); }
+  };
+  return b;
 }
 function enqueueClip(rec) {
   ttsQueue.push({ clip: rec });
@@ -1795,16 +2329,19 @@ function speak(text) {
   if (ttsQueue.length > 30) ttsQueue.splice(0, ttsQueue.length - 30); // never fall endlessly behind
   if (!ttsBusy) ttsNext();
 }
-let clipPlayer = null;
+let clipAudio = null;
 function ttsNext() {
   const text = ttsQueue.shift();
   if (!text) { ttsBusy = false; return; }
   ttsBusy = true;
   if (typeof text === 'object') { // a queued voice clip
-    clipPlayer = new Audio(clipUrl(text.clip));
-    clipPlayer.volume = prefs().clips.volume / 100;
-    clipPlayer.onended = clipPlayer.onerror = () => { clipPlayer = null; setTimeout(ttsNext, 250); };
-    clipPlayer.play().catch(() => { clipPlayer = null; setTimeout(ttsNext, 250); });
+    clipUrl(text.clip).then((u) => {
+      if (!ttsBusy) return; // stopped meanwhile
+      clipAudio = new Audio(u);
+      clipAudio.volume = prefs().clips.volume / 100;
+      clipAudio.onended = clipAudio.onerror = () => { clipAudio = null; setTimeout(ttsNext, 250); };
+      clipAudio.play().catch(() => { clipAudio = null; setTimeout(ttsNext, 250); });
+    }).catch(() => setTimeout(ttsNext, 250));
     return;
   }
   if (!('speechSynthesis' in window)) { setTimeout(ttsNext, 0); return; }
@@ -1817,7 +2354,7 @@ function ttsNext() {
 }
 function ttsStop() {
   ttsQueue.length = 0; ttsBusy = false;
-  if (clipPlayer) { clipPlayer.onended = clipPlayer.onerror = null; clipPlayer.pause(); clipPlayer = null; }
+  if (clipAudio) { clipAudio.onended = clipAudio.onerror = null; clipAudio.pause(); clipAudio = null; }
   if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
@@ -1861,13 +2398,16 @@ async function finishClip() {
   if (seconds < 0.5) return;
   const blob = new Blob(r.chunks, { type: r.recorder.mimeType || 'audio/webm' });
   const buf = new Uint8Array(await blob.arrayBuffer());
-  let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
   const caption = $('roomInput').value.trim();
   try {
     const to = convPeer(currentConv);
     const forAgent = callsAgent(caption, to);
-    const payload = { v: 2, t: caption, a: { m: blob.type.split(';')[0] || 'audio/webm', d: btoa(bin), s: Math.round(seconds * 10) / 10 }, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) };
-    const sealed = await sealFor(JSON.stringify(payload), to, forAgent);
+    const mime = blob.type.split(';')[0] || 'audio/webm', secs = Math.round(seconds * 10) / 10, mid = newMid();
+    // v4: the audio travels as its own ciphertext (raw bytes, fetched on play); older browsers: inside the body
+    const clip = HAS_DEFLATE ? await sealBlob(buf, mid) : null;
+    const a = clip ? { m: mime, k: clip.k, s: secs } : { m: mime, d: bytesToB64(buf), s: secs };
+    const payload = { v: 2, t: caption, a, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) };
+    const sealed = await sealFor(JSON.stringify(payload), to, forAgent, mid, clip ? clip.blob : undefined);
     await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
     if (caption) $('roomInput').value = '';
     cancelCompose(); await pollRoom();
@@ -1880,7 +2420,8 @@ async function finishClip() {
 // Codecs: Opus for voice (in-band FEC, DTX for silence, ~32 kb/s), VP9 → AV1 → VP8 → H.264 for video,
 // all decoded natively by the browser. Camera always starts OFF; the microphone uses the noise
 // suppression / echo cancellation / auto level settings (on by default).
-const call = { conv: null, peers: new Map(), mic: null, cam: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map() };
+const call = { conv: null, peers: new Map(), mic: null, cam: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map(),
+  local: typeof MediaStream === 'function' ? new MediaStream() : null }; // the one stream id our audio + video are sent under (lip-sync)
 let callInit = false;
 const VQ = { low: [320, 180, 15, 250], medium: [640, 360, 24, 700], high: [1280, 720, 30, 1800] }; // w, h, fps, kb/s
 function audioConstraints() { const a = prefs().audio; return { noiseSuppression: a.noise, echoCancellation: a.echo, autoGainControl: a.agc, channelCount: 1 }; }
@@ -1916,7 +2457,7 @@ async function onCallState(state) {
     const others = list.filter((p) => p.user !== me.username);
     for (const p of others) if (!call.peers.has(p.user)) connectPeer(p.user);
     if (!restarted) for (const u of [...call.peers.keys()]) if (!others.some((p) => p.user === u)) dropPeer(u);
-    for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); peer.tile.querySelector('.lbl').textContent = nickOf(p.user) + (p.mic ? '' : ' 🔇'); } }
+    for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); const l = peer.tile.querySelector('.lbl'); l.textContent = nickOf(p.user); if (!p.mic) l.append(ic('mic-off', 'trail')); } }
     $('callInfo').textContent = convLabel(call.conv) + ' · ' + list.length + ' in call';
   }
   renderCallBanner();
@@ -1925,7 +2466,7 @@ function callNotify(conv, user) {
   const P = prefs();
   if (P.sound.on) playTone('mention', P.sound.mention);
   const t = document.createElement('div'); t.className = 'toast mention'; t.style.borderLeftColor = colorOf(user);
-  const b = document.createElement('b'); b.style.color = colorOf(user); b.textContent = '📞 ' + nickOf(user);
+  const b = document.createElement('b'); b.style.color = colorOf(user); label(b, 'phone', nickOf(user));
   t.append(b, ' is in a ' + (conv === 'room' ? 'call in # Everyone' : 'private call with you') + ' — click to join');
   t.style.setProperty('--toast-s', '12s');
   t.onclick = () => { t.remove(); joinCall(conv); };
@@ -1936,10 +2477,12 @@ function callNotify(conv, user) {
 function renderCallBanner() {
   if (!me || !$('callBanner')) return;
   const list = inCallList(currentConv), b = $('callBanner'), btn = $('callBtn');
-  btn.textContent = call.conv === currentConv ? '📞 In call' : list.length ? '📞 Join call (' + list.length + ')' : '📞 Call';
+  label(btn, 'phone', call.conv === currentConv ? 'In call' : list.length ? 'Join call (' + list.length + ')' : 'Call');
   if (!list.length || call.conv === currentConv) { b.hidden = true; return; }
   b.textContent = '';
-  const s = document.createElement('span'); s.textContent = '🔊 ' + list.map((p) => nickOf(p.user) + (p.cam ? ' 📷' : '')).join(', ') + (list.length === 1 ? ' is' : ' are') + ' in a call here';
+  const s = document.createElement('span'); s.append(ic('speaker', 'lead'));
+  list.forEach((p, k) => { s.append((k ? ', ' : '') + nickOf(p.user)); if (p.cam) s.append(ic('camera', 'trail')); });
+  s.append((list.length === 1 ? ' is' : ' are') + ' in a call here');
   const j = document.createElement('button'); j.type = 'button'; j.textContent = 'Join'; j.onclick = () => joinCall(currentConv);
   b.append(s, j); b.hidden = false;
 }
@@ -1985,7 +2528,7 @@ function applyPersonAudio(tile) {
   v.volume = Math.max(0, Math.min(1, (prefs().call.volume / 100) * (personVol(u) / 100)));
   v.muted = personMuted(u);
   const b = tile.querySelector('.pMute'), r = tile.querySelector('.pVol');
-  if (b) { b.textContent = personMuted(u) ? '🔇' : '🔊'; b.title = (personMuted(u) ? 'Unmute ' : 'Mute ') + nickOf(u) + ' (only for you)'; b.classList.toggle('off', personMuted(u)); }
+  if (b) { label(b, personMuted(u) ? 'speaker-off' : 'speaker'); b.title = (personMuted(u) ? 'Unmute ' : 'Mute ') + nickOf(u) + ' (only for you)'; b.classList.toggle('off', personMuted(u)); }
   if (r) { r.value = personVol(u); r.title = nickOf(u) + ': ' + personVol(u) + '% (only for you)'; }
 }
 function makeTile(user, self) {
@@ -2066,31 +2609,47 @@ function tuneSenders(peer) {
     s.setParameters(params).catch(() => {});
   }
 }
+// Lip-sync: browsers only synchronise audio and video that belong to the same stream (the SDP msid).
+// Both senders are tied to one local stream id, and the receiving side plays the remote stream the
+// tracks arrive in, so voice and picture stay in step instead of drifting apart.
 async function attachLocal(peer) { // put our current mic / camera on this connection's senders
   const ts = peer.pc.getTransceivers();
-  for (const t of ts) { t.direction = 'sendrecv'; preferCodecs(t, t.receiver.track.kind); } // synchronously, before any offer / answer is made
+  for (const t of ts) { // synchronously, before any offer / answer is made
+    t.direction = 'sendrecv'; preferCodecs(t, t.receiver.track.kind);
+    if (t.sender.setStreams) try { t.sender.setStreams(call.local); } catch {}
+  }
   for (const t of ts) { try { await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? call.mic : call.cam); } catch {} }
 }
 function connectPeer(user) {
   if (call.peers.has(user)) return call.peers.get(user);
   const pc = new RTCPeerConnection({ iceServers: call.ice });
-  const peer = { pc, user, offerer: me.username < user, pendingIce: [], stream: new MediaStream(), tile: makeTile(user, false) };
+  const peer = { pc, user, offerer: me.username < user, pendingIce: [], iceOut: [], iceTimer: null, stream: new MediaStream(), tile: makeTile(user, false) };
   call.peers.set(user, peer);
   $('callTiles').append(peer.tile);
   peer.tile.querySelector('video').srcObject = peer.stream;
   pc.ontrack = (e) => {
-    peer.stream.addTrack(e.track); peer.tile.querySelector('video').play().catch(() => {});
+    const v = peer.tile.querySelector('video');
+    if (e.streams && e.streams[0]) { // the sender's stream: audio + video in one, so the browser lip-syncs them
+      if (v.srcObject !== e.streams[0]) { peer.stream = e.streams[0]; v.srcObject = peer.stream; }
+    } else if (!peer.stream.getTracks().includes(e.track)) peer.stream.addTrack(e.track);
+    v.play().catch(() => {});
     if (e.track.kind === 'audio') addMeter(user, e.track);
   };
-  pc.onicecandidate = (e) => { if (e.candidate) sendSignal(user, { c: e.candidate.toJSON() }); };
+  // ICE candidates arrive in quick bursts: gather them for 40 ms and send one signal per burst (each
+  // signal is a round trip through the tunnel, so this cuts set-up time on slow links).
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) return;
+    peer.iceOut.push(e.candidate.toJSON());
+    if (!peer.iceTimer) peer.iceTimer = setTimeout(() => { peer.iceTimer = null; sendSignal(user, { cs: peer.iceOut.splice(0) }); }, 40);
+  };
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') tuneSenders(peer);
     if (pc.connectionState === 'failed' && peer.offerer) pc.restartIce();
     if (pc.connectionState === 'failed') callMsg('Could not connect to ' + nickOf(user) + ' directly (strict network). A TURN server in the hub config fixes this.');
   };
   if (peer.offerer) { // exactly one side offers, so there is never a collision
-    pc.addTransceiver('audio', { direction: 'sendrecv' });
-    pc.addTransceiver('video', { direction: 'sendrecv' });
+    pc.addTransceiver('audio', { direction: 'sendrecv', streams: [call.local] });
+    pc.addTransceiver('video', { direction: 'sendrecv', streams: [call.local] });
     attachLocal(peer);
     pc.onnegotiationneeded = async () => {
       try { await pc.setLocalDescription(); await sendSignal(user, { d: tuneSdp(pc.localDescription) }); } catch {}
@@ -2101,11 +2660,12 @@ function connectPeer(user) {
 function dropPeer(user) {
   const peer = call.peers.get(user);
   if (!peer) return;
+  clearTimeout(peer.iceTimer);
   try { peer.pc.close(); } catch {}
   removeMeter(user);
   peer.tile.remove(); call.peers.delete(user); call.gone.delete(user);
 }
-async function pairKey(user) { const m = memberOf(user); return m && m.pub && chatPriv ? sharedWith(m.pub) : null; }
+async function pairKey(user) { const m = memberOf(user); return m && m.pub && chatPriv && !changedKeys.has(user) && trustedPub(user, m.pub) ? sharedWith(m.pub) : null; }
 async function sendSignal(user, body) {
   const k = await pairKey(user);
   if (!k || !call.conv) return;
@@ -2126,22 +2686,24 @@ async function onSignal(s) {
       await pc.setRemoteDescription(msg.d);
       if (msg.d.type === 'offer') { await attachLocal(peer); await pc.setLocalDescription(); await sendSignal(s.from, { d: tuneSdp(pc.localDescription) }); }
       for (const c of peer.pendingIce.splice(0)) { try { await pc.addIceCandidate(c); } catch {} }
-    } else if (msg.c) {
-      if (pc.remoteDescription) { try { await pc.addIceCandidate(msg.c); } catch {} } else peer.pendingIce.push(msg.c);
+    } else if (msg.c || Array.isArray(msg.cs)) { // one candidate (older pages) or a batch
+      for (const c of msg.cs || [msg.c]) {
+        if (pc.remoteDescription) { try { await pc.addIceCandidate(c); } catch {} } else peer.pendingIce.push(c);
+      }
     }
   } catch (e) { callMsg('Call set-up problem with ' + nickOf(s.from) + ': ' + e.message); }
 }
 
 function updateCallButtons() {
   const micOn = !!(call.mic && call.mic.enabled), camOn = !!call.cam;
-  $('callMic').textContent = call.mic ? (micOn ? '🔇 Mute' : '🎤 Unmute') : '🎤 Allow mic';
+  if (call.mic) label($('callMic'), micOn ? 'mic-off' : 'mic', micOn ? 'Mute' : 'Unmute'); else label($('callMic'), 'mic', 'Allow mic');
   $('callMic').title = call.mic ? (micOn ? 'Mute your microphone (M)' : 'Unmute your microphone (M) — you are muted') : 'Try to use your microphone again';
   if (call.mic && !meters.has(me.username)) addMeter(me.username, call.mic);
   $('callMic').classList.toggle('off', !micOn);
-  $('callCam').textContent = camOn ? '📷 Camera on' : '📷 Camera off';
+  label($('callCam'), 'camera', camOn ? 'Camera on' : 'Camera off');
   $('callCam').classList.toggle('off', !camOn);
   const st = selfTile();
-  if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; st.querySelector('.lbl').textContent = 'You' + (micOn ? '' : ' 🔇'); }
+  if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; const l = st.querySelector('.lbl'); l.textContent = 'You'; if (!micOn) l.append(ic('mic-off', 'trail')); }
 }
 function pushCallState() {
   if (call.conv) json('/api/call/state', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled) }) }).catch(() => {});
@@ -2230,10 +2792,16 @@ function dictStop() {
   clearTimeout(d.silence); clearTimeout(d.wake); d.wake = null;
   try { d.rec.stop(); } catch {}
 }
+function dictLabel(btn, state) { // idle → talk icon, listening → stop, "send message" heard → send (with words on the Work button)
+  const full = btn.dataset.full === '1';
+  if (state === 'stop') label(btn, 'stop', full ? 'Stop' : '');
+  else if (state === 'send') label(btn, 'send', full ? 'Sending…' : '');
+  else label(btn, 'talk', full ? 'Talk' : '');
+}
 function dictCleanup(d) {
   if (dict === d) dict = null;
   d.btn.classList.remove('on', 'armed');
-  d.btn.textContent = d.btn.dataset.idle;
+  dictLabel(d.btn, 'idle');
 }
 function dictStart(box, btn, submit) {
   if (dict) { const same = dict.btn === btn; dictStop(); if (same) return; }
@@ -2258,7 +2826,7 @@ function dictStart(box, btn, submit) {
     // "send message" + silence → send. More speech after it cancels that (the words stay as text).
     clearTimeout(d.wake); d.wake = null; btn.classList.remove('armed');
     if (!interim && WAKE.test(d.finals)) {
-      btn.classList.add('armed'); btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '🗣 Sending…' : '📨';
+      btn.classList.add('armed'); dictLabel(btn, 'send');
       d.wake = setTimeout(() => {
         d.wake = null;
         d.finals = d.finals.replace(WAKE, '');
@@ -2266,7 +2834,7 @@ function dictStart(box, btn, submit) {
         dictStop(); dictCleanup(d); // cleanup is idempotent: also covers the browser having already ended recognition
         if (box.value) d.submit();
       }, 1300);
-    } else if (!d.stopping) btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '■ Stop' : '■';
+    } else if (!d.stopping) dictLabel(btn, 'stop');
     box.value = d.base + d.finals + (interim ? (d.finals ? ' ' : '') + interim : '');
     box.dispatchEvent(new Event('input')); // keeps the Stop / Send now button and @ suggestions in step
     quietStop();
@@ -2281,13 +2849,13 @@ function dictStart(box, btn, submit) {
     dictCleanup(d);
   };
   try { rec.start(); } catch { dictCleanup(d); return; }
-  btn.classList.add('on'); btn.textContent = btn.dataset.idle.startsWith('🗣 ') ? '■ Stop' : '■';
+  btn.classList.add('on'); dictLabel(btn, 'stop');
   quietStop();
   box.focus();
 }
 for (const [btnId, boxId, formId] of [['roomDictate', 'roomInput', 'roomComposer'], ['workDictate', 'input', 'composer']]) {
   const btn = $(btnId);
-  btn.dataset.idle = btn.textContent;
+  btn.dataset.full = btn.textContent.trim() ? '1' : ''; // the Work button shows words next to its icon
   btn.title = 'Talk instead of typing: click to start, click again (or ~3 s of silence) to stop. Press Send / Enter to send — or finish with "send message" and pause to send automatically.';
   btn.hidden = !SpeechRec; // e.g. Firefox has no speech recognition
   btn.onclick = () => dictStart($(boxId), btn, () => $(formId).requestSubmit());
@@ -2311,10 +2879,11 @@ function toast(rec, kind) {
 }
 function startRoomPolling() {
   stopRoomPolling();
-  loadLocalChatKey().then(refreshMembers).then(pollRoom).then(() => selectConv(currentConv));
-  roomTimer = setInterval(() => { pollRoom(); }, 3000); // also while the tab is in the background, so sounds still play
+  const gen = ++roomGen;
+  // also runs while the tab is in the background, so sounds still play
+  loadLocalChatKey().then(refreshMembers).then(() => pollRoom()).then(() => selectConv(currentConv)).catch(() => {}).then(() => roomLoop(gen));
 }
-function stopRoomPolling() { if (roomTimer) clearInterval(roomTimer); roomTimer = null; }
+function stopRoomPolling() { roomGen++; roomVer = 0; roomKeysVer = 0; }
 
 // Message menu: reply to anyone; edit / delete your own; receipts.
 function closeMsgMenu() { const m = $('msgMenu'); if (m) m.remove(); }
@@ -2322,12 +2891,12 @@ function openMsgMenu(rec, e) {
   if (e.target.closest('.quote') || window.getSelection().toString()) return;
   closeMsgMenu();
   const menu = document.createElement('div'); menu.id = 'msgMenu';
-  const add = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = (ev) => { ev.stopPropagation(); fn(b); }; menu.append(b); return b; };
+  const add = (icon, text, fn) => { const b = label(document.createElement('button'), icon, text); b.type = 'button'; b.onclick = (ev) => { ev.stopPropagation(); fn(b); }; menu.append(b); return b; };
   const mine = rec.m.from === me.username;
-  if (!rec.m.deleted) add('↩ Reply', () => { closeMsgMenu(); startReply(rec); });
-  if (mine && !rec.m.deleted && !rec.locked && !rec.audio) add('✎ Edit', () => { closeMsgMenu(); startEdit(rec); });
-  if (mine && !rec.m.deleted) add('🗑 Delete', (b) => {
-    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = '🗑 Click again to delete'; return; }
+  if (!rec.m.deleted) add('reply', 'Reply', () => { closeMsgMenu(); startReply(rec); });
+  if (mine && !rec.m.deleted && !rec.locked && !rec.audio) add('edit', 'Edit', () => { closeMsgMenu(); startEdit(rec); });
+  if (mine && !rec.m.deleted) add('trash', 'Delete', (b) => {
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; label(b, 'trash', 'Click again to delete'); return; }
     closeMsgMenu();
     json('/api/room/delete', { method: 'POST', body: JSON.stringify({ seq: rec.m.seq }) }).then(pollRoom).catch((err) => sysRoom('Could not delete: ' + err.message));
   });
@@ -2355,8 +2924,12 @@ function cancelCompose() {
   replyTo = null; editingSeq = null; $('replyBar').hidden = true; $('mentionList').hidden = true;
 }
 $('replyCancel').onclick = cancelCompose;
-$('roomSideToggle').onclick = () => { $('roomCore').classList.toggle('noside'); store.set('mills.roomSide', $('roomCore').classList.contains('noside') ? 'hide' : ''); placeCall(); };
-if (store.get('mills.roomSide') === 'hide') $('roomCore').classList.add('noside');
+// On a phone the conversation list is a drawer: closed by default, opened with ☰, and it closes
+// again once a conversation is picked. On wider screens it is a side bar that remembers its state.
+const isNarrow = () => window.matchMedia('(max-width: 700px)').matches;
+$('roomSideToggle').onclick = () => { $('roomCore').classList.toggle('noside'); if (!isNarrow()) store.set('mills.roomSide', $('roomCore').classList.contains('noside') ? 'hide' : ''); placeCall(); };
+if (store.get('mills.roomSide') === 'hide' || isNarrow()) $('roomCore').classList.add('noside');
+window.matchMedia('(max-width: 700px)').addEventListener('change', (e) => { $('roomCore').classList.toggle('noside', e.matches || store.get('mills.roomSide') === 'hide'); placeCall(); });
 
 // Unity (the room agent) only receives a message when it @-mentions her (or is a private message to
 // her). Then the 5 messages before it in that conversation go along inside the encryption, so she
@@ -2376,22 +2949,38 @@ function agentCtx(conv) {
 }
 // Encrypt one message body for a conversation: everyone with a key, or only the two people.
 // The agent gets a copy only when forAgent is true.
-async function sealFor(plain, to, forAgent) {
+// v4 (browsers with CompressionStream): the JSON is deflated BEFORE encryption, so the hub only ever
+// sees compressed + padded ciphertext. A voice clip's audio goes as a separate ciphertext (`blob`)
+// with its own key carried inside the encrypted body; it is only downloaded when someone plays it.
+async function sealFor(plain, to, forAgent, mid = newMid(), blob) {
   await refreshMembers();
+  if (to && changedKeys.has(to)) throw new Error(nickOf(to) + '\'s key changed: compare fingerprints and trust the new key first (Key fingerprints).');
+  const v = HAS_DEFLATE ? 4 : 3, aad = bodyAad(me.username, to, mid, v);
   const raw = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
   const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(plain));
+  const body = v === 4 ? frame(await deflate(enc.encode(plain))) : padPlain(plain);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, k, body);
   const keys = {};
   for (const m of roomMembers) {
     if (to && m.username !== to && m.username !== me.username) continue;
     if (m.agent && !forAgent) continue;
+    if (m.username !== me.username && changedKeys.has(m.username)) continue; // never encrypt to an unverified key
     const pub = m.username === me.username ? chatPubJwk : m.pub;
     if (!pub) continue;
     const kiv = crypto.getRandomValues(new Uint8Array(12));
-    keys[m.username] = { iv: toB64(kiv), wk: toB64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await sharedWith(pub), raw)) };
+    keys[m.username] = { iv: toB64(kiv), wk: toB64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: kiv, additionalData: enc.encode(aad + '|' + m.username) }, await wrapWith(pub), raw)) };
   }
   if (to && !keys[to]) throw new Error(nickOf(to) + ' has no chat key yet (they have not signed in since chat was added).');
-  return { iv: toB64(iv), ct: toB64(ct), keys };
+  return { v, mid, iv: toB64(iv), ct: toB64(ct), keys, ...(blob ? { blob } : {}) };
+}
+// A voice clip's audio, encrypted with its own fresh key (kept inside the message body, so editing the
+// caption re-encrypts the body but leaves the clip as it is). Bound to the sender and message id.
+async function sealBlob(bytes, mid) {
+  const bk = crypto.getRandomValues(new Uint8Array(32)), biv = crypto.getRandomValues(new Uint8Array(12));
+  const k = await crypto.subtle.importKey('raw', bk, 'AES-GCM', false, ['encrypt']);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: biv, additionalData: enc.encode(blobAad(me.username, mid)) }, k, frame(bytes)));
+  const out = new Uint8Array(12 + ct.length); out.set(biv); out.set(ct, 12);
+  return { k: toB64(bk), blob: bytesToB64(out) };
 }
 $('roomComposer').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2402,7 +2991,8 @@ $('roomComposer').addEventListener('submit', async (e) => {
     if (editingSeq) {
       const rec = msgs.get(editingSeq);
       const eto = rec ? rec.m.to || '' : '';
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}) }), eto, callsAgent(text, eto));
+      // a voice clip keeps its audio: v4 clips keep their key (the clip itself stays on the hub), older ones their data
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}), ...(rec && rec.audio ? { a: rec.audio } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined);
       await json('/api/room/edit', { method: 'POST', body: JSON.stringify({ seq: editingSeq, ...sealed }) });
     } else {
       const to = convPeer(currentConv), forAgent = callsAgent(text, to);
@@ -2436,18 +3026,92 @@ function insertMention(u) {
   $('mentionList').hidden = true; el.focus();
 }
 $('roomInput').addEventListener('input', updateMentionList);
+// ── Presence: who is online, who is typing (renewed every 2.5 s while keys are pressed; lapses in 6 s) ──
+let onlineSet = new Set(), presenceMap = {}, typingList = [], typingSentAt = 0, typingOn = false, typingTimer = null;
+// Hub-wide presence: the page tells the hub which screen it is on, whether it is idle (tab hidden or
+// 5 min without input), and that it is going away; online / offline itself comes from the open long poll.
+const IDLE_MS = 5 * 60000;
+let lastInput = Date.now(), sentIdle = null, sentScreen = '';
+const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin' };
+function postPresence(body) { if (me && token && base) json('/api/presence', { method: 'POST', body: JSON.stringify(body) }).catch(() => {}); }
+function presenceTick() {
+  if (!me) return;
+  const idle = document.visibilityState === 'hidden' || Date.now() - lastInput > IDLE_MS;
+  const screen = ['menu', 'shell', 'room', 'board', 'cal', 'admin'].find((id) => !$(id).hidden) || '';
+  if (idle !== sentIdle || screen !== sentScreen) { sentIdle = idle; sentScreen = screen; postPresence({ screen, idle }); }
+}
+for (const ev of ['pointerdown', 'keydown', 'pointermove', 'wheel', 'touchstart']) document.addEventListener(ev, () => { lastInput = Date.now(); if (sentIdle) presenceTick(); }, { passive: true, capture: true });
+document.addEventListener('visibilitychange', presenceTick);
+setInterval(presenceTick, 15000);
+window.addEventListener('pagehide', () => { // closing the tab: offline at once instead of after the timeout
+  if (me && token && base) fetch(base + '/api/presence', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ gone: true }) }).catch(() => {});
+});
+const ago = (ms) => { const s = Math.round((Date.now() - ms) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago'; };
+function statusOf(u) { // 'on' | 'idle' | 'off', with a sentence for tooltips and the menu
+  const p = presenceMap[u];
+  if (!p || !p.online) return { cls: 'off', text: p && p.seen ? 'offline · last seen ' + ago(p.seen) : 'offline' };
+  if (p.idle) return { cls: 'idle', text: 'away' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') };
+  return { cls: 'on', text: 'online' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') };
+}
+function renderWho() { // the main menu's "Who's here" strip
+  const box = $('menuWho'); if (!box || !me) return;
+  box.textContent = '';
+  const people = roomMembers.filter((m) => !m.agent && m.username !== me.username);
+  if (!people.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.append(Object.assign(document.createElement('span'), { className: 'whoLbl', textContent: "Who's here" }));
+  for (const m of people.sort((a, b) => (statusOf(b.username).cls === 'on') - (statusOf(a.username).cls === 'on'))) {
+    const st = statusOf(m.username), chip = document.createElement('span'); chip.className = 'whoChip ' + st.cls; chip.title = st.text;
+    const dot = document.createElement('i'); dot.className = 'pdot ' + st.cls; dot.style.background = colorOf(m.username);
+    chip.append(dot, nickOf(m.username), Object.assign(document.createElement('small'), { textContent: st.cls === 'off' ? (presenceMap[m.username] && presenceMap[m.username].seen ? ago(presenceMap[m.username].seen) : 'offline') : st.text.replace(/^(online|away)( · in )?/, '$1 ') }));
+    box.append(chip);
+  }
+}
+function sendTyping(on) {
+  if (!me || (!on && !typingOn)) return;
+  typingOn = on; typingSentAt = on ? Date.now() : 0;
+  json('/api/room/typing', { method: 'POST', body: JSON.stringify({ conv: currentConv, on }) }).catch(() => {});
+}
+$('roomInput').addEventListener('input', () => {
+  const has = !!$('roomInput').value.trim();
+  clearTimeout(typingTimer);
+  if (!has) return sendTyping(false);
+  if (Date.now() - typingSentAt > 2500) sendTyping(true);
+  typingTimer = setTimeout(() => sendTyping(false), 4000); // stopped typing without sending
+});
+$('roomComposer').addEventListener('submit', () => { clearTimeout(typingTimer); sendTyping(false); }, true);
+function renderPresence() {
+  if (!me) return;
+  const n = [...onlineSet].filter((u) => u !== me.username && memberOf(u) && !memberOf(u).agent).length;
+  const st = $('roomStatus');
+  if (chatPriv) { st.textContent = ''; st.append(ic('lock', 'lead'), 'End-to-end encrypted'); if (n) { st.append(' · '); const o = document.createElement('span'); o.className = 'online'; o.textContent = n + ' online'; st.append(o); } }
+  for (const b of $('convList').querySelectorAll('.cv[data-user]')) {
+    const st = statusOf(b.dataset.user), dot = b.querySelector('.dot'), sub = b.querySelector('small');
+    dot.classList.remove('on', 'idle', 'off'); dot.classList.add(st.cls); dot.title = st.text;
+    if (sub && !(memberOf(b.dataset.user) || {}).agent) sub.textContent = st.text;
+  }
+  renderWho();
+  const who = typingList.filter((t) => t.conv === currentConv).map((t) => nickOf(t.user));
+  const line = $('typingLine');
+  if (!who.length) { line.hidden = true; return; }
+  line.textContent = ''; line.hidden = false;
+  const txt = who.length === 1 ? who[0] + ' is typing' : who.length === 2 ? who.join(' and ') + ' are typing' : who.slice(0, 2).join(', ') + ' and ' + (who.length - 2) + ' more are typing';
+  const dots = document.createElement('span'); dots.className = 'dots'; dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  line.append(txt, dots);
+  const log = $('roomLog'); if (log.scrollHeight - log.scrollTop - log.clientHeight < 80) log.scrollTop = log.scrollHeight;
+}
 $('roomInput').addEventListener('keydown', (e) => {
   const first = !$('mentionList').hidden && $('mentionList').querySelector('button');
   if (first && (e.key === 'Tab' || e.key === 'Enter')) { e.preventDefault(); insertMention(first.dataset.user); return; }
   if (e.key === 'Escape') { cancelCompose(); return; }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('roomComposer').requestSubmit(); }
 });
-function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.textContent = t; $('roomLog').append(d); $('roomLog').scrollTop = $('roomLog').scrollHeight; }
+function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.append(ic('warn', 'lead'), t); $('roomLog').append(d); $('roomLog').scrollTop = $('roomLog').scrollHeight; }
 
 // ── Work layout: left bar, resizable / minimizable panes, team chat docked or floating ──
-const PANES = ['files', 'edit', 'chat', 'roomPane'];
-const PANE_WIDTH = { files: 240, edit: 440, chat: 440, roomPane: 360 };
-const defaultLayout = () => ({ show: { files: true, edit: true, chat: true, roomPane: false }, size: {}, roomMode: 'dock', float: { x: 120, y: 120, w: 420, h: 520 }, railOpen: false });
+const PANES = ['files', 'edit', 'chat', 'tasks', 'roomPane'];
+const PANE_WIDTH = { files: 240, edit: 440, chat: 440, tasks: 300, roomPane: 360 };
+const defaultLayout = () => ({ show: { files: true, edit: true, chat: true, tasks: false, roomPane: false }, size: {}, roomMode: 'dock', float: { x: 120, y: 120, w: 420, h: 520 }, railOpen: false });
 let layout = defaultLayout();
 const layoutKey = () => 'mills.layout.' + (me ? me.username : '');
 function loadLayout() {
@@ -2609,22 +3273,20 @@ window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) appl
 // ── Shared Work sessions: share yours (watch-only for others), watch theirs in their own windows ──
 let myShare = '', sharesList = [], sharesInit = false;
 const watching = new Map(); // owner -> { win, log, live, after, ver, since, stop, events: [] }
+// Sharing is all or nothing: one button shares with everyone, the same button stops it.
 function renderShareSel() {
-  const sel = $('shareSel'); if (!sel || !me) return;
-  sel.textContent = '';
-  const opt = (v, l) => { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.append(o); };
-  opt('', '📡 Not shared');
-  opt('room', '📡 Shared with # Everyone');
-  for (const m of roomMembers) if (!m.agent && m.username !== me.username) opt(dmConv(m.username), '📡 Shared with ' + nickOf(m.username));
-  sel.value = myShare; if (sel.value !== myShare) sel.value = '';
-  sel.classList.toggle('on', !!myShare);
+  const b = $('shareBtn'); if (!b || !me) return;
+  label(b, myShare ? 'stop' : 'share', myShare ? 'Stop sharing' : 'Share with everyone');
+  b.classList.toggle('on', !!myShare);
+  b.title = myShare ? 'Everyone can watch this Work session right now (read-only). Click to stop sharing.'
+    : 'Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue';
 }
-$('shareSel').onchange = async () => {
-  const conv = $('shareSel').value;
+$('shareBtn').onclick = async () => {
+  const conv = myShare ? '' : 'room';
   try {
     const d = await json('/api/work/share', { method: 'POST', body: JSON.stringify({ conv, transcript: conv ? transcript.slice(-150) : [] }) });
     myShare = d.share;
-    sys(myShare ? 'Your Work session is shared with ' + (myShare === 'room' ? 'everyone' : nickOf(convPeer(myShare))) + ': they can watch it (read-only), including what you type. Pick "Not shared" to stop.' : 'Your Work session is no longer shared.');
+    sys(myShare ? 'Your Work session is shared with everyone: they can watch it (read-only), including what you type. Press "Stop sharing" to stop.' : 'Your Work session is no longer shared.');
     postLive(true);
   } catch (err) { sys('Could not change sharing: ' + err.message, true); }
   renderShareSel();
@@ -2649,7 +3311,7 @@ function onShares(list) {
 }
 function shareNotify(s) {
   const t = document.createElement('div'); t.className = 'toast'; t.style.borderLeftColor = colorOf(s.user);
-  const b = document.createElement('b'); b.style.color = colorOf(s.user); b.textContent = '👀 ' + nickOf(s.user);
+  const b = document.createElement('b'); b.style.color = colorOf(s.user); label(b, 'eye', nickOf(s.user));
   t.append(b, ' shared their Work session' + (s.conv === 'room' ? '' : ' with you') + ' — click to watch');
   t.style.setProperty('--toast-s', '10s');
   t.onclick = () => { t.remove(); openWatch(s.user); };
@@ -2661,7 +3323,7 @@ function renderShareBanner() {
   const here = sharesList.filter((s) => s.conv === currentConv);
   b.textContent = ''; b.hidden = !here.length;
   if (!here.length) return;
-  const s = document.createElement('span'); s.textContent = '👀 Sharing their Work session here:'; b.append(s);
+  const s = document.createElement('span'); label(s, 'eye', 'Sharing their Work session here:'); b.append(s);
   for (const sh of here) {
     const j = document.createElement('button'); j.type = 'button'; j.style.color = colorOf(sh.user);
     j.textContent = watching.has(sh.user) ? nickOf(sh.user) + ' · watching' : 'Join work · ' + nickOf(sh.user);
@@ -2688,8 +3350,8 @@ function openWatch(owner) {
   win.style.left = Math.min(innerWidth - 400, 60 + n * 36) + 'px'; win.style.top = Math.min(innerHeight - 480, 70 + n * 36) + 'px';
   const bar = document.createElement('div'); bar.className = 'bar winBar';
   const dot = document.createElement('i'); dot.className = 'busyDot'; dot.title = 'Claude is working';
-  const title = document.createElement('span'); title.textContent = '👀 ' + nickOf(owner) + '\'s Work (watch only)'; title.style.color = colorOf(owner);
-  const close = document.createElement('button'); close.type = 'button'; close.className = 'ghost'; close.textContent = '✕'; close.title = 'Stop watching';
+  const title = document.createElement('span'); label(title, 'eye', nickOf(owner) + '\'s Work (watch only)'); title.style.color = colorOf(owner);
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'ghost'; close.append(ic('close')); close.title = 'Stop watching'; close.setAttribute('aria-label', 'Stop watching');
   close.onclick = () => closeWatch(owner);
   bar.append(dot, title, close);
   const log = document.createElement('div'); log.className = 'wLog';
@@ -2728,7 +3390,7 @@ function renderWatchEvent(owner, w, e) {
   let el;
   if (e.t === 'user') { el = document.createElement('div'); el.className = 'msg me'; el.style.borderLeft = '3px solid ' + colorOf(owner); renderText(el, e.text); }
   else if (e.t === 'claude') { el = document.createElement('div'); el.className = 'msg'; renderText(el, e.text); }
-  else if (e.t === 'tool') { el = document.createElement('div'); el.className = 'tool'; el.textContent = e.text; }
+  else if (e.t === 'tool') { el = document.createElement('div'); el.className = 'tool'; el.textContent = toolText(e.text); }
   else { el = document.createElement('div'); el.className = 'sys'; el.textContent = e.text; }
   el.title = new Date(e.ts).toLocaleString();
   log.append(el);
@@ -2779,7 +3441,7 @@ async function loadAdmin() {
       const tr = document.createElement('tr');
       const td = (t) => { const c = document.createElement('td'); c.textContent = t; tr.append(c); return c; };
       td(a.display + ' (' + a.username + ')' + (a.admin ? ' · admin' : ''));
-      td([a.locked ? 'device locked' : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key ✓' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
+      td([a.locked ? 'device locked' : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key set' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
       td(modelName(a.model));
       const actions = td('');
       actions.append(
