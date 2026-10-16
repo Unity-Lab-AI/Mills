@@ -157,15 +157,42 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     const [width, height] = /portrait|tall|vertical/.test(shape) ? [576, 1024] : /landscape|wide|horizontal/.test(shape) ? [1024, 576] : [768, 768];
     const scene = String(args.prompt || '').slice(0, 1000).trim();
     const prompt = args.selfie ? `${scene}, she is a ${SELFIE_LOOK}, candid photo` : scene;
-    const r = await fetch(IMAGE_URL + '/txt2img', { method: 'POST', body: JSON.stringify({ prompt, width, height }), signal: AbortSignal.timeout(300000) });
+    return render(ci, '/txt2img', { prompt, width, height });
+  }
+  async function render(ci, route, body) {
+    const r = await fetch(IMAGE_URL + route, { method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(300000) });
     if (!r.ok) return { ok: false, error: 'Image engine: ' + ((await r.json().catch(() => ({}))).error || r.status) };
-    const scope = ci.scope || 'room';
+    const ref = savePicture(ci.scope || 'room', Buffer.from(await r.arrayBuffer()));
+    (ci.images || (ci.images = [])).push(ref);
+    if (ci.acct) ci.acct.lastImage = ref;
+    return { ok: true, image: ref, shown: 'The picture is attached to your reply automatically.', seconds: r.headers.get('x-seconds') };
+  }
+  function savePicture(scope, buf) {
     const id = Date.now().toString(36) + '-' + require('crypto').randomBytes(3).toString('hex');
     fs.mkdirSync(path.join(IMAGES_DIR, scope), { recursive: true });
-    fs.writeFileSync(path.join(IMAGES_DIR, scope, id + '.png'), Buffer.from(await r.arrayBuffer()));
-    const ref = scope + '/' + id;
-    (ci.images || (ci.images = [])).push(ref);
-    return { ok: true, image: ref, shown: 'The picture is attached to your reply automatically.', seconds: r.headers.get('x-seconds') };
+    fs.writeFileSync(path.join(IMAGES_DIR, scope, id + '.png'), buf);
+    return scope + '/' + id;
+  }
+  // A picture this person may use: theirs, a room one, or "last" (the last one made or sent in their chat).
+  function readPicture(acct, ref) {
+    if (!ref || ref === 'last' || ref === 'camera') ref = ref === 'camera' ? acct.lastPhoto : acct.lastImage;
+    const [scope, id] = String(ref || '').split('/');
+    if (!IMG_ID.test(id || '') || !(scope === 'room' || scope === acct.username)) return null;
+    const f = path.join(IMAGES_DIR, scope, id + '.png');
+    return fs.existsSync(f) ? fs.readFileSync(f).toString('base64') : null;
+  }
+  async function editImage(ci, a, route) {
+    if (!(await ensureImage())) return { ok: false, error: 'The camera app on the host is not starting (image engine down).' };
+    const src = readPicture(ci.acct, a.image);
+    if (!src) return { ok: false, error: 'No picture to work from: send one (camera / file) or make one first.' };
+    const body = { prompt: String(a.prompt || '').slice(0, 1000), image: src, strength: Number(a.strength) || undefined };
+    if (a.keep_face === true || a.keep_face === 'true') body.face = true;
+    if (route === '/inpaint') {
+      const box = Array.isArray(a.box) ? a.box.map(Number) : String(a.box || '').split(/[ ,]+/).filter(Boolean).map(Number);
+      if (box.length !== 4 || box.some((v) => !Number.isFinite(v))) return { ok: false, error: 'box needs 4 numbers 0-1: left, top, right, bottom.' };
+      body.box = box;
+    }
+    return render(ci, route, body);
   }
 
   let caps = null;
@@ -202,7 +229,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     const browserLoc = num(c.lat) !== null && num(c.lon) !== null;
     return { tz: okTz(c.tz) || k.tz || 'UTC', locale: typeof c.locale === 'string' && c.locale.length < 20 ? c.locale : k.locale || 'en-US',
       lat: browserLoc ? num(c.lat) : k.lat ?? null, lon: browserLoc ? num(c.lon) : k.lon ?? null,
-      place: browserLoc ? '' : k.place || '', country: browserLoc ? '' : k.country || '', scope: acct ? acct.username : 'room' };
+      place: browserLoc ? '' : k.place || '', country: browserLoc ? '' : k.country || '', scope: acct ? acct.username : 'room', acct };
   }
   // What the hub knows about where someone is: their browser (time zone, locale, location if shared)
   // and, when they come through the tunnel, the rough place of their address. Kept in memory only.
@@ -270,6 +297,16 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       + 'mood, lighting, camera angle. For a selfie never describe your face or hair (that is added for you): describe the moment.'),
     selfie: P('true when the picture shows you', 'boolean'), shape: P('square (default), portrait or landscape'),
   }, ['prompt'], (a, s, ci) => makeImage(ci, { ...a, selfie: a.selfie === true || a.selfie === 'true' }));
+  tool('edit_image', 'Change a whole picture: restyle it, turn it into something else, put the person somewhere new. Works from the last picture, the photo they sent (camera) or a given one.', {
+    image: P('"last" (default: the last picture in this chat), "camera" (the last photo they sent) or a picture id like t-user/abc'),
+    prompt: P('What the new picture should be, written fully (the whole scene, not just the change)'),
+    strength: P('How much to change, 0.2 (a little) to 0.95 (almost new); default 0.55', 'number'),
+    keep_face: P('true to keep the person in the photo looking like themselves', 'boolean'),
+  }, ['prompt'], (a, s, ci) => editImage(ci, a, '/img2img'));
+  tool('inpaint_image', 'Repaint only one area of a picture (box = left, top, right, bottom as fractions 0-1); the rest stays.', {
+    image: P('"last", "camera" or a picture id'), prompt: P('What goes in that area'), box: P('Four numbers 0-1: left, top, right, bottom'),
+    keep_face: P('true to keep the person looking like themselves', 'boolean'),
+  }, ['prompt', 'box'], (a, s, ci) => editImage(ci, a, '/inpaint'));
   tool('calculate', 'Evaluate a math expression (numbers, + - * / % ^ parentheses, sqrt, sin, cos, tan, log, ln, abs, round, pi, e).', { expression: P('The expression') }, ['expression'], (a) => {
     const expr = String(a.expression || '');
     if (!/^[\d\s+\-*/%^().,a-z]*$/i.test(expr)) return { ok: false, error: 'Only numbers and math functions are allowed.' };
@@ -404,7 +441,9 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     if (!native) system += '\n\nTOOL USE: when you need a tool, reply with ONLY one line of JSON: {"tool": "<name>", "arguments": {...}}. You get the result next. Tools:\n' + tools.map((t) => `- ${t.name}(${Object.keys(t.params).join(', ')}): ${t.description}`).join('\n');
     const note = await resolvePending(acct, text, ci, out);
     if (opts.extraSystem) system += '\n\n' + opts.extraSystem;
-    const messages = [{ role: 'system', content: system }, ...(opts.noHistory ? [] : s.history.slice(-HISTORY_KEEP)), { role: 'user', content: note ? `${text}\n\n(system note: ${note})` : text }];
+    const userMsg = { role: 'user', content: note ? `${text}\n\n(system note: ${note})` : text };
+    if (opts.photo) { const b = readPicture(acct, opts.photo); if (b) { userMsg.images = [b]; userMsg.content += `\n\n(They sent you a photo, id ${opts.photo}: you can see it. To change it use edit_image / inpaint_image with image "camera".)`; } }
+    const messages = [{ role: 'system', content: system }, ...(opts.noHistory ? [] : s.history.slice(-HISTORY_KEEP)), userMsg];
     const said = [], seen = new Set();
     let final = '';
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -493,9 +532,12 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     const ping = setInterval(() => out({ type: 'ping' }), 15000);
     const brain = brainOf(acct);
     try {
-      const reply = brain === 'local' ? await runLocal(acct, text, ci, out, ctl.signal) : await runClaudeBrain(acct, text, ci, out, brain);
+      const photo = typeof body.photo === 'string' && /^[a-z0-9-]+\/[a-z0-9-]+$/.test(body.photo) && readPicture(acct, body.photo) ? body.photo : '';
+      if (photo) acct.lastPhoto = acct.lastImage = photo;
+      const reply = brain === 'local' ? await runLocal(acct, text, ci, out, ctl.signal, { photo })
+        : await runClaudeBrain(acct, photo ? `${text}\n\n(They sent a photo, id ${photo}; use edit_image / inpaint_image with image "camera" to work with it.)` : text, ci, out, brain);
       const s = store(acct);
-      s.history.push({ role: 'user', content: text }, { role: 'assistant', content: (reply || '(did it)') + (ci.images || []).map((r) => `\n[[image:${r}]]`).join('') });
+      s.history.push({ role: 'user', content: text + (photo ? `\n[[image:${photo}]]` : '') }, { role: 'assistant', content: (reply || '(did it)') + (ci.images || []).map((r) => `\n[[image:${r}]]`).join('') });
       if (s.history.length > HISTORY_KEEP * 2) s.history.splice(0, s.history.length - HISTORY_KEEP * 2);
       save(s);
       out({ type: 'final', text: reply, brain, images: ci.images || [], pending: acct.assistantPending || null });
@@ -590,6 +632,12 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         if (!fs.existsSync(f)) { send(res, 404, { error: 'No such picture.' }); return true; }
         res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=86400' });
         fs.createReadStream(f).pipe(res); return true;
+      }
+      if (p === '/api/assistant/upload' && req.method === 'POST') { // a photo from their webcam or a file → their private pictures
+        const { image } = await readBody(req);
+        const m = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(image || ''));
+        if (!m || m[2].length > 14e6) { send(res, 400, { error: 'Send a PNG, JPEG or WebP picture under 10 MB.' }); return true; }
+        send(res, 200, { ref: savePicture(acct.username, Buffer.from(m[2], 'base64')) }); return true;
       }
       if (p === '/api/assistant/say' && req.method === 'POST') { // her voice for one line → audio/wav
         const { text, emotion, act } = await readBody(req);

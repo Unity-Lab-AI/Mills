@@ -223,6 +223,10 @@
   #assistLog { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
   #assistForm { display: flex; gap: .5rem; padding: .6rem 1rem; border-top: 1px solid var(--line); }
   #assistForm textarea { flex: 1; resize: none; min-height: 2.6rem; max-height: 10rem; }
+  #assistAttach, #assistCamBox { display: flex; gap: .6rem; align-items: center; padding: .4rem 1rem; border-top: 1px solid var(--line); }
+  #assistAttach[hidden], #assistCamBox[hidden] { display: none; }
+  #assistThumb { height: 56px; border-radius: 6px; }
+  #assistVideo { height: 180px; border-radius: 8px; background: #000; }
   #assistMic.rec { background: var(--bad); color: #fff; }
   .hostImg { display: block; max-width: min(100%, 420px); max-height: 60vh; border-radius: 8px; margin: .3rem 0; cursor: pointer; }
   .confirmCard { align-self: flex-start; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: .6rem .8rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
@@ -421,8 +425,13 @@
     <button class="ghost" id="assistClear" title="Start a new conversation (your tasks, reminders and memory stay)">New chat</button>
   </header>
   <div id="assistLog"></div>
+  <div id="assistAttach" hidden><img id="assistThumb" alt="photo to send"><span>Photo ready: it goes with your next message.</span><button type="button" class="ghost" id="assistDrop">✕</button></div>
+  <div id="assistCamBox" hidden><video id="assistVideo" autoplay playsinline muted></video><button type="button" id="assistSnap">Take photo</button><button type="button" class="ghost" id="assistCamClose">Cancel</button></div>
   <form id="assistForm">
     <textarea id="assistInput" placeholder="Talk to Unity… (Enter sends, Shift+Enter new line)"></textarea>
+    <button type="button" class="ghost" id="assistCam" title="Send her a webcam photo">📷</button>
+    <button type="button" class="ghost" id="assistFile" title="Send her a picture from your PC">📎</button>
+    <input type="file" id="assistPick" accept="image/png,image/jpeg,image/webp" hidden>
     <button type="button" class="ghost" id="assistMic" title="Talk to Unity: click, speak, click again to send">🎤</button>
     <button type="submit" id="assistSend">Send</button>
     <button type="button" class="ghost" id="assistStop" hidden>Stop</button>
@@ -702,13 +711,15 @@ function assistConfirm(p) {
 $('assistForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = $('assistInput').value.trim();
-  if (!text || assistBusy) return;
+  if ((!text && !assistPhoto) || assistBusy) return;
   $('assistInput').value = '';
-  assistAdd('msg me', text);
+  const photo = assistPhoto; setPhoto('');
+  assistAdd('msg me', (text || '(photo)') + (photo ? `
+[[image:${photo}]]` : ''));
   assistBusy = true; $('assistSend').hidden = true; $('assistStop').hidden = false;
   const bubble = assistAdd('msg', '…'); let shown = '', said = [];
   try {
-    const res = await api('/api/assistant/chat', { method: 'POST', body: JSON.stringify({ message: text, client: assistClient() }) });
+    const res = await api('/api/assistant/chat', { method: 'POST', body: JSON.stringify({ message: text || 'Look at this photo.', photo, client: assistClient() }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
     for (;;) {
@@ -771,6 +782,35 @@ $('assistMic').onclick = async () => {
     micRec.start(); $('assistMic').textContent = '⏹'; $('assistMic').classList.add('rec'); stopVoice();
   } catch (e) { micRec = null; assistSys('Microphone: ' + e.message, true); }
 };
+// ---- photos: webcam snapshot or a file, sent with the next message (she sees it and can edit it) ----
+let assistPhoto = '', camStream = null;
+function setPhoto(ref, url) { assistPhoto = ref; $('assistAttach').hidden = !ref; if (url) $('assistThumb').src = url; }
+$('assistDrop').onclick = () => setPhoto('');
+async function uploadPhoto(dataUrl) {
+  try { const d = await json('/api/assistant/upload', { method: 'POST', body: JSON.stringify({ image: dataUrl }) }); setPhoto(d.ref, dataUrl); $('assistInput').focus(); }
+  catch (e) { assistSys(e.message, true); }
+}
+function shrink(img, w, h) { // long side at most 1024, JPEG: keeps uploads small
+  const k = Math.min(1, 1024 / Math.max(w, h)), c = document.createElement('canvas');
+  c.width = Math.round(w * k); c.height = Math.round(h * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.9);
+}
+$('assistFile').onclick = () => $('assistPick').click();
+$('assistPick').onchange = () => {
+  const f = $('assistPick').files[0]; $('assistPick').value = '';
+  if (!f) return;
+  const img = new Image(), u = URL.createObjectURL(f);
+  img.onload = () => { uploadPhoto(shrink(img, img.naturalWidth, img.naturalHeight)); URL.revokeObjectURL(u); };
+  img.onerror = () => assistSys('That file is not a picture this browser can open.', true);
+  img.src = u;
+};
+function closeCam() { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; $('assistCamBox').hidden = true; }
+$('assistCam').onclick = async () => {
+  try { camStream = await navigator.mediaDevices.getUserMedia({ video: true }); $('assistVideo').srcObject = camStream; $('assistCamBox').hidden = false; }
+  catch (e) { assistSys('Camera: ' + e.message, true); }
+};
+$('assistCamClose').onclick = closeCam;
+$('assistSnap').onclick = () => { const v = $('assistVideo'); const d = shrink(v, v.videoWidth, v.videoHeight); closeCam(); uploadPhoto(d); };
 function assistNotice(n) {
   const d = document.createElement('div');
   d.textContent = '⏰ ' + n.text;
