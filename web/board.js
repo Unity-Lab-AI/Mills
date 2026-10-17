@@ -28,6 +28,7 @@
     if (!d.boards.some((b) => b.id === B.board)) B.board = d.boards[0].id;
     if (!$('board').hidden) renderBoard();
     if (!$('cal').hidden) renderCal();
+    if (!$('myDay').hidden) renderMyDay();
     renderTaskPane(); renderBadge(); remindDue();
   }
   // Due reminders (an idea from HyperProductivityManager): a task assigned to you that is due today or
@@ -345,9 +346,58 @@
     setBadge($('boardBadge'), n); $('boardBadge').title = n ? n + ' task' + (n > 1 ? 's' : '') + ' due today or overdue' : '';
   }
 
+  // ── My day: the planner view (HyperProductivityManager's "what should I be doing right now") ──
+  // Overdue / Today / This week / Later over the tasks assigned to you or held by you (or your Claude),
+  // each with quick actions: Done, Tomorrow, Next week, Open, Claude. "Plan with Claude" hands the whole
+  // picture to Claude in Work.
+  function myTasks() {
+    if (!B.data) return [];
+    return B.data.tasks.filter((t) => t.status !== 'done' && (t.assignee === me.username || (t.claim && (t.claim.key === myKey() || t.claim.key === myKey() + '#agent'))));
+  }
+  function renderMyDay() {
+    const body = $('mdBody'); if (!body || !B.data) return;
+    body.textContent = '';
+    const today = startOfDay(Date.now()), week = today + 7 * DAY, list = myTasks();
+    const groups = { overdue: [], today: [], week: [], later: [], none: [] };
+    for (const t of list) { if (!t.dueAt) groups.none.push(t); else if (t.dueAt < today) groups.overdue.push(t); else if (t.dueAt < today + DAY) groups.today.push(t); else if (t.dueAt < week) groups.week.push(t); else groups.later.push(t); }
+    $('mdTitle').textContent = 'My day · ' + new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+    body.append(el('div', 'mdSum', `${groups.today.length} due today · ${groups.overdue.length} overdue · ${groups.week.length} this week · ${groups.later.length + groups.none.length} later or unscheduled`));
+    const shift = async (t, days) => { const base = t.dueAt && t.dueAt > today ? t.dueAt : today; const d = new Date(base); d.setDate(d.getDate() + days); d.setHours(17, 0, 0, 0); await op('update', { id: t.id, rev: t.rev, dueAt: d.getTime() }); renderMyDay(); };
+    const section = (title, items, cls) => {
+      const h = el('div', 'mdSect' + (cls ? ' ' + cls : '')); h.append(el('span', '', title), el('span', '', String(items.length))); body.append(h);
+      if (!items.length) { body.append(el('div', 'tpNone', 'nothing')); return; }
+      for (const t of items.sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity) || (b.priority || 0) - (a.priority || 0))) {
+        const r = el('div', 'mdItem');
+        r.append(el('span', 'bdId', t.id));
+        if (t.priority) r.append(el('span', 'bdPri p' + t.priority, 'P' + t.priority));
+        r.append(el('span', 'bdTitle', t.title));
+        if (t.dueAt) r.append(el('span', 'bdDue ' + dueClass(t), fmtDue(t.dueAt)));
+        if (t.claim) r.append(el('span', 'bdMuted', (t.claim.agent ? 'Claude · ' : 'held · ') + minsLeft(t.claim.until) + ' min'));
+        const acts = el('div', 'mdActs');
+        const b = (icon, text, fn, title) => { const x = label(el('button', 'ghost'), icon, text); x.type = 'button'; x.title = title || text; x.onclick = fn; acts.append(x); };
+        b('check', 'Done', () => op('complete', { id: t.id }).then(renderMyDay));
+        b('calendar', 'Tomorrow', () => shift(t, 1), 'Move the due date to tomorrow');
+        b('repeat', 'Next week', () => shift(t, 7), 'Move the due date a week on');
+        b('board', 'Open', () => { $('myDay').hidden = true; B.board = t.board; showScreen('board'); openDetail(t.id); });
+        b('bot', 'Claude', () => { $('myDay').hidden = true; giveToClaude(t); });
+        r.append(acts); body.append(r);
+      }
+    };
+    section('Overdue', groups.overdue, 'over'); section('Today', groups.today); section('This week', groups.week); section('Later', groups.later); section('No date yet', groups.none);
+  }
+  function openMyDay() { renderMyDay(); $('myDay').hidden = false; }
+  function planWithClaude() {
+    const list = myTasks().map((t) => `${t.id} "${t.title}"${t.dueAt ? ' due ' + new Date(t.dueAt).toISOString().slice(0, 10) : ' (no date)'}${t.priority ? ' P' + t.priority : ''}`).join('; ');
+    $('myDay').hidden = true; showScreen('shell');
+    $('input').value = `Plan my day. These are my open board tasks: ${list || '(none)'}. Read the calendar with board_calendar, then propose an order for today and, if I agree, set due dates with task_update (due as text) and move anything I cannot finish this week to next week.`;
+    $('input').focus(); $('input').dispatchEvent(new Event('input'));
+  }
+
   // ── wiring ──
   function wire() {
     if (wire.done) return; wire.done = true;
+    $('bdMyDay').onclick = openMyDay; $('calMyDay').onclick = openMyDay; $('mdClose').onclick = () => { $('myDay').hidden = true; }; $('mdClaude').onclick = planWithClaude;
+    $('myDay').onclick = (e) => { if (e.target.id === 'myDay') $('myDay').hidden = true; };
     $('bdBoard').onchange = () => { B.board = $('bdBoard').value; closeDetail(); renderBoard(); };
     $('bdFilter').oninput = () => { B.filter = $('bdFilter').value; renderBoard(); };
     $('bdMine').onchange = () => { B.mine = $('bdMine').checked; renderBoard(); };

@@ -199,6 +199,13 @@
   .tpItem { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .4rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
   .tpActs { display: flex; gap: .3rem; } .tpActs button { font-size: .75rem; padding: .15rem .45rem; }
   #board, #cal, #notes { overflow: hidden; }
+  /* ── My day planner (web/board.js) ── */
+  #myDay .box { width: min(680px, 94vw); }
+  .mdSect { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: .4rem; display: flex; justify-content: space-between; }
+  .mdSect.over { color: var(--bad); }
+  .mdItem { display: flex; align-items: center; gap: .5rem; padding: .4rem .5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); flex-wrap: wrap; }
+  .mdItem .bdTitle { flex: 1; min-width: 10rem; } .mdItem .mdActs { display: flex; gap: .25rem; } .mdItem .mdActs button { padding: .15rem .45rem; font-size: .72rem; }
+  .mdSum { color: var(--muted); font-size: .85rem; }
   /* ── team notes (web/notes.js) ── */
   #ntMain { flex: 1; min-height: 0; display: flex; }
   #ntSide { flex: none; width: min(300px, 36%); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: .4rem; padding: .5rem; overflow: hidden; }
@@ -803,6 +810,7 @@
     <button class="ghost" id="bdNewBoard" title="Add another board"><svg class="ic lead"><use href="#i-plus"/></svg>Board</button>
     <input id="bdFilter" type="search" placeholder="Filter by title, label, person, id…" spellcheck="false">
     <label class="bdMine"><input type="checkbox" id="bdMine"> Mine</label>
+    <button class="ghost" id="bdMyDay" title="Your day: overdue, today, this week, later — with quick actions"><svg class="ic lead"><use href="#i-tasks"/></svg>My day</button>
     <span id="bdStale" class="bdStale" hidden></span>
   </header>
   <div id="bdMain">
@@ -820,9 +828,18 @@
     <span id="calTitle" class="calTitle"></span>
     <button class="ghost" id="calNext" aria-label="Next month"><svg class="ic" style="transform:scaleX(-1)"><use href="#i-back"/></svg></button>
     <button class="ghost" id="calToday">Today</button>
+    <button class="ghost" id="calMyDay" title="Your day: overdue, today, this week, later — with quick actions"><svg class="ic lead"><use href="#i-tasks"/></svg>My day</button>
     <span class="folder">Tasks with a due date. Click a day to add one, click a task to open it on the board.</span>
   </header>
   <div id="calGrid"></div>
+</div>
+
+<!-- My day (web/board.js): the planner view over the tasks assigned to or held by you -->
+<div id="myDay" class="modal" hidden>
+  <div class="box">
+    <div class="bar"><span id="mdTitle">My day</span><button class="ghost" id="mdClaude" title="Put a planning request in Claude's box in Work"><svg class="ic lead"><use href="#i-bot"/></svg>Plan with Claude</button><button class="ghost" id="mdClose">Close</button></div>
+    <div class="setBody" id="mdBody"></div>
+  </div>
 </div>
 
 <div id="notes" class="screen" hidden>
