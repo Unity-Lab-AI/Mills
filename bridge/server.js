@@ -186,111 +186,18 @@ function runClaude(acct, message, fresh, res, context) {
   // their browser); it goes to Claude after their message, clearly marked, and is not mirrored.
   child.stdin.end(context ? `${message}\n\n---\n${context}` : message);
 }
-// ---------- usage: 5-hour / 7-day limits and the context window ----------
-// All Work runs use the host's one Claude account, so the 5h / 7d limits are shared by everyone.
-// Claude Code reports them in its stream (rate-limit events: status, utilization, resetsAt); until
-// one has been seen, the windows are estimated from when the host started using Claude (a 5-hour
-// window opens with the first message after the previous one ran out). The context window is per
-// account and per Claude session: input + cache tokens of the latest reply out of the model's window.
-const USAGE_FILE = path.join(ROOT, 'usage.json');
-const usage = readJson(USAGE_FILE, {}); // { limits: { five_hour: {...}, seven_day: {...} }, fiveStart, weekStart }
-let usageTimer = null;
-const saveUsage = () => { clearTimeout(usageTimer); usageTimer = setTimeout(() => writeJson(USAGE_FILE, usage), 1000); };
-const FIVE_H = 5 * 3600e3, SEVEN_D = 7 * 86400e3;
-function noteActivity() {
-  const now = Date.now();
-  if (!usage.fiveStart || now - usage.fiveStart >= FIVE_H) usage.fiveStart = now;
-  if (!usage.weekStart || now - usage.weekStart >= SEVEN_D) usage.weekStart = now;
-  saveUsage();
-}
-function toMs(t) { const n = typeof t === 'number' ? (t < 1e12 ? t * 1000 : t) : Date.parse(t); return Number.isFinite(n) ? n : null; }
-function noteUsage(acct, ev) {
-  if (/rate_limit/.test(String(ev.type || ''))) { // e.g. { type: "rate_limit_event", rate_limit_info: { rateLimitType, status, utilization, resetsAt } }
-    const info = ev.rate_limit_info || ev.rateLimitInfo || ev;
-    const kind = String(info.rateLimitType || info.rate_limit_type || info.type || '').toLowerCase();
-    const key = /seven|week|7d/.test(kind) ? 'seven_day' : /five|5h|session/.test(kind) ? 'five_hour' : null;
-    if (key) {
-      // An event may carry only some fields: keep the last known reset time / utilization for the same
-      // window instead of wiping them. Utilization is stored as a fraction 0–1 (a value above 1 is a percentage).
-      const L = usage.limits || (usage.limits = {}), prev = L[key] || {};
-      const resetsAt = toMs(info.resetsAt || info.resets_at) || (prev.resetsAt > Date.now() ? prev.resetsAt : null);
-      const raw = info.utilization ?? info.usage ?? null, u = raw == null || raw === '' ? NaN : Number(raw);
-      const sameWindow = prev.resetsAt && resetsAt === prev.resetsAt;
-      L[key] = {
-        status: String(info.status || (sameWindow ? prev.status : '') || ''),
-        utilization: Number.isFinite(u) ? Math.max(0, Math.min(1, u > 1 ? u / 100 : u)) : sameWindow ? prev.utilization ?? null : null,
-        resetsAt, at: Date.now(),
-      };
-      saveUsage();
-    }
-  }
-  const u = ev.type === 'assistant' && ev.message && ev.message.usage;
-  if (u) {
-    const tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-    acct.state.ctx = { ...(acct.state.ctx || {}), session: acct.state.claudeSessionId || ev.session_id || '', tokens, model: ev.message.model || '', at: Date.now() };
-  }
-  if (ev.type === 'result' && ev.modelUsage && typeof ev.modelUsage === 'object') {
-    const windows = Object.values(ev.modelUsage).map((m) => Number(m && m.contextWindow)).filter((n) => n > 0);
-    if (windows.length && acct.state.ctx) acct.state.ctx.window = Math.max(...windows);
-  }
-  if (ev.type === 'result' && /rate.?limit|usage limit/i.test(String(ev.result || ''))) { // the run was refused: mark as out of usage
-    (usage.limits || (usage.limits = {})).five_hour = { ...((usage.limits || {}).five_hour || {}), status: 'rejected', at: Date.now() };
-    saveUsage();
-  }
-}
+// Usage (bridge/usage.js): the host account's 5h / 7d limits, shared by every Work run on it, and each
+// account's context window; noteActivity() when a run starts, noteUsage() per stream event, status() for /api/usage.
+const usage = require('./usage')({ ROOT, config, readJson, writeJson });
+const { noteActivity, noteUsage } = usage;
 function stopClaude(acct) {
   if (!acct.running) return;
   if (process.platform === 'win32') spawn('taskkill', ['/pid', String(acct.running.pid), '/T', '/F'], { windowsHide: true });
   else acct.running.kill('SIGTERM');
 }
 
-// ---------- conversation archive (per account) ----------
-const archiveFile = (acct, id) => {
-  if (typeof id !== 'string' || !/^[a-f0-9]{16}$/.test(id)) throw new Error('Bad conversation id.');
-  return path.join(acct.files.ARCHIVE_DIR, id + '.json');
-};
-const cleanTitle = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Untitled conversation';
-function listArchive(acct) {
-  const dir = acct.files.ARCHIVE_DIR;
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => f.endsWith('.json'))
-    .map((f) => readJson(path.join(dir, f), null)).filter(Boolean)
-    .map(({ id, title, savedAt, transcript }) => ({ id, title, savedAt, count: (transcript || []).length }))
-    .sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
-}
-// Full-text search over this account's saved sessions: every word must appear in the title or
-// somewhere in the transcript (case-insensitive). Each hit comes with short snippets around the
-// first matches, so the list shows *why* a session matched.
-function searchArchive(acct, q) {
-  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
-  if (!words.length) return listArchive(acct);
-  const dir = acct.files.ARCHIVE_DIR;
-  if (!fs.existsSync(dir)) return [];
-  const out = [];
-  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
-    const e = readJson(path.join(dir, f), null);
-    if (!e) continue;
-    const lines = (e.transcript || []).filter((t) => t && typeof t.text === 'string');
-    const hay = (e.title + '\n' + lines.map((t) => t.text).join('\n')).toLowerCase();
-    if (!words.every((w) => hay.includes(w))) continue;
-    const snippets = [];
-    let hits = 0;
-    for (const t of lines) {
-      const low = t.text.toLowerCase();
-      for (const w of words) {
-        let i = low.indexOf(w);
-        while (i >= 0) { hits++; i = low.indexOf(w, i + w.length); }
-      }
-      const first = Math.min(...words.map((w) => low.indexOf(w)).filter((i) => i >= 0));
-      if (Number.isFinite(first) && snippets.length < 3) {
-        const start = Math.max(0, first - 60);
-        snippets.push({ cls: t.cls, text: (start ? '…' : '') + t.text.slice(start, first + 90).replace(/\s+/g, ' ') + (first + 90 < t.text.length ? '…' : '') });
-      }
-    }
-    out.push({ id: e.id, title: e.title, savedAt: e.savedAt, count: lines.length, hits, snippets });
-  }
-  return out.sort((a, b) => b.hits - a.hits || String(b.savedAt).localeCompare(String(a.savedAt)));
-}
+// Past sessions (bridge/archive.js): each account's saved Claude conversations; archive.route() serves /api/archive/*.
+const archive = require('./archive')({ readJson, writeJson, send: (...a) => send(...a), readBody: (r) => readBody(r), saveState });
 
 // ---------- chat room (end-to-end encrypted) ----------
 // Browsers encrypt every message with a fresh AES-GCM key and wrap that key separately for each
@@ -881,18 +788,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/providers/update' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { provider: providers.update(acct.username, String(b.id || ''), b), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/providers/remove' && req.method === 'POST') { const b = await readBody(req); try { providers.remove(acct.username, String(b.id || '')); return send(res, 200, { providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/prefs' && req.method === 'GET') return send(res, 200, { prefs: acct.state.prefs || {} });
-    if (p === '/api/usage' && req.method === 'GET') {
-      const now = Date.now(), L = usage.limits || {};
-      const win = (key, start, len) => { // official numbers when Claude Code reported them, otherwise the estimate
-        const l = L[key];
-        if (l && l.resetsAt && l.resetsAt > now) return { source: 'claude', status: l.status, utilization: l.utilization, resetsAt: l.resetsAt };
-        const s = start && now - start < len ? start : null;
-        return { source: 'estimate', status: l && l.status === 'rejected' && now - l.at < len ? 'rejected' : 'allowed', utilization: null, resetsAt: s ? s + len : null };
-      };
-      const ctx = acct.state.ctx && acct.state.ctx.session === (acct.state.claudeSessionId || '') ? acct.state.ctx : null;
-      return send(res, 200, { now, five_hour: win('five_hour', usage.fiveStart, FIVE_H), seven_day: win('seven_day', usage.weekStart, SEVEN_D),
-        context: ctx ? { tokens: ctx.tokens, window: ctx.window || config.contextWindow || 200000, model: ctx.model } : null });
-    }
+    if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage.status(acct));
     if (p === '/api/prefs' && req.method === 'POST') {
       acct.state.prefs = cleanPrefs(await readBody(req), acct.state.prefs || {});
       saveState(acct);
@@ -947,44 +843,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/stop' && req.method === 'POST') { stopClaude(acct); return send(res, 200, { ok: true }); }
 
-    if (p === '/api/archive/list' && req.method === 'POST') return send(res, 200, { items: listArchive(acct) });
-    if (p === '/api/archive/search' && req.method === 'POST') { const { q } = await readBody(req); return send(res, 200, { items: searchArchive(acct, String(q || '').slice(0, 200)) }); }
-    if (p === '/api/archive/save' && req.method === 'POST') {
-      const { id, title, transcript } = await readBody(req);
-      if (!Array.isArray(transcript) || !transcript.length) return send(res, 400, { error: 'Nothing to save yet.' });
-      if (!acct.state.claudeSessionId) return send(res, 400, { error: 'This conversation has no Claude session yet.' });
-      const entryId = id || crypto.randomBytes(8).toString('hex');
-      const file = archiveFile(acct, entryId);
-      const prev = readJson(file, {});
-      fs.mkdirSync(acct.files.ARCHIVE_DIR, { recursive: true });
-      const entry = {
-        id: entryId, title: cleanTitle(title || prev.title), savedAt: new Date().toISOString(),
-        sessionId: acct.state.claudeSessionId,
-        transcript: transcript.filter((t) => t && typeof t.cls === 'string' && typeof t.text === 'string'),
-      };
-      writeJson(file, entry);
-      return send(res, 200, { id: entry.id, title: entry.title });
-    }
-    if (p === '/api/archive/open' && req.method === 'POST') {
-      if (acct.running) return send(res, 409, { error: 'Claude is working. Stop it first.' });
-      const entry = readJson(archiveFile(acct, (await readBody(req)).id), null);
-      if (!entry) return send(res, 404, { error: 'Conversation not found.' });
-      acct.state.claudeSessionId = entry.sessionId; saveState(acct);
-      return send(res, 200, entry);
-    }
-    if (p === '/api/archive/rename' && req.method === 'POST') {
-      const { id, title } = await readBody(req);
-      const file = archiveFile(acct, id);
-      const entry = readJson(file, null);
-      if (!entry) return send(res, 404, { error: 'Conversation not found.' });
-      entry.title = cleanTitle(title); writeJson(file, entry);
-      return send(res, 200, { id, title: entry.title });
-    }
-    if (p === '/api/archive/delete' && req.method === 'POST') {
-      const file = archiveFile(acct, (await readBody(req)).id);
-      if (fs.existsSync(file)) fs.unlinkSync(file);
-      return send(res, 200, { ok: true });
-    }
+    if (await archive.route(p, req, res, acct)) return; // past sessions: /api/archive/*
 
     // ----- team board -----
     if (p === '/api/board' || p.startsWith('/api/board/')) { if (await board.handle(req, res, p, url, acct)) return; }
