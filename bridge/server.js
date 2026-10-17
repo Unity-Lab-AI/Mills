@@ -81,7 +81,7 @@ function loadAccounts() {
       username, profile, files: P,
       display: P.config.user || username[0].toUpperCase() + username.slice(1), admin: !!P.config.admin, defaultModel: P.config.model || '',
     });
-    if (acct.state.model && !modelIds().includes(acct.state.model)) delete acct.state.model;
+    if (acct.state.model && !acct.state.provider && !modelIds().includes(acct.state.model)) delete acct.state.model; // (a provider's model list is checked when it is used)
     fs.mkdirSync(P.PROFILE_DIR, { recursive: true });
     const mcpEnv = { MILLS_BRIDGE: `http://127.0.0.1:${config.port}`, MILLS_INTERNAL: INTERNAL_SECRET, MILLS_USER: acct.display, MILLS_ACCOUNT: username };
     writeJson(P.MCP_RUNTIME, { mcpServers: {
@@ -152,9 +152,13 @@ function runClaude(acct, message, fresh, res, context) {
   // Claude (bridge/test/fake-claude.js); production config leaves them unset → the real `claude`.
   const command = config.claudeCommand || 'claude';
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
-  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true });
-  acct.running = child; acct.stream = res;
-  noteActivity();
+  // Whose Claude answers: the host's (default, nothing added) or the provider this person picked (their own
+  // Anthropic key / Claude Code login, passed to the claude process through its environment).
+  const prov = providers.get(acct.state.provider || 'host', acct.username), provEnv = prov ? providers.claudeEnv(prov) : {};
+  if (prov && provEnv === null) { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ type: 'bridge_error', text: 'Your chosen AI provider is not Claude, so it cannot run Work. Pick a Claude model in the dropdown.' }) + '\n'); return; }
+  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...(provEnv || {}) } });
+  acct.running = child; acct.stream = res; acct.runProvider = prov && prov.kind !== 'host' ? prov.id : '';
+  if (!acct.runProvider) noteActivity(); // only the host's own usage windows are shared by everyone
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
   const keepAlive = setInterval(() => emit(acct, { type: 'ping' }), 15000);
   let buf = '';
@@ -164,7 +168,7 @@ function runClaude(acct, message, fresh, res, context) {
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
       if (!line) continue;
-      try { const ev = JSON.parse(line); if (ev.session_id) acct.state.claudeSessionId = ev.session_id; noteUsage(acct, ev); mirrorEvent(acct, ev); emit(acct, ev); }
+      try { const ev = JSON.parse(line); if (ev.session_id) acct.state.claudeSessionId = ev.session_id; if (!acct.runProvider || !/rate_limit/.test(String(ev.type || ''))) noteUsage(acct, ev); mirrorEvent(acct, ev); emit(acct, ev); }
       catch { emit(acct, { type: 'raw', text: line }); }
     }
   });
@@ -648,9 +652,14 @@ function agentHear(msg) {
 // Nobody — no account's Work run and not the room agent — is mid-run.
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
-const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy();
+const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
 const team = require('./team')({ accounts, agentSay, presenceList, displayOf: nameOf, chatKeys });
+// AI providers (bridge/providers.js: the host's Claude by default, plus people's own keys / logins / endpoints)
+// and the per-person OpenAI-compatible API (bridge/openai.js, /v1/*).
+const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts });
+const openai = require('./openai')({ accounts, providers, send: (...a) => send(...a), readBody: (r) => readBody(r), writeState: saveState,
+  tunnelUrl: () => (readJson(HUB.TUNNEL_FILE, {}).url || ''), onIdle: () => setTimeout(maybeRestart, 300) });
 
 // ---------- voice / video calls ----------
 // The hub only passes call set-up messages between browsers and keeps track of who is in which
@@ -784,6 +793,9 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, team.call(name, args, who));
     }
 
+    // OpenAI-compatible API: its own bearer keys (Settings → API access), for harnesses, not the browser app.
+    if (p === '/v1' || p.startsWith('/v1/')) return openai.handle(req, res, p);
+
     const origin = req.headers.origin;
     if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -856,11 +868,18 @@ const server = http.createServer(async (req, res) => {
       return send(res, 503, { error: 'Mills is restarting; your message goes through in a moment.' });
     }
     if (await assistant.route(p, req, res, acct)) return;
+    if (await openai.route(p, req, res, acct)) return; // Settings → API access (key, rotation, provider)
 
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
-        models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct), prefs: acct.state.prefs || {}, share: shares.has(acct.username) ? shares.get(acct.username).conv : '' });
+        models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct), prefs: acct.state.prefs || {}, share: shares.has(acct.username) ? shares.get(acct.username).conv : '',
+        provider: acct.state.provider || 'host', providers: providers.list(acct.username) });
     }
+    // ----- AI providers: everyone manages their own; the host's Claude is always there -----
+    if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });
+    if (p === '/api/providers/add' && req.method === 'POST') { try { return send(res, 200, { provider: providers.add(acct.username, await readBody(req)), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/providers/update' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { provider: providers.update(acct.username, String(b.id || ''), b), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/providers/remove' && req.method === 'POST') { const b = await readBody(req); try { providers.remove(acct.username, String(b.id || '')); return send(res, 200, { providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/prefs' && req.method === 'GET') return send(res, 200, { prefs: acct.state.prefs || {} });
     if (p === '/api/usage' && req.method === 'GET') {
       const now = Date.now(), L = usage.limits || {};
@@ -888,11 +907,19 @@ const server = http.createServer(async (req, res) => {
 
     // ----- work -----
     if (p === '/api/model' && req.method === 'POST') {
-      const { model } = await readBody(req);
-      if (typeof model !== 'string' || (model && !modelIds().includes(model))) return send(res, 400, { error: 'Unknown model.' });
+      // { model, provider? }: the model must belong to the provider (host = the config.json models; someone's
+      // own Claude key / login = its model list). A provider that is not Claude cannot run Work at all.
+      const { model, provider } = await readBody(req);
+      const prov = providers.get(provider === undefined ? acct.state.provider || 'host' : String(provider || 'host'), acct.username);
+      if (!prov) return send(res, 400, { error: 'Unknown provider.' });
+      if (providers.claudeEnv(prov) === null) return send(res, 400, { error: 'That provider is not Claude; Work runs need Claude Code. Use it for the API or the Unity section instead.' });
+      const ids = prov.kind === 'host' ? modelIds() : prov.models || [];
+      if (typeof model !== 'string' || (model && !ids.includes(model))) return send(res, 400, { error: 'Unknown model.' });
       if (model) acct.state.model = model; else delete acct.state.model;
+      if (prov.kind === 'host') delete acct.state.provider; else acct.state.provider = prov.id;
+      if (prov.kind !== 'host' && !model) acct.state.model = ids[0]; // a provider always runs a model of its own list
       saveState(acct);
-      return send(res, 200, { model: acct.state.model || '', effective: effectiveModel(acct) });
+      return send(res, 200, { model: acct.state.model || '', provider: acct.state.provider || 'host', effective: effectiveModel(acct) });
     }
     if (p === '/api/workspace' && req.method === 'POST') {
       const { workspace } = await readBody(req);
@@ -1224,7 +1251,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true });
       }
       if (p === '/api/admin/signout' && req.method === 'POST') { const t = needTarget(); if (t !== acct) dropSessions(t.username); return send(res, 200, { ok: true }); }
-      if (p === '/api/admin/stop' && req.method === 'POST') { const t = needTarget(); stopClaude(t); assistant.stop(t); return send(res, 200, { ok: true }); }
+      if (p === '/api/admin/stop' && req.method === 'POST') { const t = needTarget(); stopClaude(t); assistant.stop(t); openai.stop(t); return send(res, 200, { ok: true }); }
       if (p === '/api/admin/delete' && req.method === 'POST') {
         const t = needTarget();
         if (t === acct) return send(res, 400, { error: 'You cannot delete your own account.' });
