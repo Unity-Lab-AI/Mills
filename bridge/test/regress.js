@@ -252,9 +252,14 @@ async function run() {
   const scripts = fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => path.join(BRIDGE, f)).concat(fs.readdirSync(__dirname).map((f) => path.join(__dirname, f)));
   const bad = scripts.filter((f) => spawnSync(process.execPath, ['--check', f]).status !== 0);
   let pageOk = true, pageErr = '';
-  const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  try { new Function(html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'))); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
-  for (const f of ['md.js', 'board.js']) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
+  // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
+  // covering code that moved out of index.html into its own file.
+  const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+  const html = indexHtml + '\n' + fs.readFileSync(path.join(MILLS, 'web', 'calls.js'), 'utf8');
+  const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
+  try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
+  for (const f of ['md.js', 'board.js', 'calls.js']) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
+  if (!/<script src="calls\.js"><\/script>/.test(indexHtml)) { pageOk = false; pageErr += ' calls.js not loaded'; }
   check('R1', 'every bridge script passes node --check; page script (and web/md.js) parses', !bad.length && pageOk, [bad.map((f) => path.basename(f)).join(', '), pageErr].filter(Boolean).join(' '));
 
   const st = await call('/api/status');
