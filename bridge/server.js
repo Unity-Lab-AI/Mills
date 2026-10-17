@@ -568,39 +568,9 @@ const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, wr
 const openai = require('./openai')({ accounts, providers, send: (...a) => send(...a), readBody: (r) => readBody(r), writeState: saveState,
   tunnelUrl: () => (readJson(HUB.TUNNEL_FILE, {}).url || ''), onIdle: () => setTimeout(maybeRestart, 300) });
 
-// ---------- voice / video calls ----------
-// The hub only passes call set-up messages between browsers and keeps track of who is in which
-// call. Audio and video go browser-to-browser over WebRTC (DTLS-SRTP). The set-up messages
-// themselves (SDP with the DTLS fingerprints, ICE candidates) are encrypted with the same per-pair
-// ECDH keys as the chat, so the hub can neither read them nor swap in its own fingerprints: the
-// media is end-to-end encrypted, not just encrypted to the hub. One call per conversation
-// ("room" or a private "dm:a|b"); a person is in at most one call at a time.
-const calls = new Map();   // conv -> Map(username -> { cam, mic, since, seen })
-const mailbox = new Map(); // username -> [{ n, from, conv, iv, ct }]
-const waiters = new Map(); // username -> Set(wake fn) of open long-polls
-let callN = 0, callVer = 0;
-const convMember = (conv, user) => conv === 'room' || (conv.startsWith('dm:') && conv.slice(3).split('|').includes(user));
-function validConv(conv) {
-  if (conv === 'room') return true;
-  const m = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
-  return !!m && m[1] < m[2] && accounts.has(m[1]) && accounts.has(m[2]);
-}
-function wake(users) { for (const u of users) for (const fn of waiters.get(u) || []) fn(); }
-function callChanged(conv) { callVer++; wake([...accounts.keys()].filter((u) => convMember(conv, u))); }
-function callState(user) {
-  const out = {};
-  for (const [c, ps] of calls) if (ps.size && convMember(c, user)) out[c] = [...ps].map(([u, p]) => ({ user: u, cam: p.cam, mic: p.mic, screen: !!p.screen, since: p.since }));
-  return out;
-}
-function leaveCalls(user) {
-  for (const [c, ps] of calls) if (ps.delete(user)) { if (!ps.size) calls.delete(c); callChanged(c); }
-  mailbox.delete(user);
-}
-setInterval(() => { // browsers long-poll at least every 25 s while in a call; 60 s of silence = gone
-  const now = Date.now();
-  for (const [c, ps] of calls) for (const [u, p] of ps) if (now - p.seen > 60000) { ps.delete(u); if (!ps.size) calls.delete(c); callChanged(c); }
-}, 10000).unref();
-const ICE_DEFAULT = [{ urls: 'stun:stun.l.google.com:19302' }]; // finds each browser's public address; sees no media
+// Voice / video calls (bridge/calls.js): who is in which call + the encrypted set-up relay; calls.route() serves /api/call/*.
+const calls = require('./calls')({ accounts, config, chatKeys, send: (...a) => send(...a), readBody: (r) => readBody(r), b64 });
+const { convMember } = calls; // "is this person part of that conversation" (also used by shared Work sessions)
 
 // ---------- shared Work sessions (watch-only) ----------
 // A person can share their Work session to a conversation (# Everyone or one person). Members of
@@ -795,7 +765,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { prefs: acct.state.prefs });
     }
     if (p === '/api/logout' && req.method === 'POST') {
-      leaveCalls(acct.username); stopShare(acct.username); setTyping(acct.username, '', false);
+      calls.leave(acct.username); stopShare(acct.username); setTyping(acct.username, '', false);
       { const q = pres(acct.username); q.polls = 0; clearTimeout(q.gone); setPresence(acct.username, { online: false, idle: false }); } // offline right away
       sessions.delete((req.headers.authorization || '').slice(7)); saveSessions();
       return send(res, 200, { ok: true });
@@ -967,59 +937,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ----- calls -----
-    if (p === '/api/call/join' && req.method === 'POST') {
-      const { conv, cam, mic, screen } = await readBody(req);
-      if (!validConv(conv) || !convMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
-      if (!chatKeys[acct.username]) return send(res, 400, { error: 'Your chat key is not set up yet.' });
-      for (const [c, ps] of calls) if (c !== conv && ps.delete(acct.username)) { if (!ps.size) calls.delete(c); callChanged(c); }
-      const ps = calls.get(conv) || new Map(); calls.set(conv, ps);
-      const prev = ps.get(acct.username);
-      ps.set(acct.username, { cam: !!cam, mic: !!mic, screen: !!screen, since: prev ? prev.since : new Date().toISOString(), seen: Date.now() });
-      callChanged(conv);
-      return send(res, 200, { calls: callState(acct.username), ver: callVer, iceServers: Array.isArray(config.iceServers) ? config.iceServers : ICE_DEFAULT });
-    }
-    if (p === '/api/call/leave' && req.method === 'POST') { leaveCalls(acct.username); return send(res, 200, { ok: true }); }
-    if (p === '/api/call/state' && req.method === 'POST') {
-      const { conv, cam, mic, screen } = await readBody(req);
-      const mine = calls.get(conv) && calls.get(conv).get(acct.username);
-      if (!mine) return send(res, 409, { error: 'You are not in that call.' });
-      Object.assign(mine, { cam: !!cam, mic: !!mic, screen: !!screen, seen: Date.now() });
-      callChanged(conv);
-      return send(res, 200, { ok: true });
-    }
-    if (p === '/api/call/signal' && req.method === 'POST') {
-      const { to, conv, iv, ct } = await readBody(req);
-      const ps = calls.get(conv);
-      if (!ps || !ps.has(acct.username) || !ps.has(to) || to === acct.username) return send(res, 409, { error: 'Both people must be in this call.' });
-      if (!b64(iv, 64) || !b64(ct, 200000)) return send(res, 400, { error: 'Bad signal.' });
-      const box = mailbox.get(to) || []; mailbox.set(to, box);
-      box.push({ n: ++callN, from: acct.username, conv, iv, ct });
-      if (box.length > 500) box.splice(0, box.length - 500);
-      wake([to]);
-      return send(res, 200, { ok: true });
-    }
-    if (p === '/api/call/poll' && req.method === 'GET') {
-      // Long poll: answers at once when there are signals after `after` or the call list changed
-      // since `ver`, otherwise waits up to 25 s. Doubles as the "still here" heartbeat for calls.
-      const after = Number(url.searchParams.get('after')) || 0, ver = Number(url.searchParams.get('ver'));
-      const user = acct.username;
-      const box = mailbox.get(user) || [];
-      if (box.length) mailbox.set(user, box.filter((s) => s.n > after)); // delivered ones can go
-      const answer = () => {
-        for (const ps of calls.values()) if (ps.has(user)) ps.get(user).seen = Date.now();
-        const sigs = (mailbox.get(user) || []).filter((s) => s.n > after);
-        send(res, 200, { signals: sigs, after: sigs.length ? sigs[sigs.length - 1].n : after, calls: callState(user), ver: callVer });
-      };
-      if ((mailbox.get(user) || []).some((s) => s.n > after) || ver !== callVer) return answer();
-      let done = false;
-      const set = waiters.get(user) || new Set(); waiters.set(user, set);
-      const finish = () => { if (done) return; done = true; clearTimeout(timer); set.delete(finish); answer(); };
-      const timer = setTimeout(finish, 25000);
-      set.add(finish);
-      req.on('close', () => { if (!done) { done = true; clearTimeout(timer); set.delete(finish); } });
-      return;
-    }
+    if (await calls.route(p, req, res, acct, url)) return; // voice / video calls: /api/call/*
 
     if (p === '/api/room/messages' && req.method === 'GET') {
       // ?rev=N → every message (new, edited or deleted) changed after N; first call (0) = the latest 500.
@@ -1115,7 +1033,7 @@ const server = http.createServer(async (req, res) => {
         const t = needTarget();
         if (t === acct) return send(res, 400, { error: 'You cannot delete your own account.' });
         if (!t.profile) return send(res, 400, { error: `The "${DEFAULT_USERNAME}" account lives in bridge/ itself and cannot be deleted here.` });
-        stopClaude(t); dropSessions(t.username); stopShare(t.username); leaveCalls(t.username);
+        stopClaude(t); dropSessions(t.username); stopShare(t.username); calls.leave(t.username);
         fs.mkdirSync(DELETED_DIR, { recursive: true });
         fs.renameSync(t.files.PROFILE_DIR, path.join(DELETED_DIR, `${t.username}-${Date.now()}`)); // kept, not destroyed
         delete chatKeys[t.username]; writeJson(KEYS_FILE, chatKeys);
