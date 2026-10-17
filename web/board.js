@@ -96,6 +96,7 @@
   function renderFoot() {
     if (!B.data) return;
     const pres = $('bdPresence'); pres.textContent = '';
+    if (B.data.mirror && B.data.mirror.on && B.data.mirror.board === B.board) { const m = el('span', 'bdChip'); m.append(ic('share', 'lead'), 'mirrored to Forgejo ' + B.data.mirror.repo); m.title = 'Tasks on this board are issues on git.unityailab.com and back (bridge/forgejo.json)'; pres.append(m); }
     pres.append(el('span', 'bdMuted', 'Here now: '));
     for (const p of B.data.presence) { const c = el('span', 'bdChip' + (p.agent ? ' agent' : '')); c.append(ic(p.agent ? 'bot' : 'eye', 'lead'), p.name); pres.append(c); }
     const act = $('bdActivity'); act.textContent = ''; act.title = 'Click for the whole activity log';
@@ -133,6 +134,7 @@
     if (t.priority) top.append(el('span', 'bdPri p' + t.priority, 'P' + t.priority));
     if (t.recur) { const r = el('span', 'bdRecur'); r.title = 'Repeats ' + RECUR_LABEL[t.recur]; r.append(ic('repeat')); top.append(r); }
     if (t.dueAt) top.append(el('span', 'bdDue ' + dueClass(t), fmtDue(t.dueAt)));
+    if (t.forgejo) { const f = el('a', 'bdExt', '#' + t.forgejo.number); f.href = t.forgejo.url; f.target = '_blank'; f.rel = 'noopener noreferrer'; f.title = 'Forgejo issue #' + t.forgejo.number + (t.forgejo.state === 'closed' ? ' (closed)' : ''); f.onclick = (e) => e.stopPropagation(); top.append(f); }
     if (t.assignee) { const a = el('span', 'bdAva', personName(t.assignee).slice(0, 1).toUpperCase()); a.title = 'Assigned to ' + personName(t.assignee); a.style.background = colorOf(t.assignee); top.append(a); }
     c.append(top, el('div', 'bdTitle', t.title));
     if (t.labels.length) { const l = el('div', 'bdLabels'); for (const x of t.labels) l.append(el('span', 'bdLabel', x)); c.append(l); }
@@ -230,7 +232,9 @@
       }, 'ghost bdDanger');
     }
     p.append(acts);
-    const meta = el('div', 'bdMeta', `Created by ${t.createdBy} · updated ${new Date(t.updatedAt).toLocaleString()}`); p.append(meta);
+    const meta = el('div', 'bdMeta', `Created by ${t.createdBy} · updated ${new Date(t.updatedAt).toLocaleString()}`);
+    if (t.forgejo) { meta.append(' · '); const f = el('a', '', 'Forgejo issue #' + t.forgejo.number + (t.forgejo.state === 'closed' ? ' (closed)' : '')); f.href = t.forgejo.url; f.target = '_blank'; f.rel = 'noopener noreferrer'; meta.append(f); }
+    p.append(meta);
     const log = el('div', 'bdLog'); log.append(el('b', '', 'Activity'));
     for (const a of activity) log.append(el('div', 'bdAct' + (a.agent ? ' agent' : ''), `${new Date(a.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${a.by} ${a.what}${a.detail ? ' (' + a.detail + ')' : ''}`));
     p.append(log);

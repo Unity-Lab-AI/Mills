@@ -39,6 +39,9 @@ bridge/assistant.json
 # AI providers people hooked up (API keys / login folders / endpoints) and the empty folder API calls run in
 bridge/providers.json
 Api/
+# Forgejo issue mirroring: the host's token + repo (never committed); team notes live on the host only
+bridge/forgejo.json
+Notes/
 Images/
 __pycache__/
 *.pyc
