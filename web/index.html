@@ -272,6 +272,15 @@
   .slider { display: grid; grid-template-columns: 6.5rem 1fr auto; gap: .6rem; align-items: center; }
   .slider input { padding: 0; }
   .slider button { padding: .2rem .55rem; font-size: .8rem; }
+  .setSection { display: flex; flex-direction: column; gap: .5rem; font-size: .85rem; }
+  .apiBox, .provBox { display: flex; flex-direction: column; gap: .45rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem; }
+  .apiBox code, .provBox code { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; background: color-mix(in srgb, var(--text) 10%, transparent); padding: .1rem .35rem; border-radius: 4px; overflow-wrap: anywhere; }
+  .apiBox .row, .provBox .row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+  .apiBox .row button, .provBox .row button { padding: .3rem .6rem; font-size: .8rem; }
+  .apiBox .row select, .provBox .row select, .provBox .row input { width: auto; flex: 1; min-width: 9rem; padding: .35rem .5rem; font-size: .85rem; }
+  .apiKeyShow { display: flex; gap: .4rem; align-items: center; } .apiKeyShow input { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
+  .provItem { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--line); }
+  .provItem:first-child { border-top: 0; } .provItem small { color: var(--muted); }
   #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
   .archiveSearch { padding: .5rem .75rem 0; } .archiveSearch input { font-size: .9rem; }
   .conv .snip { font-size: .76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .15rem; }
@@ -683,6 +692,11 @@
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
       <label>Theme (this browser)<select id="setTheme"></select></label>
       <div><button type="button" id="saveSettings">Save</button> <span id="setMsg" class="status"></span></div>
+      <hr>
+      <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to Mills: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
+        <div id="apiBox" class="apiBox"></div></div>
+      <div class="setSection"><b>My AIs</b> — hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.
+        <div id="provBox" class="provBox"></div></div>
     </div>
   </div>
 </div>
@@ -1475,6 +1489,8 @@ async function runPcTool(ev) {
 // current turn, if Claude is busy), to every new conversation, and after the bridge restarts.
 let modelLabels = {};
 const modelName = (id) => (id ? modelLabels[id] || id : 'Claude Code default');
+// The dropdown lists the host's Claude models, then every Claude-capable provider the person may use
+// (their own, or one a teammate shared): option value = "<provider id>|<model>" ("" = the host default).
 function showModels(d) {
   const sel = $('model');
   if (!Array.isArray(d.models)) { sel.hidden = true; return; } // bridge from before the picker existed
@@ -1484,7 +1500,14 @@ function showModels(d) {
   def.value = ''; def.textContent = 'Default' + (d.defaultModel ? ' (' + modelName(d.defaultModel) + ')' : '');
   sel.append(def);
   for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
-  sel.value = d.model || ''; sel.hidden = false;
+  for (const p of (d.providers || []).filter((x) => x.id !== 'host' && x.kind !== 'openai')) {
+    const g = document.createElement('optgroup'); g.label = p.label + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '');
+    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); g.append(o); }
+    sel.append(g);
+  }
+  sel.value = d.provider && d.provider !== 'host' ? d.provider + '|' + (d.model || '') : d.model || '';
+  if (sel.selectedIndex < 0) sel.value = '';
+  sel.hidden = false;
 }
 $('workspace').onchange = async () => {
   const sel = $('workspace'), want = sel.value;
@@ -1497,8 +1520,10 @@ $('workspace').onchange = async () => {
 };
 $('model').onchange = async () => {
   try {
-    const d = await json('/api/model', { method: 'POST', body: JSON.stringify({ model: $('model').value }) });
-    sys('Model: ' + modelName(d.effective) + (busy ? ' — applies from the message after this one.' : ' — applies from your next message.'));
+    const [provider, model] = $('model').value.includes('|') ? $('model').value.split('|') : ['host', $('model').value];
+    const d = await json('/api/model', { method: 'POST', body: JSON.stringify({ model, provider }) });
+    const via = d.provider && d.provider !== 'host' ? ' via ' + (((me.providers || []).find((p) => p.id === d.provider) || {}).label || 'your provider') : '';
+    sys('Model: ' + modelName(d.effective) + via + (busy ? ' — applies from the message after this one.' : ' — applies from your next message.'));
   } catch (err) { sys(err.message, true); }
 };
 
@@ -3297,7 +3322,92 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
+  renderApiAccess(); renderProviders();
 }
+// ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
+let providerList = [];
+const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint' };
+async function renderApiAccess(freshKey) {
+  const box = $('apiBox'); if (!box) return;
+  let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
+  try { providerList = (await json('/api/providers')).providers; } catch {}
+  box.textContent = '';
+  const line = (...kids) => { const d = document.createElement('div'); d.className = 'row'; d.append(...kids); box.append(d); return d; };
+  const code = (t) => { const c = document.createElement('code'); c.textContent = t; return c; };
+  line('Endpoint (base URL): ', code(st.endpoint || '(the hub has no public address yet)'));
+  if (freshKey) {
+    const w = document.createElement('div'); w.className = 'apiKeyShow';
+    const inp = document.createElement('input'); inp.readOnly = true; inp.value = freshKey;
+    const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'ghost'; cp.textContent = 'Copy';
+    cp.onclick = async () => { try { await navigator.clipboard.writeText(freshKey); cp.textContent = 'Copied'; } catch { cp.textContent = 'Select + copy'; } };
+    w.append(inp, cp); box.append(w);
+    const n = document.createElement('div'); n.className = 'status'; n.textContent = 'Your new key. It is shown only now; copy it into your harness. Rotating makes a new one and ends this one.'; box.append(n);
+  }
+  const info = document.createElement('div');
+  info.textContent = st.hasKey ? `Key ${st.prefix}… made ${new Date(st.createdAt).toLocaleString()}` + (st.expiresAt ? (st.expired ? ' · EXPIRED ' : ' · expires ') + new Date(st.expiresAt).toLocaleString() : ' · never expires') + ` · ${st.calls} call${st.calls === 1 ? '' : 's'}` + (st.lastUsed ? ', last ' + new Date(st.lastUsed).toLocaleString() : '') : 'No key yet.';
+  box.append(info);
+  const exp = document.createElement('select');
+  for (const [v, l] of [[0, 'never expires'], [1, 'expires after 1 day'], [7, 'expires after 7 days'], [30, 'expires after 30 days'], [90, 'expires after 90 days']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; exp.append(o); }
+  exp.value = String(st.expiresDays || 0);
+  exp.onchange = () => json('/api/apikey/settings', { method: 'POST', body: JSON.stringify({ expiresDays: Number(exp.value) }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+  const rot = document.createElement('button'); rot.type = 'button'; rot.textContent = st.hasKey ? 'Rotate key' : 'Make my key';
+  rot.onclick = async () => { try { const d = await json('/api/apikey/rotate', { method: 'POST', body: JSON.stringify({ expiresDays: Number(exp.value) }) }); renderApiAccess(d.key); } catch (e) { info.textContent = e.message; } };
+  const rev = document.createElement('button'); rev.type = 'button'; rev.className = 'ghost'; rev.textContent = 'Revoke'; rev.hidden = !st.hasKey;
+  rev.onclick = () => json('/api/apikey/revoke', { method: 'POST', body: '{}' }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+  line(rot, rev, exp);
+  const prov = document.createElement('select');
+  for (const p of providerList) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label + (p.id === 'host' ? '' : ' (' + KIND_NAMES[p.kind] + (p.owner !== me.username ? ', ' + nickOf(p.owner) : '') + ')'); prov.append(o); }
+  prov.value = st.provider || 'host';
+  const mdl = document.createElement('select');
+  const fillModels = () => { mdl.textContent = ''; const p = providerList.find((x) => x.id === prov.value) || {}; const o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'model: as requested, else the first'; mdl.append(o0); for (const m of p.models || []) { const o = document.createElement('option'); o.value = m; o.textContent = m; mdl.append(o); } mdl.value = st.model || ''; };
+  fillModels();
+  prov.onchange = () => json('/api/apikey/settings', { method: 'POST', body: JSON.stringify({ provider: prov.value }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+  mdl.onchange = () => json('/api/apikey/settings', { method: 'POST', body: JSON.stringify({ model: mdl.value }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+  const pl = document.createElement('span'); pl.textContent = 'Answers come from:';
+  line(pl, prov, mdl);
+}
+// ── Settings → My AIs: providers this person hooked up (private or shared with the team) ──
+async function renderProviders() {
+  const box = $('provBox'); if (!box) return;
+  try { providerList = (await json('/api/providers')).providers; } catch (e) { box.textContent = e.message; return; }
+  box.textContent = '';
+  for (const p of providerList) {
+    const it = document.createElement('div'); it.className = 'provItem';
+    const b = document.createElement('b'); b.textContent = p.label; it.append(b);
+    const s = document.createElement('small'); s.textContent = KIND_NAMES[p.kind] + (p.id === 'host' ? ' · everyone' : ' · ' + (p.owner === me.username ? 'yours' : nickOf(p.owner) + "'s") + (p.shared ? ' · shared with the team' : ' · private')) + (p.models && p.models.length ? ' · ' + p.models.join(', ') : ''); it.append(s);
+    if (p.id !== 'host' && p.owner === me.username) {
+      const sh = document.createElement('button'); sh.type = 'button'; sh.className = 'ghost'; sh.textContent = p.shared ? 'Make private' : 'Share with team';
+      sh.onclick = () => json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: p.id, shared: !p.shared }) }).then(() => { renderProviders(); showModels(me); }).catch((e) => sysSettings(e.message));
+      const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
+      rm.onclick = () => { if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; return; } json('/api/providers/remove', { method: 'POST', body: JSON.stringify({ id: p.id }) }).then(() => { renderProviders(); renderApiAccess(); refreshProviders(); }).catch((e) => sysSettings(e.message)); };
+      it.append(sh, rm);
+    }
+    box.append(it);
+  }
+  // add one
+  const form = document.createElement('div'); form.className = 'row';
+  const kind = document.createElement('select');
+  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
+  const label = document.createElement('input'); label.placeholder = 'label, e.g. "Sponge\'s Claude"'; label.maxLength = 60;
+  const secret = document.createElement('input'); secret.type = 'password'; secret.placeholder = 'API key'; secret.autocomplete = 'off';
+  const where = document.createElement('input'); where.placeholder = 'base URL, e.g. https://api.example.com/v1';
+  const models = document.createElement('input'); models.placeholder = 'model ids, comma separated (optional for Claude)';
+  const shared = document.createElement('label'); shared.className = 'chk'; const shc = document.createElement('input'); shc.type = 'checkbox'; shared.append(shc, ' share with the team');
+  const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add';
+  const msg = document.createElement('span'); msg.className = 'status';
+  const sync = () => { secret.hidden = kind.value === 'claude-cli'; where.hidden = kind.value !== 'claude-cli' && kind.value !== 'openai'; where.placeholder = kind.value === 'openai' ? 'base URL, e.g. https://api.example.com/v1' : 'folder on the host, e.g. D:\\claude-logins\\sponge or /home/host/claude-logins/sponge (the host runs `claude login` once with CLAUDE_CONFIG_DIR set to it)'; };
+  kind.onchange = sync; sync();
+  add.onclick = async () => {
+    const body = { kind: kind.value, label: label.value, shared: shc.checked, models: models.value };
+    if (kind.value !== 'claude-cli') body.apiKey = secret.value;
+    if (kind.value === 'openai') body.baseUrl = where.value; if (kind.value === 'claude-cli') body.configDir = where.value;
+    try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify(body) }); label.value = secret.value = where.value = models.value = ''; msg.textContent = 'Added.'; renderProviders(); renderApiAccess(); refreshProviders(); }
+    catch (e) { msg.textContent = e.message; }
+  };
+  form.append(kind, label, secret, where, models, shared, add, msg); box.append(form);
+}
+function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
+async function refreshProviders() { try { const d = await json('/api/check'); me.providers = d.providers; me.provider = d.provider; showModels(me); } catch {} }
 $('setTheme').onchange = () => applyTheme($('setTheme').value);
 function fillVoices(chosen) { // voices load late in some browsers, so this also runs on voiceschanged
   const sel = $('ttsVoice'), keep = chosen ?? sel.value;
