@@ -803,7 +803,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/status' && req.method === 'GET') {
-      return send(res, 200, { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy() });
+      // The only thing anyone may learn without signing in is that a Mills hub is here (the page needs
+      // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
+      // the regression runner), which call from this machine, never through the tunnel.
+      const viaTunnel = !!req.headers['cf-connecting-ip'];
+      return send(res, 200, viaTunnel ? { ok: true, hub: true } : { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy() });
     }
 
     if (p === '/api/login' && req.method === 'POST') {
