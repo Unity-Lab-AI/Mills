@@ -147,17 +147,20 @@ function live(opts = {}) {
       return run ? `Pages deploy of ${String(run.headSha).slice(0, 7)}: ${run.status}${run.conclusion ? ' / ' + run.conclusion : ''} ${run.url}` : 'Pages deploy: no run found';
     } catch { return 'Pages deploy: could not ask gh; check https://github.com/Unity-Lab-AI/Mills/actions'; }
   };
-  if (git(REPO, 'rev-list', '--count', `${MAIN}..${DEVELOP}`) === '0') return [`Nothing to ship: ${MAIN} (${git(REPO, 'rev-parse', '--short', MAIN)}) already has everything on ${DEVELOP}.`, deploy()];
+  // The restart flag must land in the RUNNING hub's bridge folder: the main checkout's (at.dir), never this
+  // script's own copy (a worktree's bridge/.restart restarts nothing — that mistake shipped once).
+  const restart = () => {
+    const flag = path.join(at.dir, 'bridge', '.restart');
+    fs.writeFileSync(flag, new Date().toISOString() + '\n');
+    return `Hub restart requested (${flag}): it restarts itself (same address, nobody signed out) as soon as no reply is in progress.`;
+  };
+  if (git(REPO, 'rev-list', '--count', `${MAIN}..${DEVELOP}`) === '0') return [`Nothing to ship: ${MAIN} (${git(REPO, 'rev-parse', '--short', MAIN)}) already has everything on ${DEVELOP}.`, deploy(), ...(opts.restart ? [restart()] : [])];
   const r = tryGit(at.dir, 'merge', '--no-ff', '-m', `Merge ${DEVELOP} into ${MAIN}`, DEVELOP);
   if (!r.ok) { tryGit(at.dir, 'merge', '--abort'); throw new Error(`CONFLICT merging ${DEVELOP} into ${MAIN} (nothing was changed):\n${r.out}`); }
   const lines = [`Merged ${DEVELOP} into ${MAIN} (${git(at.dir, 'rev-parse', '--short', 'HEAD')}) in ${at.dir}.`];
   for (const b of [DEVELOP, MAIN]) lines.push(...pushAll(REPO, b).map((s) => `${b} → ${s}`));
   lines.push(deploy() + ' (the run for this push may still be starting; run "node bridge/worktree.js live" again to see it)');
-  if (opts.restart) {
-    const { RESTART_FLAG } = loadProfile('');
-    fs.writeFileSync(RESTART_FLAG, new Date().toISOString() + '\n');
-    lines.push('Hub restart requested: it restarts itself (same address, nobody signed out) as soon as no reply is in progress.');
-  }
+  if (opts.restart) lines.push(restart());
   return lines;
 }
 
