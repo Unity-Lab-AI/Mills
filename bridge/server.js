@@ -68,6 +68,7 @@ function systemPrompt(acct, wd) {
     `When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.`,
     `You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.`,
     `Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search (${name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create.`,
+    `Team notes (markdown files in folders, shared by everyone): notes_list (with a search), notes_read, notes_write (path like "plans/next-week.md"; whole text), notes_delete (only when asked). Good for plans, meeting notes, decisions, how-tos.`,
     `The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as "${name} · Claude", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about.`,
   ].join(' ') + (hubLaws() ? '\n\n' + hubLaws() : '');
 }
@@ -309,6 +310,10 @@ const board = require('./board')({
   displayOf: (u) => { const a = accounts.get(u); return a ? publicPrefs(a).nick || a.display : u; },
 });
 
+// Forgejo issue mirroring (bridge/forgejo.js): off until bridge/forgejo.json names a repo + token.
+const forgejo = require('./forgejo')({ ROOT, board, readJson });
+board.setViewExtra(() => ({ mirror: forgejo.status() }));
+
 // ---------- room agent ("claude") ----------
 // Claude is a room member too, but its private key lives on this hub (Chat/agent-key.json), so the
 // hub can read what is sent to it. Browsers wrap every message for every member, the agent
@@ -527,9 +532,11 @@ function agentHear(msg) {
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
+// Team notes (bridge/notes.js): markdown files in folders under Mills/Notes, for people (/api/notes*) and Claude (notes_* tools).
+const notes = require('./notes')({ dir: path.join(MILLS_DIR, 'Notes'), send: (...a) => send(...a), readBody: (r) => readBody(r), displayOf: nameOf, changed: () => roomChanged() });
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
 const team = require('./team')({ accounts, agentSay, presenceList: presence.list, displayOf: nameOf, chatKeys, guilds,
-  hub: { callsState: (u) => calls.state(u), sharesFor: (u) => shares.listFor(u), usageStatus: (a) => usage.status(a), archiveSearch: (a, q) => archive.search(a, q), providersList: (u) => providers.list(u) } });
+  hub: { callsState: (u) => calls.state(u), sharesFor: (u) => shares.listFor(u), usageStatus: (a) => usage.status(a), archiveSearch: (a, q) => archive.search(a, q), providersList: (u) => providers.list(u) }, notes });
 // AI providers (bridge/providers.js: the host's Claude by default, plus people's own keys / logins / endpoints)
 // and the per-person OpenAI-compatible API (bridge/openai.js, /v1/*).
 const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts });
@@ -758,6 +765,7 @@ const server = http.createServer(async (req, res) => {
     // ----- team board -----
     if (p === '/api/board' || p.startsWith('/api/board/')) { if (await board.handle(req, res, p, url, acct)) return; }
     if (await guilds.route(p, req, res, acct)) return; // servers, channels, groups: /api/guilds*
+    if (await notes.route(p, req, res, acct, url)) return; // team notes: /api/notes*
 
     // ----- chat room -----
     if (p === '/api/room/members' && req.method === 'GET') {
@@ -860,7 +868,7 @@ const server = http.createServer(async (req, res) => {
         for (const [u, convs] of Object.entries(seen)) {
           for (const [c, v] of Object.entries(convs)) if (c === 'room' || (c.startsWith('dm:') && c.split(/[:|]/).includes(acct.username)) || guilds.isMember(c, acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
         }
-        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer, guildsVer: guilds.version(),
+        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer, guildsVer: guilds.version(), notesVer: notes.version(),
           online: presence.online(), presence: presence.list(), typing: presence.typingFor(acct.username) });
       };
       if (url.searchParams.get('wait') !== '1') { presence.touch(acct.username); return answer(); }

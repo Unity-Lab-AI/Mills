@@ -28,6 +28,7 @@
     if (!d.boards.some((b) => b.id === B.board)) B.board = d.boards[0].id;
     if (!$('board').hidden) renderBoard();
     if (!$('cal').hidden) renderCal();
+    if (!$('myDay').hidden) renderMyDay();
     renderTaskPane(); renderBadge(); remindDue();
   }
   // Due reminders (an idea from HyperProductivityManager): a task assigned to you that is due today or
@@ -95,6 +96,7 @@
   function renderFoot() {
     if (!B.data) return;
     const pres = $('bdPresence'); pres.textContent = '';
+    if (B.data.mirror && B.data.mirror.on && B.data.mirror.board === B.board) { const m = el('span', 'bdChip'); m.append(ic('share', 'lead'), 'mirrored to Forgejo ' + B.data.mirror.repo); m.title = 'Tasks on this board are issues on git.unityailab.com and back (bridge/forgejo.json)'; pres.append(m); }
     pres.append(el('span', 'bdMuted', 'Here now: '));
     for (const p of B.data.presence) { const c = el('span', 'bdChip' + (p.agent ? ' agent' : '')); c.append(ic(p.agent ? 'bot' : 'eye', 'lead'), p.name); pres.append(c); }
     const act = $('bdActivity'); act.textContent = ''; act.title = 'Click for the whole activity log';
@@ -132,6 +134,7 @@
     if (t.priority) top.append(el('span', 'bdPri p' + t.priority, 'P' + t.priority));
     if (t.recur) { const r = el('span', 'bdRecur'); r.title = 'Repeats ' + RECUR_LABEL[t.recur]; r.append(ic('repeat')); top.append(r); }
     if (t.dueAt) top.append(el('span', 'bdDue ' + dueClass(t), fmtDue(t.dueAt)));
+    if (t.forgejo) { const f = el('a', 'bdExt', '#' + t.forgejo.number); f.href = t.forgejo.url; f.target = '_blank'; f.rel = 'noopener noreferrer'; f.title = 'Forgejo issue #' + t.forgejo.number + (t.forgejo.state === 'closed' ? ' (closed)' : ''); f.onclick = (e) => e.stopPropagation(); top.append(f); }
     if (t.assignee) { const a = el('span', 'bdAva', personName(t.assignee).slice(0, 1).toUpperCase()); a.title = 'Assigned to ' + personName(t.assignee); a.style.background = colorOf(t.assignee); top.append(a); }
     c.append(top, el('div', 'bdTitle', t.title));
     if (t.labels.length) { const l = el('div', 'bdLabels'); for (const x of t.labels) l.append(el('span', 'bdLabel', x)); c.append(l); }
@@ -229,7 +232,9 @@
       }, 'ghost bdDanger');
     }
     p.append(acts);
-    const meta = el('div', 'bdMeta', `Created by ${t.createdBy} · updated ${new Date(t.updatedAt).toLocaleString()}`); p.append(meta);
+    const meta = el('div', 'bdMeta', `Created by ${t.createdBy} · updated ${new Date(t.updatedAt).toLocaleString()}`);
+    if (t.forgejo) { meta.append(' · '); const f = el('a', '', 'Forgejo issue #' + t.forgejo.number + (t.forgejo.state === 'closed' ? ' (closed)' : '')); f.href = t.forgejo.url; f.target = '_blank'; f.rel = 'noopener noreferrer'; meta.append(f); }
+    p.append(meta);
     const log = el('div', 'bdLog'); log.append(el('b', '', 'Activity'));
     for (const a of activity) log.append(el('div', 'bdAct' + (a.agent ? ' agent' : ''), `${new Date(a.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${a.by} ${a.what}${a.detail ? ' (' + a.detail + ')' : ''}`));
     p.append(log);
@@ -345,9 +350,58 @@
     setBadge($('boardBadge'), n); $('boardBadge').title = n ? n + ' task' + (n > 1 ? 's' : '') + ' due today or overdue' : '';
   }
 
+  // ── My day: the planner view (HyperProductivityManager's "what should I be doing right now") ──
+  // Overdue / Today / This week / Later over the tasks assigned to you or held by you (or your Claude),
+  // each with quick actions: Done, Tomorrow, Next week, Open, Claude. "Plan with Claude" hands the whole
+  // picture to Claude in Work.
+  function myTasks() {
+    if (!B.data) return [];
+    return B.data.tasks.filter((t) => t.status !== 'done' && (t.assignee === me.username || (t.claim && (t.claim.key === myKey() || t.claim.key === myKey() + '#agent'))));
+  }
+  function renderMyDay() {
+    const body = $('mdBody'); if (!body || !B.data) return;
+    body.textContent = '';
+    const today = startOfDay(Date.now()), week = today + 7 * DAY, list = myTasks();
+    const groups = { overdue: [], today: [], week: [], later: [], none: [] };
+    for (const t of list) { if (!t.dueAt) groups.none.push(t); else if (t.dueAt < today) groups.overdue.push(t); else if (t.dueAt < today + DAY) groups.today.push(t); else if (t.dueAt < week) groups.week.push(t); else groups.later.push(t); }
+    $('mdTitle').textContent = 'My day · ' + new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+    body.append(el('div', 'mdSum', `${groups.today.length} due today · ${groups.overdue.length} overdue · ${groups.week.length} this week · ${groups.later.length + groups.none.length} later or unscheduled`));
+    const shift = async (t, days) => { const base = t.dueAt && t.dueAt > today ? t.dueAt : today; const d = new Date(base); d.setDate(d.getDate() + days); d.setHours(17, 0, 0, 0); await op('update', { id: t.id, rev: t.rev, dueAt: d.getTime() }); renderMyDay(); };
+    const section = (title, items, cls) => {
+      const h = el('div', 'mdSect' + (cls ? ' ' + cls : '')); h.append(el('span', '', title), el('span', '', String(items.length))); body.append(h);
+      if (!items.length) { body.append(el('div', 'tpNone', 'nothing')); return; }
+      for (const t of items.sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity) || (b.priority || 0) - (a.priority || 0))) {
+        const r = el('div', 'mdItem');
+        r.append(el('span', 'bdId', t.id));
+        if (t.priority) r.append(el('span', 'bdPri p' + t.priority, 'P' + t.priority));
+        r.append(el('span', 'bdTitle', t.title));
+        if (t.dueAt) r.append(el('span', 'bdDue ' + dueClass(t), fmtDue(t.dueAt)));
+        if (t.claim) r.append(el('span', 'bdMuted', (t.claim.agent ? 'Claude · ' : 'held · ') + minsLeft(t.claim.until) + ' min'));
+        const acts = el('div', 'mdActs');
+        const b = (icon, text, fn, title) => { const x = label(el('button', 'ghost'), icon, text); x.type = 'button'; x.title = title || text; x.onclick = fn; acts.append(x); };
+        b('check', 'Done', () => op('complete', { id: t.id }).then(renderMyDay));
+        b('calendar', 'Tomorrow', () => shift(t, 1), 'Move the due date to tomorrow');
+        b('repeat', 'Next week', () => shift(t, 7), 'Move the due date a week on');
+        b('board', 'Open', () => { $('myDay').hidden = true; B.board = t.board; showScreen('board'); openDetail(t.id); });
+        b('bot', 'Claude', () => { $('myDay').hidden = true; giveToClaude(t); });
+        r.append(acts); body.append(r);
+      }
+    };
+    section('Overdue', groups.overdue, 'over'); section('Today', groups.today); section('This week', groups.week); section('Later', groups.later); section('No date yet', groups.none);
+  }
+  function openMyDay() { renderMyDay(); $('myDay').hidden = false; }
+  function planWithClaude() {
+    const list = myTasks().map((t) => `${t.id} "${t.title}"${t.dueAt ? ' due ' + new Date(t.dueAt).toISOString().slice(0, 10) : ' (no date)'}${t.priority ? ' P' + t.priority : ''}`).join('; ');
+    $('myDay').hidden = true; showScreen('shell');
+    $('input').value = `Plan my day. These are my open board tasks: ${list || '(none)'}. Read the calendar with board_calendar, then propose an order for today and, if I agree, set due dates with task_update (due as text) and move anything I cannot finish this week to next week.`;
+    $('input').focus(); $('input').dispatchEvent(new Event('input'));
+  }
+
   // ── wiring ──
   function wire() {
     if (wire.done) return; wire.done = true;
+    $('bdMyDay').onclick = openMyDay; $('calMyDay').onclick = openMyDay; $('mdClose').onclick = () => { $('myDay').hidden = true; }; $('mdClaude').onclick = planWithClaude;
+    $('myDay').onclick = (e) => { if (e.target.id === 'myDay') $('myDay').hidden = true; };
     $('bdBoard').onchange = () => { B.board = $('bdBoard').value; closeDetail(); renderBoard(); };
     $('bdFilter').oninput = () => { B.filter = $('bdFilter').value; renderBoard(); };
     $('bdMine').onchange = () => { B.mine = $('bdMine').checked; renderBoard(); };

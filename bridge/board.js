@@ -83,6 +83,11 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
   let ver = 1;
   const waiters = new Set();
   const viewers = new Map(); // username -> last time they had the board open
+  // Change hooks (bridge/forgejo.js mirrors tasks to issues): fn(what, task, { skipMirror }) after every saved change.
+  const hooks = [];
+  const onChange = (fn) => hooks.push(fn);
+  const emit = (what, t, b) => { for (const fn of hooks) { try { fn(what, t, { skipMirror: !!(b && b.skipMirror) }); } catch {} } };
+  let viewExtra = () => ({}); // extra fields for the board view (e.g. the mirror's status)
   function save() {
     if (db.activity.length > ACTIVITY_KEEP) db.activity.splice(0, db.activity.length - ACTIVITY_KEEP);
     const tmp = FILE + '.tmp';
@@ -107,7 +112,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
     id: t.id, board: t.board, title: t.title, status: t.status, order: t.order, priority: t.priority || 0, labels: t.labels || [],
     dueAt: t.dueAt || null, recur: t.recur || null, assignee: t.assignee || null, createdBy: t.createdBy, updatedAt: t.updatedAt, rev: t.rev,
     hasBody: !!t.body, claim: claimActive(t) ? { by: t.claim.by, agent: t.claim.agent, until: t.claim.until, key: t.claim.key } : null,
-    stale: !!(t.claim && !claimActive(t)),
+    stale: !!(t.claim && !claimActive(t)), forgejo: t.forgejo ? { number: t.forgejo.number, url: t.forgejo.url, state: t.forgejo.state } : null,
   });
   function view(user) {
     const tasks = db.tasks.filter(live);
@@ -115,7 +120,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
     for (const [u, at] of viewers) if (now() - at < 60e3 && accounts.has(u)) presence.push({ user: u, name: displayOf(u), agent: false });
     for (const t of tasks) if (claimActive(t) && t.claim.agent && !presence.some((p) => p.key === t.claim.key)) presence.push({ key: t.claim.key, name: t.claim.by, agent: true });
     return { ver, statuses: STATUSES, boards: db.boards, tasks: tasks.map(card), presence,
-      activity: db.activity.slice(-60).reverse(), me: user };
+      activity: db.activity.slice(-60).reverse(), me: user, ...viewExtra() };
   }
 
   // ── operations shared by people (HTTP) and Claude (internal MCP relay) ──
@@ -140,7 +145,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
         labels: cleanLabels(b.labels), dueAt, recur: RECUR.includes(b.recur) ? b.recur : null,
         assignee: b.assignee && accounts.has(b.assignee) ? b.assignee : null, createdBy: actorName(a), createdAt: now(), updatedAt: now(), rev: 1, claim: null };
       t.dueDay = t.dueAt ? new Date(t.dueAt).getDate() : null; // the day a monthly repeat returns to (31st stays the 31st after February)
-      db.tasks.push(t); log(t, a, 'created'); save();
+      db.tasks.push(t); log(t, a, 'created'); save(); emit('created', t, b);
       return ok({ task: { ...card(t), body: t.body } });
     },
     get(a, b) {
@@ -164,11 +169,11 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
       if (b.recur !== undefined) { t.recur = RECUR.includes(b.recur) ? b.recur : null; changed.push(t.recur ? 'repeats ' + t.recur : 'no repeat'); }
       if (b.assignee !== undefined) { t.assignee = b.assignee && accounts.has(b.assignee) ? b.assignee : null; changed.push(t.assignee ? 'assigned to ' + displayOf(t.assignee) : 'unassigned'); }
       if (b.status !== undefined && STATUS_IDS.includes(b.status) && b.status !== t.status) {
-        if (b.status === 'done') return ops.complete(a, { id: t.id });
+        if (b.status === 'done') return ops.complete(a, { id: t.id, skipMirror: b.skipMirror });
         t.status = b.status; changed.push('moved to ' + b.status);
       }
       if (!changed.length) return ok({ task: { ...card(t), body: t.body || '' } });
-      touch(t); log(t, a, 'updated', changed.join(', ')); save();
+      touch(t); log(t, a, 'updated', changed.join(', ')); save(); emit('updated', t, b);
       return ok({ task: { ...card(t), body: t.body || '' } });
     },
     move(a, b) { // drag and drop: new column + position
@@ -182,7 +187,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
       const moved = t.status !== status;
       t.status = status; touch(t);
       if (moved) log(t, a, 'moved', 'to ' + status);
-      save();
+      save(); if (moved) emit('updated', t, b);
       return ok({ task: card(t) });
     },
     complete(a, b) {
@@ -193,7 +198,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
         t.status = 'todo'; t.claim = null; touch(t);
         log(t, a, 'completed', 'repeats ' + t.recur + ': next due ' + new Date(t.dueAt).toISOString().slice(0, 10));
       } else { t.status = 'done'; t.claim = null; touch(t); log(t, a, 'completed'); }
-      save();
+      save(); emit('completed', t, b);
       return ok({ task: card(t) });
     },
     claim(a, b) {
@@ -217,7 +222,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
     remove(a, b) {
       const t = find(b.id), g = guard(t, a);
       if (g) return g;
-      t.deleted = true; t.claim = null; touch(t); log(t, a, 'deleted'); save(); // tombstone: kept, never shown
+      t.deleted = true; t.claim = null; touch(t); log(t, a, 'deleted'); save(); emit('deleted', t, b); // tombstone: kept, never shown
       return ok({ ok: true });
     },
     newBoard(a, b) {
@@ -284,7 +289,12 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
     const r = ops[op]({ user: acctName, agent: true }, args || {});
     send(res, 200, r.status === 200 ? { ok: true, result: r.body } : { ok: false, error: r.body.error });
   }
-  return { handle, internal, STATUSES, nextDue, parseDue };
+  // ---- for the Forgejo mirror: the external issue a task is tied to (not part of rev / activity) ----
+  function setExternal(id, ext) { const t = db.tasks.find((x) => x.id === id); if (!t) return; t.forgejo = ext ? { ...ext } : undefined; save(); }
+  const external = (id) => { const t = db.tasks.find((x) => x.id === id); return t && t.forgejo ? { ...t.forgejo } : null; };
+  const byExternal = (number) => db.tasks.find((t) => live(t) && t.forgejo && t.forgejo.number === number) || null;
+  const get = (id) => db.tasks.find((t) => t.id === id) || null; // the raw task (deleted ones included, so a mirror can close them)
+  return { handle, internal, STATUSES, nextDue, parseDue, ops, onChange, setExternal, external, byExternal, get, setViewExtra: (fn) => { viewExtra = fn; } };
 };
 module.exports.nextDue = nextDue;
 module.exports.parseDue = parseDue;

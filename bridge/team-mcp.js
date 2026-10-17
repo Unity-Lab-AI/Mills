@@ -20,6 +20,11 @@ const TOOLS = [
   { name: 'hub_status', description: 'The wider picture of Mills right now: who is online / away / offline and where, who is in a call (cam / mic / screen), who is sharing a Work session, and the host account\'s 5-hour / 7-day Claude usage windows plus this session\'s context size.', inputSchema: { type: 'object', properties: {} } },
   { name: 'sessions_search', description: `Search ${USER}'s own saved Claude sessions (Past sessions): every word must match the title or the transcript; snippets say who said it.`, inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] } },
   { name: 'my_providers', description: `The AIs ${USER} may use in Mills (the host's Claude, their own keys / logins / endpoints, the team's shared ones) and which one answers right now.`, inputSchema: { type: 'object', properties: {} } },
+  // Team notes: markdown files in folders on the host, shared by everyone (and visible in the Notes screen).
+  { name: 'notes_list', description: 'List the team notes (paths like "plans/next-week.md", who saved them last, when); with q, only notes whose path or text contains every word, with a snippet.', inputSchema: { type: 'object', properties: { q: { type: 'string' } } } },
+  { name: 'notes_read', description: 'Read a team note (markdown).', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+  { name: 'notes_write', description: `Create or replace a team note with the whole text (saved as "${USER} · Claude"). Folders are made as needed; names are case-insensitive.`, inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'e.g. "meetings/2026-10-17.md"' }, text: { type: 'string' } }, required: ['path', 'text'] } },
+  { name: 'notes_delete', description: 'Delete a team note (or an empty folder). Only when the person asked.', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
 ];
 
 function reply(rid, result) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: rid, result }) + '\n'); }

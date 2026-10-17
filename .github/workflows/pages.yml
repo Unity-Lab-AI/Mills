@@ -31,6 +31,14 @@ jobs:
         run: |
           test -n "$OWNER" || { echo "Set the MILLS_GIST_OWNER repository variable."; exit 1; }
           sed -i "s/__MILLS_GIST_OWNER__/$OWNER/" web/index.html
+      # Optional: a named Cloudflare tunnel's address (https://<hostname>), so the page's security policy
+      # and its hub-address check accept it besides *.trycloudflare.com. Empty = quick tunnels only.
+      - name: Inject hub host (named tunnel, optional)
+        env:
+          HUBHOST: ${{ vars.MILLS_HUB_HOST }}
+        run: |
+          case "$HUBHOST" in ""|https://*) ;; *) echo "MILLS_HUB_HOST must be empty or start with https://"; exit 1;; esac
+          sed -i "s#__MILLS_HUB_HOST__#$HUBHOST#g" web/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

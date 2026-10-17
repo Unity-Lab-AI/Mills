@@ -78,6 +78,7 @@ function listening(port) {
 
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null;
 const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
+const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [] };
 let fakeSawPhoto = false;
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
 //   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
@@ -110,6 +111,26 @@ function startFakeOllama() {
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
         if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
         return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
+      }
+      // fake Forgejo (issue mirroring): in-memory issues under the repo path; /fake/forgejo/* lets the runner act as a person on Forgejo
+      const FJ = '/api/v1/repos/UnityAILab/Mills/issues';
+      if (req.url.startsWith(FJ) || req.url.startsWith('/fake/forgejo/')) {
+        fakeForgejo.calls.push(req.method + ' ' + req.url);
+        const b = body ? JSON.parse(body) : {};
+        const stamp = () => new Date(Date.now() + (fakeForgejo.tick++)).toISOString();
+        const mk = (o) => { const n = ++fakeForgejo.n; const is = { number: n, title: o.title || '', body: o.body || '', state: o.state || 'open', labels: (o.labels || []).map((l) => ({ name: l })), html_url: 'https://git.example.invalid/UnityAILab/Mills/issues/' + n, updated_at: stamp(), created_at: stamp() }; fakeForgejo.issues.set(n, is); return is; };
+        if (req.headers.authorization !== 'token fake-forgejo-token' && !req.url.startsWith('/fake/')) { res.writeHead(401); return res.end('{"message":"token"}'); }
+        if (req.url === FJ && req.method === 'POST') return j(mk(b));
+        if (req.url === '/fake/forgejo/newissue' && req.method === 'POST') return j(mk(b)); // made "on Forgejo" by a person
+        let m = new RegExp('^' + FJ.replace(/\//g, '\\/') + '\\/(\\d+)(\\/comments)?$').exec(req.url) || /^\/fake\/forgejo\/issue\/(\d+)$/.exec(req.url);
+        if (m) {
+          const is = fakeForgejo.issues.get(Number(m[1])); if (!is) { res.writeHead(404); return res.end('{}'); }
+          if (m[2]) { (is.comments || (is.comments = [])).push(b.body); return j({ id: 1, body: b.body }); }
+          if (req.method === 'PATCH') { Object.assign(is, b.title !== undefined ? { title: b.title } : {}, b.body !== undefined ? { body: b.body } : {}, b.state !== undefined ? { state: b.state } : {}); is.updated_at = stamp(); return j(is); }
+          return j(is);
+        }
+        if (req.url.startsWith(FJ + '?') && req.method === 'GET') { const since = Date.parse(new URL('http://x' + req.url).searchParams.get('since') || 0) || 0; return j([...fakeForgejo.issues.values()].filter((is) => Date.parse(is.updated_at) > since)); }
+        res.writeHead(404); return res.end('{}');
       }
       if (req.url === '/api/tags') return j({ models: [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
@@ -168,6 +189,8 @@ async function setup() {
   await startFakeOllama();
   const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results` }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
+  // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
+  fs.writeFileSync(path.join(SB, 'forgejo.json'), JSON.stringify({ url: `http://127.0.0.1:${OLLAMA_PORT}`, token: 'fake-forgejo-token', repo: 'UnityAILab/Mills', board: 'team', pollMinutes: 0.01 }));
   const sp = (args) => spawnSync(process.execPath, [path.join(SB, 'set-password.js'), ...args], { cwd: SB, encoding: 'utf8' });
   sp(['pw-default-0001']);
   for (const [name, conf] of [['t-admin', { user: 'Tadmin', admin: true }], ['t-user', { user: 'Tuser' }]]) {
@@ -255,7 +278,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['calls.js', 'guilds.js', 'app.js'];
+  const PAGE_SCRIPTS = ['calls.js', 'guilds.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -813,8 +836,8 @@ async function run() {
 
   const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html) || [])[1] || '';
   const missing66 = [
-    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
-    [/HUB_URL_RE = \/\^https:\\\/\\\/\[a-z0-9-\]\+\\\.trycloudflare\\\.com\$\//.test(html) && /store\.set\('mills\.hub'/.test(html), 'hub address pinned + cached'],
+    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
+    [/: \/\^https:\\\/\\\/\[a-z0-9-\]\+\\\.trycloudflare\\\.com\$\/;/.test(html) && /store\.set\('mills\.hub'/.test(html) && /const HUB_HOST = /.test(html), 'hub address pinned + cached (quick tunnel, or the named tunnel host injected at deploy)'],
     [/function trustedPub\(/.test(html) && /changedKeys\.has\(m\.username\)\) continue; \/\/ never encrypt to an unverified key/.test(html) && /Trust new key/.test(html), 'key pinning'],
     [/streams: \[call\.local\]/.test(html) && /sender\.setStreams\(isScreenTransceiver\(peer\.pc, t\) \? call\.screenStream : call\.local\)/.test(html) && /e\.streams && e\.streams\[0\]/.test(html), 'call lip-sync streams'],
     [/sendSignal\(user, \{ cs: peer\.iceOut\.splice\(0\) \}\)/.test(html), 'ICE batching'],
@@ -845,11 +868,14 @@ async function run() {
   const vendorManifest = path.join(MILLS, 'web', 'vendor', 'VENDOR.json');
   if (!fs.existsSync(vendorManifest)) skip('R102', 'vendored Mermaid present and matching web/vendor/VENDOR.json', 'not installed yet: run `node bridge/vendor.js` in the Mills folder (diagrams show their source until then)');
   else {
-    const vm = JSON.parse(fs.readFileSync(vendorManifest, 'utf8')), mm = vm.mermaid || {};
+    const vm = JSON.parse(fs.readFileSync(vendorManifest, 'utf8')), mm = vm.mermaid || {}, kt = vm.katex || {};
     const mFile = path.join(MILLS, 'web', 'vendor', mm.file || 'mermaid.min.js');
     const mOk = fs.existsSync(mFile) && crypto.createHash('sha256').update(fs.readFileSync(mFile)).digest('hex') === mm.sha256 && /^11\./.test(mm.version || '');
     const mLoads = mOk && /mermaid/.test(fs.readFileSync(mFile, 'utf8').slice(0, 2000));
-    check('R102', 'vendored Mermaid 11 present, matching the sha256 in web/vendor/VENDOR.json, served from the site itself (CSP allows no outside scripts)', mOk && mLoads, `mermaid@${mm.version || '?'}`);
+    const kFiles = kt.files || [], kOk = kFiles.length > 3 && kFiles.every((f) => { const p = path.join(MILLS, 'web', 'vendor', f.file); return fs.existsSync(p) && crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex') === f.sha256; })
+      && kFiles.some((f) => f.file === 'katex.min.js') && kFiles.some((f) => f.file === 'katex.min.css') && kFiles.filter((f) => /^fonts\/.+\.woff2$/.test(f.file)).length >= 10 && !kFiles.some((f) => /\.(ttf|woff)$/.test(f.file));
+    const kCss = kOk && /font-src 'self'/.test(csp) && /katexSrc: 'vendor\/katex\.min\.js', katexCss: 'vendor\/katex\.min\.css'/.test(mdSrc) && /trust: false/.test(mdSrc);
+    check('R102', 'vendored Mermaid 11 + KaTeX (js, css, woff2 fonts only) present and matching web/vendor/VENDOR.json, served from the site itself (CSP allows no outside scripts; font-src self), KaTeX rendered with trust off', mOk && mLoads && kOk && kCss, `mermaid@${mm.version || '?'}, katex@${kt.version || '?'} (${kFiles.length} files)`);
   }
   const boardJs76 = fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8');
   const missing76 = [
@@ -994,6 +1020,69 @@ async function run() {
   check('R117', '[static] board, ideas from HyperProductivityManager: due-today / overdue reminders once a day for tasks assigned to you, Delegate (assignee + signed hand-over note), whole-board activity dialog, "/" focuses the filter, Ctrl+1/2/3 switch Board / Calendar / Work',
     /function remindDue\(/.test(boardJs117) && /mills\.remind\./.test(boardJs117) && /new Notification\(/.test(boardJs117) && /async function delegate\(/.test(boardJs117) && /appendNote: 'Handed to '/.test(boardJs117)
     && /function showActivity\(/.test(boardJs117) && /act\.onclick = showActivity/.test(boardJs117) && /\$\('bdFilter'\)\.focus\(\)/.test(boardJs117) && /\{ 1: 'board', 2: 'cal', 3: 'shell' \}/.test(boardJs117));
+  // Team notes (bridge/notes.js): folders + markdown files, case-insensitive names, no path escape, conflict check, search, Claude's tools.
+  const nt0 = (await call('/api/notes', U)).data;
+  const ntF = await call('/api/notes/folder', U, { path: 'Meetings' });
+  const ntW = await call('/api/notes/write', U, { path: 'Meetings/2026-10-17.md', text: 'line one\r\nneedle-r118 here\r\n' });
+  const ntDup = await call('/api/notes/write', U, { path: 'meetings/2026-10-17.MD', text: 'other case' }); // same name ignoring case: refused
+  const ntEsc = await call('/api/notes/write', U, { path: '../outside.md', text: 'x' }), ntDot = await call('/api/notes/write', U, { path: '.hidden.md', text: 'x' }), ntNoMd = await call('/api/notes/write', U, { path: 'Meetings/plain.txt', text: 'x' });
+  const ntR = (await fetch(H + '/api/notes/read?path=' + encodeURIComponent('meetings/2026-10-17.md'), { headers: { Authorization: 'Bearer ' + A } })).json ? await (await fetch(H + '/api/notes/read?path=' + encodeURIComponent('meetings/2026-10-17.md'), { headers: { Authorization: 'Bearer ' + A } })).json() : {};
+  const ntStale = await call('/api/notes/write', A, { path: 'Meetings/2026-10-17.md', text: 'stale', baseAt: 1 });
+  const ntOk = await call('/api/notes/write', A, { path: 'Meetings/2026-10-17.md', text: 'line one\nneedle-r118 here\nadded by A\n', baseAt: ntR.at });
+  const ntS = await (await fetch(H + '/api/notes/search?q=needle-r118%20added', { headers: { Authorization: 'Bearer ' + U } })).json();
+  const ntMv = await call('/api/notes/move', U, { from: 'Meetings/2026-10-17.md', to: 'Meetings/Archive/first.md' });
+  const ntTree = (await call('/api/notes', U)).data;
+  const ntRun = await chat(A, 'NOTESTOOL please', { fresh: true });
+  const ntOut = JSON.parse((texts(ntRun.events).match(/NOTES:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+  const ntDelFull = await call('/api/notes/delete', U, { path: 'Meetings' }); // not empty → refused
+  await call('/api/notes/delete', U, { path: 'Meetings/Archive/first.md' }); await call('/api/notes/delete', U, { path: 'Meetings/Archive' });
+  const ntDelOk = await call('/api/notes/delete', U, { path: 'Meetings' });
+  const onDiskNotes = fs.existsSync(path.join(SCRATCH, 'Notes'));
+  check('R118', 'team notes: folders + .md notes on the host (Mills/Notes), CRLF → LF, names case-insensitive (duplicate refused), no path escape / hidden / non-.md, read by anyone signed in, stale save → 409, search over path + text with snippets, move into a new folder, Claude writes / lists / reads (any case) / deletes as "<person> · Claude" and cannot escape, non-empty folder not deletable; [static] Notes screen + menu button + web/notes.js',
+    Array.isArray(nt0.tree) && ntF.status === 200 && ntW.status === 200 && ntW.data.created === true && ntDup.status === 400 && ntEsc.status === 400 && ntDot.status === 400 && ntNoMd.status === 400
+    && ntR.text === 'line one\nneedle-r118 here\n' && /^(Tuser|Tee Nick)$/.test(ntR.by) && ntStale.status === 409 && ntOk.status === 200 && ntOk.data.by === 'Tadmin'
+    && (ntS.items || []).length === 1 && /needle-r118/.test(ntS.items[0].snippet) && ntMv.status === 200 && ntMv.data.to === 'Meetings/Archive/first.md'
+    && ntTree.tree.some((f) => f.type === 'folder' && f.name === 'Meetings' && f.children.some((c) => c.type === 'folder' && c.name === 'Archive' && c.children.some((n) => n.name === 'first')))
+    && ntOut.wrote === 'Tadmin · Claude' && Array.isArray(ntOut.listed) && ntOut.listed.includes('plans/Claude Plan.md') && ntOut.read === true && ntOut.bad === false && ntOut.deleted === true
+    && ntDelFull.status === 400 && ntDelOk.status === 200 && onDiskNotes
+    && /id="goNotes"/.test(html) && /<div id="notes" class="screen"/.test(html) && /<script src="notes\.js"><\/script>/.test(html) && /const NOTES = /.test(html) && /NOTES\.onVersion\(d\.notesVer\)/.test(html),
+    `write ${ntW.status}, dup ${ntDup.status}, esc ${ntEsc.status}, read ${JSON.stringify((ntR.text || '').slice(0, 30))} by ${ntR.by}, stale ${ntStale.status}, ok ${ntOk.status} by ${ntOk.data && ntOk.data.by}, search ${(ntS.items || []).length}, move ${ntMv.status}, tree ${JSON.stringify(ntTree.tree).slice(0, 120)}, claude ${JSON.stringify(ntOut)}, del ${ntDelFull.status}/${ntDelOk.status}`);
+  check('R119', '[static] My day planner (Board + Calendar headers): Overdue / Today / This week / Later / No date over the tasks assigned to or held by you, quick actions Done / Tomorrow / Next week / Open / Claude, "Plan with Claude" hands the list to Work',
+    /id="bdMyDay"/.test(html) && /id="calMyDay"/.test(html) && /<div id="myDay" class="modal" hidden>/.test(html) && /function renderMyDay\(/.test(boardJs117 + fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8'))
+    && /function planWithClaude\(/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8')) && /b\('repeat', 'Next week'/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8')) && /Plan my day\./.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8')));
+  // Forgejo issue mirroring (bridge/forgejo.js) against the fake Forgejo: both directions, no loops.
+  const fjView = (await call('/api/board', U)).data;
+  const fjT = (await call('/api/board/create', U, { title: 'mirror me r120', body: 'from mills', status: 'todo', labels: 'x' })).data.task;
+  const until = async (test, ms = 12000) => { for (let t = 0; t < ms; t += 300) { const v = await test(); if (v) return v; await sleep(300); } return null; };
+  const fjCard = await until(async () => ((await call('/api/board', U)).data.tasks || []).find((t) => t.id === fjT.id && t.forgejo));
+  const fjIssueLive = fjCard && [...fakeForgejo.issues.values()].find((is) => is.number === fjCard.forgejo.number), fjIssue = fjIssueLive && { ...fjIssueLive }; // snapshot: the fake mutates it on later PATCHes
+  await call('/api/board/update', U, { id: fjT.id, title: 'mirror me r120 renamed' });
+  const fjRenamed = await until(async () => { const is = fakeForgejo.issues.get(fjCard.forgejo.number); return is && is.title === 'mirror me r120 renamed' ? is : null; });
+  await call('/api/board/complete', U, { id: fjT.id });
+  const fjClosed = await until(async () => { const is = fakeForgejo.issues.get(fjCard.forgejo.number); return is && is.state === 'closed' ? is : null; });
+  // a person on Forgejo: makes an issue → a task appears; closes it → the task completes; renames → the title follows
+  const fjMade = await (await fetch(`http://127.0.0.1:${OLLAMA_PORT}/fake/forgejo/newissue`, { method: 'POST', body: JSON.stringify({ title: 'from forgejo r120', body: 'issue body', labels: ['bug'] }) })).json();
+  const fjIn = await until(async () => ((await call('/api/board', U)).data.tasks || []).find((t) => t.forgejo && t.forgejo.number === fjMade.number));
+  const fjInDetail = fjIn ? (await call('/api/board/task?id=' + fjIn.id, U)).data.task : null;
+  await fetch(`http://127.0.0.1:${OLLAMA_PORT}/fake/forgejo/issue/${fjMade.number}`, { method: 'PATCH', body: JSON.stringify({ title: 'from forgejo r120 edited', state: 'closed' }) });
+  const fjInDone = await until(async () => { const t = ((await call('/api/board', U)).data.tasks || []).find((x) => x.id === (fjIn || {}).id); return t && t.status === 'done' && t.title === 'from forgejo r120 edited' ? t : null; });
+  await sleep(3500); // a few more polls: nothing may ping-pong
+  const callsAfter = fakeForgejo.calls.filter((c) => c.startsWith('PATCH')).length;
+  await sleep(3500);
+  const callsLater = fakeForgejo.calls.filter((c) => c.startsWith('PATCH')).length;
+  const fjDel = (await call('/api/board/delete', U, { id: fjT.id })).status;
+  const fjDelComment = await until(async () => { const is = fakeForgejo.issues.get(fjCard.forgejo.number); return is && (is.comments || []).some((c) => /Deleted on the Mills board/.test(c)) ? is : null; });
+  check('R120', 'Forgejo issue mirroring: a new task becomes an issue (title, body + Mills marker), rename and completion follow it (closed), an issue made on Forgejo becomes a task with label forgejo, its close + rename land on the task, no ping-pong between the two, deleting the task closes the issue with a comment; the board view shows the mirror',
+    fjView.mirror && fjView.mirror.on === true && fjView.mirror.repo === 'UnityAILab/Mills' && !!fjCard && !!fjIssue && fjIssue.title === 'mirror me r120' && /from mills[\s\S]*Mills task T-\d+/.test(fjIssue.body)
+    && !!fjRenamed && !!fjClosed && !!fjIn && fjIn.labels.includes('forgejo') && fjIn.labels.includes('bug') && fjInDetail && /issue body[\s\S]*From Forgejo issue/.test(fjInDetail.body) && !!fjInDone && callsLater === callsAfter
+    && fjDel === 200 && !!fjDelComment && fjDelComment.state === 'closed',
+    `issue ${fjIssue ? '#' + fjIssue.number : 'none'}, renamed ${!!fjRenamed}, closed ${!!fjClosed}, inbound ${fjIn ? fjIn.id : 'none'} done ${!!fjInDone}, patches ${callsAfter}→${callsLater}, delete ${fjDel} comment ${!!fjDelComment}`
+    + ` | mirror ${JSON.stringify(fjView.mirror)} | issue body ${JSON.stringify((fjIssue || {}).body)} | in labels ${JSON.stringify((fjIn || {}).labels)} | in body ${JSON.stringify(((fjInDetail || {}).body || '').slice(0, 80))} | comment state ${(fjDelComment || {}).state}`);
+  const runJs121 = fs.readFileSync(path.join(BRIDGE, 'run.js'), 'utf8'), pagesYml = fs.readFileSync(path.join(MILLS, '.github', 'workflows', 'pages.yml'), 'utf8');
+  check('R121', '[static] named Cloudflare tunnel, prepared: run.js runs `cloudflared tunnel run <tunnelName>` and publishes https://<tunnelHostname> when configured (quick tunnel otherwise); the page accepts the deploy-time MILLS_HUB_HOST besides *.trycloudflare.com (CSP connect-src + hub address check); pages.yml injects it (empty = quick tunnels only)',
+    /config\.tunnelName/.test(runJs121) && /'run', '--url'/.test(runJs121) && /config\.tunnelHostname/.test(runJs121) && /publishUrl\('https:\/\/' \+ host\)/.test(runJs121)
+    && /__MILLS_HUB_HOST__; img-src/.test(csp) && /const HUB_HOST = /.test(html) && /HUB_HOST && location\.origin === HUB_HOST/.test(html)
+    && /MILLS_HUB_HOST/.test(pagesYml) && /__MILLS_HUB_HOST__#\$HUBHOST#g/.test(pagesYml) && /https:\/\/\*\)/.test(pagesYml));
   check('R100', '[static] Board + Calendar in the main menu, web/board.js loaded, Board / Calendar screens, Tasks pane in Work (rail + layout), "Give to Claude", Claude told to claim before working',
     /id="goBoard"/.test(html) && /id="goCal"/.test(html) && /<script src="board\.js"><\/script>/.test(html) && /<div id="board" class="screen"/.test(html) && /<div id="cal" class="screen"/.test(html)
     && /data-pane="tasks"/.test(html) && /const PANES = \['files', 'edit', 'chat', 'tasks', 'roomPane'\]/.test(html) && /function giveToClaude\(/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8'))

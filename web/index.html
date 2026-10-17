@@ -7,7 +7,7 @@
      the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
      anything except by loading an image; markdown images (https) are allowed for that reason only and
      are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Mills</title>
 <!-- Mills Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -158,6 +158,7 @@
   .bdDue { border-radius: 4px; padding: 0 .3rem; background: color-mix(in srgb, var(--text) 10%, transparent); }
   .bdDue.today { background: #ffd43b; color: #111; } .bdDue.overdue { background: #ff6b6b; color: #111; }
   .bdRecur { color: var(--muted); display: inline-flex; }
+  .bdExt { font-family: ui-monospace, Consolas, monospace; font-size: .68rem; color: var(--accent); text-decoration: none; border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line)); border-radius: 4px; padding: 0 .3rem; } .bdExt:hover { text-decoration: underline; }
   .bdAva { margin-left: auto; width: 1.25rem; height: 1.25rem; border-radius: 50%; color: #111; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; font-size: .66rem; }
   .bdTitle { font-size: .88rem; line-height: 1.35; overflow-wrap: anywhere; }
   .bdLabels { display: flex; flex-wrap: wrap; gap: .25rem; }
@@ -198,7 +199,30 @@
   .tpNone { font-size: .78rem; color: var(--muted); }
   .tpItem { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .4rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
   .tpActs { display: flex; gap: .3rem; } .tpActs button { font-size: .75rem; padding: .15rem .45rem; }
-  #board, #cal { overflow: hidden; }
+  #board, #cal, #notes { overflow: hidden; }
+  /* ── My day planner (web/board.js) ── */
+  #myDay .box { width: min(680px, 94vw); }
+  .mdSect { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: .4rem; display: flex; justify-content: space-between; }
+  .mdSect.over { color: var(--bad); }
+  .mdItem { display: flex; align-items: center; gap: .5rem; padding: .4rem .5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); flex-wrap: wrap; }
+  .mdItem .bdTitle { flex: 1; min-width: 10rem; } .mdItem .mdActs { display: flex; gap: .25rem; } .mdItem .mdActs button { padding: .15rem .45rem; font-size: .72rem; }
+  .mdSum { color: var(--muted); font-size: .85rem; }
+  /* ── team notes (web/notes.js) ── */
+  #ntMain { flex: 1; min-height: 0; display: flex; }
+  #ntSide { flex: none; width: min(300px, 36%); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: .4rem; padding: .5rem; overflow: hidden; }
+  #ntSide input { font-size: .85rem; }
+  #ntTree { flex: 1; min-height: 0; overflow: auto; font-size: .85rem; }
+  .ntRow { display: flex; align-items: center; gap: .4rem; padding: .3rem .4rem; border-radius: 6px; cursor: pointer; }
+  .ntRow:hover { background: var(--panel); } .ntRow.on { background: var(--bg); outline: 1px solid var(--line); }
+  .ntRow .ntName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ntRow small { color: var(--muted); font-size: .68rem; white-space: nowrap; }
+  .ntFolder .ntName { font-weight: 600; } .ntRow .tiny { opacity: 0; } .ntRow:hover .tiny { opacity: 1; }
+  .ntSnip { flex-basis: 100%; font-size: .74rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ntDoc { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #ntDoc .bar #ntTitle { flex: 1; color: var(--text); font-weight: 600; } #ntDoc .bar small { color: var(--muted); font-size: .72rem; margin-right: .4rem; white-space: nowrap; }
+  #ntEditor { flex: 1; border: 0; border-radius: 0; resize: none; font-family: ui-monospace, Consolas, monospace; font-size: .9rem; line-height: 1.5; padding: 1rem; }
+  #ntPreview { flex: 1; overflow: auto; padding: 1rem 1.3rem; }
+  #ntEmpty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+  @media (max-width: 700px) { #ntMain { flex-direction: column; } #ntSide { width: auto; max-height: 40%; border-right: 0; border-bottom: 1px solid var(--line); } }
   /* ── icons (the sprite at the top of <body>) ── */
   .ic { width: 1.15em; height: 1.15em; flex: none; vertical-align: -.2em; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
   .ic.lead { margin-right: .4em; }
@@ -245,7 +269,11 @@
   .md .mdmbody svg { max-width: 100%; height: auto; }
   .md .mdmsrc { margin: 0; padding: .6rem .75rem; border-top: 1px solid var(--line); background: #0b0d12; color: #e6e9ef; font-size: .8rem; white-space: pre; overflow-x: auto; }
   .md .mderr { color: var(--bad); }
-  .md .mdmath { margin: .5rem 0; padding: .5rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; text-align: center; }
+  .md .mdmath { margin: .5rem 0; padding: .5rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; text-align: center; overflow-x: auto; }
+  .md .mdmath.rendered { font-family: inherit; font-size: 1.05rem; white-space: normal; }
+  .md .mdmathi { font-family: ui-monospace, Consolas, monospace; font-size: .9em; background: color-mix(in srgb, var(--text) 6%, transparent); border-radius: 4px; padding: 0 .25rem; }
+  .md .mdmathi.rendered { font-family: inherit; font-size: 1em; background: transparent; padding: 0; }
+  .md .mdmath.mderr, .md .mdmathi.mderr { outline: 1px dashed var(--bad); }
   .md .mdfnref { cursor: pointer; color: color-mix(in srgb, var(--accent) 55%, var(--text)); font-size: .72em; margin-left: .1rem; }
   .md .mdfns { font-size: .82em; color: var(--muted); } .md .mdfns ol { padding-left: 1.4rem; margin: .3rem 0 0; }
   .md .mdimgwrap { display: inline-block; max-width: 100%; margin: .3rem 0; }
@@ -653,6 +681,7 @@
     <button id="goChat">Chat<span class="badge" id="chatBadge" hidden></span></button>
     <button id="goBoard"><svg class="ic lead"><use href="#i-board"/></svg>Board<span class="badge" id="boardBadge" hidden></span></button>
     <button id="goCal"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar</button>
+    <button id="goNotes"><svg class="ic lead"><use href="#i-file"/></svg>Notes</button>
     <button id="goAssist"><svg class="ic lead"><use href="#i-chat"/></svg>Unity</button>
     <button id="goAdmin" hidden>Admin</button>
     <button class="ghost" id="goSettings" data-settings>Settings</button>
@@ -786,6 +815,7 @@
     <button class="ghost" id="bdNewBoard" title="Add another board"><svg class="ic lead"><use href="#i-plus"/></svg>Board</button>
     <input id="bdFilter" type="search" placeholder="Filter by title, label, person, id…" spellcheck="false">
     <label class="bdMine"><input type="checkbox" id="bdMine"> Mine</label>
+    <button class="ghost" id="bdMyDay" title="Your day: overdue, today, this week, later — with quick actions"><svg class="ic lead"><use href="#i-tasks"/></svg>My day</button>
     <span id="bdStale" class="bdStale" hidden></span>
   </header>
   <div id="bdMain">
@@ -803,9 +833,45 @@
     <span id="calTitle" class="calTitle"></span>
     <button class="ghost" id="calNext" aria-label="Next month"><svg class="ic" style="transform:scaleX(-1)"><use href="#i-back"/></svg></button>
     <button class="ghost" id="calToday">Today</button>
+    <button class="ghost" id="calMyDay" title="Your day: overdue, today, this week, later — with quick actions"><svg class="ic lead"><use href="#i-tasks"/></svg>My day</button>
     <span class="folder">Tasks with a due date. Click a day to add one, click a task to open it on the board.</span>
   </header>
   <div id="calGrid"></div>
+</div>
+
+<!-- My day (web/board.js): the planner view over the tasks assigned to or held by you -->
+<div id="myDay" class="modal" hidden>
+  <div class="box">
+    <div class="bar"><span id="mdTitle">My day</span><button class="ghost" id="mdClaude" title="Put a planning request in Claude's box in Work"><svg class="ic lead"><use href="#i-bot"/></svg>Plan with Claude</button><button class="ghost" id="mdClose">Close</button></div>
+    <div class="setBody" id="mdBody"></div>
+  </div>
+</div>
+
+<div id="notes" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Notes</b>
+    <span class="folder">Team notes: markdown files in folders on the host, shared with everyone and with Claude</span>
+    <button class="ghost" id="ntNew" title="New note"><svg class="ic lead"><use href="#i-plus"/></svg>Note</button>
+    <button class="ghost" id="ntNewFolder" title="New folder"><svg class="ic lead"><use href="#i-folder"/></svg>Folder</button>
+    <span id="ntMsg" class="status"></span>
+  </header>
+  <div id="ntMain">
+    <aside id="ntSide">
+      <input id="ntSearch" type="search" placeholder="Search notes…" spellcheck="false" autocomplete="off">
+      <div id="ntTree"></div>
+    </aside>
+    <section id="ntDoc" hidden>
+      <div class="bar"><span id="ntTitle"></span><small id="ntMeta"></small>
+        <button class="ghost" id="ntToggle"><svg class="ic lead"><use href="#i-eye"/></svg>Preview</button>
+        <button id="ntSave" title="Save (Ctrl+S)">Save</button>
+        <button class="ghost" id="ntRename" title="Rename or move (folders with /)"><svg class="ic lead"><use href="#i-edit"/></svg>Rename</button>
+        <button class="ghost" id="ntDelete"><svg class="ic lead"><use href="#i-trash"/></svg>Delete</button></div>
+      <textarea id="ntEditor" spellcheck="true" placeholder="Markdown…"></textarea>
+      <div id="ntPreview" class="md" hidden></div>
+    </section>
+    <div id="ntEmpty">Pick a note on the left, or make one with <b>Note</b>.</div>
+  </div>
 </div>
 
 <div id="assist" class="screen" hidden>
@@ -1026,9 +1092,12 @@ let base = null;
 // The hub publishes its address in the gist file mills-bridge.json.
 // Only a Cloudflare tunnel address is ever accepted from the gist, so whoever can edit that gist
 // cannot point everyone at some other server (the CSP below enforces the same list).
-const HUB_URL_RE = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
+// A named tunnel's fixed address (https://<hostname>) is filled in at deploy time from the MILLS_HUB_HOST
+// repository variable; without it (local dev, quick tunnels only) only *.trycloudflare.com addresses count.
+const HUB_HOST = (() => { const v = '__MILLS_HUB_HOST__'; return /^https:\/\/[a-z0-9.-]+$/i.test(v) ? v.toLowerCase() : ''; })();
+const HUB_URL_RE = HUB_HOST ? new RegExp('^(?:' + HUB_HOST.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '|https://[a-z0-9-]+\\.trycloudflare\\.com)$') : /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
 async function findBridge(fresh) {
-  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com')) return location.origin;
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com') || (HUB_HOST && location.origin === HUB_HOST)) return location.origin;
   // Last good address first: skips two GitHub API round trips (and its 60-an-hour limit) on every load.
   const cached = store.get('mills.hub');
   if (!fresh && cached && HUB_URL_RE.test(cached)) {
@@ -1367,9 +1436,10 @@ async function enter() {
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
+  if (name === 'notes') NOTES.show(); // web/notes.js
   presenceTick(); // tell the others where you are now
   if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); }
   if (name === 'shell') refreshUsage();
@@ -1382,14 +1452,15 @@ $('goWork').onclick = () => showScreen('shell');
 $('goChat').onclick = () => showScreen('room');
 $('goBoard').onclick = () => showScreen('board');
 $('goCal').onclick = () => showScreen('cal');
+$('goNotes').onclick = () => showScreen('notes');
 $('goAdmin').onclick = () => showScreen('admin');
 $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist']) $(id).hidden = true;
-  BOARD.stop();
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes']) $(id).hidden = true;
+  BOARD.stop(); NOTES.stop();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
@@ -2324,6 +2395,7 @@ async function applyRoom(d) {
   roomVer = d.ver || 0;
   if (d.keysVer && d.keysVer !== roomKeysVer) { const first = !roomKeysVer; roomKeysVer = d.keysVer; if (!first) await refreshMembers(); }
   if (d.guildsVer && d.guildsVer !== GUILDS.state.ver) await GUILDS.refresh(); // a server / channel / group changed somewhere
+  NOTES.onVersion(d.notesVer); // someone saved a note: the open Notes screen refreshes its tree
   seenMap = d.seen || {};
   onShares(d.shares || []);
   presenceMap = Object.fromEntries((d.presence || []).map((p) => [p.user, p]));
@@ -2937,12 +3009,12 @@ let onlineSet = new Set(), presenceMap = {}, typingList = [], typingSentAt = 0, 
 // 5 min without input), and that it is going away; online / offline itself comes from the open long poll.
 const IDLE_MS = 5 * 60000;
 let lastInput = Date.now(), sentIdle = null, sentScreen = '';
-const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin' };
+const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin', notes: 'Notes', assist: 'Unity' };
 function postPresence(body) { if (me && token && base) json('/api/presence', { method: 'POST', body: JSON.stringify(body) }).catch(() => {}); }
 function presenceTick() {
   if (!me) return;
   const idle = document.visibilityState === 'hidden' || Date.now() - lastInput > IDLE_MS;
-  const screen = ['menu', 'shell', 'room', 'board', 'cal', 'admin'].find((id) => !$(id).hidden) || '';
+  const screen = ['menu', 'shell', 'room', 'board', 'cal', 'admin', 'notes', 'assist'].find((id) => !$(id).hidden) || '';
   if (idle !== sentIdle || screen !== sentScreen) { sentIdle = idle; sentScreen = screen; postPresence({ screen, idle }); }
 }
 for (const ev of ['pointerdown', 'keydown', 'pointermove', 'wheel', 'touchstart']) document.addEventListener(ev, () => { lastInput = Date.now(); if (sentIdle) presenceTick(); }, { passive: true, capture: true });
@@ -3474,6 +3546,7 @@ connect().then((ok) => { if (ok && token) enter().catch(() => signOut()); });
 <script src="calls.js"></script>
 <!-- servers, channels, groups, member column: web/guilds.js · app mode + install: web/app.js -->
 <script src="guilds.js"></script>
+<script src="notes.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
