@@ -67,7 +67,9 @@ async function run() {
     ['code block: label, copy, colouring', '```js\nconst x = "s"; // c\n```', (h) => h.includes('<span>js</span>') && h.includes('Copy') && h.includes('<span class="hl-kw">const</span>') && h.includes('<span class="hl-str">"s"</span>') && h.includes('<span class="hl-com">// c</span>')],
     ['unclosed fence (still streaming) renders', '```py\nprint(1)', (h) => h.includes('mdcode') && h.includes('print')],
     ['mermaid block → diagram box with source', '```mermaid\ngraph TD; A-->B\n```', (h) => h.includes('mdmermaid') && h.includes('Drawing diagram') && h.includes('graph TD; A--&gt;B')],
-    ['math block shown as source', '$$\na^2+b^2\n$$', (h) => h.includes('<pre class="mdmath">a^2+b^2</pre>')],
+    ['math block: source until KaTeX renders it', '$$\na^2+b^2\n$$', (h) => h.includes('<div class="mdmath">a^2+b^2</div>')],
+    ['inline math $…$: source until KaTeX renders it; prices are not math', 'Euler: $e^{i\\pi}+1=0$ costs $5 and $10 today', (h) => h.includes('<span class="mdmathi">e^{i\\pi}+1=0</span>') && h.includes('costs $5 and $10 today') && (h.match(/mdmathi/g) || []).length === 1],
+    ['math fence renders as a math block', '```math\n\\frac{1}{2}\n```', (h) => h.includes('<div class="mdmath">\\frac{1}{2}</div>')],
     ['footnotes', 'Fact[^1].\n\n[^1]: Source.', (h) => h.includes('<sup class="mdfnref">[1]</sup>') && h.includes('mdfns') && h.includes('Source.')],
     ['hr', 'a\n\n---\n\nb', (h) => h.includes('<hr></hr>')],
     ['mention hook', 'hi @sam and @nobody', (h) => h.includes('<b class="m">@sam</b>') && h.includes('@nobody'), { mention: (x) => { if (x !== 'sam') return null; const b = new El('b'); b.className = 'm'; b.textContent = '@' + x; return b; } }],
@@ -89,10 +91,12 @@ async function run() {
     for (const k of Object.keys(saved)) MD[k] = saved[k];
     if (!ok(out)) failed.push(name + ' → ' + out.slice(0, 300));
   }
-  await new Promise((r) => setTimeout(r, 50)); // the diagram library is requested asynchronously
-  if (!head.childNodes.some((s) => s.src === 'vendor/mermaid.min.js')) failed.push('mermaid library not requested on demand');
-  if (head.childNodes.length !== 1) failed.push('mermaid library requested more than once');
-  return { total: cases.length + 2, failed };
+  await new Promise((r) => setTimeout(r, 50)); // the diagram / math libraries are requested asynchronously
+  const scripts = head.childNodes.filter((n) => n.tagName === 'SCRIPT'), links = head.childNodes.filter((n) => n.tagName === 'LINK');
+  if (!scripts.some((s) => s.src === 'vendor/mermaid.min.js')) failed.push('mermaid library not requested on demand');
+  if (scripts.filter((s) => s.src === 'vendor/mermaid.min.js').length !== 1) failed.push('mermaid library requested more than once');
+  if (scripts.filter((s) => s.src === 'vendor/katex.min.js').length !== 1 || links.filter((l) => l.href === 'vendor/katex.min.css').length !== 1) failed.push('math library (js + css) not requested exactly once');
+  return { total: cases.length + 3, failed };
 }
 
 module.exports = { run };

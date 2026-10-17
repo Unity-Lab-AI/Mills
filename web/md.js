@@ -8,7 +8,8 @@
 // links, images (https and inline data images load lazily without a referrer; http ones are retried over
 // https; a relative path is loaded from the folder opened on your PC through MD.resolveImage; anything else is a link), > quotes, GitHub alerts
 // (> [!NOTE] / TIP / IMPORTANT / WARNING / CAUTION), nested bullet / numbered / task lists, GFM tables
-// with column alignment, --- rules, footnotes ([^1] … [^1]: text), $$ math blocks (shown as source),
+// with column alignment, --- rules, footnotes ([^1] … [^1]: text), math ($$ blocks, ```math fences and $…$ inline,
+// rendered by the project's own KaTeX when installed, otherwise shown as source),
 // fenced code with a language label, light syntax colouring and a Copy button, and ```mermaid diagrams.
 //
 // Mermaid is the project's own copy in vendor/mermaid.min.js, loaded only when a diagram appears, run
@@ -44,6 +45,7 @@
     '\\*(?<i1>[^\\s*](?:[\\s\\S]*?[^\\s*])?)\\*',
     '(?<![\\w])_(?<i2>[^\\s_](?:[\\s\\S]*?[^\\s_])?)_(?![\\w])',
     '(?<mention>(?<![\\w])@[\\w.-]*\\w)',
+    '(?<![\\w$\\\\])\\$(?<math>[^$\\s][^$\\n]{0,198}?[^$\\s\\\\])\\$(?![\\w$])',
     '(?<br>\\n)',
   ].join('|'), 'g');
 
@@ -94,6 +96,7 @@
       else if (g.mk !== undefined) { const s = el('mark'); inline(s, g.mk, ctx, noLinks); parent.append(s); }
       else if (g.i1 !== undefined || g.i2 !== undefined) { const i = el('em'); inline(i, g.i1 ?? g.i2, ctx, noLinks); parent.append(i); }
       else if (g.mention !== undefined) { const node = ctx.mention && ctx.mention(g.mention.slice(1)); parent.append(node || g.mention); }
+      else if (g.math !== undefined) parent.append(mathNode(g.math, false));
       else if (g.br !== undefined) parent.append(el('br'));
     }
     if (last < text.length) parent.append(text.slice(last));
@@ -146,6 +149,33 @@
     const pre = el('pre'), c = el('code'); highlight(code, lang, c); pre.append(c);
     box.append(head, pre);
     return box;
+  }
+
+  // ── math: KaTeX (the project's own copy in vendor/katex.min.js + css + fonts), loaded the first time a formula
+  // appears; rendered with trust off, so \href / \html… are refused; a formula that cannot be rendered is shown as
+  // its source (title = the error). Without the library the source is shown. ──
+  let katexLoading = null;
+  function loadKatex() {
+    if (window.katex) return Promise.resolve(window.katex);
+    if (!katexLoading) {
+      katexLoading = new Promise((resolve, reject) => {
+        const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = MD.katexCss; document.head.append(css);
+        const s = document.createElement('script'); s.src = MD.katexSrc; s.async = true;
+        s.onload = () => (window.katex ? resolve(window.katex) : reject(new Error('the math library did not load')));
+        s.onerror = () => { katexLoading = null; s.remove(); css.remove(); reject(new Error('the math library (vendor/katex.min.js) is not installed')); };
+        document.head.append(s);
+      });
+    }
+    return katexLoading;
+  }
+  function mathNode(src, display) {
+    const node = el(display ? 'div' : 'span', display ? 'mdmath' : 'mdmathi', src); // source first (what you see without the library)
+    node.dataset.math = src;
+    loadKatex().then((katex) => {
+      try { node.textContent = ''; katex.render(src, node, { displayMode: display, throwOnError: true, trust: false, strict: 'ignore', output: 'html' }); node.classList.add('rendered'); }
+      catch (e) { node.textContent = src; node.title = 'Not rendered: ' + String(e && e.message || e).split('\n')[0]; node.classList.add('mderr'); }
+    }).catch(() => {}); // no library: the source stays
+    return node;
   }
 
   // ── mermaid ──
@@ -293,14 +323,14 @@
         i++; // closing fence (or the end, while a reply is still streaming in)
         const code = body.join('\n');
         if (/^mermaid$/i.test(lang)) parent.append(mermaidBlock(code));
-        else if (/^(math|latex|tex|katex)$/i.test(lang)) parent.append(el('pre', 'mdmath', code));
+        else if (/^(math|latex|tex|katex)$/i.test(lang)) parent.append(mathNode(code, true));
         else parent.append(codeBlock(code, lang));
         continue;
       }
       if (line.trim() === '$$') {
         const body = []; i++;
         while (i < lines.length && lines[i].trim() !== '$$') body.push(lines[i++]);
-        i++; parent.append(el('pre', 'mdmath', body.join('\n'))); continue;
+        i++; parent.append(mathNode(body.join('\n'), true)); continue;
       }
       if ((m = HEADING.exec(line))) { const h = el('h' + m[1].length, 'mdh'); inline(h, m[2] || '', ctx); parent.append(h); i++; continue; }
       if (HR.test(line)) { parent.append(el('hr')); i++; continue; }
@@ -327,6 +357,7 @@
 
   const MD = {
     mermaidSrc: 'vendor/mermaid.min.js',
+    katexSrc: 'vendor/katex.min.js', katexCss: 'vendor/katex.min.css',
     isDark: () => true,
     // resolveImage(relativePath) → Promise<url | null>: set by the page so pictures Claude or a teammate
     // name by a path inside the folder opened on your PC load from that folder (nothing is uploaded).
