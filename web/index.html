@@ -7,7 +7,7 @@
      the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
      anything except by loading an image; markdown images (https) are allowed for that reason only and
      are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Mills</title>
 <!-- Mills Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -269,7 +269,11 @@
   .md .mdmbody svg { max-width: 100%; height: auto; }
   .md .mdmsrc { margin: 0; padding: .6rem .75rem; border-top: 1px solid var(--line); background: #0b0d12; color: #e6e9ef; font-size: .8rem; white-space: pre; overflow-x: auto; }
   .md .mderr { color: var(--bad); }
-  .md .mdmath { margin: .5rem 0; padding: .5rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; text-align: center; }
+  .md .mdmath { margin: .5rem 0; padding: .5rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); font-family: ui-monospace, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; text-align: center; overflow-x: auto; }
+  .md .mdmath.rendered { font-family: inherit; font-size: 1.05rem; white-space: normal; }
+  .md .mdmathi { font-family: ui-monospace, Consolas, monospace; font-size: .9em; background: color-mix(in srgb, var(--text) 6%, transparent); border-radius: 4px; padding: 0 .25rem; }
+  .md .mdmathi.rendered { font-family: inherit; font-size: 1em; background: transparent; padding: 0; }
+  .md .mdmath.mderr, .md .mdmathi.mderr { outline: 1px dashed var(--bad); }
   .md .mdfnref { cursor: pointer; color: color-mix(in srgb, var(--accent) 55%, var(--text)); font-size: .72em; margin-left: .1rem; }
   .md .mdfns { font-size: .82em; color: var(--muted); } .md .mdfns ol { padding-left: 1.4rem; margin: .3rem 0 0; }
   .md .mdimgwrap { display: inline-block; max-width: 100%; margin: .3rem 0; }
