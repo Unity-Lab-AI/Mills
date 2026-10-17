@@ -28,7 +28,28 @@
     if (!d.boards.some((b) => b.id === B.board)) B.board = d.boards[0].id;
     if (!$('board').hidden) renderBoard();
     if (!$('cal').hidden) renderCal();
-    renderTaskPane(); renderBadge();
+    renderTaskPane(); renderBadge(); remindDue();
+  }
+  // Due reminders (an idea from HyperProductivityManager): a task assigned to you that is due today or
+  // overdue gets one reminder per day — a tone, a pop-up and (if allowed) a browser notification.
+  function remindDue() {
+    if (!B.data || !me) return;
+    const key = 'mills.remind.' + me.username, today = new Date().toDateString();
+    let seen = {}; try { seen = JSON.parse(store.get(key) || '{}') || {}; } catch {}
+    if (seen.day !== today) seen = { day: today, ids: [] };
+    const due = B.data.tasks.filter((t) => t.status !== 'done' && t.dueAt && t.dueAt < startOfDay(Date.now()) + DAY && t.assignee === me.username && !seen.ids.includes(t.id));
+    if (!due.length) return;
+    for (const t of due) {
+      seen.ids.push(t.id);
+      const over = t.dueAt < startOfDay(Date.now());
+      const tt = el('div', 'toast mention'); tt.style.borderLeftColor = over ? 'var(--bad)' : 'var(--accent)';
+      const b = el('b'); label(b, 'calendar', (over ? 'Overdue: ' : 'Due today: ') + t.id); tt.append(b, ' ' + t.title); tt.style.setProperty('--toast-s', '14s');
+      tt.onclick = () => { tt.remove(); B.board = t.board; showScreen('board'); openDetail(t.id); };
+      tt.addEventListener('animationend', () => tt.remove()); $('toasts').append(tt);
+      try { if (window.Notification && Notification.permission === 'granted') new Notification((over ? 'Overdue task: ' : 'Due today: ') + t.title, { body: t.id + ' on the Mills board' }); } catch {}
+    }
+    const P = prefs(); if (P.sound.on) playTone('mention', P.sound.mention);
+    store.set(key, JSON.stringify(seen));
   }
   async function loop(gen) {
     while (me && gen === B.gen) {
@@ -76,8 +97,29 @@
     const pres = $('bdPresence'); pres.textContent = '';
     pres.append(el('span', 'bdMuted', 'Here now: '));
     for (const p of B.data.presence) { const c = el('span', 'bdChip' + (p.agent ? ' agent' : '')); c.append(ic(p.agent ? 'bot' : 'eye', 'lead'), p.name); pres.append(c); }
-    const act = $('bdActivity'); act.textContent = '';
+    const act = $('bdActivity'); act.textContent = ''; act.title = 'Click for the whole activity log';
     for (const a of B.data.activity.slice(0, 4)) act.append(el('span', 'bdAct' + (a.agent ? ' agent' : ''), `${a.by} ${a.what}${a.task ? ' ' + a.task : ''}${a.detail ? ' (' + a.detail + ')' : ''} · ${new Date(a.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`));
+    act.onclick = showActivity;
+  }
+  function showActivity() { // the whole board's activity log (last 60 entries) in a dialog
+    if (!B.data) return;
+    let m = $('bdActAll');
+    if (!m) {
+      m = el('div', 'modal'); m.id = 'bdActAll';
+      const box = el('div', 'box'), bar = el('div', 'bar'); bar.append(el('span', '', 'Board activity'));
+      const x = el('button', 'ghost', 'Close'); x.type = 'button'; x.onclick = () => { m.hidden = true; }; bar.append(x);
+      const body = el('div', 'setBody'); body.id = 'bdActBody'; box.append(bar, body); m.append(box);
+      m.onclick = (e) => { if (e.target === m) m.hidden = true; };
+      document.body.append(m);
+    }
+    const body = $('bdActBody'); body.textContent = '';
+    for (const a of B.data.activity) {
+      const row = el('div', 'bdAct' + (a.agent ? ' agent' : ''), `${new Date(a.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${a.by} ${a.what}${a.task ? ' ' + a.task : ''}${a.title ? ' — ' + a.title : ''}${a.detail ? ' (' + a.detail + ')' : ''}`);
+      if (a.task) { row.style.cursor = 'pointer'; row.onclick = () => { m.hidden = true; openDetail(a.task); }; }
+      body.append(row);
+    }
+    if (!B.data.activity.length) body.append(el('div', 'bdNone', 'Nothing has happened yet.'));
+    m.hidden = false;
   }
   let dragging = null;
   function cardEl(t, index) {
@@ -179,6 +221,7 @@
       if (t.status !== 'done') btn('check', t.recur ? 'Complete (repeats)' : 'Complete', () => op('complete', { id: t.id }).then(() => openDetail(t.id)));
     }
     btn('bot', 'Give to Claude', () => giveToClaude(t));
+    if (!held) btn('share', 'Delegate', () => delegate(t)); // hand it to a teammate with a signed note (assignee + note in one step)
     if (!held) {
       const del = btn('trash', 'Delete', async () => {
         if (del.dataset.armed !== '1') { del.dataset.armed = '1'; label(del, 'trash', 'Click again to delete'); return; }
@@ -191,6 +234,16 @@
     for (const a of activity) log.append(el('div', 'bdAct' + (a.agent ? ' agent' : ''), `${new Date(a.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${a.by} ${a.what}${a.detail ? ' (' + a.detail + ')' : ''}`));
     p.append(log);
     B.editing = false;
+  }
+  async function delegate(t) { // delegation = assignee + a hand-over note, in one step, logged in the activity
+    const names = B.members.filter((m) => m.username !== t.assignee).map((m) => m.username).join(', ');
+    const who = window.prompt('Hand ' + t.id + ' to (username): ' + names, '');
+    if (!who || !who.trim()) return;
+    const u = who.trim().toLowerCase();
+    if (!B.members.some((m) => m.username === u)) return note('No such person: ' + u, true);
+    const why = window.prompt('A note for ' + personName(u) + ' (what, why, by when):', '') || '';
+    const r = await op('update', { id: t.id, rev: t.rev, assignee: u, appendNote: 'Handed to ' + personName(u) + (why ? ': ' + why : '') });
+    if (r) openDetail(t.id);
   }
   function giveToClaude(t) {
     showScreen('shell');
@@ -304,6 +357,17 @@
     $('calToday').onclick = () => { B.cal = null; renderCal(); };
     $('tpOpenBoard').onclick = () => showScreen('board');
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('board').hidden && B.open && !e.target.closest('input, textarea, select')) closeDetail(); });
+    // keyboard (from HyperProductivityManager): "/" focuses the board filter, Ctrl+1 / 2 / 3 switch Board / Calendar / Work
+    document.addEventListener('keydown', (e) => {
+      if (!me) return;
+      const typing = e.target.closest('input, textarea, select, [contenteditable]');
+      if (e.key === '/' && !typing && !$('board').hidden) { e.preventDefault(); $('bdFilter').focus(); return; }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && ['1', '2', '3'].includes(e.key) && $('login').hidden) {
+        const screen = { 1: 'board', 2: 'cal', 3: 'shell' }[e.key];
+        if ($('menu').hidden && $(screen).hidden === false) return; // already there
+        e.preventDefault(); showScreen(screen);
+      }
+    });
   }
   window.BOARD = {
     start() { wire(); B.gen++; B.ver = 0; loadMembers(); loop(B.gen); },
