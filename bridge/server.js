@@ -310,6 +310,10 @@ const board = require('./board')({
   displayOf: (u) => { const a = accounts.get(u); return a ? publicPrefs(a).nick || a.display : u; },
 });
 
+// Forgejo issue mirroring (bridge/forgejo.js): off until bridge/forgejo.json names a repo + token.
+const forgejo = require('./forgejo')({ ROOT, board, readJson });
+board.setViewExtra(() => ({ mirror: forgejo.status() }));
+
 // ---------- room agent ("claude") ----------
 // Claude is a room member too, but its private key lives on this hub (Chat/agent-key.json), so the
 // hub can read what is sent to it. Browsers wrap every message for every member, the agent
