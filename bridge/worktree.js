@@ -15,8 +15,10 @@
 //   node bridge/worktree.js merge <username>        merge work/<username> into develop and push develop
 //                                                   (refuses with uncommitted changes; on a conflict nothing is
 //                                                   left half-merged: run sync, resolve, commit, merge again)
-// The hub's live code is the host folder; going live (develop → main there + restart) stays a
-// separate, explicit step.
+//   node bridge/worktree.js live [--restart]        go live: develop → main in the host folder, push main + develop
+//                                                   to every remote, report the Pages deploy; --restart asks the hub
+//                                                   to restart itself gracefully on the new code
+// The hub's live code is the host folder; going live stays a separate, explicit step (only when asked).
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -31,7 +33,7 @@ const REPO = (() => {
   } catch { return path.resolve(MILLS_DIR); }
 })();
 const WT_ROOT = path.resolve(loadProfile('').config.worktreeRoot || path.join(REPO, '..', 'Mills-worktrees'));
-const DEVELOP = 'develop';
+const DEVELOP = 'develop', MAIN = 'main';
 const USERNAME_RE = /^[a-z0-9-]{1,32}$/;
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -129,6 +131,33 @@ function status() {
   return worktrees().map((w) => `${(w.branch || '(detached)').padEnd(22)} ${dirty(w.dir) ? 'uncommitted changes' : 'clean'.padEnd(19)}  ${w.dir}`).join('\n');
 }
 
+// Going live: develop → main in the folder that has main checked out (the host folder, i.e. the running
+// hub's own code), push main AND develop to every remote, report the GitHub Pages deploy run, and
+// (with --restart) ask the hub to restart itself gracefully (same as node bridge/restart.js: it waits
+// until nobody has a reply in progress, nobody is signed out). Refuses if main's folder has uncommitted
+// changes. This is the one go-live command, so a Work session can ship when its person asks.
+function live(opts = {}) {
+  const at = worktrees().find((w) => w.branch === MAIN);
+  if (!at) throw new Error(`No checkout has ${MAIN} checked out; the host folder should.`);
+  if (dirty(at.dir)) throw new Error(`${MAIN} has uncommitted changes in ${at.dir}. Somebody is mid-work there; sort that out first.`);
+  if (git(REPO, 'rev-list', '--count', `${MAIN}..${DEVELOP}`) === '0') return [`Nothing to ship: ${MAIN} already has everything on ${DEVELOP}.`];
+  const r = tryGit(at.dir, 'merge', '--no-ff', '-m', `Merge ${DEVELOP} into ${MAIN}`, DEVELOP);
+  if (!r.ok) { tryGit(at.dir, 'merge', '--abort'); throw new Error(`CONFLICT merging ${DEVELOP} into ${MAIN} (nothing was changed):\n${r.out}`); }
+  const lines = [`Merged ${DEVELOP} into ${MAIN} (${git(at.dir, 'rev-parse', '--short', 'HEAD')}) in ${at.dir}.`];
+  for (const b of [DEVELOP, MAIN]) lines.push(...pushAll(REPO, b).map((s) => `${b} → ${s}`));
+  try { // the Pages deploy for main (best effort: gh may be missing or logged out)
+    const out = execFileSync('gh', ['run', 'list', '-R', 'Unity-Lab-AI/Mills', '-L', '1', '--json', 'status,conclusion,url,headSha'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const run = JSON.parse(out)[0];
+    if (run) lines.push(`Pages deploy: ${run.status}${run.conclusion ? ' / ' + run.conclusion : ''} ${run.url} (watch it: gh run watch <id> -R Unity-Lab-AI/Mills --exit-status)`);
+  } catch { lines.push('Pages deploy: could not ask gh; check https://github.com/Unity-Lab-AI/Mills/actions'); }
+  if (opts.restart) {
+    const { RESTART_FLAG } = loadProfile('');
+    fs.writeFileSync(RESTART_FLAG, new Date().toISOString() + '\n');
+    lines.push('Hub restart requested: it restarts itself (same address, nobody signed out) as soon as no reply is in progress.');
+  }
+  return lines;
+}
+
 module.exports = { ensure, WT_ROOT, REPO };
 
 if (require.main === module) {
@@ -139,6 +168,7 @@ if (require.main === module) {
     else if (cmd === 'commit') console.log(commit(user, rest.join(' ')));
     else if (cmd === 'sync') console.log(sync(user));
     else if (cmd === 'merge') console.log(merge(user));
-    else { console.error('Usage: node bridge/worktree.js status | ensure <username> | commit <username> [message] | sync <username> | merge <username>'); process.exit(1); }
+    else if (cmd === 'live') console.log(live({ restart: process.argv.includes('--restart') }).join('\n'));
+    else { console.error('Usage: node bridge/worktree.js status | ensure <username> | commit <username> [message] | sync <username> | merge <username> | live [--restart]'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }
 }

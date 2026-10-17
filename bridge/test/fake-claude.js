@@ -46,6 +46,20 @@ process.stdin.on('end', async () => {
     const noted = await tool('task_update', { id, appendNote: 'progress from the agent r70' });
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'BOARD:' + JSON.stringify({ id, made: made.ok, claimed: claimed.ok, noted: noted.ok }) }] } });
   }
+  // "TEAMSAY": post into the team chat through the team MCP relay, like Claude in a Work run: one
+  // message for everyone, one private to t-user, one to a user that does not exist (must fail).
+  if (input.includes('TEAMSAY')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const all = await tool('team_say', { text: 'hello team from a Work run r108' });
+    const dm = await tool('team_say', { text: 'private note r108', to: 't-user' });
+    const bad = await tool('team_say', { text: 'x', to: 'nobody-here' });
+    const who = await tool('team_presence', {});
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'TEAM:' + JSON.stringify({ all: all.ok && all.result.as, dm: dm.ok && dm.result.to, bad: bad.ok, people: who.ok ? who.result.people.length : -1 }) }] } });
+  }
   // "LIMITPARTIAL": a 5h event with only a status (no utilization, no reset time), then a 7d event
   // reporting utilization as a percentage (55) — the hub must keep the 5h numbers and read 55 as 55 %.
   if (input.includes('LIMITPARTIAL')) {

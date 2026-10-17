@@ -66,6 +66,7 @@ function systemPrompt(acct, wd) {
     `Shell commands cannot run on ${name}'s PC; if something needs running there, tell ${name} exactly what to run.`,
     `The Mills team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as "${name} · Claude".`,
     `When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.`,
+    `The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as "${name} · Claude", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about.`,
   ].join(' ') + (hubLaws() ? '\n\n' + hubLaws() : '');
 }
 function loadAccounts() {
@@ -86,6 +87,7 @@ function loadAccounts() {
     writeJson(P.MCP_RUNTIME, { mcpServers: {
       pc: { command: process.execPath, args: [path.join(ROOT, 'pc-tools-mcp.js')], env: mcpEnv },
       board: { command: process.execPath, args: [path.join(ROOT, 'board-mcp.js')], env: mcpEnv }, // the team board, as "<person> · Claude"
+      team: { command: process.execPath, args: [path.join(ROOT, 'team-mcp.js')], env: mcpEnv },  // post into the team chat + see who is here, as "<person> · Claude"
     } });
     accounts.set(username, acct);
   }
@@ -513,14 +515,21 @@ function agentContext(m) { // the earlier messages the caller sent along: [{ n: 
       .map((c) => ({ n: String(c.n || '?').slice(0, 40), t: c.t.slice(0, 2000) })) : [];
   } catch { return []; }
 }
-function agentSay(text, to) { // to = a username for a private answer, '' for the room
+// to = a username for a private answer, '' for the room. extra = routing labels kept outside the
+// encryption: { as: 'Sam · Claude', via: 'sam' } when a Work run's Claude posts through bridge/team.js
+// (the message is still sealed with the hub's own key, exactly like Unity's).
+function agentSay(text, to, extra = {}) {
   const mid = crypto.randomBytes(16).toString('base64url'), aad = bodyAad(AGENT, to, mid);
   const plain = Buffer.from(text, 'utf8'), padded = Buffer.alloc(padBucket(plain.length), 0x20);
   plain.copy(padded);
   const raw = crypto.randomBytes(32), body = gcmSeal(raw, padded, aad), keys = {};
   const pubs = [[AGENT, agentKey.pub], ...[...accounts.values()].filter((a) => chatKeys[a.username] && (!to || a.username === to)).map((a) => [a.username, chatKeys[a.username].pub])];
   for (const [u, pub] of pubs) { const w = gcmSeal(agentWrapKey(pub), raw, aad + '|' + u); keys[u] = { iv: w.iv, wk: w.ct }; }
-  appendMessage({ seq: ++seq, v: 3, mid, from: AGENT, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys });
+  const msg = { seq: ++seq, v: 3, mid, from: AGENT, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys };
+  if (typeof extra.as === 'string' && extra.as) msg.as = extra.as.slice(0, 60);
+  if (typeof extra.via === 'string' && accounts.has(extra.via)) msg.via = extra.via;
+  appendMessage(msg);
+  return msg.seq;
 }
 const nameOf = (u) => { if (u === AGENT) return AGENT_NAME; const a = accounts.get(u); return a ? publicPrefs(a).nick || a.display : u; };
 function agentPrompt() {
@@ -638,6 +647,8 @@ function agentHear(msg) {
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy();
+// Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
+const team = require('./team')({ accounts, agentSay, presenceList, displayOf: nameOf, chatKeys });
 
 // ---------- voice / video calls ----------
 // The hub only passes call set-up messages between browsers and keeps track of who is in which
@@ -762,6 +773,13 @@ const server = http.createServer(async (req, res) => {
     if (p === '/internal/board') { // board MCP tools of a Work run (same machine, shared secret, names the account)
       if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
       return board.internal(req, res, String(req.headers['x-mills-account'] || '') || DEFAULT_USERNAME);
+    }
+    if (p === '/internal/team') { // team MCP tools of a Work run: post into the chat as "<person> · Claude", presence
+      if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
+      const who = accounts.get(String(req.headers['x-mills-account'] || '') || DEFAULT_USERNAME);
+      if (!who) return send(res, 200, { ok: false, error: 'Unknown account.' });
+      const { name, args } = await readBody(req);
+      return send(res, 200, team.call(name, args, who));
     }
 
     const origin = req.headers.origin;

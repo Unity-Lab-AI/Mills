@@ -51,7 +51,7 @@ function load() {
 }
 
 async function run() {
-  const { render, head } = load();
+  const { render, head, MD } = load();
   const cases = [
     ['heading + bold/italic/strike/highlight/code', '# Title\nSome **bold**, *it*, ~~gone~~, ==hi== and `x<y`',
       (h) => h.includes('<h1 class="mdh">Title</h1>') && h.includes('<strong>bold</strong>') && h.includes('<em>it</em>') && h.includes('<del>gone</del>') && h.includes('<mark>hi</mark>') && h.includes('<code class="mdc">x&lt;y</code>')],
@@ -74,13 +74,19 @@ async function run() {
     ['escapes', '\\*not italic\\*', (h) => !h.includes('<em>') && h.includes('*not italic*')],
     ['https image loads (lazy, no referrer, opens full size)', '![a cat](https://img.test/cat.png)', (h) => /<a class="mdimgwrap" href="https:\/\/img\.test\/cat\.png"><img class="mdimg"><\/img><\/a>/.test(h)],
     ['data image loads inline', '![](data:image/png;base64,iVBORw0KGgo=)', (h) => /<span class="mdimgwrap"><img class="mdimg">/.test(h)],
-    ['http (not https) image stays a link', '![x](http://img.test/x.png)', (h) => !h.includes('<img') && h.includes('href="http://img.test/x.png"')],
+    ['http (not https) image is tried over https (link kept as the fallback)', '![x](http://img.test/x.png)', (h) => /<a class="mdimgwrap" href="http:\/\/img\.test\/x\.png"><img class="mdimg">/.test(h)],
+    ['relative image path is handed to the page resolver (folder on your PC)', '![shot](out/shot.png)', (h) => /<span class="mdimgwrap mdimgwait"><img class="mdimg">/.test(h)],
+    ['relative image path without a resolver stays text', '![shot](out/shot.png)', (h) => !h.includes('<img') && h.includes('![shot](out/shot.png)'), undefined, { resolveImage: null }],
     ['javascript: image refused', '![x](javascript:alert(1))', (h) => !h.includes('<img') && !h.includes('<a')],
   ];
   const failed = [];
-  for (const [name, input, ok, opts] of cases) {
+  MD.resolveImage = () => Promise.resolve(null); // the page sets this; cases may override it per run (5th element)
+  for (const [name, input, ok, opts, over] of cases) {
     let out = '';
+    const saved = { ...over };
+    for (const k of Object.keys(saved)) { saved[k] = MD[k]; MD[k] = over[k]; }
     try { out = render(input, opts); } catch (e) { out = 'THREW ' + e.message; }
+    for (const k of Object.keys(saved)) MD[k] = saved[k];
     if (!ok(out)) failed.push(name + ' → ' + out.slice(0, 300));
   }
   await new Promise((r) => setTimeout(r, 50)); // the diagram library is requested asynchronously
