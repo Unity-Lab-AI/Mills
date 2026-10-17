@@ -66,6 +66,8 @@ function systemPrompt(acct, wd) {
     `Shell commands cannot run on ${name}'s PC; if something needs running there, tell ${name} exactly what to run.`,
     `The Mills team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as "${name} · Claude".`,
     `When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.`,
+    `You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.`,
+    `Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search (${name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create.`,
     `The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as "${name} · Claude", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about.`,
   ].join(' ') + (hubLaws() ? '\n\n' + hubLaws() : '');
 }
@@ -526,7 +528,8 @@ function agentHear(msg) {
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
-const team = require('./team')({ accounts, agentSay, presenceList: presence.list, displayOf: nameOf, chatKeys, guilds });
+const team = require('./team')({ accounts, agentSay, presenceList: presence.list, displayOf: nameOf, chatKeys, guilds,
+  hub: { callsState: (u) => calls.state(u), sharesFor: (u) => shares.listFor(u), usageStatus: (a) => usage.status(a), archiveSearch: (a, q) => archive.search(a, q), providersList: (u) => providers.list(u) } });
 // AI providers (bridge/providers.js: the host's Claude by default, plus people's own keys / logins / endpoints)
 // and the per-person OpenAI-compatible API (bridge/openai.js, /v1/*).
 const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts });
