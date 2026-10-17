@@ -663,6 +663,8 @@
       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
+      <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything Mills says out loud (chat read-aloud and Unity's voice); off = silence</label>
+      <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
       <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
       <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
@@ -1098,11 +1100,16 @@ $('assistForm').addEventListener('submit', async (e) => {
   assistBusy = false; $('assistSend').hidden = false; $('assistStop').hidden = true;
 });
 // ---- voice: her replies in her own voice (made on the host), your mic → text on the host ----
-const voiceKey = () => 'mills.assistVoice.' + (me ? me.username : '');
-const voiceOn = () => store.get(voiceKey()) === '1';
+// Her voice follows the account (Settings → "Unity speaks her replies"), under the text-to-speech master switch.
+const voiceOn = () => prefs().tts.all && prefs().tts.unity;
 function icoText(btn, icon, text) { btn.textContent = ''; btn.append(ic(icon, text ? 'lead' : ''), text || ''); }
-function showVoice() { icoText($('assistVoice'), voiceOn() ? 'speaker' : 'speaker-off', voiceOn() ? 'Voice on' : 'Voice off'); }
-$('assistVoice').onclick = () => { store.set(voiceKey(), voiceOn() ? '' : '1'); showVoice(); if (!voiceOn()) stopVoice(); };
+function showVoice() { icoText($('assistVoice'), voiceOn() ? 'speaker' : 'speaker-off', voiceOn() ? 'Voice on' : prefs().tts.all ? 'Voice off' : 'Voice off (text to speech is off in Settings)'); }
+$('assistVoice').onclick = async () => {
+  if (!prefs().tts.all) return assistSys('Text to speech is switched off in Settings; turn the master switch on first.', true);
+  try { const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({ tts: { unity: !prefs().tts.unity } }) }); me.prefs = d.prefs; }
+  catch (e) { return assistSys(e.message, true); }
+  showVoice(); if (!voiceOn()) stopVoice();
+};
 let voiceQueue = Promise.resolve(), voiceAudio = null, voiceGen = 0;
 function stopVoice() { voiceGen++; if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; } voiceQueue = Promise.resolve(); }
 function speakLine(text, emotion, act) {
@@ -1982,7 +1989,7 @@ function prefs() {
   const p = (me && me.prefs) || {};
   return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5,
     sound: { on: true, message: 50, mention: 70, reply: 70, ...(p.sound || {}) },
-    tts: { on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) },
+    tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) }, // all = master switch
     clips: { volume: 90, autoplay: false, ...(p.clips || {}) },
     audio: { noise: true, echo: true, agc: true, ...(p.audio || {}) }, // noise suppression on by default
     call: { volume: 100, quality: 'medium', ...(p.call || {}) } };
@@ -2389,7 +2396,7 @@ let ttsBusy = false;
 const ttsClean = (s) => s.replace(/```[\s\S]*?```/g, ' (code) ').replace(/https?:\/\/\S+/g, ' (link) ').replace(/\s+/g, ' ').trim().slice(0, 400);
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
-  if (!text) return;
+  if (!text || !prefs().tts.all) return; // the master switch silences every read-aloud
   ttsQueue.push(ttsClean(text));
   if (ttsQueue.length > 30) ttsQueue.splice(0, ttsQueue.length - 30); // never fall endlessly behind
   if (!ttsBusy) ttsNext();
@@ -3276,6 +3283,7 @@ function openSettings() {
   mark();
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
   $('setToasts').checked = P.toasts;
+  $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
   $('ttsRateVal').textContent = (P.tts.rate / 100).toFixed(1) + '×';
   fillVoices(P.tts.voice);
@@ -3317,7 +3325,7 @@ $('saveSettings').onclick = async () => {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
       nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autosave: Number($('setAutosave').value),
       sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value) },
-      tts: { on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
+      tts: { all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
       clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },
       audio: { noise: $('audNoise').checked, echo: $('audEcho').checked, agc: $('audAgc').checked },
       call: { volume: Number($('callVolume').value), quality: $('callQuality').value },
@@ -3325,8 +3333,10 @@ $('saveSettings').onclick = async () => {
     document.querySelectorAll('#callTiles .tile:not(.self)').forEach(applyPersonAudio);
     if (call.mic) call.mic.applyConstraints(audioConstraints()).catch(() => {}); // new noise / echo settings apply to the live call too
     document.querySelectorAll('.rmsg audio').forEach((a) => { a.volume = d.prefs.clips ? d.prefs.clips.volume / 100 : 0.9; });
-    if (!d.prefs.tts || !d.prefs.tts.on) ttsStop();
     me.prefs = d.prefs;
+    if (!prefs().tts.on || !prefs().tts.all) ttsStop();
+    if (!voiceOn()) stopVoice();
+    showVoice();
     $('setMsg').textContent = 'Saved.'; $('setMsg').className = 'status on';
     await refreshMembers(); selectConv(currentConv);
   } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }

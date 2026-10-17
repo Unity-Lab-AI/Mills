@@ -399,8 +399,10 @@ function cleanPrefs(p, prev = {}) {
     for (const k of ['message', 'mention', 'reply']) if (p.sound[k] !== undefined) s[k] = Math.max(0, Math.min(100, Math.round(Number(p.sound[k]) || 0)));
     out.sound = s;
   }
-  if (p.tts && typeof p.tts === 'object') { // read chat messages aloud (the browser's own speech voices)
+  if (p.tts && typeof p.tts === 'object') { // text to speech: `all` = master switch (chat read-aloud AND Unity's voice), `on` = chat read-aloud, `unity` = Unity speaks her replies
     const t = { ...(prev.tts || {}) };
+    if (p.tts.all !== undefined) t.all = !!p.tts.all;
+    if (p.tts.unity !== undefined) t.unity = !!p.tts.unity;
     if (p.tts.on !== undefined) t.on = !!p.tts.on;
     if (p.tts.volume !== undefined) t.volume = Math.max(0, Math.min(100, Math.round(Number(p.tts.volume) || 0)));
     if (p.tts.rate !== undefined) t.rate = Math.max(50, Math.min(200, Math.round(Number(p.tts.rate) || 100)));

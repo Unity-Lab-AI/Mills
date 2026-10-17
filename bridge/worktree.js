@@ -140,16 +140,19 @@ function live(opts = {}) {
   const at = worktrees().find((w) => w.branch === MAIN);
   if (!at) throw new Error(`No checkout has ${MAIN} checked out; the host folder should.`);
   if (dirty(at.dir)) throw new Error(`${MAIN} has uncommitted changes in ${at.dir}. Somebody is mid-work there; sort that out first.`);
-  if (git(REPO, 'rev-list', '--count', `${MAIN}..${DEVELOP}`) === '0') return [`Nothing to ship: ${MAIN} already has everything on ${DEVELOP}.`];
+  const deploy = () => { // the latest Pages deploy run for main (best effort: gh may be missing or logged out)
+    try {
+      const out = execFileSync('gh', ['run', 'list', '-R', 'Unity-Lab-AI/Mills', '-L', '1', '--json', 'status,conclusion,url,headSha'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      const run = JSON.parse(out)[0];
+      return run ? `Pages deploy of ${String(run.headSha).slice(0, 7)}: ${run.status}${run.conclusion ? ' / ' + run.conclusion : ''} ${run.url}` : 'Pages deploy: no run found';
+    } catch { return 'Pages deploy: could not ask gh; check https://github.com/Unity-Lab-AI/Mills/actions'; }
+  };
+  if (git(REPO, 'rev-list', '--count', `${MAIN}..${DEVELOP}`) === '0') return [`Nothing to ship: ${MAIN} (${git(REPO, 'rev-parse', '--short', MAIN)}) already has everything on ${DEVELOP}.`, deploy()];
   const r = tryGit(at.dir, 'merge', '--no-ff', '-m', `Merge ${DEVELOP} into ${MAIN}`, DEVELOP);
   if (!r.ok) { tryGit(at.dir, 'merge', '--abort'); throw new Error(`CONFLICT merging ${DEVELOP} into ${MAIN} (nothing was changed):\n${r.out}`); }
   const lines = [`Merged ${DEVELOP} into ${MAIN} (${git(at.dir, 'rev-parse', '--short', 'HEAD')}) in ${at.dir}.`];
   for (const b of [DEVELOP, MAIN]) lines.push(...pushAll(REPO, b).map((s) => `${b} → ${s}`));
-  try { // the Pages deploy for main (best effort: gh may be missing or logged out)
-    const out = execFileSync('gh', ['run', 'list', '-R', 'Unity-Lab-AI/Mills', '-L', '1', '--json', 'status,conclusion,url,headSha'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    const run = JSON.parse(out)[0];
-    if (run) lines.push(`Pages deploy: ${run.status}${run.conclusion ? ' / ' + run.conclusion : ''} ${run.url} (watch it: gh run watch <id> -R Unity-Lab-AI/Mills --exit-status)`);
-  } catch { lines.push('Pages deploy: could not ask gh; check https://github.com/Unity-Lab-AI/Mills/actions'); }
+  lines.push(deploy() + ' (the run for this push may still be starting; run "node bridge/worktree.js live" again to see it)');
   if (opts.restart) {
     const { RESTART_FLAG } = loadProfile('');
     fs.writeFileSync(RESTART_FLAG, new Date().toISOString() + '\n');

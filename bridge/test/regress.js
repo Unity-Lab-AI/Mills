@@ -44,12 +44,18 @@ function skip(id, label, why) {
 }
 
 // ---------- production snapshot (read-only) ----------
-const { allProfiles, readJson } = require(path.join(BRIDGE, 'common.js'));
+// The running hub and its account files live in the MAIN checkout (the host folder), which is not this
+// folder when the runner is started from someone's worktree: production checks always look there.
+const { readJson } = require(path.join(BRIDGE, 'common.js'));
+const PROD = path.join(require(path.join(BRIDGE, 'worktree.js')).REPO, 'bridge');
+function prodProfiles() { // every production account: '' = the default one (bridge/ itself), then bridge/profiles/<name>
+  const dir = path.join(PROD, 'profiles');
+  const named = fs.existsSync(dir) ? fs.readdirSync(dir).filter((p) => /^[a-z0-9-]{1,32}$/.test(p) && ['config.json', 'auth.json'].some((f) => fs.existsSync(path.join(dir, p, f)))).sort() : [];
+  return ['', ...named];
+}
+const prodDir = (p) => (p ? path.join(PROD, 'profiles', p) : PROD);
 function prodAccountFiles() {
-  return allProfiles().flatMap((p) => {
-    const dir = p ? path.join(BRIDGE, 'profiles', p) : BRIDGE;
-    return [path.join(dir, 'auth.json'), ...(p ? [path.join(dir, 'config.json')] : [])];
-  });
+  return prodProfiles().flatMap((p) => [path.join(prodDir(p), 'auth.json'), ...(p ? [path.join(prodDir(p), 'config.json')] : [])]);
 }
 const prodBefore = Object.fromEntries(prodAccountFiles().map((f) => [f, sha(f)]));
 
@@ -477,16 +483,17 @@ async function run() {
   };
   const v2 = (t, r) => JSON.stringify({ v: 2, t, ...(r ? { r } : {}) });
   const pr = await call('/api/prefs', U, { nick: '  Tee\u0007 Nick  ', color: 5, toasts: false, sound: { on: true, message: 150, mention: 20 },
-    tts: { on: true, volume: 400, rate: 10, voice: 'x'.repeat(300), scope: 'weird' }, clips: { volume: -5, autoplay: 1 },
+    tts: { all: 0, unity: 'yes', on: true, volume: 400, rate: 10, voice: 'x'.repeat(300), scope: 'weird' }, clips: { volume: -5, autoplay: 1 },
     audio: { noise: false, echo: 1 }, call: { volume: 250, quality: 'ultra' }, autosave: 999 });
-  const ttsOk = pr.data.prefs && pr.data.prefs.tts && pr.data.prefs.tts.on === true && pr.data.prefs.tts.volume === 100 && pr.data.prefs.tts.rate === 50
+  const ttsOk = pr.data.prefs && pr.data.prefs.tts && pr.data.prefs.tts.on === true && pr.data.prefs.tts.all === false && pr.data.prefs.tts.unity === true && pr.data.prefs.tts.volume === 100 && pr.data.prefs.tts.rate === 50
+    && /id="setTtsAll"/.test(html) && /id="setTtsUnity"/.test(html) && /const voiceOn = \(\) => prefs\(\)\.tts\.all && prefs\(\)\.tts\.unity/.test(html) && /if \(!text \|\| !prefs\(\)\.tts\.all\) return;/.test(html)
     && pr.data.prefs.tts.voice.length === 120 && pr.data.prefs.tts.scope === 'all'
     && pr.data.prefs.clips && pr.data.prefs.clips.volume === 0 && pr.data.prefs.clips.autoplay === true
     && pr.data.prefs.audio && pr.data.prefs.audio.noise === false && pr.data.prefs.audio.echo === true
     && pr.data.prefs.call && pr.data.prefs.call.volume === 100 && pr.data.prefs.call.quality === 'medium' && pr.data.prefs.autosave === 120;
   const prBad = await call('/api/prefs', A, { color: 99 });
   const memP = ((await call('/api/room/members', A)).data.members || []).find((m) => m.username === 't-user');
-  check('R42', 'settings: nickname cleaned, colour kept, volumes / speech settings clamped, bad colour → none; others see nick + colour', pr.status === 200 && ttsOk && pr.data.prefs.nick === 'Tee Nick'
+  check('R42', 'settings: nickname cleaned, colour kept, volumes / speech settings clamped, text-to-speech master switch + Unity voice stored as booleans on the account, bad colour → none; others see nick + colour; [static] both switches in Settings, speak() and the Voice button obey the master switch', pr.status === 200 && ttsOk && pr.data.prefs.nick === 'Tee Nick'
     && pr.data.prefs.color === 5 && pr.data.prefs.sound.message === 100 && pr.data.prefs.toasts === false && prBad.data.prefs.color === null
     && !!memP && memP.nick === 'Tee Nick' && memP.color === 5 && (await call('/api/check', U)).data.prefs.nick === 'Tee Nick');
 
@@ -1140,14 +1147,14 @@ async function run() {
 
   // Production (read-only)
   if (NO_PROD) { skip('R33', 'production hub', '--no-prod'); skip('R34', 'production accounts', '--no-prod'); skip('R35', 'account files survive git', '--no-prod'); return; }
-  const prodPort = readJson(path.join(BRIDGE, 'config.json'), {}).port || 7777;
+  const prodPort = readJson(path.join(PROD, 'config.json'), {}).port || 7777;
   let prod = null; try { prod = await (await fetch(`http://127.0.0.1:${prodPort}/api/status`)).json(); } catch {}
   check('R33', `production: ${prodPort} answers, no leftover old port 7778`, !!(prod && prod.ok) && !(await listening(7778)), prod ? `pid ${prod.pid}, supervised ${prod.supervised}` : 'not answering');
-  const accts = allProfiles();
-  const intact = accts.every((p) => { const a = readJson(path.join(p ? path.join(BRIDGE, 'profiles', p) : BRIDGE, 'auth.json'), null); return a && a.salt && a.hash; });
-  check('R34', `production: every account (${accts.length}) still has an intact password file`, intact, 'sign-in itself is proven by the host (law 6), not by this runner');
+  const accts = prodProfiles();
+  const intact = accts.every((p) => { const a = readJson(path.join(prodDir(p), 'auth.json'), null); return a && a.salt && a.hash; });
+  check('R34', `production: every account (${accts.length}, in ${PROD}) still has an intact password file`, intact, 'sign-in itself is proven by the host (law 6), not by this runner');
   const tracked = spawnSync('git', ['ls-files', 'bridge/profiles', 'bridge/auth.json', 'bridge/state.json', 'bridge/hub-state.json'], { cwd: MILLS, encoding: 'utf8' }).stdout.trim();
-  const configs = accts.filter(Boolean).every((p) => fs.existsSync(path.join(BRIDGE, 'profiles', p, 'config.json')));
+  const configs = accts.filter(Boolean).every((p) => fs.existsSync(path.join(prodDir(p), 'config.json')));
   check('R35', 'account files are untracked (git cannot delete them on merge) and every account has its config.json', !tracked && configs, tracked || (configs ? '' : 'a profile is missing config.json'));
 }
 
