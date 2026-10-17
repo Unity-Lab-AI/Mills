@@ -77,7 +77,8 @@ process.stdin.on('end', async () => {
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'TOOL:' + JSON.stringify(r) }] } });
   }
-  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()}` }],
+  // cfg / key: which Claude login / API key this run was handed (a person's own provider), '' = the host's
+  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)}` }],
     ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
   // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
   out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,

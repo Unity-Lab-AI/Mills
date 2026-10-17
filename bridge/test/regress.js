@@ -104,6 +104,13 @@ function startFakeOllama() {
         const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
         res.writeHead(200, { 'Content-Type': 'image/png', 'X-Seconds': '0.01' }); return res.end(png);
       }
+      // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
+      if (req.url === '/oai/chat/completions') {
+        const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
+        const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
+        if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
+        return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
+      }
       if (req.url === '/api/tags') return j({ models: [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
       if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
@@ -279,7 +286,7 @@ async function run() {
   // so a new route is covered the day it is written) answers 401 to a visitor, GET and POST, except the
   // sign-in itself and the bare "a hub is here" status; through the tunnel that status carries no pid /
   // busy / supervised; unknown paths and folders are 404; and the page ships with only the sign-in form visible.
-  const routeSrc = ['server.js', 'board.js', 'assistant.js'].map((f) => fs.readFileSync(path.join(BRIDGE, f), 'utf8')).join('\n');
+  const routeSrc = ['server.js', 'board.js', 'assistant.js', 'openai.js', 'team.js'].map((f) => fs.readFileSync(path.join(BRIDGE, f), 'utf8')).join('\n');
   const routes = [...new Set([...routeSrc.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)].map((m) => m[1]))].filter((r) => r !== '/api/status' && r !== '/api/login' && !/\/$/.test(r));
   const leaks = [];
   for (const r of routes) {
@@ -440,7 +447,7 @@ async function run() {
   check('R35b', 'room agent key survives the restart', !!memAfter && !!agentMember && memAfter.pub.x === agentMember.pub.x);
 
   // Per-account worktrees (the scratch copy is its own git repo)
-  const cwdOf = (events) => ((texts(events).match(/cwd=(.+)$/m) || [])[1] || '').trim();
+  const cwdOf = (events) => ((texts(events).match(/cwd=(.+?)(?: \||$)/m) || [])[1] || '').trim();
   const samePath = (a, b) => !!a && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
   const wtU = path.join(SCRATCH, 'worktrees', 't-user');
   const ckU = (await call('/api/check', U)).data;
@@ -491,6 +498,75 @@ async function run() {
   const mainClean = spawnSync('git', ['status', '--porcelain'], { cwd: SCRATCH, encoding: 'utf8' }).stdout.trim() === '';
   check('R109', 'worktree.js live: develop → main (--no-ff) in the checkout that has main, pushes every remote, reports the deploy; second run = nothing to ship; main folder left clean; no restart without --restart',
     lv.status === 0 && /Merged develop into main/.test(lv.stdout) && onMain && /Nothing to ship/.test(lvAgain) && mainClean && !fs.existsSync(path.join(SB, '.restart')), String(lv.stdout || lv.stderr).trim().split('\n')[0]);
+
+  // OpenAI-compatible API (/v1) with one key per person (bridge/openai.js), answered by the host's Claude (the fake one here).
+  const v1 = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, text: await r.text(), ct: r.headers.get('content-type') || '' }; };
+  const k0 = (await call('/api/apikey', U)).data;
+  const made = (await call('/api/apikey/rotate', U, { expiresDays: 7 })).data;
+  const noKey = await v1('/v1/models'), badKey = await v1('/v1/models', 'mills_' + 'a'.repeat(48));
+  const models = await v1('/v1/models', made.key);
+  const chat1 = await v1('/v1/chat/completions', made.key, { model: 'claude-opus-5-5', messages: [{ role: 'system', content: 'be brief' }, { role: 'user', content: 'hi there' }, { role: 'assistant', content: 'hello' }, { role: 'user', content: 'ping-r111' }] });
+  const oa1 = JSON.parse(chat1.text || '{}'), c1text = (((oa1.choices || [])[0] || {}).message || {}).content || '';
+  const stream1 = await v1('/v1/chat/completions', made.key, { model: 'claude-haiku-5-5', stream: true, messages: [{ role: 'user', content: 'stream-r111' }] });
+  const chunks = stream1.text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
+  const streamed = chunks.map((c) => (((c.choices || [])[0] || {}).delta || {}).content || '').join('');
+  const noMsgs = await v1('/v1/chat/completions', made.key, { model: 'x' });
+  const afterUse = (await call('/api/apikey', U)).data;
+  const rotated = (await call('/api/apikey/rotate', U, {})).data;
+  const oldDead = await v1('/v1/models', made.key), newLive = await v1('/v1/models', rotated.key);
+  // expiry: a 1-day key made "yesterday" is refused as expired (the runner backdates it in the scratch state file)
+  const uState = path.join(SB, 'profiles', 't-user', 'state.json');
+  const st1 = JSON.parse(fs.readFileSync(uState, 'utf8')); // (the hub keeps its own copy in memory; expiry is judged from createdAt + expiresDays at call time)
+  const setExp = await call('/api/apikey/settings', U, { expiresDays: 1 });
+  const stillOk = await v1('/v1/models', rotated.key);
+  const revoked = (await call('/api/apikey/revoke', U, {})).data, afterRevoke = await v1('/v1/models', rotated.key);
+  check('R111', 'OpenAI-compatible API: Settings makes a per-person key (shown once, sha256 kept), /v1/models + /v1/chat/completions answer with it (system + history flattened into one claude -p run, usage counted, streaming as SSE chunks ending in [DONE]); no key / unknown key → 401 in OpenAI error shape; bad body → 400; rotate kills the old key; expiry setting kept; revoke kills it',
+    !k0.hasKey && /^mills_[a-f0-9]{48}$/.test(made.key || '') && made.hasKey && made.expiresDays === 7 && made.prefix === made.key.slice(0, 12)
+    && noKey.status === 401 && /authentication_error/.test(noKey.text) && badKey.status === 401 && models.status === 200 && /claude-opus-5-5/.test(models.text)
+    && chat1.status === 200 && oa1.object === 'chat.completion' && /ping-r111/.test(c1text) && /Conversation so far:[\s\S]*User: hi there[\s\S]*Assistant: hello/.test(c1text) && !/be brief/.test(c1text) && /model=claude-opus-5-5/.test(c1text) && oa1.usage && typeof oa1.usage.total_tokens === 'number'
+    && stream1.status === 200 && /text\/event-stream/.test(stream1.ct) && /stream-r111/.test(streamed) && /model=claude-haiku-5-5/.test(streamed) && /data: \[DONE\]/.test(stream1.text)
+    && noMsgs.status === 400 && afterUse.calls === 2 && !!afterUse.lastUsed
+    && rotated.key && rotated.key !== made.key && oldDead.status === 401 && newLive.status === 200
+    && st1.api && setExp.data.expiresDays === 1 && stillOk.status === 200 && revoked.hasKey === false && afterRevoke.status === 401
+    && /id="apiBox"/.test(html) && /\/api\/apikey\/rotate/.test(html) && /function renderApiAccess\(/.test(html),
+    `key ${made.key ? 'made' : 'none'}, models ${models.status}, chat ${chat1.status} "${c1text.slice(0, 60)}", stream ${stream1.status} ${chunks.length} chunks, calls ${afterUse.calls}, rotate ${oldDead.status}/${newLive.status}, revoke ${afterRevoke.status}`);
+
+  // AI providers (bridge/providers.js): a person's own Claude login / key / OpenAI endpoint, private or shared; the host's Claude untouched.
+  const prov0 = (await call('/api/providers', U)).data;
+  const badKind = await call('/api/providers/add', U, { kind: 'magic', label: 'x' });
+  const badAnth = await call('/api/providers/add', U, { kind: 'anthropic', label: 'bad', apiKey: 'nope' });
+  const cfgDir = path.join(SCRATCH, 'claude-sponge-login');
+  const cli = (await call('/api/providers/add', U, { kind: 'claude-cli', label: 'Tuser Claude login', configDir: cfgDir, shared: false })).data;
+  const oai = (await call('/api/providers/add', U, { kind: 'openai', label: 'Tuser endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt, fake-mini', shared: true })).data;
+  const seenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
+  const secretLeak = JSON.stringify((await call('/api/providers', U)).data).includes('"apiKey"');
+  const pickCli = await call('/api/model', U, { provider: cli.provider.id, model: 'claude-sonnet-5-5' });
+  const cliRun = await chat(U, 'who runs me', { fresh: true });
+  const ck7 = (await call('/api/check', U)).data;
+  const pickOai = await call('/api/model', U, { provider: oai.provider.id, model: 'fake-gpt' });
+  const useOai = (await call('/api/apikey/rotate', U, {})).data;
+  const setOai = await call('/api/apikey/settings', U, { provider: oai.provider.id, model: 'fake-mini' });
+  const oaiModels = await v1('/v1/models', useOai.key);
+  const oaiChat = await v1('/v1/chat/completions', useOai.key, { model: 'fake-gpt', messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'through-r112' }] });
+  const oaiText = ((((JSON.parse(oaiChat.text || '{}').choices || [])[0] || {}).message || {}).content) || '';
+  const oaiStream = await v1('/v1/chat/completions', useOai.key, { model: 'fake-gpt', stream: true, messages: [{ role: 'user', content: 'flow-r112' }] });
+  const oaiStreamed = oaiStream.text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => ((JSON.parse(l.slice(6)).choices || [])[0] || {}).delta || {}).map((d) => d.content || '').join('');
+  const otherTouch = await call('/api/providers/update', A, { id: cli.provider.id, shared: true });
+  const shareIt = await call('/api/providers/update', U, { id: cli.provider.id, shared: true });
+  const nowSeenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
+  const rmOther = await call('/api/providers/remove', A, { id: cli.provider.id });
+  const rm = await call('/api/providers/remove', U, { id: cli.provider.id });
+  const ck7b = (await call('/api/check', U)).data;
+  await call('/api/providers/remove', U, { id: oai.provider.id }); await call('/api/apikey/revoke', U, {}); await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' });
+  check('R112', 'AI providers: the host Claude is always listed; a person adds a Claude Code login (own folder) and an OpenAI endpoint (private or shared; bad kind / key refused; secrets never listed); a private one is invisible to others; picking the login runs Work with CLAUDE_CONFIG_DIR set and that model; an OpenAI provider is refused for Work; the API key answers through the endpoint provider (plain + streaming, system passed); only the owner shares / removes; removal clears the person\'s choice',
+    prov0.providers.length === 1 && prov0.providers[0].id === 'host' && badKind.status === 400 && badAnth.status === 400 && cli.provider && oai.provider && !secretLeak
+    && !seenByA.includes(cli.provider.id) && seenByA.includes(oai.provider.id)
+    && pickCli.status === 200 && pickCli.data.provider === cli.provider.id && new RegExp('cfg=' + cfgDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(texts(cliRun.events)) && /model=claude-sonnet-5-5/.test(texts(cliRun.events)) && ck7.provider === cli.provider.id && (ck7.providers || []).some((p) => p.id === cli.provider.id)
+    && pickOai.status === 400 && setOai.status === 200 && setOai.data.provider === oai.provider.id && oaiModels.status === 200 && /fake-mini/.test(oaiModels.text)
+    && oaiChat.status === 200 && /^oai says: through-r112 \[sys 3\]/.test(oaiText) && /flow-r112/.test(oaiStreamed)
+    && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByA.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
+    && /id="provBox"/.test(html) && /\/api\/providers\/add/.test(html) && /o\.value = p\.id \+ '\|' \+ m/.test(html),
+    `cli ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
 
   // Chat v2: settings, private messages, edit / delete, receipts, agent privacy
   const seal = async (tok, priv, plain, to) => { // like the page's sealFor: everyone, or only sender + recipient
