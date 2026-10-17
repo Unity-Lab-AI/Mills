@@ -114,12 +114,16 @@ function startFakeOllama() {
       }
       // fake Forgejo (issue mirroring): in-memory issues under the repo path; /fake/forgejo/* lets the runner act as a person on Forgejo
       const FJ = '/api/v1/repos/UnityAILab/Mills/issues';
+      const FJ_LOGINS = { 'token fake-forgejo-token': 'mills-hub', 'token fake-personal-token-1': 'tuser-fj' }; // hub token + one person's
+      if (req.url === '/api/v1/user') { const l = FJ_LOGINS[req.headers.authorization]; if (!l) { res.writeHead(401); return res.end('{"message":"token"}'); } return j({ id: 7, login: l }); }
       if (req.url.startsWith(FJ) || req.url.startsWith('/fake/forgejo/')) {
         fakeForgejo.calls.push(req.method + ' ' + req.url);
         const b = body ? JSON.parse(body) : {};
+        const who = FJ_LOGINS[req.headers.authorization] || 'someone';
         const stamp = () => new Date(Date.now() + (fakeForgejo.tick++)).toISOString();
-        const mk = (o) => { const n = ++fakeForgejo.n; const is = { number: n, title: o.title || '', body: o.body || '', state: o.state || 'open', labels: (o.labels || []).map((l) => ({ name: l })), html_url: 'https://git.example.invalid/UnityAILab/Mills/issues/' + n, updated_at: stamp(), created_at: stamp() }; fakeForgejo.issues.set(n, is); return is; };
-        if (req.headers.authorization !== 'token fake-forgejo-token' && !req.url.startsWith('/fake/')) { res.writeHead(401); return res.end('{"message":"token"}'); }
+        const mk = (o) => { const n = ++fakeForgejo.n; const is = { number: n, title: o.title || '', body: o.body || '', state: o.state || 'open', labels: (o.labels || []).map((l) => ({ name: l })), html_url: 'https://git.example.invalid/UnityAILab/Mills/issues/' + n, updated_at: stamp(), created_at: stamp(), user: { login: who } }; fakeForgejo.issues.set(n, is); return is; };
+        if (!FJ_LOGINS[req.headers.authorization] && !req.url.startsWith('/fake/')) { res.writeHead(401); return res.end('{"message":"token"}'); }
+        if (req.method === 'PATCH' && !req.url.startsWith('/fake/')) fakeForgejo.patchedBy = who;
         if (req.url === FJ && req.method === 'POST') return j(mk(b));
         if (req.url === '/fake/forgejo/newissue' && req.method === 'POST') return j(mk(b)); // made "on Forgejo" by a person
         let m = new RegExp('^' + FJ.replace(/\//g, '\\/') + '\\/(\\d+)(\\/comments)?$').exec(req.url) || /^\/fake\/forgejo\/issue\/(\d+)$/.exec(req.url);
@@ -1078,6 +1082,32 @@ async function run() {
     && fjDel === 200 && !!fjDelComment && fjDelComment.state === 'closed',
     `issue ${fjIssue ? '#' + fjIssue.number : 'none'}, renamed ${!!fjRenamed}, closed ${!!fjClosed}, inbound ${fjIn ? fjIn.id : 'none'} done ${!!fjInDone}, patches ${callsAfter}→${callsLater}, delete ${fjDel} comment ${!!fjDelComment}`
     + ` | mirror ${JSON.stringify(fjView.mirror)} | issue body ${JSON.stringify((fjIssue || {}).body)} | in labels ${JSON.stringify((fjIn || {}).labels)} | in body ${JSON.stringify(((fjInDetail || {}).body || '').slice(0, 80))} | comment state ${(fjDelComment || {}).state}`);
+  // My Forgejo: each person's own token, checked against Forgejo, never sent back; mirroring + Work runs act as them.
+  const fjMe0 = (await call('/api/forgejo/me', U)).data;
+  const fjBadShape = await call('/api/forgejo/connect', U, { token: 'x' });
+  const fjWrong = await call('/api/forgejo/connect', U, { token: 'not-a-real-token-123' });
+  const fjOk = await call('/api/forgejo/connect', U, { token: 'fake-personal-token-1' });
+  const fjMeU = await call('/api/forgejo/me', U), fjMeA = (await call('/api/forgejo/me', A)).data;
+  const fjLeak = JSON.stringify(fjOk.data).includes('fake-personal-token-1') || JSON.stringify(fjMeU.data).includes('fake-personal-token-1');
+  const fjMineT = (await call('/api/board/create', U, { title: 'mine r122', status: 'todo' })).data.task;
+  const fjHubT = (await call('/api/board/create', A, { title: 'hub r122', status: 'todo' })).data.task;
+  const fjMineI = await until(async () => [...fakeForgejo.issues.values()].find((is) => is.title === 'mine r122'));
+  const fjHubI = await until(async () => [...fakeForgejo.issues.values()].find((is) => is.title === 'hub r122'));
+  await call('/api/board/complete', U, { id: fjMineT.id });
+  await until(async () => { const is = fjMineI && fakeForgejo.issues.get(fjMineI.number); return is && is.state === 'closed'; });
+  const fjPatchBy = fakeForgejo.patchedBy;
+  const fjEnvOf = (events) => ((texts(events).match(/fj=([^\s|]*)/) || [])[1] || '');
+  const fjRunU = fjEnvOf((await chat(U, 'forgejo env r122', { fresh: true })).events), fjRunA = fjEnvOf((await chat(A, 'forgejo env r122', { fresh: true })).events);
+  const fjOff = (await call('/api/forgejo/disconnect', U, {})).data;
+  const fjRunU2 = fjEnvOf((await chat(U, 'forgejo env r122 after', { fresh: true })).events);
+  const fjAnon = await fetch(H + '/api/forgejo/me');
+  for (const t of [fjMineT, fjHubT]) await call('/api/board/delete', t === fjHubT ? A : U, { id: t.id });
+  check('R122', 'My Forgejo: a person saves their own Forgejo token (Settings), the hub checks it with Forgejo (bad shape / wrong token refused), shows who it belongs to and never sends it back; their board changes reach Forgejo as them (others fall back to the hub token); their own Work run gets FORGEJO_TOKEN + a git extraHeader for the Forgejo host, nobody else\'s does; Remove takes it away; signed-out callers get 401; the token file is gitignored',
+    fjMe0.connected === false && !!fjMe0.url && fjBadShape.status === 400 && fjWrong.status === 400 && fjOk.status === 200 && fjOk.data.login === 'tuser-fj' && fjMeU.data.connected === true && fjMeA.connected === false && !fjLeak
+    && fjMineI && fjMineI.user.login === 'tuser-fj' && fjHubI && fjHubI.user.login === 'mills-hub' && fjPatchBy === 'tuser-fj'
+    && fjRunU === `tuser-fj:tok:http.http://127.0.0.1:${OLLAMA_PORT}/.extraHeader` && fjRunA === '::' && fjOff.connected === false && fjRunU2 === '::' && fjAnon.status === 401
+    && /^bridge\/forgejo-users\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /id="fjBox"/.test(html) && /function renderForgejo\(/.test(html),
+    `me0 ${JSON.stringify(fjMe0)}, bad ${fjBadShape.status}/${fjWrong.status}, ok ${fjOk.status} ${JSON.stringify(fjOk.data)}, A ${fjMeA.connected}, leak ${fjLeak}, issues by ${fjMineI && fjMineI.user.login}/${fjHubI && fjHubI.user.login}, patch by ${fjPatchBy}, runs U "${fjRunU}" A "${fjRunA}" after "${fjRunU2}", anon ${fjAnon.status}`);
   const runJs121 = fs.readFileSync(path.join(BRIDGE, 'run.js'), 'utf8'), pagesYml = fs.readFileSync(path.join(MILLS, '.github', 'workflows', 'pages.yml'), 'utf8');
   check('R121', '[static] named Cloudflare tunnel, prepared: run.js runs `cloudflared tunnel run <tunnelName>` and publishes https://<tunnelHostname> when configured (quick tunnel otherwise); the page accepts the deploy-time MILLS_HUB_HOST besides *.trycloudflare.com (CSP connect-src + hub address check); pages.yml injects it (empty = quick tunnels only)',
     /config\.tunnelName/.test(runJs121) && /'run', '--url'/.test(runJs121) && /config\.tunnelHostname/.test(runJs121) && /publishUrl\('https:\/\/' \+ host\)/.test(runJs121)
