@@ -54,6 +54,7 @@ module.exports = function createTeam({ accounts, agentSay, presenceList, display
       if (conv && conv !== 'room') {
         if (!guilds || !guilds.isGuildConv(conv) || !guilds.exists(conv)) return no(`No conversation "${conv}" (use team_channels to list them).`);
         if (!guilds.isMember(conv, acct.username)) return no(`${displayOf(acct.username)} is not in ${conv}.`);
+        if (guilds.canPost && !guilds.canPost(conv, acct.username)) return no(`${conv} is an announcement channel; ${displayOf(acct.username)} may not post there.`);
       }
       const label = displayOf(acct.username) + ' · Claude';
       const seq = agentSay(text, to, { as: label, via: acct.username, conv: conv && conv !== 'room' ? conv : '' });
