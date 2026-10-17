@@ -9,16 +9,19 @@
 
 const ICE_DEFAULT = [{ urls: 'stun:stun.l.google.com:19302' }]; // finds each browser's public address; sees no media
 
-module.exports = function createCalls({ accounts, config, chatKeys, send, readBody, b64 }) {
+// extraMember(conv, user) / extraConv(conv): membership and existence of the server-channel and group
+// conversations (bridge/guilds.js); room and private conversations are judged here.
+module.exports = function createCalls({ accounts, config, chatKeys, send, readBody, b64, extraMember = () => false, extraConv = () => false }) {
   const calls = new Map();   // conv -> Map(username -> { cam, mic, screen, since, seen })
   const mailbox = new Map(); // username -> [{ n, from, conv, iv, ct }]
   const waiters = new Map(); // username -> Set(wake fn) of open long-polls
   let callN = 0, callVer = 0;
-  const convMember = (conv, user) => conv === 'room' || (conv.startsWith('dm:') && conv.slice(3).split('|').includes(user));
+  const convMember = (conv, user) => conv === 'room' || (conv.startsWith('dm:') && conv.slice(3).split('|').includes(user)) || extraMember(conv, user);
   function validConv(conv) {
     if (conv === 'room') return true;
     const m = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
-    return !!m && m[1] < m[2] && accounts.has(m[1]) && accounts.has(m[2]);
+    if (m) return m[1] < m[2] && accounts.has(m[1]) && accounts.has(m[2]);
+    return extraConv(conv);
   }
   function wake(users) { for (const u of users) for (const fn of waiters.get(u) || []) fn(); }
   function changed(conv) { callVer++; wake([...accounts.keys()].filter((u) => convMember(conv, u))); }

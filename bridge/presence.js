@@ -8,7 +8,7 @@
 
 const TYPING_MS = 6000, GONE_MS = 8000, ONLINE_MS = 70000; // ONLINE_MS: fallback if a close is never seen
 
-module.exports = function createPresence({ accounts, roomChanged, extraTyping = () => [] }) {
+module.exports = function createPresence({ accounts, roomChanged, extraTyping = () => [], convMember = null }) {
   const presence = new Map();   // username -> { online, idle, screen, at (last change), seen (last contact), polls }
   const typing = new Map();     // username -> { conv, at, timer }
   function pres(user) { let p = presence.get(user); if (!p) { p = { online: false, idle: false, screen: '', at: 0, seen: 0, polls: 0 }; presence.set(user, p); } return p; }
@@ -48,7 +48,8 @@ module.exports = function createPresence({ accounts, roomChanged, extraTyping = 
   }
   function typingFor(user) { // conversations this reader is in, plus whatever the hub adds (Unity composing)
     const out = [];
-    for (const [u, t] of typing) if (u !== user && (t.conv === 'room' || t.conv.split(/[:|]/).includes(user))) out.push({ user: u, conv: t.conv });
+    const inConv = (c) => (convMember ? convMember(c, user) : c === 'room' || c.split(/[:|]/).includes(user));
+    for (const [u, t] of typing) if (u !== user && inConv(t.conv)) out.push({ user: u, conv: t.conv });
     return out.concat(extraTyping(user));
   }
   return { set, touch, pollOpened, pollClosed, gone, list, online, typing: setTyping, typingFor };

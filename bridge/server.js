@@ -224,7 +224,8 @@ function roomChanged() { roomVer++; for (const fn of [...roomWaiters]) fn(); }
 // Presence + typing (bridge/presence.js): online / idle / offline from each page's open long poll, who is typing
 // where; Unity counts as typing while she composes (extraTyping).
 const presence = require('./presence')({ accounts, roomChanged: () => roomChanged(),
-  extraTyping: (user) => (agent.running && agentEnabled() && (!agent.target || agent.target === user) ? [{ user: AGENT, conv: agent.target ? 'dm:' + [AGENT, user].sort().join('|') : 'room' }] : []) });
+  convMember: (c, u) => calls.convMember(c, u),
+  extraTyping: (user) => (agent.running && agentEnabled() && (!agent.target || agent.target === user) ? [{ user: AGENT, conv: agent.target ? 'dm:' + [AGENT, user].sort().join('|') : agent.conv || 'room' }] : []) });
 function appendMessage(msg) { msg.rev = ++rev; messages.push(msg); fs.appendFileSync(CHAT_FILE, JSON.stringify(msg) + '\n'); roomChanged(); }
 function saveMessages() { // after an edit / delete: rewrite the whole (small) file atomically
   const tmp = CHAT_FILE + '.tmp';
@@ -234,20 +235,22 @@ function saveMessages() { // after an edit / delete: rewrite the whole (small) f
 }
 // Direct messages: `to` names the one recipient (routing metadata only; the text stays encrypted).
 // Only the sender and the recipient ever receive them.
-const visibleTo = (m, user) => !m.to || m.from === user || m.to === user;
-const convOf = (m) => (m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
+// A channel / group message carries `conv` (bridge/guilds.js) and goes to that conversation's members only.
+const visibleTo = (m, user) => (m.conv ? m.from === user || guilds.isMember(m.conv, user) : !m.to || m.from === user || m.to === user);
+const convOf = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
 // Read receipts: seen[user][conv] = highest seq that user has looked at in that conversation.
 const SEEN_FILE = path.join(CHAT_DIR, 'seen.json');
 let seen = readJson(SEEN_FILE, {});
 let seenTimer = null;
 const saveSeen = () => { clearTimeout(seenTimer); seenTimer = setTimeout(() => writeJson(SEEN_FILE, seen), 500); };
-// Collect the key slots a message may carry: members (and the agent) only, and for a direct
-// message only the sender and the recipient.
-function cleanSlots(keys, from, to) {
-  const slots = {};
+// Collect the key slots a message may carry: members (and the agent) only; for a direct message only
+// the sender and the recipient; for a channel / group only that conversation's members.
+function cleanSlots(keys, from, to, conv = '') {
+  const slots = {}, allowed = conv ? guilds.members(conv) || [] : null;
   for (const [u, k] of Object.entries(keys || {})) {
     if (!(accounts.has(u) || (u === AGENT && agentEnabled()))) continue;
     if (to && u !== from && u !== to) continue;
+    if (allowed && u !== AGENT && u !== from && !allowed.includes(u)) continue;
     if (k && b64(k.iv, 64) && b64(k.wk, 200)) slots[u] = { iv: k.iv, wk: k.wk };
   }
   return slots;
@@ -331,6 +334,8 @@ if (!agentKey || !agentKey.priv || !agentKey.priv.d) {
 }
 const agentPriv = crypto.createPrivateKey({ key: agentKey.priv, format: 'jwk' });
 const agentEnabled = () => !accounts.has(AGENT) && config.roomAgent !== false;
+// Servers, channels and groups (bridge/guilds.js): who is in which conversation; guilds.route() serves /api/guilds*.
+const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJson, agentName: AGENT_NAME, changed: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
 const agentShared = (jwk) => crypto.diffieHellman({ privateKey: agentPriv, publicKey: crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' }) });
 function gcmOpen(key, iv, data, aad) {
   const buf = Buffer.from(data, 'base64'), d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
@@ -386,15 +391,18 @@ function agentContext(m) { // the earlier messages the caller sent along: [{ n: 
 }
 // to = a username for a private answer, '' for the room. extra = routing labels kept outside the
 // encryption: { as: 'Sam · Claude', via: 'sam' } when a Work run's Claude posts through bridge/team.js
-// (the message is still sealed with the hub's own key, exactly like Unity's).
+// (the message is still sealed with the hub's own key, exactly like Unity's); { conv: 'ch:…' / 'grp:…' }
+// posts into a channel / group, wrapped for its members only.
 function agentSay(text, to, extra = {}) {
+  const conv = !to && typeof extra.conv === 'string' && guilds.isGuildConv(extra.conv) ? extra.conv : '';
+  const allowed = conv ? guilds.members(conv) || [] : null;
   const mid = crypto.randomBytes(16).toString('base64url'), aad = bodyAad(AGENT, to, mid);
   const plain = Buffer.from(text, 'utf8'), padded = Buffer.alloc(padBucket(plain.length), 0x20);
   plain.copy(padded);
   const raw = crypto.randomBytes(32), body = gcmSeal(raw, padded, aad), keys = {};
-  const pubs = [[AGENT, agentKey.pub], ...[...accounts.values()].filter((a) => chatKeys[a.username] && (!to || a.username === to)).map((a) => [a.username, chatKeys[a.username].pub])];
+  const pubs = [[AGENT, agentKey.pub], ...[...accounts.values()].filter((a) => chatKeys[a.username] && (!to || a.username === to) && (!allowed || allowed.includes(a.username))).map((a) => [a.username, chatKeys[a.username].pub])];
   for (const [u, pub] of pubs) { const w = gcmSeal(agentWrapKey(pub), raw, aad + '|' + u); keys[u] = { iv: w.iv, wk: w.ct }; }
-  const msg = { seq: ++seq, v: 3, mid, from: AGENT, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys };
+  const msg = { seq: ++seq, v: 3, mid, from: AGENT, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys };
   if (typeof extra.as === 'string' && extra.as) msg.as = extra.as.slice(0, 60);
   if (typeof extra.via === 'string' && accounts.has(extra.via)) msg.via = extra.via;
   appendMessage(msg);
@@ -451,11 +459,12 @@ function agentGreet(acct) {
   go();
 }
 const roomBrain = () => config.roomAgentBrain || 'local';
-// target: username of a private conversation, '' = the room; caller: whose tools / time / place it uses
-function runAgent(target = '', caller = '') {
-  if (agent.running) { agent.queued = true; agent.nextTarget = target; agent.nextCaller = caller; return; }
+// target: username of a private conversation, '' = the room; caller: whose tools / time / place it uses;
+// conv: a channel / group conversation she was called in ('' = the room)
+function runAgent(target = '', caller = '', conv = '') {
+  if (agent.running) { agent.queued = true; agent.nextTarget = target; agent.nextCaller = caller; agent.nextConv = conv; return; }
   agent.queued = false;
-  agent.target = target;
+  agent.target = target; agent.conv = target ? '' : conv;
   if (roomBrain() === 'local') return runAgentLocal(target, caller);
   const args = ['-p', '--output-format', 'json', '--permission-mode', config.permissionMode, '--append-system-prompt', AGENT_SYSTEM];
   // The room agent can be called by anyone in the chat, so it never gets the PC tools or any shell
@@ -478,9 +487,9 @@ function runAgent(target = '', caller = '') {
       try { const r = JSON.parse(line); if (r.session_id) agent.state.sessionId = r.session_id; if (typeof r.result === 'string') { text = r.result; break; } } catch {}
     }
     agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
-    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
+    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
     else roomChanged(); // nothing posted: still take the typing indicator away
-    if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || ''); else setTimeout(maybeRestart, 300);
+    if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || '', agent.nextConv || ''); else setTimeout(maybeRestart, 300);
   };
   child.on('error', (e) => done('(I could not start: ' + e.message + ')'));
   child.on('close', () => done(''));
@@ -496,9 +505,9 @@ function runAgentLocal(target, caller) {
     .catch((e) => `(my brain glitched: ${e.message})`)
     .then((text) => {
       agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
-      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
+      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
       else if (typeof roomChanged === 'function') roomChanged(); // nothing posted: still take the typing indicator away
-      if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || ''); else setTimeout(maybeRestart, 300);
+      if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || '', agent.nextConv || ''); else setTimeout(maybeRestart, 300);
     });
 }
 function agentHear(msg) {
@@ -506,7 +515,7 @@ function agentHear(msg) {
   if (msg.to === AGENT) { if (agentRead(msg)) runAgent(msg.from, msg.from); return; } // a private message to the agent always gets a private answer
   if (msg.to) return; // someone else's private conversation
   const text = agentRead(msg);
-  if (text && AGENT_CALL.test(text)) runAgent('', msg.from);
+  if (text && AGENT_CALL.test(text)) runAgent('', msg.from, msg.conv || ''); // answered where she was called: the room, a channel or a group
 }
 
 // ---------- self-restart ----------
@@ -517,7 +526,7 @@ function agentHear(msg) {
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
-const team = require('./team')({ accounts, agentSay, presenceList: presence.list, displayOf: nameOf, chatKeys });
+const team = require('./team')({ accounts, agentSay, presenceList: presence.list, displayOf: nameOf, chatKeys, guilds });
 // AI providers (bridge/providers.js: the host's Claude by default, plus people's own keys / logins / endpoints)
 // and the per-person OpenAI-compatible API (bridge/openai.js, /v1/*).
 const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts });
@@ -525,7 +534,8 @@ const openai = require('./openai')({ accounts, providers, send: (...a) => send(.
   tunnelUrl: () => (readJson(HUB.TUNNEL_FILE, {}).url || ''), onIdle: () => setTimeout(maybeRestart, 300) });
 
 // Voice / video calls (bridge/calls.js): who is in which call + the encrypted set-up relay; calls.route() serves /api/call/*.
-const calls = require('./calls')({ accounts, config, chatKeys, send: (...a) => send(...a), readBody: (r) => readBody(r), b64 });
+const calls = require('./calls')({ accounts, config, chatKeys, send: (...a) => send(...a), readBody: (r) => readBody(r), b64,
+  extraMember: (c, u) => guilds.isMember(c, u), extraConv: (c) => guilds.isGuildConv(c) && guilds.exists(c) });
 const { convMember } = calls; // "is this person part of that conversation" (also used by shared Work sessions)
 
 // Shared Work sessions (bridge/shares.js): watch-only windows on a person's Work run; shares.route() serves /api/work/*.
@@ -555,7 +565,7 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
 function accountSummary(a) {
   return {
     username: a.username, display: a.display, admin: a.admin,
@@ -744,6 +754,7 @@ const server = http.createServer(async (req, res) => {
 
     // ----- team board -----
     if (p === '/api/board' || p.startsWith('/api/board/')) { if (await board.handle(req, res, p, url, acct)) return; }
+    if (await guilds.route(p, req, res, acct)) return; // servers, channels, groups: /api/guilds*
 
     // ----- chat room -----
     if (p === '/api/room/members' && req.method === 'GET') {
@@ -760,17 +771,20 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/send' && req.method === 'POST') {
-      const { iv, ct, keys, to, v, mid, blob } = await readBody(req);
+      const { iv, ct, keys, to, v, mid, blob, conv: convIn } = await readBody(req);
       const mine = chatKeys[acct.username];
+      // conv: a channel / group this person is in ('room' or nothing = # Everyone; a private message uses `to`)
+      const conv = convIn && convIn !== 'room' ? String(convIn) : '';
+      if (conv && (to || !guilds.isGuildConv(conv) || !guilds.isMember(conv, acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
       if (v !== undefined && !(FORMATS.includes(v) && MID_RE.test(mid || '') && !messages.some((x) => x.mid === mid))) return send(res, 400, { error: 'Bad message.' });
       if (blob !== undefined && !(v === 4 && b64(blob, MAX_CT))) return send(res, typeof blob === 'string' && blob.length > MAX_CT ? 413 : 400, { error: 'That voice clip is too large or malformed (up to about 2 minutes).' });
       if (!mine) return send(res, 400, { error: 'Your chat key is not set up yet.' });
       if (typeof ct === 'string' && ct.length > MAX_CT) return send(res, 413, { error: 'That message is too large (voice clips can be up to about 2 minutes).' });
       if (!b64(iv, 64) || !b64(ct, MAX_CT) || !keys || typeof keys !== 'object') return send(res, 400, { error: 'Bad message.' });
       if (to !== undefined && to !== '' && (to === acct.username || !(accounts.has(to) || (to === AGENT && agentEnabled())))) return send(res, 400, { error: 'Unknown recipient.' });
-      const slots = cleanSlots(keys, acct.username, to || '');
+      const slots = cleanSlots(keys, acct.username, to || '', conv);
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
-      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}) };
+      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}) };
       appendMessage(msg);
       agentHear(msg);
       return send(res, 200, { seq: msg.seq });
@@ -784,7 +798,7 @@ const server = http.createServer(async (req, res) => {
       // an edit keeps the message id; a legacy message gets a fresh one when it is first edited in v3
       if (v !== undefined && !(FORMATS.includes(v) && MID_RE.test(mid || '') && (m.mid ? m.mid === mid : !messages.some((x) => x.mid === mid)))) return send(res, 400, { error: 'Bad message.' });
       if (m.blob && v !== 4) return send(res, 400, { error: 'Bad message.' }); // a clip's caption is edited in v4, which keeps the clip's key
-      const slots = cleanSlots(keys, acct.username, m.to || '');
+      const slots = cleanSlots(keys, acct.username, m.to || '', m.conv || '');
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
       if (v !== undefined) Object.assign(m, { v, mid }); else { delete m.v; delete m.mid; }
       Object.assign(m, { iv, ct, keys: slots, fromPub: mine.pub, editedAt: new Date().toISOString(), rev: ++rev });
@@ -805,14 +819,14 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/room/typing' && req.method === 'POST') {
       const { conv, on } = await readBody(req);
       const dm = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
-      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
+      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username)) && !guilds.isMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
       presence.typing(acct.username, conv, !!on);
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/seen' && req.method === 'POST') {
       const { conv, seq: upTo } = await readBody(req);
       const dm = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
-      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
+      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username)) && !guilds.isMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
       const mine = seen[acct.username] || (seen[acct.username] = {});
       const v = Math.min(Number(upTo) || 0, seq);
       if (v > (mine[conv] || 0)) { mine[conv] = v; saveSeen(); roomChanged(); }
@@ -841,9 +855,9 @@ const server = http.createServer(async (req, res) => {
         }
         const seenOut = {}; // receipts for the conversations this reader is part of
         for (const [u, convs] of Object.entries(seen)) {
-          for (const [c, v] of Object.entries(convs)) if (c === 'room' || c.split(/[:|]/).includes(acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
+          for (const [c, v] of Object.entries(convs)) if (c === 'room' || (c.startsWith('dm:') && c.split(/[:|]/).includes(acct.username)) || guilds.isMember(c, acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
         }
-        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer,
+        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer, guildsVer: guilds.version(),
           online: presence.online(), presence: presence.list(), typing: presence.typingFor(acct.username) });
       };
       if (url.searchParams.get('wait') !== '1') { presence.touch(acct.username); return answer(); }
@@ -916,7 +930,7 @@ const server = http.createServer(async (req, res) => {
         const t = needTarget();
         if (t === acct) return send(res, 400, { error: 'You cannot delete your own account.' });
         if (!t.profile) return send(res, 400, { error: `The "${DEFAULT_USERNAME}" account lives in bridge/ itself and cannot be deleted here.` });
-        stopClaude(t); dropSessions(t.username); shares.stop(t.username); calls.leave(t.username);
+        stopClaude(t); dropSessions(t.username); shares.stop(t.username); calls.leave(t.username); guilds.dropUser(t.username);
         fs.mkdirSync(DELETED_DIR, { recursive: true });
         fs.renameSync(t.files.PROFILE_DIR, path.join(DELETED_DIR, `${t.username}-${Date.now()}`)); // kept, not destroyed
         delete chatKeys[t.username]; writeJson(KEYS_FILE, chatKeys);

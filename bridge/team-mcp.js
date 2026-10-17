@@ -11,9 +11,10 @@ const USER = process.env.MILLS_USER || 'the user';
 const ACCOUNT = process.env.MILLS_ACCOUNT || '';
 
 const TOOLS = [
-  { name: 'team_say', description: `Post a message into the Mills team chat as "${USER} · Claude": to # Everyone (default) or privately to one person (to = their username). Use it to tell the team what you are doing, what landed, and BEFORE any hub restart. Markdown is rendered.`,
-    inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'The message (markdown)' }, to: { type: 'string', description: 'Username for a private message; leave out for everyone' } }, required: ['text'] } },
+  { name: 'team_say', description: `Post a message into the Mills team chat as "${USER} · Claude": to # Everyone (default), privately to one person (to = their username), or into a server channel / group (conv = its id from team_channels, e.g. "ch:mills/dev" or "grp:ab12cd"). Use it to tell the team what you are doing, what landed, and BEFORE any hub restart. Markdown is rendered.`,
+    inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'The message (markdown)' }, to: { type: 'string', description: 'Username for a private message; leave out for everyone' }, conv: { type: 'string', description: 'A channel or group conversation id (see team_channels)' } }, required: ['text'] } },
   { name: 'team_presence', description: 'Who is in Mills right now: every account with online / away / offline, where they are and when they were last seen.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'team_channels', description: `The servers, channels and groups ${USER} is in, with the conversation ids team_say accepts.`, inputSchema: { type: 'object', properties: {} } },
 ];
 
 function reply(rid, result) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: rid, result }) + '\n'); }

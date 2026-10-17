@@ -7,8 +7,12 @@
      the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
      anything except by loading an image; markdown images (https) are allowed for that reason only and
      are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Mills</title>
+<!-- Mills Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/mills.svg" type="image/svg+xml">
+<meta name="theme-color" content="#0f1115">
 <style>
   :root {
     --bg: #0f1115; --panel: #171a21; --line: #2a2f3a; --text: #e6e8ee; --muted: #8b93a7;
@@ -359,8 +363,43 @@
   #recBar span { flex: 1; }
   #recBar button { padding: .25rem .7rem; font-size: .8rem; }
   @keyframes recPulse { 50% { opacity: .3; } }
-  #roomSide { gap: .5rem; }
+  #roomSide { gap: 0; padding: 0; flex-direction: row; width: 266px; }
+  #sideLists { flex: 1; min-width: 0; overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .35rem; }
   #convList { display: flex; flex-direction: column; gap: .25rem; }
+  /* ── servers (rail), channels, groups, members (web/guilds.js) ── */
+  #serverRail { flex: none; width: 56px; display: flex; flex-direction: column; align-items: center; gap: .45rem; padding: .5rem 0; background: color-mix(in srgb, var(--bg) 70%, #000); border-right: 1px solid var(--line); overflow-y: auto; }
+  #serverRail .srv { position: relative; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 0; color: #fff; font-weight: 800; font-size: .8rem; letter-spacing: .02em; display: flex; align-items: center; justify-content: center; transition: border-radius .15s ease, transform .1s ease; }
+  #serverRail .srv:hover, #serverRail .srv.on { border-radius: 14px; }
+  #serverRail .srv.on::before { content: ''; position: absolute; left: -8px; top: 8px; width: 4px; height: 24px; border-radius: 0 4px 4px 0; background: var(--text); }
+  #serverRail .srv.add { background: var(--panel); color: var(--good); border: 1px dashed var(--line); }
+  #serverRail .srv .badge { position: absolute; right: -4px; bottom: -4px; background: var(--bad); color: #fff; border-radius: 999px; font-size: .62rem; padding: 0 .3rem; border: 2px solid var(--bg); }
+  .chHead { display: flex; align-items: center; gap: .3rem; padding: .25rem .25rem .4rem; border-bottom: 1px solid var(--line); margin-bottom: .2rem; } .chHead b { flex: 1; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chSect { display: flex; align-items: center; justify-content: space-between; font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding: .55rem .25rem .15rem; }
+  .ghost.tiny { padding: .05rem .3rem; font-size: .7rem; border: 0; } .ghost.tiny.armed { color: var(--bad); }
+  .cv.ch { padding: .3rem .45rem; } .cv .dot.hash { background: transparent; color: var(--muted); font-weight: 700; width: 1rem; text-align: center; font-size: .95rem; display: inline-flex; justify-content: center; }
+  .cv .chDel { margin-left: auto; opacity: 0; } .cv:hover .chDel { opacity: 1; }
+  .chNone { font-size: .75rem; color: var(--muted); padding: .1rem .45rem; }
+  #memberList { flex: none; width: 220px; border-left: 1px solid var(--line); overflow-y: auto; padding: .6rem .5rem; background: color-mix(in srgb, var(--panel) 80%, var(--bg)); font-size: .85rem; }
+  #memberList .mHead { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: .6rem .3rem .25rem; }
+  #memberList .mRow { display: flex; align-items: center; gap: .5rem; padding: .3rem .4rem; border-radius: 6px; cursor: pointer; } #memberList .mRow:hover { background: var(--line); }
+  #memberList .mName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .botTag { background: var(--accent); color: var(--on-accent); font-size: .6rem; font-weight: 800; border-radius: 4px; padding: 0 .3rem; margin-left: .35rem; vertical-align: middle; letter-spacing: .04em; }
+  /* (web/guilds.js shows the member column in app mode and on screens 1500 px and wider while the Chat screen is open) */
+  /* ── app mode (index.html?app=1, the installed Mills Chat): chat only, Discord-shaped, fancier ── */
+  body.appMode #room header { display: none; }
+  body.appMode #room { --panel: #171b23; --line: #272c37; }
+  body.appMode #roomSide { width: 296px; max-width: 42%; }
+  body.appMode #sideLists { padding: .6rem .5rem; }
+  body.appMode .roomTop { padding: .6rem .9rem; font-size: .95rem; box-shadow: 0 2px 10px rgba(0,0,0,.25); position: relative; z-index: 1; }
+  body.appMode #roomLog { padding: 1rem 1.1rem; gap: .35rem; }
+  body.appMode .rmsg { max-width: 100%; border-left: 0; background: transparent; padding: .35rem .6rem; border-radius: 8px; }
+  body.appMode .rmsg:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  body.appMode .rmsg.me { align-self: stretch; color: var(--text); }
+  body.appMode .rmsg small b { font-size: .95rem; }
+  body.appMode #roomComposer { padding: .5rem 1.1rem 1rem; border-top: 0; }
+  body.appMode #roomComposer textarea { background: #1f2430; border-color: transparent; border-radius: 10px; height: 3rem; }
+  body.appMode #memberList { display: block; }
+  @media (max-width: 900px) { body.appMode #memberList { display: none; } }
   #callSideHost:empty { display: none; }
   #callCore { display: flex; flex-direction: column; gap: .4rem; font-size: .8rem; min-height: 0; flex: 1; }
   #callFloatBody { flex: 1; min-height: 0; display: flex; padding: .4rem; overflow: auto; }
@@ -628,7 +667,10 @@
 <!-- The team chat itself. One copy, moved between the Chat screen, the Work pane and the floating window. -->
 <div id="roomPark" hidden>
   <div id="roomCore">
-    <aside id="roomSide"><div id="callSideHost"></div><div id="convList"></div></aside>
+    <aside id="roomSide">
+      <nav id="serverRail" aria-label="Servers"></nav>
+      <div id="sideLists"><div id="callSideHost"></div><div id="chanList"></div><div id="convList"></div></div>
+    </aside>
     <div class="roomMain">
       <div class="roomTop">
         <button class="ghost" id="roomSideToggle" title="Show / hide conversations" aria-label="Show / hide conversations"><svg class="ic"><use href="#i-menu"/></svg></button>
@@ -653,6 +695,8 @@
     </div>
     <!-- Theater: the call panel moves here and takes most of the width; the chat stays on the left -->
     <div id="callStage" hidden></div>
+    <!-- who is in this conversation (app mode and wide screens): web/guilds.js -->
+    <aside id="memberList" hidden></aside>
   </div>
 </div>
 
@@ -720,6 +764,8 @@
       <hr>
       <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to Mills: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
         <div id="apiBox" class="apiBox"></div></div>
+      <div class="setSection"><b>Mills Chat app</b> — the chat side of Mills as its own installed app on Windows or Linux (servers, channels, groups, private messages, calls, Unity).
+        <div id="appBox" class="apiBox"></div></div>
       <div class="setSection"><b>My AIs</b> — hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.
         <div id="provBox" class="provBox"></div></div>
     </div>
@@ -1304,7 +1350,7 @@ async function enter() {
   myShare = me.share || '';
   loadLayout();
   currentConv = store.get('mills.conv.' + me.username) || 'room';
-  showScreen('menu');
+  showScreen(APP_MODE ? 'room' : 'menu'); // the installed Mills Chat app is the chat and nothing else
   startRoomPolling();
   callPollLoop();
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
@@ -2024,14 +2070,15 @@ const memberOf = (u) => roomMembers.find((x) => x.username === u);
 const nickOf = (u) => { const m = memberOf(u); return m ? (m.nick || m.display) : u; };
 const colorIndex = (u) => { const m = memberOf(u); return m && Number.isInteger(m.color) ? m.color : hashName(u) % PALETTE.length; };
 const colorOf = (u) => PALETTE[colorIndex(u)][lightTheme ? 1 : 0];
-const convOfMsg = (m) => (m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
+const convOfMsg = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
 // Who a message is shown as: normally the sender; a Work run's Claude posts through the hub's key with
 // `as` = "<person> · Claude" and `via` = that person (whose colour it takes).
 const authorOf = (m) => m.as || nickOf(m.from);
 const authorColor = (m) => colorOf(m.via || m.from);
 const dmConv = (u) => 'dm:' + [me.username, u].sort().join('|');
-const convPeer = (c) => (c === 'room' ? '' : c.slice(3).split('|').find((u) => u !== me.username) || '');
-const convLabel = (c) => (c === 'room' ? '# Everyone' : '@ ' + nickOf(convPeer(c)) + ' (private)');
+const isGuildConv = (c) => /^(ch|grp):/.test(String(c || '')); // a server channel or a group (web/guilds.js)
+const convPeer = (c) => (c === 'room' || isGuildConv(c) ? '' : c.slice(3).split('|').find((u) => u !== me.username) || '');
+const convLabel = (c) => (c === 'room' ? '# general' : isGuildConv(c) ? GUILDS.label(c) : '@ ' + nickOf(convPeer(c)) + ' (private)');
 const clipLen = (s) => Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
 const snippet = (rec) => (rec.m.deleted ? 'message deleted'
   : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
@@ -2137,8 +2184,8 @@ async function renderConvList() {
     const badge = document.createElement('span'); badge.className = 'badge'; badge.dataset.convBadge = conv; badge.hidden = true;
     b.append(dot, nm, badge); b.onclick = () => selectConv(conv); box.append(b);
   };
-  add('room', '# Everyone', null, 'the whole team');
-  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'AI · ' : 'private · ') + '@' + m.username);
+  // (# general and the other channels / groups are drawn by web/guilds.js above this list)
+  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'BOT · ' : 'private · ') + '@' + m.username);
   const det = document.createElement('details'); const sum = document.createElement('summary'); sum.textContent = 'Key fingerprints';
   det.append(sum);
   for (const m of roomMembers) {
@@ -2161,18 +2208,20 @@ async function renderConvList() {
   updateUnread();
 }
 function selectConv(conv) {
-  if (conv !== 'room' && !memberOf(convPeer(conv))) conv = 'room';
+  if (conv !== 'room' && !(isGuildConv(conv) ? GUILDS.has(conv) : memberOf(convPeer(conv)))) conv = 'room';
   currentConv = conv; store.set('mills.conv.' + me.username, conv);
   if (isNarrow()) $('roomCore').classList.add('noside'); // phone: picking a conversation closes the drawer
   cancelCompose(); sendTyping(false);
   $('convName').textContent = convLabel(conv);
   $('roomInput').placeholder = conv === 'room' ? 'Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)'
+    : isGuildConv(conv) ? 'Message ' + convLabel(conv) + '…  (its members only; @unity to call her here)'
     : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
   const log = $('roomLog'); log.innerHTML = '';
   for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
   log.scrollTop = log.scrollHeight;
-  for (const b of $('convList').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
-  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence();
+  for (const b of $('roomSide').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
+  const sv = GUILDS.serverOf(conv); if (sv && GUILDS.state.server !== sv) { GUILDS.state.server = sv; GUILDS.render(); }
+  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers();
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
@@ -2194,6 +2243,7 @@ async function applyRoom(d) {
   if (d.latestRev < roomRev) { resetRoomData(); return applyRoom(await json('/api/room/messages?rev=0')); } // an admin cleared the history
   roomVer = d.ver || 0;
   if (d.keysVer && d.keysVer !== roomKeysVer) { const first = !roomKeysVer; roomKeysVer = d.keysVer; if (!first) await refreshMembers(); }
+  if (d.guildsVer && d.guildsVer !== GUILDS.state.ver) await GUILDS.refresh(); // a server / channel / group changed somewhere
   seenMap = d.seen || {};
   onShares(d.shares || []);
   presenceMap = Object.fromEntries((d.presence || []).map((p) => [p.user, p]));
@@ -2290,7 +2340,7 @@ function renderMsg(rec, bulk) {
   el.dataset.seq = m.seq; el.style.borderLeftColor = authorColor(m); el.textContent = '';
   const head = document.createElement('small');
   const who = document.createElement('b'); who.textContent = authorOf(m); who.style.color = authorColor(m); who.title = m.as ? 'Posted by ' + nickOf(m.via || m.from) + '\'s Claude from a Work session' : '@' + m.from;
-  if (m.as) who.append(ic('bot', 'trail'));
+  if (m.as || (memberOf(m.from) || {}).agent) { const tag = document.createElement('span'); tag.className = 'botTag'; tag.textContent = 'BOT'; who.append(tag); } // Unity and the team's Claudes are bots here
   const dt = new Date(m.ts), when = document.createElement('time');
   when.dateTime = m.ts; when.textContent = fmtTime(dt); when.title = dt.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
   head.append(who, ' · ', when);
@@ -2341,6 +2391,7 @@ function jumpTo(seq) {
 // Receipts: "seen alex · unseen sam" under your own messages (and in every message's menu).
 function participants(conv) {
   if (conv === 'room') return roomMembers.filter((x) => !x.agent).map((x) => x.username);
+  if (isGuildConv(conv)) return GUILDS.members(conv).filter((u) => !(memberOf(u) || {}).agent);
   return conv.slice(3).split('|').filter((u) => !(memberOf(u) || {}).agent);
 }
 function seenText(rec) {
@@ -2539,8 +2590,9 @@ async function finishClip() {
     const clip = HAS_DEFLATE ? await sealBlob(buf, mid) : null;
     const a = clip ? { m: mime, k: clip.k, s: secs } : { m: mime, d: bytesToB64(buf), s: secs };
     const payload = { v: 2, t: caption, a, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) };
-    const sealed = await sealFor(JSON.stringify(payload), to, forAgent, mid, clip ? clip.blob : undefined);
-    await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
+    const gconv = isGuildConv(currentConv) ? currentConv : '';
+    const sealed = await sealFor(JSON.stringify(payload), to, forAgent, mid, clip ? clip.blob : undefined, gconv);
+    await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}), ...(gconv ? { conv: gconv } : {}) }) });
     if (caption) $('roomInput').value = '';
     cancelCompose(); await pollRoom();
   } catch (err) { sysRoom('Could not send the voice clip: ' + err.message); }
@@ -2651,7 +2703,7 @@ function startRoomPolling() {
   stopRoomPolling();
   const gen = ++roomGen;
   // also runs while the tab is in the background, so sounds still play
-  loadLocalChatKey().then(refreshMembers).then(() => pollRoom()).then(() => selectConv(currentConv)).catch(() => {}).then(() => roomLoop(gen));
+  loadLocalChatKey().then(refreshMembers).then(() => GUILDS.refresh()).then(() => pollRoom()).then(() => selectConv(currentConv)).catch(() => {}).then(() => roomLoop(gen));
 }
 function stopRoomPolling() { roomGen++; roomVer = 0; roomKeysVer = 0; }
 
@@ -2722,7 +2774,8 @@ function agentCtx(conv) {
 // v4 (browsers with CompressionStream): the JSON is deflated BEFORE encryption, so the hub only ever
 // sees compressed + padded ciphertext. A voice clip's audio goes as a separate ciphertext (`blob`)
 // with its own key carried inside the encrypted body; it is only downloaded when someone plays it.
-async function sealFor(plain, to, forAgent, mid = newMid(), blob) {
+// conv: a channel / group → the key is wrapped for its members only (the hub drops anything else anyway)
+async function sealFor(plain, to, forAgent, mid = newMid(), blob, conv = '') {
   await refreshMembers();
   if (to && changedKeys.has(to)) throw new Error(nickOf(to) + '\'s key changed: compare fingerprints and trust the new key first (Key fingerprints).');
   const v = HAS_DEFLATE ? 4 : 3, aad = bodyAad(me.username, to, mid, v);
@@ -2730,9 +2783,10 @@ async function sealFor(plain, to, forAgent, mid = newMid(), blob) {
   const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
   const body = v === 4 ? frame(await deflate(enc.encode(plain))) : padPlain(plain);
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, k, body);
-  const keys = {};
+  const keys = {}, allowed = isGuildConv(conv) ? GUILDS.members(conv) : null;
   for (const m of roomMembers) {
     if (to && m.username !== to && m.username !== me.username) continue;
+    if (allowed && !m.agent && m.username !== me.username && !allowed.includes(m.username)) continue;
     if (m.agent && !forAgent) continue;
     if (m.username !== me.username && changedKeys.has(m.username)) continue; // never encrypt to an unverified key
     const pub = m.username === me.username ? chatPubJwk : m.pub;
@@ -2760,15 +2814,15 @@ $('roomComposer').addEventListener('submit', async (e) => {
   try {
     if (editingSeq) {
       const rec = msgs.get(editingSeq);
-      const eto = rec ? rec.m.to || '' : '';
+      const eto = rec ? rec.m.to || '' : '', econv = rec ? rec.m.conv || '' : '';
       // a voice clip keeps its audio: v4 clips keep their key (the clip itself stays on the hub), older ones their data
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}), ...(rec && rec.audio ? { a: rec.audio } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined);
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}), ...(rec && rec.audio ? { a: rec.audio } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined, undefined, econv);
       await json('/api/room/edit', { method: 'POST', body: JSON.stringify({ seq: editingSeq, ...sealed }) });
     } else {
-      const to = convPeer(currentConv), forAgent = callsAgent(text, to);
+      const to = convPeer(currentConv), forAgent = callsAgent(text, to), gconv = isGuildConv(currentConv) ? currentConv : '';
       if (forAgent) agentWaitNext = { conv: currentConv, after: Math.max(0, ...msgs.keys()), at: Date.now() };
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) }), to, forAgent);
-      await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) }), to, forAgent, undefined, undefined, gconv);
+      await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}), ...(gconv ? { conv: gconv } : {}) }) });
     }
     editingSeq = null; $('roomInput').value = ''; cancelCompose();
     await pollRoom();
@@ -2861,7 +2915,7 @@ function renderPresence() {
     dot.classList.remove('on', 'idle', 'off'); dot.classList.add(st.cls); dot.title = st.text;
     if (sub && !(memberOf(b.dataset.user) || {}).agent) sub.textContent = st.text;
   }
-  renderWho();
+  renderWho(); GUILDS.renderMembers();
   const here = typingList.filter((t) => t.conv === currentConv), who = here.map((t) => nickOf(t.user));
   const line = $('typingLine');
   if (!who.length) { line.hidden = true; line.classList.remove('thinking'); return; }
@@ -3000,7 +3054,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderApiAccess(); renderProviders();
+  renderApiAccess(); renderProviders(); renderAppCard();
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
@@ -3338,5 +3392,8 @@ connect().then((ok) => { if (ok && token) enter().catch(() => signOut()); });
 </script>
 <!-- voice / video calls, theater and screen share: web/calls.js (loaded after the page script, uses its helpers) -->
 <script src="calls.js"></script>
+<!-- servers, channels, groups, member column: web/guilds.js · app mode + install: web/app.js -->
+<script src="guilds.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

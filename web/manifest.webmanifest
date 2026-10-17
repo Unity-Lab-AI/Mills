@@ -1,0 +1,17 @@
+{
+  "name": "Mills Chat",
+  "short_name": "Mills Chat",
+  "description": "The Unity AI Lab team chat: servers, channels, groups, private messages, calls and Unity, end-to-end encrypted.",
+  "id": "./index.html?app=1",
+  "start_url": "./index.html?app=1",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "categories": ["social", "productivity"],
+  "icons": [
+    { "src": "icons/mills.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/mills-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
