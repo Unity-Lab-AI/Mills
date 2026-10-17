@@ -66,6 +66,20 @@ process.stdin.on('end', async () => {
     const after = await tool('task_get', { id });
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLAN:' + JSON.stringify({ id, dueAt: made.ok ? made.result.task.dueAt : null, calDays: cal.ok ? cal.result.days.map((d) => d.day + ':' + d.tasks.length) : cal.error, movedTo: moved.ok ? moved.result.task.status : moved.error, redue: redue.ok ? redue.result.task.dueAt : redue.error, undue: undue.ok ? redue.result && undue.result.task.dueAt : undue.error, badDue: badDue.ok ? 'accepted' : badDue.error, board: nb.ok ? nb.result.boards.map((b) => b.id) : nb.error, deleted: gone.ok, afterGet: after.ok ? 'still there' : after.error }) }] } });
   }
+  // "NOTESTOOL": team notes through the team MCP relay: write, list with search, read, delete.
+  if (input.includes('NOTESTOOL')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const w = await tool('notes_write', { path: 'plans/Claude Plan.md', text: '# Plan\n\nneedle-notes-r118 by claude' });
+    const l = await tool('notes_list', { q: 'needle-notes-r118' });
+    const r = await tool('notes_read', { path: 'plans/claude plan.md' });
+    const bad = await tool('notes_write', { path: '../escape.md', text: 'x' });
+    const d = await tool('notes_delete', { path: 'plans/Claude Plan.md' });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'NOTES:' + JSON.stringify({ wrote: w.ok && w.result.by, listed: l.ok ? l.result.notes.map((n) => n.path) : l.error, read: r.ok ? r.result.text.includes('needle-notes-r118') : r.error, bad: bad.ok, deleted: d.ok }) }] } });
+  }
   // "TEAMMORE": the wider team tools: a channel + a group made by Claude, the hub picture, past-session search, the AIs available.
   if (input.includes('TEAMMORE')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
