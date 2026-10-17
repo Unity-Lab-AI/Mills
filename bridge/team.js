@@ -7,7 +7,7 @@
 // answer these (they come from the agent's own key), so a Claude run can never call her by accident.
 'use strict';
 
-module.exports = function createTeam({ accounts, agentSay, presenceList, displayOf, chatKeys, guilds = null, hub = {} }) {
+module.exports = function createTeam({ accounts, agentSay, presenceList, displayOf, chatKeys, guilds = null, hub = {}, notes = null }) {
   // hub: optional getters for the wider picture: callsState(user), sharesFor(user), usageStatus(acct), archiveSearch(acct, q), providersList(user)
   const ok = (result) => ({ ok: true, result });
   const no = (error) => ({ ok: false, error });
@@ -73,6 +73,7 @@ module.exports = function createTeam({ accounts, agentSay, presenceList, display
   };
   // name + args from the MCP relay; acct = the account whose Work run this is
   function call(name, args, acct) {
+    if (/^notes_/.test(name)) return notes ? notes.call(name, args || {}, acct) : no('Notes are not available.'); // bridge/notes.js
     const t = tools[name];
     if (!t) return no('Unknown team tool: ' + name);
     try { return t(acct, args || {}); } catch (e) { return no(e.message); }
