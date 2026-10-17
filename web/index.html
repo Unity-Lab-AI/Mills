@@ -7,7 +7,7 @@
      the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
      anything except by loading an image; markdown images (https) are allowed for that reason only and
      are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Mills</title>
 <style>
   :root {
@@ -62,6 +62,8 @@
   .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
   @keyframes dotPulse { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-.2rem); } }
   .msg.thinking { color: var(--muted); font-style: italic; display: flex; align-items: center; animation: msgIn .2s ease; }
+  /* the team chat shows the same bubble while Unity composes (the typing line takes the Work bubble's look) */
+  .typingLine.thinking { margin: 0 .8rem .3rem; padding: .5rem .8rem; border-radius: 10px; background: var(--panel); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); align-self: flex-start; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
   #shell { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -2228,11 +2230,18 @@ function hostImage(ref) { // a picture made by the host's image engine, loaded w
    .catch(() => { img.replaceWith(document.createTextNode('(picture no longer on the host)')); imgCache.delete(ref); });
   return img;
 }
-function ytPlayer(id) { // a YouTube video Unity picked, played right here (privacy-enhanced embed)
+function ytPlayer(id, autoplay = true) { // a YouTube video, played right here (privacy-enhanced embed; the only frame the CSP allows)
   const f = document.createElement('iframe'); f.className = 'ytPlayer';
-  f.src = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) + '?autoplay=1&rel=0';
-  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen'; f.allowFullscreen = true; f.title = 'YouTube video';
+  f.src = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) + '?rel=0' + (autoplay ? '&autoplay=1' : '');
+  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen'; f.allowFullscreen = true; f.title = 'YouTube video'; f.loading = 'lazy';
+  f.addEventListener('click', (e) => e.stopPropagation());
   return f;
+}
+// YouTube links in a team-chat message (watch?v=, youtu.be/, shorts/, embed/, live/) → the video ids, in order, no duplicates
+function ytIds(text) {
+  const out = [];
+  for (const m of String(text || '').matchAll(/https?:\/\/(?:www\.|m\.|music\.)?(?:youtube\.com\/(?:watch\?(?:[^\s#]*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([\w-]{11})/g)) if (!out.includes(m[1])) out.push(m[1]);
+  return out.slice(0, 3);
 }
 function withImages(el, text, render) { // split out [[image:ref]] markers, render the rest as usual
   const parts = String(text).split(/\[\[(image:[a-z0-9-]+\/[a-z0-9-]+|youtube:[\w-]{11})\]\]/);
@@ -2275,7 +2284,10 @@ function renderMsg(rec, bulk) {
   const body = document.createElement('div'); body.className = 'body';
   if (m.deleted) body.textContent = 'message deleted';
   else if (rec.locked) body.append(ic('lock', 'lead'), rec.text); // could not be opened: say why, never render it
-  else renderRich(body, rec.text);
+  else {
+    renderRich(body, rec.text);
+    for (const vid of ytIds(rec.text)) body.append(ytPlayer(vid, false)); // a YouTube link posted to the team plays right here (no autoplay)
+  }
   el.append(body);
   if (rec.audio && !m.deleted) {
     if (rec.url || rec.audio.d) {
@@ -3189,11 +3201,16 @@ function renderPresence() {
     if (sub && !(memberOf(b.dataset.user) || {}).agent) sub.textContent = st.text;
   }
   renderWho();
-  const who = typingList.filter((t) => t.conv === currentConv).map((t) => nickOf(t.user));
+  const here = typingList.filter((t) => t.conv === currentConv), who = here.map((t) => nickOf(t.user));
   const line = $('typingLine');
-  if (!who.length) { line.hidden = true; return; }
+  if (!who.length) { line.hidden = true; line.classList.remove('thinking'); return; }
   line.textContent = ''; line.hidden = false;
-  const txt = who.length === 1 ? who[0] + ' is typing' : who.length === 2 ? who.join(' and ') + ' are typing' : who.slice(0, 2).join(', ') + ' and ' + (who.length - 2) + ' more are typing';
+  // Unity composing an answer gets the same "thinking" bubble Work shows for Claude; people get the typing line
+  const ai = here.some((t) => (memberOf(t.user) || {}).agent);
+  line.classList.toggle('thinking', ai);
+  if (ai) line.append(ic('bot', 'lead'));
+  const verb = ai ? 'thinking' : 'typing';
+  const txt = who.length === 1 ? who[0] + ' is ' + verb : who.length === 2 ? who.join(' and ') + ' are ' + verb : who.slice(0, 2).join(', ') + ' and ' + (who.length - 2) + ' more are ' + verb;
   const dots = document.createElement('span'); dots.className = 'dots'; dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
   line.append(txt, dots);
   const log = $('roomLog'); if (log.scrollHeight - log.scrollTop - log.clientHeight < 80) log.scrollTop = log.scrollHeight;
