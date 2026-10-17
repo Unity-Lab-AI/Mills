@@ -37,6 +37,16 @@ node bridge/restart.js
 
 The hub restarts itself the moment nobody has a Claude reply in progress, under the same tunnel, so the address does not change and the web app shows "Mills is restarting" for a second and carries on. `node bridge/restart.js --hard` closes the window and relaunches `start.bat` (new tunnel address, found again automatically) for a wedged hub; `--hard --delay 30` does that 30 s later from a detached helper so the Claude run that asked for it can finish its reply; `--stop` closes it without relaunching. Progress of a hard restart is written to `bridge/restart.log`. Admins can also press **Restart hub** in the Admin section.
 
+### A fixed address (named Cloudflare tunnel), when the host wants one
+
+By default the hub opens a **quick tunnel**: a random `*.trycloudflare.com` address, published to the gist each start and found again by the web app. A **named tunnel** gives Mills a fixed address on a domain the host owns; everything for it is in place, the host only needs the Cloudflare side:
+
+1. Once, on the host: `cloudflared tunnel login`, `cloudflared tunnel create mills`, `cloudflared tunnel route dns mills mills.example.com` (your domain in Cloudflare).
+2. In `bridge/config.json`: `"tunnelName": "mills", "tunnelHostname": "mills.example.com"`. `run.js` then runs `cloudflared tunnel run mills` and publishes `https://mills.example.com` instead of parsing a quick-tunnel address.
+3. On GitHub, Settings → Secrets and variables → Actions → Variables: `MILLS_HUB_HOST` = `https://mills.example.com`, then redeploy (push to `main`). The Pages workflow writes that host into the page's Content-Security-Policy `connect-src` and its hub-address check, so the page may talk to it; without the variable only `*.trycloudflare.com` addresses are accepted, exactly as before.
+
+Both kinds work on Windows and Linux; nothing else changes (sign-in, encryption, the gist lookup).
+
 ### Accounts
 
 Admins manage accounts from **Admin** in the web app: create an account (a 20-character password is generated and shown once), give someone a new password, reset a device lock, sign someone out, stop their Claude run, delete an account (its folder moves to `bridge/profiles-deleted/`, nothing is destroyed). Admin can also clear the chat history.

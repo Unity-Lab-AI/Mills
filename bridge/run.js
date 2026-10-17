@@ -60,10 +60,23 @@ function publishUrl(publicUrl) {
     console.log(`${tag} Published tunnel URL for the web app.`);
   });
 }
+// Two kinds of tunnel. Default: a QUICK tunnel (random *.trycloudflare.com address, published to the gist
+// each start). With "tunnelName" + "tunnelHostname" in config.json: a NAMED tunnel (the host ran
+// `cloudflared tunnel login`, `cloudflared tunnel create <name>` and `cloudflared tunnel route dns <name> <hostname>`
+// once), whose address never changes; it is published the same way, and the web app must be deployed
+// with the MILLS_HUB_HOST repository variable set to https://<hostname> so its security policy allows it.
 function startTunnel() {
-  cf = spawn(config.cloudflared, ['tunnel', '--config', path.join(ROOT, 'cloudflared-quick.yml'),
-    '--no-autoupdate', '--url', `http://127.0.0.1:${config.port}`], { windowsHide: true });
+  const named = !!config.tunnelName;
+  const args = named
+    ? ['tunnel', '--no-autoupdate', 'run', '--url', `http://127.0.0.1:${config.port}`, String(config.tunnelName)]
+    : ['tunnel', '--config', path.join(ROOT, 'cloudflared-quick.yml'), '--no-autoupdate', '--url', `http://127.0.0.1:${config.port}`];
+  cf = spawn(config.cloudflared, args, { windowsHide: true });
   let announced = false;
+  if (named) {
+    const host = String(config.tunnelHostname || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    if (!host) console.log(`${tag} tunnelName is set but tunnelHostname is not: add "tunnelHostname": "<hostname>" to config.json so the address can be published.`);
+    else { announced = true; console.log(`${tag} Public URL (named tunnel): https://${host}`); publishUrl('https://' + host); }
+  }
   const scan = (d) => {
     const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(String(d));
     if (m && !announced) { announced = true; console.log(`${tag} Public URL: ` + m[0]); publishUrl(m[0]); }
