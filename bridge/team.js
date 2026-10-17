@@ -7,21 +7,31 @@
 // answer these (they come from the agent's own key), so a Claude run can never call her by accident.
 'use strict';
 
-module.exports = function createTeam({ accounts, agentSay, presenceList, displayOf, chatKeys }) {
+module.exports = function createTeam({ accounts, agentSay, presenceList, displayOf, chatKeys, guilds = null }) {
   const ok = (result) => ({ ok: true, result });
   const no = (error) => ({ ok: false, error });
   const tools = {
     team_say(acct, args) {
       const text = String(args.text || '').trim().slice(0, 20000);
       if (!text) return no('team_say needs "text".');
-      const to = String(args.to || '').trim().toLowerCase();
+      const to = String(args.to || '').trim().toLowerCase(), conv = String(args.conv || '').trim();
+      if (to && conv) return no('Give either "to" (a private message) or "conv" (a channel / group), not both.');
       if (to) {
         if (!accounts.has(to)) return no(`No account called "${to}".`);
         if (!chatKeys[to]) return no(`${displayOf(to)} has no chat key yet (they have not signed in since chat was added), so nothing can be encrypted for them.`);
       }
+      if (conv && conv !== 'room') {
+        if (!guilds || !guilds.isGuildConv(conv) || !guilds.exists(conv)) return no(`No conversation "${conv}" (use team_channels to list them).`);
+        if (!guilds.isMember(conv, acct.username)) return no(`${displayOf(acct.username)} is not in ${conv}.`);
+      }
       const label = displayOf(acct.username) + ' · Claude';
-      const seq = agentSay(text, to, { as: label, via: acct.username });
-      return ok({ posted: true, seq, as: label, to: to || 'everyone' });
+      const seq = agentSay(text, to, { as: label, via: acct.username, conv: conv && conv !== 'room' ? conv : '' });
+      return ok({ posted: true, seq, as: label, to: to || (conv && conv !== 'room' ? conv : 'everyone') });
+    },
+    team_channels(acct) { // the servers, channels and groups this person is in (conv ids for team_say)
+      if (!guilds) return ok({ servers: [], groups: [] });
+      const v = guilds.view(acct.username);
+      return ok({ servers: v.servers.map((s) => ({ id: s.id, name: s.name, members: s.members, channels: s.channels.map((c) => ({ name: '#' + c.name, conv: c.conv, topic: c.topic })) })), groups: v.groups.map((g) => ({ name: g.name, conv: g.conv, members: g.members })) });
     },
     team_presence(acct) {
       const now = Date.now();
