@@ -46,6 +46,41 @@ process.stdin.on('end', async () => {
     const noted = await tool('task_update', { id, appendNote: 'progress from the agent r70' });
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'BOARD:' + JSON.stringify({ id, made: made.ok, claimed: claimed.ok, noted: noted.ok }) }] } });
   }
+  // "BOARDPLAN": plan with the board like Claude would: create with a text due date, read the calendar,
+  // move a task, delete one, make a board, and set / clear a due date by text.
+  if (input.includes('BOARDPLAN')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.board.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/board', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const made = await tool('task_create', { title: 'plan r116', due: 'tomorrow', priority: 2 });
+    const id = made.ok ? made.result.task.id : '';
+    const cal = await tool('board_calendar', { from: 'today', to: '+7d' });
+    const moved = await tool('task_move', { id, status: 'review', index: 0 });
+    const redue = await tool('task_update', { id, due: 'next friday' });
+    const undue = await tool('task_update', { id, due: 'none' });
+    const badDue = await tool('task_update', { id, due: 'someday maybe' });
+    const nb = await tool('board_new', { name: 'Plan Board r116' });
+    const gone = await tool('task_delete', { id });
+    const after = await tool('task_get', { id });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLAN:' + JSON.stringify({ id, dueAt: made.ok ? made.result.task.dueAt : null, calDays: cal.ok ? cal.result.days.map((d) => d.day + ':' + d.tasks.length) : cal.error, movedTo: moved.ok ? moved.result.task.status : moved.error, redue: redue.ok ? redue.result.task.dueAt : redue.error, undue: undue.ok ? redue.result && undue.result.task.dueAt : undue.error, badDue: badDue.ok ? 'accepted' : badDue.error, board: nb.ok ? nb.result.boards.map((b) => b.id) : nb.error, deleted: gone.ok, afterGet: after.ok ? 'still there' : after.error }) }] } });
+  }
+  // "TEAMMORE": the wider team tools: a channel + a group made by Claude, the hub picture, past-session search, the AIs available.
+  if (input.includes('TEAMMORE')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const ch = await tool('team_channel_create', { name: 'Claude Made', topic: 'r116' });
+    const said = ch.ok ? await tool('team_say', { text: 'hello channel r116', conv: ch.result.conv }) : ch;
+    const grp = await tool('team_group_create', { members: ['t-user'], name: 'claude group r116' });
+    const st = await tool('hub_status', {});
+    const se = await tool('sessions_search', { q: 'needle-r116' });
+    const pv = await tool('my_providers', {});
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'MORE:' + JSON.stringify({ conv: ch.ok ? ch.result.conv : ch.error, said: said.ok, grp: grp.ok ? grp.result.group.members : grp.error, people: st.ok ? st.result.people.length : st.error, usage: st.ok && st.result.usage ? Object.keys(st.result.usage) : null, hits: se.ok ? se.result.items.length : se.error, providers: pv.ok ? pv.result.providers.map((p) => p.id) : pv.error }) }] } });
+  }
   // "TEAMSAY": post into the team chat through the team MCP relay, like Claude in a Work run: one
   // message for everyone, one private to t-user, one to a user that does not exist (must fail).
   if (input.includes('TEAMSAY')) {

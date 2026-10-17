@@ -972,6 +972,26 @@ async function run() {
     && agentBlocks.status === 409 && /progress from the agent r70/.test(agentDetail.body || '') && bDel.status === 409 && bDel2.status === 200 && bGone && onDiskB.deleted === true
     && /board-mcp\.js/.test(mcpRt) && /mcp__board/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8')),
     `create ${bt.status}, claim ${bClaim.status}, blocked ${bBlockedU.status}/${bClaimU.status}, stale ${bStale.status}, due ${d1.getMonth() + 1}/${d1.getDate()} → ${d2.getMonth() + 1}/${d2.getDate()} (leap ${leap}), agent ${JSON.stringify(agentOut)}, agent-held edit ${agentBlocks.status}`);
+  // Claude plans with the board + calendar (task_create / task_update with text due dates, board_calendar, task_move, task_delete, board_new) and reaches the wider hub (channels / groups it makes, hub_status, sessions_search, my_providers).
+  await call('/api/archive/save', A, { title: 'Needle session', transcript: [{ cls: 'me', text: 'remember needle-r116' }] });
+  const planRun = await chat(A, 'BOARDPLAN please', { fresh: true });
+  const plan = JSON.parse((texts(planRun.events).match(/PLAN:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(17, 0, 0, 0);
+  const moreRun = await chat(A, 'TEAMMORE please', { fresh: true });
+  const more = JSON.parse((texts(moreRun.events).match(/MORE:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+  const { parseDue } = require(path.join(BRIDGE, 'board.js'));
+  let badThrows = false; try { parseDue('someday maybe'); } catch { badThrows = true; }
+  const nextFri = parseDue('next friday'), plus3 = parseDue('+3d'), iso = parseDue('2031-03-04 09:30');
+  check('R116', 'Claude plans the board + calendar: text due dates (tomorrow, next friday, +3d, YYYY-MM-DD HH:MM, none; a typo is refused), board_calendar groups by day, task_move changes the column, task_update re-dates / clears, board_new, task_delete leaves a tombstone; wider reach: team_channel_create (+ a post into it), team_group_create, hub_status (people + usage windows), sessions_search finds own past sessions, my_providers lists the host Claude',
+    plan.id && plan.dueAt === tomorrow.getTime() && Array.isArray(plan.calDays) && plan.calDays.some((d) => d.startsWith(new Date(tomorrow).toISOString().slice(0, 10)) || d.includes(':1')) && plan.movedTo === 'review'
+    && typeof plan.redue === 'number' && new Date(plan.redue).getDay() === 5 && plan.undue === null && /Could not read the due date/.test(plan.badDue) && Array.isArray(plan.board) && plan.board.includes('plan-board-r116') && plan.deleted === true && /No such task/.test(plan.afterGet)
+    && badThrows && new Date(nextFri).getDay() === 5 && nextFri > Date.now() && Math.round((plus3 - parseDue('today')) / 86400e3) === 3 && new Date(iso).getHours() === 9 && new Date(iso).getMinutes() === 30
+    && more.conv === 'ch:mills/claude-made' && more.said === true && Array.isArray(more.grp) && more.grp.includes('t-admin') && more.grp.includes('t-user') && more.people >= 3 && Array.isArray(more.usage) && more.usage.includes('fiveHour') && more.hits === 1 && Array.isArray(more.providers) && more.providers.includes('host'),
+    `plan ${JSON.stringify(plan).slice(0, 260)} | more ${JSON.stringify(more).slice(0, 200)}`);
+  const boardJs117 = fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8');
+  check('R117', '[static] board, ideas from HyperProductivityManager: due-today / overdue reminders once a day for tasks assigned to you, Delegate (assignee + signed hand-over note), whole-board activity dialog, "/" focuses the filter, Ctrl+1/2/3 switch Board / Calendar / Work',
+    /function remindDue\(/.test(boardJs117) && /mills\.remind\./.test(boardJs117) && /new Notification\(/.test(boardJs117) && /async function delegate\(/.test(boardJs117) && /appendNote: 'Handed to '/.test(boardJs117)
+    && /function showActivity\(/.test(boardJs117) && /act\.onclick = showActivity/.test(boardJs117) && /\$\('bdFilter'\)\.focus\(\)/.test(boardJs117) && /\{ 1: 'board', 2: 'cal', 3: 'shell' \}/.test(boardJs117));
   check('R100', '[static] Board + Calendar in the main menu, web/board.js loaded, Board / Calendar screens, Tasks pane in Work (rail + layout), "Give to Claude", Claude told to claim before working',
     /id="goBoard"/.test(html) && /id="goCal"/.test(html) && /<script src="board\.js"><\/script>/.test(html) && /<div id="board" class="screen"/.test(html) && /<div id="cal" class="screen"/.test(html)
     && /data-pane="tasks"/.test(html) && /const PANES = \['files', 'edit', 'chat', 'tasks', 'roomPane'\]/.test(html) && /function giveToClaude\(/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8'))
