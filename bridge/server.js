@@ -682,7 +682,7 @@ function wake(users) { for (const u of users) for (const fn of waiters.get(u) ||
 function callChanged(conv) { callVer++; wake([...accounts.keys()].filter((u) => convMember(conv, u))); }
 function callState(user) {
   const out = {};
-  for (const [c, ps] of calls) if (ps.size && convMember(c, user)) out[c] = [...ps].map(([u, p]) => ({ user: u, cam: p.cam, mic: p.mic, since: p.since }));
+  for (const [c, ps] of calls) if (ps.size && convMember(c, user)) out[c] = [...ps].map(([u, p]) => ({ user: u, cam: p.cam, mic: p.mic, screen: !!p.screen, since: p.since }));
   return out;
 }
 function leaveCalls(user) {
@@ -1110,22 +1110,22 @@ const server = http.createServer(async (req, res) => {
 
     // ----- calls -----
     if (p === '/api/call/join' && req.method === 'POST') {
-      const { conv, cam, mic } = await readBody(req);
+      const { conv, cam, mic, screen } = await readBody(req);
       if (!validConv(conv) || !convMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
       if (!chatKeys[acct.username]) return send(res, 400, { error: 'Your chat key is not set up yet.' });
       for (const [c, ps] of calls) if (c !== conv && ps.delete(acct.username)) { if (!ps.size) calls.delete(c); callChanged(c); }
       const ps = calls.get(conv) || new Map(); calls.set(conv, ps);
       const prev = ps.get(acct.username);
-      ps.set(acct.username, { cam: !!cam, mic: !!mic, since: prev ? prev.since : new Date().toISOString(), seen: Date.now() });
+      ps.set(acct.username, { cam: !!cam, mic: !!mic, screen: !!screen, since: prev ? prev.since : new Date().toISOString(), seen: Date.now() });
       callChanged(conv);
       return send(res, 200, { calls: callState(acct.username), ver: callVer, iceServers: Array.isArray(config.iceServers) ? config.iceServers : ICE_DEFAULT });
     }
     if (p === '/api/call/leave' && req.method === 'POST') { leaveCalls(acct.username); return send(res, 200, { ok: true }); }
     if (p === '/api/call/state' && req.method === 'POST') {
-      const { conv, cam, mic } = await readBody(req);
+      const { conv, cam, mic, screen } = await readBody(req);
       const mine = calls.get(conv) && calls.get(conv).get(acct.username);
       if (!mine) return send(res, 409, { error: 'You are not in that call.' });
-      Object.assign(mine, { cam: !!cam, mic: !!mic, seen: Date.now() });
+      Object.assign(mine, { cam: !!cam, mic: !!mic, screen: !!screen, seen: Date.now() });
       callChanged(conv);
       return send(res, 200, { ok: true });
     }

@@ -392,6 +392,25 @@
   #callBanner span { flex: 1; }
   #callBanner button { padding: .15rem .6rem; font-size: .78rem; }
   #callFloat { min-width: 240px; min-height: 180px; width: 340px; height: 300px; transition: left .18s, top .18s; }
+  /* theater: call on the right taking most of the room, chat narrow on the left, conversation list tucked away */
+  #callStage { flex: 1 1 62%; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: .6rem; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 85%, #000); }
+  #roomCore.theater .roomMain { flex: 0 1 38%; min-width: min(300px, 100%); }
+  #roomCore.theater #roomSide { display: none; }
+  #callStage #callCore { flex: 1; min-height: 0; }
+  #callStage #callTiles { flex: 1; min-height: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); align-content: center; gap: .6rem; }
+  #callStage .tile { border-width: 3px; }
+  #callStage .tile .lbl { font-size: .9rem; } #callStage .tile .ava { font-size: 2.6rem; }
+  #callStage .callCtl button { padding: .4rem .8rem; font-size: .85rem; }
+  #callTheater.on, #callScreen.on { border-color: var(--good); color: var(--good); }
+  /* a shared screen: its own tile, full width, whole picture visible (not cropped) */
+  .tile.screenTile { grid-column: 1 / -1; aspect-ratio: auto; max-height: 62vh; min-height: 120px; background: #000; cursor: pointer; }
+  .tile.screenTile video { object-fit: contain; max-height: 62vh; transform: none; }
+  #callSideHost .tile.screenTile { max-height: 160px; }
+  @media (max-width: 700px) {
+    #roomCore.theater { flex-direction: column; }
+    #roomCore.theater .roomMain { flex: 1 1 40%; min-width: 0; }
+    #callStage { flex: 1 1 60%; border-left: 0; border-top: 1px solid var(--line); }
+  }
   #callFloat.dragging { transition: none; }
   .rmsg audio { display: block; margin-top: .3rem; width: min(320px, 100%); height: 2.2rem; }
   #assistLog { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
@@ -632,6 +651,8 @@
           <button type="button" class="ghost dictate" id="roomDictate" aria-label="Dictate" hidden><svg class="ic"><use href="#i-talk"/></svg></button></div>
       </form>
     </div>
+    <!-- Theater: the call panel moves here and takes most of the width; the chat stays on the left -->
+    <div id="callStage" hidden></div>
   </div>
 </div>
 
@@ -643,6 +664,8 @@
     <div class="callCtl">
       <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone"><svg class="ic lead"><use href="#i-mic"/></svg>Mic on</button>
       <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)"><svg class="ic lead"><use href="#i-camera"/></svg>Camera off</button>
+      <button type="button" class="ghost" id="callScreen" title="Share your screen, a window or a tab with the call (shows as its own tile for everyone)"><svg class="ic lead"><use href="#i-share"/></svg>Share screen</button>
+      <button type="button" class="ghost" id="callTheater" title="Theater: the call fills the screen and the chat stays on the left (Esc leaves it)"><svg class="ic lead"><use href="#i-eye"/></svg>Theater</button>
       <button type="button" id="callLeave" title="Leave the call">Leave</button>
     </div>
     <div id="callMsg"></div>
@@ -2529,8 +2552,9 @@ async function finishClip() {
 // Codecs: Opus for voice (in-band FEC, DTX for silence, ~32 kb/s), VP9 → AV1 → VP8 → H.264 for video,
 // all decoded natively by the browser. Camera always starts OFF; the microphone uses the noise
 // suppression / echo cancellation / auto level settings (on by default).
-const call = { conv: null, peers: new Map(), mic: null, cam: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map(),
-  local: typeof MediaStream === 'function' ? new MediaStream() : null }; // the one stream id our audio + video are sent under (lip-sync)
+const call = { conv: null, peers: new Map(), mic: null, cam: null, screen: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map(),
+  local: typeof MediaStream === 'function' ? new MediaStream() : null, // the one stream id our audio + video are sent under (lip-sync)
+  screenStream: typeof MediaStream === 'function' ? new MediaStream() : null }; // a second, constant stream id for the shared screen (3rd sender on every connection)
 let callInit = false;
 const VQ = { low: [320, 180, 15, 250], medium: [640, 360, 24, 700], high: [1280, 720, 30, 1800] }; // w, h, fps, kb/s
 function audioConstraints() { const a = prefs().audio; return { noiseSuppression: a.noise, echoCancellation: a.echo, autoGainControl: a.agc, channelCount: 1 }; }
@@ -2566,7 +2590,7 @@ async function onCallState(state) {
     const others = list.filter((p) => p.user !== me.username);
     for (const p of others) if (!call.peers.has(p.user)) connectPeer(p.user);
     if (!restarted) for (const u of [...call.peers.keys()]) if (!others.some((p) => p.user === u)) dropPeer(u);
-    for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); const l = peer.tile.querySelector('.lbl'); l.textContent = nickOf(p.user); if (!p.mic) l.append(ic('mic-off', 'trail')); } }
+    for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); const l = peer.tile.querySelector('.lbl'); l.textContent = nickOf(p.user); if (!p.mic) l.append(ic('mic-off', 'trail')); if (p.screen) l.append(ic('share', 'trail')); } }
     $('callInfo').textContent = convLabel(call.conv) + ' · ' + list.length + ' in call';
   }
   renderCallBanner();
@@ -2590,7 +2614,7 @@ function renderCallBanner() {
   if (!list.length || call.conv === currentConv) { b.hidden = true; return; }
   b.textContent = '';
   const s = document.createElement('span'); s.append(ic('speaker', 'lead'));
-  list.forEach((p, k) => { s.append((k ? ', ' : '') + nickOf(p.user)); if (p.cam) s.append(ic('camera', 'trail')); });
+  list.forEach((p, k) => { s.append((k ? ', ' : '') + nickOf(p.user)); if (p.cam) s.append(ic('camera', 'trail')); if (p.screen) s.append(ic('share', 'trail')); });
   s.append((list.length === 1 ? ' is' : ' are') + ' in a call here');
   const j = document.createElement('button'); j.type = 'button'; j.textContent = 'Join'; j.onclick = () => joinCall(currentConv);
   b.append(s, j); b.hidden = false;
@@ -2622,7 +2646,8 @@ async function leaveCall(quiet) {
   if (me) removeMeter(me.username);
   if (call.mic) call.mic.stop();
   if (call.cam) call.cam.stop(); // camera light goes off
-  call.mic = call.cam = null; call.conv = null;
+  if (call.screen) { call.screen.onended = null; call.screen.stop(); if (call.screenStream) call.screenStream.removeTrack(call.screen); }
+  call.mic = call.cam = call.screen = null; call.conv = null;
   placeCall(); renderCallBanner();
   if (!quiet || me) json('/api/call/leave', { method: 'POST', body: '{}' }).catch(() => {});
 }
@@ -2708,26 +2733,30 @@ function tuneSdp(desc) { // ask the other side for Opus with forward error corre
   });
   return { type: desc.type, sdp };
 }
+// Every connection carries three senders in a fixed order: audio, camera, shared screen (the screen one
+// sends nothing until someone shares). Older pages have two; the third is simply absent for them.
+const videoTransceivers = (pc) => pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video');
+const isScreenTransceiver = (pc, t) => videoTransceivers(pc)[1] === t;
 function tuneSenders(peer) {
   const [, , fps, kbps] = VQ[prefs().call.quality] || VQ.medium;
   for (const t of peer.pc.getTransceivers()) {
-    const s = t.sender, kind = t.receiver.track.kind, params = s.getParameters();
+    const s = t.sender, kind = t.receiver.track.kind, params = s.getParameters(), screen = isScreenTransceiver(peer.pc, t);
     if (!params.encodings || !params.encodings.length) continue; // not negotiated yet; tried again once connected
-    params.encodings[0].maxBitrate = (kind === 'video' ? kbps : 32) * 1000;
-    if (kind === 'video') params.encodings[0].maxFramerate = fps;
+    params.encodings[0].maxBitrate = (screen ? 2500 : kind === 'video' ? kbps : 32) * 1000; // a screen needs crisp text, not frames
+    if (kind === 'video') params.encodings[0].maxFramerate = screen ? 15 : fps;
     s.setParameters(params).catch(() => {});
   }
 }
 // Lip-sync: browsers only synchronise audio and video that belong to the same stream (the SDP msid).
 // Both senders are tied to one local stream id, and the receiving side plays the remote stream the
 // tracks arrive in, so voice and picture stay in step instead of drifting apart.
-async function attachLocal(peer) { // put our current mic / camera on this connection's senders
+async function attachLocal(peer) { // put our current mic / camera / shared screen on this connection's senders
   const ts = peer.pc.getTransceivers();
   for (const t of ts) { // synchronously, before any offer / answer is made
     t.direction = 'sendrecv'; preferCodecs(t, t.receiver.track.kind);
-    if (t.sender.setStreams) try { t.sender.setStreams(call.local); } catch {}
+    if (t.sender.setStreams) try { t.sender.setStreams(isScreenTransceiver(peer.pc, t) ? call.screenStream : call.local); } catch {}
   }
-  for (const t of ts) { try { await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? call.mic : call.cam); } catch {} }
+  for (const t of ts) { try { await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? call.mic : isScreenTransceiver(peer.pc, t) ? call.screen : call.cam); } catch {} }
 }
 function connectPeer(user) {
   if (call.peers.has(user)) return call.peers.get(user);
@@ -2737,6 +2766,13 @@ function connectPeer(user) {
   $('callTiles').append(peer.tile);
   peer.tile.querySelector('video').srcObject = peer.stream;
   pc.ontrack = (e) => {
+    if (e.track.kind === 'video' && isScreenTransceiver(pc, e.transceiver)) { // their shared screen: its own tile, shown while the track carries video
+      const stream = (e.streams && e.streams[0]) || new MediaStream([e.track]);
+      const show = () => showScreenTile(user, stream, false), hide = () => removeScreenTile(user);
+      e.track.onunmute = show; e.track.onmute = hide; e.track.onended = hide;
+      if (!e.track.muted) show();
+      return;
+    }
     const v = peer.tile.querySelector('video');
     if (e.streams && e.streams[0]) { // the sender's stream: audio + video in one, so the browser lip-syncs them
       if (v.srcObject !== e.streams[0]) { peer.stream = e.streams[0]; v.srcObject = peer.stream; }
@@ -2759,6 +2795,7 @@ function connectPeer(user) {
   if (peer.offerer) { // exactly one side offers, so there is never a collision
     pc.addTransceiver('audio', { direction: 'sendrecv', streams: [call.local] });
     pc.addTransceiver('video', { direction: 'sendrecv', streams: [call.local] });
+    pc.addTransceiver('video', { direction: 'sendrecv', streams: [call.screenStream] }); // the shared screen (silent until someone shares)
     attachLocal(peer);
     pc.onnegotiationneeded = async () => {
       try { await pc.setLocalDescription(); await sendSignal(user, { d: tuneSdp(pc.localDescription) }); } catch {}
@@ -2771,9 +2808,51 @@ function dropPeer(user) {
   if (!peer) return;
   clearTimeout(peer.iceTimer);
   try { peer.pc.close(); } catch {}
-  removeMeter(user);
+  removeMeter(user); removeScreenTile(user);
   peer.tile.remove(); call.peers.delete(user); call.gone.delete(user);
 }
+// ── Screen share: a window / tab / whole screen as an extra tile everyone in the call sees ──
+const screenTile = (user) => $('callTiles').querySelector('.screenTile[data-user="' + CSS.escape(user) + '"]');
+function showScreenTile(user, stream, self) {
+  let t = screenTile(user);
+  if (!t) {
+    t = document.createElement('div'); t.className = 'tile screenTile'; t.dataset.user = user; t.style.borderColor = colorOf(user);
+    const v = document.createElement('video'); v.autoplay = true; v.playsInline = true; v.muted = true;
+    const l = document.createElement('div'); l.className = 'lbl'; l.append(ic('share', 'lead'), (self ? 'Your' : nickOf(user) + "'s") + ' screen');
+    t.append(v, l); t.title = 'Click for theater view'; t.onclick = () => { if (!theaterOn()) setTheater(true); };
+    $('callTiles').prepend(t);
+  }
+  const v = t.querySelector('video'); if (v.srcObject !== stream) v.srcObject = stream; v.play().catch(() => {});
+}
+function removeScreenTile(user) { const t = screenTile(user); if (t) t.remove(); }
+async function stopScreen() {
+  if (!call.screen) return;
+  call.screen.onended = null; call.screen.stop();
+  if (call.screenStream) call.screenStream.removeTrack(call.screen);
+  call.screen = null;
+  for (const p of call.peers.values()) await attachLocal(p); // the third sender goes quiet: their tile disappears
+  if (me) removeScreenTile(me.username);
+  updateCallButtons(); pushCallState();
+}
+$('callScreen').onclick = async () => {
+  if (!call.conv) return;
+  if (call.screen) return stopScreen();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return callMsg('This browser cannot share a screen (needs Chrome, Edge or Firefox on a computer).');
+  let s;
+  try { s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false }); }
+  catch (e) { return callMsg(e.name === 'NotAllowedError' ? 'Screen sharing was cancelled.' : 'Screen share: ' + e.message); }
+  call.screen = s.getVideoTracks()[0]; call.screen.contentHint = 'detail';
+  call.screen.onended = () => stopScreen(); // the browser's own "Stop sharing" bar
+  call.screenStream.addTrack(call.screen); // same stream id as always, so no renegotiation is needed
+  for (const p of call.peers.values()) { await attachLocal(p); tuneSenders(p); }
+  showScreenTile(me.username, call.screenStream, true);
+  updateCallButtons(); pushCallState();
+};
+// ── Theater: the call takes most of the screen, the chat stays on the left ──
+const theaterOn = () => store.get('mills.theater') === '1';
+function setTheater(on) { store.set('mills.theater', on ? '1' : ''); placeCall(); updateCallButtons(); }
+$('callTheater').onclick = () => setTheater(!theaterOn());
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && call.conv && theaterOn() && !e.target.closest('input, textarea, select')) setTheater(false); });
 async function pairKey(user) { const m = memberOf(user); return m && m.pub && chatPriv && !changedKeys.has(user) && trustedPub(user, m.pub) ? sharedWith(m.pub) : null; }
 async function sendSignal(user, body) {
   const k = await pairKey(user);
@@ -2811,11 +2890,14 @@ function updateCallButtons() {
   $('callMic').classList.toggle('off', !micOn);
   label($('callCam'), 'camera', camOn ? 'Camera on' : 'Camera off');
   $('callCam').classList.toggle('off', !camOn);
+  label($('callScreen'), 'share', call.screen ? 'Stop sharing' : 'Share screen'); $('callScreen').classList.toggle('on', !!call.screen);
+  $('callScreen').hidden = !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  label($('callTheater'), 'eye', theaterOn() ? 'Exit theater' : 'Theater'); $('callTheater').classList.toggle('on', theaterOn());
   const st = selfTile();
   if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; const l = st.querySelector('.lbl'); l.textContent = 'You'; if (!micOn) l.append(ic('mic-off', 'trail')); }
 }
 function pushCallState() {
-  if (call.conv) json('/api/call/state', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled) }) }).catch(() => {});
+  if (call.conv) json('/api/call/state', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled), screen: !!call.screen }) }).catch(() => {});
 }
 $('callMic').onclick = async () => {
   if (!call.conv) return;
@@ -2852,10 +2934,14 @@ function chatOpen() {
   if (!$('room').hidden) return true;
   return !$('shell').hidden && layout.show.roomPane;
 }
+const chatVisible = () => !!me && (!$('room').hidden || (!$('shell').hidden && layout.show.roomPane)); // the team chat is on screen (side list or not)
 function placeCall() {
-  const core = $('callCore');
+  const core = $('callCore'), stage = $('callStage'), rc = $('roomCore');
+  const theater = !!call.conv && theaterOn() && chatVisible();
+  rc.classList.toggle('theater', theater); stage.hidden = !theater;
   if (!call.conv) { $('callPark').append(core); $('callFloat').hidden = true; return; }
-  if (chatOpen()) { $('callSideHost').append(core); $('callFloat').hidden = true; }
+  if (theater) { stage.append(core); $('callFloat').hidden = true; }
+  else if (chatOpen()) { $('callSideHost').append(core); $('callFloat').hidden = true; }
   else { $('callFloatBody').append(core); $('callFloat').hidden = false; snapCall(store.get('mills.callSnap') || 'br'); }
 }
 const SNAPS = { tl: [0, 0], tc: [0.5, 0], tr: [1, 0], ml: [0, 0.5], mr: [1, 0.5], bl: [0, 1], bc: [0.5, 1], br: [1, 1] };
