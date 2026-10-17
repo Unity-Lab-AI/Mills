@@ -275,6 +275,25 @@ async function run() {
   const tmp = (await login('t-user', 'pw-t-user-0001', devB)).data.token;
   await call('/api/logout', tmp, {});
   check('R8', 'logout → old token 401', (await call('/api/check', tmp)).status === 401);
+  // Nothing without a sign-in: every API route the hub source mentions (server.js, board.js, assistant.js,
+  // so a new route is covered the day it is written) answers 401 to a visitor, GET and POST, except the
+  // sign-in itself and the bare "a hub is here" status; through the tunnel that status carries no pid /
+  // busy / supervised; unknown paths and folders are 404; and the page ships with only the sign-in form visible.
+  const routeSrc = ['server.js', 'board.js', 'assistant.js'].map((f) => fs.readFileSync(path.join(BRIDGE, f), 'utf8')).join('\n');
+  const routes = [...new Set([...routeSrc.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)].map((m) => m[1]))].filter((r) => r !== '/api/status' && r !== '/api/login' && !/\/$/.test(r));
+  const leaks = [];
+  for (const r of routes) {
+    const g = await call(r), po = await call(r, null, {});
+    if (g.status !== 401 || po.status !== 401) leaks.push(`${r} ${g.status}/${po.status}`);
+  }
+  const anonStatus = (await fetch(H + '/api/status', { headers: { 'cf-connecting-ip': '203.0.113.9' } }).then((r) => r.json()).catch(() => ({})));
+  const localStatus = (await call('/api/status')).data;
+  const notFound = (await fetch(H + '/nothing-here.html')).status, dirList = (await fetch(H + '/vendor/')).status, traversal = (await fetch(H + '/..%2f..%2fbridge%2fconfig.json')).status;
+  const hiddenScreens = ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'settings', 'roomFloat', 'callFloat', 'archive'].filter((id) => !new RegExp(`id="${id}"[^>]*\\bhidden\\b`).test(html) && !new RegExp(`<[a-z]+ [^>]*\\bhidden\\b[^>]*id="${id}"`).test(html));
+  check('R110', `login gate: ${routes.length} API routes from the hub source answer 401 without a sign-in (GET + POST); anonymous status through the tunnel carries no pid / busy / supervised; unknown paths, folder listings and path traversal → 404; [static] every screen but the sign-in form ships hidden`,
+    routes.length >= 50 && !leaks.length && anonStatus.ok === true && anonStatus.pid === undefined && anonStatus.busy === undefined && anonStatus.supervised === undefined && typeof localStatus.pid === 'number'
+    && notFound === 404 && dirList === 404 && traversal === 404 && !hiddenScreens.length && /<form id="login"/.test(html),
+    [leaks.slice(0, 6).join(', '), hiddenScreens.length ? 'visible: ' + hiddenScreens.join(' ') : '', `404s ${notFound}/${dirList}/${traversal}`].filter(Boolean).join(' | '));
 
   // Work
   const ck = (await call('/api/check', A)).data;
