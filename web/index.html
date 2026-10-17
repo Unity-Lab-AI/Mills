@@ -263,6 +263,12 @@
   button.dictate.on { background: var(--bad); color: #fff; border-color: var(--bad); animation: recPulse 1.2s infinite; }
   button.dictate.armed { background: var(--good); color: #111; border-color: var(--good); }
   .msg.me.queued { opacity: .6; border: 1px dashed var(--muted); }
+  /* slash-command menu above the Claude box: "/" lists the common commands, filtered as you type */
+  #slashMenu { border-top: 1px solid var(--line); background: var(--panel); max-height: 40%; overflow: auto; padding: .3rem; display: flex; flex-direction: column; gap: .1rem; font-size: .85rem; }
+  #slashMenu .sl { display: flex; align-items: baseline; gap: .6rem; padding: .35rem .6rem; border-radius: 6px; cursor: pointer; background: transparent; color: var(--text); border: 0; text-align: left; font-weight: 400; }
+  #slashMenu .sl:hover, #slashMenu .sl.on { background: var(--line); }
+  #slashMenu .sl code { font-family: ui-monospace, Consolas, monospace; font-weight: 700; min-width: 7.5rem; }
+  #slashMenu .sl small { color: var(--muted); } #slashMenu .sl .tag { margin-left: auto; font-size: .66rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 .4rem; }
   .msg .unqueue { float: right; margin-left: .5rem; background: transparent; color: var(--muted); padding: 0 .3rem; font-size: .8rem; border: 0; }
 
   #archive, .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 40; }
@@ -900,6 +906,7 @@
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
       </div>
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
+      <div id="slashMenu" hidden></div>
       <form id="composer">
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <div class="sendCol">
@@ -1612,7 +1619,8 @@ $('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const message = $('input').value.trim();
   if (!message) return;
-  $('input').value = ''; updateStopButton();
+  $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true;
+  if (message.startsWith('/') && runLocalSlash(message)) return; // a Mills command: done here, nothing goes to Claude
   if (busy) enqueue(message); else send(message);
 });
 function enqueue(message) {
@@ -1696,7 +1704,79 @@ function handleEvent(ev) {
   scroll();
 }
 
+// ── Slash commands: "/" at the start of the Claude box lists the common ones. Most are passed through to
+// Claude Code exactly as typed (it understands them); a few act on Mills itself ("here").
+const SLASH = [
+  { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context)', args: '[focus]' },
+  { cmd: '/clear', desc: 'Start a fresh conversation (same as New chat)', local: () => $('newChat').click() },
+  { cmd: '/new', desc: 'Start a fresh conversation', local: () => $('newChat').click() },
+  { cmd: '/stop', desc: 'Stop the current reply', local: () => $('stop').click() },
+  { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', local: (a) => slashModel(a) },
+  { cmd: '/share', desc: 'Share / stop sharing this Work session with everyone', local: () => $('shareBtn').click() },
+  { cmd: '/save', desc: 'Save this session to Past sessions now', local: () => saveToArchive(false) },
+  { cmd: '/sessions', desc: 'Open Past sessions', local: () => showArchive() },
+  { cmd: '/board', desc: 'Open the team board', local: () => showScreen('board') },
+  { cmd: '/tasks', desc: 'Show / hide the Tasks pane', local: () => togglePane('tasks') },
+  { cmd: '/chat', desc: 'Show / hide the team chat pane', local: () => togglePane('roomPane') },
+  { cmd: '/settings', desc: 'Open Settings', local: () => openSettings() },
+  { cmd: '/review', desc: 'Ask Claude to review the pending changes', args: '[what]' },
+  { cmd: '/init', desc: 'Ask Claude to create a CLAUDE.md for the opened project' },
+  { cmd: '/memory', desc: 'Show / edit what Claude remembers about this project' },
+  { cmd: '/cost', desc: 'Token usage and cost of this session' },
+  { cmd: '/status', desc: 'Claude Code status: model, account, tools' },
+  { cmd: '/help', desc: 'Claude Code help' },
+  { cmd: '/commit', desc: 'Ask Claude to commit the staged work with a good message', args: '[message]' },
+  { cmd: '/pr', desc: 'Ask Claude to open / describe a pull request', args: '[title]' },
+  { cmd: '/explain', desc: 'Ask Claude to explain the selected file or topic', args: '<file or topic>' },
+  { cmd: '/test', desc: 'Ask Claude to run or write tests', args: '[what]' },
+  { cmd: '/fix', desc: 'Ask Claude to find and fix the problem described', args: '<problem>' },
+  { cmd: '/docs', desc: 'Ask Claude to update the docs for the change', args: '[what]' },
+];
+let slashIdx = 0;
+function slashQuery() { const v = $('input').value; const m = /^\/(\S*)$/.exec(v); return m ? m[1].toLowerCase() : null; }
+function slashMatches() { const q = slashQuery(); return q === null ? [] : SLASH.filter((s) => s.cmd.slice(1).startsWith(q)); }
+function renderSlash() {
+  const box = $('slashMenu'), list = slashMatches();
+  box.textContent = '';
+  if (!list.length) { box.hidden = true; return; }
+  slashIdx = Math.min(slashIdx, list.length - 1);
+  list.forEach((s, i) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'sl' + (i === slashIdx ? ' on' : '');
+    const c = document.createElement('code'); c.textContent = s.cmd + (s.args ? ' ' + s.args : '');
+    const d = document.createElement('small'); d.textContent = s.desc;
+    const t = document.createElement('span'); t.className = 'tag'; t.textContent = s.local ? 'here' : 'to Claude';
+    b.append(c, d, t); b.onmousedown = (e) => { e.preventDefault(); pickSlash(s); }; box.append(b);
+  });
+  box.hidden = false;
+}
+function pickSlash(s) { // a Mills command without arguments runs now; anything else is put in the box ready to send
+  const box = $('input');
+  if (s.local && !s.args) { box.value = ''; $('slashMenu').hidden = true; updateStopButton(); s.local(''); return; }
+  box.value = s.cmd + ' '; $('slashMenu').hidden = true; box.focus(); box.setSelectionRange(box.value.length, box.value.length); updateStopButton();
+}
+function slashModel(arg) {
+  const want = String(arg || '').trim().toLowerCase(), sel = $('model');
+  const opt = [...sel.options].find((o) => (want === 'default' && o.value === '') || (want && !o.value.includes('|') && (o.value.toLowerCase().includes(want) || o.textContent.toLowerCase().includes(want))));
+  if (!opt) return sys('Model: say which one — ' + [...sel.options].map((o) => o.textContent).join(', '), true);
+  sel.value = opt.value; sel.dispatchEvent(new Event('change'));
+}
+// A local command typed in full (with or without arguments) runs here instead of going to Claude.
+function runLocalSlash(message) {
+  const m = /^(\/\S+)\s*([\s\S]*)$/.exec(message); if (!m) return false;
+  const s = SLASH.find((x) => x.cmd === m[1].toLowerCase());
+  if (!s || !s.local) return false;
+  s.local(m[2]); return true;
+}
+$('input').addEventListener('input', () => { slashIdx = 0; renderSlash(); });
+$('input').addEventListener('blur', () => setTimeout(() => { $('slashMenu').hidden = true; }, 150));
 $('input').addEventListener('keydown', (e) => {
+  const open = !$('slashMenu').hidden, list = open ? slashMatches() : [];
+  if (open && list.length) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashIdx = (slashIdx + 1) % list.length; return renderSlash(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashIdx = (slashIdx - 1 + list.length) % list.length; return renderSlash(); }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); return pickSlash(list[slashIdx]); }
+    if (e.key === 'Escape') { e.preventDefault(); $('slashMenu').hidden = true; return; }
+  }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('composer').requestSubmit(); }
 });
 $('stop').onclick = () => {
