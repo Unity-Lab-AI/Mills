@@ -51,6 +51,29 @@ function nextDue(ms, kind, anchorDay) {
   }
 }
 
+// Due dates as people (and Claude) write them → ms at 17:00 local, or null for "none". Accepts a number
+// (ms), "YYYY-MM-DD", "YYYY-MM-DD HH:MM", "today", "tomorrow", "+3d" / "in 3 days", "next monday" / "friday",
+// "none" / "" / "clear". Anything else throws, so a typo never becomes a silent date.
+const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+function parseDue(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return Number.isFinite(v) && v > 0 ? v : null;
+  const t = String(v).trim().toLowerCase();
+  if (!t || t === 'none' || t === 'clear' || t === 'no' || t === 'null') return null;
+  if (/^\d{12,}$/.test(t)) return Number(t);
+  const at17 = (d) => { d.setHours(17, 0, 0, 0); return d.getTime(); };
+  const today = new Date();
+  let m;
+  if (t === 'today') return at17(today);
+  if (t === 'tomorrow') return at17(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
+  if ((m = /^(?:\+|in )?(\d{1,3}) ?(d|days?|w|weeks?)$/.exec(t))) return at17(new Date(today.getFullYear(), today.getMonth(), today.getDate() + Number(m[1]) * (/^w/.test(m[2]) ? 7 : 1)));
+  if ((m = /^(?:next )?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.exec(t))) { const want = DAYS.indexOf(m[1]); let d = (want - today.getDay() + 7) % 7; if (!d) d = 7; return at17(new Date(today.getFullYear(), today.getMonth(), today.getDate() + d)); }
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})(?:[ t](\d{1,2}):(\d{2}))?$/.exec(t))) { const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), m[4] ? Number(m[4]) : 17, m[5] ? Number(m[5]) : 0); if (Number.isNaN(d.getTime())) throw new Error('Bad date: ' + v); return d.getTime(); }
+  const d = Date.parse(t); if (Number.isFinite(d)) return d;
+  throw new Error(`Could not read the due date "${v}" (use YYYY-MM-DD, today, tomorrow, +3d, next friday, or none).`);
+}
+const dayKey = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
 module.exports = function createBoard({ dir, send, readBody, accounts, displayOf }) {
   const FILE = path.join(dir, 'board.json');
   fs.mkdirSync(dir, { recursive: true });
@@ -111,9 +134,10 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
       if (!title) return no(400, 'A task needs a title.');
       const board = db.boards.some((x) => x.id === b.board) ? b.board : db.boards[0].id;
       const status = STATUS_IDS.includes(b.status) ? b.status : 'todo';
+      let dueAt; try { dueAt = b.due !== undefined ? parseDue(b.due) : Number(b.dueAt) || null; } catch (e) { return no(400, e.message); }
       const order = Math.max(0, ...db.tasks.filter((t) => live(t) && t.board === board && t.status === status).map((t) => t.order || 0)) + 1;
       const t = { id: 'T-' + (++db.n), board, title, body: String(b.body || '').slice(0, 50000), status, order, priority: Math.max(0, Math.min(5, b.priority | 0)),
-        labels: cleanLabels(b.labels), dueAt: Number(b.dueAt) || null, recur: RECUR.includes(b.recur) ? b.recur : null,
+        labels: cleanLabels(b.labels), dueAt, recur: RECUR.includes(b.recur) ? b.recur : null,
         assignee: b.assignee && accounts.has(b.assignee) ? b.assignee : null, createdBy: actorName(a), createdAt: now(), updatedAt: now(), rev: 1, claim: null };
       t.dueDay = t.dueAt ? new Date(t.dueAt).getDate() : null; // the day a monthly repeat returns to (31st stays the 31st after February)
       db.tasks.push(t); log(t, a, 'created'); save();
@@ -133,7 +157,10 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
       if (b.appendNote) { t.body = ((t.body || '') + '\n\n---\n**' + actorName(a) + '** · ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + '\n\n' + String(b.appendNote).slice(0, 8000)).trim(); changed.push('note'); }
       if (b.labels !== undefined) { t.labels = cleanLabels(b.labels); changed.push('labels'); }
       if (b.priority !== undefined) { t.priority = Math.max(0, Math.min(5, b.priority | 0)); changed.push('priority ' + t.priority); }
-      if (b.dueAt !== undefined) { t.dueAt = Number(b.dueAt) || null; t.dueDay = t.dueAt ? new Date(t.dueAt).getDate() : null; changed.push(t.dueAt ? 'due ' + new Date(t.dueAt).toISOString().slice(0, 10) : 'no due date'); }
+      if (b.due !== undefined || b.dueAt !== undefined) {
+        let dueAt; try { dueAt = b.due !== undefined ? parseDue(b.due) : Number(b.dueAt) || null; } catch (e) { return no(400, e.message); }
+        t.dueAt = dueAt; t.dueDay = t.dueAt ? new Date(t.dueAt).getDate() : null; changed.push(t.dueAt ? 'due ' + dayKey(t.dueAt) : 'no due date');
+      }
       if (b.recur !== undefined) { t.recur = RECUR.includes(b.recur) ? b.recur : null; changed.push(t.recur ? 'repeats ' + t.recur : 'no repeat'); }
       if (b.assignee !== undefined) { t.assignee = b.assignee && accounts.has(b.assignee) ? b.assignee : null; changed.push(t.assignee ? 'assigned to ' + displayOf(t.assignee) : 'unassigned'); }
       if (b.status !== undefined && STATUS_IDS.includes(b.status) && b.status !== t.status) {
@@ -209,6 +236,21 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
       if (b.mine) tasks = tasks.filter((t) => t.assignee === a.user || (t.claim && t.claim.key === actorKey(a)));
       return ok({ boards: v.boards, statuses: STATUS_IDS, tasks });
     },
+    calendar(a, b) { // the calendar as Claude reads it: tasks with a due date, grouped by day, for a range (default today → +14 days)
+      let from, to;
+      try { from = b.from !== undefined ? parseDue(b.from) : parseDue('today'); to = b.to !== undefined ? parseDue(b.to) : parseDue('+14d'); } catch (e) { return no(400, e.message); }
+      if (from === null || to === null) return no(400, 'from / to must be dates.');
+      const start = new Date(from); start.setHours(0, 0, 0, 0); const end = new Date(to); end.setHours(23, 59, 59, 999);
+      const byDay = new Map();
+      for (const t of db.tasks.filter(live)) {
+        if (!t.dueAt || t.dueAt < start.getTime() || t.dueAt > end.getTime()) continue;
+        if (b.board && t.board !== b.board) continue;
+        const k = dayKey(t.dueAt); (byDay.get(k) || byDay.set(k, []).get(k)).push({ ...card(t), overdue: t.status !== 'done' && t.dueAt < now(), assigneeName: t.assignee ? displayOf(t.assignee) : null });
+      }
+      const days = [...byDay.entries()].sort(([x], [y]) => x.localeCompare(y)).map(([day, tasks]) => ({ day, weekday: DAYS[new Date(day + 'T12:00:00').getDay()], tasks: tasks.sort((p, q) => p.dueAt - q.dueAt) }));
+      const overdue = db.tasks.filter((t) => live(t) && t.dueAt && t.status !== 'done' && t.dueAt < start.getTime()).map(card);
+      return ok({ from: dayKey(start.getTime()), to: dayKey(end.getTime()), today: dayKey(now()), days, overdue });
+    },
   };
 
   // ── HTTP for people ──
@@ -235,12 +277,14 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
   // ── internal: Claude in a Work run (board MCP tools), acting as "<person> · Claude" ──
   async function internal(req, res, acctName) {
     const { name, args } = await readBody(req);
-    const map = { board_list: 'list', task_get: 'get', task_create: 'create', task_update: 'update', task_claim: 'claim', task_renew: 'claim', task_release: 'release', task_complete: 'complete' };
+    const map = { board_list: 'list', task_get: 'get', task_create: 'create', task_update: 'update', task_claim: 'claim', task_renew: 'claim', task_release: 'release', task_complete: 'complete',
+      task_delete: 'remove', task_move: 'move', board_new: 'newBoard', board_calendar: 'calendar' };
     const op = map[name];
     if (!op || !accounts.has(acctName)) return send(res, 200, { ok: false, error: op ? 'Unknown account.' : 'Unknown board tool: ' + name });
     const r = ops[op]({ user: acctName, agent: true }, args || {});
     send(res, 200, r.status === 200 ? { ok: true, result: r.body } : { ok: false, error: r.body.error });
   }
-  return { handle, internal, STATUSES, nextDue };
+  return { handle, internal, STATUSES, nextDue, parseDue };
 };
 module.exports.nextDue = nextDue;
+module.exports.parseDue = parseDue;

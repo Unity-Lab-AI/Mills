@@ -66,6 +66,8 @@ function systemPrompt(acct, wd) {
     `Shell commands cannot run on ${name}'s PC; if something needs running there, tell ${name} exactly what to run.`,
     `The Mills team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as "${name} · Claude".`,
     `When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.`,
+    `You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.`,
+    `Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search (${name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create.`,
     `The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as "${name} · Claude", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about.`,
   ].join(' ') + (hubLaws() ? '\n\n' + hubLaws() : '');
 }
@@ -81,7 +83,7 @@ function loadAccounts() {
       username, profile, files: P,
       display: P.config.user || username[0].toUpperCase() + username.slice(1), admin: !!P.config.admin, defaultModel: P.config.model || '',
     });
-    if (acct.state.model && !modelIds().includes(acct.state.model)) delete acct.state.model;
+    if (acct.state.model && !acct.state.provider && !modelIds().includes(acct.state.model)) delete acct.state.model; // (a provider's model list is checked when it is used)
     fs.mkdirSync(P.PROFILE_DIR, { recursive: true });
     const mcpEnv = { MILLS_BRIDGE: `http://127.0.0.1:${config.port}`, MILLS_INTERNAL: INTERNAL_SECRET, MILLS_USER: acct.display, MILLS_ACCOUNT: username };
     writeJson(P.MCP_RUNTIME, { mcpServers: {
@@ -132,7 +134,7 @@ const failures = new Map(); // username -> { count, blockedUntil }
 // ---------- claude runner + pc tool relay (one per account) ----------
 function emit(acct, ev) { if (acct.stream) acct.stream.write(JSON.stringify(ev) + '\n'); }
 function runClaude(acct, message, fresh, res, context) {
-  mirror(acct, 'user', message);
+  shares.mirror(acct, 'user', message);
   let wd;
   try { wd = workDir(acct); } catch (e) {
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
@@ -152,9 +154,13 @@ function runClaude(acct, message, fresh, res, context) {
   // Claude (bridge/test/fake-claude.js); production config leaves them unset → the real `claude`.
   const command = config.claudeCommand || 'claude';
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
-  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true });
-  acct.running = child; acct.stream = res;
-  noteActivity();
+  // Whose Claude answers: the host's (default, nothing added) or the provider this person picked (their own
+  // Anthropic key / Claude Code login, passed to the claude process through its environment).
+  const prov = providers.get(acct.state.provider || 'host', acct.username), provEnv = prov ? providers.claudeEnv(prov) : {};
+  if (prov && provEnv === null) { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ type: 'bridge_error', text: 'Your chosen AI provider is not Claude, so it cannot run Work. Pick a Claude model in the dropdown.' }) + '\n'); return; }
+  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...(provEnv || {}) } });
+  acct.running = child; acct.stream = res; acct.runProvider = prov && prov.kind !== 'host' ? prov.id : '';
+  if (!acct.runProvider) noteActivity(); // only the host's own usage windows are shared by everyone
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
   const keepAlive = setInterval(() => emit(acct, { type: 'ping' }), 15000);
   let buf = '';
@@ -164,7 +170,7 @@ function runClaude(acct, message, fresh, res, context) {
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
       if (!line) continue;
-      try { const ev = JSON.parse(line); if (ev.session_id) acct.state.claudeSessionId = ev.session_id; noteUsage(acct, ev); mirrorEvent(acct, ev); emit(acct, ev); }
+      try { const ev = JSON.parse(line); if (ev.session_id) acct.state.claudeSessionId = ev.session_id; if (!acct.runProvider || !/rate_limit/.test(String(ev.type || ''))) noteUsage(acct, ev); shares.mirrorEvent(acct, ev); emit(acct, ev); }
       catch { emit(acct, { type: 'raw', text: line }); }
     }
   });
@@ -182,111 +188,18 @@ function runClaude(acct, message, fresh, res, context) {
   // their browser); it goes to Claude after their message, clearly marked, and is not mirrored.
   child.stdin.end(context ? `${message}\n\n---\n${context}` : message);
 }
-// ---------- usage: 5-hour / 7-day limits and the context window ----------
-// All Work runs use the host's one Claude account, so the 5h / 7d limits are shared by everyone.
-// Claude Code reports them in its stream (rate-limit events: status, utilization, resetsAt); until
-// one has been seen, the windows are estimated from when the host started using Claude (a 5-hour
-// window opens with the first message after the previous one ran out). The context window is per
-// account and per Claude session: input + cache tokens of the latest reply out of the model's window.
-const USAGE_FILE = path.join(ROOT, 'usage.json');
-const usage = readJson(USAGE_FILE, {}); // { limits: { five_hour: {...}, seven_day: {...} }, fiveStart, weekStart }
-let usageTimer = null;
-const saveUsage = () => { clearTimeout(usageTimer); usageTimer = setTimeout(() => writeJson(USAGE_FILE, usage), 1000); };
-const FIVE_H = 5 * 3600e3, SEVEN_D = 7 * 86400e3;
-function noteActivity() {
-  const now = Date.now();
-  if (!usage.fiveStart || now - usage.fiveStart >= FIVE_H) usage.fiveStart = now;
-  if (!usage.weekStart || now - usage.weekStart >= SEVEN_D) usage.weekStart = now;
-  saveUsage();
-}
-function toMs(t) { const n = typeof t === 'number' ? (t < 1e12 ? t * 1000 : t) : Date.parse(t); return Number.isFinite(n) ? n : null; }
-function noteUsage(acct, ev) {
-  if (/rate_limit/.test(String(ev.type || ''))) { // e.g. { type: "rate_limit_event", rate_limit_info: { rateLimitType, status, utilization, resetsAt } }
-    const info = ev.rate_limit_info || ev.rateLimitInfo || ev;
-    const kind = String(info.rateLimitType || info.rate_limit_type || info.type || '').toLowerCase();
-    const key = /seven|week|7d/.test(kind) ? 'seven_day' : /five|5h|session/.test(kind) ? 'five_hour' : null;
-    if (key) {
-      // An event may carry only some fields: keep the last known reset time / utilization for the same
-      // window instead of wiping them. Utilization is stored as a fraction 0–1 (a value above 1 is a percentage).
-      const L = usage.limits || (usage.limits = {}), prev = L[key] || {};
-      const resetsAt = toMs(info.resetsAt || info.resets_at) || (prev.resetsAt > Date.now() ? prev.resetsAt : null);
-      const raw = info.utilization ?? info.usage ?? null, u = raw == null || raw === '' ? NaN : Number(raw);
-      const sameWindow = prev.resetsAt && resetsAt === prev.resetsAt;
-      L[key] = {
-        status: String(info.status || (sameWindow ? prev.status : '') || ''),
-        utilization: Number.isFinite(u) ? Math.max(0, Math.min(1, u > 1 ? u / 100 : u)) : sameWindow ? prev.utilization ?? null : null,
-        resetsAt, at: Date.now(),
-      };
-      saveUsage();
-    }
-  }
-  const u = ev.type === 'assistant' && ev.message && ev.message.usage;
-  if (u) {
-    const tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-    acct.state.ctx = { ...(acct.state.ctx || {}), session: acct.state.claudeSessionId || ev.session_id || '', tokens, model: ev.message.model || '', at: Date.now() };
-  }
-  if (ev.type === 'result' && ev.modelUsage && typeof ev.modelUsage === 'object') {
-    const windows = Object.values(ev.modelUsage).map((m) => Number(m && m.contextWindow)).filter((n) => n > 0);
-    if (windows.length && acct.state.ctx) acct.state.ctx.window = Math.max(...windows);
-  }
-  if (ev.type === 'result' && /rate.?limit|usage limit/i.test(String(ev.result || ''))) { // the run was refused: mark as out of usage
-    (usage.limits || (usage.limits = {})).five_hour = { ...((usage.limits || {}).five_hour || {}), status: 'rejected', at: Date.now() };
-    saveUsage();
-  }
-}
+// Usage (bridge/usage.js): the host account's 5h / 7d limits, shared by every Work run on it, and each
+// account's context window; noteActivity() when a run starts, noteUsage() per stream event, status() for /api/usage.
+const usage = require('./usage')({ ROOT, config, readJson, writeJson });
+const { noteActivity, noteUsage } = usage;
 function stopClaude(acct) {
   if (!acct.running) return;
   if (process.platform === 'win32') spawn('taskkill', ['/pid', String(acct.running.pid), '/T', '/F'], { windowsHide: true });
   else acct.running.kill('SIGTERM');
 }
 
-// ---------- conversation archive (per account) ----------
-const archiveFile = (acct, id) => {
-  if (typeof id !== 'string' || !/^[a-f0-9]{16}$/.test(id)) throw new Error('Bad conversation id.');
-  return path.join(acct.files.ARCHIVE_DIR, id + '.json');
-};
-const cleanTitle = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Untitled conversation';
-function listArchive(acct) {
-  const dir = acct.files.ARCHIVE_DIR;
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => f.endsWith('.json'))
-    .map((f) => readJson(path.join(dir, f), null)).filter(Boolean)
-    .map(({ id, title, savedAt, transcript }) => ({ id, title, savedAt, count: (transcript || []).length }))
-    .sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
-}
-// Full-text search over this account's saved sessions: every word must appear in the title or
-// somewhere in the transcript (case-insensitive). Each hit comes with short snippets around the
-// first matches, so the list shows *why* a session matched.
-function searchArchive(acct, q) {
-  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
-  if (!words.length) return listArchive(acct);
-  const dir = acct.files.ARCHIVE_DIR;
-  if (!fs.existsSync(dir)) return [];
-  const out = [];
-  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
-    const e = readJson(path.join(dir, f), null);
-    if (!e) continue;
-    const lines = (e.transcript || []).filter((t) => t && typeof t.text === 'string');
-    const hay = (e.title + '\n' + lines.map((t) => t.text).join('\n')).toLowerCase();
-    if (!words.every((w) => hay.includes(w))) continue;
-    const snippets = [];
-    let hits = 0;
-    for (const t of lines) {
-      const low = t.text.toLowerCase();
-      for (const w of words) {
-        let i = low.indexOf(w);
-        while (i >= 0) { hits++; i = low.indexOf(w, i + w.length); }
-      }
-      const first = Math.min(...words.map((w) => low.indexOf(w)).filter((i) => i >= 0));
-      if (Number.isFinite(first) && snippets.length < 3) {
-        const start = Math.max(0, first - 60);
-        snippets.push({ cls: t.cls, text: (start ? '…' : '') + t.text.slice(start, first + 90).replace(/\s+/g, ' ') + (first + 90 < t.text.length ? '…' : '') });
-      }
-    }
-    out.push({ id: e.id, title: e.title, savedAt: e.savedAt, count: lines.length, hits, snippets });
-  }
-  return out.sort((a, b) => b.hits - a.hits || String(b.savedAt).localeCompare(String(a.savedAt)));
-}
+// Past sessions (bridge/archive.js): each account's saved Claude conversations; archive.route() serves /api/archive/*.
+const archive = require('./archive')({ readJson, writeJson, send: (...a) => send(...a), readBody: (r) => readBody(r), saveState });
 
 // ---------- chat room (end-to-end encrypted) ----------
 // Browsers encrypt every message with a fresh AES-GCM key and wrap that key separately for each
@@ -310,54 +223,11 @@ const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv ==
 let roomVer = 1, keysVer = 1;
 const roomWaiters = new Set();
 function roomChanged() { roomVer++; for (const fn of [...roomWaiters]) fn(); }
-// Presence, hub-wide: every signed-in page keeps one long poll open, so the hub knows exactly who is
-// connected. A person is online while they have a poll open, idle when their page says so (tab
-// hidden or no input for 5 minutes), and offline a few seconds after their last connection closes
-// (or at once when the page reports it is going away). Each change is pushed to everyone.
-// Typing is per conversation and only shown to that conversation's members; an entry lapses after
-// 6 s unless the browser renews it (it renews every 2.5 s while keys are pressed).
-const TYPING_MS = 6000, GONE_MS = 8000, ONLINE_MS = 70000; // ONLINE_MS: fallback if a close is never seen
-const presence = new Map();   // username -> { online, idle, screen, at (last change), seen (last contact), polls }
-const typing = new Map();     // username -> { conv, at, timer }
-function pres(user) { let p = presence.get(user); if (!p) { p = { online: false, idle: false, screen: '', at: 0, seen: 0, polls: 0 }; presence.set(user, p); } return p; }
-function setPresence(user, patch) {
-  const p = pres(user), before = JSON.stringify([p.online, p.idle, p.screen]);
-  Object.assign(p, patch); p.seen = Date.now();
-  if (JSON.stringify([p.online, p.idle, p.screen]) !== before) { p.at = Date.now(); roomChanged(); }
-}
-function pollOpened(user) { const p = pres(user); p.polls++; clearTimeout(p.gone); setPresence(user, { online: true }); }
-function pollClosed(user) { // offline once no connection has been open for GONE_MS
-  const p = pres(user); p.polls = Math.max(0, p.polls - 1);
-  if (p.polls) return;
-  clearTimeout(p.gone);
-  p.gone = setTimeout(() => { if (!p.polls) setPresence(user, { online: false, idle: false }); }, GONE_MS);
-  p.gone.unref();
-}
-function presenceList() {
-  const now = Date.now(), out = [];
-  for (const [u, p] of presence) {
-    if (!accounts.has(u)) continue;
-    if (p.online && now - p.seen > ONLINE_MS) { p.online = false; p.idle = false; p.at = now; } // never saw the close
-    out.push({ user: u, online: p.online, idle: p.online && p.idle, screen: p.online ? p.screen : '', at: p.at, seen: p.seen });
-  }
-  return out;
-}
-function setTyping(user, conv, on) {
-  const prev = typing.get(user);
-  if (prev) clearTimeout(prev.timer);
-  if (!on) { typing.delete(user); if (prev) roomChanged(); return; }
-  const timer = setTimeout(() => { typing.delete(user); roomChanged(); }, TYPING_MS);
-  timer.unref();
-  typing.set(user, { conv, at: Date.now(), timer });
-  if (!prev || prev.conv !== conv) roomChanged();
-}
-const onlineUsers = () => presenceList().filter((p) => p.online).map((p) => p.user);
-function typingFor(user) { // conversations this reader is in; the agent counts while composing a reply
-  const out = [];
-  for (const [u, t] of typing) if (u !== user && (t.conv === 'room' || t.conv.split(/[:|]/).includes(user))) out.push({ user: u, conv: t.conv });
-  if (agent.running && agentEnabled() && (!agent.target || agent.target === user)) out.push({ user: AGENT, conv: agent.target ? 'dm:' + [AGENT, user].sort().join('|') : 'room' });
-  return out;
-}
+// Presence + typing (bridge/presence.js): online / idle / offline from each page's open long poll, who is typing
+// where; Unity counts as typing while she composes (extraTyping).
+const presence = require('./presence')({ accounts, roomChanged: () => roomChanged(),
+  convMember: (c, u) => calls.convMember(c, u),
+  extraTyping: (user) => (agent.running && agentEnabled() && (!agent.target || agent.target === user) ? [{ user: AGENT, conv: agent.target ? 'dm:' + [AGENT, user].sort().join('|') : agent.conv || 'room' }] : []) });
 function appendMessage(msg) { msg.rev = ++rev; messages.push(msg); fs.appendFileSync(CHAT_FILE, JSON.stringify(msg) + '\n'); roomChanged(); }
 function saveMessages() { // after an edit / delete: rewrite the whole (small) file atomically
   const tmp = CHAT_FILE + '.tmp';
@@ -367,20 +237,22 @@ function saveMessages() { // after an edit / delete: rewrite the whole (small) f
 }
 // Direct messages: `to` names the one recipient (routing metadata only; the text stays encrypted).
 // Only the sender and the recipient ever receive them.
-const visibleTo = (m, user) => !m.to || m.from === user || m.to === user;
-const convOf = (m) => (m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
+// A channel / group message carries `conv` (bridge/guilds.js) and goes to that conversation's members only.
+const visibleTo = (m, user) => (m.conv ? m.from === user || guilds.isMember(m.conv, user) : !m.to || m.from === user || m.to === user);
+const convOf = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
 // Read receipts: seen[user][conv] = highest seq that user has looked at in that conversation.
 const SEEN_FILE = path.join(CHAT_DIR, 'seen.json');
 let seen = readJson(SEEN_FILE, {});
 let seenTimer = null;
 const saveSeen = () => { clearTimeout(seenTimer); seenTimer = setTimeout(() => writeJson(SEEN_FILE, seen), 500); };
-// Collect the key slots a message may carry: members (and the agent) only, and for a direct
-// message only the sender and the recipient.
-function cleanSlots(keys, from, to) {
-  const slots = {};
+// Collect the key slots a message may carry: members (and the agent) only; for a direct message only
+// the sender and the recipient; for a channel / group only that conversation's members.
+function cleanSlots(keys, from, to, conv = '') {
+  const slots = {}, allowed = conv ? guilds.members(conv) || [] : null;
   for (const [u, k] of Object.entries(keys || {})) {
     if (!(accounts.has(u) || (u === AGENT && agentEnabled()))) continue;
     if (to && u !== from && u !== to) continue;
+    if (allowed && u !== AGENT && u !== from && !allowed.includes(u)) continue;
     if (k && b64(k.iv, 64) && b64(k.wk, 200)) slots[u] = { iv: k.iv, wk: k.wk };
   }
   return slots;
@@ -399,8 +271,10 @@ function cleanPrefs(p, prev = {}) {
     for (const k of ['message', 'mention', 'reply']) if (p.sound[k] !== undefined) s[k] = Math.max(0, Math.min(100, Math.round(Number(p.sound[k]) || 0)));
     out.sound = s;
   }
-  if (p.tts && typeof p.tts === 'object') { // read chat messages aloud (the browser's own speech voices)
+  if (p.tts && typeof p.tts === 'object') { // text to speech: `all` = master switch (chat read-aloud AND Unity's voice), `on` = chat read-aloud, `unity` = Unity speaks her replies
     const t = { ...(prev.tts || {}) };
+    if (p.tts.all !== undefined) t.all = !!p.tts.all;
+    if (p.tts.unity !== undefined) t.unity = !!p.tts.unity;
     if (p.tts.on !== undefined) t.on = !!p.tts.on;
     if (p.tts.volume !== undefined) t.volume = Math.max(0, Math.min(100, Math.round(Number(p.tts.volume) || 0)));
     if (p.tts.rate !== undefined) t.rate = Math.max(50, Math.min(200, Math.round(Number(p.tts.rate) || 100)));
@@ -462,6 +336,8 @@ if (!agentKey || !agentKey.priv || !agentKey.priv.d) {
 }
 const agentPriv = crypto.createPrivateKey({ key: agentKey.priv, format: 'jwk' });
 const agentEnabled = () => !accounts.has(AGENT) && config.roomAgent !== false;
+// Servers, channels and groups (bridge/guilds.js): who is in which conversation; guilds.route() serves /api/guilds*.
+const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJson, agentName: AGENT_NAME, changed: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
 const agentShared = (jwk) => crypto.diffieHellman({ privateKey: agentPriv, publicKey: crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' }) });
 function gcmOpen(key, iv, data, aad) {
   const buf = Buffer.from(data, 'base64'), d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
@@ -517,15 +393,18 @@ function agentContext(m) { // the earlier messages the caller sent along: [{ n: 
 }
 // to = a username for a private answer, '' for the room. extra = routing labels kept outside the
 // encryption: { as: 'Sam · Claude', via: 'sam' } when a Work run's Claude posts through bridge/team.js
-// (the message is still sealed with the hub's own key, exactly like Unity's).
+// (the message is still sealed with the hub's own key, exactly like Unity's); { conv: 'ch:…' / 'grp:…' }
+// posts into a channel / group, wrapped for its members only.
 function agentSay(text, to, extra = {}) {
+  const conv = !to && typeof extra.conv === 'string' && guilds.isGuildConv(extra.conv) ? extra.conv : '';
+  const allowed = conv ? guilds.members(conv) || [] : null;
   const mid = crypto.randomBytes(16).toString('base64url'), aad = bodyAad(AGENT, to, mid);
   const plain = Buffer.from(text, 'utf8'), padded = Buffer.alloc(padBucket(plain.length), 0x20);
   plain.copy(padded);
   const raw = crypto.randomBytes(32), body = gcmSeal(raw, padded, aad), keys = {};
-  const pubs = [[AGENT, agentKey.pub], ...[...accounts.values()].filter((a) => chatKeys[a.username] && (!to || a.username === to)).map((a) => [a.username, chatKeys[a.username].pub])];
+  const pubs = [[AGENT, agentKey.pub], ...[...accounts.values()].filter((a) => chatKeys[a.username] && (!to || a.username === to) && (!allowed || allowed.includes(a.username))).map((a) => [a.username, chatKeys[a.username].pub])];
   for (const [u, pub] of pubs) { const w = gcmSeal(agentWrapKey(pub), raw, aad + '|' + u); keys[u] = { iv: w.iv, wk: w.ct }; }
-  const msg = { seq: ++seq, v: 3, mid, from: AGENT, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys };
+  const msg = { seq: ++seq, v: 3, mid, from: AGENT, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: agentKey.pub, iv: body.iv, ct: body.ct, keys };
   if (typeof extra.as === 'string' && extra.as) msg.as = extra.as.slice(0, 60);
   if (typeof extra.via === 'string' && accounts.has(extra.via)) msg.via = extra.via;
   appendMessage(msg);
@@ -582,11 +461,12 @@ function agentGreet(acct) {
   go();
 }
 const roomBrain = () => config.roomAgentBrain || 'local';
-// target: username of a private conversation, '' = the room; caller: whose tools / time / place it uses
-function runAgent(target = '', caller = '') {
-  if (agent.running) { agent.queued = true; agent.nextTarget = target; agent.nextCaller = caller; return; }
+// target: username of a private conversation, '' = the room; caller: whose tools / time / place it uses;
+// conv: a channel / group conversation she was called in ('' = the room)
+function runAgent(target = '', caller = '', conv = '') {
+  if (agent.running) { agent.queued = true; agent.nextTarget = target; agent.nextCaller = caller; agent.nextConv = conv; return; }
   agent.queued = false;
-  agent.target = target;
+  agent.target = target; agent.conv = target ? '' : conv;
   if (roomBrain() === 'local') return runAgentLocal(target, caller);
   const args = ['-p', '--output-format', 'json', '--permission-mode', config.permissionMode, '--append-system-prompt', AGENT_SYSTEM];
   // The room agent can be called by anyone in the chat, so it never gets the PC tools or any shell
@@ -609,9 +489,9 @@ function runAgent(target = '', caller = '') {
       try { const r = JSON.parse(line); if (r.session_id) agent.state.sessionId = r.session_id; if (typeof r.result === 'string') { text = r.result; break; } } catch {}
     }
     agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
-    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
+    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
     else roomChanged(); // nothing posted: still take the typing indicator away
-    if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || ''); else setTimeout(maybeRestart, 300);
+    if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || '', agent.nextConv || ''); else setTimeout(maybeRestart, 300);
   };
   child.on('error', (e) => done('(I could not start: ' + e.message + ')'));
   child.on('close', () => done(''));
@@ -627,9 +507,9 @@ function runAgentLocal(target, caller) {
     .catch((e) => `(my brain glitched: ${e.message})`)
     .then((text) => {
       agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
-      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
+      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
       else if (typeof roomChanged === 'function') roomChanged(); // nothing posted: still take the typing indicator away
-      if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || ''); else setTimeout(maybeRestart, 300);
+      if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || '', agent.nextConv || ''); else setTimeout(maybeRestart, 300);
     });
 }
 function agentHear(msg) {
@@ -637,7 +517,7 @@ function agentHear(msg) {
   if (msg.to === AGENT) { if (agentRead(msg)) runAgent(msg.from, msg.from); return; } // a private message to the agent always gets a private answer
   if (msg.to) return; // someone else's private conversation
   const text = agentRead(msg);
-  if (text && AGENT_CALL.test(text)) runAgent('', msg.from);
+  if (text && AGENT_CALL.test(text)) runAgent('', msg.from, msg.conv || ''); // answered where she was called: the room, a channel or a group
 }
 
 // ---------- self-restart ----------
@@ -646,75 +526,23 @@ function agentHear(msg) {
 // Nobody — no account's Work run and not the room agent — is mid-run.
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
-const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy();
+const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
-const team = require('./team')({ accounts, agentSay, presenceList, displayOf: nameOf, chatKeys });
+const team = require('./team')({ accounts, agentSay, presenceList: presence.list, displayOf: nameOf, chatKeys, guilds,
+  hub: { callsState: (u) => calls.state(u), sharesFor: (u) => shares.listFor(u), usageStatus: (a) => usage.status(a), archiveSearch: (a, q) => archive.search(a, q), providersList: (u) => providers.list(u) } });
+// AI providers (bridge/providers.js: the host's Claude by default, plus people's own keys / logins / endpoints)
+// and the per-person OpenAI-compatible API (bridge/openai.js, /v1/*).
+const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts });
+const openai = require('./openai')({ accounts, providers, send: (...a) => send(...a), readBody: (r) => readBody(r), writeState: saveState,
+  tunnelUrl: () => (readJson(HUB.TUNNEL_FILE, {}).url || ''), onIdle: () => setTimeout(maybeRestart, 300) });
 
-// ---------- voice / video calls ----------
-// The hub only passes call set-up messages between browsers and keeps track of who is in which
-// call. Audio and video go browser-to-browser over WebRTC (DTLS-SRTP). The set-up messages
-// themselves (SDP with the DTLS fingerprints, ICE candidates) are encrypted with the same per-pair
-// ECDH keys as the chat, so the hub can neither read them nor swap in its own fingerprints: the
-// media is end-to-end encrypted, not just encrypted to the hub. One call per conversation
-// ("room" or a private "dm:a|b"); a person is in at most one call at a time.
-const calls = new Map();   // conv -> Map(username -> { cam, mic, since, seen })
-const mailbox = new Map(); // username -> [{ n, from, conv, iv, ct }]
-const waiters = new Map(); // username -> Set(wake fn) of open long-polls
-let callN = 0, callVer = 0;
-const convMember = (conv, user) => conv === 'room' || (conv.startsWith('dm:') && conv.slice(3).split('|').includes(user));
-function validConv(conv) {
-  if (conv === 'room') return true;
-  const m = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
-  return !!m && m[1] < m[2] && accounts.has(m[1]) && accounts.has(m[2]);
-}
-function wake(users) { for (const u of users) for (const fn of waiters.get(u) || []) fn(); }
-function callChanged(conv) { callVer++; wake([...accounts.keys()].filter((u) => convMember(conv, u))); }
-function callState(user) {
-  const out = {};
-  for (const [c, ps] of calls) if (ps.size && convMember(c, user)) out[c] = [...ps].map(([u, p]) => ({ user: u, cam: p.cam, mic: p.mic, since: p.since }));
-  return out;
-}
-function leaveCalls(user) {
-  for (const [c, ps] of calls) if (ps.delete(user)) { if (!ps.size) calls.delete(c); callChanged(c); }
-  mailbox.delete(user);
-}
-setInterval(() => { // browsers long-poll at least every 25 s while in a call; 60 s of silence = gone
-  const now = Date.now();
-  for (const [c, ps] of calls) for (const [u, p] of ps) if (now - p.seen > 60000) { ps.delete(u); if (!ps.size) calls.delete(c); callChanged(c); }
-}, 10000).unref();
-const ICE_DEFAULT = [{ urls: 'stun:stun.l.google.com:19302' }]; // finds each browser's public address; sees no media
+// Voice / video calls (bridge/calls.js): who is in which call + the encrypted set-up relay; calls.route() serves /api/call/*.
+const calls = require('./calls')({ accounts, config, chatKeys, send: (...a) => send(...a), readBody: (r) => readBody(r), b64,
+  extraMember: (c, u) => guilds.isMember(c, u), extraConv: (c) => guilds.isGuildConv(c) && guilds.exists(c) });
+const { convMember } = calls; // "is this person part of that conversation" (also used by shared Work sessions)
 
-// ---------- shared Work sessions (watch-only) ----------
-// A person can share their Work session to a conversation (# Everyone or one person). Members of
-// that conversation can watch it in a window: the Claude conversation as it happens, what the owner
-// is typing (live), what they send and what is queued. Watching is read-only; everyone keeps working
-// in their own session and worktree. Work runs happen on the hub anyway, so this adds no new reader.
-const shares = new Map();        // owner -> { conv, since, n, log: [{ n, t, text, ts }], live: { typing, queue }, ver }
-const watchWaiters = new Map();  // owner -> Set(wake fn)
-const wakeWatchers = (owner) => { for (const fn of watchWaiters.get(owner) || []) fn(); };
-function mirror(acct, t, text) {
-  const s = shares.get(acct.username);
-  if (!s || !text) return;
-  s.log.push({ n: ++s.n, t, text: String(text).slice(0, 20000), ts: new Date().toISOString() });
-  if (s.log.length > 400) s.log.splice(0, s.log.length - 400);
-  wakeWatchers(acct.username);
-}
-function mirrorEvent(acct, ev) {
-  if (!shares.has(acct.username)) return;
-  if (ev.type === 'assistant' && ev.message) {
-    for (const b of ev.message.content || []) {
-      if (b.type === 'text' && b.text && b.text.trim()) mirror(acct, 'claude', b.text);
-      else if (b.type === 'tool_use') {
-        const i = b.input || {}, target = i.path ?? i.file_path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? '';
-        // (no icon in the text: the page draws the gear itself)
-        mirror(acct, 'tool', String(b.name).replace(/^mcp__pc__/, 'their PC › ') + (target !== '' ? '  ' + String(target).slice(0, 160) : ''));
-      }
-    }
-  } else if (ev.type === 'result') mirror(acct, 'sys', ev.is_error ? 'Claude stopped with an error' : 'Done');
-}
-const canWatch = (owner, viewer) => { const s = shares.get(owner); return !!s && owner !== viewer && convMember(s.conv, viewer); };
-const sharesFor = (user) => [...shares].filter(([o, s]) => o !== user && convMember(s.conv, user)).map(([o, s]) => ({ user: o, conv: s.conv, since: s.since }));
-function stopShare(owner) { if (shares.delete(owner)) { wakeWatchers(owner); roomChanged(); } }
+// Shared Work sessions (bridge/shares.js): watch-only windows on a person's Work run; shares.route() serves /api/work/*.
+const shares = require('./shares')({ accounts, convMember, roomChanged: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
 function maybeRestart() {
   if (anyBusy() || !fs.existsSync(RESTART_FLAG)) return;
   try { fs.unlinkSync(RESTART_FLAG); } catch {}
@@ -740,7 +568,7 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
 function accountSummary(a) {
   return {
     username: a.username, display: a.display, admin: a.admin,
@@ -782,6 +610,9 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, team.call(name, args, who));
     }
 
+    // OpenAI-compatible API: its own bearer keys (Settings → API access), for harnesses, not the browser app.
+    if (p === '/v1' || p.startsWith('/v1/')) return openai.handle(req, res, p);
+
     const origin = req.headers.origin;
     if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -801,7 +632,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/status' && req.method === 'GET') {
-      return send(res, 200, { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy() });
+      // The only thing anyone may learn without signing in is that a Mills hub is here (the page needs
+      // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
+      // the regression runner), which call from this machine, never through the tunnel.
+      const viaTunnel = !!req.headers['cf-connecting-ip'];
+      return send(res, 200, viaTunnel ? { ok: true, hub: true } : { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy() });
     }
 
     if (p === '/api/login' && req.method === 'POST') {
@@ -850,43 +685,47 @@ const server = http.createServer(async (req, res) => {
       return send(res, 503, { error: 'Mills is restarting; your message goes through in a moment.' });
     }
     if (await assistant.route(p, req, res, acct)) return;
+    if (await openai.route(p, req, res, acct)) return; // Settings → API access (key, rotation, provider)
 
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
-        models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct), prefs: acct.state.prefs || {}, share: shares.has(acct.username) ? shares.get(acct.username).conv : '' });
+        models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct), prefs: acct.state.prefs || {}, share: shares.convOf(acct.username),
+        provider: acct.state.provider || 'host', providers: providers.list(acct.username) });
     }
+    // ----- AI providers: everyone manages their own; the host's Claude is always there -----
+    if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });
+    if (p === '/api/providers/add' && req.method === 'POST') { try { return send(res, 200, { provider: providers.add(acct.username, await readBody(req)), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/providers/update' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { provider: providers.update(acct.username, String(b.id || ''), b), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/providers/remove' && req.method === 'POST') { const b = await readBody(req); try { providers.remove(acct.username, String(b.id || '')); return send(res, 200, { providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/prefs' && req.method === 'GET') return send(res, 200, { prefs: acct.state.prefs || {} });
-    if (p === '/api/usage' && req.method === 'GET') {
-      const now = Date.now(), L = usage.limits || {};
-      const win = (key, start, len) => { // official numbers when Claude Code reported them, otherwise the estimate
-        const l = L[key];
-        if (l && l.resetsAt && l.resetsAt > now) return { source: 'claude', status: l.status, utilization: l.utilization, resetsAt: l.resetsAt };
-        const s = start && now - start < len ? start : null;
-        return { source: 'estimate', status: l && l.status === 'rejected' && now - l.at < len ? 'rejected' : 'allowed', utilization: null, resetsAt: s ? s + len : null };
-      };
-      const ctx = acct.state.ctx && acct.state.ctx.session === (acct.state.claudeSessionId || '') ? acct.state.ctx : null;
-      return send(res, 200, { now, five_hour: win('five_hour', usage.fiveStart, FIVE_H), seven_day: win('seven_day', usage.weekStart, SEVEN_D),
-        context: ctx ? { tokens: ctx.tokens, window: ctx.window || config.contextWindow || 200000, model: ctx.model } : null });
-    }
+    if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage.status(acct));
     if (p === '/api/prefs' && req.method === 'POST') {
       acct.state.prefs = cleanPrefs(await readBody(req), acct.state.prefs || {});
       saveState(acct);
       return send(res, 200, { prefs: acct.state.prefs });
     }
     if (p === '/api/logout' && req.method === 'POST') {
-      leaveCalls(acct.username); stopShare(acct.username); setTyping(acct.username, '', false);
-      { const q = pres(acct.username); q.polls = 0; clearTimeout(q.gone); setPresence(acct.username, { online: false, idle: false }); } // offline right away
+      calls.leave(acct.username); shares.stop(acct.username); presence.typing(acct.username, '', false);
+      presence.gone(acct.username); // offline right away
       sessions.delete((req.headers.authorization || '').slice(7)); saveSessions();
       return send(res, 200, { ok: true });
     }
 
     // ----- work -----
     if (p === '/api/model' && req.method === 'POST') {
-      const { model } = await readBody(req);
-      if (typeof model !== 'string' || (model && !modelIds().includes(model))) return send(res, 400, { error: 'Unknown model.' });
+      // { model, provider? }: the model must belong to the provider (host = the config.json models; someone's
+      // own Claude key / login = its model list). A provider that is not Claude cannot run Work at all.
+      const { model, provider } = await readBody(req);
+      const prov = providers.get(provider === undefined ? acct.state.provider || 'host' : String(provider || 'host'), acct.username);
+      if (!prov) return send(res, 400, { error: 'Unknown provider.' });
+      if (providers.claudeEnv(prov) === null) return send(res, 400, { error: 'That provider is not Claude; Work runs need Claude Code. Use it for the API or the Unity section instead.' });
+      const ids = prov.kind === 'host' ? modelIds() : prov.models || [];
+      if (typeof model !== 'string' || (model && !ids.includes(model))) return send(res, 400, { error: 'Unknown model.' });
       if (model) acct.state.model = model; else delete acct.state.model;
+      if (prov.kind === 'host') delete acct.state.provider; else acct.state.provider = prov.id;
+      if (prov.kind !== 'host' && !model) acct.state.model = ids[0]; // a provider always runs a model of its own list
       saveState(acct);
-      return send(res, 200, { model: acct.state.model || '', effective: effectiveModel(acct) });
+      return send(res, 200, { model: acct.state.model || '', provider: acct.state.provider || 'host', effective: effectiveModel(acct) });
     }
     if (p === '/api/workspace' && req.method === 'POST') {
       const { workspace } = await readBody(req);
@@ -914,47 +753,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/stop' && req.method === 'POST') { stopClaude(acct); return send(res, 200, { ok: true }); }
 
-    if (p === '/api/archive/list' && req.method === 'POST') return send(res, 200, { items: listArchive(acct) });
-    if (p === '/api/archive/search' && req.method === 'POST') { const { q } = await readBody(req); return send(res, 200, { items: searchArchive(acct, String(q || '').slice(0, 200)) }); }
-    if (p === '/api/archive/save' && req.method === 'POST') {
-      const { id, title, transcript } = await readBody(req);
-      if (!Array.isArray(transcript) || !transcript.length) return send(res, 400, { error: 'Nothing to save yet.' });
-      if (!acct.state.claudeSessionId) return send(res, 400, { error: 'This conversation has no Claude session yet.' });
-      const entryId = id || crypto.randomBytes(8).toString('hex');
-      const file = archiveFile(acct, entryId);
-      const prev = readJson(file, {});
-      fs.mkdirSync(acct.files.ARCHIVE_DIR, { recursive: true });
-      const entry = {
-        id: entryId, title: cleanTitle(title || prev.title), savedAt: new Date().toISOString(),
-        sessionId: acct.state.claudeSessionId,
-        transcript: transcript.filter((t) => t && typeof t.cls === 'string' && typeof t.text === 'string'),
-      };
-      writeJson(file, entry);
-      return send(res, 200, { id: entry.id, title: entry.title });
-    }
-    if (p === '/api/archive/open' && req.method === 'POST') {
-      if (acct.running) return send(res, 409, { error: 'Claude is working. Stop it first.' });
-      const entry = readJson(archiveFile(acct, (await readBody(req)).id), null);
-      if (!entry) return send(res, 404, { error: 'Conversation not found.' });
-      acct.state.claudeSessionId = entry.sessionId; saveState(acct);
-      return send(res, 200, entry);
-    }
-    if (p === '/api/archive/rename' && req.method === 'POST') {
-      const { id, title } = await readBody(req);
-      const file = archiveFile(acct, id);
-      const entry = readJson(file, null);
-      if (!entry) return send(res, 404, { error: 'Conversation not found.' });
-      entry.title = cleanTitle(title); writeJson(file, entry);
-      return send(res, 200, { id, title: entry.title });
-    }
-    if (p === '/api/archive/delete' && req.method === 'POST') {
-      const file = archiveFile(acct, (await readBody(req)).id);
-      if (fs.existsSync(file)) fs.unlinkSync(file);
-      return send(res, 200, { ok: true });
-    }
+    if (await archive.route(p, req, res, acct)) return; // past sessions: /api/archive/*
 
     // ----- team board -----
     if (p === '/api/board' || p.startsWith('/api/board/')) { if (await board.handle(req, res, p, url, acct)) return; }
+    if (await guilds.route(p, req, res, acct)) return; // servers, channels, groups: /api/guilds*
 
     // ----- chat room -----
     if (p === '/api/room/members' && req.method === 'GET') {
@@ -971,17 +774,20 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/send' && req.method === 'POST') {
-      const { iv, ct, keys, to, v, mid, blob } = await readBody(req);
+      const { iv, ct, keys, to, v, mid, blob, conv: convIn } = await readBody(req);
       const mine = chatKeys[acct.username];
+      // conv: a channel / group this person is in ('room' or nothing = # Everyone; a private message uses `to`)
+      const conv = convIn && convIn !== 'room' ? String(convIn) : '';
+      if (conv && (to || !guilds.isGuildConv(conv) || !guilds.isMember(conv, acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
       if (v !== undefined && !(FORMATS.includes(v) && MID_RE.test(mid || '') && !messages.some((x) => x.mid === mid))) return send(res, 400, { error: 'Bad message.' });
       if (blob !== undefined && !(v === 4 && b64(blob, MAX_CT))) return send(res, typeof blob === 'string' && blob.length > MAX_CT ? 413 : 400, { error: 'That voice clip is too large or malformed (up to about 2 minutes).' });
       if (!mine) return send(res, 400, { error: 'Your chat key is not set up yet.' });
       if (typeof ct === 'string' && ct.length > MAX_CT) return send(res, 413, { error: 'That message is too large (voice clips can be up to about 2 minutes).' });
       if (!b64(iv, 64) || !b64(ct, MAX_CT) || !keys || typeof keys !== 'object') return send(res, 400, { error: 'Bad message.' });
       if (to !== undefined && to !== '' && (to === acct.username || !(accounts.has(to) || (to === AGENT && agentEnabled())))) return send(res, 400, { error: 'Unknown recipient.' });
-      const slots = cleanSlots(keys, acct.username, to || '');
+      const slots = cleanSlots(keys, acct.username, to || '', conv);
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
-      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}) };
+      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}) };
       appendMessage(msg);
       agentHear(msg);
       return send(res, 200, { seq: msg.seq });
@@ -995,7 +801,7 @@ const server = http.createServer(async (req, res) => {
       // an edit keeps the message id; a legacy message gets a fresh one when it is first edited in v3
       if (v !== undefined && !(FORMATS.includes(v) && MID_RE.test(mid || '') && (m.mid ? m.mid === mid : !messages.some((x) => x.mid === mid)))) return send(res, 400, { error: 'Bad message.' });
       if (m.blob && v !== 4) return send(res, 400, { error: 'Bad message.' }); // a clip's caption is edited in v4, which keeps the clip's key
-      const slots = cleanSlots(keys, acct.username, m.to || '');
+      const slots = cleanSlots(keys, acct.username, m.to || '', m.conv || '');
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
       if (v !== undefined) Object.assign(m, { v, mid }); else { delete m.v; delete m.mid; }
       Object.assign(m, { iv, ct, keys: slots, fromPub: mine.pub, editedAt: new Date().toISOString(), rev: ++rev });
@@ -1016,118 +822,22 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/room/typing' && req.method === 'POST') {
       const { conv, on } = await readBody(req);
       const dm = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
-      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
-      setTyping(acct.username, conv, !!on);
+      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username)) && !guilds.isMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
+      presence.typing(acct.username, conv, !!on);
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/seen' && req.method === 'POST') {
       const { conv, seq: upTo } = await readBody(req);
       const dm = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
-      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
+      if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username)) && !guilds.isMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
       const mine = seen[acct.username] || (seen[acct.username] = {});
       const v = Math.min(Number(upTo) || 0, seq);
       if (v > (mine[conv] || 0)) { mine[conv] = v; saveSeen(); roomChanged(); }
       return send(res, 200, { ok: true });
     }
-    // ----- shared Work sessions -----
-    if (p === '/api/work/share' && req.method === 'POST') {
-      const { conv, transcript } = await readBody(req);
-      if (!conv) { stopShare(acct.username); return send(res, 200, { share: '' }); }
-      if (conv !== 'room') return send(res, 400, { error: 'A Work session can only be shared with everyone.' }); // no per-person shares
-      const prev = shares.get(acct.username);
-      const s = { conv, since: new Date().toISOString(), n: 0, log: [], live: prev ? prev.live : { typing: '', queue: [] }, ver: 0 };
-      const kinds = { me: 'user', claude: 'claude', tool: 'tool', sys: 'sys' };
-      for (const t of (Array.isArray(transcript) ? transcript : []).slice(-150)) {
-        if (t && kinds[t.cls] && typeof t.text === 'string') s.log.push({ n: ++s.n, t: kinds[t.cls], text: t.text.slice(0, 20000), ts: s.since });
-      }
-      if (prev) wakeWatchers(acct.username); // watchers of the old share see it restart
-      shares.set(acct.username, s);
-      roomChanged();
-      return send(res, 200, { share: conv });
-    }
-    if (p === '/api/work/live' && req.method === 'POST') {
-      const s = shares.get(acct.username);
-      if (!s) return send(res, 200, { ok: false });
-      const { typing, queue } = await readBody(req);
-      s.live = { typing: typeof typing === 'string' ? typing.slice(0, 4000) : '', queue: (Array.isArray(queue) ? queue : []).slice(0, 20).map((q) => String(q).slice(0, 2000)) };
-      s.ver++; wakeWatchers(acct.username);
-      return send(res, 200, { ok: true });
-    }
-    if (p === '/api/work/watch' && req.method === 'GET') {
-      // Long poll: new log entries after `after`, or a live typing / queue change since `ver`; waits up to 25 s.
-      const owner = String(url.searchParams.get('user') || ''), after = Number(url.searchParams.get('after')) || 0;
-      const ver = Number(url.searchParams.get('ver')), since = url.searchParams.get('since') || '';
-      const answer = () => {
-        const s = shares.get(owner), o = accounts.get(owner);
-        if (!s || !canWatch(owner, acct.username)) return send(res, 200, { stopped: true });
-        const restart = since !== s.since; // a new share: send everything again
-        send(res, 200, { since: s.since, conv: s.conv, busy: !!(o && o.running), live: s.live, ver: s.ver,
-          events: s.log.filter((e) => restart || e.n > after), after: s.n, restart });
-      };
-      const s = shares.get(owner);
-      if (!s || !canWatch(owner, acct.username) || since !== s.since || s.log.some((e) => e.n > after) || ver !== s.ver) return answer();
-      let done = false;
-      const set = watchWaiters.get(owner) || new Set(); watchWaiters.set(owner, set);
-      const finish = () => { if (done) return; done = true; clearTimeout(timer); set.delete(finish); answer(); };
-      const timer = setTimeout(finish, 25000);
-      set.add(finish);
-      req.on('close', () => { if (!done) { done = true; clearTimeout(timer); set.delete(finish); } });
-      return;
-    }
+    if (await shares.route(p, req, res, acct, url)) return; // shared Work sessions: /api/work/*
 
-    // ----- calls -----
-    if (p === '/api/call/join' && req.method === 'POST') {
-      const { conv, cam, mic } = await readBody(req);
-      if (!validConv(conv) || !convMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
-      if (!chatKeys[acct.username]) return send(res, 400, { error: 'Your chat key is not set up yet.' });
-      for (const [c, ps] of calls) if (c !== conv && ps.delete(acct.username)) { if (!ps.size) calls.delete(c); callChanged(c); }
-      const ps = calls.get(conv) || new Map(); calls.set(conv, ps);
-      const prev = ps.get(acct.username);
-      ps.set(acct.username, { cam: !!cam, mic: !!mic, since: prev ? prev.since : new Date().toISOString(), seen: Date.now() });
-      callChanged(conv);
-      return send(res, 200, { calls: callState(acct.username), ver: callVer, iceServers: Array.isArray(config.iceServers) ? config.iceServers : ICE_DEFAULT });
-    }
-    if (p === '/api/call/leave' && req.method === 'POST') { leaveCalls(acct.username); return send(res, 200, { ok: true }); }
-    if (p === '/api/call/state' && req.method === 'POST') {
-      const { conv, cam, mic } = await readBody(req);
-      const mine = calls.get(conv) && calls.get(conv).get(acct.username);
-      if (!mine) return send(res, 409, { error: 'You are not in that call.' });
-      Object.assign(mine, { cam: !!cam, mic: !!mic, seen: Date.now() });
-      callChanged(conv);
-      return send(res, 200, { ok: true });
-    }
-    if (p === '/api/call/signal' && req.method === 'POST') {
-      const { to, conv, iv, ct } = await readBody(req);
-      const ps = calls.get(conv);
-      if (!ps || !ps.has(acct.username) || !ps.has(to) || to === acct.username) return send(res, 409, { error: 'Both people must be in this call.' });
-      if (!b64(iv, 64) || !b64(ct, 200000)) return send(res, 400, { error: 'Bad signal.' });
-      const box = mailbox.get(to) || []; mailbox.set(to, box);
-      box.push({ n: ++callN, from: acct.username, conv, iv, ct });
-      if (box.length > 500) box.splice(0, box.length - 500);
-      wake([to]);
-      return send(res, 200, { ok: true });
-    }
-    if (p === '/api/call/poll' && req.method === 'GET') {
-      // Long poll: answers at once when there are signals after `after` or the call list changed
-      // since `ver`, otherwise waits up to 25 s. Doubles as the "still here" heartbeat for calls.
-      const after = Number(url.searchParams.get('after')) || 0, ver = Number(url.searchParams.get('ver'));
-      const user = acct.username;
-      const box = mailbox.get(user) || [];
-      if (box.length) mailbox.set(user, box.filter((s) => s.n > after)); // delivered ones can go
-      const answer = () => {
-        for (const ps of calls.values()) if (ps.has(user)) ps.get(user).seen = Date.now();
-        const sigs = (mailbox.get(user) || []).filter((s) => s.n > after);
-        send(res, 200, { signals: sigs, after: sigs.length ? sigs[sigs.length - 1].n : after, calls: callState(user), ver: callVer });
-      };
-      if ((mailbox.get(user) || []).some((s) => s.n > after) || ver !== callVer) return answer();
-      let done = false;
-      const set = waiters.get(user) || new Set(); waiters.set(user, set);
-      const finish = () => { if (done) return; done = true; clearTimeout(timer); set.delete(finish); answer(); };
-      const timer = setTimeout(finish, 25000);
-      set.add(finish);
-      req.on('close', () => { if (!done) { done = true; clearTimeout(timer); set.delete(finish); } });
-      return;
-    }
+    if (await calls.route(p, req, res, acct, url)) return; // voice / video calls: /api/call/*
 
     if (p === '/api/room/messages' && req.method === 'GET') {
       // ?rev=N → every message (new, edited or deleted) changed after N; first call (0) = the latest 500.
@@ -1148,27 +858,27 @@ const server = http.createServer(async (req, res) => {
         }
         const seenOut = {}; // receipts for the conversations this reader is part of
         for (const [u, convs] of Object.entries(seen)) {
-          for (const [c, v] of Object.entries(convs)) if (c === 'room' || c.split(/[:|]/).includes(acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
+          for (const [c, v] of Object.entries(convs)) if (c === 'room' || (c.startsWith('dm:') && c.split(/[:|]/).includes(acct.username)) || guilds.isMember(c, acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
         }
-        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: sharesFor(acct.username), ver: roomVer, keysVer,
-          online: onlineUsers(), presence: presenceList(), typing: typingFor(acct.username) });
+        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer, guildsVer: guilds.version(),
+          online: presence.online(), presence: presence.list(), typing: presence.typingFor(acct.username) });
       };
-      if (url.searchParams.get('wait') !== '1') { pres(acct.username).seen = Date.now(); return answer(); }
+      if (url.searchParams.get('wait') !== '1') { presence.touch(acct.username); return answer(); }
       // a long poll = a connected page: online while one is open, offline shortly after the last one closes
       const stale = Number(url.searchParams.get('ver')) !== roomVer; // judged before our own coming-online bumps the version
-      pollOpened(acct.username);
-      if (stale) { pollClosed(acct.username); return answer(); } // re-opens at once with the next poll
+      presence.pollOpened(acct.username);
+      if (stale) { presence.pollClosed(acct.username); return answer(); } // re-opens at once with the next poll
       let done = false;
-      const finish = () => { if (done) return; done = true; clearTimeout(timer); roomWaiters.delete(finish); pollClosed(acct.username); answer(); };
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); roomWaiters.delete(finish); presence.pollClosed(acct.username); answer(); };
       const timer = setTimeout(finish, 25000);
       roomWaiters.add(finish);
-      req.on('close', () => { if (!done) { done = true; clearTimeout(timer); roomWaiters.delete(finish); pollClosed(acct.username); } });
+      req.on('close', () => { if (!done) { done = true; clearTimeout(timer); roomWaiters.delete(finish); presence.pollClosed(acct.username); } });
       return;
     }
     if (p === '/api/presence' && req.method === 'POST') { // the page reports where it is, whether it is idle, and when it goes away
       const { screen, idle, gone } = await readBody(req);
-      if (gone) { const q = pres(acct.username); q.polls = 0; clearTimeout(q.gone); setPresence(acct.username, { online: false, idle: false }); }
-      else setPresence(acct.username, { ...(typeof screen === 'string' ? { screen: screen.slice(0, 12) } : {}), ...(idle !== undefined ? { idle: !!idle } : {}) });
+      if (gone) presence.gone(acct.username);
+      else presence.set(acct.username, { ...(typeof screen === 'string' ? { screen: screen.slice(0, 12) } : {}), ...(idle !== undefined ? { idle: !!idle } : {}) });
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/blob' && req.method === 'GET') { // a voice clip's ciphertext, for a reader of that message
@@ -1218,12 +928,12 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true });
       }
       if (p === '/api/admin/signout' && req.method === 'POST') { const t = needTarget(); if (t !== acct) dropSessions(t.username); return send(res, 200, { ok: true }); }
-      if (p === '/api/admin/stop' && req.method === 'POST') { const t = needTarget(); stopClaude(t); assistant.stop(t); return send(res, 200, { ok: true }); }
+      if (p === '/api/admin/stop' && req.method === 'POST') { const t = needTarget(); stopClaude(t); assistant.stop(t); openai.stop(t); return send(res, 200, { ok: true }); }
       if (p === '/api/admin/delete' && req.method === 'POST') {
         const t = needTarget();
         if (t === acct) return send(res, 400, { error: 'You cannot delete your own account.' });
         if (!t.profile) return send(res, 400, { error: `The "${DEFAULT_USERNAME}" account lives in bridge/ itself and cannot be deleted here.` });
-        stopClaude(t); dropSessions(t.username); stopShare(t.username); leaveCalls(t.username);
+        stopClaude(t); dropSessions(t.username); shares.stop(t.username); calls.leave(t.username); guilds.dropUser(t.username);
         fs.mkdirSync(DELETED_DIR, { recursive: true });
         fs.renameSync(t.files.PROFILE_DIR, path.join(DELETED_DIR, `${t.username}-${Date.now()}`)); // kept, not destroyed
         delete chatKeys[t.username]; writeJson(KEYS_FILE, chatKeys);

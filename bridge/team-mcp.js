@@ -11,9 +11,15 @@ const USER = process.env.MILLS_USER || 'the user';
 const ACCOUNT = process.env.MILLS_ACCOUNT || '';
 
 const TOOLS = [
-  { name: 'team_say', description: `Post a message into the Mills team chat as "${USER} · Claude": to # Everyone (default) or privately to one person (to = their username). Use it to tell the team what you are doing, what landed, and BEFORE any hub restart. Markdown is rendered.`,
-    inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'The message (markdown)' }, to: { type: 'string', description: 'Username for a private message; leave out for everyone' } }, required: ['text'] } },
+  { name: 'team_say', description: `Post a message into the Mills team chat as "${USER} · Claude": to # Everyone (default), privately to one person (to = their username), or into a server channel / group (conv = its id from team_channels, e.g. "ch:mills/dev" or "grp:ab12cd"). Use it to tell the team what you are doing, what landed, and BEFORE any hub restart. Markdown is rendered.`,
+    inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'The message (markdown)' }, to: { type: 'string', description: 'Username for a private message; leave out for everyone' }, conv: { type: 'string', description: 'A channel or group conversation id (see team_channels)' } }, required: ['text'] } },
   { name: 'team_presence', description: 'Who is in Mills right now: every account with online / away / offline, where they are and when they were last seen.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'team_channels', description: `The servers, channels and groups ${USER} is in, with the conversation ids team_say accepts.`, inputSchema: { type: 'object', properties: {} } },
+  { name: 'team_channel_create', description: `Make a text channel in a server ${USER} is in (default: the Mills server everyone is in). Returns its conv id for team_say.`, inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'letters, digits, dashes' }, topic: { type: 'string' }, server: { type: 'string', description: 'server id, default "mills"' } }, required: ['name'] } },
+  { name: 'team_group_create', description: `Make a group conversation with the people named (${USER} is included). Returns its conv id for team_say.`, inputSchema: { type: 'object', properties: { members: { type: 'array', items: { type: 'string' }, description: 'usernames' }, name: { type: 'string' } }, required: ['members'] } },
+  { name: 'hub_status', description: 'The wider picture of Mills right now: who is online / away / offline and where, who is in a call (cam / mic / screen), who is sharing a Work session, and the host account\'s 5-hour / 7-day Claude usage windows plus this session\'s context size.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'sessions_search', description: `Search ${USER}'s own saved Claude sessions (Past sessions): every word must match the title or the transcript; snippets say who said it.`, inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] } },
+  { name: 'my_providers', description: `The AIs ${USER} may use in Mills (the host's Claude, their own keys / logins / endpoints, the team's shared ones) and which one answers right now.`, inputSchema: { type: 'object', properties: {} } },
 ];
 
 function reply(rid, result) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: rid, result }) + '\n'); }

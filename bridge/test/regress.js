@@ -44,12 +44,18 @@ function skip(id, label, why) {
 }
 
 // ---------- production snapshot (read-only) ----------
-const { allProfiles, readJson } = require(path.join(BRIDGE, 'common.js'));
+// The running hub and its account files live in the MAIN checkout (the host folder), which is not this
+// folder when the runner is started from someone's worktree: production checks always look there.
+const { readJson } = require(path.join(BRIDGE, 'common.js'));
+const PROD = path.join(require(path.join(BRIDGE, 'worktree.js')).REPO, 'bridge');
+function prodProfiles() { // every production account: '' = the default one (bridge/ itself), then bridge/profiles/<name>
+  const dir = path.join(PROD, 'profiles');
+  const named = fs.existsSync(dir) ? fs.readdirSync(dir).filter((p) => /^[a-z0-9-]{1,32}$/.test(p) && ['config.json', 'auth.json'].some((f) => fs.existsSync(path.join(dir, p, f)))).sort() : [];
+  return ['', ...named];
+}
+const prodDir = (p) => (p ? path.join(PROD, 'profiles', p) : PROD);
 function prodAccountFiles() {
-  return allProfiles().flatMap((p) => {
-    const dir = p ? path.join(BRIDGE, 'profiles', p) : BRIDGE;
-    return [path.join(dir, 'auth.json'), ...(p ? [path.join(dir, 'config.json')] : [])];
-  });
+  return prodProfiles().flatMap((p) => [path.join(prodDir(p), 'auth.json'), ...(p ? [path.join(prodDir(p), 'config.json')] : [])]);
 }
 const prodBefore = Object.fromEntries(prodAccountFiles().map((f) => [f, sha(f)]));
 
@@ -97,6 +103,13 @@ function startFakeOllama() {
         if (req.url === '/txt2img') fakeImagePrompts.push(JSON.parse(body || '{}').prompt || '');
         const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
         res.writeHead(200, { 'Content-Type': 'image/png', 'X-Seconds': '0.01' }); return res.end(png);
+      }
+      // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
+      if (req.url === '/oai/chat/completions') {
+        const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
+        const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
+        if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
+        return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
       }
       if (req.url === '/api/tags') return j({ models: [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
@@ -239,9 +252,15 @@ async function run() {
   const scripts = fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => path.join(BRIDGE, f)).concat(fs.readdirSync(__dirname).map((f) => path.join(__dirname, f)));
   const bad = scripts.filter((f) => spawnSync(process.execPath, ['--check', f]).status !== 0);
   let pageOk = true, pageErr = '';
-  const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  try { new Function(html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'))); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
-  for (const f of ['md.js', 'board.js']) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
+  // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
+  // covering code that moved out of index.html into its own file.
+  const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+  const PAGE_SCRIPTS = ['calls.js', 'guilds.js', 'app.js'];
+  const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
+  const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
+  try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
+  for (const f of ['md.js', 'board.js', 'sw.js', ...PAGE_SCRIPTS]) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
+  for (const f of PAGE_SCRIPTS) if (!indexHtml.includes(`<script src="${f}"></script>`)) { pageOk = false; pageErr += ' ' + f + ' not loaded'; }
   check('R1', 'every bridge script passes node --check; page script (and web/md.js) parses', !bad.length && pageOk, [bad.map((f) => path.basename(f)).join(', '), pageErr].filter(Boolean).join(' '));
 
   const st = await call('/api/status');
@@ -269,6 +288,25 @@ async function run() {
   const tmp = (await login('t-user', 'pw-t-user-0001', devB)).data.token;
   await call('/api/logout', tmp, {});
   check('R8', 'logout → old token 401', (await call('/api/check', tmp)).status === 401);
+  // Nothing without a sign-in: every API route the hub source mentions (server.js, board.js, assistant.js,
+  // so a new route is covered the day it is written) answers 401 to a visitor, GET and POST, except the
+  // sign-in itself and the bare "a hub is here" status; through the tunnel that status carries no pid /
+  // busy / supervised; unknown paths and folders are 404; and the page ships with only the sign-in form visible.
+  const routeSrc = ['server.js', 'board.js', 'assistant.js', 'openai.js', 'team.js'].map((f) => fs.readFileSync(path.join(BRIDGE, f), 'utf8')).join('\n');
+  const routes = [...new Set([...routeSrc.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)].map((m) => m[1]))].filter((r) => r !== '/api/status' && r !== '/api/login' && !/\/$/.test(r));
+  const leaks = [];
+  for (const r of routes) {
+    const g = await call(r), po = await call(r, null, {});
+    if (g.status !== 401 || po.status !== 401) leaks.push(`${r} ${g.status}/${po.status}`);
+  }
+  const anonStatus = (await fetch(H + '/api/status', { headers: { 'cf-connecting-ip': '203.0.113.9' } }).then((r) => r.json()).catch(() => ({})));
+  const localStatus = (await call('/api/status')).data;
+  const notFound = (await fetch(H + '/nothing-here.html')).status, dirList = (await fetch(H + '/vendor/')).status, traversal = (await fetch(H + '/..%2f..%2fbridge%2fconfig.json')).status;
+  const hiddenScreens = ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'settings', 'roomFloat', 'callFloat', 'archive'].filter((id) => !new RegExp(`id="${id}"[^>]*\\bhidden\\b`).test(html) && !new RegExp(`<[a-z]+ [^>]*\\bhidden\\b[^>]*id="${id}"`).test(html));
+  check('R110', `login gate: ${routes.length} API routes from the hub source answer 401 without a sign-in (GET + POST); anonymous status through the tunnel carries no pid / busy / supervised; unknown paths, folder listings and path traversal → 404; [static] every screen but the sign-in form ships hidden`,
+    routes.length >= 50 && !leaks.length && anonStatus.ok === true && anonStatus.pid === undefined && anonStatus.busy === undefined && anonStatus.supervised === undefined && typeof localStatus.pid === 'number'
+    && notFound === 404 && dirList === 404 && traversal === 404 && !hiddenScreens.length && /<form id="login"/.test(html),
+    [leaks.slice(0, 6).join(', '), hiddenScreens.length ? 'visible: ' + hiddenScreens.join(' ') : '', `404s ${notFound}/${dirList}/${traversal}`].filter(Boolean).join(' | '));
 
   // Work
   const ck = (await call('/api/check', A)).data;
@@ -415,7 +453,7 @@ async function run() {
   check('R35b', 'room agent key survives the restart', !!memAfter && !!agentMember && memAfter.pub.x === agentMember.pub.x);
 
   // Per-account worktrees (the scratch copy is its own git repo)
-  const cwdOf = (events) => ((texts(events).match(/cwd=(.+)$/m) || [])[1] || '').trim();
+  const cwdOf = (events) => ((texts(events).match(/cwd=(.+?)(?: \||$)/m) || [])[1] || '').trim();
   const samePath = (a, b) => !!a && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
   const wtU = path.join(SCRATCH, 'worktrees', 't-user');
   const ckU = (await call('/api/check', U)).data;
@@ -467,6 +505,75 @@ async function run() {
   check('R109', 'worktree.js live: develop → main (--no-ff) in the checkout that has main, pushes every remote, reports the deploy; second run = nothing to ship; main folder left clean; no restart without --restart',
     lv.status === 0 && /Merged develop into main/.test(lv.stdout) && onMain && /Nothing to ship/.test(lvAgain) && mainClean && !fs.existsSync(path.join(SB, '.restart')), String(lv.stdout || lv.stderr).trim().split('\n')[0]);
 
+  // OpenAI-compatible API (/v1) with one key per person (bridge/openai.js), answered by the host's Claude (the fake one here).
+  const v1 = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, text: await r.text(), ct: r.headers.get('content-type') || '' }; };
+  const k0 = (await call('/api/apikey', U)).data;
+  const made = (await call('/api/apikey/rotate', U, { expiresDays: 7 })).data;
+  const noKey = await v1('/v1/models'), badKey = await v1('/v1/models', 'mills_' + 'a'.repeat(48));
+  const models = await v1('/v1/models', made.key);
+  const chat1 = await v1('/v1/chat/completions', made.key, { model: 'claude-opus-5-5', messages: [{ role: 'system', content: 'be brief' }, { role: 'user', content: 'hi there' }, { role: 'assistant', content: 'hello' }, { role: 'user', content: 'ping-r111' }] });
+  const oa1 = JSON.parse(chat1.text || '{}'), c1text = (((oa1.choices || [])[0] || {}).message || {}).content || '';
+  const stream1 = await v1('/v1/chat/completions', made.key, { model: 'claude-haiku-5-5', stream: true, messages: [{ role: 'user', content: 'stream-r111' }] });
+  const chunks = stream1.text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
+  const streamed = chunks.map((c) => (((c.choices || [])[0] || {}).delta || {}).content || '').join('');
+  const noMsgs = await v1('/v1/chat/completions', made.key, { model: 'x' });
+  const afterUse = (await call('/api/apikey', U)).data;
+  const rotated = (await call('/api/apikey/rotate', U, {})).data;
+  const oldDead = await v1('/v1/models', made.key), newLive = await v1('/v1/models', rotated.key);
+  // expiry: a 1-day key made "yesterday" is refused as expired (the runner backdates it in the scratch state file)
+  const uState = path.join(SB, 'profiles', 't-user', 'state.json');
+  const st1 = JSON.parse(fs.readFileSync(uState, 'utf8')); // (the hub keeps its own copy in memory; expiry is judged from createdAt + expiresDays at call time)
+  const setExp = await call('/api/apikey/settings', U, { expiresDays: 1 });
+  const stillOk = await v1('/v1/models', rotated.key);
+  const revoked = (await call('/api/apikey/revoke', U, {})).data, afterRevoke = await v1('/v1/models', rotated.key);
+  check('R111', 'OpenAI-compatible API: Settings makes a per-person key (shown once, sha256 kept), /v1/models + /v1/chat/completions answer with it (system + history flattened into one claude -p run, usage counted, streaming as SSE chunks ending in [DONE]); no key / unknown key → 401 in OpenAI error shape; bad body → 400; rotate kills the old key; expiry setting kept; revoke kills it',
+    !k0.hasKey && /^mills_[a-f0-9]{48}$/.test(made.key || '') && made.hasKey && made.expiresDays === 7 && made.prefix === made.key.slice(0, 12)
+    && noKey.status === 401 && /authentication_error/.test(noKey.text) && badKey.status === 401 && models.status === 200 && /claude-opus-5-5/.test(models.text)
+    && chat1.status === 200 && oa1.object === 'chat.completion' && /ping-r111/.test(c1text) && /Conversation so far:[\s\S]*User: hi there[\s\S]*Assistant: hello/.test(c1text) && !/be brief/.test(c1text) && /model=claude-opus-5-5/.test(c1text) && oa1.usage && typeof oa1.usage.total_tokens === 'number'
+    && stream1.status === 200 && /text\/event-stream/.test(stream1.ct) && /stream-r111/.test(streamed) && /model=claude-haiku-5-5/.test(streamed) && /data: \[DONE\]/.test(stream1.text)
+    && noMsgs.status === 400 && afterUse.calls === 2 && !!afterUse.lastUsed
+    && rotated.key && rotated.key !== made.key && oldDead.status === 401 && newLive.status === 200
+    && st1.api && setExp.data.expiresDays === 1 && stillOk.status === 200 && revoked.hasKey === false && afterRevoke.status === 401
+    && /id="apiBox"/.test(html) && /\/api\/apikey\/rotate/.test(html) && /function renderApiAccess\(/.test(html),
+    `key ${made.key ? 'made' : 'none'}, models ${models.status}, chat ${chat1.status} "${c1text.slice(0, 60)}", stream ${stream1.status} ${chunks.length} chunks, calls ${afterUse.calls}, rotate ${oldDead.status}/${newLive.status}, revoke ${afterRevoke.status}`);
+
+  // AI providers (bridge/providers.js): a person's own Claude login / key / OpenAI endpoint, private or shared; the host's Claude untouched.
+  const prov0 = (await call('/api/providers', U)).data;
+  const badKind = await call('/api/providers/add', U, { kind: 'magic', label: 'x' });
+  const badAnth = await call('/api/providers/add', U, { kind: 'anthropic', label: 'bad', apiKey: 'nope' });
+  const cfgDir = path.join(SCRATCH, 'claude-sponge-login');
+  const cli = (await call('/api/providers/add', U, { kind: 'claude-cli', label: 'Tuser Claude login', configDir: cfgDir, shared: false })).data;
+  const oai = (await call('/api/providers/add', U, { kind: 'openai', label: 'Tuser endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt, fake-mini', shared: true })).data;
+  const seenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
+  const secretLeak = JSON.stringify((await call('/api/providers', U)).data).includes('"apiKey"');
+  const pickCli = await call('/api/model', U, { provider: cli.provider.id, model: 'claude-sonnet-5-5' });
+  const cliRun = await chat(U, 'who runs me', { fresh: true });
+  const ck7 = (await call('/api/check', U)).data;
+  const pickOai = await call('/api/model', U, { provider: oai.provider.id, model: 'fake-gpt' });
+  const useOai = (await call('/api/apikey/rotate', U, {})).data;
+  const setOai = await call('/api/apikey/settings', U, { provider: oai.provider.id, model: 'fake-mini' });
+  const oaiModels = await v1('/v1/models', useOai.key);
+  const oaiChat = await v1('/v1/chat/completions', useOai.key, { model: 'fake-gpt', messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'through-r112' }] });
+  const oaiText = ((((JSON.parse(oaiChat.text || '{}').choices || [])[0] || {}).message || {}).content) || '';
+  const oaiStream = await v1('/v1/chat/completions', useOai.key, { model: 'fake-gpt', stream: true, messages: [{ role: 'user', content: 'flow-r112' }] });
+  const oaiStreamed = oaiStream.text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => ((JSON.parse(l.slice(6)).choices || [])[0] || {}).delta || {}).map((d) => d.content || '').join('');
+  const otherTouch = await call('/api/providers/update', A, { id: cli.provider.id, shared: true });
+  const shareIt = await call('/api/providers/update', U, { id: cli.provider.id, shared: true });
+  const nowSeenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
+  const rmOther = await call('/api/providers/remove', A, { id: cli.provider.id });
+  const rm = await call('/api/providers/remove', U, { id: cli.provider.id });
+  const ck7b = (await call('/api/check', U)).data;
+  await call('/api/providers/remove', U, { id: oai.provider.id }); await call('/api/apikey/revoke', U, {}); await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' });
+  check('R112', 'AI providers: the host Claude is always listed; a person adds a Claude Code login (own folder) and an OpenAI endpoint (private or shared; bad kind / key refused; secrets never listed); a private one is invisible to others; picking the login runs Work with CLAUDE_CONFIG_DIR set and that model; an OpenAI provider is refused for Work; the API key answers through the endpoint provider (plain + streaming, system passed); only the owner shares / removes; removal clears the person\'s choice',
+    prov0.providers.length === 1 && prov0.providers[0].id === 'host' && badKind.status === 400 && badAnth.status === 400 && cli.provider && oai.provider && !secretLeak
+    && !seenByA.includes(cli.provider.id) && seenByA.includes(oai.provider.id)
+    && pickCli.status === 200 && pickCli.data.provider === cli.provider.id && new RegExp('cfg=' + cfgDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(texts(cliRun.events)) && /model=claude-sonnet-5-5/.test(texts(cliRun.events)) && ck7.provider === cli.provider.id && (ck7.providers || []).some((p) => p.id === cli.provider.id)
+    && pickOai.status === 400 && setOai.status === 200 && setOai.data.provider === oai.provider.id && oaiModels.status === 200 && /fake-mini/.test(oaiModels.text)
+    && oaiChat.status === 200 && /^oai says: through-r112 \[sys 3\]/.test(oaiText) && /flow-r112/.test(oaiStreamed)
+    && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByA.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
+    && /id="provBox"/.test(html) && /\/api\/providers\/add/.test(html) && /o\.value = p\.id \+ '\|' \+ m/.test(html),
+    `cli ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
+
   // Chat v2: settings, private messages, edit / delete, receipts, agent privacy
   const seal = async (tok, priv, plain, to) => { // like the page's sealFor: everyone, or only sender + recipient
     const mem = (await call('/api/room/members', tok)).data.members, r2 = rand(32), iv2 = rand(12);
@@ -477,16 +584,17 @@ async function run() {
   };
   const v2 = (t, r) => JSON.stringify({ v: 2, t, ...(r ? { r } : {}) });
   const pr = await call('/api/prefs', U, { nick: '  Tee\u0007 Nick  ', color: 5, toasts: false, sound: { on: true, message: 150, mention: 20 },
-    tts: { on: true, volume: 400, rate: 10, voice: 'x'.repeat(300), scope: 'weird' }, clips: { volume: -5, autoplay: 1 },
+    tts: { all: 0, unity: 'yes', on: true, volume: 400, rate: 10, voice: 'x'.repeat(300), scope: 'weird' }, clips: { volume: -5, autoplay: 1 },
     audio: { noise: false, echo: 1 }, call: { volume: 250, quality: 'ultra' }, autosave: 999 });
-  const ttsOk = pr.data.prefs && pr.data.prefs.tts && pr.data.prefs.tts.on === true && pr.data.prefs.tts.volume === 100 && pr.data.prefs.tts.rate === 50
+  const ttsOk = pr.data.prefs && pr.data.prefs.tts && pr.data.prefs.tts.on === true && pr.data.prefs.tts.all === false && pr.data.prefs.tts.unity === true && pr.data.prefs.tts.volume === 100 && pr.data.prefs.tts.rate === 50
+    && /id="setTtsAll"/.test(html) && /id="setTtsUnity"/.test(html) && /const voiceOn = \(\) => prefs\(\)\.tts\.all && prefs\(\)\.tts\.unity/.test(html) && /if \(!text \|\| !prefs\(\)\.tts\.all\) return;/.test(html)
     && pr.data.prefs.tts.voice.length === 120 && pr.data.prefs.tts.scope === 'all'
     && pr.data.prefs.clips && pr.data.prefs.clips.volume === 0 && pr.data.prefs.clips.autoplay === true
     && pr.data.prefs.audio && pr.data.prefs.audio.noise === false && pr.data.prefs.audio.echo === true
     && pr.data.prefs.call && pr.data.prefs.call.volume === 100 && pr.data.prefs.call.quality === 'medium' && pr.data.prefs.autosave === 120;
   const prBad = await call('/api/prefs', A, { color: 99 });
   const memP = ((await call('/api/room/members', A)).data.members || []).find((m) => m.username === 't-user');
-  check('R42', 'settings: nickname cleaned, colour kept, volumes / speech settings clamped, bad colour → none; others see nick + colour', pr.status === 200 && ttsOk && pr.data.prefs.nick === 'Tee Nick'
+  check('R42', 'settings: nickname cleaned, colour kept, volumes / speech settings clamped, text-to-speech master switch + Unity voice stored as booleans on the account, bad colour → none; others see nick + colour; [static] both switches in Settings, speak() and the Voice button obey the master switch', pr.status === 200 && ttsOk && pr.data.prefs.nick === 'Tee Nick'
     && pr.data.prefs.color === 5 && pr.data.prefs.sound.message === 100 && pr.data.prefs.toasts === false && prBad.data.prefs.color === null
     && !!memP && memP.nick === 'Tee Nick' && memP.color === 5 && (await call('/api/check', U)).data.prefs.nick === 'Tee Nick');
 
@@ -660,7 +768,8 @@ async function run() {
   check('R101', 'presence: typing wakes the others\' long poll and is per conversation (a private one only to its two people; outsider → 400); off removes it; online list; Unity shows as typing while composing and stops after posting; [static] typing line, Claude-is-thinking bubble, message slide-in, live dot',
     tyOn.status === 200 && (pWoke.typing || []).some((t) => t.user === 't-user' && t.conv === 'room') && tyDm.status === 200 && seesDmA && !seesDmD && tyBad.status === 400 && onlineOk
     && agentTyping && !!tyAns && agentDone
-    && /id="typingLine"/.test(html) && /function showThinking\(/.test(html) && /@keyframes msgIn/.test(html) && /@keyframes dotPulse/.test(html) && /\.status\.on::before/.test(html) && /prefers-reduced-motion/.test(html),
+    && /id="typingLine"/.test(html) && /function showThinking\(/.test(html) && /@keyframes msgIn/.test(html) && /@keyframes dotPulse/.test(html) && /\.status\.on::before/.test(html) && /prefers-reduced-motion/.test(html)
+    && /line\.classList\.toggle\('thinking', ai\)/.test(html) && /\.typingLine\.thinking \{/.test(html), // Unity composing in the chat = Work's thinking bubble
     `typing woke ${(pWoke.typing || []).length}, dm A/D ${seesDmA}/${seesDmD}, outsider ${tyBad.status}, online ${JSON.stringify(afterOff.online)}, Unity typing ${agentTyping} → done ${agentDone}`);
 
   // Hub-wide presence: online = a page with its long poll open; idle + screen reported by the page;
@@ -705,7 +814,7 @@ async function run() {
     [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
     [/HUB_URL_RE = \/\^https:\\\/\\\/\[a-z0-9-\]\+\\\.trycloudflare\\\.com\$\//.test(html) && /store\.set\('mills\.hub'/.test(html), 'hub address pinned + cached'],
     [/function trustedPub\(/.test(html) && /changedKeys\.has\(m\.username\)\) continue; \/\/ never encrypt to an unverified key/.test(html) && /Trust new key/.test(html), 'key pinning'],
-    [/streams: \[call\.local\]/.test(html) && /sender\.setStreams\(call\.local\)/.test(html) && /e\.streams && e\.streams\[0\]/.test(html), 'call lip-sync streams'],
+    [/streams: \[call\.local\]/.test(html) && /sender\.setStreams\(isScreenTransceiver\(peer\.pc, t\) \? call\.screenStream : call\.local\)/.test(html) && /e\.streams && e\.streams\[0\]/.test(html), 'call lip-sync streams'],
     [/sendSignal\(user, \{ cs: peer\.iceOut\.splice\(0\) \}\)/.test(html), 'ICE batching'],
     [/&wait=1&ver=' \+ roomVer/.test(html) && !/setInterval\(\(\) => \{ pollRoom\(\)/.test(html), 'room long poll, no 3 s timer'],
     [/new CompressionStream\('deflate-raw'\)/.test(html) && /\/api\/room\/blob\?seq=/.test(html), 'v4 deflate + clip on play'],
@@ -724,7 +833,7 @@ async function run() {
     .filter(([l]) => EMOJI.test(l) && !/^\s*\*|\/\*/.test(l)).map(([, at]) => at);
   const symbols = new Set([...html.matchAll(/<symbol id="i-([\w-]+)"/g)].map((m) => m[1]));
   const code68 = shown(html).join('\n');
-  const usedIcons = new Set([...code68.matchAll(/href="#i-([\w-]+)"/g), ...code68.matchAll(/\bic\('([\w-]+)'/g), ...code68.matchAll(/\blabel\([^,]+, '([\w-]+)'/g)].map((m) => m[1])
+  const usedIcons = new Set([...code68.matchAll(/href="#i-([\w-]+)"/g), ...code68.matchAll(/\bic\('([\w-]+)'/g), ...code68.matchAll(/(?<![.\w])label\([^,\n]+, '([\w-]+)'/g)].map((m) => m[1])
     .concat(['reply', 'edit', 'trash', 'stop', 'send', 'talk', 'image', 'mic', 'mic-off', 'speaker', 'speaker-off', 'folder', 'file'])); // via add(), dictLabel(), ternaries, md.js
   const missingIcons = [...usedIcons].filter((n) => !symbols.has(n));
   const serverEmoji = /mirror\(acct, 'tool', '⚙/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'server.js'), 'utf8'));
@@ -754,6 +863,28 @@ async function run() {
     [/\.modal \.box, #archive \.box \{ width: 100vw;/.test(html), 'full-screen dialogs on phones'],
     [/\.floatWin \{ left: 8px !important;/.test(html), 'floating windows fill phones'],
   ].filter(([ok]) => !ok).map(([, n]) => n);
+  // Mills Chat app: PWA manifest + service worker + icons, app mode, the Discord-shaped side bar and member column.
+  const manifest = JSON.parse(fs.readFileSync(path.join(MILLS, 'web', 'manifest.webmanifest'), 'utf8'));
+  const swSrc = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8');
+  const icons = (manifest.icons || []).map((i) => path.join(MILLS, 'web', i.src));
+  const servedManifest = await fetch(H + '/manifest.webmanifest'), servedIcon = await fetch(H + '/icons/mills.svg'), servedSw = await fetch(H + '/sw.js');
+  const missing114 = [
+    [manifest.start_url === './index.html?app=1' && manifest.display === 'standalone' && icons.length >= 2 && icons.every((f) => fs.existsSync(f)), 'manifest (start_url ?app=1, standalone, icons on disk)'],
+    [/<link rel="manifest" href="manifest\.webmanifest">/.test(indexHtml) && /manifest-src 'self'/.test(csp) && /<link rel="icon" href="icons\/mills\.svg"/.test(indexHtml), 'page links the manifest + icon, CSP allows it'],
+    [servedManifest.status === 200 && /manifest\+json/.test(servedManifest.headers.get('content-type') || '') && servedIcon.status === 200 && servedSw.status === 200, 'hub serves manifest / icon / sw'],
+    [/url\.pathname\.includes\('\/api\/'\)/.test(swSrc) && /includes\('\/v1\/'\)/.test(swSrc) && /fetch\(e\.request\)\.then/.test(swSrc), 'service worker: network first, never caches /api or /v1'],
+    [/navigator\.serviceWorker\.register\('sw\.js'\)/.test(html) && /beforeinstallprompt/.test(html) && /function appOs\(/.test(html) && /id="appBox"/.test(html) && /renderAppCard\(\)/.test(html), 'install card in Settings (OS detected, install prompt)'],
+    [/const APP_MODE = /.test(html) && /document\.body\.classList\.add\('appMode'\)/.test(html) && /showScreen\(APP_MODE \? 'room' : 'menu'\)/.test(html) && /body\.appMode #room header \{ display: none; \}/.test(html), 'app mode = chat only'],
+    [/id="serverRail"/.test(html) && /id="chanList"/.test(html) && /id="memberList"/.test(html) && /const GUILDS = /.test(html) && /GUILDS\.refresh\(\)/.test(html) && /d\.guildsVer && d\.guildsVer !== GUILDS\.state\.ver/.test(html), 'server rail, channel list, member column, live refresh'],
+    [/isGuildConv\(currentConv\) \? currentConv : ''/.test(html) && /allowed = isGuildConv\(conv\) \? GUILDS\.members\(conv\) : null/.test(html) && /const convOfMsg = \(m\) => \(m\.conv \? m\.conv/.test(html), 'channel / group messages: conv sent, keys wrapped for members only, routed by conv'],
+    [/className = 'botTag'/.test(html) && /'Bots — 1'/.test(html), 'Unity and the Claudes carry a BOT badge'],
+  ].filter(([ok]) => !ok).map(([, n]) => n);
+  check('R114', 'Mills Chat app: installable PWA (manifest, icons, service worker that never caches hub answers, CSP manifest-src), app mode shows the chat only, Settings install card detects Windows / Linux; Discord-shaped side bar (server rail, channels, groups, DMs) + member column; channel / group messages wrapped for members only; BOT badges', !missing114.length, missing114.join(', '));
+  const slashCmds = [...html.matchAll(/\{ cmd: '(\/[a-z]+)'/g)].map((m) => m[1]);
+  check('R115', '[static] slash commands in the Claude box: "/" opens a filtered menu of the common commands (compact, clear, model, review, cost, status, help, commit …), arrows / Tab / Enter pick, Esc closes; Mills commands run here (clear, stop, model, share, board …), the rest go to Claude Code as typed',
+    /id="slashMenu"/.test(html) && slashCmds.length >= 20 && ['/compact', '/clear', '/model', '/review', '/cost', '/status', '/help', '/commit', '/stop', '/share'].every((c) => slashCmds.includes(c))
+    && /function renderSlash\(/.test(html) && /function runLocalSlash\(/.test(html) && /if \(message\.startsWith\('\/'\) && runLocalSlash\(message\)\) return;/.test(html) && /e\.key === 'ArrowDown'/.test(html) && /pickSlash\(list\[slashIdx\]\)/.test(html),
+    slashCmds.length + ' commands');
   check('R105', '[static] responsive: phone breakpoint (drawer chat list, board sheet + swipe columns, calendar agenda, full-screen dialogs, stacked Work panes, safe-area padding, no zoom-on-focus), touch-sized controls, laptop header tightening, admin table scrolls', !missing76.length, missing76.join(', '));
   check('R95', '[static] CSP, hub address pinned to the tunnel, key pinning (TOFU + Trust new key), call lip-sync + ICE batching, room long poll, v4 deflate + clips fetched on play', !missing66.length, missing66.join(', '));
   // Calls: the hub only tracks who is in which call and relays opaque (encrypted) set-up messages.
@@ -773,15 +904,15 @@ async function run() {
   const sig = await call('/api/call/signal', A, { to: 't-user', conv: 'room', ...opaque });
   const woke = (await waiting).data, waited = Date.now() - t0;
   const got1 = (woke.signals || []).find((s) => s.from === 't-admin');
-  const camState = await call('/api/call/state', A, { conv: 'room', cam: true, mic: false });
+  const camState = await call('/api/call/state', A, { conv: 'room', cam: true, mic: false, screen: true });
   const afterCam = (((await call('/api/call/poll?after=0&ver=-1', U)).data.calls || {}).room || []).find((p) => p.user === 't-admin');
   await call('/api/call/leave', A, {});
   const afterLeave = (((await call('/api/call/poll?after=0&ver=-1', U)).data.calls || {}).room || []).map((p) => p.user);
-  check('R50', 'calls: presence per conversation, private calls only for their two people, one call at a time, signals relayed opaquely and only inside the call, long-poll wakes on a signal, cam/mic state, leave',
+  check('R50', 'calls: presence per conversation, private calls only for their two people, one call at a time, signals relayed opaquely and only inside the call, long-poll wakes on a signal, cam/mic/screen state, leave',
     jA.status === 200 && Array.isArray(jA.data.iceServers) && ((pollU.calls || {}).room || []).some((p) => p.user === 't-admin') && ((pollD.calls || {}).room || []).some((p) => p.user === 't-admin')
     && dmJoin.status === 200 && dmIntruder.status === 400 && badConv.status === 400 && !dmSeenByD && !(stU.calls || {})['dm:t-admin|t-user']
     && sigToD.status === 409 && sig.status === 200 && !!got1 && got1.ct === opaque.ct && waited >= 600 && waited < 20000
-    && camState.status === 200 && afterCam && afterCam.cam === true && afterCam.mic === false && !afterLeave.includes('t-admin') && afterLeave.includes('t-user'),
+    && camState.status === 200 && afterCam && afterCam.cam === true && afterCam.mic === false && afterCam.screen === true && !afterLeave.includes('t-admin') && afterLeave.includes('t-user'),
     `dm ${dmJoin.status}/${dmIntruder.status}, signal ${sigToD.status}/${sig.status}, waited ${waited} ms`);
   await call('/api/call/leave', U, {});
   // Usage bar: 5h / 7d windows (estimated, then Claude's own numbers) + per-session context window
@@ -841,6 +972,26 @@ async function run() {
     && agentBlocks.status === 409 && /progress from the agent r70/.test(agentDetail.body || '') && bDel.status === 409 && bDel2.status === 200 && bGone && onDiskB.deleted === true
     && /board-mcp\.js/.test(mcpRt) && /mcp__board/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8')),
     `create ${bt.status}, claim ${bClaim.status}, blocked ${bBlockedU.status}/${bClaimU.status}, stale ${bStale.status}, due ${d1.getMonth() + 1}/${d1.getDate()} → ${d2.getMonth() + 1}/${d2.getDate()} (leap ${leap}), agent ${JSON.stringify(agentOut)}, agent-held edit ${agentBlocks.status}`);
+  // Claude plans with the board + calendar (task_create / task_update with text due dates, board_calendar, task_move, task_delete, board_new) and reaches the wider hub (channels / groups it makes, hub_status, sessions_search, my_providers).
+  await call('/api/archive/save', A, { title: 'Needle session', transcript: [{ cls: 'me', text: 'remember needle-r116' }] });
+  const planRun = await chat(A, 'BOARDPLAN please', { fresh: true });
+  const plan = JSON.parse((texts(planRun.events).match(/PLAN:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(17, 0, 0, 0);
+  const moreRun = await chat(A, 'TEAMMORE please', { fresh: true });
+  const more = JSON.parse((texts(moreRun.events).match(/MORE:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+  const { parseDue } = require(path.join(BRIDGE, 'board.js'));
+  let badThrows = false; try { parseDue('someday maybe'); } catch { badThrows = true; }
+  const nextFri = parseDue('next friday'), plus3 = parseDue('+3d'), iso = parseDue('2031-03-04 09:30');
+  check('R116', 'Claude plans the board + calendar: text due dates (tomorrow, next friday, +3d, YYYY-MM-DD HH:MM, none; a typo is refused), board_calendar groups by day, task_move changes the column, task_update re-dates / clears, board_new, task_delete leaves a tombstone; wider reach: team_channel_create (+ a post into it), team_group_create, hub_status (people + usage windows), sessions_search finds own past sessions, my_providers lists the host Claude',
+    plan.id && plan.dueAt === tomorrow.getTime() && Array.isArray(plan.calDays) && plan.calDays.some((d) => d.startsWith(new Date(tomorrow).toISOString().slice(0, 10)) || d.includes(':1')) && plan.movedTo === 'review'
+    && typeof plan.redue === 'number' && new Date(plan.redue).getDay() === 5 && plan.undue === null && /Could not read the due date/.test(plan.badDue) && Array.isArray(plan.board) && plan.board.includes('plan-board-r116') && plan.deleted === true && /No such task/.test(plan.afterGet)
+    && badThrows && new Date(nextFri).getDay() === 5 && nextFri > Date.now() && Math.round((plus3 - parseDue('today')) / 86400e3) === 3 && new Date(iso).getHours() === 9 && new Date(iso).getMinutes() === 30
+    && more.conv === 'ch:mills/claude-made' && more.said === true && Array.isArray(more.grp) && more.grp.includes('t-admin') && more.grp.includes('t-user') && more.people >= 3 && Array.isArray(more.usage) && more.usage.includes('fiveHour') && more.hits === 1 && Array.isArray(more.providers) && more.providers.includes('host'),
+    `plan ${JSON.stringify(plan).slice(0, 260)} | more ${JSON.stringify(more).slice(0, 200)}`);
+  const boardJs117 = fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8');
+  check('R117', '[static] board, ideas from HyperProductivityManager: due-today / overdue reminders once a day for tasks assigned to you, Delegate (assignee + signed hand-over note), whole-board activity dialog, "/" focuses the filter, Ctrl+1/2/3 switch Board / Calendar / Work',
+    /function remindDue\(/.test(boardJs117) && /mills\.remind\./.test(boardJs117) && /new Notification\(/.test(boardJs117) && /async function delegate\(/.test(boardJs117) && /appendNote: 'Handed to '/.test(boardJs117)
+    && /function showActivity\(/.test(boardJs117) && /act\.onclick = showActivity/.test(boardJs117) && /\$\('bdFilter'\)\.focus\(\)/.test(boardJs117) && /\{ 1: 'board', 2: 'cal', 3: 'shell' \}/.test(boardJs117));
   check('R100', '[static] Board + Calendar in the main menu, web/board.js loaded, Board / Calendar screens, Tasks pane in Work (rail + layout), "Give to Claude", Claude told to claim before working',
     /id="goBoard"/.test(html) && /id="goCal"/.test(html) && /<script src="board\.js"><\/script>/.test(html) && /<div id="board" class="screen"/.test(html) && /<div id="cal" class="screen"/.test(html)
     && /data-pane="tasks"/.test(html) && /const PANES = \['files', 'edit', 'chat', 'tasks', 'roomPane'\]/.test(html) && /function giveToClaude\(/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8'))
@@ -848,9 +999,11 @@ async function run() {
   check('R53', '[static] usage bar above the Claude messages: 5h hh:mm:ss, 7d dd/hh/mm, colour scale green → orange → yellow → red, purple when out',
     /id="usageBar"/.test(html) && html.indexOf('id="usageBar"') < html.indexOf('id="log"') && /\[0, \[46, 204, 113\]\], \[33, \[255, 159, 26\]\], \[66, \[255, 212, 59\]\], \[100, \[255, 59, 59\]\]/.test(html)
     && /OUT_COLOR = 'rgb\(160, 90, 255\)'/.test(html) && /pad2\(Math\.floor\(s \/ 3600\)\) \+ ':'/.test(html) && /'d ' \+ pad2/.test(html));
-  check('R54', '[static] calls: speaking ring from a local level meter, per-person volume + mute kept only in this browser, Mute / Unmute button with M shortcut',
+  check('R54', '[static] calls: speaking ring from a local level meter, per-person volume + mute kept only in this browser, Mute / Unmute button with M shortcut; theater view (call fills the screen, chat stays left, Esc leaves); screen share as a third sender on every connection with its own full-width tile',
     /\.tile\.speaking \{/.test(html) && /createAnalyser\(\)/.test(html) && /addMeter\(user, e\.track\)/.test(html) && /mills\.vol\.' \+ u/.test(html)
-    && /mills\.mute\.' \+ user/.test(html) && /className = 'pVol'/.test(html) && /micOn \? 'mic-off' : 'mic', micOn \? 'Mute' : 'Unmute'/.test(html) && /M = mute \/ unmute yourself/.test(html));
+    && /mills\.mute\.' \+ user/.test(html) && /className = 'pVol'/.test(html) && /micOn \? 'mic-off' : 'mic', micOn \? 'Mute' : 'Unmute'/.test(html) && /M = mute \/ unmute yourself/.test(html)
+    && /id="callTheater"/.test(html) && /id="callStage"/.test(html) && /#roomCore\.theater \.roomMain/.test(html) && /rc\.classList\.toggle\('theater', theater\)/.test(html) && /theaterOn\(\) && !e\.target\.closest/.test(html)
+    && /id="callScreen"/.test(html) && /getDisplayMedia\(/.test(html) && /pc\.addTransceiver\('video', \{ direction: 'sendrecv', streams: \[call\.screenStream\] \}\)/.test(html) && /isScreenTransceiver\(pc, e\.transceiver\)/.test(html) && /\.tile\.screenTile \{ grid-column: 1 \/ -1/.test(html) && /screen: !!call\.screen/.test(html));
   check('R55', '[static] dictation in chat + Work: browser speech recognition, appends (continue), ~3 s silence stop, never auto-sends except "send message" + silence',
     /id="roomDictate"/.test(html) && /id="workDictate"/.test(html) && /window\.SpeechRecognition \|\| window\.webkitSpeechRecognition/.test(html)
     && /setTimeout\(dictStop, 3000\)/.test(html) && /const WAKE = \/\\s\*\\bsend message/.test(html) && /if \(box\.value\) d\.submit\(\)/.test(html)
@@ -886,6 +1039,56 @@ async function run() {
     && /team-mcp\.js/.test(fs.readFileSync(path.join(SB, '.mcp-runtime.json'), 'utf8')) && /mcp__team/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8'))
     && /const authorOf = \(m\) => m\.as \|\| nickOf\(m\.from\)/.test(html),
     `tool ${JSON.stringify(teamOut)}, room "${roomText}", dm "${dmText}", D sees dm ${teamMsgsD.some((m) => m.to)}, Unity replied ${unityReplied}`);
+
+  // Servers, channels and groups (bridge/guilds.js): membership decides key slots, visibility, typing, seen, calls, Unity's answers.
+  const g0 = (await call('/api/guilds', U)).data;
+  const gSv = await call('/api/guilds/server', U, { name: 'Dev Team', members: ['t-user'] });
+  const gSid = gSv.data.result && gSv.data.result.id;
+  const chn = await call('/api/guilds/channel', U, { server: gSid, name: 'Build Logs', topic: 'ci' });
+  const chConv = 'ch:' + gSid + '/build-logs';
+  const grp = await call('/api/guilds/group', U, { name: 'us two', members: ['t-admin'] });
+  const grpConv = grp.data.result && 'grp:' + grp.data.result.id;
+  const aView = (await call('/api/guilds', A)).data;
+  const sealConv = async (tok, priv, from, plain, conv, agent = false) => ({ ...(await seal4(tok, priv, from, { v: 2, t: plain }, '', { agent })), conv });
+  const chSent = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'channel hello-r113', chConv)); // wraps for everyone: the hub must keep members only
+  const chDisk = chSent.status === 200 ? (fs.readFileSync(path.join(SCRATCH, 'Chat', 'messages.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.seq === chSent.data.seq) || {}) : {};
+  const chSeenByA = ((await call('/api/room/messages?since=' + (chSent.data.seq - 1), A)).data.messages || []).some((m) => m.seq === chSent.data.seq);
+  const chOutsider = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'intruder', chConv));
+  const gBadConv = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'x', 'ch:nope/general'));
+  const tyOutsider = await call('/api/room/typing', A, { conv: chConv, on: true }), tyMember = await call('/api/room/typing', U, { conv: chConv, on: true });
+  const seenMember = await call('/api/room/seen', U, { conv: chConv, seq: chSent.data.seq }), seenOutsider = await call('/api/room/seen', A, { conv: chConv, seq: 1 });
+  const callOutsider = await call('/api/call/join', A, { conv: chConv, mic: true }), callMember = await call('/api/call/join', U, { conv: chConv, mic: true });
+  await call('/api/call/leave', U, {});
+  const grpSent = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'group hello-r113', grpConv));
+  const grpForU = ((await call('/api/room/messages?since=' + (grpSent.data.seq - 1), U)).data.messages || []).find((m) => m.seq === grpSent.data.seq);
+  const grpForD = ((await call('/api/room/messages?since=' + (grpSent.data.seq - 1), D)).data.messages || []).some((m) => m.seq === grpSent.data.seq);
+  const grpText = grpForU ? await read4(restored, grpForU).catch(() => null) : null;
+  const added = await call('/api/guilds/server/add', U, { server: gSid, add: ['t-admin'] });
+  const aViewAfter = (await call('/api/guilds', A)).data;
+  const chSent2 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'now A sees-r113', chConv));
+  const chForA2 = ((await call('/api/room/messages?since=' + (chSent2.data.seq - 1), A)).data.messages || []).find((m) => m.seq === chSent2.data.seq);
+  const chText2 = chForA2 ? await read4(privA, chForA2).catch(() => null) : null;
+  await sleep(1500);
+  const seqG = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  await call('/api/room/send', U, await sealConv(U, restored, 't-user', '@unity ping-ch-r113', chConv, true));
+  const ansCh = await waitAgent(U, restored, seqG, (t) => t.includes('ping-ch-r113'), 20000);
+  const ansChMsg = ansCh && ((await call('/api/room/messages?since=' + seqG, U)).data.messages || []).find((m) => m.seq === ansCh.seq);
+  const teamCh = await chat(A, 'TEAMSAY please', { fresh: true }); // (team tools: the fake also posts; here we only need the hub to accept conv)
+  const gDelOther = await call('/api/guilds/channel/delete', A, { server: gSid, channel: 'build-logs' });
+  const gDelOwn = await call('/api/guilds/channel/delete', U, { server: gSid, channel: 'build-logs' });
+  const gLeave = await call('/api/guilds/group/leave', U, { group: grp.data.result.id });
+  const gAfterLeave = (await call('/api/guilds', U)).data;
+  const rmSv = await call('/api/guilds/server/delete', U, { server: gSid });
+  check('R113', 'servers / channels / groups: default Mills server with #general = room; a person creates a server + channel + group; a channel message keeps key slots for members only (outsider gets nothing, cannot post, type, mark seen or join its call; unknown channel → 400); a group message reaches its two people only; adding a member makes new messages readable to them; @unity in a channel is answered in that channel; only the creator deletes a channel; leaving a group; deleting the server',
+    g0.servers.length === 1 && g0.servers[0].id === 'mills' && g0.servers[0].channels[0].conv === 'room' && gSv.status === 200 && !!gSid && chn.status === 200 && grp.status === 200 && !!grpConv
+    && !aView.servers.some((s) => s.id === gSid) && aView.groups.some((g) => g.conv === grpConv)
+    && chSent.status === 200 && chDisk.conv === chConv && Object.keys(chDisk.keys || {}).sort().join() === 't-user' && !chSeenByA
+    && chOutsider.status === 400 && gBadConv.status === 400 && tyOutsider.status === 400 && tyMember.status === 200 && seenMember.status === 200 && seenOutsider.status === 400 && callOutsider.status === 400 && callMember.status === 200
+    && grpSent.status === 200 && grpForU && grpText && grpText.t === 'group hello-r113' && !grpForD
+    && added.status === 200 && aViewAfter.servers.some((s) => s.id === gSid) && chSent2.status === 200 && chText2 && chText2.t === 'now A sees-r113'
+    && !!ansCh && ansChMsg && ansChMsg.conv === chConv && teamCh.status === 200
+    && gDelOther.status === 400 && gDelOwn.status === 200 && gLeave.status === 200 && !gAfterLeave.groups.some((g) => g.conv === grpConv) && rmSv.status === 200,
+    `server ${gSv.status}, channel ${chn.status}, send ${chSent.status} slots ${Object.keys(chDisk.keys || {}).join('+')}, A sees ${chSeenByA}, outsider ${chOutsider.status}/${tyOutsider.status}/${seenOutsider.status}/${callOutsider.status}, group ${grpSent.status} U "${grpText && grpText.t}" D ${grpForD}, after add "${chText2 && chText2.t}", unity ${!!ansCh} in ${ansChMsg && ansChMsg.conv}, delete ${gDelOther.status}/${gDelOwn.status}`);
 
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });
@@ -1023,7 +1226,9 @@ async function run() {
   check('R81', 'play_youtube: finds the video and attaches the player to the reply', plr.video === 'abcdefghijk' && plr.playing === 'Regress Song' && (plf.media || []).includes('abcdefghijk'));
   const rp = toolRes(await uchat(U, 'README'), 'read_page');
   check('R82', 'read_page refuses the host\'s own network (no localhost / private addresses)', rp.ok === false && /private network/.test(rp.error || ''), rp.error);
-  check('R83', '[static] page embeds [[youtube:id]] as a player', /youtube-nocookie\.com\/embed/.test(html) && /youtube:\[\\w-\]\{11\}/.test(html));
+  check('R83', '[static] page embeds [[youtube:id]] as a player; a YouTube link posted in the team chat gets an in-chat player (no autoplay; watch / youtu.be / shorts / embed / live forms); the CSP allows exactly that frame host',
+    /youtube-nocookie\.com\/embed/.test(html) && /youtube:\[\\w-\]\{11\}/.test(html) && /function ytIds\(/.test(html) && /for \(const vid of ytIds\(rec\.text\)\) body\.append\(ytPlayer\(vid, false\)\)/.test(html)
+    && /frame-src https:\/\/www\.youtube-nocookie\.com;/.test(csp) && !/frame-src[^;]*(https:|\*)[;"]/.test(csp));
   // the runner plays the browser: it answers her own-computer calls while the reply streams
   async function uchatLive(tok, message, answer) {
     const r = await fetch(H + '/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ message, client: { tz: 'UTC' } }) });
@@ -1140,14 +1345,14 @@ async function run() {
 
   // Production (read-only)
   if (NO_PROD) { skip('R33', 'production hub', '--no-prod'); skip('R34', 'production accounts', '--no-prod'); skip('R35', 'account files survive git', '--no-prod'); return; }
-  const prodPort = readJson(path.join(BRIDGE, 'config.json'), {}).port || 7777;
+  const prodPort = readJson(path.join(PROD, 'config.json'), {}).port || 7777;
   let prod = null; try { prod = await (await fetch(`http://127.0.0.1:${prodPort}/api/status`)).json(); } catch {}
   check('R33', `production: ${prodPort} answers, no leftover old port 7778`, !!(prod && prod.ok) && !(await listening(7778)), prod ? `pid ${prod.pid}, supervised ${prod.supervised}` : 'not answering');
-  const accts = allProfiles();
-  const intact = accts.every((p) => { const a = readJson(path.join(p ? path.join(BRIDGE, 'profiles', p) : BRIDGE, 'auth.json'), null); return a && a.salt && a.hash; });
-  check('R34', `production: every account (${accts.length}) still has an intact password file`, intact, 'sign-in itself is proven by the host (law 6), not by this runner');
+  const accts = prodProfiles();
+  const intact = accts.every((p) => { const a = readJson(path.join(prodDir(p), 'auth.json'), null); return a && a.salt && a.hash; });
+  check('R34', `production: every account (${accts.length}, in ${PROD}) still has an intact password file`, intact, 'sign-in itself is proven by the host (law 6), not by this runner');
   const tracked = spawnSync('git', ['ls-files', 'bridge/profiles', 'bridge/auth.json', 'bridge/state.json', 'bridge/hub-state.json'], { cwd: MILLS, encoding: 'utf8' }).stdout.trim();
-  const configs = accts.filter(Boolean).every((p) => fs.existsSync(path.join(BRIDGE, 'profiles', p, 'config.json')));
+  const configs = accts.filter(Boolean).every((p) => fs.existsSync(path.join(prodDir(p), 'config.json')));
   check('R35', 'account files are untracked (git cannot delete them on merge) and every account has its config.json', !tracked && configs, tracked || (configs ? '' : 'a profile is missing config.json'));
 }
 

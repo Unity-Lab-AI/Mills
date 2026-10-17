@@ -36,6 +36,9 @@ Archive/
 # Assistant: persona prompt (host-local) and per-account data
 bridge/assistant-persona.txt
 bridge/assistant.json
+# AI providers people hooked up (API keys / login folders / endpoints) and the empty folder API calls run in
+bridge/providers.json
+Api/
 Images/
 __pycache__/
 *.pyc

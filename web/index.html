@@ -7,8 +7,12 @@
      the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
      anything except by loading an image; markdown images (https) are allowed for that reason only and
      are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com; img-src 'self' https: data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Mills</title>
+<!-- Mills Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/mills.svg" type="image/svg+xml">
+<meta name="theme-color" content="#0f1115">
 <style>
   :root {
     --bg: #0f1115; --panel: #171a21; --line: #2a2f3a; --text: #e6e8ee; --muted: #8b93a7;
@@ -62,6 +66,8 @@
   .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
   @keyframes dotPulse { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-.2rem); } }
   .msg.thinking { color: var(--muted); font-style: italic; display: flex; align-items: center; animation: msgIn .2s ease; }
+  /* the team chat shows the same bubble while Unity composes (the typing line takes the Work bubble's look) */
+  .typingLine.thinking { margin: 0 .8rem .3rem; padding: .5rem .8rem; border-radius: 10px; background: var(--panel); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); align-self: flex-start; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
   #shell { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -257,6 +263,12 @@
   button.dictate.on { background: var(--bad); color: #fff; border-color: var(--bad); animation: recPulse 1.2s infinite; }
   button.dictate.armed { background: var(--good); color: #111; border-color: var(--good); }
   .msg.me.queued { opacity: .6; border: 1px dashed var(--muted); }
+  /* slash-command menu above the Claude box: "/" lists the common commands, filtered as you type */
+  #slashMenu { border-top: 1px solid var(--line); background: var(--panel); max-height: 40%; overflow: auto; padding: .3rem; display: flex; flex-direction: column; gap: .1rem; font-size: .85rem; }
+  #slashMenu .sl { display: flex; align-items: baseline; gap: .6rem; padding: .35rem .6rem; border-radius: 6px; cursor: pointer; background: transparent; color: var(--text); border: 0; text-align: left; font-weight: 400; }
+  #slashMenu .sl:hover, #slashMenu .sl.on { background: var(--line); }
+  #slashMenu .sl code { font-family: ui-monospace, Consolas, monospace; font-weight: 700; min-width: 7.5rem; }
+  #slashMenu .sl small { color: var(--muted); } #slashMenu .sl .tag { margin-left: auto; font-size: .66rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 .4rem; }
   .msg .unqueue { float: right; margin-left: .5rem; background: transparent; color: var(--muted); padding: 0 .3rem; font-size: .8rem; border: 0; }
 
   #archive, .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 40; }
@@ -272,6 +284,15 @@
   .slider { display: grid; grid-template-columns: 6.5rem 1fr auto; gap: .6rem; align-items: center; }
   .slider input { padding: 0; }
   .slider button { padding: .2rem .55rem; font-size: .8rem; }
+  .setSection { display: flex; flex-direction: column; gap: .5rem; font-size: .85rem; }
+  .apiBox, .provBox { display: flex; flex-direction: column; gap: .45rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem; }
+  .apiBox code, .provBox code { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; background: color-mix(in srgb, var(--text) 10%, transparent); padding: .1rem .35rem; border-radius: 4px; overflow-wrap: anywhere; }
+  .apiBox .row, .provBox .row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+  .apiBox .row button, .provBox .row button { padding: .3rem .6rem; font-size: .8rem; }
+  .apiBox .row select, .provBox .row select, .provBox .row input { width: auto; flex: 1; min-width: 9rem; padding: .35rem .5rem; font-size: .85rem; }
+  .apiKeyShow { display: flex; gap: .4rem; align-items: center; } .apiKeyShow input { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
+  .provItem { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--line); }
+  .provItem:first-child { border-top: 0; } .provItem small { color: var(--muted); }
   #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
   .archiveSearch { padding: .5rem .75rem 0; } .archiveSearch input { font-size: .9rem; }
   .conv .snip { font-size: .76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .15rem; }
@@ -348,8 +369,43 @@
   #recBar span { flex: 1; }
   #recBar button { padding: .25rem .7rem; font-size: .8rem; }
   @keyframes recPulse { 50% { opacity: .3; } }
-  #roomSide { gap: .5rem; }
+  #roomSide { gap: 0; padding: 0; flex-direction: row; width: 266px; }
+  #sideLists { flex: 1; min-width: 0; overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .35rem; }
   #convList { display: flex; flex-direction: column; gap: .25rem; }
+  /* ── servers (rail), channels, groups, members (web/guilds.js) ── */
+  #serverRail { flex: none; width: 56px; display: flex; flex-direction: column; align-items: center; gap: .45rem; padding: .5rem 0; background: color-mix(in srgb, var(--bg) 70%, #000); border-right: 1px solid var(--line); overflow-y: auto; }
+  #serverRail .srv { position: relative; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 0; color: #fff; font-weight: 800; font-size: .8rem; letter-spacing: .02em; display: flex; align-items: center; justify-content: center; transition: border-radius .15s ease, transform .1s ease; }
+  #serverRail .srv:hover, #serverRail .srv.on { border-radius: 14px; }
+  #serverRail .srv.on::before { content: ''; position: absolute; left: -8px; top: 8px; width: 4px; height: 24px; border-radius: 0 4px 4px 0; background: var(--text); }
+  #serverRail .srv.add { background: var(--panel); color: var(--good); border: 1px dashed var(--line); }
+  #serverRail .srv .badge { position: absolute; right: -4px; bottom: -4px; background: var(--bad); color: #fff; border-radius: 999px; font-size: .62rem; padding: 0 .3rem; border: 2px solid var(--bg); }
+  .chHead { display: flex; align-items: center; gap: .3rem; padding: .25rem .25rem .4rem; border-bottom: 1px solid var(--line); margin-bottom: .2rem; } .chHead b { flex: 1; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chSect { display: flex; align-items: center; justify-content: space-between; font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding: .55rem .25rem .15rem; }
+  .ghost.tiny { padding: .05rem .3rem; font-size: .7rem; border: 0; } .ghost.tiny.armed { color: var(--bad); }
+  .cv.ch { padding: .3rem .45rem; } .cv .dot.hash { background: transparent; color: var(--muted); font-weight: 700; width: 1rem; text-align: center; font-size: .95rem; display: inline-flex; justify-content: center; }
+  .cv .chDel { margin-left: auto; opacity: 0; } .cv:hover .chDel { opacity: 1; }
+  .chNone { font-size: .75rem; color: var(--muted); padding: .1rem .45rem; }
+  #memberList { flex: none; width: 220px; border-left: 1px solid var(--line); overflow-y: auto; padding: .6rem .5rem; background: color-mix(in srgb, var(--panel) 80%, var(--bg)); font-size: .85rem; }
+  #memberList .mHead { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: .6rem .3rem .25rem; }
+  #memberList .mRow { display: flex; align-items: center; gap: .5rem; padding: .3rem .4rem; border-radius: 6px; cursor: pointer; } #memberList .mRow:hover { background: var(--line); }
+  #memberList .mName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .botTag { background: var(--accent); color: var(--on-accent); font-size: .6rem; font-weight: 800; border-radius: 4px; padding: 0 .3rem; margin-left: .35rem; vertical-align: middle; letter-spacing: .04em; }
+  /* (web/guilds.js shows the member column in app mode and on screens 1500 px and wider while the Chat screen is open) */
+  /* ── app mode (index.html?app=1, the installed Mills Chat): chat only, Discord-shaped, fancier ── */
+  body.appMode #room header { display: none; }
+  body.appMode #room { --panel: #171b23; --line: #272c37; }
+  body.appMode #roomSide { width: 296px; max-width: 42%; }
+  body.appMode #sideLists { padding: .6rem .5rem; }
+  body.appMode .roomTop { padding: .6rem .9rem; font-size: .95rem; box-shadow: 0 2px 10px rgba(0,0,0,.25); position: relative; z-index: 1; }
+  body.appMode #roomLog { padding: 1rem 1.1rem; gap: .35rem; }
+  body.appMode .rmsg { max-width: 100%; border-left: 0; background: transparent; padding: .35rem .6rem; border-radius: 8px; }
+  body.appMode .rmsg:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  body.appMode .rmsg.me { align-self: stretch; color: var(--text); }
+  body.appMode .rmsg small b { font-size: .95rem; }
+  body.appMode #roomComposer { padding: .5rem 1.1rem 1rem; border-top: 0; }
+  body.appMode #roomComposer textarea { background: #1f2430; border-color: transparent; border-radius: 10px; height: 3rem; }
+  body.appMode #memberList { display: block; }
+  @media (max-width: 900px) { body.appMode #memberList { display: none; } }
   #callSideHost:empty { display: none; }
   #callCore { display: flex; flex-direction: column; gap: .4rem; font-size: .8rem; min-height: 0; flex: 1; }
   #callFloatBody { flex: 1; min-height: 0; display: flex; padding: .4rem; overflow: auto; }
@@ -381,6 +437,25 @@
   #callBanner span { flex: 1; }
   #callBanner button { padding: .15rem .6rem; font-size: .78rem; }
   #callFloat { min-width: 240px; min-height: 180px; width: 340px; height: 300px; transition: left .18s, top .18s; }
+  /* theater: call on the right taking most of the room, chat narrow on the left, conversation list tucked away */
+  #callStage { flex: 1 1 62%; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: .6rem; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 85%, #000); }
+  #roomCore.theater .roomMain { flex: 0 1 38%; min-width: min(300px, 100%); }
+  #roomCore.theater #roomSide { display: none; }
+  #callStage #callCore { flex: 1; min-height: 0; }
+  #callStage #callTiles { flex: 1; min-height: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); align-content: center; gap: .6rem; }
+  #callStage .tile { border-width: 3px; }
+  #callStage .tile .lbl { font-size: .9rem; } #callStage .tile .ava { font-size: 2.6rem; }
+  #callStage .callCtl button { padding: .4rem .8rem; font-size: .85rem; }
+  #callTheater.on, #callScreen.on { border-color: var(--good); color: var(--good); }
+  /* a shared screen: its own tile, full width, whole picture visible (not cropped) */
+  .tile.screenTile { grid-column: 1 / -1; aspect-ratio: auto; max-height: 62vh; min-height: 120px; background: #000; cursor: pointer; }
+  .tile.screenTile video { object-fit: contain; max-height: 62vh; transform: none; }
+  #callSideHost .tile.screenTile { max-height: 160px; }
+  @media (max-width: 700px) {
+    #roomCore.theater { flex-direction: column; }
+    #roomCore.theater .roomMain { flex: 1 1 40%; min-width: 0; }
+    #callStage { flex: 1 1 60%; border-left: 0; border-top: 1px solid var(--line); }
+  }
   #callFloat.dragging { transition: none; }
   .rmsg audio { display: block; margin-top: .3rem; width: min(320px, 100%); height: 2.2rem; }
   #assistLog { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
@@ -598,7 +673,10 @@
 <!-- The team chat itself. One copy, moved between the Chat screen, the Work pane and the floating window. -->
 <div id="roomPark" hidden>
   <div id="roomCore">
-    <aside id="roomSide"><div id="callSideHost"></div><div id="convList"></div></aside>
+    <aside id="roomSide">
+      <nav id="serverRail" aria-label="Servers"></nav>
+      <div id="sideLists"><div id="callSideHost"></div><div id="chanList"></div><div id="convList"></div></div>
+    </aside>
     <div class="roomMain">
       <div class="roomTop">
         <button class="ghost" id="roomSideToggle" title="Show / hide conversations" aria-label="Show / hide conversations"><svg class="ic"><use href="#i-menu"/></svg></button>
@@ -621,6 +699,10 @@
           <button type="button" class="ghost dictate" id="roomDictate" aria-label="Dictate" hidden><svg class="ic"><use href="#i-talk"/></svg></button></div>
       </form>
     </div>
+    <!-- Theater: the call panel moves here and takes most of the width; the chat stays on the left -->
+    <div id="callStage" hidden></div>
+    <!-- who is in this conversation (app mode and wide screens): web/guilds.js -->
+    <aside id="memberList" hidden></aside>
   </div>
 </div>
 
@@ -632,6 +714,8 @@
     <div class="callCtl">
       <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone"><svg class="ic lead"><use href="#i-mic"/></svg>Mic on</button>
       <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)"><svg class="ic lead"><use href="#i-camera"/></svg>Camera off</button>
+      <button type="button" class="ghost" id="callScreen" title="Share your screen, a window or a tab with the call (shows as its own tile for everyone)"><svg class="ic lead"><use href="#i-share"/></svg>Share screen</button>
+      <button type="button" class="ghost" id="callTheater" title="Theater: the call fills the screen and the chat stays on the left (Esc leaves it)"><svg class="ic lead"><use href="#i-eye"/></svg>Theater</button>
       <button type="button" id="callLeave" title="Leave the call">Leave</button>
     </div>
     <div id="callMsg"></div>
@@ -663,6 +747,8 @@
       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
+      <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything Mills says out loud (chat read-aloud and Unity's voice); off = silence</label>
+      <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
       <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
       <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
@@ -681,6 +767,13 @@
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
       <label>Theme (this browser)<select id="setTheme"></select></label>
       <div><button type="button" id="saveSettings">Save</button> <span id="setMsg" class="status"></span></div>
+      <hr>
+      <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to Mills: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
+        <div id="apiBox" class="apiBox"></div></div>
+      <div class="setSection"><b>Mills Chat app</b> — the chat side of Mills as its own installed app on Windows or Linux (servers, channels, groups, private messages, calls, Unity).
+        <div id="appBox" class="apiBox"></div></div>
+      <div class="setSection"><b>My AIs</b> — hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.
+        <div id="provBox" class="provBox"></div></div>
     </div>
   </div>
 </div>
@@ -813,6 +906,7 @@
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
       </div>
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
+      <div id="slashMenu" hidden></div>
       <form id="composer">
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <div class="sendCol">
@@ -1098,11 +1192,16 @@ $('assistForm').addEventListener('submit', async (e) => {
   assistBusy = false; $('assistSend').hidden = false; $('assistStop').hidden = true;
 });
 // ---- voice: her replies in her own voice (made on the host), your mic → text on the host ----
-const voiceKey = () => 'mills.assistVoice.' + (me ? me.username : '');
-const voiceOn = () => store.get(voiceKey()) === '1';
+// Her voice follows the account (Settings → "Unity speaks her replies"), under the text-to-speech master switch.
+const voiceOn = () => prefs().tts.all && prefs().tts.unity;
 function icoText(btn, icon, text) { btn.textContent = ''; btn.append(ic(icon, text ? 'lead' : ''), text || ''); }
-function showVoice() { icoText($('assistVoice'), voiceOn() ? 'speaker' : 'speaker-off', voiceOn() ? 'Voice on' : 'Voice off'); }
-$('assistVoice').onclick = () => { store.set(voiceKey(), voiceOn() ? '' : '1'); showVoice(); if (!voiceOn()) stopVoice(); };
+function showVoice() { icoText($('assistVoice'), voiceOn() ? 'speaker' : 'speaker-off', voiceOn() ? 'Voice on' : prefs().tts.all ? 'Voice off' : 'Voice off (text to speech is off in Settings)'); }
+$('assistVoice').onclick = async () => {
+  if (!prefs().tts.all) return assistSys('Text to speech is switched off in Settings; turn the master switch on first.', true);
+  try { const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({ tts: { unity: !prefs().tts.unity } }) }); me.prefs = d.prefs; }
+  catch (e) { return assistSys(e.message, true); }
+  showVoice(); if (!voiceOn()) stopVoice();
+};
 let voiceQueue = Promise.resolve(), voiceAudio = null, voiceGen = 0;
 function stopVoice() { voiceGen++; if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; } voiceQueue = Promise.resolve(); }
 function speakLine(text, emotion, act) {
@@ -1258,7 +1357,7 @@ async function enter() {
   myShare = me.share || '';
   loadLayout();
   currentConv = store.get('mills.conv.' + me.username) || 'room';
-  showScreen('menu');
+  showScreen(APP_MODE ? 'room' : 'menu'); // the installed Mills Chat app is the chat and nothing else
   startRoomPolling();
   callPollLoop();
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
@@ -1468,6 +1567,8 @@ async function runPcTool(ev) {
 // current turn, if Claude is busy), to every new conversation, and after the bridge restarts.
 let modelLabels = {};
 const modelName = (id) => (id ? modelLabels[id] || id : 'Claude Code default');
+// The dropdown lists the host's Claude models, then every Claude-capable provider the person may use
+// (their own, or one a teammate shared): option value = "<provider id>|<model>" ("" = the host default).
 function showModels(d) {
   const sel = $('model');
   if (!Array.isArray(d.models)) { sel.hidden = true; return; } // bridge from before the picker existed
@@ -1477,7 +1578,14 @@ function showModels(d) {
   def.value = ''; def.textContent = 'Default' + (d.defaultModel ? ' (' + modelName(d.defaultModel) + ')' : '');
   sel.append(def);
   for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
-  sel.value = d.model || ''; sel.hidden = false;
+  for (const p of (d.providers || []).filter((x) => x.id !== 'host' && x.kind !== 'openai')) {
+    const g = document.createElement('optgroup'); g.label = p.label + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '');
+    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); g.append(o); }
+    sel.append(g);
+  }
+  sel.value = d.provider && d.provider !== 'host' ? d.provider + '|' + (d.model || '') : d.model || '';
+  if (sel.selectedIndex < 0) sel.value = '';
+  sel.hidden = false;
 }
 $('workspace').onchange = async () => {
   const sel = $('workspace'), want = sel.value;
@@ -1490,8 +1598,10 @@ $('workspace').onchange = async () => {
 };
 $('model').onchange = async () => {
   try {
-    const d = await json('/api/model', { method: 'POST', body: JSON.stringify({ model: $('model').value }) });
-    sys('Model: ' + modelName(d.effective) + (busy ? ' — applies from the message after this one.' : ' — applies from your next message.'));
+    const [provider, model] = $('model').value.includes('|') ? $('model').value.split('|') : ['host', $('model').value];
+    const d = await json('/api/model', { method: 'POST', body: JSON.stringify({ model, provider }) });
+    const via = d.provider && d.provider !== 'host' ? ' via ' + (((me.providers || []).find((p) => p.id === d.provider) || {}).label || 'your provider') : '';
+    sys('Model: ' + modelName(d.effective) + via + (busy ? ' — applies from the message after this one.' : ' — applies from your next message.'));
   } catch (err) { sys(err.message, true); }
 };
 
@@ -1509,7 +1619,8 @@ $('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const message = $('input').value.trim();
   if (!message) return;
-  $('input').value = ''; updateStopButton();
+  $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true;
+  if (message.startsWith('/') && runLocalSlash(message)) return; // a Mills command: done here, nothing goes to Claude
   if (busy) enqueue(message); else send(message);
 });
 function enqueue(message) {
@@ -1593,7 +1704,79 @@ function handleEvent(ev) {
   scroll();
 }
 
+// ── Slash commands: "/" at the start of the Claude box lists the common ones. Most are passed through to
+// Claude Code exactly as typed (it understands them); a few act on Mills itself ("here").
+const SLASH = [
+  { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context)', args: '[focus]' },
+  { cmd: '/clear', desc: 'Start a fresh conversation (same as New chat)', local: () => $('newChat').click() },
+  { cmd: '/new', desc: 'Start a fresh conversation', local: () => $('newChat').click() },
+  { cmd: '/stop', desc: 'Stop the current reply', local: () => $('stop').click() },
+  { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', local: (a) => slashModel(a) },
+  { cmd: '/share', desc: 'Share / stop sharing this Work session with everyone', local: () => $('shareBtn').click() },
+  { cmd: '/save', desc: 'Save this session to Past sessions now', local: () => saveToArchive(false) },
+  { cmd: '/sessions', desc: 'Open Past sessions', local: () => showArchive() },
+  { cmd: '/board', desc: 'Open the team board', local: () => showScreen('board') },
+  { cmd: '/tasks', desc: 'Show / hide the Tasks pane', local: () => togglePane('tasks') },
+  { cmd: '/chat', desc: 'Show / hide the team chat pane', local: () => togglePane('roomPane') },
+  { cmd: '/settings', desc: 'Open Settings', local: () => openSettings() },
+  { cmd: '/review', desc: 'Ask Claude to review the pending changes', args: '[what]' },
+  { cmd: '/init', desc: 'Ask Claude to create a CLAUDE.md for the opened project' },
+  { cmd: '/memory', desc: 'Show / edit what Claude remembers about this project' },
+  { cmd: '/cost', desc: 'Token usage and cost of this session' },
+  { cmd: '/status', desc: 'Claude Code status: model, account, tools' },
+  { cmd: '/help', desc: 'Claude Code help' },
+  { cmd: '/commit', desc: 'Ask Claude to commit the staged work with a good message', args: '[message]' },
+  { cmd: '/pr', desc: 'Ask Claude to open / describe a pull request', args: '[title]' },
+  { cmd: '/explain', desc: 'Ask Claude to explain the selected file or topic', args: '<file or topic>' },
+  { cmd: '/test', desc: 'Ask Claude to run or write tests', args: '[what]' },
+  { cmd: '/fix', desc: 'Ask Claude to find and fix the problem described', args: '<problem>' },
+  { cmd: '/docs', desc: 'Ask Claude to update the docs for the change', args: '[what]' },
+];
+let slashIdx = 0;
+function slashQuery() { const v = $('input').value; const m = /^\/(\S*)$/.exec(v); return m ? m[1].toLowerCase() : null; }
+function slashMatches() { const q = slashQuery(); return q === null ? [] : SLASH.filter((s) => s.cmd.slice(1).startsWith(q)); }
+function renderSlash() {
+  const box = $('slashMenu'), list = slashMatches();
+  box.textContent = '';
+  if (!list.length) { box.hidden = true; return; }
+  slashIdx = Math.min(slashIdx, list.length - 1);
+  list.forEach((s, i) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'sl' + (i === slashIdx ? ' on' : '');
+    const c = document.createElement('code'); c.textContent = s.cmd + (s.args ? ' ' + s.args : '');
+    const d = document.createElement('small'); d.textContent = s.desc;
+    const t = document.createElement('span'); t.className = 'tag'; t.textContent = s.local ? 'here' : 'to Claude';
+    b.append(c, d, t); b.onmousedown = (e) => { e.preventDefault(); pickSlash(s); }; box.append(b);
+  });
+  box.hidden = false;
+}
+function pickSlash(s) { // a Mills command without arguments runs now; anything else is put in the box ready to send
+  const box = $('input');
+  if (s.local && !s.args) { box.value = ''; $('slashMenu').hidden = true; updateStopButton(); s.local(''); return; }
+  box.value = s.cmd + ' '; $('slashMenu').hidden = true; box.focus(); box.setSelectionRange(box.value.length, box.value.length); updateStopButton();
+}
+function slashModel(arg) {
+  const want = String(arg || '').trim().toLowerCase(), sel = $('model');
+  const opt = [...sel.options].find((o) => (want === 'default' && o.value === '') || (want && !o.value.includes('|') && (o.value.toLowerCase().includes(want) || o.textContent.toLowerCase().includes(want))));
+  if (!opt) return sys('Model: say which one — ' + [...sel.options].map((o) => o.textContent).join(', '), true);
+  sel.value = opt.value; sel.dispatchEvent(new Event('change'));
+}
+// A local command typed in full (with or without arguments) runs here instead of going to Claude.
+function runLocalSlash(message) {
+  const m = /^(\/\S+)\s*([\s\S]*)$/.exec(message); if (!m) return false;
+  const s = SLASH.find((x) => x.cmd === m[1].toLowerCase());
+  if (!s || !s.local) return false;
+  s.local(m[2]); return true;
+}
+$('input').addEventListener('input', () => { slashIdx = 0; renderSlash(); });
+$('input').addEventListener('blur', () => setTimeout(() => { $('slashMenu').hidden = true; }, 150));
 $('input').addEventListener('keydown', (e) => {
+  const open = !$('slashMenu').hidden, list = open ? slashMatches() : [];
+  if (open && list.length) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashIdx = (slashIdx + 1) % list.length; return renderSlash(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashIdx = (slashIdx - 1 + list.length) % list.length; return renderSlash(); }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); return pickSlash(list[slashIdx]); }
+    if (e.key === 'Escape') { e.preventDefault(); $('slashMenu').hidden = true; return; }
+  }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('composer').requestSubmit(); }
 });
 $('stop').onclick = () => {
@@ -1967,14 +2150,15 @@ const memberOf = (u) => roomMembers.find((x) => x.username === u);
 const nickOf = (u) => { const m = memberOf(u); return m ? (m.nick || m.display) : u; };
 const colorIndex = (u) => { const m = memberOf(u); return m && Number.isInteger(m.color) ? m.color : hashName(u) % PALETTE.length; };
 const colorOf = (u) => PALETTE[colorIndex(u)][lightTheme ? 1 : 0];
-const convOfMsg = (m) => (m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
+const convOfMsg = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
 // Who a message is shown as: normally the sender; a Work run's Claude posts through the hub's key with
 // `as` = "<person> · Claude" and `via` = that person (whose colour it takes).
 const authorOf = (m) => m.as || nickOf(m.from);
 const authorColor = (m) => colorOf(m.via || m.from);
 const dmConv = (u) => 'dm:' + [me.username, u].sort().join('|');
-const convPeer = (c) => (c === 'room' ? '' : c.slice(3).split('|').find((u) => u !== me.username) || '');
-const convLabel = (c) => (c === 'room' ? '# Everyone' : '@ ' + nickOf(convPeer(c)) + ' (private)');
+const isGuildConv = (c) => /^(ch|grp):/.test(String(c || '')); // a server channel or a group (web/guilds.js)
+const convPeer = (c) => (c === 'room' || isGuildConv(c) ? '' : c.slice(3).split('|').find((u) => u !== me.username) || '');
+const convLabel = (c) => (c === 'room' ? '# general' : isGuildConv(c) ? GUILDS.label(c) : '@ ' + nickOf(convPeer(c)) + ' (private)');
 const clipLen = (s) => Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
 const snippet = (rec) => (rec.m.deleted ? 'message deleted'
   : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
@@ -1982,7 +2166,7 @@ function prefs() {
   const p = (me && me.prefs) || {};
   return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5,
     sound: { on: true, message: 50, mention: 70, reply: 70, ...(p.sound || {}) },
-    tts: { on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) },
+    tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) }, // all = master switch
     clips: { volume: 90, autoplay: false, ...(p.clips || {}) },
     audio: { noise: true, echo: true, agc: true, ...(p.audio || {}) }, // noise suppression on by default
     call: { volume: 100, quality: 'medium', ...(p.call || {}) } };
@@ -2080,8 +2264,8 @@ async function renderConvList() {
     const badge = document.createElement('span'); badge.className = 'badge'; badge.dataset.convBadge = conv; badge.hidden = true;
     b.append(dot, nm, badge); b.onclick = () => selectConv(conv); box.append(b);
   };
-  add('room', '# Everyone', null, 'the whole team');
-  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'AI · ' : 'private · ') + '@' + m.username);
+  // (# general and the other channels / groups are drawn by web/guilds.js above this list)
+  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'BOT · ' : 'private · ') + '@' + m.username);
   const det = document.createElement('details'); const sum = document.createElement('summary'); sum.textContent = 'Key fingerprints';
   det.append(sum);
   for (const m of roomMembers) {
@@ -2104,18 +2288,20 @@ async function renderConvList() {
   updateUnread();
 }
 function selectConv(conv) {
-  if (conv !== 'room' && !memberOf(convPeer(conv))) conv = 'room';
+  if (conv !== 'room' && !(isGuildConv(conv) ? GUILDS.has(conv) : memberOf(convPeer(conv)))) conv = 'room';
   currentConv = conv; store.set('mills.conv.' + me.username, conv);
   if (isNarrow()) $('roomCore').classList.add('noside'); // phone: picking a conversation closes the drawer
   cancelCompose(); sendTyping(false);
   $('convName').textContent = convLabel(conv);
   $('roomInput').placeholder = conv === 'room' ? 'Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)'
+    : isGuildConv(conv) ? 'Message ' + convLabel(conv) + '…  (its members only; @unity to call her here)'
     : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
   const log = $('roomLog'); log.innerHTML = '';
   for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
   log.scrollTop = log.scrollHeight;
-  for (const b of $('convList').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
-  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence();
+  for (const b of $('roomSide').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
+  const sv = GUILDS.serverOf(conv); if (sv && GUILDS.state.server !== sv) { GUILDS.state.server = sv; GUILDS.render(); }
+  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers();
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
@@ -2137,6 +2323,7 @@ async function applyRoom(d) {
   if (d.latestRev < roomRev) { resetRoomData(); return applyRoom(await json('/api/room/messages?rev=0')); } // an admin cleared the history
   roomVer = d.ver || 0;
   if (d.keysVer && d.keysVer !== roomKeysVer) { const first = !roomKeysVer; roomKeysVer = d.keysVer; if (!first) await refreshMembers(); }
+  if (d.guildsVer && d.guildsVer !== GUILDS.state.ver) await GUILDS.refresh(); // a server / channel / group changed somewhere
   seenMap = d.seen || {};
   onShares(d.shares || []);
   presenceMap = Object.fromEntries((d.presence || []).map((p) => [p.user, p]));
@@ -2196,11 +2383,18 @@ function hostImage(ref) { // a picture made by the host's image engine, loaded w
    .catch(() => { img.replaceWith(document.createTextNode('(picture no longer on the host)')); imgCache.delete(ref); });
   return img;
 }
-function ytPlayer(id) { // a YouTube video Unity picked, played right here (privacy-enhanced embed)
+function ytPlayer(id, autoplay = true) { // a YouTube video, played right here (privacy-enhanced embed; the only frame the CSP allows)
   const f = document.createElement('iframe'); f.className = 'ytPlayer';
-  f.src = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) + '?autoplay=1&rel=0';
-  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen'; f.allowFullscreen = true; f.title = 'YouTube video';
+  f.src = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) + '?rel=0' + (autoplay ? '&autoplay=1' : '');
+  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen'; f.allowFullscreen = true; f.title = 'YouTube video'; f.loading = 'lazy';
+  f.addEventListener('click', (e) => e.stopPropagation());
   return f;
+}
+// YouTube links in a team-chat message (watch?v=, youtu.be/, shorts/, embed/, live/) → the video ids, in order, no duplicates
+function ytIds(text) {
+  const out = [];
+  for (const m of String(text || '').matchAll(/https?:\/\/(?:www\.|m\.|music\.)?(?:youtube\.com\/(?:watch\?(?:[^\s#]*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([\w-]{11})/g)) if (!out.includes(m[1])) out.push(m[1]);
+  return out.slice(0, 3);
 }
 function withImages(el, text, render) { // split out [[image:ref]] markers, render the rest as usual
   const parts = String(text).split(/\[\[(image:[a-z0-9-]+\/[a-z0-9-]+|youtube:[\w-]{11})\]\]/);
@@ -2226,7 +2420,7 @@ function renderMsg(rec, bulk) {
   el.dataset.seq = m.seq; el.style.borderLeftColor = authorColor(m); el.textContent = '';
   const head = document.createElement('small');
   const who = document.createElement('b'); who.textContent = authorOf(m); who.style.color = authorColor(m); who.title = m.as ? 'Posted by ' + nickOf(m.via || m.from) + '\'s Claude from a Work session' : '@' + m.from;
-  if (m.as) who.append(ic('bot', 'trail'));
+  if (m.as || (memberOf(m.from) || {}).agent) { const tag = document.createElement('span'); tag.className = 'botTag'; tag.textContent = 'BOT'; who.append(tag); } // Unity and the team's Claudes are bots here
   const dt = new Date(m.ts), when = document.createElement('time');
   when.dateTime = m.ts; when.textContent = fmtTime(dt); when.title = dt.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
   head.append(who, ' · ', when);
@@ -2243,7 +2437,10 @@ function renderMsg(rec, bulk) {
   const body = document.createElement('div'); body.className = 'body';
   if (m.deleted) body.textContent = 'message deleted';
   else if (rec.locked) body.append(ic('lock', 'lead'), rec.text); // could not be opened: say why, never render it
-  else renderRich(body, rec.text);
+  else {
+    renderRich(body, rec.text);
+    for (const vid of ytIds(rec.text)) body.append(ytPlayer(vid, false)); // a YouTube link posted to the team plays right here (no autoplay)
+  }
   el.append(body);
   if (rec.audio && !m.deleted) {
     if (rec.url || rec.audio.d) {
@@ -2274,6 +2471,7 @@ function jumpTo(seq) {
 // Receipts: "seen alex · unseen sam" under your own messages (and in every message's menu).
 function participants(conv) {
   if (conv === 'room') return roomMembers.filter((x) => !x.agent).map((x) => x.username);
+  if (isGuildConv(conv)) return GUILDS.members(conv).filter((u) => !(memberOf(u) || {}).agent);
   return conv.slice(3).split('|').filter((u) => !(memberOf(u) || {}).agent);
 }
 function seenText(rec) {
@@ -2389,7 +2587,7 @@ let ttsBusy = false;
 const ttsClean = (s) => s.replace(/```[\s\S]*?```/g, ' (code) ').replace(/https?:\/\/\S+/g, ' (link) ').replace(/\s+/g, ' ').trim().slice(0, 400);
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
-  if (!text) return;
+  if (!text || !prefs().tts.all) return; // the master switch silences every read-aloud
   ttsQueue.push(ttsClean(text));
   if (ttsQueue.length > 30) ttsQueue.splice(0, ttsQueue.length - 30); // never fall endlessly behind
   if (!ttsBusy) ttsNext();
@@ -2472,375 +2670,14 @@ async function finishClip() {
     const clip = HAS_DEFLATE ? await sealBlob(buf, mid) : null;
     const a = clip ? { m: mime, k: clip.k, s: secs } : { m: mime, d: bytesToB64(buf), s: secs };
     const payload = { v: 2, t: caption, a, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) };
-    const sealed = await sealFor(JSON.stringify(payload), to, forAgent, mid, clip ? clip.blob : undefined);
-    await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
+    const gconv = isGuildConv(currentConv) ? currentConv : '';
+    const sealed = await sealFor(JSON.stringify(payload), to, forAgent, mid, clip ? clip.blob : undefined, gconv);
+    await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}), ...(gconv ? { conv: gconv } : {}) }) });
     if (caption) $('roomInput').value = '';
     cancelCompose(); await pollRoom();
   } catch (err) { sysRoom('Could not send the voice clip: ' + err.message); }
 }
-// ── Voice / video calls ──
-// WebRTC between the browsers in a call (a small mesh: everyone connects to everyone). Media is
-// DTLS-SRTP encrypted end to end; the hub only relays the set-up messages, and those are encrypted
-// with the per-pair chat keys, so the hub cannot read them or slip in its own DTLS fingerprints.
-// Codecs: Opus for voice (in-band FEC, DTX for silence, ~32 kb/s), VP9 → AV1 → VP8 → H.264 for video,
-// all decoded natively by the browser. Camera always starts OFF; the microphone uses the noise
-// suppression / echo cancellation / auto level settings (on by default).
-const call = { conv: null, peers: new Map(), mic: null, cam: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map(),
-  local: typeof MediaStream === 'function' ? new MediaStream() : null }; // the one stream id our audio + video are sent under (lip-sync)
-let callInit = false;
-const VQ = { low: [320, 180, 15, 250], medium: [640, 360, 24, 700], high: [1280, 720, 30, 1800] }; // w, h, fps, kb/s
-function audioConstraints() { const a = prefs().audio; return { noiseSuppression: a.noise, echoCancellation: a.echo, autoGainControl: a.agc, channelCount: 1 }; }
-const callMsg = (t) => { $('callMsg').textContent = t || ''; };
-const inCallList = (c) => call.state[c] || [];
-
-async function callPollLoop() {
-  if (call.polling) return;
-  call.polling = true;
-  while (me) {
-    try {
-      const d = await json(`/api/call/poll?after=${call.after}&ver=${call.ver}`);
-      call.after = d.after; call.ver = d.ver;
-      await onCallState(d.calls || {});
-      for (const s of d.signals || []) await onSignal(s);
-    } catch { await sleep(3000); }
-  }
-  call.polling = false;
-}
-async function onCallState(state) {
-  const prev = call.state; call.state = state;
-  for (const [c, ps] of Object.entries(state)) for (const p of ps) { // "X is in a call" — a notification, never a ringtone
-    if (p.user === me.username || call.conv === c) continue;
-    if (callInit && !(prev[c] || []).some((x) => x.user === p.user)) callNotify(c, p.user);
-  }
-  callInit = true;
-  if (call.conv) {
-    const list = inCallList(call.conv);
-    const restarted = !list.some((p) => p.user === me.username);
-    if (restarted) { // the hub restarted (or dropped us): quietly join again, and keep the existing connections meanwhile
-      try { await json('/api/call/join', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled) }) }); } catch {}
-    }
-    const others = list.filter((p) => p.user !== me.username);
-    for (const p of others) if (!call.peers.has(p.user)) connectPeer(p.user);
-    if (!restarted) for (const u of [...call.peers.keys()]) if (!others.some((p) => p.user === u)) dropPeer(u);
-    for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); const l = peer.tile.querySelector('.lbl'); l.textContent = nickOf(p.user); if (!p.mic) l.append(ic('mic-off', 'trail')); } }
-    $('callInfo').textContent = convLabel(call.conv) + ' · ' + list.length + ' in call';
-  }
-  renderCallBanner();
-}
-function callNotify(conv, user) {
-  const P = prefs();
-  if (P.sound.on) playTone('mention', P.sound.mention);
-  const t = document.createElement('div'); t.className = 'toast mention'; t.style.borderLeftColor = colorOf(user);
-  const b = document.createElement('b'); b.style.color = colorOf(user); label(b, 'phone', nickOf(user));
-  t.append(b, ' is in a ' + (conv === 'room' ? 'call in # Everyone' : 'private call with you') + ' — click to join');
-  t.style.setProperty('--toast-s', '12s');
-  t.onclick = () => { t.remove(); joinCall(conv); };
-  t.addEventListener('animationend', () => t.remove());
-  $('toasts').append(t);
-  if (P.tts.on) speak(nickOf(user) + ' is in a call');
-}
-function renderCallBanner() {
-  if (!me || !$('callBanner')) return;
-  const list = inCallList(currentConv), b = $('callBanner'), btn = $('callBtn');
-  label(btn, 'phone', call.conv === currentConv ? 'In call' : list.length ? 'Join call (' + list.length + ')' : 'Call');
-  if (!list.length || call.conv === currentConv) { b.hidden = true; return; }
-  b.textContent = '';
-  const s = document.createElement('span'); s.append(ic('speaker', 'lead'));
-  list.forEach((p, k) => { s.append((k ? ', ' : '') + nickOf(p.user)); if (p.cam) s.append(ic('camera', 'trail')); });
-  s.append((list.length === 1 ? ' is' : ' are') + ' in a call here');
-  const j = document.createElement('button'); j.type = 'button'; j.textContent = 'Join'; j.onclick = () => joinCall(currentConv);
-  b.append(s, j); b.hidden = false;
-}
-$('callBtn').onclick = () => { if (call.conv === currentConv) placeCall(); else joinCall(currentConv); };
-
-async function joinCall(conv) {
-  if (call.conv === conv) return;
-  if (call.conv) await leaveCall();
-  if (!chatPriv) return sysRoom('Your chat key is locked in this browser. Sign out and sign in again to call.');
-  if (!window.RTCPeerConnection) return sysRoom('This browser cannot make calls.');
-  try { call.mic = (await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() })).getAudioTracks()[0]; }
-  catch { call.mic = null; }
-  call.cam = null; call.conv = conv; call.gone.clear();
-  try {
-    const d = await json('/api/call/join', { method: 'POST', body: JSON.stringify({ conv, cam: false, mic: !!call.mic }) });
-    call.ice = d.iceServers || [];
-    $('callTiles').textContent = '';
-    $('callTiles').append(makeTile(me.username, true));
-    updateCallButtons();
-    callMsg(call.mic ? '' : 'Microphone not available or not allowed: you are listening only. Allow it in the address bar and rejoin to talk.');
-    placeCall();
-    await onCallState(d.calls || {});
-  } catch (err) { await leaveCall(true); sysRoom('Could not join the call: ' + err.message); }
-}
-async function leaveCall(quiet) {
-  if (!call.conv) return;
-  for (const u of [...call.peers.keys()]) dropPeer(u);
-  if (me) removeMeter(me.username);
-  if (call.mic) call.mic.stop();
-  if (call.cam) call.cam.stop(); // camera light goes off
-  call.mic = call.cam = null; call.conv = null;
-  placeCall(); renderCallBanner();
-  if (!quiet || me) json('/api/call/leave', { method: 'POST', body: '{}' }).catch(() => {});
-}
-$('callLeave').onclick = () => leaveCall();
-
-// Per-person volume and mute: only in this browser (they change what YOU hear, nobody else), kept
-// per username so they stick across calls. Effective volume = Settings call volume × this person's slider.
-const personVol = (u) => { const v = Number(store.get('mills.vol.' + u)); return Number.isFinite(v) && store.get('mills.vol.' + u) !== null ? v : 100; };
-const personMuted = (u) => store.get('mills.mute.' + u) === '1';
-function applyPersonAudio(tile) {
-  const u = tile.dataset.user, v = tile.querySelector('video');
-  v.volume = Math.max(0, Math.min(1, (prefs().call.volume / 100) * (personVol(u) / 100)));
-  v.muted = personMuted(u);
-  const b = tile.querySelector('.pMute'), r = tile.querySelector('.pVol');
-  if (b) { label(b, personMuted(u) ? 'speaker-off' : 'speaker'); b.title = (personMuted(u) ? 'Unmute ' : 'Mute ') + nickOf(u) + ' (only for you)'; b.classList.toggle('off', personMuted(u)); }
-  if (r) { r.value = personVol(u); r.title = nickOf(u) + ': ' + personVol(u) + '% (only for you)'; }
-}
-function makeTile(user, self) {
-  const t = document.createElement('div'); t.className = 'tile nocam' + (self ? ' self' : ''); t.dataset.user = user;
-  t.style.borderColor = colorOf(user);
-  const v = document.createElement('video'); v.autoplay = true; v.playsInline = true; if (self) v.muted = true;
-  const ava = document.createElement('div'); ava.className = 'ava'; ava.style.background = colorOf(user); ava.textContent = nickOf(user).slice(0, 1).toUpperCase();
-  const lbl = document.createElement('div'); lbl.className = 'lbl'; lbl.textContent = self ? 'You' : nickOf(user);
-  t.append(v, ava, lbl);
-  if (!self) {
-    const ctl = document.createElement('div'); ctl.className = 'pCtl';
-    const mute = document.createElement('button'); mute.type = 'button'; mute.className = 'pMute';
-    mute.onclick = (e) => { e.stopPropagation(); store.set('mills.mute.' + user, personMuted(user) ? '' : '1'); applyPersonAudio(t); };
-    const vol = document.createElement('input'); vol.type = 'range'; vol.className = 'pVol'; vol.min = 0; vol.max = 100;
-    vol.oninput = () => { store.set('mills.vol.' + user, vol.value); if (personMuted(user) && Number(vol.value) > 0) store.set('mills.mute.' + user, ''); applyPersonAudio(t); };
-    ctl.append(mute, vol); t.append(ctl);
-    applyPersonAudio(t);
-  }
-  return t;
-}
-
-// Speaking ring: a tiny level meter per voice (Web Audio analyser, nothing leaves the browser).
-// Someone counts as speaking while their level is above the threshold, held for a moment so the
-// ring does not flicker between words.
-const meters = new Map(); // username -> { an, src, buf, hold }
-function addMeter(user, track) {
-  removeMeter(user);
-  try {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
-    const an = audioCtx.createAnalyser(); an.fftSize = 512; an.smoothingTimeConstant = 0.3;
-    src.connect(an); // measured only, never played through here (the tile's <video> plays it)
-    meters.set(user, { an, src, buf: new Uint8Array(an.fftSize), hold: 0, track });
-  } catch {}
-}
-function removeMeter(user) { const m = meters.get(user); if (m) { try { m.src.disconnect(); } catch {} meters.delete(user); } }
-setInterval(() => {
-  if (!call.conv) return;
-  const now = Date.now();
-  for (const [user, m] of meters) {
-    m.an.getByteTimeDomainData(m.buf);
-    let sum = 0; for (const x of m.buf) { const d = (x - 128) / 128; sum += d * d; }
-    const level = Math.sqrt(sum / m.buf.length);
-    const self = user === me.username;
-    const audible = self ? !!(call.mic && call.mic.enabled) : true; // others ring even if you muted them locally (you still see who talks)
-    if (audible && m.track.enabled && m.track.readyState === 'live' && level > 0.035) m.hold = now + 350;
-    const tile = self ? selfTile() : (call.peers.get(user) || {}).tile;
-    if (tile) tile.classList.toggle('speaking', m.hold > now);
-  }
-}, 100);
-function selfTile() { return $('callTiles').querySelector('.tile.self'); }
-
-function preferCodecs(t, kind) {
-  if (!t.setCodecPreferences || !RTCRtpReceiver.getCapabilities) return;
-  const caps = RTCRtpReceiver.getCapabilities(kind);
-  if (!caps) return;
-  const order = kind === 'audio' ? ['audio/opus'] : ['video/VP9', 'video/AV1', 'video/VP8', 'video/H264'];
-  const rank = (c) => { const i = order.indexOf(c.mimeType); return i < 0 ? order.length : i; };
-  try { t.setCodecPreferences([...caps.codecs].sort((a, b) => rank(a) - rank(b))); } catch {}
-}
-function tuneSdp(desc) { // ask the other side for Opus with forward error correction + silence suppression
-  let sdp = desc.sdp;
-  const m = /a=rtpmap:(\d+) opus\/48000/i.exec(sdp);
-  if (m) sdp = sdp.replace(new RegExp('a=fmtp:' + m[1] + ' ([^\\r\\n]*)'), (line, params) => {
-    const add = ['useinbandfec=1', 'usedtx=1', 'maxaveragebitrate=32000'].filter((x) => !params.includes(x.split('=')[0]));
-    return 'a=fmtp:' + m[1] + ' ' + params + (add.length ? ';' + add.join(';') : '');
-  });
-  return { type: desc.type, sdp };
-}
-function tuneSenders(peer) {
-  const [, , fps, kbps] = VQ[prefs().call.quality] || VQ.medium;
-  for (const t of peer.pc.getTransceivers()) {
-    const s = t.sender, kind = t.receiver.track.kind, params = s.getParameters();
-    if (!params.encodings || !params.encodings.length) continue; // not negotiated yet; tried again once connected
-    params.encodings[0].maxBitrate = (kind === 'video' ? kbps : 32) * 1000;
-    if (kind === 'video') params.encodings[0].maxFramerate = fps;
-    s.setParameters(params).catch(() => {});
-  }
-}
-// Lip-sync: browsers only synchronise audio and video that belong to the same stream (the SDP msid).
-// Both senders are tied to one local stream id, and the receiving side plays the remote stream the
-// tracks arrive in, so voice and picture stay in step instead of drifting apart.
-async function attachLocal(peer) { // put our current mic / camera on this connection's senders
-  const ts = peer.pc.getTransceivers();
-  for (const t of ts) { // synchronously, before any offer / answer is made
-    t.direction = 'sendrecv'; preferCodecs(t, t.receiver.track.kind);
-    if (t.sender.setStreams) try { t.sender.setStreams(call.local); } catch {}
-  }
-  for (const t of ts) { try { await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? call.mic : call.cam); } catch {} }
-}
-function connectPeer(user) {
-  if (call.peers.has(user)) return call.peers.get(user);
-  const pc = new RTCPeerConnection({ iceServers: call.ice });
-  const peer = { pc, user, offerer: me.username < user, pendingIce: [], iceOut: [], iceTimer: null, stream: new MediaStream(), tile: makeTile(user, false) };
-  call.peers.set(user, peer);
-  $('callTiles').append(peer.tile);
-  peer.tile.querySelector('video').srcObject = peer.stream;
-  pc.ontrack = (e) => {
-    const v = peer.tile.querySelector('video');
-    if (e.streams && e.streams[0]) { // the sender's stream: audio + video in one, so the browser lip-syncs them
-      if (v.srcObject !== e.streams[0]) { peer.stream = e.streams[0]; v.srcObject = peer.stream; }
-    } else if (!peer.stream.getTracks().includes(e.track)) peer.stream.addTrack(e.track);
-    v.play().catch(() => {});
-    if (e.track.kind === 'audio') addMeter(user, e.track);
-  };
-  // ICE candidates arrive in quick bursts: gather them for 40 ms and send one signal per burst (each
-  // signal is a round trip through the tunnel, so this cuts set-up time on slow links).
-  pc.onicecandidate = (e) => {
-    if (!e.candidate) return;
-    peer.iceOut.push(e.candidate.toJSON());
-    if (!peer.iceTimer) peer.iceTimer = setTimeout(() => { peer.iceTimer = null; sendSignal(user, { cs: peer.iceOut.splice(0) }); }, 40);
-  };
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') tuneSenders(peer);
-    if (pc.connectionState === 'failed' && peer.offerer) pc.restartIce();
-    if (pc.connectionState === 'failed') callMsg('Could not connect to ' + nickOf(user) + ' directly (strict network). A TURN server in the hub config fixes this.');
-  };
-  if (peer.offerer) { // exactly one side offers, so there is never a collision
-    pc.addTransceiver('audio', { direction: 'sendrecv', streams: [call.local] });
-    pc.addTransceiver('video', { direction: 'sendrecv', streams: [call.local] });
-    attachLocal(peer);
-    pc.onnegotiationneeded = async () => {
-      try { await pc.setLocalDescription(); await sendSignal(user, { d: tuneSdp(pc.localDescription) }); } catch {}
-    };
-  }
-  return peer;
-}
-function dropPeer(user) {
-  const peer = call.peers.get(user);
-  if (!peer) return;
-  clearTimeout(peer.iceTimer);
-  try { peer.pc.close(); } catch {}
-  removeMeter(user);
-  peer.tile.remove(); call.peers.delete(user); call.gone.delete(user);
-}
-async function pairKey(user) { const m = memberOf(user); return m && m.pub && chatPriv && !changedKeys.has(user) && trustedPub(user, m.pub) ? sharedWith(m.pub) : null; }
-async function sendSignal(user, body) {
-  const k = await pairKey(user);
-  if (!k || !call.conv) return;
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(JSON.stringify({ conv: call.conv, from: me.username, to: user, ...body })));
-  await json('/api/call/signal', { method: 'POST', body: JSON.stringify({ to: user, conv: call.conv, iv: toB64(iv), ct: toB64(ct) }) }).catch(() => {});
-}
-async function onSignal(s) {
-  if (!call.conv || s.conv !== call.conv) return;
-  const k = await pairKey(s.from);
-  if (!k) return;
-  let msg;
-  try { msg = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(s.iv) }, k, fromB64(s.ct)))); } catch { return; } // not from them: ignored
-  if (msg.conv !== call.conv || msg.from !== s.from || msg.to !== me.username) return; // bound to this call inside the encryption
-  const peer = connectPeer(s.from), pc = peer.pc;
-  try {
-    if (msg.d) {
-      await pc.setRemoteDescription(msg.d);
-      if (msg.d.type === 'offer') { await attachLocal(peer); await pc.setLocalDescription(); await sendSignal(s.from, { d: tuneSdp(pc.localDescription) }); }
-      for (const c of peer.pendingIce.splice(0)) { try { await pc.addIceCandidate(c); } catch {} }
-    } else if (msg.c || Array.isArray(msg.cs)) { // one candidate (older pages) or a batch
-      for (const c of msg.cs || [msg.c]) {
-        if (pc.remoteDescription) { try { await pc.addIceCandidate(c); } catch {} } else peer.pendingIce.push(c);
-      }
-    }
-  } catch (e) { callMsg('Call set-up problem with ' + nickOf(s.from) + ': ' + e.message); }
-}
-
-function updateCallButtons() {
-  const micOn = !!(call.mic && call.mic.enabled), camOn = !!call.cam;
-  if (call.mic) label($('callMic'), micOn ? 'mic-off' : 'mic', micOn ? 'Mute' : 'Unmute'); else label($('callMic'), 'mic', 'Allow mic');
-  $('callMic').title = call.mic ? (micOn ? 'Mute your microphone (M)' : 'Unmute your microphone (M) — you are muted') : 'Try to use your microphone again';
-  if (call.mic && !meters.has(me.username)) addMeter(me.username, call.mic);
-  $('callMic').classList.toggle('off', !micOn);
-  label($('callCam'), 'camera', camOn ? 'Camera on' : 'Camera off');
-  $('callCam').classList.toggle('off', !camOn);
-  const st = selfTile();
-  if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; const l = st.querySelector('.lbl'); l.textContent = 'You'; if (!micOn) l.append(ic('mic-off', 'trail')); }
-}
-function pushCallState() {
-  if (call.conv) json('/api/call/state', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled) }) }).catch(() => {});
-}
-$('callMic').onclick = async () => {
-  if (!call.conv) return;
-  if (!call.mic) { // permission was refused earlier: try again
-    try { call.mic = (await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() })).getAudioTracks()[0]; callMsg(''); }
-    catch { return callMsg('Microphone still not allowed.'); }
-    for (const p of call.peers.values()) await attachLocal(p);
-  } else call.mic.enabled = !call.mic.enabled;
-  updateCallButtons(); pushCallState();
-};
-document.addEventListener('keydown', (e) => { // M = mute / unmute yourself while in a call (not while typing)
-  if (!call.conv || e.ctrlKey || e.metaKey || e.altKey || (e.key !== 'm' && e.key !== 'M')) return;
-  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
-  e.preventDefault(); $('callMic').click();
-});
-$('callCam').onclick = async () => {
-  if (!call.conv) return;
-  if (call.cam) { call.cam.stop(); call.cam = null; }
-  else {
-    const [w, h, fps] = VQ[prefs().call.quality] || VQ.medium;
-    try { call.cam = (await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps, max: fps } } })).getVideoTracks()[0]; }
-    catch (e) { return callMsg('Camera not available: ' + (e.name === 'NotAllowedError' ? 'permission was refused (allow it in the address bar).' : e.message)); }
-    call.cam.contentHint = 'motion';
-  }
-  for (const p of call.peers.values()) { await attachLocal(p); tuneSenders(p); }
-  updateCallButtons(); pushCallState();
-};
-
-// Where the call panel lives: in the chat's side bar while the chat is open (Chat screen, or the
-// team chat shown in Work with its side bar visible); otherwise in its own window that snaps to
-// the nearest edge or corner wherever it is dropped.
-function chatOpen() {
-  if (!me || $('roomCore').classList.contains('noside')) return false;
-  if (!$('room').hidden) return true;
-  return !$('shell').hidden && layout.show.roomPane;
-}
-function placeCall() {
-  const core = $('callCore');
-  if (!call.conv) { $('callPark').append(core); $('callFloat').hidden = true; return; }
-  if (chatOpen()) { $('callSideHost').append(core); $('callFloat').hidden = true; }
-  else { $('callFloatBody').append(core); $('callFloat').hidden = false; snapCall(store.get('mills.callSnap') || 'br'); }
-}
-const SNAPS = { tl: [0, 0], tc: [0.5, 0], tr: [1, 0], ml: [0, 0.5], mr: [1, 0.5], bl: [0, 1], bc: [0.5, 1], br: [1, 1] };
-function snapCall(anchor) {
-  const win = $('callFloat'), m = 12, [fx, fy] = SNAPS[anchor] || SNAPS.br;
-  const w = win.offsetWidth, h = win.offsetHeight;
-  win.style.left = Math.round(m + fx * (innerWidth - w - 2 * m)) + 'px';
-  win.style.top = Math.round(m + fy * (innerHeight - h - 2 * m)) + 'px';
-}
-(function bindCallFloat() {
-  const win = $('callFloat'), bar = win.querySelector('.winBar');
-  bar.addEventListener('pointerdown', (e) => {
-    const r = win.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
-    bar.setPointerCapture(e.pointerId); win.classList.add('dragging');
-    const move = (ev) => { win.style.left = (ev.clientX - sx) + 'px'; win.style.top = (ev.clientY - sy) + 'px'; };
-    const up = () => {
-      bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); win.classList.remove('dragging');
-      const b = win.getBoundingClientRect(), cx = (b.left + b.width / 2) / innerWidth, cy = (b.top + b.height / 2) / innerHeight;
-      let best = 'br', dist = Infinity; // snap to whichever of the 8 edge / corner spots is closest
-      for (const [k, [fx, fy]] of Object.entries(SNAPS)) { const d = (fx - cx) ** 2 + (fy - cy) ** 2; if (d < dist) { dist = d; best = k; } }
-      store.set('mills.callSnap', best); snapCall(best);
-    };
-    bar.addEventListener('pointermove', move); bar.addEventListener('pointerup', up);
-  });
-  window.addEventListener('resize', () => { if (!win.hidden) snapCall(store.get('mills.callSnap') || 'br'); });
-})();
-window.addEventListener('pagehide', () => { // closing the tab leaves the call right away
-  if (call.conv && token && base) fetch(base + '/api/call/leave', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: '{}' }).catch(() => {});
-});
+// ── Voice / video calls, theater, screen share: web/calls.js (loaded right after this script) ──
 
 // ── Dictation (speech to text) for the team chat box and the Claude box in Work ──
 // 🗣 starts listening and writes what you say into the box, after anything already there, so you
@@ -2946,7 +2783,7 @@ function startRoomPolling() {
   stopRoomPolling();
   const gen = ++roomGen;
   // also runs while the tab is in the background, so sounds still play
-  loadLocalChatKey().then(refreshMembers).then(() => pollRoom()).then(() => selectConv(currentConv)).catch(() => {}).then(() => roomLoop(gen));
+  loadLocalChatKey().then(refreshMembers).then(() => GUILDS.refresh()).then(() => pollRoom()).then(() => selectConv(currentConv)).catch(() => {}).then(() => roomLoop(gen));
 }
 function stopRoomPolling() { roomGen++; roomVer = 0; roomKeysVer = 0; }
 
@@ -3017,7 +2854,8 @@ function agentCtx(conv) {
 // v4 (browsers with CompressionStream): the JSON is deflated BEFORE encryption, so the hub only ever
 // sees compressed + padded ciphertext. A voice clip's audio goes as a separate ciphertext (`blob`)
 // with its own key carried inside the encrypted body; it is only downloaded when someone plays it.
-async function sealFor(plain, to, forAgent, mid = newMid(), blob) {
+// conv: a channel / group → the key is wrapped for its members only (the hub drops anything else anyway)
+async function sealFor(plain, to, forAgent, mid = newMid(), blob, conv = '') {
   await refreshMembers();
   if (to && changedKeys.has(to)) throw new Error(nickOf(to) + '\'s key changed: compare fingerprints and trust the new key first (Key fingerprints).');
   const v = HAS_DEFLATE ? 4 : 3, aad = bodyAad(me.username, to, mid, v);
@@ -3025,9 +2863,10 @@ async function sealFor(plain, to, forAgent, mid = newMid(), blob) {
   const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
   const body = v === 4 ? frame(await deflate(enc.encode(plain))) : padPlain(plain);
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, k, body);
-  const keys = {};
+  const keys = {}, allowed = isGuildConv(conv) ? GUILDS.members(conv) : null;
   for (const m of roomMembers) {
     if (to && m.username !== to && m.username !== me.username) continue;
+    if (allowed && !m.agent && m.username !== me.username && !allowed.includes(m.username)) continue;
     if (m.agent && !forAgent) continue;
     if (m.username !== me.username && changedKeys.has(m.username)) continue; // never encrypt to an unverified key
     const pub = m.username === me.username ? chatPubJwk : m.pub;
@@ -3055,15 +2894,15 @@ $('roomComposer').addEventListener('submit', async (e) => {
   try {
     if (editingSeq) {
       const rec = msgs.get(editingSeq);
-      const eto = rec ? rec.m.to || '' : '';
+      const eto = rec ? rec.m.to || '' : '', econv = rec ? rec.m.conv || '' : '';
       // a voice clip keeps its audio: v4 clips keep their key (the clip itself stays on the hub), older ones their data
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}), ...(rec && rec.audio ? { a: rec.audio } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined);
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}), ...(rec && rec.audio ? { a: rec.audio } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined, undefined, econv);
       await json('/api/room/edit', { method: 'POST', body: JSON.stringify({ seq: editingSeq, ...sealed }) });
     } else {
-      const to = convPeer(currentConv), forAgent = callsAgent(text, to);
+      const to = convPeer(currentConv), forAgent = callsAgent(text, to), gconv = isGuildConv(currentConv) ? currentConv : '';
       if (forAgent) agentWaitNext = { conv: currentConv, after: Math.max(0, ...msgs.keys()), at: Date.now() };
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) }), to, forAgent);
-      await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}) }) });
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) }), to, forAgent, undefined, undefined, gconv);
+      await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}), ...(gconv ? { conv: gconv } : {}) }) });
     }
     editingSeq = null; $('roomInput').value = ''; cancelCompose();
     await pollRoom();
@@ -3156,12 +2995,17 @@ function renderPresence() {
     dot.classList.remove('on', 'idle', 'off'); dot.classList.add(st.cls); dot.title = st.text;
     if (sub && !(memberOf(b.dataset.user) || {}).agent) sub.textContent = st.text;
   }
-  renderWho();
-  const who = typingList.filter((t) => t.conv === currentConv).map((t) => nickOf(t.user));
+  renderWho(); GUILDS.renderMembers();
+  const here = typingList.filter((t) => t.conv === currentConv), who = here.map((t) => nickOf(t.user));
   const line = $('typingLine');
-  if (!who.length) { line.hidden = true; return; }
+  if (!who.length) { line.hidden = true; line.classList.remove('thinking'); return; }
   line.textContent = ''; line.hidden = false;
-  const txt = who.length === 1 ? who[0] + ' is typing' : who.length === 2 ? who.join(' and ') + ' are typing' : who.slice(0, 2).join(', ') + ' and ' + (who.length - 2) + ' more are typing';
+  // Unity composing an answer gets the same "thinking" bubble Work shows for Claude; people get the typing line
+  const ai = here.some((t) => (memberOf(t.user) || {}).agent);
+  line.classList.toggle('thinking', ai);
+  if (ai) line.append(ic('bot', 'lead'));
+  const verb = ai ? 'thinking' : 'typing';
+  const txt = who.length === 1 ? who[0] + ' is ' + verb : who.length === 2 ? who.join(' and ') + ' are ' + verb : who.slice(0, 2).join(', ') + ' and ' + (who.length - 2) + ' more are ' + verb;
   const dots = document.createElement('span'); dots.className = 'dots'; dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
   line.append(txt, dots);
   const log = $('roomLog'); if (log.scrollHeight - log.scrollTop - log.clientHeight < 80) log.scrollTop = log.scrollHeight;
@@ -3276,6 +3120,7 @@ function openSettings() {
   mark();
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
   $('setToasts').checked = P.toasts;
+  $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
   $('ttsRateVal').textContent = (P.tts.rate / 100).toFixed(1) + '×';
   fillVoices(P.tts.voice);
@@ -3289,7 +3134,92 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
+  renderApiAccess(); renderProviders(); renderAppCard();
 }
+// ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
+let providerList = [];
+const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint' };
+async function renderApiAccess(freshKey) {
+  const box = $('apiBox'); if (!box) return;
+  let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
+  try { providerList = (await json('/api/providers')).providers; } catch {}
+  box.textContent = '';
+  const line = (...kids) => { const d = document.createElement('div'); d.className = 'row'; d.append(...kids); box.append(d); return d; };
+  const code = (t) => { const c = document.createElement('code'); c.textContent = t; return c; };
+  line('Endpoint (base URL): ', code(st.endpoint || '(the hub has no public address yet)'));
+  if (freshKey) {
+    const w = document.createElement('div'); w.className = 'apiKeyShow';
+    const inp = document.createElement('input'); inp.readOnly = true; inp.value = freshKey;
+    const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'ghost'; cp.textContent = 'Copy';
+    cp.onclick = async () => { try { await navigator.clipboard.writeText(freshKey); cp.textContent = 'Copied'; } catch { cp.textContent = 'Select + copy'; } };
+    w.append(inp, cp); box.append(w);
+    const n = document.createElement('div'); n.className = 'status'; n.textContent = 'Your new key. It is shown only now; copy it into your harness. Rotating makes a new one and ends this one.'; box.append(n);
+  }
+  const info = document.createElement('div');
+  info.textContent = st.hasKey ? `Key ${st.prefix}… made ${new Date(st.createdAt).toLocaleString()}` + (st.expiresAt ? (st.expired ? ' · EXPIRED ' : ' · expires ') + new Date(st.expiresAt).toLocaleString() : ' · never expires') + ` · ${st.calls} call${st.calls === 1 ? '' : 's'}` + (st.lastUsed ? ', last ' + new Date(st.lastUsed).toLocaleString() : '') : 'No key yet.';
+  box.append(info);
+  const exp = document.createElement('select');
+  for (const [v, l] of [[0, 'never expires'], [1, 'expires after 1 day'], [7, 'expires after 7 days'], [30, 'expires after 30 days'], [90, 'expires after 90 days']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; exp.append(o); }
+  exp.value = String(st.expiresDays || 0);
+  exp.onchange = () => json('/api/apikey/settings', { method: 'POST', body: JSON.stringify({ expiresDays: Number(exp.value) }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+  const rot = document.createElement('button'); rot.type = 'button'; rot.textContent = st.hasKey ? 'Rotate key' : 'Make my key';
+  rot.onclick = async () => { try { const d = await json('/api/apikey/rotate', { method: 'POST', body: JSON.stringify({ expiresDays: Number(exp.value) }) }); renderApiAccess(d.key); } catch (e) { info.textContent = e.message; } };
+  const rev = document.createElement('button'); rev.type = 'button'; rev.className = 'ghost'; rev.textContent = 'Revoke'; rev.hidden = !st.hasKey;
+  rev.onclick = () => json('/api/apikey/revoke', { method: 'POST', body: '{}' }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+  line(rot, rev, exp);
+  const prov = document.createElement('select');
+  for (const p of providerList) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label + (p.id === 'host' ? '' : ' (' + KIND_NAMES[p.kind] + (p.owner !== me.username ? ', ' + nickOf(p.owner) : '') + ')'); prov.append(o); }
+  prov.value = st.provider || 'host';
+  const mdl = document.createElement('select');
+  const fillModels = () => { mdl.textContent = ''; const p = providerList.find((x) => x.id === prov.value) || {}; const o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'model: as requested, else the first'; mdl.append(o0); for (const m of p.models || []) { const o = document.createElement('option'); o.value = m; o.textContent = m; mdl.append(o); } mdl.value = st.model || ''; };
+  fillModels();
+  prov.onchange = () => json('/api/apikey/settings', { method: 'POST', body: JSON.stringify({ provider: prov.value }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+  mdl.onchange = () => json('/api/apikey/settings', { method: 'POST', body: JSON.stringify({ model: mdl.value }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+  const pl = document.createElement('span'); pl.textContent = 'Answers come from:';
+  line(pl, prov, mdl);
+}
+// ── Settings → My AIs: providers this person hooked up (private or shared with the team) ──
+async function renderProviders() {
+  const box = $('provBox'); if (!box) return;
+  try { providerList = (await json('/api/providers')).providers; } catch (e) { box.textContent = e.message; return; }
+  box.textContent = '';
+  for (const p of providerList) {
+    const it = document.createElement('div'); it.className = 'provItem';
+    const b = document.createElement('b'); b.textContent = p.label; it.append(b);
+    const s = document.createElement('small'); s.textContent = KIND_NAMES[p.kind] + (p.id === 'host' ? ' · everyone' : ' · ' + (p.owner === me.username ? 'yours' : nickOf(p.owner) + "'s") + (p.shared ? ' · shared with the team' : ' · private')) + (p.models && p.models.length ? ' · ' + p.models.join(', ') : ''); it.append(s);
+    if (p.id !== 'host' && p.owner === me.username) {
+      const sh = document.createElement('button'); sh.type = 'button'; sh.className = 'ghost'; sh.textContent = p.shared ? 'Make private' : 'Share with team';
+      sh.onclick = () => json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: p.id, shared: !p.shared }) }).then(() => { renderProviders(); showModels(me); }).catch((e) => sysSettings(e.message));
+      const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
+      rm.onclick = () => { if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; return; } json('/api/providers/remove', { method: 'POST', body: JSON.stringify({ id: p.id }) }).then(() => { renderProviders(); renderApiAccess(); refreshProviders(); }).catch((e) => sysSettings(e.message)); };
+      it.append(sh, rm);
+    }
+    box.append(it);
+  }
+  // add one
+  const form = document.createElement('div'); form.className = 'row';
+  const kind = document.createElement('select');
+  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
+  const label = document.createElement('input'); label.placeholder = 'label, e.g. "Sponge\'s Claude"'; label.maxLength = 60;
+  const secret = document.createElement('input'); secret.type = 'password'; secret.placeholder = 'API key'; secret.autocomplete = 'off';
+  const where = document.createElement('input'); where.placeholder = 'base URL, e.g. https://api.example.com/v1';
+  const models = document.createElement('input'); models.placeholder = 'model ids, comma separated (optional for Claude)';
+  const shared = document.createElement('label'); shared.className = 'chk'; const shc = document.createElement('input'); shc.type = 'checkbox'; shared.append(shc, ' share with the team');
+  const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add';
+  const msg = document.createElement('span'); msg.className = 'status';
+  const sync = () => { secret.hidden = kind.value === 'claude-cli'; where.hidden = kind.value !== 'claude-cli' && kind.value !== 'openai'; where.placeholder = kind.value === 'openai' ? 'base URL, e.g. https://api.example.com/v1' : 'folder on the host, e.g. D:\\claude-logins\\sponge or /home/host/claude-logins/sponge (the host runs `claude login` once with CLAUDE_CONFIG_DIR set to it)'; };
+  kind.onchange = sync; sync();
+  add.onclick = async () => {
+    const body = { kind: kind.value, label: label.value, shared: shc.checked, models: models.value };
+    if (kind.value !== 'claude-cli') body.apiKey = secret.value;
+    if (kind.value === 'openai') body.baseUrl = where.value; if (kind.value === 'claude-cli') body.configDir = where.value;
+    try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify(body) }); label.value = secret.value = where.value = models.value = ''; msg.textContent = 'Added.'; renderProviders(); renderApiAccess(); refreshProviders(); }
+    catch (e) { msg.textContent = e.message; }
+  };
+  form.append(kind, label, secret, where, models, shared, add, msg); box.append(form);
+}
+function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
+async function refreshProviders() { try { const d = await json('/api/check'); me.providers = d.providers; me.provider = d.provider; showModels(me); } catch {} }
 $('setTheme').onchange = () => applyTheme($('setTheme').value);
 function fillVoices(chosen) { // voices load late in some browsers, so this also runs on voiceschanged
   const sel = $('ttsVoice'), keep = chosen ?? sel.value;
@@ -3317,7 +3247,7 @@ $('saveSettings').onclick = async () => {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
       nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autosave: Number($('setAutosave').value),
       sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value) },
-      tts: { on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
+      tts: { all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
       clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },
       audio: { noise: $('audNoise').checked, echo: $('audEcho').checked, agc: $('audAgc').checked },
       call: { volume: Number($('callVolume').value), quality: $('callQuality').value },
@@ -3325,8 +3255,10 @@ $('saveSettings').onclick = async () => {
     document.querySelectorAll('#callTiles .tile:not(.self)').forEach(applyPersonAudio);
     if (call.mic) call.mic.applyConstraints(audioConstraints()).catch(() => {}); // new noise / echo settings apply to the live call too
     document.querySelectorAll('.rmsg audio').forEach((a) => { a.volume = d.prefs.clips ? d.prefs.clips.volume / 100 : 0.9; });
-    if (!d.prefs.tts || !d.prefs.tts.on) ttsStop();
     me.prefs = d.prefs;
+    if (!prefs().tts.on || !prefs().tts.all) ttsStop();
+    if (!voiceOn()) stopVoice();
+    showVoice();
     $('setMsg').textContent = 'Saved.'; $('setMsg').className = 'status on';
     await refreshMembers(); selectConv(currentConv);
   } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }
@@ -3538,5 +3470,10 @@ $('adminClearChat').replaceWith(confirmButton('Clear chat history', () => adminC
 
 connect().then((ok) => { if (ok && token) enter().catch(() => signOut()); });
 </script>
+<!-- voice / video calls, theater and screen share: web/calls.js (loaded after the page script, uses its helpers) -->
+<script src="calls.js"></script>
+<!-- servers, channels, groups, member column: web/guilds.js · app mode + install: web/app.js -->
+<script src="guilds.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
