@@ -68,6 +68,7 @@ function systemPrompt(acct, wd) {
     `When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.`,
     `You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.`,
     `Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search (${name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create.`,
+    ...(forgejo.tokenFor(acct.username) ? [`Forgejo (${forgejo.url}): ${name} saved their own token, so git pushes / fetches to that host authenticate as them, and FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token).`] : []),
     `Team notes (markdown files in folders, shared by everyone): notes_list (with a search), notes_read, notes_write (path like "plans/next-week.md"; whole text), notes_delete (only when asked). Good for plans, meeting notes, decisions, how-tos.`,
     `The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as "${name} · Claude", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about.`,
   ].join(' ') + (hubLaws() ? '\n\n' + hubLaws() : '');
@@ -159,7 +160,7 @@ function runClaude(acct, message, fresh, res, context) {
   // Anthropic key / Claude Code login, passed to the claude process through its environment).
   const prov = providers.get(acct.state.provider || 'host', acct.username), provEnv = prov ? providers.claudeEnv(prov) : {};
   if (prov && provEnv === null) { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ type: 'bridge_error', text: 'Your chosen AI provider is not Claude, so it cannot run Work. Pick a Claude model in the dropdown.' }) + '\n'); return; }
-  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...(provEnv || {}) } });
+  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...(provEnv || {}), ...forgejo.workEnv(acct.username) } }); // + their own Forgejo token, if they saved one
   acct.running = child; acct.stream = res; acct.runProvider = prov && prov.kind !== 'host' ? prov.id : '';
   if (!acct.runProvider) noteActivity(); // only the host's own usage windows are shared by everyone
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
@@ -310,8 +311,9 @@ const board = require('./board')({
   displayOf: (u) => { const a = accounts.get(u); return a ? publicPrefs(a).nick || a.display : u; },
 });
 
-// Forgejo issue mirroring (bridge/forgejo.js): off until bridge/forgejo.json names a repo + token.
-const forgejo = require('./forgejo')({ ROOT, board, readJson });
+// Forgejo (bridge/forgejo.js): everyone's own token ("My Forgejo"), and issue mirroring, off until
+// bridge/forgejo.json names a repo.
+const forgejo = require('./forgejo')({ ROOT, board, readJson, writeJson, config });
 board.setViewExtra(() => ({ mirror: forgejo.status() }));
 
 // ---------- room agent ("claude") ----------
@@ -704,6 +706,10 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/providers/add' && req.method === 'POST') { try { return send(res, 200, { provider: providers.add(acct.username, await readBody(req)), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/providers/update' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { provider: providers.update(acct.username, String(b.id || ''), b), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/providers/remove' && req.method === 'POST') { const b = await readBody(req); try { providers.remove(acct.username, String(b.id || '')); return send(res, 200, { providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
+    // ----- My Forgejo: each person's own Forgejo token (checked, stored on the host, never sent back) -----
+    if (p === '/api/forgejo/me' && req.method === 'GET') return send(res, 200, forgejo.me(acct.username));
+    if (p === '/api/forgejo/connect' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, await forgejo.connect(acct.username, b.token)); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/forgejo/disconnect' && req.method === 'POST') return send(res, 200, forgejo.disconnect(acct.username));
     if (p === '/api/prefs' && req.method === 'GET') return send(res, 200, { prefs: acct.state.prefs || {} });
     if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage.status(acct));
     if (p === '/api/prefs' && req.method === 'POST') {

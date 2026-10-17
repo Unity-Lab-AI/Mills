@@ -83,10 +83,11 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
   let ver = 1;
   const waiters = new Set();
   const viewers = new Map(); // username -> last time they had the board open
-  // Change hooks (bridge/forgejo.js mirrors tasks to issues): fn(what, task, { skipMirror }) after every saved change.
+  // Change hooks (bridge/forgejo.js mirrors tasks to issues): fn(what, task, { skipMirror, actor }) after every
+  // saved change; actor = who made it ({ user, agent }), so the mirror can act on Forgejo as that person.
   const hooks = [];
   const onChange = (fn) => hooks.push(fn);
-  const emit = (what, t, b) => { for (const fn of hooks) { try { fn(what, t, { skipMirror: !!(b && b.skipMirror) }); } catch {} } };
+  const emit = (what, t, b, a) => { for (const fn of hooks) { try { fn(what, t, { skipMirror: !!(b && b.skipMirror), actor: a || null }); } catch {} } };
   let viewExtra = () => ({}); // extra fields for the board view (e.g. the mirror's status)
   function save() {
     if (db.activity.length > ACTIVITY_KEEP) db.activity.splice(0, db.activity.length - ACTIVITY_KEEP);
@@ -145,7 +146,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
         labels: cleanLabels(b.labels), dueAt, recur: RECUR.includes(b.recur) ? b.recur : null,
         assignee: b.assignee && accounts.has(b.assignee) ? b.assignee : null, createdBy: actorName(a), createdAt: now(), updatedAt: now(), rev: 1, claim: null };
       t.dueDay = t.dueAt ? new Date(t.dueAt).getDate() : null; // the day a monthly repeat returns to (31st stays the 31st after February)
-      db.tasks.push(t); log(t, a, 'created'); save(); emit('created', t, b);
+      db.tasks.push(t); log(t, a, 'created'); save(); emit('created', t, b, a);
       return ok({ task: { ...card(t), body: t.body } });
     },
     get(a, b) {
@@ -173,7 +174,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
         t.status = b.status; changed.push('moved to ' + b.status);
       }
       if (!changed.length) return ok({ task: { ...card(t), body: t.body || '' } });
-      touch(t); log(t, a, 'updated', changed.join(', ')); save(); emit('updated', t, b);
+      touch(t); log(t, a, 'updated', changed.join(', ')); save(); emit('updated', t, b, a);
       return ok({ task: { ...card(t), body: t.body || '' } });
     },
     move(a, b) { // drag and drop: new column + position
@@ -187,7 +188,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
       const moved = t.status !== status;
       t.status = status; touch(t);
       if (moved) log(t, a, 'moved', 'to ' + status);
-      save(); if (moved) emit('updated', t, b);
+      save(); if (moved) emit('updated', t, b, a);
       return ok({ task: card(t) });
     },
     complete(a, b) {
@@ -198,7 +199,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
         t.status = 'todo'; t.claim = null; touch(t);
         log(t, a, 'completed', 'repeats ' + t.recur + ': next due ' + new Date(t.dueAt).toISOString().slice(0, 10));
       } else { t.status = 'done'; t.claim = null; touch(t); log(t, a, 'completed'); }
-      save(); emit('completed', t, b);
+      save(); emit('completed', t, b, a);
       return ok({ task: card(t) });
     },
     claim(a, b) {
@@ -222,7 +223,7 @@ module.exports = function createBoard({ dir, send, readBody, accounts, displayOf
     remove(a, b) {
       const t = find(b.id), g = guard(t, a);
       if (g) return g;
-      t.deleted = true; t.claim = null; touch(t); log(t, a, 'deleted'); save(); emit('deleted', t, b); // tombstone: kept, never shown
+      t.deleted = true; t.claim = null; touch(t); log(t, a, 'deleted'); save(); emit('deleted', t, b, a); // tombstone: kept, never shown
       return ok({ ok: true });
     },
     newBoard(a, b) {
