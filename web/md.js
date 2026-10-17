@@ -5,7 +5,8 @@
 //
 // Supported: headings, paragraphs (single newlines kept as line breaks, chat style), **bold**,
 // *italic*, ~~strike~~, ==highlight==, `code`, links (http / https / mailto only), bare and <auto>
-// links, images (https and inline data images load lazily without a referrer; anything else is a link), > quotes, GitHub alerts
+// links, images (https and inline data images load lazily without a referrer; http ones are retried over
+// https; a relative path is loaded from the folder opened on your PC through MD.resolveImage; anything else is a link), > quotes, GitHub alerts
 // (> [!NOTE] / TIP / IMPORTANT / WARNING / CAUTION), nested bullet / numbered / task lists, GFM tables
 // with column alignment, --- rules, footnotes ([^1] … [^1]: text), $$ math blocks (shown as source),
 // fenced code with a language label, light syntax colouring and a Copy button, and ```mermaid diagrams.
@@ -57,13 +58,25 @@
       if (g.esc !== undefined) parent.append(g.esc);
       else if (g.code !== undefined) parent.append(el('code', 'mdc', g.code.length > 2 && g.code[0] === ' ' && g.code.at(-1) === ' ' ? g.code.slice(1, -1) : g.code));
       else if (g.isrc !== undefined) {
-        const href = safeHref(g.isrc);
-        const img = () => { const i = el('img', 'mdimg'); i.src = g.isrc; i.alt = g.ialt; i.loading = 'lazy'; i.referrerPolicy = 'no-referrer'; i.decoding = 'async'; return i; };
-        if (/^data:image\/(png|gif|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(g.isrc)) { const w = el('span', 'mdimgwrap'); w.append(img()); parent.append(w); }
-        else if (href && /^https:\/\//i.test(href)) { // https pictures load (lazily, no referrer); a click opens the full size in a new tab
-          const a = el('a', 'mdimgwrap'); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.append(img()); parent.append(a);
+        const src = g.isrc, href = safeHref(src);
+        const img = (u) => { const i = el('img', 'mdimg'); if (u) i.src = u; i.alt = g.ialt; i.loading = 'lazy'; i.referrerPolicy = 'no-referrer'; i.decoding = 'async'; return i; };
+        const asLink = () => link(href || src, MD.icon ? [MD.icon('image', 'lead'), g.ialt || 'image'] : 'Image: ' + (g.ialt || 'image'));
+        const relative = !/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith('//');
+        if (/^data:image\/(png|gif|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(src)) { const w = el('span', 'mdimgwrap'); w.append(img(src)); parent.append(w); }
+        else if (relative && MD.resolveImage) { // a relative path: the page may know the folder it lives in (the one opened on your PC)
+          const w = el('span', 'mdimgwrap mdimgwait'), i = img(); i.title = src; w.append(i); parent.append(w);
+          Promise.resolve().then(() => MD.resolveImage(src)).then((u) => { if (u) { i.src = u; w.className = 'mdimgwrap'; } else w.replaceWith(el('span', 'mdimgmiss', 'Image not found in your open folder: ' + src)); })
+            .catch(() => w.replaceWith(el('span', 'mdimgmiss', 'Image not found in your open folder: ' + src)));
         }
-        else if (href) parent.append(link(href, MD.icon ? [MD.icon('image', 'lead'), g.ialt || 'image'] : 'Image: ' + (g.ialt || 'image')));
+        else if (relative) parent.append(m[0]); // no folder to look in: the markdown stays as written
+        else if (href && /^https:\/\//i.test(href)) { // https pictures load (lazily, no referrer); a click opens the full size in a new tab
+          const a = el('a', 'mdimgwrap'); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.append(img(src)); parent.append(a);
+        }
+        else if (href && /^http:\/\//i.test(href)) { // the page may only load https pictures: try the same picture over https, else a link
+          const a = el('a', 'mdimgwrap'); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+          const i = img(href.replace(/^http:/i, 'https:')); i.onerror = () => a.replaceWith(asLink()); a.append(i); parent.append(a);
+        }
+        else if (href) parent.append(asLink());
         else parent.append(m[0]);
       } else if (g.fn !== undefined) {
         const n = ctx.fnRef(g.fn), s = el('sup', 'mdfnref', '[' + n + ']');
@@ -315,6 +328,9 @@
   const MD = {
     mermaidSrc: 'vendor/mermaid.min.js',
     isDark: () => true,
+    // resolveImage(relativePath) → Promise<url | null>: set by the page so pictures Claude or a teammate
+    // name by a path inside the folder opened on your PC load from that folder (nothing is uploaded).
+    resolveImage: null,
     // Render markdown text into el (replacing its content). opts.mention(handle) → a Node for an
     // @handle, or null to leave it as text.
     render(target, text, opts = {}) {
