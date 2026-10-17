@@ -803,6 +803,8 @@
         <div id="appBox" class="apiBox"></div></div>
       <div class="setSection"><b>My AIs</b> — hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.
         <div id="provBox" class="provBox"></div></div>
+      <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
+        <div id="fjBox" class="apiBox"></div></div>
     </div>
   </div>
 </div>
@@ -3206,7 +3208,30 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderApiAccess(); renderProviders(); renderAppCard();
+  renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo();
+}
+// ── Settings → My Forgejo: this person's own Forgejo token (the hub checks it and never sends it back) ──
+async function renderForgejo() {
+  const box = $('fjBox'); if (!box) return;
+  let st; try { st = await json('/api/forgejo/me'); } catch (e) { box.textContent = e.message; return; }
+  box.textContent = '';
+  const info = document.createElement('div');
+  info.textContent = st.connected ? `Connected as ${st.login} on ${st.url} · saved ${new Date(st.savedAt).toLocaleString()}` : `Not connected. Make a token on ${st.url} (Settings → Applications → Generate token, with repository and issue read + write) and paste it here.`;
+  box.append(info);
+  if (st.mirror) { const m = document.createElement('small'); m.textContent = `Board "${st.mirror.board}" mirrors to ${st.mirror.repo}` + (st.mirror.poll ? '; Forgejo changes come back every few minutes.' : '; changes go out only (no hub token for reading them back).'); box.append(m); }
+  const row = document.createElement('div'); row.className = 'row';
+  const tok = document.createElement('input'); tok.type = 'password'; tok.autocomplete = 'off'; tok.placeholder = st.connected ? 'new token to replace it' : 'Forgejo access token';
+  const save = document.createElement('button'); save.type = 'button'; save.textContent = st.connected ? 'Replace' : 'Connect';
+  const msg = document.createElement('span'); msg.className = 'status';
+  save.onclick = async () => { msg.textContent = 'Checking with Forgejo…'; try { await json('/api/forgejo/connect', { method: 'POST', body: JSON.stringify({ token: tok.value }) }); tok.value = ''; renderForgejo(); } catch (e) { msg.textContent = e.message; } };
+  tok.onkeydown = (e) => { if (e.key === 'Enter') save.click(); };
+  row.append(tok, save);
+  if (st.connected) {
+    const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
+    rm.onclick = () => { if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; return; } json('/api/forgejo/disconnect', { method: 'POST', body: '{}' }).then(() => renderForgejo()).catch((e) => { msg.textContent = e.message; }); };
+    row.append(rm);
+  }
+  row.append(msg); box.append(row);
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];

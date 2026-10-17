@@ -41,6 +41,8 @@ bridge/providers.json
 Api/
 # Forgejo issue mirroring: the host's token + repo (never committed); team notes live on the host only
 bridge/forgejo.json
+# My Forgejo: everyone's own Forgejo token (Settings), kept on the host only
+bridge/forgejo-users.json
 Notes/
 Images/
 __pycache__/
