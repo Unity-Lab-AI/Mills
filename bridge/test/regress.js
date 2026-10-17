@@ -11,6 +11,7 @@
 //   node bridge/test/regress.js            full run, exit code 1 if anything failed
 //   node bridge/test/regress.js --keep     keep the scratch folder for inspection
 //   node bridge/test/regress.js --no-prod  skip the read-only production checks
+//   node bridge/test/regress.js --md       only the markdown renderer cases (bridge/test/md-check.js), no hub
 //   node bridge/test/regress.js --install-vendor
 //                                          first fetch + integrity-check the vendored browser libraries
 //                                          (web/vendor, via bridge/vendor.js), then run the checks
@@ -860,6 +861,25 @@ async function run() {
   check('R57b', '[static] browsers encrypt for Unity only when a message @-mentions her (or is private to her), with the 5 previous messages',
     /if \(m\.agent && !forAgent\) continue;/.test(html) && /function callsAgent\(/.test(html) && /\.slice\(-5\)/.test(html) && /ctx: agentCtx\(currentConv\)/.test(html));
 
+  // Team tools in a Work run: Claude posts into the chat as "<person> · Claude" (everyone, or privately), sees presence.
+  await sleep(1500);
+  const seqTeam = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  const teamRun = await chat(A, 'TEAMSAY please', { fresh: true });
+  const teamOut = JSON.parse((texts(teamRun.events).match(/TEAM:(\{.*?\})/) || [])[1] || '{}');
+  const teamMsgsU = ((await call('/api/room/messages?since=' + seqTeam, U)).data.messages || []).filter((m) => m.from === 'claude' && m.as);
+  const teamMsgsD = ((await call('/api/room/messages?since=' + seqTeam, D)).data.messages || []).filter((m) => m.from === 'claude' && m.as);
+  const roomPost = teamMsgsU.find((m) => !m.to), dmPost = teamMsgsU.find((m) => m.to === 't-user');
+  const roomText = roomPost ? await roomRead(restored, roomPost) : null, dmText = dmPost ? await roomRead(restored, dmPost) : null;
+  await sleep(2500);
+  const unityReplied = ((await call('/api/room/messages?since=' + seqTeam, U)).data.messages || []).some((m) => m.from === 'claude' && !m.as);
+  check('R108', 'team tools: a Work run posts into the chat as "<person> · Claude" (label + via outside the encryption, body sealed with the hub key so every member reads it), a private post reaches only its person, unknown person refused, presence listed, Unity does not answer these; team MCP wired into Work runs',
+    teamOut.all === 'Tadmin · Claude' && teamOut.dm === 't-user' && teamOut.bad === false && teamOut.people >= 3
+    && !!roomPost && roomPost.via === 't-admin' && roomText === 'hello team from a Work run r108' && !!dmPost && dmText === 'private note r108'
+    && teamMsgsD.some((m) => !m.to) && !teamMsgsD.some((m) => m.to) && !unityReplied
+    && /team-mcp\.js/.test(fs.readFileSync(path.join(SB, '.mcp-runtime.json'), 'utf8')) && /mcp__team/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8'))
+    && /const authorOf = \(m\) => m\.as \|\| nickOf\(m\.from\)/.test(html),
+    `tool ${JSON.stringify(teamOut)}, room "${roomText}", dm "${dmText}", D sees dm ${teamMsgsD.some((m) => m.to)}, Unity replied ${unityReplied}`);
+
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });
   const shareListU = (await call('/api/room/messages?rev=0', U)).data.shares || [], shareListA = (await call('/api/room/messages?rev=0', A)).data.shares || [];
@@ -1088,7 +1108,8 @@ async function run() {
     ? fs.readFileSync(path.join(MILLS, 'docs', 'hygiene-terms.txt'), 'utf8').split('\n').map((s) => s.trim()).filter((s) => s && !s.startsWith('#')) : [];
   const generic = ['[0-9a-f]{32}', '"hash"\\s*:\\s*"[0-9a-f]', 'C:\\\\\\\\Users\\\\\\\\', 'trycloudflare\\.com/', 'password\\s*[:=]\\s*"[^"]{6,}'];
   const pattern = [...generic, ...terms.map((t) => '\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b')].join('|');
-  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js'], { cwd: MILLS, encoding: 'utf8' });
+  // web/vendor holds third-party libraries (checked by R102 against their published hashes), not our text
+  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor'], { cwd: MILLS, encoding: 'utf8' });
   check('R31', `no names / passwords / ids / hashes / local paths in tracked files (${terms.length} local terms)`, gg.status === 1, (gg.stdout || '').split('\n').slice(0, 3).join(' | '));
   const junk = [];
   (function walk(d) {
@@ -1115,6 +1136,11 @@ async function run() {
 
 (async () => {
   let code = 0;
+  if (process.argv.includes('--md')) { // quick: only the markdown renderer cases (no throwaway hub)
+    const r = await require('./md-check.js').run();
+    console.log(r.failed.length ? 'FAILED:\n' + r.failed.join('\n') : `md-check: all ${r.total} cases pass`);
+    process.exit(r.failed.length ? 1 : 0);
+  }
   try {
     if (process.argv.includes('--install-vendor')) { console.log('Installing vendored libraries (bridge/vendor.js)…'); await require(path.join(BRIDGE, 'vendor.js')).installAll(); console.log(''); }
     await setup();

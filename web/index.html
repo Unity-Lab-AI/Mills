@@ -847,6 +847,20 @@
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
 MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
+// A relative image path in markdown (![shot](out/shot.png)) is a file in the folder opened on this PC:
+// read it here and show it; nothing is uploaded. No open folder → null → the markdown stays as written.
+const imgUrlCache = new Map();
+MD.resolveImage = async (p) => {
+  if (!rootHandle || $('pickFolder').textContent.startsWith('Reopen')) return null;
+  const key = rootHandle.name + '|' + p;
+  if (imgUrlCache.has(key)) return imgUrlCache.get(key);
+  try {
+    const segs = parts(p), d = await dirAt(segs.slice(0, -1));
+    const file = await (await d.getFileHandle(segs.at(-1))).getFile();
+    if (!/^image\//.test(file.type)) return null;
+    const url = URL.createObjectURL(file); imgUrlCache.set(key, url); return url;
+  } catch { return null; }
+};
 const GH_USER = '__MILLS_GIST_OWNER__'; // filled in at deploy time from the MILLS_GIST_OWNER repository variable
 // One Mills hub serves every account; people sign in with username + password.
 // An old ?user=<name> link still works: it just fills in the username.
@@ -1928,6 +1942,10 @@ const nickOf = (u) => { const m = memberOf(u); return m ? (m.nick || m.display) 
 const colorIndex = (u) => { const m = memberOf(u); return m && Number.isInteger(m.color) ? m.color : hashName(u) % PALETTE.length; };
 const colorOf = (u) => PALETTE[colorIndex(u)][lightTheme ? 1 : 0];
 const convOfMsg = (m) => (m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
+// Who a message is shown as: normally the sender; a Work run's Claude posts through the hub's key with
+// `as` = "<person> · Claude" and `via` = that person (whose colour it takes).
+const authorOf = (m) => m.as || nickOf(m.from);
+const authorColor = (m) => colorOf(m.via || m.from);
 const dmConv = (u) => 'dm:' + [me.username, u].sort().join('|');
 const convPeer = (c) => (c === 'room' ? '' : c.slice(3).split('|').find((u) => u !== me.username) || '');
 const convLabel = (c) => (c === 'room' ? '# Everyone' : '@ ' + nickOf(convPeer(c)) + ' (private)');
@@ -2159,9 +2177,10 @@ function renderMsg(rec, bulk) {
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
   const el = rec.el || document.createElement('div');
   el.className = 'msg rmsg' + (mine ? ' me' : '') + (m.deleted ? ' deleted' : '');
-  el.dataset.seq = m.seq; el.style.borderLeftColor = colorOf(m.from); el.textContent = '';
+  el.dataset.seq = m.seq; el.style.borderLeftColor = authorColor(m); el.textContent = '';
   const head = document.createElement('small');
-  const who = document.createElement('b'); who.textContent = nickOf(m.from); who.style.color = colorOf(m.from); who.title = '@' + m.from;
+  const who = document.createElement('b'); who.textContent = authorOf(m); who.style.color = authorColor(m); who.title = m.as ? 'Posted by ' + nickOf(m.via || m.from) + '\'s Claude from a Work session' : '@' + m.from;
+  if (m.as) who.append(ic('bot', 'trail'));
   const dt = new Date(m.ts), when = document.createElement('time');
   when.dateTime = m.ts; when.textContent = fmtTime(dt); when.title = dt.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
   head.append(who, ' · ', when);
@@ -2170,7 +2189,7 @@ function renderMsg(rec, bulk) {
   el.append(head);
   if (rec.r && !m.deleted) {
     const q = msgs.get(rec.r), quote = document.createElement('div'); quote.className = 'quote';
-    label(quote, 'reply', q ? nickOf(q.m.from) + ': ' + snippet(q) : 'an earlier message');
+    label(quote, 'reply', q ? authorOf(q.m) + ': ' + snippet(q) : 'an earlier message');
     quote.title = 'Jump to the message this replies to';
     quote.onclick = (e) => { e.stopPropagation(); jumpTo(rec.r); };
     el.append(quote);
@@ -2279,7 +2298,7 @@ function notify(rec) {
   const watching = roomVisible() && document.hasFocus() && c === currentConv;
   if (P.sound.on && !watching) playTone(kind, P.sound[kind]);
   if (P.toasts && !$('shell').hidden && !(roomVisible() && c === currentConv)) toast(rec, kind);
-  const who = nickOf(m.from), how = kind === 'reply' ? ' replied' : m.to ? ' privately' : '';
+  const who = authorOf(m), how = kind === 'reply' ? ' replied' : m.to ? ' privately' : '';
   const readIt = P.tts.on && !watching && (P.tts.scope === 'all' || kind !== 'message');
   if (rec.audio) {
     if (readIt) speak(`${who}${how} sent a voice clip${rec.text ? ': ' + rec.text : ''}`);
@@ -2869,9 +2888,9 @@ $('micBtn').onclick = startClip;
 $('recSend').onclick = () => stopClip(false);
 $('recCancel').onclick = () => stopClip(true);
 function toast(rec, kind) {
-  const t = document.createElement('div'); t.className = 'toast ' + kind; t.style.borderLeftColor = colorOf(rec.m.from);
-  const b = document.createElement('b'); b.style.color = colorOf(rec.m.from);
-  b.textContent = nickOf(rec.m.from) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : '') + ': ';
+  const t = document.createElement('div'); t.className = 'toast ' + kind; t.style.borderLeftColor = authorColor(rec.m);
+  const b = document.createElement('b'); b.style.color = authorColor(rec.m);
+  b.textContent = authorOf(rec.m) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : '') + ': ';
   t.append(b, snippet(rec)); t.title = 'Open in the team chat';
   t.onclick = () => { showRoomInWork(); selectConv(convOfMsg(rec.m)); jumpTo(rec.m.seq); t.remove(); };
   t.addEventListener('animationend', () => t.remove());
@@ -2911,7 +2930,7 @@ function openMsgMenu(rec, e) {
 document.addEventListener('click', (e) => { if (!e.target.closest('#msgMenu') && !e.target.closest('.rmsg')) closeMsgMenu(); });
 function startReply(rec) {
   editingSeq = null; replyTo = rec.m.seq;
-  $('replyText').textContent = 'Replying to ' + nickOf(rec.m.from) + ': ' + snippet(rec);
+  $('replyText').textContent = 'Replying to ' + authorOf(rec.m) + ': ' + snippet(rec);
   $('replyBar').hidden = false; $('roomInput').focus();
 }
 function startEdit(rec) {
@@ -2945,7 +2964,7 @@ function callsAgent(text, to) {
 function agentCtx(conv) {
   return [...msgs.values()].filter((r) => convOfMsg(r.m) === conv && !r.m.deleted && !r.locked)
     .sort((a, b) => a.m.seq - b.m.seq).slice(-5)
-    .map((r) => ({ n: nickOf(r.m.from), t: ((r.audio ? '(voice clip) ' : '') + r.text).slice(0, 1500) }));
+    .map((r) => ({ n: authorOf(r.m), t: ((r.audio ? '(voice clip) ' : '') + r.text).slice(0, 1500) }));
 }
 // Encrypt one message body for a conversation: everyone with a key, or only the two people.
 // The agent gets a copy only when forAgent is true.
