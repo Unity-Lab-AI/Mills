@@ -282,7 +282,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['calls.js', 'guilds.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['calls.js', 'guilds.js', 'guild-settings.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -1158,7 +1158,7 @@ async function run() {
     && !!roomPost && roomPost.via === 't-admin' && roomText === 'hello team from a Work run r108' && !!dmPost && dmText === 'private note r108'
     && teamMsgsD.some((m) => !m.to) && !teamMsgsD.some((m) => m.to) && !unityReplied
     && /team-mcp\.js/.test(fs.readFileSync(path.join(SB, '.mcp-runtime.json'), 'utf8')) && /mcp__team/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8'))
-    && /const authorOf = \(m\) => m\.as \|\| nickOf\(m\.from\)/.test(html),
+    && /const authorOf = \(m\) => m\.as \|\| [^\n]*nickOf\(m\.from\)/.test(html), // the "<person> · Claude" label wins over any (server) nickname
     `tool ${JSON.stringify(teamOut)}, room "${roomText}", dm "${dmText}", D sees dm ${teamMsgsD.some((m) => m.to)}, Unity replied ${unityReplied}`);
 
   // Servers, channels and groups (bridge/guilds.js): membership decides key slots, visibility, typing, seen, calls, Unity's answers.
@@ -1184,7 +1184,8 @@ async function run() {
   const grpForU = ((await call('/api/room/messages?since=' + (grpSent.data.seq - 1), U)).data.messages || []).find((m) => m.seq === grpSent.data.seq);
   const grpForD = ((await call('/api/room/messages?since=' + (grpSent.data.seq - 1), D)).data.messages || []).some((m) => m.seq === grpSent.data.seq);
   const grpText = grpForU ? await read4(restored, grpForU).catch(() => null) : null;
-  const added = await call('/api/guilds/server/add', U, { server: gSid, add: ['t-admin'] });
+  const addedInv = await call('/api/guilds/server/add', U, { server: gSid, add: ['t-admin'] }); // an invitation now…
+  const added = addedInv.status === 200 ? await call('/api/guilds/invitation/accept', A, { server: gSid }) : addedInv; // …that they accept
   const aViewAfter = (await call('/api/guilds', A)).data;
   const chSent2 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'now A sees-r113', chConv));
   const chForA2 = ((await call('/api/room/messages?since=' + (chSent2.data.seq - 1), A)).data.messages || []).find((m) => m.seq === chSent2.data.seq);
@@ -1210,6 +1211,85 @@ async function run() {
     && !!ansCh && ansChMsg && ansChMsg.conv === chConv && teamCh.status === 200
     && gDelOther.status === 400 && gDelOwn.status === 200 && gLeave.status === 200 && !gAfterLeave.groups.some((g) => g.conv === grpConv) && rmSv.status === 200,
     `server ${gSv.status}, channel ${chn.status}, send ${chSent.status} slots ${Object.keys(chDisk.keys || {}).join('+')}, A sees ${chSeenByA}, outsider ${chOutsider.status}/${tyOutsider.status}/${seenOutsider.status}/${callOutsider.status}, group ${grpSent.status} U "${grpText && grpText.t}" D ${grpForD}, after add "${chText2 && chText2.t}", unity ${!!ansCh} in ${ansChMsg && ansChMsg.conv}, delete ${gDelOther.status}/${gDelOwn.status}`);
+
+  // Servers, Discord-shaped: invitations, roles + ranks, invite links (expiry / uses / temporary), password lock,
+  // kick / ban, private + announcement channels, nicknames, audit log, ownership, the editable Mills server, groups.
+  const gq = (tok) => call('/api/guilds', tok).then((r) => r.data);
+  const inviteLink23 = (code) => 'https://example.invalid/Mills/?invite=' + code; // a pasted link works like the bare code
+  const sv23 = (v, id) => (v.servers || []).find((s) => s.id === id);
+  const mk23 = await call('/api/guilds/server', U, { name: 'Friends r123', color: '#123456', description: 'just us', members: ['t-admin'] });
+  const s23 = mk23.data.result && mk23.data.result.id;
+  const aInv = await gq(A);
+  const aBefore = !sv23(aInv, s23) && (aInv.invitations || []).some((i) => i.server === s23);
+  const acc23 = await call('/api/guilds/invitation/accept', A, { server: s23 });
+  const updNo = await call('/api/guilds/server/update', A, { server: s23, name: 'hijack' });
+  const updOk = await call('/api/guilds/server/update', U, { server: s23, name: 'Friends plus', description: 'just us r123' });
+  const roleM = (await call('/api/guilds/role', U, { server: s23, name: 'Mods', color: '#ff0000', perms: ['KICK', 'CREATE_CHANNELS', 'NOT_A_PERM'] })).data.result;
+  const roleI = (await call('/api/guilds/role', U, { server: s23, name: 'Inner', perms: [] })).data.result;
+  const giveM = await call('/api/guilds/member/roles', U, { server: s23, user: 't-admin', roles: [roleM.id] });
+  const kickOwner = await call('/api/guilds/member/kick', A, { server: s23, user: 't-user' });
+  const pw23 = await call('/api/guilds/server/password', U, { server: s23, password: 'hunter-r123' });
+  const iv23 = (await call('/api/guilds/invite', U, { server: s23, maxAge: 60, maxUses: 1 })).data.result;
+  const leak23 = /"(salt|hash)"/.test(JSON.stringify(await gq(U))) || /"(salt|hash)"/.test(JSON.stringify(pw23.data));
+  const pv23 = (await call('/api/guilds/invite/preview', D, { code: inviteLink23(iv23.code) })).data.result;
+  const joinNoPw = await call('/api/guilds/invite/join', D, { code: iv23.code });
+  const joinBadPw = await call('/api/guilds/invite/join', D, { code: iv23.code, password: 'nope' });
+  const joinOk = await call('/api/guilds/invite/join', D, { code: iv23.code, password: 'hunter-r123' });
+  const used23 = await call('/api/guilds/invite/preview', D, { code: iv23.code }); // max 1 use: gone
+  const dIn = !!sv23(await gq(D), s23);
+  const kickD = await call('/api/guilds/member/kick', A, { server: s23, user: 'mills', reason: 'r123 test' }); // Mods (rank 1) over a plain member
+  const dOut = !sv23(await gq(D), s23);
+  const ban23 = await call('/api/guilds/member/ban', U, { server: s23, user: 'mills', reason: 'r123 ban' });
+  const iv23b = (await call('/api/guilds/invite', U, { server: s23, maxAge: 0, maxUses: 0, temporary: true })).data.result;
+  const joinBanned = await call('/api/guilds/invite/join', D, { code: iv23b.code, password: 'hunter-r123' });
+  const unban23 = await call('/api/guilds/member/unban', U, { server: s23, user: 'mills' });
+  const joinTemp = await call('/api/guilds/invite/join', D, { code: iv23b.code, password: 'hunter-r123' });
+  const tempListed = (sv23(await gq(U), s23) || {}).temp || [];
+  // private + announcement channels
+  const priv23 = await call('/api/guilds/channel', U, { server: s23, name: 'inner-room', roles: [roleI.id] });
+  const news23 = await call('/api/guilds/channel', U, { server: s23, name: 'news', announce: true });
+  const aSeesPriv = (sv23(await gq(A), s23) || { channels: [] }).channels.some((c) => c.id === 'inner-room');
+  const aPrivSend = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'sneak r123', 'ch:' + s23 + '/inner-room'));
+  const aNews = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'news by a r123', 'ch:' + s23 + '/news'));
+  const uNews = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'news by owner r123', 'ch:' + s23 + '/news'));
+  await call('/api/guilds/member/roles', U, { server: s23, user: 't-admin', roles: [roleM.id, roleI.id] });
+  const aSeesPriv2 = (sv23(await gq(A), s23) || { channels: [] }).channels.some((c) => c.id === 'inner-room');
+  const nick23 = await call('/api/guilds/member/nick', D, { server: s23, user: 'mills', nick: 'Dee r123' });
+  const nickSeen = ((sv23(await gq(U), s23) || {}).nicks || {}).mills === 'Dee r123';
+  const uView = sv23(await gq(U), s23) || {}, dView = sv23(await gq(D), s23) || {};
+  const audit23 = (uView.audit || []).map((a) => a.what);
+  const dNoAudit = dView.audit === undefined && dView.bans === undefined;
+  const leaveOwner = await call('/api/guilds/server/leave', U, { server: s23 });
+  const xfer = await call('/api/guilds/server/transfer', U, { server: s23, user: 't-admin' });
+  const leaveAfter = await call('/api/guilds/server/leave', U, { server: s23 });
+  const delOld = await call('/api/guilds/server/delete', U, { server: s23 });
+  const delNew = await call('/api/guilds/server/delete', A, { server: s23 });
+  // the Mills server: hub admins edit it; nobody invites to it
+  const millsU = await call('/api/guilds/server/update', U, { server: 'mills', name: 'Not yours' });
+  const millsA = await call('/api/guilds/server/update', A, { server: 'mills', name: 'Mills HQ r123', description: 'team r123' });
+  const millsName = (sv23(await gq(U), 'mills') || {}).name;
+  await call('/api/guilds/server/update', A, { server: 'mills', name: 'Mills', description: '' });
+  const millsInv = await call('/api/guilds/invite', A, { server: 'mills' });
+  // groups: owner removes / hands over; others cannot remove
+  const g23 = (await call('/api/guilds/group', U, { name: 'three r123', members: ['t-admin', 'mills'] })).data.result;
+  const gRmNo = await call('/api/guilds/group/remove', A, { group: g23.id, user: 'mills' });
+  const gRmOk = await call('/api/guilds/group/remove', U, { group: g23.id, user: 'mills' });
+  const gXfer = await call('/api/guilds/group/transfer', U, { group: g23.id, user: 't-admin' });
+  await call('/api/guilds/group/leave', U, { group: g23.id });
+  const gAfter = ((await gq(A)).groups || []).find((g) => g.id === g23.id);
+  await call('/api/guilds/group/leave', A, { group: g23.id });
+  const gs23 = fs.readFileSync(path.join(MILLS, 'web', 'guild-settings.js'), 'utf8');
+  check('R123', 'servers like Discord: personal invitations to accept, server settings only with "manage server", roles with permissions + ranks (a moderator cannot kick the owner), password lock (hash never sent; no / wrong password refused), invite links with max uses + expiry + temporary membership, kick + ban (banned cannot rejoin) + unban, private channels only for their roles, announcement channels only for the announce permission, server nicknames, audit log only for managers, owner must hand over before leaving, only the owner deletes; the Mills server is edited by hub admins only and has no invites; groups: only the owner removes / hands over; [static] Server Settings tabs + join / invitation dialogs',
+    mk23.status === 200 && aBefore && acc23.status === 200 && updNo.status === 400 && updOk.status === 200 && roleM && roleM.perms.join() === 'KICK,CREATE_CHANNELS' && giveM.status === 200 && kickOwner.status === 400
+    && pw23.status === 200 && !leak23 && pv23 && pv23.locked === true && pv23.members === 2 && joinNoPw.status === 400 && joinBadPw.status === 400 && joinOk.status === 200 && used23.status === 400 && dIn
+    && kickD.status === 200 && dOut && ban23.status === 200 && joinBanned.status === 400 && unban23.status === 200 && joinTemp.status === 200 && tempListed.includes('mills')
+    && priv23.status === 200 && news23.status === 200 && !aSeesPriv && aPrivSend.status === 400 && aNews.status === 403 && uNews.status === 200 && aSeesPriv2
+    && nick23.status === 200 && nickSeen && audit23.includes('banned') && audit23.includes('kicked') && audit23.includes('joined') && dNoAudit
+    && leaveOwner.status === 400 && xfer.status === 200 && leaveAfter.status === 200 && delOld.status === 400 && delNew.status === 200
+    && millsU.status === 400 && millsA.status === 200 && millsName === 'Mills HQ r123' && millsInv.status === 400
+    && gRmNo.status === 400 && gRmOk.status === 200 && gXfer.status === 200 && gAfter && gAfter.owner === 't-admin' && !gAfter.members.includes('t-user')
+    && /'overview', 'Overview'/.test(gs23) && /'security', 'Security'/.test(gs23) && /'audit', 'Audit log'/.test(gs23) && /function drawJoin\(/.test(gs23) && /\?invite=/.test(gs23) && /<script src="guild-settings\.js">/.test(html),
+    `make ${mk23.status}, invited ${aBefore} accept ${acc23.status}, update ${updNo.status}/${updOk.status}, role ${roleM && roleM.perms}, kick owner ${kickOwner.status}, pw ${pw23.status} leak ${leak23}, preview ${JSON.stringify(pv23)}, join ${joinNoPw.status}/${joinBadPw.status}/${joinOk.status} used ${used23.status}, kick ${kickD.status} out ${dOut}, ban ${ban23.status} rejoin ${joinBanned.status} unban ${unban23.status} temp ${joinTemp.status} ${tempListed}, priv ${priv23.status} seen ${aSeesPriv}→${aSeesPriv2} send ${aPrivSend.status}, news ${aNews.status}/${uNews.status}, nick ${nickSeen}, audit ${audit23.slice(0, 8)}, D audit ${dNoAudit}, leave ${leaveOwner.status} xfer ${xfer.status} leave ${leaveAfter.status} del ${delOld.status}/${delNew.status}, mills ${millsU.status}/${millsA.status} ${millsName} inv ${millsInv.status}, group ${gRmNo.status}/${gRmOk.status}/${gXfer.status} owner ${gAfter && gAfter.owner}`);
 
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });

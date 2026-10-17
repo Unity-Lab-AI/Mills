@@ -406,6 +406,21 @@
   #serverRail .srv:hover, #serverRail .srv.on { border-radius: 14px; }
   #serverRail .srv.on::before { content: ''; position: absolute; left: -8px; top: 8px; width: 4px; height: 24px; border-radius: 0 4px 4px 0; background: var(--text); }
   #serverRail .srv.add { background: var(--panel); color: var(--good); border: 1px dashed var(--line); }
+  #serverRail .srv.invites { background: var(--panel); color: var(--accent); border: 1px solid var(--accent); position: relative; }
+  #serverRail .srv.invites .badge { position: absolute; top: -4px; right: -4px; }
+  /* Server Settings (web/guild-settings.js) */
+  .gsetBox { width: min(760px, 96vw) !important; }
+  .gsetTabs { display: flex; flex-wrap: wrap; gap: .25rem; padding: 0 1rem .5rem; border-bottom: 1px solid var(--line); }
+  .gsetTabs button.on { background: var(--accent); color: var(--on-accent); }
+  .gsetMember { display: flex; flex-direction: column; gap: .2rem; padding: .45rem .3rem; border-bottom: 1px solid var(--line); }
+  .gsetMember.focus { outline: 1px solid var(--accent); border-radius: 6px; }
+  .gsetMember small, .setSection small { color: var(--muted); }
+  .gsetPerms { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .15rem .6rem; margin: .3rem 0; }
+  .gsetAudit { font-size: .82rem; padding: .15rem 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+  .gsetPreview { display: flex; align-items: center; gap: .6rem; margin: .5rem 0; }
+  .gsetPreview .srv { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; font-weight: 800; color: #fff; }
+  .gsetIcon { width: 6em; }
+  #gsetModal textarea { width: 100%; box-sizing: border-box; }
   #serverRail .srv .badge { position: absolute; right: -4px; bottom: -4px; background: var(--bad); color: #fff; border-radius: 999px; font-size: .62rem; padding: 0 .3rem; border: 2px solid var(--bg); }
   .chHead { display: flex; align-items: center; gap: .3rem; padding: .25rem .25rem .4rem; border-bottom: 1px solid var(--line); margin-bottom: .2rem; } .chHead b { flex: 1; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chSect { display: flex; align-items: center; justify-content: space-between; font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding: .55rem .25rem .15rem; }
@@ -2226,7 +2241,7 @@ const colorOf = (u) => PALETTE[colorIndex(u)][lightTheme ? 1 : 0];
 const convOfMsg = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
 // Who a message is shown as: normally the sender; a Work run's Claude posts through the hub's key with
 // `as` = "<person> · Claude" and `via` = that person (whose colour it takes).
-const authorOf = (m) => m.as || nickOf(m.from);
+const authorOf = (m) => m.as || (typeof GUILDS !== 'undefined' && GUILDS.nickIn(m.conv || currentConv, m.from)) || nickOf(m.from); // server nickname inside its channels
 const authorColor = (m) => colorOf(m.via || m.from);
 const dmConv = (u) => 'dm:' + [me.username, u].sort().join('|');
 const isGuildConv = (c) => /^(ch|grp):/.test(String(c || '')); // a server channel or a group (web/guilds.js)
@@ -2367,7 +2382,7 @@ function selectConv(conv) {
   cancelCompose(); sendTyping(false);
   $('convName').textContent = convLabel(conv);
   $('roomInput').placeholder = conv === 'room' ? 'Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)'
-    : isGuildConv(conv) ? 'Message ' + convLabel(conv) + '…  (its members only; @unity to call her here)'
+    : isGuildConv(conv) ? (GUILDS.canPost(conv) ? 'Message ' + convLabel(conv) + '…  (its members only; @unity to call her here)' : convLabel(conv) + ' is an announcement channel: only people with the announce permission post here.')
     : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
   const log = $('roomLog'); log.innerHTML = '';
   for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
@@ -2857,7 +2872,7 @@ function startRoomPolling() {
   stopRoomPolling();
   const gen = ++roomGen;
   // also runs while the tab is in the background, so sounds still play
-  loadLocalChatKey().then(refreshMembers).then(() => GUILDS.refresh()).then(() => pollRoom()).then(() => selectConv(currentConv)).catch(() => {}).then(() => roomLoop(gen));
+  loadLocalChatKey().then(refreshMembers).then(() => GUILDS.refresh()).then(() => GUILDS.pendingInvite()).then(() => pollRoom()).then(() => selectConv(currentConv)).catch(() => {}).then(() => roomLoop(gen));
 }
 function stopRoomPolling() { roomGen++; roomVer = 0; roomKeysVer = 0; }
 
@@ -3571,6 +3586,8 @@ connect().then((ok) => { if (ok && token) enter().catch(() => signOut()); });
 <script src="calls.js"></script>
 <!-- servers, channels, groups, member column: web/guilds.js · app mode + install: web/app.js -->
 <script src="guilds.js"></script>
+<!-- Server Settings, join / invitations, channel + group dialogs: web/guild-settings.js -->
+<script src="guild-settings.js"></script>
 <script src="notes.js"></script>
 <script src="app.js"></script>
 </body>
