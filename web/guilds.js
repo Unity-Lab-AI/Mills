@@ -1,11 +1,14 @@
 // Mills servers, channels, groups and the member column, page side (hub side: bridge/guilds.js).
 // Loaded after the page script and calls.js; uses the page's helpers at call time ($, json, me, nickOf,
-// colorOf, statusOf, ic, label, selectConv, currentConv, roomMembers, sysRoom, store).
+// colorOf, statusOf, ic, selectConv, currentConv, roomMembers, sysRoom, store). Server Settings, the join /
+// invitation dialogs and group settings live in web/guild-settings.js (GSET).
 //
 // The chat's side bar is Discord-shaped: a rail of servers on the far left (the "Mills" server is
-// everyone's and always first; its #general is the old # Everyone), the picked server's channels, then
-// group conversations and private messages. The member column (app mode, or wide screens) lists who is
-// in the current conversation with their presence; Unity and "<person> · Claude" carry a BOT badge.
+// everyone's and always first; its #general is the old # Everyone), with buttons for pending invitations and
+// joining by invite code; then the picked server's channels by category (private ones carry a lock,
+// announcement ones a flag), group conversations and private messages. The member column (app mode, or wide
+// screens) lists who is in the current conversation by hoisted role and presence; Unity and
+// "<person> · Claude" carry a BOT badge.
 const GUILDS = (() => {
   const G = { data: null, ver: 0, server: 'mills' };
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -18,69 +21,89 @@ const GUILDS = (() => {
     return g ? { kind: 'grp', group: g } : null;
   }
   const label = (c) => { const f = find(c); return !f ? c : f.kind === 'ch' ? '# ' + f.channel.name : f.group.name; };
-  const members = (c) => { const f = find(c); return !f ? [] : f.kind === 'ch' ? f.server.members : f.group.members; };
+  const members = (c) => { const f = find(c); return !f ? [] : f.kind === 'ch' ? f.channel.members || f.server.members : f.group.members; }; // a private channel: only who may see it
   const serverOf = (c) => { const f = find(c); return f && f.kind === 'ch' ? f.server.id : null; };
+  const current = () => (G.data ? G.data.servers.find((x) => x.id === G.server) || G.data.servers[0] : null);
+  const can = (s, p) => !!(s && s.me && s.me.perms.includes(p));
+  const nickIn = (c, u) => { const f = find(c); return f && f.kind === 'ch' && f.server.nicks ? f.server.nicks[u] || '' : ''; };
+  const roleColor = (s, u) => { const ids = (s.memberRoles || {})[u] || []; const r = (s.roles || []).find((x) => ids.includes(x.id) && x.color); return r ? r.color : ''; };
+  const canPost = (c) => { const f = find(c); return !f || f.kind !== 'ch' || f.channel.canPost !== false; };
   async function refresh() {
     if (!me) return;
     try { G.data = await json('/api/guilds'); G.ver = G.data.ver; } catch { return; }
     if (!G.data.servers.some((s) => s.id === G.server)) G.server = 'mills';
     const sv = serverOf(currentConv); if (sv) G.server = sv;
+    if (isGuildConv(currentConv) && !has(currentConv)) selectConv('room'); // kicked, banned, left, or the channel went private
     render();
+    if (typeof GSET !== 'undefined') GSET.refreshOpen();
   }
-  async function op(path, body) {
-    try { const d = await json('/api/guilds/' + path, { method: 'POST', body: JSON.stringify(body) }); G.data = d; G.ver = d.ver; render(); return d.result; }
-    catch (e) { sysRoom(e.message); return null; }
+  async function op(path, body, quiet) {
+    try { const d = await json('/api/guilds/' + path, { method: 'POST', body: JSON.stringify(body) }); G.data = d; G.ver = d.ver; render(); if (typeof GSET !== 'undefined') GSET.refreshOpen(); return d.result === undefined ? true : d.result; }
+    catch (e) { if (quiet) throw e; sysRoom(e.message); return null; }
   }
   // ── server rail ──
   function renderRail() {
     const rail = $('serverRail'); if (!rail || !G.data) return;
     rail.textContent = '';
     for (const s of G.data.servers) {
-      const b = el('button', 'srv' + (s.id === G.server ? ' on' : '')); b.type = 'button'; b.title = s.name + (s.everyone ? ' · everyone' : ' · ' + s.members.length + ' member' + (s.members.length === 1 ? '' : 's'));
-      b.textContent = (s.icon || s.name).slice(0, 2).toUpperCase(); b.style.background = s.id === 'mills' ? 'var(--accent)' : colorOf(s.createdBy || s.id);
+      const b = el('button', 'srv' + (s.id === G.server ? ' on' : '')); b.type = 'button';
+      b.title = s.name + (s.everyone ? ' · everyone' : ' · ' + s.members.length + ' member' + (s.members.length === 1 ? '' : 's')) + (s.locked ? ' · password locked' : '') + (s.description ? '\n' + s.description : '');
+      b.textContent = (s.icon || s.name).slice(0, 2).toUpperCase(); b.style.background = s.color || (s.id === 'mills' ? 'var(--accent)' : colorOf(s.owner || s.createdBy || s.id));
       const badge = el('span', 'badge'); badge.hidden = true; badge.dataset.serverBadge = s.id; b.append(badge);
       b.onclick = () => { G.server = s.id; render(); const first = s.channels[0]; if (first && serverOf(currentConv) !== s.id && currentConv !== first.conv) selectConv(first.conv); };
+      b.oncontextmenu = (e) => { e.preventDefault(); G.server = s.id; render(); GSET.openServer(s.id); };
       rail.append(b);
     }
-    const add = el('button', 'srv add'); add.type = 'button'; add.title = 'Make a server'; add.append(ic('plus')); add.onclick = newServer; rail.append(add);
+    const inv = G.data.invitations || [];
+    if (inv.length) { const b = el('button', 'srv invites'); b.type = 'button'; b.title = inv.length + ' server invitation' + (inv.length === 1 ? '' : 's'); b.append(ic('flag')); const n = el('span', 'badge', String(inv.length)); b.append(n); b.onclick = () => GSET.invitations(); rail.append(b); }
+    const add = el('button', 'srv add'); add.type = 'button'; add.title = 'Make a server'; add.append(ic('plus')); add.onclick = () => GSET.newServer(); rail.append(add);
+    const join = el('button', 'srv add'); join.type = 'button'; join.title = 'Join a server with an invite code or link'; join.append(ic('share')); join.onclick = () => GSET.join(); rail.append(join);
   }
-  // ── channels of the picked server, then groups ──
+  // ── channels of the picked server (by category), then groups ──
   function renderChannels() {
     const box = $('chanList'); if (!box || !G.data) return;
     box.textContent = '';
-    const s = G.data.servers.find((x) => x.id === G.server) || G.data.servers[0];
+    const s = current();
     if (!s) return;
     const head = el('div', 'chHead');
-    const name = el('b', '', s.name); head.append(name);
-    if (!s.everyone) {
-      const inv = el('button', 'ghost tiny'); inv.type = 'button'; inv.title = 'Add people to this server'; inv.append(ic('plus')); inv.onclick = () => addPeople(s); head.append(inv);
-      if (s.createdBy === me.username) { const del = el('button', 'ghost tiny'); del.type = 'button'; del.title = 'Delete this server (twice)'; del.append(ic('trash')); del.onclick = () => { if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.classList.add('armed'); return; } op('server/delete', { server: s.id }).then(() => { G.server = 'mills'; selectConv('room'); }); }; head.append(del); }
-    }
+    const name = el('b', '', s.name); name.title = s.description || ''; head.append(name);
+    if (s.locked) { const l = ic('lock'); l.setAttribute('aria-label', 'password locked'); head.append(l); }
+    if (!s.everyone && can(s, 'INVITE')) { const inv = el('button', 'ghost tiny'); inv.type = 'button'; inv.title = 'Invite people'; inv.append(ic('plus')); inv.onclick = () => GSET.openServer(s.id, 'invites'); head.append(inv); }
+    const set = el('button', 'ghost tiny'); set.type = 'button'; set.title = 'Server settings: overview, members, roles, channels, invites' + (s.everyone ? '' : ', bans, password lock, audit log'); set.append(ic('gear')); set.onclick = () => GSET.openServer(s.id); head.append(set);
     box.append(head);
-    const sect = el('div', 'chSect'); sect.append(el('span', '', 'Text channels'));
-    const plus = el('button', 'ghost tiny'); plus.type = 'button'; plus.title = 'New channel'; plus.append(ic('plus')); plus.onclick = () => newChannel(s); sect.append(plus); box.append(sect);
-    for (const ch of s.channels) box.append(convButton(ch.conv, '#', ch.name, ch.topic || (ch.conv === 'room' ? 'the whole team' : ''), ch));
+    const cats = []; for (const ch of s.channels) { const c = ch.category || 'Text channels'; if (!cats.includes(c)) cats.push(c); }
+    if (!cats.length) cats.push('Text channels');
+    cats.forEach((cat, i) => {
+      const sect = el('div', 'chSect'); sect.append(el('span', '', cat));
+      if (i === 0 && (can(s, 'CREATE_CHANNELS') || can(s, 'MANAGE_CHANNELS'))) { const plus = el('button', 'ghost tiny'); plus.type = 'button'; plus.title = 'New channel'; plus.append(ic('plus')); plus.onclick = () => GSET.newChannel(s); sect.append(plus); }
+      box.append(sect);
+      for (const ch of s.channels.filter((c) => (c.category || 'Text channels') === cat)) box.append(convButton(ch.conv, ch.private ? '' : '#', ch.name, ch.topic || (ch.conv === 'room' ? 'the whole team' : ''), ch, null, s));
+    });
     const gs = el('div', 'chSect'); gs.append(el('span', '', 'Groups'));
-    const gp = el('button', 'ghost tiny'); gp.type = 'button'; gp.title = 'New group conversation'; gp.append(ic('plus')); gp.onclick = newGroup; gs.append(gp); box.append(gs);
+    const gp = el('button', 'ghost tiny'); gp.type = 'button'; gp.title = 'New group conversation'; gp.append(ic('plus')); gp.onclick = () => GSET.newGroup(); gs.append(gp); box.append(gs);
     for (const g of G.data.groups) box.append(convButton(g.conv, '', g.name, g.members.map((u) => nickOf(u)).join(', '), null, g));
     if (!G.data.groups.length) box.append(el('div', 'chNone', 'no groups yet'));
     const dmHead = el('div', 'chSect'); dmHead.append(el('span', '', 'Direct messages')); box.append(dmHead);
   }
-  function convButton(conv, prefix, name, sub, ch, g) {
+  function convButton(conv, prefix, name, sub, ch, g, s) {
     const b = el('button', 'cv ch' + (conv === currentConv ? ' on' : '')); b.type = 'button';
-    const dot = el('span', 'dot hash', prefix || ''); if (!prefix) dot.append(ic('chat'));
-    const nm = el('span', 'nm', name); const s = el('small', '', sub); nm.append(s);
+    const dot = el('span', 'dot hash', prefix || '');
+    if (!prefix) dot.append(ic(ch && ch.private ? 'lock' : 'chat'));
+    if (ch && ch.announce) { dot.textContent = ''; dot.append(ic('flag')); }
+    const nm = el('span', 'nm', name); const sm = el('small', '', sub); nm.append(sm);
     const badge = el('span', 'badge'); badge.dataset.convBadge = conv; badge.hidden = true;
     b.append(dot, nm, badge); b.onclick = () => selectConv(conv);
-    if (ch && conv !== 'room' && (ch.createdBy === me.username || (G.data.servers.find((x) => x.id === G.server) || {}).createdBy === me.username)) {
-      const x = el('button', 'ghost tiny chDel'); x.type = 'button'; x.title = 'Delete channel (twice)'; x.append(ic('close'));
-      x.onclick = (e) => { e.stopPropagation(); if (x.dataset.armed !== '1') { x.dataset.armed = '1'; x.classList.add('armed'); return; } op('channel/delete', { server: G.server, channel: ch.id }).then(() => { if (currentConv === conv) selectConv('room'); }); };
+    if (ch && s && (can(s, 'MANAGE_CHANNELS') || ch.createdBy === me.username)) {
+      const x = el('button', 'ghost tiny chDel'); x.type = 'button'; x.title = 'Edit channel'; x.append(ic('edit'));
+      x.onclick = (e) => { e.stopPropagation(); GSET.editChannel(s, ch); };
       b.append(x);
+      b.oncontextmenu = (e) => { e.preventDefault(); GSET.editChannel(s, ch); };
     }
     if (g) {
-      const x = el('button', 'ghost tiny chDel'); x.type = 'button'; x.title = 'Leave this group (twice)'; x.append(ic('close'));
-      x.onclick = (e) => { e.stopPropagation(); if (x.dataset.armed !== '1') { x.dataset.armed = '1'; x.classList.add('armed'); return; } op('group/leave', { group: g.id }).then(() => { if (currentConv === conv) selectConv('room'); }); };
+      const x = el('button', 'ghost tiny chDel'); x.type = 'button'; x.title = 'Group settings: rename, people, owner, leave'; x.append(ic('gear'));
+      x.onclick = (e) => { e.stopPropagation(); GSET.editGroup(g.id); };
       b.append(x);
+      b.oncontextmenu = (e) => { e.preventDefault(); GSET.editGroup(g.id); };
     }
     return b;
   }
@@ -92,20 +115,28 @@ const GUILDS = (() => {
     box.textContent = '';
     if (box.hidden) return;
     const f = find(currentConv);
+    const s = f && f.kind === 'ch' ? f.server : currentConv === 'room' && G.data ? G.data.servers.find((x) => x.id === 'mills') : null;
     const people = f ? members(currentConv) : currentConv === 'room' ? roomMembers.filter((m) => !m.agent).map((m) => m.username) : currentConv.slice(3).split('|');
     const agent = roomMembers.find((m) => m.agent);
-    const groups = { online: [], away: [], offline: [] };
-    for (const u of people) { if (u === me.username) { groups.online.push(u); continue; } const st = statusOf(u).cls; (st === 'on' ? groups.online : st === 'idle' ? groups.away : groups.offline).push(u); }
-    const section = (title, list) => {
-      if (!list.length) return;
-      box.append(el('div', 'mHead', title + ' — ' + list.length));
-      for (const u of list) {
-        const r = el('div', 'mRow'); const dot = el('i', 'pdot ' + statusOf(u).cls); dot.style.background = colorOf(u);
-        const nm = el('span', 'mName', nickOf(u) + (u === me.username ? ' (you)' : '')); nm.style.color = colorOf(u);
-        r.append(dot, nm); r.title = statusOf(u).text; r.onclick = () => { if (u !== me.username) selectConv('dm:' + [me.username, u].sort().join('|')); };
-        box.append(r);
-      }
+    const shown = new Set();
+    const row = (u) => {
+      const r = el('div', 'mRow'); const dot = el('i', 'pdot ' + statusOf(u).cls); dot.style.background = colorOf(u);
+      const nick = (s && s.nicks && s.nicks[u]) || nickOf(u);
+      const nm = el('span', 'mName', nick + (u === me.username ? ' (you)' : '')); nm.style.color = (s && roleColor(s, u)) || colorOf(u);
+      r.append(dot, nm);
+      if (s && !s.everyone && s.owner === u) { const o = el('span', 'botTag', 'OWNER'); r.append(o); }
+      if (s && (s.temp || []).includes(u)) { const t = el('span', 'botTag', 'TEMP'); r.append(t); }
+      r.title = statusOf(u).text + (nick !== nickOf(u) ? ' · ' + nickOf(u) : '');
+      r.onclick = () => { if (u !== me.username) selectConv('dm:' + [me.username, u].sort().join('|')); };
+      if (s) r.oncontextmenu = (e) => { e.preventDefault(); GSET.openServer(s.id, 'members', u); };
+      return r;
     };
+    const section = (title, list) => { if (!list.length) return; box.append(el('div', 'mHead', title + ' — ' + list.length)); for (const u of list) { shown.add(u); box.append(row(u)); } };
+    if (s && f && f.kind === 'ch' || (s && currentConv === 'room')) { // hoisted roles first (Discord), for the people online
+      for (const r of (s.roles || []).filter((x) => x.hoist)) section(r.name, people.filter((u) => !shown.has(u) && statusOf(u).cls !== 'off' && ((s.memberRoles || {})[u] || []).includes(r.id)));
+    }
+    const groups = { online: [], away: [], offline: [] };
+    for (const u of people) { if (shown.has(u)) continue; if (u === me.username) { groups.online.push(u); continue; } const st = statusOf(u).cls; (st === 'on' ? groups.online : st === 'idle' ? groups.away : groups.offline).push(u); }
     section('Online', groups.online); section('Away', groups.away); section('Offline', groups.offline);
     if (agent && (f || currentConv === 'room')) { // Unity is in every channel and group
       box.append(el('div', 'mHead', 'Bots — 1'));
@@ -115,29 +146,12 @@ const GUILDS = (() => {
     }
   }
   function render() { renderRail(); renderChannels(); renderMembers(); if (typeof updateUnread === 'function') updateUnread(); }
-  // ── dialogs (prompt-based, like the board) ──
-  async function newServer() {
-    const name = window.prompt('Name of the new server:'); if (!name || !name.trim()) return;
-    const others = window.prompt('Who else is in it? Usernames, comma separated (you can add people later):', '') || '';
-    const s = await op('server', { name: name.trim(), members: others.split(/[,\s]+/).filter(Boolean) });
-    if (s) { G.server = s.id; render(); selectConv('ch:' + s.id + '/general'); }
+  // an invite link opened this page (?invite=CODE): offer the join once signed in
+  function pendingInvite() {
+    const code = new URLSearchParams(location.search).get('invite');
+    if (!code) return;
+    const u = new URL(location.href); u.searchParams.delete('invite'); history.replaceState(null, '', u.pathname + u.search + u.hash);
+    setTimeout(() => GSET.join(code), 300);
   }
-  async function newChannel(s) {
-    const name = window.prompt('New channel in ' + s.name + ' (letters, digits, dashes):'); if (!name || !name.trim()) return;
-    const topic = window.prompt('Topic (optional):', '') || '';
-    const ch = await op('channel', { server: s.id, name: name.trim(), topic });
-    if (ch) selectConv('ch:' + s.id + '/' + ch.id);
-  }
-  async function addPeople(s) {
-    const who = window.prompt('Add to ' + s.name + ' (usernames, comma separated):', roomMembers.filter((m) => !m.agent && !s.members.includes(m.username)).map((m) => m.username).join(', '));
-    if (!who || !who.trim()) return;
-    await op('server/add', { server: s.id, add: who.split(/[,\s]+/).filter(Boolean) });
-  }
-  async function newGroup() {
-    const who = window.prompt('Group with (usernames, comma separated):', ''); if (!who || !who.trim()) return;
-    const name = window.prompt('Group name (optional):', '') || '';
-    const g = await op('group', { name, members: who.split(/[,\s]+/).filter(Boolean) });
-    if (g) selectConv('grp:' + g.id);
-  }
-  return { isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, state: G };
+  return { isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, op, can, current, nickIn, canPost, pendingInvite, state: G };
 })();

@@ -344,7 +344,8 @@ if (!agentKey || !agentKey.priv || !agentKey.priv.d) {
 const agentPriv = crypto.createPrivateKey({ key: agentKey.priv, format: 'jwk' });
 const agentEnabled = () => !accounts.has(AGENT) && config.roomAgent !== false;
 // Servers, channels and groups (bridge/guilds.js): who is in which conversation; guilds.route() serves /api/guilds*.
-const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJson, agentName: AGENT_NAME, changed: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
+const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJson, agentName: AGENT_NAME, changed: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r),
+  isOnline: (u) => presence.online().includes(u) }); // temporary members leave when they go offline
 const agentShared = (jwk) => crypto.diffieHellman({ privateKey: agentPriv, publicKey: crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' }) });
 function gcmOpen(key, iv, data, aad) {
   const buf = Buffer.from(data, 'base64'), d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
@@ -793,6 +794,7 @@ const server = http.createServer(async (req, res) => {
       // conv: a channel / group this person is in ('room' or nothing = # Everyone; a private message uses `to`)
       const conv = convIn && convIn !== 'room' ? String(convIn) : '';
       if (conv && (to || !guilds.isGuildConv(conv) || !guilds.isMember(conv, acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
+      if (conv && !guilds.canPost(conv, acct.username)) return send(res, 403, { error: 'This is an announcement channel: only people with the announce permission post here.' });
       if (v !== undefined && !(FORMATS.includes(v) && MID_RE.test(mid || '') && !messages.some((x) => x.mid === mid))) return send(res, 400, { error: 'Bad message.' });
       if (blob !== undefined && !(v === 4 && b64(blob, MAX_CT))) return send(res, typeof blob === 'string' && blob.length > MAX_CT ? 413 : 400, { error: 'That voice clip is too large or malformed (up to about 2 minutes).' });
       if (!mine) return send(res, 400, { error: 'Your chat key is not set up yet.' });
