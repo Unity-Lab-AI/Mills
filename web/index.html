@@ -2604,6 +2604,8 @@ function renderMsg(rec, bulk) {
   el.dataset.seq = m.seq; el.style.borderLeftColor = authorColor(m); el.textContent = '';
   const head = document.createElement('small');
   const who = document.createElement('b'); who.textContent = authorOf(m); who.style.color = authorColor(m); who.title = m.as ? 'Posted by ' + nickOf(m.via || m.from) + '\'s Claude from a Work session' : '@' + m.from;
+  const avUrl = PROFILE.avatarOf(m.via || m.from); // a small round picture before the name, when they set one
+  if (avUrl) { const av = document.createElement('img'); av.className = 'msgAv'; av.src = avUrl; av.alt = ''; who.prepend(av); }
   if (!(memberOf(m.from) || {}).agent || m.via) { who.dataset.profile = '1'; who.classList.add('pLink'); who.onclick = (ev) => { ev.stopPropagation(); PROFILE.show(m.via || m.from, ev); }; } // the name opens their profile card (Unity has none)
   if (m.as || (memberOf(m.from) || {}).agent) { const tag = document.createElement('span'); tag.className = 'botTag'; tag.textContent = 'BOT'; who.append(tag); } // Unity and the team's Claudes are bots here
   const dt = new Date(m.ts), when = document.createElement('time');

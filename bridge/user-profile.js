@@ -45,4 +45,45 @@ const publicProfile = (state) => {
   return { bio: p.bio || '', pronouns: p.pronouns || '', status: p.status || '', location: p.location || '', links: p.links || [], accent: p.accent ?? null, timezone: p.timezone || '' };
 };
 
-module.exports = { cleanProfile, publicProfile, PALETTE_SIZE };
+// ---- profile pictures ----
+// The browser crops + shrinks the picture to a square (256 px, WebP / PNG / JPEG) before it is sent, so no original
+// and none of its metadata leaves the person's PC. The hub checks the type by its first bytes (never trusts the
+// name), caps the size, and keeps one file per person in Mills/Avatars/<username>.<ext> (gitignored; outside the
+// account folders). Everyone signed in gets it inside the member list as a data: address (no extra request, no
+// cookie or token needed by an <img>).
+const fs = require('fs');
+const path = require('path');
+const AVATAR_MAX = 300 * 1024; // bytes after decoding
+const KINDS = { webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg' };
+function sniff(buf) {
+  if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+  if (buf.length > 8 && buf[0] === 0x89 && buf.toString('ascii', 1, 4) === 'PNG') return 'png';
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  return '';
+}
+function createAvatars(dir) {
+  const cache = new Map(); // username -> data: URL ('' = none)
+  const fileOf = (user) => { for (const ext of Object.keys(KINDS)) { const f = path.join(dir, user + '.' + ext); if (fs.existsSync(f)) return { f, ext }; } return null; };
+  function get(user) {
+    if (cache.has(user)) return cache.get(user);
+    const hit = fileOf(user); let url = '';
+    if (hit) { try { url = 'data:' + KINDS[hit.ext] + ';base64,' + fs.readFileSync(hit.f).toString('base64'); } catch {} }
+    cache.set(user, url); return url;
+  }
+  function set(user, dataUrl) {
+    const m = /^data:image\/(webp|png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
+    if (!m) throw new Error('Send the picture as a WebP, PNG or JPEG image.');
+    const buf = Buffer.from(m[2], 'base64');
+    if (!buf.length || buf.length > AVATAR_MAX) throw new Error('That picture is too large (up to 300 KB after shrinking).');
+    const ext = sniff(buf); if (!ext) throw new Error('That file is not a WebP, PNG or JPEG picture.');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const e of Object.keys(KINDS)) if (e !== ext) { try { fs.unlinkSync(path.join(dir, user + '.' + e)); } catch {} } // one picture per person
+    const f = path.join(dir, user + '.' + ext), tmp = f + '.tmp';
+    fs.writeFileSync(tmp, buf); fs.renameSync(tmp, f);
+    cache.delete(user); return get(user);
+  }
+  function remove(user) { for (const e of Object.keys(KINDS)) { try { fs.unlinkSync(path.join(dir, user + '.' + e)); } catch {} } cache.set(user, ''); return ''; }
+  return { get, set, remove, DIR: dir };
+}
+
+module.exports = { cleanProfile, publicProfile, createAvatars, PALETTE_SIZE, AVATAR_MAX };
