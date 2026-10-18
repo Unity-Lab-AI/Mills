@@ -538,7 +538,8 @@ async function run() {
   // OpenAI-compatible API (/v1) with one key per person (bridge/openai.js), answered by the host's Claude (the fake one here).
   const v1 = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, text: await r.text(), ct: r.headers.get('content-type') || '' }; };
   const k0 = (await call('/api/apikey', U)).data;
-  const made = (await call('/api/apikey/rotate', U, { expiresDays: 7 })).data;
+  const madeRes = await call('/api/apikey/rotate', U, { expiresDays: 7 }), made = madeRes.data;
+  if (!made.key) console.log(`  (R111 diagnostics: key rotate answered ${madeRes.status} ${JSON.stringify(made).slice(0, 200)})`); // an intermittent "key none" once: record why
   const noKey = await v1('/v1/models'), badKey = await v1('/v1/models', 'mills_' + 'a'.repeat(48));
   const models = await v1('/v1/models', made.key);
   const chat1 = await v1('/v1/chat/completions', made.key, { model: 'claude-opus-5-5', messages: [{ role: 'system', content: 'be brief' }, { role: 'user', content: 'hi there' }, { role: 'assistant', content: 'hello' }, { role: 'user', content: 'ping-r111' }] });
@@ -1152,6 +1153,15 @@ async function run() {
     SEMVER.test(V.project) && !badSem.length && !unlisted.length && !ghosts.length && !notBumped.length && projectMoved && hasSection
     && ckV.version === V.project && ckV.versions && ckV.versions['bridge/server.js'] === V.modules['bridge/server.js'] && /id="aboutMills"/.test(html) && /function renderAbout\(/.test(html),
     `project ${V.project}${PV ? ' (production ' + PV.project + ')' : ' (production has no versions.json yet: baseline)'}, ${Object.keys(V.modules).length} modules; changed vs production: ${changedMods.join(' ') || 'none'}; not bumped: ${notBumped.join(', ') || 'none'}; unlisted: ${unlisted.join(' ') || 'none'}; extra: ${ghosts.join(' ') || 'none'}; bad: ${badSem.join(' ') || 'none'}; changelog section ${hasSection}`);
+  // Hub law 15: every change to any tracked file is logged; the newest changelog section is the current version.
+  const trackedFiles = execFileSync('git', ['ls-files'], { cwd: MILLS, encoding: 'utf8', windowsHide: true }).split('\n').map((s) => s.trim()).filter(Boolean).filter((f) => !['CHANGELOG.md', 'versions.json'].includes(f));
+  const changedFiles = PV ? trackedFiles.filter((f) => !same(f)) : [];
+  const topHead = (/^## (.+)$/m.exec(changelog) || [, ''])[1];
+  const topOk = new RegExp('^' + V.project.replace(/\./g, '\\.') + ' — \\d{4}-\\d{2}-\\d{2}$').test(topHead);
+  const logged = !changedFiles.length || (SEMVER.test(V.project) && SEMVER.test(PV.project) && semCmp(V.project, PV.project) > 0);
+  check('R133', 'law 15, the changelog: every tracked file that differs from the production checkout (code, page, README, tests, workflows …) comes with a higher project version than production\'s, and the newest CHANGELOG.md section is that version with its date',
+    topOk && logged && /^### (Added|Changed|Fixed|Removed|Security)$/m.test(changelog),
+    `top section "${topHead}", project ${V.project}${PV ? ' vs production ' + PV.project : ''}; changed vs production: ${changedFiles.slice(0, 12).join(' ') || 'none'}${changedFiles.length > 12 ? ' …' : ''}`);
   check('R124', '[static] themed scrollbars: thumb + hover built from the theme variables (accent + line), standard scrollbar-width / scrollbar-color plus the ::-webkit-scrollbar fallback, no hard-coded scrollbar colours',
     /--sb-thumb: color-mix\(in srgb, var\(--accent\)/.test(html) && /scrollbar-color: var\(--sb-thumb\) var\(--sb-track\)/.test(html) && /scrollbar-width: thin/.test(html)
     && /::-webkit-scrollbar-thumb \{ background: var\(--sb-thumb\)/.test(html) && /::-webkit-scrollbar-thumb:hover \{ background: var\(--sb-hover\)/.test(html) && !/scrollbar-color: #/.test(html));

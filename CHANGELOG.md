@@ -3,7 +3,22 @@
 Semantic versioning (hub law 14): `versions.json` holds the project's version and every module's.
 MAJOR = something stops working the old way (routes, stored files, message format, a removed feature),
 MINOR = something new that leaves the rest working, PATCH = a fix or polish. Each change bumps every module it
-touches and the project by its largest bump, and adds a section here.
+touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
+logged here in the same commit, newest first (hub law 15).
+
+## 1.0.1 — 2026-10-18
+
+### Added
+- Regression check R133: a change against production without a higher project version and its dated section
+  at the top of this file fails the suite.
+
+### Changed
+- Hub law 15: every change of any tracked file (code, page, README, docs, tests, workflows) is logged here in
+  the same commit, and moves the project version (PATCH at least). No module changed, so every module stays
+  at its version.
+- README: the Versions section names the changelog rule.
+- Regression check R111 (the OpenAI-compatible API) failed once with "key none" and passed on the rerun; it now
+  prints the hub's answer when making the key fails, so the next time shows the cause.
 
 ## 1.0.0 — 2026-10-18
 
