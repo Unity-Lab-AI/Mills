@@ -126,6 +126,11 @@ const GSET = (() => {
       it.append(el('small', '', sub || 'no roles'));
       const below = u !== me.username && myRank > rankOf(u);
       const acts = el('div', 'row');
+      const co = (s.roles || []).find((r) => r.builtin === 'coowner');
+      if (co && s.me.owner && u !== me.username && !(s.everyone ? false : u === s.owner)) { // the owner names co-owners
+        const isCo = ((s.memberRoles || {})[u] || []).includes(co.id), cur = (s.memberRoles || {})[u] || [];
+        acts.append(isCo ? armed('Remove co-owner', () => op('member/roles', { server: s.id, user: u, roles: cur.filter((id) => id !== co.id) })) : btn('Make co-owner', () => op('member/roles', { server: s.id, user: u, roles: [...cur, co.id] }), 'ghost'));
+      }
       if (can(s, 'MANAGE_ROLES') && (s.roles || []).length && (below || s.me.owner)) acts.append(btn('Roles', () => { o.focus = u; o.rolesFor = o.rolesFor === u ? '' : u; draw(); }, 'ghost'));
       if (can(s, 'MANAGE_NICKNAMES') && below) acts.append(btn('Nickname', async () => { const n = window.prompt('Server nickname for ' + nickOf(u) + ' (empty = none):', (s.nicks || {})[u] || ''); if (n !== null) op('member/nick', { server: s.id, user: u, nick: n }); }, 'ghost'));
       if (can(s, 'MODERATE_MEMBERS') && below) {
@@ -197,22 +202,24 @@ const GSET = (() => {
     if (edit) {
       const nm = input('', 'new role name'); nm.maxLength = 32;
       const col = input('#3ba55d', '', 'color');
-      const levels = Object.entries(D.templates).map(([k, t]) => btn('Add ' + t.name + ' level', () => op('role', { server: s.id, template: k }), 'ghost'));
-      bodyEl.append(sect('New role', row(nm, col, btn('Make role', () => op('role', { server: s.id, name: nm.value, color: col.value, perms: [] }))),
-        el('small', '', 'Or start from a permission level: Admin (administrator), Moderator (kick, ban, timeout, mute, delete + pin messages, audit log, nicknames, invites, slowmode bypass, announce), Member (pin messages).'), row(...levels)));
+      const tpl = sel([['', 'start empty'], ...Object.entries(D.templates).filter(([k]) => k !== 'coowner').map(([k, t]) => [k, 'start with ' + t.name + "'s permissions"])], '');
+      bodyEl.append(sect('New role', el('small', '', 'A custom role starts just above Member; move it between the built-in levels with Move up / down.'),
+        row(nm, col, tpl, btn('Make role', () => op('role', { server: s.id, name: nm.value, color: col.value, ...(tpl.value ? { template: tpl.value } : { perms: [] }) })))));
     }
+    bodyEl.append(sect('Built-in levels', el('small', '', 'Every server has these, highest first: Owner (one person) → Co-owner (owner rights under the owner: everything except deleting or handing over the server and managing other co-owners) → Super Admin (administrator) → Admin (manage server, roles, channels) → Super Moderator (ban, invites, announce, make channels) → Moderator (kick, timeout, mute in calls, delete + pin messages, audit log, nicknames, slowmode bypass) → Member (everyone who joins) → @everyone. Each level holds everything below it. They cannot be deleted or reordered; the owner can rename them and change their permissions (Co-owner and Super Admin always have every permission).')));
     for (const r of s.roles || []) {
       const mine = s.me.owner || s.me.rank > r.position;
       const nm = input(r.name); nm.maxLength = 32; nm.disabled = !edit || !mine;
       const col = input(r.color || '#99aab5', '', 'color'); col.disabled = !edit || !mine;
       const hoist = check('show its members separately', r.hoist); hoist.box.disabled = !edit || !mine;
-      const boxes = permBoxes(s, r.perms, { readOnly: !edit || !mine });
+      const fixed = r.builtin === 'coowner' || r.builtin === 'superadmin';
+      const boxes = permBoxes(s, r.perms, { readOnly: !edit || !mine || fixed });
       const who = s.members.filter((u) => ((s.memberRoles || {})[u] || []).includes(r.id)).map((u) => nick(s, u)).join(', ');
-      const box = sect(r.name + ' · position ' + r.position, el('small', '', who ? 'held by ' + who : 'nobody has it yet'), row(nm, col, hoist), el('div', 'gsetPerms'));
+      const box = sect(r.name + (r.builtin ? ' · built-in level' : ' · custom role') + ' · position ' + r.position, el('small', '', who ? 'held by ' + who : r.builtin === 'member' && s.everyone ? 'everyone' : 'nobody has it yet'), row(nm, col, hoist), el('div', 'gsetPerms'));
       box.querySelector('.gsetPerms').append(...boxes);
-      if (edit && mine) box.append(row(btn('Save', () => op('role/update', { server: s.id, role: r.id, name: nm.value, color: col.value, hoist: hoist.box.checked, perms: ticked(boxes) })),
-        btn('Move up', () => op('role/update', { server: s.id, role: r.id, position: r.position + 1 }), 'ghost'), btn('Move down', () => op('role/update', { server: s.id, role: r.id, position: Math.max(1, r.position - 1) }), 'ghost'),
-        armed('Delete role', () => op('role/delete', { server: s.id, role: r.id }))));
+      if (edit && mine) box.append(row(btn('Save', () => op('role/update', { server: s.id, role: r.id, name: nm.value, color: col.value, hoist: hoist.box.checked, ...(fixed ? {} : { perms: ticked(boxes) }) })),
+        ...(r.builtin ? [] : [btn('Move up', () => op('role/update', { server: s.id, role: r.id, position: r.position + 1 }), 'ghost'), btn('Move down', () => op('role/update', { server: s.id, role: r.id, position: Math.max(1, r.position - 1) }), 'ghost'),
+          armed('Delete role', () => op('role/delete', { server: s.id, role: r.id }))])));
       else if (!mine) box.append(el('small', '', 'Above or level with your own highest role: you cannot change it.'));
       bodyEl.append(box);
     }
@@ -250,7 +257,8 @@ const GSET = (() => {
   }
   function owner(s) {
     const to = el('select'); for (const u of s.members.filter((u) => u !== me.username)) { const op_ = el('option', '', nick(s, u)); op_.value = u; to.append(op_); }
-    bodyEl.append(sect('Hand the server over', el('small', '', 'The new owner gets every permission; you stay as a member.'), row(to, armed('Make them the owner', () => to.value && op('server/transfer', { server: s.id, user: to.value })))));
+    const stay = check('stay on as Co-owner', true);
+    bodyEl.append(sect('Hand the server over', el('small', '', 'The new owner gets every right, including deleting the server and naming co-owners. You stay a member, and by default a Co-owner.'), row(to, stay, armed('Make them the owner', () => to.value && op('server/transfer', { server: s.id, user: to.value, keepCoOwner: stay.box.checked })))));
     bodyEl.append(sect('Delete the server', el('small', '', 'Its channels and settings go for everyone. Messages already sent stay encrypted on the host but nobody can open the channels again.'),
       row(armed('Delete ' + s.name, async () => { if (await op('server/delete', { server: s.id })) { close(); GUILDS.state.server = 'mills'; selectConv('room'); } }))));
   }
@@ -357,10 +365,10 @@ const GSET = (() => {
     const desc = el('textarea'); desc.rows = 2; desc.maxLength = 300; desc.placeholder = 'what it is for (optional)';
     const who = input('', 'invite people now (usernames, optional)'); who.setAttribute('list', 'gsetPeople4');
     const dl = el('datalist'); dl.id = 'gsetPeople4'; for (const u of people().filter((u) => u !== me.username)) { const op_ = el('option'); op_.value = u; op_.label = nickOf(u); dl.append(op_); }
-    const levels = check('start with permission levels: Admin, Moderator, Member (roles you hand out; you are the owner either way)', true);
-    bodyEl.append(sect('Server', row(name), row(icon, color), desc), sect('People', el('small', '', 'They get an invitation to accept. You can also make invite links later.'), row(who, dl)), sect('Roles', levels),
+    bodyEl.append(sect('Server', row(name), row(icon, color), desc), sect('People', el('small', '', 'They get an invitation to accept and join as Members. You can also make invite links later.'), row(who, dl)),
+      sect('Roles', el('small', '', 'You are the owner. The server comes with the built-in levels Co-owner, Super Admin, Admin, Super Moderator, Moderator and Member, ready to hand out.')),
       row(btn('Make server', async () => {
-        const s = await op('server', { name: name.value, icon: icon.value, color: color.value, description: desc.value, members: who.value.split(/[,\s]+/).filter(Boolean), levels: levels.box.checked });
+        const s = await op('server', { name: name.value, icon: icon.value, color: color.value, description: desc.value, members: who.value.split(/[,\s]+/).filter(Boolean) });
         if (s && s.id) { close(); GUILDS.state.server = s.id; GUILDS.render(); selectConv('ch:' + s.id + '/general'); }
       })));
     name.focus();

@@ -77,8 +77,31 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     s.channels = (Array.isArray(s.channels) ? s.channels : []).map((ch, i) => normChannel(ch, i, s));
     if (!s.channels.some((c) => c.id === 'general')) s.channels.unshift(normChannel({ id: 'general', name: 'general', position: -1 }, 0, s));
     s.permsVersion = 2;
+    ensureBuiltins(s);
     return s;
   }
+  // The built-in ladder (bridge/guild-perms.js BUILTINS) on every server. Older servers: a same-named role becomes the
+  // built-in (keeping its id and holders), custom roles move up between Admin (40) and Super Admin (50) so they keep
+  // outranking ordinary members, and every non-temporary member gets Member.
+  const BUILTIN_POS = new Set(P.BUILTINS.map((b) => b.position));
+  const isBuiltinPos = (n) => BUILTIN_POS.has(n);
+  function ensureBuiltins(s) {
+    const fresh = s.rolesVersion !== 3;
+    for (const b of P.BUILTINS) {
+      let r = s.roles.find((x) => x.builtin === b.key) || (fresh && s.roles.find((x) => !x.builtin && String(x.name).toLowerCase() === b.name.toLowerCase()));
+      if (!r) { r = { id: 'b-' + b.key, name: b.name, color: b.color, perms: [...b.perms], hoist: true, mentionable: false }; s.roles.push(r); }
+      r.builtin = b.key; r.position = b.position;
+      if (b.key === 'coowner' || b.key === 'superadmin') r.perms = ['ADMINISTRATOR'];
+    }
+    if (fresh) {
+      s.roles.filter((r) => !r.builtin).sort((a, c) => a.position - c.position).forEach((r, i) => { r.position = Math.min(49, 41 + i); });
+      const mem = s.roles.find((r) => r.builtin === 'member');
+      if (!s.everyone) for (const u of s.members) if (!s.temp[u]) { const l = s.memberRoles[u] || []; if (!l.includes(mem.id)) s.memberRoles[u] = [mem.id, ...l]; }
+      s.rolesVersion = 3;
+    }
+  }
+  const memberRole = (s) => s.roles.find((r) => r.builtin === 'member');
+  const realRoles = (s, u) => (s.memberRoles[u] || []).filter((id) => { const r = s.roles.find((x) => x.id === id); return r && r.builtin !== 'member'; }); // roles beyond the automatic Member
   let mills = db.servers.find((s) => s.id === 'mills');
   if (!mills) { mills = { id: 'mills', name: 'Mills', everyone: true, channels: [{ id: 'general', name: 'general', topic: 'the whole team' }], createdBy: '' }; db.servers.unshift(mills); }
   mills.everyone = true;
@@ -140,7 +163,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     if (voice && !has('SEND_VOICE_MESSAGES')) return `You may not send voice clips in #${ch.name}.`;
     if (edit) return '';
     const wait = s.settings.wait || 0, j = s.joined[user];
-    if (wait && j && !(s.memberRoles[user] || []).length && Date.now() - j.at < wait * 60e3) return `New members of ${s.name} wait ${wait} minutes before posting (${Math.ceil((wait * 60e3 - (Date.now() - j.at)) / 60e3)} to go).`;
+    if (wait && j && !realRoles(s, user).length && Date.now() - j.at < wait * 60e3) return `New members of ${s.name} wait ${wait} minutes before posting (${Math.ceil((wait * 60e3 - (Date.now() - j.at)) / 60e3)} to go).`;
     if (ch.slowmode && !has('BYPASS_SLOWMODE') && !has('MANAGE_MESSAGES') && !has('MANAGE_CHANNELS')) {
       const last = lastPost.get(conv + '|' + user) || 0, left = ch.slowmode * 1000 - (Date.now() - last);
       if (left > 0) return `Slowmode in #${ch.name}: wait ${Math.ceil(left / 1000)} s.`;
@@ -224,6 +247,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     delete s.pending[who];
     s.joined[who] = { at: Date.now(), seq: getSeq() };
     if (temporary) s.temp[who] = Date.now();
+    else { const m = memberRole(s); if (m) s.memberRoles[who] = [...new Set([m.id, ...(s.memberRoles[who] || [])])]; } // everyone who joins is a Member
     audit(s, who, 'joined', how + (temporary ? ' (temporary)' : ''));
     sysSay(s, `${nameOf(who)} joined ${s.name}. Welcome!` + (s.settings.rulesChannel ? ` Read #${(s.channels.find((c) => c.id === s.settings.rulesChannel) || {}).name || 'rules'} first.` : ''), 'systemJoins');
     return s;
@@ -249,9 +273,11 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     const name = cleanName(b.name || (tpl && tpl.name), 32); if (!name) throw new Error('A role needs a name.');
     const perms = P.cleanPerms(b.perms !== undefined ? b.perms : tpl ? tpl.perms : []);
     if (!P.grantable(s, user, perms)) throw new Error('You can only give a role permissions you have yourself.');
-    const myRank = P.rank(s, user), top = Math.max(0, ...s.roles.map((r) => r.position));
-    const position = myRank === Infinity ? top + 1 : Math.max(1, Math.min(myRank - 1, top + 1));
-    if (!(myRank > position)) throw new Error('You can only make roles below your own.');
+    // a new custom role starts just above Member (like Discord: new roles go to the bottom), never on a built-in's spot
+    const myRank = P.rank(s, user);
+    let position = Math.min(myRank - 1, 11);
+    while (position > 0 && isBuiltinPos(position)) position--;
+    if (!(position >= 1) || !(myRank > position)) throw new Error('You can only make roles below your own.');
     const r = { id: crypto.randomBytes(4).toString('hex'), name, color: COLOR_RE.test(b.color || (tpl && tpl.color) || '') ? b.color || tpl.color : '', perms, position, hoist: b.hoist !== false, mentionable: !!b.mentionable };
     s.roles.push(r); return r;
   }
@@ -289,9 +315,8 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
       if (db.servers.filter((s) => s.owner === user).length >= SERVER_MAX_PER_USER) throw new Error('You own enough servers already.');
       let id = slug(name) || 's'; if (id === 'mills' || db.servers.some((s) => s.id === id)) id = (id.slice(0, 27) + '-' + crypto.randomBytes(2).toString('hex'));
       const s = normServer({ id, name, icon: cleanName(b.icon, 2), color: b.color, description: cleanName(b.description, 300), channels: [{ id: 'general', name: 'general', topic: '' }], members: [user], owner: user, createdBy: user, createdAt: new Date().toISOString(), permsVersion: 2 });
-      s.joined[user] = { at: Date.now(), seq: 0 };
-      if (b.levels) for (const t of ['member', 'moderator', 'admin']) newRole(s, user, { template: t }); // Admin above Moderator above Member
-      audit(s, user, 'created the server', b.levels ? 'with the Admin / Moderator / Member levels' : '');
+      s.joined[user] = { at: Date.now(), seq: 0 }; s.memberRoles[user] = [memberRole(s).id]; // the built-in levels came with normServer
+      audit(s, user, 'created the server');
       for (const u of userList(b.members)) if (u !== user) { s.pending[u] = { by: user, at: new Date().toISOString() }; audit(s, user, 'invited', nameOf(u)); }
       db.servers.push(s); save(); return s;
     },
@@ -326,7 +351,10 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     transferServer(user, b) {
       const s = owned(b.server, user); const to = String(b.user || '').toLowerCase();
       if (!inServer(s, to) || to === user) throw new Error('Hand it to another member of the server.');
-      s.owner = to; delete s.temp[to]; delete s.timeouts[to]; delete s.voiceMuted[to]; audit(s, user, 'handed ownership to', nameOf(to)); save(); return s;
+      const co = s.roles.find((r) => r.builtin === 'coowner');
+      s.owner = to; delete s.temp[to]; delete s.timeouts[to]; delete s.voiceMuted[to];
+      if (co) { s.memberRoles[to] = (s.memberRoles[to] || []).filter((id) => id !== co.id); if (b.keepCoOwner !== false) s.memberRoles[user] = [...new Set([...(s.memberRoles[user] || []), co.id])]; } // the old owner stays on as Co-owner
+      audit(s, user, 'handed ownership to', nameOf(to) + (co && b.keepCoOwner !== false ? ' (stays on as Co-owner)' : '')); save(); return s;
     },
     leaveServer(user, b) {
       const s = member(b.server, user); notEveryone(s, 'leaving');
@@ -390,7 +418,8 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
       for (const id of [...want.filter((x) => !before.includes(x)), ...before.filter((x) => !want.includes(x))]) { // only roles below you change hands
         const r = s.roles.find((x) => x.id === id); if (r && !P.roleBelow(s, user, r)) throw new Error(`The role "${r.name}" is not below your own.`);
       }
-      if (want.length) { s.memberRoles[who] = want; delete s.temp[who]; } else delete s.memberRoles[who]; // a role makes a temporary member permanent
+      if (want.length) s.memberRoles[who] = want; else delete s.memberRoles[who];
+      if (realRoles(s, who).length || want.includes((memberRole(s) || {}).id)) delete s.temp[who]; // any role (Member included, when handed out) makes a temporary member permanent
       audit(s, user, 'changed the roles of', nameOf(who) + ': ' + (want.map((id) => s.roles.find((r) => r.id === id).name).join(', ') || 'none'));
       save(); return true;
     },
@@ -403,16 +432,25 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
       if (b.color !== undefined) r.color = COLOR_RE.test(b.color || '') ? b.color : '';
       if (b.hoist !== undefined) r.hoist = !!b.hoist;
       if (b.mentionable !== undefined) r.mentionable = !!b.mentionable;
+      if (b.perms !== undefined && (r.builtin === 'coowner' || r.builtin === 'superadmin')) throw new Error(r.name + ' always has every permission.');
+      if (b.position !== undefined && r.builtin) throw new Error('The built-in levels keep their order; move your own roles between them.');
       if (b.perms !== undefined) {
         const perms = P.cleanPerms(b.perms), diff = [...perms.filter((p) => !r.perms.includes(p)), ...r.perms.filter((p) => !perms.includes(p))];
         if (!P.grantable(s, user, diff)) throw new Error('You can only change permissions you have yourself.');
         r.perms = perms;
       }
-      if (b.position !== undefined) { const pos = Math.max(1, Number(b.position) | 0); if (!(P.rank(s, user) > pos)) throw new Error('A role can only move below your own.'); r.position = pos; }
+      if (b.position !== undefined) {
+        let pos = Math.max(1, Math.min(P.COOWNER_POS - 1, Number(b.position) | 0)); const dir = pos > r.position ? 1 : -1;
+        while (isBuiltinPos(pos)) pos += dir; // hop over a built-in level
+        if (pos < 1 || pos >= P.COOWNER_POS) throw new Error('A custom role stays between Member and Co-owner.');
+        if (!(P.rank(s, user) > pos)) throw new Error('A role can only move below your own.');
+        r.position = pos;
+      }
       audit(s, user, 'changed the role', r.name); save(); return r;
     },
     deleteRole(user, b) {
       const s = need(b.server, user, 'MANAGE_ROLES'); const r = s.roles.find((x) => x.id === b.role); if (!r) throw new Error('No such role.');
+      if (r.builtin) throw new Error(r.name + ' is a built-in level; it stays (rename or re-permission it instead).');
       if (!P.roleBelow(s, user, r)) throw new Error('That role is not below your own.');
       s.roles.splice(s.roles.indexOf(r), 1);
       for (const u of Object.keys(s.memberRoles)) { s.memberRoles[u] = s.memberRoles[u].filter((id) => id !== r.id); if (!s.memberRoles[u].length) delete s.memberRoles[u]; }
@@ -559,7 +597,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     for (const s of db.servers) {
       for (const [u, at] of Object.entries(s.temp)) {
         if (Date.now() - at < TEMP_GRACE || isOnline(u)) continue;
-        if ((s.memberRoles[u] || []).length) { delete s.temp[u]; any = true; continue; }
+        if (realRoles(s, u).length) { delete s.temp[u]; any = true; continue; }
         removeFrom(s, u); audit(s, u, 'left', 'temporary membership ended (went offline)'); maybeDrop(s); any = true;
       }
       for (const [u, t] of Object.entries(s.timeouts)) if (Date.parse(t) <= Date.now()) { delete s.timeouts[u]; any = true; }
