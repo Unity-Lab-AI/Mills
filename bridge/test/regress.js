@@ -195,6 +195,11 @@ async function setup() {
   const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results` }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
+  // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
+  // a co-owner; the Mills server gets a named owner (t-admin, a hub admin already, so nothing else changes)
+  fs.mkdirSync(path.join(SCRATCH, 'Chat'), { recursive: true });
+  fs.writeFileSync(path.join(SCRATCH, 'Chat', 'guilds.json'), JSON.stringify({ servers: [{ id: 'seedtest', name: 'Seed Test', members: ['t-admin', 't-user'], owner: 't-user', createdBy: 't-user', channels: [{ id: 'general', name: 'general' }] }], groups: [] }));
+  fs.writeFileSync(path.join(SB, 'server-owners.json'), JSON.stringify({ servers: { seedtest: { owner: 't-admin', coOwners: ['t-user', 'nobody-here'] }, mills: { owner: 't-admin', coOwners: [] } } }));
   fs.writeFileSync(path.join(SB, 'forgejo.json'), JSON.stringify({ url: `http://127.0.0.1:${OLLAMA_PORT}`, token: 'fake-forgejo-token', repo: 'UnityAILab/Mills', board: 'team', pollMinutes: 0.01 }));
   const sp = (args) => spawnSync(process.execPath, [path.join(SB, 'set-password.js'), ...args], { cwd: SB, encoding: 'utf8' });
   sp(['pw-default-0001']);
@@ -1259,7 +1264,7 @@ async function run() {
   const gAfterLeave = (await call('/api/guilds', U)).data;
   const rmSv = await call('/api/guilds/server/delete', U, { server: gSid });
   check('R113', 'servers / channels / groups: default Mills server with #general = room; a person creates a server + channel + group; a channel message keeps key slots for members only (outsider gets nothing, cannot post, type, mark seen or join its call; unknown channel → 400); a group message reaches its two people only; adding a member makes new messages readable to them; @unity in a channel is answered in that channel; only the creator deletes a channel; leaving a group; deleting the server',
-    g0.servers.length === 1 && g0.servers[0].id === 'mills' && g0.servers[0].channels[0].conv === 'room' && gSv.status === 200 && !!gSid && chn.status === 200 && grp.status === 200 && !!grpConv
+    g0.servers.filter((s) => s.id !== 'seedtest').length === 1 && g0.servers[0].id === 'mills' && g0.servers[0].channels[0].conv === 'room' && gSv.status === 200 && !!gSid && chn.status === 200 && grp.status === 200 && !!grpConv
     && !aView.servers.some((s) => s.id === gSid) && aView.groups.some((g) => g.conv === grpConv)
     && chSent.status === 200 && chDisk.conv === chConv && Object.keys(chDisk.keys || {}).sort().join() === 't-user' && !chSeenByA
     && chOutsider.status === 400 && gBadConv.status === 400 && tyOutsider.status === 400 && tyMember.status === 200 && seenMember.status === 200 && seenOutsider.status === 400 && callOutsider.status === 400 && callMember.status === 200
@@ -1542,6 +1547,22 @@ async function run() {
     && /function shrink\(/.test(pj30) && /toDataURL\('image\/webp'/.test(pj30) && /'Remove picture'/.test(pj30) && /PROFILE\.avatarOf\(m\.via \|\| m\.from\)/.test(html) && /PROFILE\.avatarOf\(u\)/.test(html)
     && /^Avatars\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     `png ${avPng.status} seen ${avSeen.slice(0, 30)} file ${pngFile}, jpg ${avJpg.status} swapped ${swapped}, svg ${avSvg.status} fake ${avFake.status} big ${avBig.status} anon ${avAnon.status}, remove ${avRm.status} gone "${avGone}"`);
+
+  // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.
+  const seedV = (await gq(U)).servers || [], seedS = seedV.find((s) => s.id === 'seedtest') || {}, millsS = seedV.find((s) => s.id === 'mills') || {};
+  const seedCo = (seedS.roles || []).find((r) => r.builtin === 'coowner') || {};
+  const seedOwnerOk = seedS.owner === 't-admin' && ((seedS.memberRoles || {})['t-user'] || []).includes(seedCo.id) && !((seedS.memberRoles || {})['t-admin'] || []).includes(seedCo.id);
+  const seedApplied = (() => { try { const g = JSON.parse(fs.readFileSync(path.join(SCRATCH, 'Chat', 'guilds.json'), 'utf8')); return !!(g.seeds && g.seeds.seedtest && g.seeds.mills); } catch { return false; } })();
+  const seedAudit = ((sv23(await gq(A), 'seedtest') || {}).audit || []).some((a) => a.by === 'host' && /owner t-admin/.test(a.detail || ''));
+  const coCanEdit = await call('/api/guilds/server/update', U, { server: 'seedtest', description: 'co-owner edit r134' });
+  const coCannotDelete = await call('/api/guilds/server/delete', U, { server: 'seedtest' });
+  const millsOwnerShown = millsS.owner === 't-admin';
+  const gs34 = fs.readFileSync(path.join(MILLS, 'web', 'guild-settings.js'), 'utf8'), gu34 = fs.readFileSync(path.join(MILLS, 'bridge', 'guilds.js'), 'utf8');
+  await call('/api/guilds/server/delete', A, { server: 'seedtest' });
+  check('R134', 'host-set owners: bridge/server-owners.json (gitignored) gives a server its owner and co-owners at start, once (remembered in guilds.json, so later Server Settings changes stick), skipping unknown accounts, with an audit line by "host"; the Mills server can have a named owner (hub admins keep owner rights), shown to everyone, and can be handed on but never deleted; a seeded co-owner edits settings but cannot delete',
+    seedOwnerOk && seedApplied && seedAudit && coCanEdit.status === 200 && coCannotDelete.status === 400 && millsOwnerShown
+    && /db\.seeds\[id\] === key/.test(gu34) && /if \(s\.everyone\) return; \/\/ the Mills server is everyone's/.test(gs34) && /^bridge\/server-owners\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
+    `seedtest owner ${seedS.owner} co ${JSON.stringify((seedS.memberRoles || {})['t-user'])}, applied ${seedApplied}, audit ${seedAudit}, co edit ${coCanEdit.status} delete ${coCannotDelete.status}, mills owner "${millsS.owner}"`);
 
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });

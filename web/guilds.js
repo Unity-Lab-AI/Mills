@@ -161,7 +161,7 @@ const GUILDS = (() => {
       const nick = (s && s.nicks && s.nicks[u]) || nickOf(u);
       const nm = el('span', 'mName', nick + (u === me.username ? ' (you)' : '')); nm.style.color = (s && roleColor(s, u)) || colorOf(u);
       r.append(dot, nm);
-      if (s && !s.everyone && s.owner === u) { const o = el('span', 'botTag', 'OWNER'); o.prepend(ic('crown')); o.title = 'owns ' + s.name; r.append(o); }
+      if (s && s.owner && s.owner === u) { const o = el('span', 'botTag', 'OWNER'); o.prepend(ic('crown')); o.title = 'owns ' + s.name; r.append(o); }
       else if (s) { const co = (s.roles || []).find((x) => x.builtin === 'coowner'); if (co && ((s.memberRoles || {})[u] || []).includes(co.id)) r.append(el('span', 'botTag', 'CO-OWNER')); }
       if (s && (s.temp || []).includes(u)) { const t = el('span', 'botTag', 'TEMP'); r.append(t); }
       if (s && s.timeouts && s.timeouts[u]) { const t = el('span', 'botTag', 'TIMEOUT'); t.title = 'timed out until ' + new Date(s.timeouts[u]).toLocaleString(); r.append(t); }
