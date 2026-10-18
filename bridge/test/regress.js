@@ -182,6 +182,7 @@ async function setup() {
   }
   fs.copyFileSync(path.join(__dirname, 'fake-claude.js'), path.join(SB, 'test', 'fake-claude.js'));
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
+  for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
   PORT = await freePort(7799);
   H = `http://127.0.0.1:${PORT}`;
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
@@ -1129,6 +1130,28 @@ async function run() {
     !notCached.length && !appCssHex.length && /function renderAppUser\(/.test(appJs131) && /openSettings\(\)/.test(appJs131) && /signOut\(\)/.test(appJs131) && /renderAppUser\(\)/.test(fs.readFileSync(path.join(MILLS, 'web', 'guilds.js'), 'utf8')) && /renderAppUser\(\); \/\/ the app's user panel/.test(html)
     && /Mills Chat/.test(fs.readFileSync(path.join(MILLS, 'README.md'), 'utf8')) && /user panel/.test(fs.readFileSync(path.join(MILLS, 'README.md'), 'utf8')),
     `page files ${pageFiles.join(' ')}; not in the shell: ${notCached.join(' ') || 'none'}; app-mode hex: ${appCssHex.join(' ') || 'none'}`);
+  // Hub law 14: semver for every module and the project; a module changed against production moves up.
+  const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[\w.]+)?$/;
+  const semCmp = (a, b) => { const x = SEMVER.exec(a), y = SEMVER.exec(b); for (let i = 1; i <= 3; i++) { const d = Number(x[i]) - Number(y[i]); if (d) return d; } return 0; };
+  const readVersions = (root) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'versions.json'), 'utf8')); } catch { return null; } };
+  const V = readVersions(MILLS) || { project: '', modules: {} }, prodRoot = path.join(PROD, '..'), PV = prodRoot !== MILLS ? readVersions(prodRoot) : null;
+  const modsOnDisk = [...fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => 'bridge/' + f), ...fs.readdirSync(path.join(MILLS, 'web')).filter((f) => /\.(js|css)$/.test(f) || f === 'index.html').map((f) => 'web/' + f)];
+  const unlisted = modsOnDisk.filter((m) => !(m in V.modules)), ghosts = Object.keys(V.modules).filter((m) => !modsOnDisk.includes(m));
+  const badSem = [V.project, ...Object.values(V.modules)].filter((s) => !SEMVER.test(String(s)));
+  const same = (rel) => { try { return fs.readFileSync(path.join(MILLS, rel)).equals(fs.readFileSync(path.join(prodRoot, rel))); } catch { return false; } };
+  const notBumped = [], changedMods = [];
+  if (PV && PV.modules) for (const m of Object.keys(V.modules)) {
+    if (!(m in PV.modules)) { changedMods.push(m); continue; } // new module (starts at 1.0.0)
+    if (!same(m)) { changedMods.push(m); if (!(SEMVER.test(V.modules[m]) && SEMVER.test(PV.modules[m]) && semCmp(V.modules[m], PV.modules[m]) > 0)) notBumped.push(`${m} ${PV.modules[m]}→${V.modules[m]}`); }
+  }
+  const projectMoved = !PV || (changedMods.length ? SEMVER.test(V.project) && SEMVER.test(PV.project) && semCmp(V.project, PV.project) > 0 : true);
+  const changelog = fs.existsSync(path.join(MILLS, 'CHANGELOG.md')) ? fs.readFileSync(path.join(MILLS, 'CHANGELOG.md'), 'utf8') : '';
+  const hasSection = new RegExp('^## ' + V.project.replace(/\./g, '\\.') + ' — \\d{4}-\\d{2}-\\d{2}$', 'm').test(changelog);
+  const ckV = (await call('/api/check', U)).data;
+  check('R132', 'law 14, semver: versions.json has a valid project version and one per module (every bridge/*.js, web/*.js, web/*.css, web/index.html; none missing, none extra); every module that differs from the production checkout has a higher version there, and the project moved up when anything did; CHANGELOG.md has a dated section for the project version; /api/check and Settings show it',
+    SEMVER.test(V.project) && !badSem.length && !unlisted.length && !ghosts.length && !notBumped.length && projectMoved && hasSection
+    && ckV.version === V.project && ckV.versions && ckV.versions['bridge/server.js'] === V.modules['bridge/server.js'] && /id="aboutMills"/.test(html) && /function renderAbout\(/.test(html),
+    `project ${V.project}${PV ? ' (production ' + PV.project + ')' : ' (production has no versions.json yet: baseline)'}, ${Object.keys(V.modules).length} modules; changed vs production: ${changedMods.join(' ') || 'none'}; not bumped: ${notBumped.join(', ') || 'none'}; unlisted: ${unlisted.join(' ') || 'none'}; extra: ${ghosts.join(' ') || 'none'}; bad: ${badSem.join(' ') || 'none'}; changelog section ${hasSection}`);
   check('R124', '[static] themed scrollbars: thumb + hover built from the theme variables (accent + line), standard scrollbar-width / scrollbar-color plus the ::-webkit-scrollbar fallback, no hard-coded scrollbar colours',
     /--sb-thumb: color-mix\(in srgb, var\(--accent\)/.test(html) && /scrollbar-color: var\(--sb-thumb\) var\(--sb-track\)/.test(html) && /scrollbar-width: thin/.test(html)
     && /::-webkit-scrollbar-thumb \{ background: var\(--sb-thumb\)/.test(html) && /::-webkit-scrollbar-thumb:hover \{ background: var\(--sb-hover\)/.test(html) && !/scrollbar-color: #/.test(html));

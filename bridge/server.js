@@ -47,6 +47,8 @@ function workDir(acct) {
   if (workspaceOf(acct) === 'shared') return { dir: MILLS_DIR, branch: '' };
   return worktree.ensure(acct.username);
 }
+// semver (hub law 14): the project's and every module's version, read once at start (a restart picks up a new one)
+const VERSIONS = (() => { try { const v = JSON.parse(fs.readFileSync(path.join(MILLS_DIR, 'versions.json'), 'utf8')); return { project: String(v.project || '0.0.0'), modules: v.modules || {} }; } catch { return { project: '0.0.0', modules: {} }; } })();
 const hubLaws = () => { try { return fs.readFileSync(path.join(MILLS_DIR, 'CLAUDE.md'), 'utf8'); } catch { return ''; } };
 function systemPrompt(acct, wd) {
   const name = acct.display;
@@ -717,7 +719,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
         models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct), prefs: acct.state.prefs || {}, share: shares.convOf(acct.username),
-        provider: acct.state.provider || 'host', providers: providers.list(acct.username) });
+        provider: acct.state.provider || 'host', providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules });
     }
     // ----- AI providers: everyone manages their own; the host's Claude is always there -----
     if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });

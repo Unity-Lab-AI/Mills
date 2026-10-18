@@ -4,6 +4,8 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
+!/versions.json
+!/CHANGELOG.md
 !/web/
 !/bridge/
 !/.github/

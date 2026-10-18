@@ -888,6 +888,8 @@
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
       <label>Theme (follows you to every browser you sign in on)<select id="setTheme"></select></label>
       <div><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
+      <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
+      <details id="aboutMills" class="setSection"><summary></summary><div id="aboutModules"></div></details>
      </div>
      <div data-setpane="connections" hidden>
       <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to Mills: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
@@ -3333,6 +3335,13 @@ function openSettings() {
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
   renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo();
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
+  renderAbout();
+}
+function renderAbout() { // Settings → App settings: "Mills x.y.z" (+ every module's version when opened)
+  const sum = $('aboutMills').querySelector('summary'), box = $('aboutModules');
+  sum.textContent = 'Mills ' + (me.version || 'unknown') + (APP_MODE ? ' · Mills Chat app' : '') + ' · module versions';
+  box.textContent = '';
+  for (const [m, v] of Object.entries(me.versions || {})) { const r = document.createElement('div'); r.className = 'row'; const a = document.createElement('code'); a.textContent = m; const b = document.createElement('small'); b.textContent = v; r.append(a, b); box.append(r); }
 }
 // ── Settings → My Forgejo: this person's own Forgejo token (the hub checks it and never sends it back) ──
 async function renderForgejo() {
