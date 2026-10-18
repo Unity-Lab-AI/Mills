@@ -167,7 +167,7 @@ const GUILDS = (() => {
       if (s && s.timeouts && s.timeouts[u]) { const t = el('span', 'botTag', 'TIMEOUT'); t.title = 'timed out until ' + new Date(s.timeouts[u]).toLocaleString(); r.append(t); }
       if (s && (s.voiceMuted || []).includes(u)) { const t = el('span', 'botTag', 'MUTED'); t.title = 'muted in calls by a moderator'; r.append(t); }
       r.title = statusOf(u).text + (nick !== nickOf(u) ? ' · ' + nickOf(u) : '');
-      r.onclick = () => { if (u !== me.username) selectConv('dm:' + [me.username, u].sort().join('|')); };
+      r.dataset.profile = '1'; r.onclick = (ev) => PROFILE.show(u, ev); // their profile card (it has Message)
       if (s) r.oncontextmenu = (e) => { e.preventDefault(); GSET.openServer(s.id, 'members', u); };
       return r;
     };

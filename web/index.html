@@ -432,6 +432,22 @@
   .gsetPreview { display: flex; align-items: center; gap: .6rem; margin: .5rem 0; }
   .gsetPreview .srv { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; font-weight: 800; color: #fff; }
   .gsetIcon { width: 6em; }
+  /* Settings tabs + profiles (web/profile.js) */
+  .setTabs { display: flex; gap: .25rem; padding: 0 1rem .5rem; border-bottom: 1px solid var(--line); }
+  .setTabs button.on { background: var(--accent); color: var(--on-accent); }
+  #profileCard { position: fixed; z-index: 46; }
+  .pCard { width: 300px; max-width: 94vw; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 34px rgba(0,0,0,.45); position: relative; }
+  .pBanner { height: 64px; }
+  .pAvatar { position: absolute; top: 30px; left: 14px; width: 64px; height: 64px; border-radius: 50%; border: 4px solid var(--panel); display: grid; place-items: center; font-weight: 800; font-size: 1.2rem; color: #fff; }
+  .pBody { padding: 2.2rem .9rem .8rem; display: flex; flex-direction: column; gap: .3rem; }
+  .pName { font-size: 1.1rem; } .pSub, .pFacts { color: var(--muted); font-size: .82rem; }
+  .pStatus { font-style: italic; } .pBio { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9rem; }
+  .pHead { font-size: .7rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: .3rem; }
+  .pLinks, .pRoles { display: flex; flex-wrap: wrap; gap: .3rem .6rem; font-size: .85rem; }
+  .pLinkInputs { display: flex; flex-direction: column; gap: .25rem; }
+  #profilePreview { display: flex; justify-content: center; margin-bottom: .6rem; }
+  #profilePreview .pCard { box-shadow: none; }
+  .pLink { cursor: pointer; } .pLink:hover { text-decoration: underline; }
   .roleChip { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 0 .55rem; font-size: .8rem; font-weight: 600; }
   .mention.role { font-weight: 700; }
   .gsetPerms .cat { grid-column: 1 / -1; font-weight: 700; color: var(--muted); margin-top: .3rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
@@ -804,10 +820,18 @@
 <div id="settings" class="modal" hidden>
   <div class="box">
     <div class="bar"><span>Settings</span><button class="ghost" id="closeSettings">Close</button></div>
+    <!-- three tabs (web/profile.js): Profile = what others see (user settings); App = how Mills behaves for you
+         (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons -->
+    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile">Profile</button><button type="button" class="ghost" data-settab="app">App settings</button><button type="button" class="ghost" data-settab="connections">Connections</button></div>
     <div class="setBody">
+     <div data-setpane="profile">
+      <div id="profilePreview"></div>
       <label>Nickname (shown with your messages; others can @ you by it)
         <input id="setNick" maxlength="32" placeholder="leave empty to use your account name"></label>
-      <div>Your colour (same for everyone, adjusts to each theme)<div class="swatches" id="setColors"></div></div>
+      <div>Your colour (same for everyone, adjusts to each theme; your name and, by default, your profile follow it)<div class="swatches" id="setColors"></div></div>
+      <div id="profileBox"></div>
+     </div>
+     <div data-setpane="app" hidden>
       <label class="chk"><input type="checkbox" id="setSound"> Sound when a chat message arrives</label>
       <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
@@ -831,9 +855,10 @@
       <label>Auto-save Claude sessions to Past sessions<select id="setAutosave">
         <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
-      <label>Theme (this browser)<select id="setTheme"></select></label>
-      <div><button type="button" id="saveSettings">Save</button> <span id="setMsg" class="status"></span></div>
-      <hr>
+      <label>Theme (follows you to every browser you sign in on)<select id="setTheme"></select></label>
+      <div><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
+     </div>
+     <div data-setpane="connections" hidden>
       <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to Mills: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
         <div id="apiBox" class="apiBox"></div></div>
       <div class="setSection"><b>Mills Chat app</b> — the chat side of Mills as its own installed app on Windows or Linux (servers, channels, groups, private messages, calls, Unity).
@@ -842,9 +867,12 @@
         <div id="provBox" class="provBox"></div></div>
       <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
         <div id="fjBox" class="apiBox"></div></div>
+     </div>
     </div>
   </div>
 </div>
+<!-- a person's profile card (web/profile.js), opened by clicking a name -->
+<div id="profileCard" hidden></div>
 
 <div id="board" class="screen" hidden>
   <header>
@@ -1454,6 +1482,9 @@ $('login').addEventListener('submit', async (e) => {
 });
 async function enter() {
   me = await json('/api/check');
+  // app settings follow the account: its saved theme wins over this browser's; an account without one adopts the browser's
+  if (me.prefs && typeof me.prefs.theme === 'string') { if (me.prefs.theme !== (store.get('mills.theme') || '')) { const m = me; me = null; applyTheme(m.prefs.theme); me = m; } } // (no chat re-render yet: it is drawn next)
+  else if (store.get('mills.theme')) saveThemeChoice(store.get('mills.theme'));
   USER_NAME = me.display;
   document.title = `Mills · ${me.display}`;
   $('brand').textContent = `Mills · ${me.display}`;
@@ -2074,7 +2105,8 @@ $('closeArchive').onclick = () => { $('archive').hidden = true; };
 $('archive').onclick = (e) => { if (e.target.id === 'archive') $('archive').hidden = true; };
 $('convTitle').onclick = () => { if (archiveId) renameConversation(archiveId, archiveTitle); else saveToArchive(false); };
 
-// ── Theme picker ──
+// ── Theme picker ── (the theme is an app setting on the account: it follows the person to every browser)
+function saveThemeChoice(name) { if (me) json('/api/prefs', { method: 'POST', body: JSON.stringify({ theme: name || '' }) }).then((d) => { me.prefs = d.prefs; }).catch(() => {}); }
 function buildThemeMenu() {
   const menu = $('themeMenu'), current = store.get('mills.theme') || '';
   menu.innerHTML = '';
@@ -2084,7 +2116,7 @@ function buildThemeMenu() {
     const sw = document.createElement('i');
     sw.style.background = t ? `linear-gradient(90deg, ${t.bg} 50%, ${t.accent} 50%)` : 'linear-gradient(90deg, #0f1115 50%, #7c9cff 50%)';
     b.append(sw, label);
-    b.onclick = () => { applyTheme(name); menu.hidden = true; };
+    b.onclick = () => { applyTheme(name); menu.hidden = true; saveThemeChoice(name); };
     menu.append(b);
   };
   add('', 'Mills default', null);
@@ -2541,6 +2573,7 @@ function renderMsg(rec, bulk) {
   el.dataset.seq = m.seq; el.style.borderLeftColor = authorColor(m); el.textContent = '';
   const head = document.createElement('small');
   const who = document.createElement('b'); who.textContent = authorOf(m); who.style.color = authorColor(m); who.title = m.as ? 'Posted by ' + nickOf(m.via || m.from) + '\'s Claude from a Work session' : '@' + m.from;
+  if (!(memberOf(m.from) || {}).agent || m.via) { who.dataset.profile = '1'; who.classList.add('pLink'); who.onclick = (ev) => { ev.stopPropagation(); PROFILE.show(m.via || m.from, ev); }; } // the name opens their profile card (Unity has none)
   if (m.as || (memberOf(m.from) || {}).agent) { const tag = document.createElement('span'); tag.className = 'botTag'; tag.textContent = 'BOT'; who.append(tag); } // Unity and the team's Claudes are bots here
   const dt = new Date(m.ts), when = document.createElement('time');
   when.dateTime = m.ts; when.textContent = fmtTime(dt); when.title = dt.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
@@ -3266,6 +3299,7 @@ function openSettings() {
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
   renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo();
+  PROFILE.open(); // the Profile tab (web/profile.js) opens first
 }
 // ── Settings → My Forgejo: this person's own Forgejo token (the hub checks it and never sends it back) ──
 async function renderForgejo() {
@@ -3405,6 +3439,7 @@ $('saveSettings').onclick = async () => {
       clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },
       audio: { noise: $('audNoise').checked, echo: $('audEcho').checked, agc: $('audAgc').checked },
       call: { volume: Number($('callVolume').value), quality: $('callQuality').value },
+      theme: $('setTheme').value,
     }) });
     document.querySelectorAll('#callTiles .tile:not(.self)').forEach(applyPersonAudio);
     if (call.mic) call.mic.applyConstraints(audioConstraints()).catch(() => {}); // new noise / echo settings apply to the live call too
@@ -3630,6 +3665,8 @@ connect().then((ok) => { if (ok && token) enter().catch(() => signOut()); });
 <script src="guilds.js"></script>
 <!-- Server Settings, join / invitations, channel + group dialogs: web/guild-settings.js -->
 <script src="guild-settings.js"></script>
+<!-- profiles: Settings tabs (Profile / App settings / Connections), the profile editor and profile cards: web/profile.js -->
+<script src="profile.js"></script>
 <script src="notes.js"></script>
 <script src="app.js"></script>
 </body>

@@ -282,7 +282,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['calls.js', 'guilds.js', 'guild-settings.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -1441,6 +1441,30 @@ async function run() {
     && /const roleColor = \(s, u\) => \{ const r = rolesOfUser\(s, u\)\.find/.test(gj27) && /\.sort\(\(a, b\) => b\.position - a\.position\)/.test(gj27) && /GUILDS\.colorIn\(convOfMsg\(m\)/.test(html) && /GUILDS\.roleByHandle\(currentConv, h\)/.test(html) && /GUILDS\.mentionsMyRole\(c, rec\.text\)/.test(html) && /mentionableRoles\(currentConv\)/.test(html)
     && /'Your roles'/.test(gs27) && /member\/selfrole/.test(gs27),
     `multi ${multi.status} ${aRoles.length} roles, admin makes ${adminMakes.status} plain ${plainMakes.status}, order blue ${blueNow.position} red ${redNow.position}, mentionable ${redNow.mentionable}, self ${self27 && self27.selfAssign} bad ${selfBad.status} builtin ${selfBuiltin.status} pick ${pickOn.status}/${pickNot.status} off ${pickOff.status}`);
+
+  // Profiles (user settings everyone sees) kept apart from app settings (private, follow the person to every browser).
+  const pf0 = (await call('/api/profile', U)).data, prefs0 = (await call('/api/prefs', U)).data.prefs || {};
+  const pfSave = await call('/api/profile', U, { nick: prefs0.nick || '', color: prefs0.color ?? null, profile: { bio: 'hello r128\nsecond line ' + 'x'.repeat(400), pronouns: 'they/them', status: 'testing r128', location: 'Somewhere', links: ['https://example.org/r128'], accent: 3, timezone: 'Europe/Berlin' } });
+  const pfBadLink = await call('/api/profile', U, { profile: { links: ['http://plain.example/r128'] } });
+  const pfBadTz = await call('/api/profile', U, { profile: { timezone: 'Mars/Olympus' } });
+  const seenByA28 = (((await call('/api/room/members', A)).data.members || []).find((m) => m.username === 't-user') || {});
+  const pp = seenByA28.profile || {};
+  const appSave = await call('/api/prefs', U, { theme: 'dracula', sound: { on: !((prefs0.sound || {}).on) } });
+  const appBad = (await call('/api/prefs', U, { theme: '<script>' })).data.prefs || {};
+  const prefsAfter = (await call('/api/prefs', U)).data.prefs || {};
+  const pfAgain = await call('/api/profile', U, { profile: { status: 'still r128' } });
+  const prefsAfter2 = (await call('/api/prefs', U)).data.prefs || {};
+  const leak28 = /"(sound|tts|theme|audio|call|clips|autosave)"/.test(JSON.stringify(seenByA28));
+  await call('/api/prefs', U, { theme: prefs0.theme || '', sound: { on: !!(prefs0.sound || {}).on } });
+  await call('/api/profile', U, { profile: { bio: '', pronouns: '', status: '', location: '', links: [], accent: null, timezone: '' } });
+  const pj28 = fs.readFileSync(path.join(MILLS, 'web', 'profile.js'), 'utf8');
+  check('R128', 'profiles: a person sets bio (300 max), pronouns, status, location, https links, banner colour (default: follows their colour) and their local time; everyone signed in sees it in the member list; bad links / time zones refused; app settings (sounds, theme …) stay private, are saved separately (theme on the account, follows them to every browser) and a profile save never touches them; [static] Settings tabs Profile / App settings / Connections, live preview, profile card from a name with Message, the theme saved with the account',
+    pf0.username === 't-user' && pf0.profile && pf0.profile.accent === null && pfSave.status === 200 && pfBadLink.status === 400 && pfBadTz.status === 400
+    && pp.bio && pp.bio.length === 300 && pp.bio.startsWith('hello r128\nsecond line') && pp.pronouns === 'they/them' && pp.status === 'testing r128' && pp.links.join() === 'https://example.org/r128' && pp.accent === 3 && pp.timezone === 'Europe/Berlin'
+    && appSave.status === 200 && appSave.data.prefs.theme === 'dracula' && appBad.theme === '' && prefsAfter.sound.on === !((prefs0.sound || {}).on) && pfAgain.status === 200 && prefsAfter2.theme === '' && prefsAfter2.sound.on === prefsAfter.sound.on && !leak28
+    && /data-settab="profile"/.test(html) && /data-settab="app"/.test(html) && /data-settab="connections"/.test(html) && /data-setpane="connections"/.test(html) && /<script src="profile\.js">/.test(html)
+    && /function cardFor\(/.test(pj28) && /'follow my colour'/.test(pj28) && /'Message'/.test(pj28) && /PROFILE\.show\(m\.via \|\| m\.from, ev\)/.test(html) && /saveThemeChoice\(/.test(html) && /theme: \$\('setTheme'\)\.value/.test(html),
+    `get ${JSON.stringify(pf0.profile)}, save ${pfSave.status} badLink ${pfBadLink.status} badTz ${pfBadTz.status}, seen ${JSON.stringify(pp).slice(0, 160)}, app ${appSave.status} ${appSave.data.prefs && appSave.data.prefs.theme} bad "${appBad.theme}", after profile save theme "${prefsAfter2.theme}" sound ${prefsAfter2.sound && prefsAfter2.sound.on}, leak ${leak28}`);
 
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });
