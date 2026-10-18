@@ -2,6 +2,8 @@
 
 *Formerly **Mills** (renamed in 1.3.0). Stored names stay as they were so nothing breaks: the default account `mills`, the everyone-server's id `mills`, conversation ids like `ch:mills/…`, the `MILLS_*` settings, the `X-Mills-*` internal headers, and on the first host the `Mills` folder, `Mills-worktrees` and the GitHub repo `Unity-Lab-AI/Mills`. The web address below changes once the new repo is live.*
 
+**Repos:** the new home is **https://git.unityailab.com/GFourteen/VibeRoller** (Forgejo). Every release is also pushed to the original Forgejo repo `GFourteen/Mills` and to GitHub `Unity-Lab-AI/Mills`, which still publishes the web page through GitHub Pages. The go-live script pushes `develop` and `main` to every remote the checkout has.
+
 A private workspace for a small team: talk to Claude in the browser and have it build and edit files on your own PC, and talk to each other in an end-to-end encrypted chat room. There's nothing to install on your side.
 
 **Web app:** https://unity-lab-ai.github.io/Mills/ (deployed from `main` by GitHub Actions). Everyone uses the same address and signs in with **username + password**.
@@ -182,6 +184,21 @@ Gee's Claude Code login on the host answers everything by default, and nothing b
 
 - **My AIs** (Settings). Anyone can hook up an AI of their own and keep it private or share it with the team: an **Anthropic API key**, a second **Claude Code login** on the host (the host runs `claude login` once with `CLAUDE_CONFIG_DIR` set to a folder of their own and enters that folder here), or any **OpenAI-compatible endpoint** (base URL + key + model ids). Shared ones appear for everyone. Claude-capable providers show up in Work's model dropdown as their own group, and a Work run then runs `claude` under that login / key (your usage, not the host's, and the shared 5h / 7d bars ignore it). An OpenAI-compatible provider cannot run Work (Claude Code needs Claude) but serves the API below. Providers live in `bridge/providers.json` on the host (gitignored, secrets inside; never delete it).
 - **API access** (Settings). Every person can make their own key (`mills_…`, shown once, kept as a sha256 hash) for the hub's **OpenAI-compatible API**: base URL = the hub's address + `/v1` (shown in Settings), `GET /v1/models`, `POST /v1/chat/completions` with or without `stream`. Point any OpenAI-speaking harness at it and it talks to VibeRoller; answers come from the provider you pick there (the host's Claude by default, or one of your / the team's AIs), and an optional model. **Rotation:** rotate any time (the old key dies at once), revoke, or set the key to expire after 1 / 7 / 30 / 90 days so it must be rotated. One request at a time per key; a request is a stateless `claude -p` run in an empty folder (`VibeRoller/Api/sandbox`, gitignored) with no tools, so a key can never touch files or the team's data. A regression check drives the whole path against a fake Claude and a fake endpoint.
+
+## On a server (the lab box), with the AI from home
+
+`deploy/README.md` is the hand-off for moving the hub onto the lab server, where every push to `main` on Forgejo then deploys it. It covers the workflow, the locked-down systemd service, the nginx site and the data move.
+
+- **Server mode.** `bridge/config.local.json` (gitignored) is laid over `bridge/config.json` key by key, so a server keeps its own settings and its git checkout stays clean. `deploy/config.local.example.json` is the server's version:
+  - `publicUrl` is the fixed address. The page the hub serves learns it, and that origin may call the API.
+  - `tunnel: false` means no Cloudflare tunnel.
+  - `behindProxy: true` means a request forwarded by nginx counts as coming from outside, so anonymous status stays minimal and the client's address comes from `X-Real-IP`.
+- **AI nodes: the AI from home.** A machine lends its local engines to a hub running elsewhere: Unity's Ollama brain, plus the image, voice and speech engines.
+  - **How it connects.** `node bridge/ai-node.js` runs on that machine, configured by the gitignored `bridge/ai-node.json` (hub address, node name, secret, and its own engine addresses). It connects **out** to the hub over HTTPS, so no port opens at home.
+  - **What the hub can reach.** The hub sends a job naming an engine and a path, never an address, so it can only reach the engines the node chose to lend.
+  - **Hub settings.** The hub accepts the node with `"aiNodes": { "<name>": "<secret>" }` and sends Unity's engine calls through it with `"assistant": { "via": "node" }`, both in its `config.local.json`.
+  - **Pausing.** The knife on the lending machine (`ai-host.off`) pauses the node, so the hub sees it offline. The heart brings it back. Answers come back whole, so Unity's words appear at the end rather than word by word.
+  - **What it doesn't cover.** Work runs need Claude Code and the files, so on the server they run there on Gee's Claude login. They don't go through a node.
 
 ## Versions
 

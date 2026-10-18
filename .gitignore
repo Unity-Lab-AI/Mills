@@ -6,6 +6,8 @@
 !/README.md
 !/versions.json
 !/CHANGELOG.md
+!/deploy/
+!/.forgejo/
 !/web/
 !/bridge/
 !/.github/
@@ -43,6 +45,9 @@ bridge/providers.json
 Api/
 # Forgejo issue mirroring: the host's token + repo (never committed); team notes live on the host only
 bridge/forgejo.json
+# this machine's own hub settings, laid over config.json (deploy/config.local.example.json)
+bridge/config.local.json
+bridge/ai-node.json
 # the host's AI on/off switch + the host tools built on that machine (bridge/host-tools/build.cmd)
 bridge/ai-host.off
 bridge/host-tools/*.exe

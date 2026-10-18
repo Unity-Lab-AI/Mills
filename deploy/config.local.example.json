@@ -1,0 +1,10 @@
+{
+  "_": "Copy to bridge/config.local.json on the server (gitignored). It is laid over bridge/config.json key by key.",
+  "port": 7777,
+  "tunnel": false,
+  "publicUrl": "https://viberoller.git.unityailab.com",
+  "behindProxy": true,
+  "allowedOrigins": ["https://unity-lab-ai.github.io"],
+  "worktreeRoot": "/srv/viberoller/worktrees",
+  "forgejoUrl": "https://git.unityailab.com"
+}

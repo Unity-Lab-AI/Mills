@@ -1,0 +1,50 @@
+# VibeRoller hub on the lab server: a locked-down work area (deploy/README.md). Install as root:
+#   cp deploy/viberoller-hub.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now viberoller-hub
+# Logs: journalctl -u viberoller-hub -f
+[Unit]
+Description=VibeRoller hub (team hub + Work runs, behind nginx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=viberoller
+Group=viberoller
+# Everything VibeRoller may write lives under /srv/viberoller: the live checkout (app/) with its data, the
+# worktrees, and the service user's home (Claude Code's login + settings).
+WorkingDirectory=/srv/viberoller/app/bridge
+Environment=HOME=/srv/viberoller/home
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env node run.js
+Restart=on-failure
+RestartSec=5
+# run.js exits 0 / 2 for a clean stop or "already running" (no restart); anything else is a crash and restarts.
+# Graceful restarts (bridge/restart.js, the deploy) happen inside run.js and never stop this service.
+SuccessExitStatus=0 2
+
+# ── the locked-down work area ──
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/viberoller
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
