@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
-module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle }) {
+module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle, aiNodes = null }) {
   const A = config.assistant || {};
   const OLLAMA = (A.ollamaUrl || 'http://127.0.0.1:11434').replace(/\/$/, '');
   const LOCAL_MODEL = A.model || 'unity-brain';
@@ -27,6 +27,17 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const MODELFILE = A.modelfile || path.join(MILLS_DIR, '..', 'Backrooms', 'models', 'unity-brain', 'Modelfile');
   const PERSONA_FILE = path.join(ROOT, 'assistant-persona.txt');
   const IMAGE_URL = (A.imageUrl || 'http://127.0.0.1:5124').replace(/\/$/, '');
+  const VOICE_URL = (A.voiceUrl || 'http://127.0.0.1:5123').replace(/\/$/, '');
+  const EARS_URL = (A.speechUrl || 'http://127.0.0.1:5125').replace(/\/$/, '');
+  // Hub elsewhere (the lab server), engines on the host's PC: with "via": "node" every call to one of Unity's four
+  // engines goes through a connected AI node (bridge/ai-nodes.js); every other fetch (web search, pages) goes out
+  // as usual. The node is handed only the engine's name and the path, never this hub's idea of an address.
+  const VIA_NODE = A.via === 'node' && !!aiNodes;
+  const ENGINE_BASES = [['ollama', OLLAMA], ['image', IMAGE_URL], ['voice', VOICE_URL], ['speech', EARS_URL]];
+  const fetch = (url, init) => {
+    if (VIA_NODE) for (const [engine, base] of ENGINE_BASES) if (String(url).startsWith(base + '/')) return aiNodes.engineFetch(engine, String(url).slice(base.length), init || {});
+    return globalThis.fetch(url, init);
+  };
   const IMAGE_CKPT = A.imageCheckpoint || path.join(MILLS_DIR, '..', 'Unity 3D Equational Model', 'Unity 18+', 'models', 'realistic-vision-v51.safetensors');
   const IMAGES_DIR = path.join(MILLS_DIR, 'Images'); // Images/<username>/<id>.png (private) and Images/room/<id>.png (team chat); gitignored
   // Her look in pictures, added after the scene she writes so the moment leads (the engine encodes
@@ -44,12 +55,12 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     if (ollamaState.starting) return ollamaState.starting;
     ollamaState.starting = (async () => {
       if (!(await ollamaUp())) {
-        try { spawn(A.ollamaCommand || 'ollama', ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
+        if (!VIA_NODE) { try { spawn(A.ollamaCommand || 'ollama', ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {} } // via a node: its host runs Ollama
         for (let i = 0; i < 30 && !(await ollamaUp()); i++) await new Promise((r) => setTimeout(r, 1000));
       }
       ollamaState.up = await ollamaUp();
       ollamaState.model = ollamaState.up && await hasModel(LOCAL_MODEL);
-      if (ollamaState.up && !ollamaState.model && fs.existsSync(MODELFILE)) {
+      if (!VIA_NODE && ollamaState.up && !ollamaState.model && fs.existsSync(MODELFILE)) {
         console.log(`[mills] Unity: loading ${LOCAL_MODEL} into Ollama (one time, a few minutes)...`);
         await new Promise((resolve) => {
           const c = spawn(A.ollamaCommand || 'ollama', ['create', LOCAL_MODEL, '-f', MODELFILE], { cwd: path.dirname(MODELFILE), stdio: 'ignore', windowsHide: true });
@@ -70,9 +81,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   // pyw on Windows: the windowless launcher, so the services run in the background with no console windows
   const PY = A.python || (process.platform === 'win32' ? 'pyw' : 'python3');
   const PY_ARGS = A.pythonArgs || (process.platform === 'win32' && !A.python ? ['-3.10'] : []);
-  const VOICE_URL = (A.voiceUrl || 'http://127.0.0.1:5123').replace(/\/$/, '');
   const VOICE_DIR = A.voiceDir || path.join(MILLS_DIR, '..', 'Backrooms', 'models', 'unity-voice-v2');
-  const EARS_URL = (A.speechUrl || 'http://127.0.0.1:5125').replace(/\/$/, '');
   const WHISPER = A.whisperModel || path.join(MILLS_DIR, '..', 'Unity 3D Equational Model', 'Unity 18+', 'models', 'whisper-small');
   const starting = new Map();
   async function up(url) { try { return (await fetch(url + '/health', { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } }
@@ -84,7 +93,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       // two-line wrapper that sends its output nowhere first (the scripts themselves stay unchanged).
       const [script, ...rest] = args;
       const boot = 'import os,sys,runpy; sys.stdout = sys.stderr = open(os.devnull, "w"); sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(sys.argv[0])); runpy.run_path(sys.argv[0], run_name="__main__")';
-      try { spawn(PY, [...PY_ARGS, '-c', boot, script, ...rest], { cwd, detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
+      if (!VIA_NODE) { try { spawn(PY, [...PY_ARGS, '-c', boot, script, ...rest], { cwd, detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {} } // via a node: its host runs the engines
       for (let i = 0; i < 60; i++) { if (await up(url)) return true; await new Promise((r) => setTimeout(r, 1000)); }
       return false;
     })().finally(() => starting.delete(url));
@@ -670,7 +679,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       history: s.history.slice(-40), counts: { tasks: s.tasks.filter((t) => t.status === 'pending').length, reminders: s.reminders.filter((r) => !r.fired).length, events: s.events.filter((e) => e.at >= Date.now()).length } };
   }
 
-  const clientIp = (req) => String(req.headers['cf-connecting-ip'] || '').trim();
+  // the person's address: the tunnel's cf-connecting-ip, or (server mode, behind nginx) the proxy's X-Real-IP
+  const clientIp = (req) => String(req.headers['cf-connecting-ip'] || (config.behindProxy === true ? req.headers['x-real-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0] : '') || '').trim();
   function stopRun(acct) { const r = runs.get(acct.username); if (r) { r.abort.abort(); if (r.child) r.child.kill(); } }
 
   // The team chat's Unity: one local-brain run for whoever called her (their tools, their time and

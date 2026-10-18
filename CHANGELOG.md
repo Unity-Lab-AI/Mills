@@ -6,6 +6,30 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 1.4.0 — 2026-10-18
+
+### Added
+- **The new repo:** https://git.unityailab.com/GFourteen/VibeRoller (Forgejo), created through Forgejo's API
+  and filled with main, develop and the work branches. Every release now goes to it as well as to the
+  original Forgejo repo and GitHub (the go-live script pushes to every remote).
+- **The server kit** (`deploy/`, hand-off in `deploy/README.md`): a Forgejo workflow that deploys every push to
+  `main` (fast-forward the live checkout, check the scripts, graceful restart), off until the repo variable
+  `VIBEROLLER_DEPLOY` is `on`; a locked-down systemd service (its own user, writes only under `/srv/viberoller`,
+  no privileges); an nginx site (TLS, streaming unbuffered, WebSocket-ready, `/internal/` blocked, forged
+  forwarding headers dropped); the server's own settings; the steps for the data move with Gee's approval.
+- **Server mode:** `bridge/config.local.json` (gitignored) is laid over `bridge/config.json`; `publicUrl` gives
+  the hub a fixed address (its page learns it, that origin may call the API), `behindProxy` treats nginx-forwarded
+  requests as coming from outside.
+- **AI nodes:** `bridge/ai-node.js` lends a machine's local engines (Unity's Ollama brain, image, voice, speech)
+  to a hub running elsewhere, connecting out over HTTPS with its own name + secret; the hub (`bridge/ai-nodes.js`,
+  `assistant.via = "node"`) sends only engine names and paths. The knife pauses a node. `/api/check` lists nodes.
+  The throwaway test hub now runs every Unity check through a real node. Checks R137.
+
+### Changed
+- Modules: bridge/ai-node.js 1.0.0 (new), bridge/ai-nodes.js 1.0.0 (new), bridge/assistant.js 1.1.0,
+  bridge/common.js 1.1.0, bridge/server.js 1.4.0.
+- Hub law 10 now names the third remote (`viberoller`).
+
 ## 1.3.1 — 2026-10-18
 
 ### Fixed
