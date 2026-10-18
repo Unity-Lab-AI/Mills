@@ -671,11 +671,13 @@
   #msgMenu { max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; }
   img, video, audio, canvas { max-width: 100%; }
 </style>
+<!-- the finish: depth, surfaces, tiles, rail, cards and badges, all built from the theme's variables (loaded last, so it wins) -->
+<link rel="stylesheet" href="polish.css">
 </head>
 <body>
 <!-- Mills icon set: one sprite of custom line icons (24×24 grid, round 1.9 px strokes in the text colour,
      so they follow every theme). Use: an svg with class "ic" holding a use of the symbol, or ic(name) in script. -->
-<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><!-- zero-size, not display:none: gradients inside a display:none svg do not paint -->
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5.5M11 18l-6-6 6-6"/></symbol>
   <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19.5V5M6 11l6-6 6 6"/></symbol>
   <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 2.8l1.7 2.4 2.9-.7.7 2.9 2.4 1.7-1.3 2.9 1.3 2.9-2.4 1.7-.7 2.9-2.9-.7L12 21.2l-1.7-2.4-2.9.7-.7-2.9-2.4-1.7L5.6 12 4.3 9.1l2.4-1.7.7-2.9 2.9.7z"/><circle cx="12" cy="12" r="3.1"/></symbol>
@@ -714,9 +716,34 @@
   <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5.5 21V4M5.5 4.5h10.5l-2 3.8 2 3.7H5.5"/></symbol>
   <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 3.5l3 3-3 3M4 11.5v-1a4 4 0 0 1 4-4h12M7 20.5l-3-3 3-3M20 12.5v1a4 4 0 0 1-4 4H4"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.5H15"/></symbol>
+  <!-- second set: servers, roles, profiles, the menu -->
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3.5h6l-1 5.2 3.5 3.3H6.5L10 8.7z"/><path d="M12 12v8.5"/></symbol>
+  <symbol id="i-megaphone" viewBox="0 0 24 24"><path d="M4 10v4a1 1 0 0 0 1 1h2.5L15 19V5L7.5 9H5a1 1 0 0 0-1 1z"/><path d="M7.5 15l1.2 4.5h2.4L10 15.6M18 9.5a3.5 3.5 0 0 1 0 5"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M4 7l8 6 8-6"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.2 13.8a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.1 1.1M13.8 10.2a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.1-1.1"/></symbol>
+  <symbol id="i-crown" viewBox="0 0 24 24"><path d="M4 8l4 3.5L12 5l4 6.5L20 8l-1.6 10.5H5.6z"/><path d="M6 18.5h12"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.2l7.5 2.8v5.6c0 4.6-3.2 8.2-7.5 9.4-4.3-1.2-7.5-4.8-7.5-9.4V6z"/><path d="M8.8 12.2l2.2 2.1 4.3-4.4"/></symbol>
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9.5 4L7.8 20M16.2 4l-1.7 16M4.5 9h16M3.8 15h16"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.3"/><path d="M3 19.5a6 6 0 0 1 12 0M15.5 5.6a3.3 3.3 0 0 1 0 6M17.5 14a5.5 5.5 0 0 1 3.5 5.5"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.3" r="3.8"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.4 3.6 5.2 3.6 8.5s-1.2 6.1-3.6 8.5c-2.4-2.4-3.6-5.2-3.6-8.5S9.6 5.9 12 3.5z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.3l3.4 2"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 0 0 0 17c1.2 0 1.8-.9 1.4-1.9-.5-1.3.3-2.6 1.7-2.6H17a3.5 3.5 0 0 0 3.5-3.5c0-5-3.8-9-8.5-9z"/><circle cx="7.8" cy="11.5" r="1" fill="currentColor" stroke="none"/><circle cx="10.5" cy="7.7" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="8.2" r="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="16" height="6.5" rx="1.8"/><path d="M7.5 7.2h.01M7.5 16.7h.01M11 7.2h5.5M11 16.7h5.5"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15.5" r="4"/><path d="M10.8 12.7L19.5 4M16 7.5l2.5 2.5M14 9.5l1.8 1.8"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3.5v4.5M15 3.5v4.5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5v4"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2H5z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.2 5.1 1.8-5.1 1.9L12 17.6l-1.9-5.2L5 10.5l5.1-1.8z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 4.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5H14M10.5 12H20M16.5 8.5L20 12l-3.5 3.5"/></symbol>
+  <!-- the Mills mark (the app icon's "M" in its rounded square), stroked with a gradient of the theme's own
+       accent colours and the "live" dot in its good colour; used on the sign-in card and the menu -->
+  <defs><linearGradient id="gMark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color: var(--accent)"/><stop offset="1" style="stop-color: var(--accent-2, var(--accent))"/></linearGradient></defs>
+  <symbol id="i-mills" viewBox="0 0 48 48"><rect x="3" y="3" width="42" height="42" rx="10.5" stroke="url(#gMark)" stroke-width="2"/><path d="M12 33V16.5l6 9 6-9 6 9 6-9V33" stroke="url(#gMark)" stroke-width="3.6"/><circle cx="37.5" cy="13" r="2.8" style="fill: var(--good)" stroke="none"/></symbol>
 </svg>
 
 <form id="login" class="center">
+  <svg class="brandMark" aria-hidden="true"><use href="#i-mills"/></svg>
   <h1 id="title">Mills</h1>
   <p>Sign in with your Mills username and password.</p>
   <input id="username" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>
@@ -727,18 +754,22 @@
 </form>
 
 <div id="menu" hidden>
+  <svg class="brandMark small" aria-hidden="true"><use href="#i-mills"/></svg>
   <h1 id="menuUser"></h1>
   <div id="menuWho" class="menuWho" hidden></div>
+  <!-- the menu is a grid of tiles: icon, name, one line on what is inside (styles in web/polish.css) -->
   <div class="choices">
-    <button id="goWork">Work</button>
-    <button id="goChat">Chat<span class="badge" id="chatBadge" hidden></span></button>
-    <button id="goBoard"><svg class="ic lead"><use href="#i-board"/></svg>Board<span class="badge" id="boardBadge" hidden></span></button>
-    <button id="goCal"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar</button>
-    <button id="goNotes"><svg class="ic lead"><use href="#i-file"/></svg>Notes</button>
-    <button id="goAssist"><svg class="ic lead"><use href="#i-chat"/></svg>Unity</button>
-    <button id="goAdmin" hidden>Admin</button>
-    <button class="ghost" id="goSettings" data-settings>Settings</button>
-    <button class="ghost" id="menuLogout">Sign out</button>
+    <button id="goWork" class="tile"><svg class="ic lead"><use href="#i-code"/></svg>Work<small>Claude, your files and the team, side by side</small></button>
+    <button id="goChat" class="tile"><svg class="ic lead"><use href="#i-chat"/></svg>Chat<small>Servers, channels, groups and calls, end-to-end encrypted</small><span class="badge" id="chatBadge" hidden></span></button>
+    <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
+    <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
+    <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
+    <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
+    <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
+  </div>
+  <div class="menuFoot">
+    <button class="ghost" id="goSettings" data-settings><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button>
+    <button class="ghost" id="menuLogout"><svg class="ic lead"><use href="#i-logout"/></svg>Sign out</button>
   </div>
 </div>
 
@@ -822,7 +853,7 @@
     <div class="bar"><span>Settings</span><button class="ghost" id="closeSettings">Close</button></div>
     <!-- three tabs (web/profile.js): Profile = what others see (user settings); App = how Mills behaves for you
          (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons -->
-    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile">Profile</button><button type="button" class="ghost" data-settab="app">App settings</button><button type="button" class="ghost" data-settab="connections">Connections</button></div>
+    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App settings</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button></div>
     <div class="setBody">
      <div data-setpane="profile">
       <div id="profilePreview"></div>
@@ -2953,7 +2984,7 @@ function openMsgMenu(rec, e) {
   if (!rec.m.deleted) add('reply', 'Reply', () => { closeMsgMenu(); startReply(rec); });
   if (mine && !rec.m.deleted && !rec.locked && !rec.audio) add('edit', 'Edit', () => { closeMsgMenu(); startEdit(rec); });
   const conv = convOfMsg(rec.m), pinned = GUILDS.pinned(conv, rec.m.seq);
-  if (!rec.m.deleted && GUILDS.canPin(conv)) add('flag', pinned ? 'Unpin' : 'Pin', () => { closeMsgMenu(); GUILDS.pin(conv, rec.m.seq, !pinned); });
+  if (!rec.m.deleted && GUILDS.canPin(conv)) add('pin', pinned ? 'Unpin' : 'Pin', () => { closeMsgMenu(); GUILDS.pin(conv, rec.m.seq, !pinned); });
   const modDelete = !mine && !rec.m.to && GUILDS.canModerate(conv); // "manage messages" in a server channel / Mills #general
   if ((mine || modDelete) && !rec.m.deleted) add('trash', mine ? 'Delete' : 'Delete (moderator)', (b) => {
     if (b.dataset.armed !== '1') { b.dataset.armed = '1'; label(b, 'trash', 'Click again to delete'); return; }

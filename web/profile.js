@@ -32,11 +32,10 @@ const PROFILE = (() => {
     const sub = el('div', 'pSub', '@' + u + (p.pronouns ? ' · ' + p.pronouns : '') + (m.agent ? ' · BOT' : '')); body.append(sub);
     if (p.status) body.append(el('div', 'pStatus', p.status));
     if (p.bio) { const b = el('div', 'pBio'); linkify(b, p.bio); body.append(el('div', 'pHead', 'About'), b); }
-    const facts = [];
-    if (p.location) facts.push(p.location);
-    if (p.timezone) facts.push(localTime(p.timezone) + ' local time');
-    if (facts.length) body.append(el('div', 'pFacts', facts.join(' · ')));
-    if ((p.links || []).length) { const l = el('div', 'pLinks'); for (const x of p.links) { const a = el('a', '', x.replace(/^https:\/\//, '')); a.href = x; a.target = '_blank'; a.rel = 'noopener noreferrer'; l.append(a); } body.append(l); }
+    const fact = (icon, t) => { const d = el('div', 'pFacts'); d.append(ic(icon, 'lead'), t); body.append(d); };
+    if (p.location) fact('globe', p.location);
+    if (p.timezone) fact('clock', localTime(p.timezone) + ' local time');
+    if ((p.links || []).length) { const l = el('div', 'pLinks'); for (const x of p.links) { const a = el('a', ''); a.append(ic('link', 'lead'), x.replace(/^https:\/\//, '')); a.href = x; a.target = '_blank'; a.rel = 'noopener noreferrer'; l.append(a); } body.append(l); }
     if (!opts.preview) {
       const f = GUILDS.find(currentConv), s = f && f.kind === 'ch' ? f.server : null;
       if (s && s.members.includes(u)) {
