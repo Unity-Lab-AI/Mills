@@ -307,7 +307,8 @@ function cleanPrefs(p, prev = {}) {
 }
 // what everyone sees about a person: nickname + colour (in prefs, as always) and their profile (bridge/user-profile.js)
 const userProfile = require('./user-profile');
-const publicPrefs = (a) => ({ nick: (a.state.prefs || {}).nick || '', color: (a.state.prefs || {}).color ?? null, profile: userProfile.publicProfile(a.state) });
+const avatars = userProfile.createAvatars(path.join(MILLS_DIR, 'Avatars')); // profile pictures, one per person
+const publicPrefs = (a) => ({ nick: (a.state.prefs || {}).nick || '', color: (a.state.prefs || {}).color ?? null, profile: { ...userProfile.publicProfile(a.state), avatar: avatars.get(a.username) } });
 
 // ---------- team board (tasks + calendar, claims shared by people and Claude) ----------
 const board = require('./board')({
@@ -739,6 +740,13 @@ const server = http.createServer(async (req, res) => {
       keysVer++; roomChanged(); // everyone's page reloads the member list (names, colours, profiles)
       return send(res, 200, { username: acct.username, display: acct.display, ...publicPrefs(acct), prefs: acct.state.prefs });
     }
+    if (p === '/api/profile/avatar' && req.method === 'POST') { // upload (replaces the old one)
+      const b = await readBody(req);
+      try { avatars.set(acct.username, b.image); } catch (e) { return send(res, 400, { error: e.message }); }
+      keysVer++; roomChanged();
+      return send(res, 200, { username: acct.username, ...publicPrefs(acct) });
+    }
+    if (p === '/api/profile/avatar/remove' && req.method === 'POST') { avatars.remove(acct.username); keysVer++; roomChanged(); return send(res, 200, { username: acct.username, ...publicPrefs(acct) }); }
     if (p === '/api/prefs' && req.method === 'GET') return send(res, 200, { prefs: acct.state.prefs || {} });
     if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage.status(acct));
     if (p === '/api/prefs' && req.method === 'POST') {
@@ -982,7 +990,7 @@ const server = http.createServer(async (req, res) => {
         const t = needTarget();
         if (t === acct) return send(res, 400, { error: 'You cannot delete your own account.' });
         if (!t.profile) return send(res, 400, { error: `The "${DEFAULT_USERNAME}" account lives in bridge/ itself and cannot be deleted here.` });
-        stopClaude(t); dropSessions(t.username); shares.stop(t.username); calls.leave(t.username); guilds.dropUser(t.username);
+        stopClaude(t); dropSessions(t.username); shares.stop(t.username); calls.leave(t.username); guilds.dropUser(t.username); avatars.remove(t.username);
         fs.mkdirSync(DELETED_DIR, { recursive: true });
         fs.renameSync(t.files.PROFILE_DIR, path.join(DELETED_DIR, `${t.username}-${Date.now()}`)); // kept, not destroyed
         delete chatKeys[t.username]; writeJson(KEYS_FILE, chatKeys);

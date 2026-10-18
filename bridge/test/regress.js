@@ -1475,6 +1475,29 @@ async function run() {
     && /function cardFor\(/.test(pj28) && /'follow my colour'/.test(pj28) && /'Message'/.test(pj28) && /PROFILE\.show\(m\.via \|\| m\.from, ev\)/.test(html) && /saveThemeChoice\(/.test(html) && /theme: \$\('setTheme'\)\.value/.test(html),
     `get ${JSON.stringify(pf0.profile)}, save ${pfSave.status} badLink ${pfBadLink.status} badTz ${pfBadTz.status}, seen ${JSON.stringify(pp).slice(0, 160)}, app ${appSave.status} ${appSave.data.prefs && appSave.data.prefs.theme} bad "${appBad.theme}", after profile save theme "${prefsAfter2.theme}" sound ${prefsAfter2.sound && prefsAfter2.sound.on}, leak ${leak28}`);
 
+  // Profile pictures: upload (type checked by its bytes, size capped), everyone sees it, replace, remove.
+  const avDir = path.join(SCRATCH, 'Avatars');
+  const pngBytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 7)]);
+  const jpgBytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(40, 9)]);
+  const avPng = await call('/api/profile/avatar', U, { image: 'data:image/png;base64,' + pngBytes.toString('base64') });
+  const avSeen = ((((await call('/api/room/members', A)).data.members || []).find((m) => m.username === 't-user') || {}).profile || {}).avatar || '';
+  const pngFile = fs.existsSync(path.join(avDir, 't-user.png'));
+  const avJpg = await call('/api/profile/avatar', U, { image: 'data:image/jpeg;base64,' + jpgBytes.toString('base64') });
+  const swapped = !fs.existsSync(path.join(avDir, 't-user.png')) && fs.existsSync(path.join(avDir, 't-user.jpg'));
+  const avSvg = await call('/api/profile/avatar', U, { image: 'data:image/svg+xml;base64,' + Buffer.from('<svg/>').toString('base64') });
+  const avFake = await call('/api/profile/avatar', U, { image: 'data:image/png;base64,' + Buffer.from('not a picture at all').toString('base64') });
+  const avBig = await call('/api/profile/avatar', U, { image: 'data:image/png;base64,' + Buffer.concat([pngBytes, Buffer.alloc(320 * 1024)]).toString('base64') });
+  const avAnon = await fetch(H + '/api/profile/avatar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const avRm = await call('/api/profile/avatar/remove', U, {});
+  const avGone = ((((await call('/api/room/members', A)).data.members || []).find((m) => m.username === 't-user') || {}).profile || {}).avatar;
+  const pj30 = fs.readFileSync(path.join(MILLS, 'web', 'profile.js'), 'utf8');
+  check('R130', 'profile pictures: a person uploads one (shrunk to a 256 px square in their browser), the hub checks the type by its first bytes (PNG / JPEG / WebP only: no SVG, no disguised files) and caps the size, keeps one file per person outside the account folders (a new one replaces the old), everyone sees it in the member list; Remove deletes it; signed-out → 401; [static] upload / remove buttons, picture on the card, in the member column and next to messages; the folder is gitignored',
+    avPng.status === 200 && avSeen.startsWith('data:image/png;base64,') && pngFile && avJpg.status === 200 && swapped && avSvg.status === 400 && avFake.status === 400 && avBig.status === 400 && avAnon.status === 401
+    && avRm.status === 200 && avGone === '' && !fs.existsSync(path.join(avDir, 't-user.jpg'))
+    && /function shrink\(/.test(pj30) && /toDataURL\('image\/webp'/.test(pj30) && /'Remove picture'/.test(pj30) && /PROFILE\.avatarOf\(m\.via \|\| m\.from\)/.test(html) && /PROFILE\.avatarOf\(u\)/.test(html)
+    && /^Avatars\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
+    `png ${avPng.status} seen ${avSeen.slice(0, 30)} file ${pngFile}, jpg ${avJpg.status} swapped ${swapped}, svg ${avSvg.status} fake ${avFake.status} big ${avBig.status} anon ${avAnon.status}, remove ${avRm.status} gone "${avGone}"`);
+
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });
   const shareListU = (await call('/api/room/messages?rev=0', U)).data.shares || [], shareListA = (await call('/api/room/messages?rev=0', A)).data.shares || [];

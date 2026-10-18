@@ -24,7 +24,10 @@ const PROFILE = (() => {
     const p = prof || profOf(u), m = memberOf(u) || { username: u, display: u };
     const card = el('div', 'pCard');
     const banner = el('div', 'pBanner'); banner.style.background = accentOf(u, p); card.append(banner);
-    const av = el('div', 'pAvatar', (opts.nick || nickOf(u) || u).slice(0, 2).toUpperCase()); av.style.background = colorOf(u); card.append(av);
+    const av = el('div', 'pAvatar', (opts.nick || nickOf(u) || u).slice(0, 2).toUpperCase()); av.style.background = colorOf(u); // initials in their colour, or their picture
+    const pic = opts.avatar !== undefined ? opts.avatar : p.avatar;
+    if (pic) { av.textContent = ''; const img = el('img'); img.src = pic; img.alt = ''; av.append(img); }
+    card.append(av);
     const body = el('div', 'pBody');
     const inServer = !opts.preview && GUILDS.colorIn(currentConv, u);
     const name = el('b', 'pName', (!opts.preview && GUILDS.nickIn(currentConv, u)) || opts.nick || nickOf(u)); name.style.color = inServer || (opts.color != null ? PALETTE[opts.color][lightTheme ? 1 : 0] : colorOf(u));
@@ -69,17 +72,57 @@ const PROFILE = (() => {
   for (const b of document.querySelectorAll('[data-settab]')) b.onclick = () => tab(b.dataset.settab);
 
   // ── the Profile tab: editor + live preview ──
-  let draft = {};
+  let draft = {}, picture = '';
+  // a picture is cropped to the middle square and shrunk to 256 px here, in the browser; only that small image is sent
+  async function shrink(file) {
+    if (!/^image\//.test(file.type)) throw new Error('Pick a picture file.');
+    if (file.size > 25e6) throw new Error('That file is very large; pick one under 25 MB.');
+    const bmp = await createImageBitmap(file);
+    const side = Math.min(bmp.width, bmp.height), size = Math.min(256, side);
+    const c = document.createElement('canvas'); c.width = c.height = size;
+    c.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, size, size);
+    bmp.close && bmp.close();
+    let url = c.toDataURL('image/webp', 0.86);
+    if (!url.startsWith('data:image/webp')) url = c.toDataURL('image/jpeg', 0.88); // browsers without WebP encoding
+    return url;
+  }
+  function pictureEditor(box) {
+    const wrap = el('div', 'setSection'); wrap.append(el('b', '', 'Profile picture'));
+    wrap.append(el('small', '', 'Shown on your card, in the member list and next to your messages. It is cropped to a square and shrunk to 256 px in this browser before upload, so the original never leaves your PC. Without one, your initials show in your colour.'));
+    const file = el('input'); file.type = 'file'; file.accept = 'image/png,image/jpeg,image/webp,image/gif'; file.hidden = true;
+    const up = el('button', '', picture ? 'Change picture' : 'Upload picture'); up.type = 'button'; up.onclick = () => file.click();
+    const rm = el('button', 'ghost', 'Remove picture'); rm.type = 'button'; rm.hidden = !picture;
+    const msg = el('span', 'status');
+    file.onchange = async () => {
+      const f = file.files && file.files[0]; file.value = ''; if (!f) return;
+      msg.textContent = 'Shrinking and uploading…'; msg.className = 'status';
+      try {
+        const d = await json('/api/profile/avatar', { method: 'POST', body: JSON.stringify({ image: await shrink(f) }) });
+        picture = d.profile.avatar || ''; up.textContent = 'Change picture'; rm.hidden = !picture;
+        msg.textContent = 'Picture saved: everyone sees it now.'; msg.className = 'status on'; preview();
+        await refreshMembers(); selectConv(currentConv);
+      } catch (e) { msg.textContent = e.message; msg.className = 'status'; }
+    };
+    rm.onclick = async () => {
+      if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; rm.classList.add('armed'); return; }
+      try { await json('/api/profile/avatar/remove', { method: 'POST', body: '{}' }); picture = ''; rm.hidden = true; rm.dataset.armed = ''; rm.classList.remove('armed'); rm.textContent = 'Remove picture'; up.textContent = 'Upload picture'; msg.textContent = 'Picture removed.'; msg.className = 'status on'; preview(); await refreshMembers(); selectConv(currentConv); }
+      catch (e) { msg.textContent = e.message; msg.className = 'status'; }
+    };
+    const r = el('div', 'row'); r.append(up, rm, file, msg); wrap.append(r);
+    box.append(wrap);
+  }
+  const avatarOf = (u) => profOf(u).avatar || '';
   function preview() {
     const box = $('profilePreview'); if (!box || !me) return;
-    box.textContent = ''; box.append(cardFor(me.username, draft, { preview: true, nick: $('setNick').value.trim() || me.display, color: pickedColor }));
+    box.textContent = ''; box.append(cardFor(me.username, draft, { preview: true, nick: $('setNick').value.trim() || me.display, color: pickedColor, avatar: picture }));
   }
   async function open() {
     const box = $('profileBox'); if (!box) return;
     tab('profile');
     let cur; try { cur = await json('/api/profile'); } catch (e) { box.textContent = e.message; return; }
-    draft = { ...cur.profile };
+    picture = cur.profile.avatar || ''; draft = { ...cur.profile }; delete draft.avatar; // the picture has its own buttons
     box.textContent = '';
+    pictureEditor(box);
     const field = (label, node) => { const l = el('label', '', label); l.append(node); box.append(l); return node; };
     const inp = (v, max, ph) => { const i = el('input'); i.value = v || ''; i.maxLength = max; if (ph) i.placeholder = ph; return i; };
     const status = field('Status (a short line under your name)', inp(draft.status, 80, 'e.g. heads down until 5'));
@@ -115,5 +158,5 @@ const PROFILE = (() => {
     const r = el('div', 'row'); r.append(save, msg); box.append(r);
     sync();
   }
-  return { open, show, hide, tab, cardFor };
+  return { open, show, hide, tab, cardFor, avatarOf };
 })();
