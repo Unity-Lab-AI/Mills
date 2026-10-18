@@ -1117,6 +1117,18 @@ async function run() {
     && /class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"\/><\/svg>Unity<small>/.test(html) && (html.match(/class="tile"/g) || []).length >= 7 && /class="brandMark"/.test(html) && /<symbol id="i-mills"/.test(html) && /stop-color: var\(--accent\)/.test(html) && !/<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" style="display:none">/.test(html)
     && ['hash', 'megaphone', 'mail', 'link', 'pin', 'crown', 'globe', 'clock', 'user', 'plug', 'logout', 'sparkle', 'shield'].every((n) => new RegExp(`(href="#i-${n}"|ic\\('${n}'|'${n}' :|\\? '${n}'|'${n}')`).test(html)),
     `served ${polishRes.status} ${polishType}, fixed colours ${fixedColours.join(' ') || 'none'}`);
+  // Hub law 11: every site change includes the Windows / Linux app (Mills Chat = the page in app mode, installed).
+  const indexHtml131 = () => fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+  const pageFiles = [...indexHtml131().matchAll(/<(?:script src|link rel="stylesheet" href)="([\w./-]+)"/g)].map((m) => m[1]).filter((f) => !/^vendor\//.test(f));
+  const swShell = (/const OWN = \[([^\]]*)\]/.exec(swJs) || [, ''])[1];
+  const notCached = pageFiles.filter((f) => !swShell.includes(`'${f}'`));
+  const appCss = indexHtml131().split('\n').filter((l) => /body\.appMode/.test(l)).join('\n');
+  const appCssHex = (appCss.replace(/\/\*[\s\S]*?\*\//g, '').match(/#[0-9a-f]{3,8}\b/gi) || []);
+  const appJs131 = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
+  check('R131', '[static] law 11, the Windows / Linux app goes with every site change: every page script + stylesheet is in the app\'s service-worker shell, app-mode styles use no hard-coded colours (they follow the themes), the app has its own way into Settings + Sign out (user panel, since app mode hides the headers), the app keeps up with renders (servers + conversation changes), the README describes the app',
+    !notCached.length && !appCssHex.length && /function renderAppUser\(/.test(appJs131) && /openSettings\(\)/.test(appJs131) && /signOut\(\)/.test(appJs131) && /renderAppUser\(\)/.test(fs.readFileSync(path.join(MILLS, 'web', 'guilds.js'), 'utf8')) && /renderAppUser\(\); \/\/ the app's user panel/.test(html)
+    && /Mills Chat/.test(fs.readFileSync(path.join(MILLS, 'README.md'), 'utf8')) && /user panel/.test(fs.readFileSync(path.join(MILLS, 'README.md'), 'utf8')),
+    `page files ${pageFiles.join(' ')}; not in the shell: ${notCached.join(' ') || 'none'}; app-mode hex: ${appCssHex.join(' ') || 'none'}`);
   check('R124', '[static] themed scrollbars: thumb + hover built from the theme variables (accent + line), standard scrollbar-width / scrollbar-color plus the ::-webkit-scrollbar fallback, no hard-coded scrollbar colours',
     /--sb-thumb: color-mix\(in srgb, var\(--accent\)/.test(html) && /scrollbar-color: var\(--sb-thumb\) var\(--sb-track\)/.test(html) && /scrollbar-width: thin/.test(html)
     && /::-webkit-scrollbar-thumb \{ background: var\(--sb-thumb\)/.test(html) && /::-webkit-scrollbar-thumb:hover \{ background: var\(--sb-hover\)/.test(html) && !/scrollbar-color: #/.test(html));
