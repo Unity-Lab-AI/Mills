@@ -1,4 +1,4 @@
-// OpenAI-compatible API on the Mills hub, one key per person.
+// OpenAI-compatible API on the VibeRoller hub, one key per person.
 //
 //   GET  /v1/models                      the models the key's provider serves
 //   POST /v1/chat/completions            OpenAI chat format in (stream or not), answered by the person's
@@ -91,7 +91,7 @@ module.exports = function createOpenAI({ accounts, providers, send, readBody, wr
             usage: r.usage ? { ...r.usage, total_tokens: (r.usage.prompt_tokens || 0) + (r.usage.completion_tokens || 0) } : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } });
         }
       } catch (e) {
-        if (!res.headersSent) oaError(res, 502, e.message, 'api_error');
+        if (!res.headersSent) oaError(res, e.status || 502, e.message, e.status === 503 ? 'service_unavailable' : 'api_error'); // 503 = the host paused its AI
         else { try { res.end('data: ' + JSON.stringify({ error: { message: e.message, type: 'api_error' } }) + '\n\ndata: [DONE]\n\n'); } catch {} }
       } finally { running.delete(acct.username); onIdle(); }
       return;

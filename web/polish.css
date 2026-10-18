@@ -1,4 +1,4 @@
-/* Mills — the finish layer.
+/* VibeRoller — the finish layer.
    Loaded after the page's own styles. Everything here is built from the theme's variables (--bg, --panel,
    --line, --text, --muted, --accent, --on-accent, --good, --bad), so all 23 themes and the default get the
    same depth and polish without per-theme work. Layout, sizes and breakpoints stay in index.html; this file
@@ -157,7 +157,7 @@ header b { font-weight: 750; letter-spacing: .01em; }
 #memberList .mRow:hover { background: var(--accent-soft); }
 #memberList .mHead { font-weight: 800; letter-spacing: .06em; }
 
-/* ── the Mills Chat app's user panel (web/app.js; app mode only) ── */
+/* ── the VibeRoller Chat app's user panel (web/app.js; app mode only) ── */
 #appUser { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: center; gap: .5rem; padding: .55rem .5rem; border-radius: var(--r-m);
   background: color-mix(in srgb, var(--surface-sunk) 85%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border: 1px solid var(--hairline); box-shadow: var(--sh-2); }
 #appUser .auAv { width: 2.1rem; height: 2.1rem; flex: none; border-radius: 50%; overflow: hidden; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: .8rem; cursor: pointer; box-shadow: var(--sh-1); }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MCP stdio server launched by Claude Code in a Work run: the Mills team board. Claude acts on the
+// MCP stdio server launched by Claude Code in a Work run: the VibeRoller team board. Claude acts on the
 // board as "<person> · Claude" (the person whose Work run this is). Before working a task, claim it;
 // renew the claim while working; release it (or complete the task) when done. A task someone else
 // holds cannot be edited until they release it or the claim lapses.
@@ -12,7 +12,7 @@ const ACCOUNT = process.env.MILLS_ACCOUNT || '';
 
 const id = { id: { type: 'string', description: 'Task id, e.g. "T-12".' } };
 const TOOLS = [
-  { name: 'board_list', description: `List the Mills team board's tasks (no descriptions). Filter by board, status (backlog/todo/doing/review/done), or mine=true for tasks assigned to ${USER} or claimed by you.`,
+  { name: 'board_list', description: `List the VibeRoller team board's tasks (no descriptions). Filter by board, status (backlog/todo/doing/review/done), or mine=true for tasks assigned to ${USER} or claimed by you.`,
     inputSchema: { type: 'object', properties: { board: { type: 'string' }, status: { type: 'string' }, mine: { type: 'boolean' } } } },
   { name: 'task_get', description: 'Read one task with its markdown description and recent activity.', inputSchema: { type: 'object', properties: id, required: ['id'] } },
   { name: 'task_create', description: 'Create a task on the team board (a task with a due date is a calendar entry).', inputSchema: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string', description: 'Markdown description' }, status: { type: 'string' }, board: { type: 'string' }, labels: { type: 'array', items: { type: 'string' } }, priority: { type: 'integer', minimum: 0, maximum: 5 }, due: { type: 'string', description: 'Due date as text: YYYY-MM-DD, today, tomorrow, +3d, next friday' }, assignee: { type: 'string', description: 'username' }, recur: { type: 'string', description: 'daily, weekly, biweekly, monthly, quarterly, half_year, yearly' } }, required: ['title'] } },

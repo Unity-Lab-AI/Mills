@@ -22,7 +22,7 @@ const { spawn } = require('child_process');
 const KINDS = ['anthropic', 'claude-cli', 'openai'];
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts }) {
+module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts, aiHostOn = () => true }) {
   const FILE = path.join(ROOT, 'providers.json');
   const SANDBOX = path.join(MILLS_DIR, 'Api', 'sandbox'); // empty folder `claude -p` runs in for API calls: no project files in reach
   let db = readJson(FILE, { providers: [] });
@@ -183,6 +183,7 @@ module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, w
   }
   async function complete({ provider, model, system = '', messages = [], onToken = null, signal, maxTokens }) {
     const p = get(provider) || HOST;
+    if ((p.kind === 'host' || p.kind === 'claude-cli') && !aiHostOn()) { const e = new Error("The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers."); e.status = 503; throw e; } // the host tools' switch
     const m = pickModel(p, model);
     if (p.kind === 'openai') return completeOpenAI(p, { model: m, system, messages, onToken, signal, maxTokens });
     if (p.kind === 'anthropic') return completeAnthropic(p, { model: m, system, messages, onToken, signal, maxTokens });

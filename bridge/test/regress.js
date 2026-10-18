@@ -166,7 +166,7 @@ function startFakeOllama() {
       } else if (last.role === 'tool' && last.tool_name !== 'say') {
         call('say', { text: 'done: ' + last.content.slice(0, 160), emotion: 'happy', act: 'statement' });
       } else {
-        line({ content: `final sys-has-name=${/Mills username "t-user"|Mills username "t-admin"/.test(sys)} tz=${(/\(([A-Za-z_]+\/[A-Za-z_]+)\)/.exec(sys) || [])[1] || ''}` });
+        line({ content: `final sys-has-name=${/(VibeRoller|Mills) username "t-(user|admin)"/.test(sys)} tz=${(/\(([A-Za-z_]+\/[A-Za-z_]+)\)/.exec(sys) || [])[1] || ''}` });
       }
       res.end(JSON.stringify({ done: true }) + '\n');
     });
@@ -1134,7 +1134,7 @@ async function run() {
   const appJs131 = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
   check('R131', '[static] law 11, the Windows / Linux app goes with every site change: every page script + stylesheet is in the app\'s service-worker shell, app-mode styles use no hard-coded colours (they follow the themes), the app has its own way into Settings + Sign out (user panel, since app mode hides the headers), the app keeps up with renders (servers + conversation changes), the README describes the app',
     !notCached.length && !appCssHex.length && /function renderAppUser\(/.test(appJs131) && /openSettings\(\)/.test(appJs131) && /signOut\(\)/.test(appJs131) && /renderAppUser\(\)/.test(fs.readFileSync(path.join(MILLS, 'web', 'guilds.js'), 'utf8')) && /renderAppUser\(\); \/\/ the app's user panel/.test(html)
-    && /Mills Chat/.test(fs.readFileSync(path.join(MILLS, 'README.md'), 'utf8')) && /user panel/.test(fs.readFileSync(path.join(MILLS, 'README.md'), 'utf8')),
+    && /VibeRoller Chat/.test(fs.readFileSync(path.join(MILLS, 'README.md'), 'utf8')) && /user panel/.test(fs.readFileSync(path.join(MILLS, 'README.md'), 'utf8')),
     `page files ${pageFiles.join(' ')}; not in the shell: ${notCached.join(' ') || 'none'}; app-mode hex: ${appCssHex.join(' ') || 'none'}`);
   // Hub law 14: semver for every module and the project; a module changed against production moves up.
   const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[\w.]+)?$/;
@@ -1156,7 +1156,7 @@ async function run() {
   const ckV = (await call('/api/check', U)).data;
   check('R132', 'law 14, semver: versions.json has a valid project version and one per module (every bridge/*.js, web/*.js, web/*.css, web/index.html; none missing, none extra); every module that differs from the production checkout has a higher version there, and the project moved up when anything did; CHANGELOG.md has a dated section for the project version; /api/check and Settings show it',
     SEMVER.test(V.project) && !badSem.length && !unlisted.length && !ghosts.length && !notBumped.length && projectMoved && hasSection
-    && ckV.version === V.project && ckV.versions && ckV.versions['bridge/server.js'] === V.modules['bridge/server.js'] && /id="aboutMills"/.test(html) && /function renderAbout\(/.test(html),
+    && ckV.version === V.project && ckV.versions && ckV.versions['bridge/server.js'] === V.modules['bridge/server.js'] && /id="aboutVibeRoller"/.test(html) && /function renderAbout\(/.test(html),
     `project ${V.project}${PV ? ' (production ' + PV.project + ')' : ' (production has no versions.json yet: baseline)'}, ${Object.keys(V.modules).length} modules; changed vs production: ${changedMods.join(' ') || 'none'}; not bumped: ${notBumped.join(', ') || 'none'}; unlisted: ${unlisted.join(' ') || 'none'}; extra: ${ghosts.join(' ') || 'none'}; bad: ${badSem.join(' ') || 'none'}; changelog section ${hasSection}`);
   // Hub law 15: every change to any tracked file is logged; the newest changelog section is the current version.
   const trackedFiles = execFileSync('git', ['ls-files'], { cwd: MILLS, encoding: 'utf8', windowsHide: true }).split('\n').map((s) => s.trim()).filter(Boolean).filter((f) => !['CHANGELOG.md', 'versions.json'].includes(f));
@@ -1372,7 +1372,7 @@ async function run() {
   await call('/api/guilds/server/invite', U, { server: s25, add: ['mills'] }); await call('/api/guilds/invitation/accept', D, { server: s25 });
   const after25 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'after D r125', gen25));
   const dSees = (await roomMsgs(D, 0)).filter((m) => m.conv === gen25).map((m) => m.seq);
-  const welcome25 = (await roomMsgs(U, before25.data.seq)).some((m) => m.conv === gen25 && m.as === 'Mills');
+  const welcome25 = (await roomMsgs(U, before25.data.seq)).some((m) => m.conv === gen25 && m.as === 'VibeRoller');
   const histOk = !dSees.includes(before25.data.seq) && dSees.includes(after25.data.seq);
   // timeout: A cannot post, type or call; ended → can again
   const to25 = await call('/api/guilds/member/timeout', U, { server: s25, user: 't-admin', minutes: 5, reason: 'r125' });
@@ -1548,6 +1548,31 @@ async function run() {
     && /^Avatars\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     `png ${avPng.status} seen ${avSeen.slice(0, 30)} file ${pngFile}, jpg ${avJpg.status} swapped ${swapped}, svg ${avSvg.status} fake ${avFake.status} big ${avBig.status} anon ${avAnon.status}, remove ${avRm.status} gone "${avGone}"`);
 
+  // The host's AI switch (bridge/ai-host.off, the heart / knife host tools): the AI hosted here pauses, nothing else.
+  fs.writeFileSync(path.join(SB, 'ai-host.off'), 'paused by r136');
+  const offCheck = (await call('/api/check', U)).data;
+  const offWork = (((await chat(U, 'while off r136', { fresh: true })).events || []).find((e) => e.type === 'bridge_error') || {}).text || ''; // the hub's own notice, not Claude text
+  const offKey = (await call('/api/apikey/rotate', U, {})).data.key;
+  const offV1 = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + offKey }, body: JSON.stringify({ model: 'x', messages: [{ role: 'user', content: 'hi r136' }] }) });
+  const offAssist = await call('/api/assistant/chat', U, { message: 'hi r136' });
+  const seqOff = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  await call('/api/room/send', U, await sealConv(U, restored, 't-user', '@unity are you there r136', 'room', true));
+  const offUnity = await waitAgent(U, restored, seqOff, (t) => /paused the AI/.test(t), 8000);
+  const offChatOk = (await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'chat still works r136', 'room'))).status;
+  const offBoardOk = (await call('/api/board', U)).status;
+  fs.unlinkSync(path.join(SB, 'ai-host.off'));
+  const onCheck = (await call('/api/check', U)).data;
+  const onWork = texts((await chat(U, 'back on r136', { fresh: true })).events);
+  await call('/api/apikey/revoke', U, {});
+  const ht = (f) => fs.readFileSync(path.join(BRIDGE, 'host-tools', f), 'utf8');
+  check('R136', 'the host\'s AI switch: with bridge/ai-host.off the AI hosted on this machine pauses (Work runs on the host\'s Claude, the API → 503, the Unity section → 503, Unity in the chat says it is paused) while chat and the board keep working and /api/check reports it; removing the file brings the AI back at once; [static] the heart / knife host tools (start-viberoller-host / stop-viberoller-host from one C# file, icons drawn by the build script, Desktop shortcuts, Linux twins) only touch that switch and start the hub if it is not running; their build output is gitignored',
+    offCheck.aiHost === false && /switched off right now/.test(offWork) && offV1.status === 503 && offAssist.status === 503 && !!offUnity && offChatOk === 200 && offBoardOk === 200
+    && onCheck.aiHost === true && /echo: back on r136/.test(onWork)
+    && /#if START/.test(ht('HostTool.cs')) && /ai-host\.off/.test(ht('HostTool.cs')) && /start\.bat/.test(ht('HostTool.cs')) && /heart\.ico/.test(ht('build-host-tools.ps1')) && /knife\.ico/.test(ht('build-host-tools.ps1'))
+    && /start-viberoller-host\.exe/.test(ht('build-host-tools.ps1')) && /stop-viberoller-host\.exe/.test(ht('build-host-tools.ps1')) && /rm -f ai-host\.off/.test(ht('start-viberoller-host.sh')) && /> ai-host\.off/.test(ht('stop-viberoller-host.sh'))
+    && /^bridge\/ai-host\.off$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /^bridge\/host-tools\/\*\.exe$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
+    `off: check ${offCheck.aiHost} work "${offWork.slice(0, 60)}" v1 ${offV1.status} assistant ${offAssist.status} unity ${offUnity ? 'said paused' : 'no reply'} chat ${offChatOk} board ${offBoardOk}; on: check ${onCheck.aiHost} work "${onWork.slice(0, 40)}"`);
+
   // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.
   const seedV = (await gq(U)).servers || [], seedS = seedV.find((s) => s.id === 'seedtest') || {}, millsS = seedV.find((s) => s.id === 'mills') || {};
   const seedCo = (seedS.roles || []).find((r) => r.builtin === 'coowner') || {};
@@ -1561,7 +1586,7 @@ async function run() {
   await call('/api/guilds/server/delete', A, { server: 'seedtest' });
   check('R134', 'host-set owners: bridge/server-owners.json (gitignored) gives a server its owner and co-owners at start, once (remembered in guilds.json, so later Server Settings changes stick), skipping unknown accounts, with an audit line by "host"; the Mills server can have a named owner (hub admins keep owner rights), shown to everyone, and can be handed on but never deleted; a seeded co-owner edits settings but cannot delete',
     seedOwnerOk && seedApplied && seedAudit && coCanEdit.status === 200 && coCannotDelete.status === 400 && millsOwnerShown
-    && /db\.seeds\[id\] === key/.test(gu34) && /if \(s\.everyone\) return; \/\/ the Mills server is everyone's/.test(gs34) && /^bridge\/server-owners\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
+    && /db\.seeds\[id\] === key/.test(gu34) && /if \(s\.everyone\) return; \/\/ the VibeRoller server is everyone's/.test(gs34) && /^bridge\/server-owners\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     `seedtest owner ${seedS.owner} co ${JSON.stringify((seedS.memberRoles || {})['t-user'])}, applied ${seedApplied}, audit ${seedAudit}, co edit ${coCanEdit.status} delete ${coCannotDelete.status}, mills owner "${millsS.owner}"`);
 
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
