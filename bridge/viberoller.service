@@ -1,0 +1,23 @@
+# VibeRoller autostart for Linux: a systemd USER service that keeps the hub's supervisor running, so this
+# machine is always there as a host for AI.
+#   1. Run bridge/start.sh once by hand first (it asks for the first password if there is no account yet).
+#   2. Copy this file:   mkdir -p ~/.config/systemd/user && cp viberoller.service ~/.config/systemd/user/
+#   3. Point WorkingDirectory at your checkout's bridge folder if it is not ~/VibeRoller/bridge.
+#   4. Turn it on:       systemctl --user daemon-reload && systemctl --user enable --now viberoller
+#   5. Start at boot, before anyone signs in:   loginctl enable-linger "$USER"
+# Logs: journalctl --user -u viberoller -f      Off again: systemctl --user disable --now viberoller
+# A second copy is harmless: it finds the hub's port taken and stops without opening a second tunnel.
+[Unit]
+Description=VibeRoller hub (AI host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/VibeRoller/bridge
+ExecStart=/usr/bin/env node run.js
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

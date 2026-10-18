@@ -1,7 +1,7 @@
 {
-  "name": "Mills Chat",
-  "short_name": "Mills Chat",
-  "description": "The Unity AI Lab team chat: servers, channels, groups, private messages, calls and Unity, end-to-end encrypted.",
+  "name": "VibeRoller Chat",
+  "short_name": "VibeRoller",
+  "description": "The VibeRoller team chat: servers, channels, groups, private messages, calls and Unity, end-to-end encrypted.",
   "id": "./index.html?app=1",
   "start_url": "./index.html?app=1",
   "scope": "./",

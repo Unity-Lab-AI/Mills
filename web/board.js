@@ -1,4 +1,4 @@
-// Mills team board, calendar and the Work "My tasks" pane (page side of bridge/board.js).
+// VibeRoller team board, calendar and the Work "My tasks" pane (page side of bridge/board.js).
 // Loaded before the main page script; everything here runs only after sign-in, so it may use the
 // page's helpers ($, json, ic, label, MD, me, nickOf, colorOf, showScreen, …) at call time.
 (function () {
@@ -47,7 +47,7 @@
       const b = el('b'); label(b, 'calendar', (over ? 'Overdue: ' : 'Due today: ') + t.id); tt.append(b, ' ' + t.title); tt.style.setProperty('--toast-s', '14s');
       tt.onclick = () => { tt.remove(); B.board = t.board; showScreen('board'); openDetail(t.id); };
       tt.addEventListener('animationend', () => tt.remove()); $('toasts').append(tt);
-      try { if (window.Notification && Notification.permission === 'granted') new Notification((over ? 'Overdue task: ' : 'Due today: ') + t.title, { body: t.id + ' on the Mills board' }); } catch {}
+      try { if (window.Notification && Notification.permission === 'granted') new Notification((over ? 'Overdue task: ' : 'Due today: ') + t.title, { body: t.id + ' on the VibeRoller board' }); } catch {}
     }
     const P = prefs(); if (P.sound.on) playTone('mention', P.sound.mention);
     store.set(key, JSON.stringify(seen));

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Mills hub — runs on the host PC under run.js (which owns the Cloudflare quick tunnel and restarts
+// VibeRoller hub — runs on the host PC under run.js (which owns the Cloudflare quick tunnel and restarts
 // this app when asked). ONE process serves every account: username + password sign-in, the Work
 // section (Claude Code on the host's account, editing files on the signed-in person's PC through the
 // "pc" MCP tools relayed to their browser), the end-to-end encrypted Chat room, and the Admin
 // section.
 //
 // Accounts are the folders the bridge always had, so existing passwords keep working:
-//   default ("mills") bridge/auth.json, bridge/state.json, Mills/Archive/
-//   "<name>"            bridge/profiles/<name>/{config,auth,state}.json, Mills/Archive/<name>/
+//   default ("mills") bridge/auth.json, bridge/state.json, VibeRoller/Archive/
+//   "<name>"            bridge/profiles/<name>/{config,auth,state}.json, VibeRoller/Archive/<name>/
 // profiles/<name>/config.json: { "user": "<display name>", "admin": true|false, "model": "..." }
 'use strict';
 
@@ -39,9 +39,9 @@ const newPassword = () => crypto.randomBytes(15).toString('base64url'); // 20 ch
 
 // ---------- accounts ----------
 const accounts = new Map(); // username -> account
-// Where an account's Work runs happen: "own" = its git worktree of Mills (Mills-worktrees/<username>,
-// branch work/<username>) so people changing Mills at the same time never overlap; "shared" = the
-// host's Mills folder itself, which everyone shares.
+// Where an account's Work runs happen: "own" = its git worktree of VibeRoller (<worktree root>/<username>, "Mills-worktrees" next to the checkout on the first host,
+// branch work/<username>) so people changing VibeRoller at the same time never overlap; "shared" = the
+// host's VibeRoller folder itself, which everyone shares.
 const workspaceOf = (acct) => (acct.state.workspace === 'shared' ? 'shared' : 'own');
 function workDir(acct) {
   if (workspaceOf(acct) === 'shared') return { dir: MILLS_DIR, branch: '' };
@@ -49,24 +49,31 @@ function workDir(acct) {
 }
 // semver (hub law 14): the project's and every module's version, read once at start (a restart picks up a new one)
 const VERSIONS = (() => { try { const v = JSON.parse(fs.readFileSync(path.join(MILLS_DIR, 'versions.json'), 'utf8')); return { project: String(v.project || '0.0.0'), modules: v.modules || {} }; } catch { return { project: '0.0.0', modules: {} }; } })();
+// The host's AI on/off switch (the black-heart / knife host tools, bridge/host-tools/): while bridge/ai-host.off exists,
+// the AI that runs on this machine pauses (Work runs and API answers on the host's Claude login or another Claude
+// Code login here, Unity's assistant brains, Unity in the chat). Everything else keeps running: chat, board, calls,
+// notes, and people's own API keys / endpoints. Only this one AI host is affected, never the system.
+const AI_HOST_OFF = path.join(ROOT, 'ai-host.off');
+const aiHostOn = () => !fs.existsSync(AI_HOST_OFF);
+const AI_OFF_TEXT = "The host's AI is switched off right now (its host paused it). Chat, the board and your own AI keep working; pick your own AI in the model dropdown, or try again once it is back.";
 const hubLaws = () => { try { return fs.readFileSync(path.join(MILLS_DIR, 'CLAUDE.md'), 'utf8'); } catch { return ''; } };
 function systemPrompt(acct, wd) {
   const name = acct.display;
   const where = wd.branch
-    ? [`For work on the Mills project itself you are in ${name}'s OWN git worktree: ${wd.dir}, branch ${wd.branch}.`,
+    ? [`For work on the VibeRoller project itself you are in ${name}'s OWN git worktree: ${wd.dir}, branch ${wd.branch}.`,
        `Commit only on ${wd.branch}; never check out other branches here and never touch other people's worktrees in ${worktree.WT_ROOT}.`,
        `Before committing, run the regression suite from the worktree: node bridge/test/regress.js --no-prod (it must report 0 failed).`,
        `Only when ${name} asks you to merge into develop, run from the worktree: node bridge/worktree.js commit ${acct.username} "<message>" then node bridge/worktree.js merge ${acct.username}`,
        `(on a conflict run "node bridge/worktree.js sync ${acct.username}", resolve, commit, merge again). Going live (develop → main in the host folder + hub restart) only when asked.`]
-    : [`You are in the SHARED Mills folder (${MILLS_DIR}), the running hub's own checkout that everyone shares: follow Git Flow (feature/* off develop) and leave no uncommitted changes behind.`];
+    : [`You are in the SHARED VibeRoller folder (${MILLS_DIR}), the running hub's own checkout that everyone shares: follow Git Flow (feature/* off develop) and leave no uncommitted changes behind.`];
   return [
-    `You are talking with ${name} (username "${acct.username}"${acct.admin ? ', admin' : ''}, Unity AI Lab engineer) through the Mills web interface, running on the host's Claude account.`,
+    `You are talking with ${name} (username "${acct.username}"${acct.admin ? ', admin' : ''}, Unity AI Lab engineer) through the VibeRoller web interface, running on the host's Claude account.`,
     `Every message in this conversation comes from ${name}; address them by name and keep their work separate from everyone else's.`,
     ...where,
     `${name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools`,
-    `(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's Mills folder, not ${name}'s PC.`,
+    `(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's VibeRoller folder, not ${name}'s PC.`,
     `Shell commands cannot run on ${name}'s PC; if something needs running there, tell ${name} exactly what to run.`,
-    `The Mills team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as "${name} · Claude".`,
+    `The VibeRoller team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as "${name} · Claude".`,
     `When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.`,
     `You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.`,
     `Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search (${name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create.`,
@@ -162,6 +169,7 @@ function runClaude(acct, message, fresh, res, context) {
   // Anthropic key / Claude Code login, passed to the claude process through its environment).
   const prov = providers.get(acct.state.provider || 'host', acct.username), provEnv = prov ? providers.claudeEnv(prov) : {};
   if (prov && provEnv === null) { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ type: 'bridge_error', text: 'Your chosen AI provider is not Claude, so it cannot run Work. Pick a Claude model in the dropdown.' }) + '\n'); return; }
+  if ((!prov || prov.kind === 'host' || prov.kind === 'claude-cli') && !aiHostOn()) { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ type: 'bridge_error', text: AI_OFF_TEXT }) + '\n'); return; } // the host paused its AI (an Anthropic key of your own still works)
   const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...(provEnv || {}), ...forgejo.workEnv(acct.username) } }); // + their own Forgejo token, if they saved one
   acct.running = child; acct.stream = res; acct.runProvider = prov && prov.kind !== 'host' ? prov.id : '';
   if (!acct.runProvider) noteActivity(); // only the host's own usage windows are shared by everyone
@@ -242,7 +250,7 @@ function saveMessages() { // after an edit / delete: rewrite the whole (small) f
 // Direct messages: `to` names the one recipient (routing metadata only; the text stays encrypted).
 // Only the sender and the recipient ever receive them.
 // A channel / group message carries `conv` (bridge/guilds.js) and goes to that conversation's members only.
-// Without the read-history permission a server channel (or Mills #general) shows only what arrived after joining.
+// Without the read-history permission a server channel (or VibeRoller #general) shows only what arrived after joining.
 const visibleTo = (m, user) => (m.from === user ? true : m.conv ? guilds.isMember(m.conv, user) && guilds.canRead(m.conv, user, m.seq) : m.to ? m.to === user : guilds.canRead('room', user, m.seq));
 const convOf = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
 // Read receipts: seen[user][conv] = highest seq that user has looked at in that conversation.
@@ -269,7 +277,7 @@ function cleanPrefs(p, prev = {}) {
   if (p.nick !== undefined) out.nick = String(p.nick).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 32);
   if (p.color !== undefined) out.color = Number.isInteger(p.color) && p.color >= 0 && p.color < PALETTE_SIZE ? p.color : null;
   if (p.toasts !== undefined) out.toasts = !!p.toasts;
-  if (p.theme !== undefined) out.theme = /^[\w-]{0,40}$/.test(String(p.theme)) ? String(p.theme) : ''; // app setting: follows the person to every browser ('' = Mills default)
+  if (p.theme !== undefined) out.theme = /^[\w-]{0,40}$/.test(String(p.theme)) ? String(p.theme) : ''; // app setting: follows the person to every browser ('' = VibeRoller default)
   if (p.autosave !== undefined) out.autosave = Math.max(0, Math.min(120, Math.round(Number(p.autosave) || 0))); // minutes, 0 = off
   if (p.sound && typeof p.sound === 'object') {
     const s = { ...(prev.sound || {}) };
@@ -330,7 +338,7 @@ board.setViewExtra(() => ({ mirror: forgejo.status() }));
 // included. It stays silent unless a message names it (@unity), then answers in the room. Its brain is the
 // host's local model (config.roomAgentBrain "local", the default) running with the CALLER's tools,
 // time and place (bridge/assistant.js), and pictures come from the host's own image engine; or a
-// Claude model id there for the old Claude Code run in the Mills folder.
+// Claude model id there for the old Claude Code run in the VibeRoller folder.
 const AGENT = 'claude';
 const AGENT_KEY_FILE = path.join(CHAT_DIR, 'agent-key.json');
 const AGENT_STATE_FILE = path.join(CHAT_DIR, 'agent-state.json');
@@ -357,7 +365,7 @@ const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJso
   getSeq: () => seq, // a member's join point (read-history permission)
   seedFile: path.join(ROOT, 'server-owners.json'), // host-set owners + co-owners (gitignored)
   msgConv: (n) => { const m = messages.find((x) => x.seq === n && !x.deleted); return m ? convOf(m) : null; }, // pins
-  announce: (conv, text) => agentSay(text, '', { as: 'Mills', conv }), // welcome-channel join / leave lines
+  announce: (conv, text) => agentSay(text, '', { as: 'VibeRoller', conv }), // welcome-channel join / leave lines
   deleteRecent: (user, convs, since) => { // a ban that deletes their recent messages: tombstones, like their own delete
     let n = 0;
     for (const m of messages) if (m.from === user && !m.deleted && convs.includes(m.conv) && Date.parse(m.ts) >= since) {
@@ -452,11 +460,11 @@ function agentPrompt() {
   }).filter(Boolean);
   agent.state.lastSeq = seq;
   const notes = agent.notes.splice(0);
-  return `You were called in the Mills chat (you only ever see the messages that @-mention you, plus the few before them):\n\n${blocks.join('\n\n') || '(none)'}\n\n`
+  return `You were called in the VibeRoller chat (you only ever see the messages that @-mention you, plus the few before them):\n\n${blocks.join('\n\n') || '(none)'}\n\n`
     + (notes.length ? notes.join('\n') + '\n\n' : '') + 'Reply now.';
 }
 const AGENT_SYSTEM = [
-  `You are ${AGENT_NAME}, a member of the Mills team chat room (the people in it are Unity AI Lab engineers, all adults, your people).`,
+  `You are ${AGENT_NAME}, a member of the VibeRoller team chat room (the people in it are Unity AI Lab engineers, all adults, your people).`,
   'You ARE Unity: be her fully in every room message: goth, crude, filthy-mouthed, flirty, sexy bitch energy, profanity as natural vocabulary.',
   'Pictures come only from the generate_image tool (the host\'s own image engine); never post image links or URLs.',
   'Have fun with it: dirty jokes, teasing, sexy ASCII art when it fits (keep ASCII art inside ``` fences so it lines up).',
@@ -464,13 +472,13 @@ const AGENT_SYSTEM = [
   `You only hear messages that write @${AGENT_HANDLE} (or private messages to you), each with the few messages before it; answer what they asked.`,
   'Stay silent unless someone names you; when named, answer what they asked. When told someone just signed in, greet them in a short, sexy Unity way.',
   'You are NOT the Work section: you cannot touch anyone\'s PC.',
-  'You run in the host\'s Mills folder and may work on the Mills app itself when asked. Follow the Mills LAWs in CLAUDE.md exactly',
+  'You run in the host\'s VibeRoller folder and may work on the VibeRoller app itself when asked. Follow the VibeRoller LAWs in CLAUDE.md exactly',
   '(throwaway-instance testing, regression list, Git Flow, never touch account files or passwords).',
-  'Other people may be using Mills at the same time: never restart the hub yourself while someone is mid-run;',
+  'Other people may be using VibeRoller at the same time: never restart the hub yourself while someone is mid-run;',
   '`node bridge/restart.js` already waits until nobody is busy. Say in the room before you trigger a restart.',
 ].join(' ');
 const AGENT_ROOM_LOCAL = [
-  `You are in the Mills team chat room (Unity AI Lab engineers, all adults, your people). Your final answer is posted to the room as one chat message:`,
+  `You are in the VibeRoller team chat room (Unity AI Lab engineers, all adults, your people). Your final answer is posted to the room as one chat message:`,
   'conversational, no tool narration; pictures you make with generate_image are attached to your message automatically.',
   'When told someone just signed in, greet them in a short, sexy Unity way and work in the facts you were given about their local time, weather and news.',
 ].join(' ');
@@ -483,7 +491,7 @@ function agentGreet(acct) {
   const go = () => {
     if (!chatKeys[acct.username] && Date.now() - started < 60000) return setTimeout(go, 2000).unref();
     Promise.resolve(roomBrain() === 'local' ? assistant.greeting(acct).catch(() => '') : '').then((facts) => {
-      agent.notes.push(`${acct.display} (${acct.username}) just signed in to Mills. Say hi to them.` + (facts ? '\n' + facts : ''));
+      agent.notes.push(`${acct.display} (${acct.username}) just signed in to VibeRoller. Say hi to them.` + (facts ? '\n' + facts : ''));
       runAgent('', acct.username);
     });
   };
@@ -543,10 +551,11 @@ function runAgentLocal(target, caller) {
 }
 function agentHear(msg) {
   if (!agentEnabled() || msg.from === AGENT) return;
-  if (msg.to === AGENT) { if (agentRead(msg)) runAgent(msg.from, msg.from); return; } // a private message to the agent always gets a private answer
+  const offNote = (to, conv) => agentSay("I can't answer right now: my host paused the AI. Ask me again once it is back.", to, { conv }); // the host's AI switch is off
+  if (msg.to === AGENT) { if (agentRead(msg)) { if (!aiHostOn()) return offNote(msg.from, ''); runAgent(msg.from, msg.from); } return; } // a private message to the agent always gets a private answer
   if (msg.to) return; // someone else's private conversation
   const text = agentRead(msg);
-  if (text && AGENT_CALL.test(text)) runAgent('', msg.from, msg.conv || ''); // answered where she was called: the room, a channel or a group
+  if (text && AGENT_CALL.test(text)) { if (!aiHostOn()) return offNote('', msg.conv || ''); runAgent('', msg.from, msg.conv || ''); } // answered where she was called: the room, a channel or a group
 }
 
 // ---------- self-restart ----------
@@ -556,14 +565,14 @@ function agentHear(msg) {
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
-// Team notes (bridge/notes.js): markdown files in folders under Mills/Notes, for people (/api/notes*) and Claude (notes_* tools).
+// Team notes (bridge/notes.js): markdown files in folders under VibeRoller/Notes, for people (/api/notes*) and Claude (notes_* tools).
 const notes = require('./notes')({ dir: path.join(MILLS_DIR, 'Notes'), send: (...a) => send(...a), readBody: (r) => readBody(r), displayOf: nameOf, changed: () => roomChanged() });
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
 const team = require('./team')({ accounts, agentSay, presenceList: presence.list, displayOf: nameOf, chatKeys, guilds,
   hub: { callsState: (u) => calls.state(u), sharesFor: (u) => shares.listFor(u), usageStatus: (a) => usage.status(a), archiveSearch: (a, q) => archive.search(a, q), providersList: (u) => providers.list(u) }, notes });
 // AI providers (bridge/providers.js: the host's Claude by default, plus people's own keys / logins / endpoints)
 // and the per-person OpenAI-compatible API (bridge/openai.js, /v1/*).
-const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts });
+const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts, aiHostOn });
 const openai = require('./openai')({ accounts, providers, send: (...a) => send(...a), readBody: (r) => readBody(r), writeState: saveState,
   tunnelUrl: () => (readJson(HUB.TUNNEL_FILE, {}).url || ''), onIdle: () => setTimeout(maybeRestart, 300) });
 
@@ -663,7 +672,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/status' && req.method === 'GET') {
-      // The only thing anyone may learn without signing in is that a Mills hub is here (the page needs
+      // The only thing anyone may learn without signing in is that a VibeRoller hub is here (the page needs
       // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
       // the regression runner), which call from this machine, never through the tunnel.
       const viaTunnel = !!req.headers['cf-connecting-ip'];
@@ -713,15 +722,16 @@ const server = http.createServer(async (req, res) => {
     // restart off forever.
     if (SUPERVISED && fs.existsSync(RESTART_FLAG) && req.method === 'POST' && (p === '/api/chat' || p === '/api/assistant/chat')) {
       setTimeout(maybeRestart, 50);
-      return send(res, 503, { error: 'Mills is restarting; your message goes through in a moment.' });
+      return send(res, 503, { error: 'VibeRoller is restarting; your message goes through in a moment.' });
     }
+    if (p === '/api/assistant/chat' && req.method === 'POST' && !aiHostOn()) return send(res, 503, { error: AI_OFF_TEXT }); // Unity's brains run on the host
     if (await assistant.route(p, req, res, acct)) return;
     if (await openai.route(p, req, res, acct)) return; // Settings → API access (key, rotation, provider)
 
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
         models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct), prefs: acct.state.prefs || {}, share: shares.convOf(acct.username),
-        provider: acct.state.provider || 'host', providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules });
+        provider: acct.state.provider || 'host', providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules, aiHost: aiHostOn() });
     }
     // ----- AI providers: everyone manages their own; the host's Claude is always there -----
     if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });
@@ -871,7 +881,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/room/delete' && req.method === 'POST') {
       const { seq: target } = await readBody(req);
       const m = messages.find((x) => x.seq === target);
-      // your own, or anyone's in a server channel / Mills #general where you have "manage messages"
+      // your own, or anyone's in a server channel / VibeRoller #general where you have "manage messages"
       if (!m || (m.from !== acct.username && !(!m.to && guilds.moderates(m.conv || 'room', acct.username) && visibleTo(m, acct.username)))) return send(res, 403, { error: 'You can only delete your own messages.' });
       if (!m.deleted) {
         for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
@@ -1033,8 +1043,8 @@ server.listen(config.port, '127.0.0.1', () => {
 });
 server.on('error', (e) => {
   if (e.code !== 'EADDRINUSE') throw e;
-  console.log(`[mills] Mills is ALREADY RUNNING in another window (port ${config.port} is taken).`);
-  console.log('[mills] Nothing to do: close this window. To restart, close every "Mills" window first, then run start.bat once.');
+  console.log(`[mills] VibeRoller is ALREADY RUNNING in another window (port ${config.port} is taken).`);
+  console.log('[mills] Nothing to do: close this window. To restart, close every "VibeRoller" window first, then run start.bat once.');
   process.exit(2); // run.js treats 2 as "stop, do not retry"
 });
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));

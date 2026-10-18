@@ -8,8 +8,8 @@
      anything except by loading an image; markdown images (https) are allowed for that reason only and
      are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
-<title>Mills</title>
-<!-- Mills Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
+<title>VibeRoller</title>
+<!-- VibeRoller Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/mills.svg" type="image/svg+xml">
 <meta name="theme-color" content="#0f1115">
@@ -472,7 +472,7 @@
   #memberList .mName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .botTag { background: var(--accent); color: var(--on-accent); font-size: .6rem; font-weight: 800; border-radius: 4px; padding: 0 .3rem; margin-left: .35rem; vertical-align: middle; letter-spacing: .04em; }
   /* (web/guilds.js shows the member column in app mode and on screens 1500 px and wider while the Chat screen is open) */
-  /* ── app mode (index.html?app=1, the installed Mills Chat): chat only, Discord-shaped, fancier ── */
+  /* ── app mode (index.html?app=1, the installed VibeRoller Chat): chat only, Discord-shaped, fancier ── */
   body.appMode #room header { display: none; }
   body.appMode #room { --panel: color-mix(in srgb, var(--panel) 92%, var(--accent) 3%); --line: color-mix(in srgb, var(--line) 90%, var(--bg)); } /* follows the theme, like the site */
   body.appMode #roomSide { width: 296px; max-width: 42%; }
@@ -675,7 +675,7 @@
 <link rel="stylesheet" href="polish.css">
 </head>
 <body>
-<!-- Mills icon set: one sprite of custom line icons (24×24 grid, round 1.9 px strokes in the text colour,
+<!-- VibeRoller icon set: one sprite of custom line icons (24×24 grid, round 1.9 px strokes in the text colour,
      so they follow every theme). Use: an svg with class "ic" holding a use of the symbol, or ic(name) in script. -->
 <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><!-- zero-size, not display:none: gradients inside a display:none svg do not paint -->
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5.5M11 18l-6-6 6-6"/></symbol>
@@ -736,7 +736,7 @@
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></symbol>
   <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.2 5.1 1.8-5.1 1.9L12 17.6l-1.9-5.2L5 10.5l5.1-1.8z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></symbol>
   <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 4.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5H14M10.5 12H20M16.5 8.5L20 12l-3.5 3.5"/></symbol>
-  <!-- the Mills mark (the app icon's "M" in its rounded square), stroked with a gradient of the theme's own
+  <!-- the VibeRoller mark (the app icon's "M" in its rounded square), stroked with a gradient of the theme's own
        accent colours and the "live" dot in its good colour; used on the sign-in card and the menu -->
   <defs><linearGradient id="gMark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color: var(--accent)"/><stop offset="1" style="stop-color: var(--accent-2, var(--accent))"/></linearGradient></defs>
   <symbol id="i-mills" viewBox="0 0 48 48"><rect x="3" y="3" width="42" height="42" rx="10.5" stroke="url(#gMark)" stroke-width="2"/><path d="M12 33V16.5l6 9 6-9 6 9 6-9V33" stroke="url(#gMark)" stroke-width="3.6"/><circle cx="37.5" cy="13" r="2.8" style="fill: var(--good)" stroke="none"/></symbol>
@@ -744,13 +744,13 @@
 
 <form id="login" class="center">
   <svg class="brandMark" aria-hidden="true"><use href="#i-mills"/></svg>
-  <h1 id="title">Mills</h1>
-  <p>Sign in with your Mills username and password.</p>
+  <h1 id="title">VibeRoller</h1>
+  <p>Sign in with your VibeRoller username and password.</p>
   <input id="username" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>
   <input id="password" type="password" placeholder="Password" autocomplete="current-password">
   <button type="submit" id="signin">Sign in</button>
   <div class="err" id="loginErr"></div>
-  <div class="status" id="bridgeStatus">Looking for Mills…</div>
+  <div class="status" id="bridgeStatus">Looking for VibeRoller…</div>
 </form>
 
 <div id="menu" hidden>
@@ -851,7 +851,7 @@
 <div id="settings" class="modal" hidden>
   <div class="box">
     <div class="bar"><span>Settings</span><button class="ghost" id="closeSettings">Close</button></div>
-    <!-- three tabs (web/profile.js): Profile = what others see (user settings); App = how Mills behaves for you
+    <!-- three tabs (web/profile.js): Profile = what others see (user settings); App = how VibeRoller behaves for you
          (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons -->
     <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App settings</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button></div>
     <div class="setBody">
@@ -868,7 +868,7 @@
       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
-      <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything Mills says out loud (chat read-aloud and Unity's voice); off = silence</label>
+      <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
       <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
       <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
       <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
@@ -889,12 +889,12 @@
       <label>Theme (follows you to every browser you sign in on)<select id="setTheme"></select></label>
       <div><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
       <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
-      <details id="aboutMills" class="setSection"><summary></summary><div id="aboutModules"></div></details>
+      <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
      </div>
      <div data-setpane="connections" hidden>
-      <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to Mills: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
+      <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
         <div id="apiBox" class="apiBox"></div></div>
-      <div class="setSection"><b>Mills Chat app</b> — the chat side of Mills as its own installed app on Windows or Linux (servers, channels, groups, private messages, calls, Unity).
+      <div class="setSection"><b>VibeRoller Chat app</b> — the chat side of VibeRoller as its own installed app on Windows or Linux (servers, channels, groups, private messages, calls, Unity).
         <div id="appBox" class="apiBox"></div></div>
       <div class="setSection"><b>My AIs</b> — hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.
         <div id="provBox" class="provBox"></div></div>
@@ -1025,14 +1025,14 @@
 <div id="shell" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
-    <b id="brand">Mills</b>
+    <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
     <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
     <button class="ghost" id="openArchive" title="Your saved Claude sessions">Past sessions</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
-    <select id="workspace" title="Where Claude works on the Mills project: your own git worktree (nobody else's changes get in the way) or the shared Mills folder everyone uses" hidden>
+    <select id="workspace" title="Where Claude works on the VibeRoller project: your own git worktree (nobody else's changes get in the way) or the shared VibeRoller folder everyone uses" hidden>
       <option value="own">My worktree</option><option value="shared">Shared folder</option></select>
     <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
       <div id="themeMenu" hidden></div></span>
@@ -1127,7 +1127,7 @@ MD.resolveImage = async (p) => {
   } catch { return null; }
 };
 const GH_USER = '__MILLS_GIST_OWNER__'; // filled in at deploy time from the MILLS_GIST_OWNER repository variable
-// One Mills hub serves every account; people sign in with username + password.
+// One VibeRoller hub serves every account; people sign in with username + password.
 // An old ?user=<name> link still works: it just fills in the username.
 const GIST_FILE = 'mills-bridge.json';
 const TOKEN_KEY = 'mills.token';
@@ -1182,7 +1182,7 @@ function applyTheme(name) {
 }
 applyTheme(store.get('mills.theme'));
 
-// Stable per-browser device id — Mills locks itself to the first device that signs in.
+// Stable per-browser device id — VibeRoller locks itself to the first device that signs in.
 let deviceId = store.get('mills.device');
 if (!deviceId) { deviceId = crypto.randomUUID() + crypto.randomUUID(); store.set('mills.device', deviceId); }
 let token = sessionStorage.getItem(TOKEN_KEY);
@@ -1212,10 +1212,10 @@ async function findBridge(fresh) {
 async function gistBridge() {
   const list = await fetch(`https://api.github.com/users/${GH_USER}/gists?per_page=100`).then((r) => r.json());
   const gist = Array.isArray(list) && list.find((g) => g.files && g.files[GIST_FILE]);
-  if (!gist) throw new Error('Mills is not running yet.');
+  if (!gist) throw new Error('VibeRoller is not running yet.');
   const full = await fetch(gist.url).then((r) => r.json());
   const url = JSON.parse(full.files[GIST_FILE].content).url;
-  if (!url) throw new Error('Mills is not running yet.');
+  if (!url) throw new Error('VibeRoller is not running yet.');
   return url;
 }
 async function connect() {
@@ -1223,8 +1223,8 @@ async function connect() {
   try {
     base = await findBridge();
     const ok = await fetch(base + '/api/status').then((r) => r.ok).catch(() => false);
-    if (!ok) throw new Error('Mills is offline — ask the admin to start it.');
-    s.textContent = 'Mills is online'; s.className = 'status on';
+    if (!ok) throw new Error('VibeRoller is offline — ask the admin to start it.');
+    s.textContent = 'VibeRoller is online'; s.className = 'status on';
     return true;
   } catch (e) {
     base = null;
@@ -1237,20 +1237,20 @@ async function connect() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let reconnecting = false;
 async function api(path, opts = {}) {
-  if (!base) throw new Error('Mills is offline — ask the admin to start it.');
+  if (!base) throw new Error('VibeRoller is offline — ask the admin to start it.');
   const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
   for (let attempt = 1; ; attempt++) {
     let res = null;
     try { res = await fetch(base + path, init); } catch {}
     if (res && ![502, 503, 504, 530].includes(res.status)) {
-      if (reconnecting) { reconnecting = false; sys('Mills is back.'); }
+      if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
       if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
       return res;
     }
     // No bridge behind the address: it is restarting after a code change (back within seconds,
     // same address) or the admin restarted its window (new address, found again via the gist).
-    if (attempt >= 40) { reconnecting = false; throw new Error('Mills is not responding — ask the admin to check it.'); }
-    if (!reconnecting) { reconnecting = true; sys('Mills is restarting — waiting for it to come back…'); }
+    if (attempt >= 40) { reconnecting = false; throw new Error('VibeRoller is not responding — ask the admin to check it.'); }
+    if (!reconnecting) { reconnecting = true; sys('VibeRoller is restarting — waiting for it to come back…'); }
     await sleep(3000);
     if (attempt % 4 === 0) { try { base = await findBridge(true); } catch {} }
   }
@@ -1487,7 +1487,7 @@ function assistNotice(n) {
   d.onclick = () => d.remove();
   $('assistNotice').appendChild(d);
   if (!$('assist').hidden) assistSys('Reminder: ' + n.text);
-  try { if (window.Notification && Notification.permission === 'granted') new Notification('Mills reminder', { body: n.text }); } catch {}
+  try { if (window.Notification && Notification.permission === 'granted') new Notification('VibeRoller reminder', { body: n.text }); } catch {}
   setTimeout(() => d.remove(), 120000);
 }
 function startAssistNotices() {
@@ -1502,7 +1502,7 @@ function startAssistNotices() {
 $('login').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('loginErr').textContent = '';
-  if (!base && !(await connect())) { $('loginErr').textContent = 'Mills is offline — ask the admin to start it.'; return; }
+  if (!base && !(await connect())) { $('loginErr').textContent = 'VibeRoller is offline — ask the admin to start it.'; return; }
   const username = $('username').value.trim().toLowerCase(), password = $('password').value;
   if (!username || !password) { $('loginErr').textContent = 'Enter your username and password.'; return; }
   try {
@@ -1519,8 +1519,8 @@ async function enter() {
   if (me.prefs && typeof me.prefs.theme === 'string') { if (me.prefs.theme !== (store.get('mills.theme') || '')) { const m = me; me = null; applyTheme(m.prefs.theme); me = m; } } // (no chat re-render yet: it is drawn next)
   else if (store.get('mills.theme')) saveThemeChoice(store.get('mills.theme'));
   USER_NAME = me.display;
-  document.title = `Mills · ${me.display}`;
-  $('brand').textContent = `Mills · ${me.display}`;
+  document.title = `VibeRoller · ${me.display}`;
+  $('brand').textContent = `VibeRoller · ${me.display}`;
   $('menuUser').textContent = me.username;
   $('goAdmin').hidden = !me.admin;
   $('login').hidden = true;
@@ -1529,7 +1529,7 @@ async function enter() {
   myShare = me.share || '';
   loadLayout();
   currentConv = store.get('mills.conv.' + me.username) || 'room';
-  showScreen(APP_MODE ? 'room' : 'menu'); // the installed Mills Chat app is the chat and nothing else
+  showScreen(APP_MODE ? 'room' : 'menu'); // the installed VibeRoller Chat app is the chat and nothing else
   startRoomPolling();
   callPollLoop();
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
@@ -1767,7 +1767,7 @@ $('workspace').onchange = async () => {
     const d = await json('/api/workspace', { method: 'POST', body: JSON.stringify({ workspace: want }) });
     fresh = true; // a Claude session belongs to one folder: the next message starts a new one
     sys(d.workspace === 'own' ? 'Working in your own worktree: ' + d.dir + ' (branch ' + d.branch + '). Ask Claude to "merge into develop" when you are done. Next message starts a new chat.'
-      : 'Working in the shared Mills folder everyone uses. Next message starts a new chat.');
+      : 'Working in the shared VibeRoller folder everyone uses. Next message starts a new chat.');
   } catch (err) { sel.value = want === 'own' ? 'shared' : 'own'; sys(err.message, true); }
 };
 $('model').onchange = async () => {
@@ -1794,7 +1794,7 @@ $('composer').addEventListener('submit', (e) => {
   const message = $('input').value.trim();
   if (!message) return;
   $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true;
-  if (message.startsWith('/') && runLocalSlash(message)) return; // a Mills command: done here, nothing goes to Claude
+  if (message.startsWith('/') && runLocalSlash(message)) return; // a VibeRoller command: done here, nothing goes to Claude
   if (busy) enqueue(message); else send(message);
 });
 // The queue (and a pending "Send now") is kept on the hub (bridge/work-state.js), so a reload, closing the
@@ -1883,7 +1883,7 @@ function handleEvent(ev) {
 }
 
 // ── Slash commands: "/" at the start of the Claude box lists the common ones. Most are passed through to
-// Claude Code exactly as typed (it understands them); a few act on Mills itself ("here").
+// Claude Code exactly as typed (it understands them); a few act on VibeRoller itself ("here").
 const SLASH = [
   { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context)', args: '[focus]' },
   { cmd: '/clear', desc: 'Start a fresh conversation (same as New chat)', local: () => $('newChat').click() },
@@ -1927,7 +1927,7 @@ function renderSlash() {
   });
   box.hidden = false;
 }
-function pickSlash(s) { // a Mills command without arguments runs now; anything else is put in the box ready to send
+function pickSlash(s) { // a VibeRoller command without arguments runs now; anything else is put in the box ready to send
   const box = $('input');
   if (s.local && !s.args) { box.value = ''; $('slashMenu').hidden = true; updateStopButton(); s.local(''); return; }
   box.value = s.cmd + ' '; $('slashMenu').hidden = true; box.focus(); box.setSelectionRange(box.value.length, box.value.length); updateStopButton();
@@ -2031,7 +2031,7 @@ setInterval(paintUsage, 1000);            // countdowns tick every second
 setInterval(() => { if (!$('shell').hidden) refreshUsage(); }, 15000); // the limits are shared by everyone: other people's runs move them too
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUsage(); });
 
-// ---------- past sessions (saved Claude conversations, stored on the host PC in Mills/Archive) ----------
+// ---------- past sessions (saved Claude conversations, stored on the host PC in VibeRoller/Archive) ----------
 let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSaveAt = 0;
 // The conversation on screen is also kept on the hub (bridge/work-state.js) a moment after every change, so
 // opening Work later (after a reload, a restart, on another device) puts it back and Claude continues it.
@@ -2175,7 +2175,7 @@ function buildThemeMenu() {
     b.onclick = () => { applyTheme(name); menu.hidden = true; saveThemeChoice(name); };
     menu.append(b);
   };
-  add('', 'Mills default', null);
+  add('', 'VibeRoller default', null);
   for (const [name, t] of Object.entries(THEMES)) add(name, name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()), t);
 }
 $('themeBtn').onclick = (e) => { e.stopPropagation(); const m = $('themeMenu'); if (m.hidden) buildThemeMenu(); m.hidden = !m.hidden; };
@@ -2279,7 +2279,7 @@ function checkPins() { // after every member-list load
     if (!m.pub || (m.username === me.username && !chatPubJwk)) continue; // own key: judged once it is unlocked here
     const was = changedKeys.has(m.username);
     if (trustedPub(m.username, m.pub)) changedKeys.delete(m.username);
-    else if (!was) { changedKeys.add(m.username); sysRoom(nickOf(m.username) + '\'s encryption key changed. Nothing is sent to them until you compare fingerprints with them (outside Mills) and press "Trust new key" under Key fingerprints.'); }
+    else if (!was) { changedKeys.add(m.username); sysRoom(nickOf(m.username) + '\'s encryption key changed. Nothing is sent to them until you compare fingerprints with them (outside VibeRoller) and press "Trust new key" under Key fingerprints.'); }
   }
 }
 function acceptKey(user) {
@@ -2352,7 +2352,7 @@ const convOfMsg = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort()
 // Who a message is shown as: normally the sender; a Work run's Claude posts through the hub's key with
 // `as` = "<person> · Claude" and `via` = that person (whose colour it takes).
 const authorOf = (m) => m.as || (typeof GUILDS !== 'undefined' && GUILDS.nickIn(m.conv || currentConv, m.from)) || nickOf(m.from); // server nickname inside its channels
-// inside a server (Mills #general included) a name takes the colour of the person's highest coloured role there
+// inside a server (VibeRoller #general included) a name takes the colour of the person's highest coloured role there
 const authorColor = (m) => (typeof GUILDS !== 'undefined' && GUILDS.colorIn(convOfMsg(m), m.via || m.from)) || colorOf(m.via || m.from);
 const dmConv = (u) => 'dm:' + [me.username, u].sort().join('|');
 const isGuildConv = (c) => /^(ch|grp):/.test(String(c || '')); // a server channel or a group (web/guilds.js)
@@ -2476,13 +2476,13 @@ async function renderConvList() {
     if (changedKeys.has(m.username)) {
       det.open = true;
       const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Trust new key';
-      b.title = 'Only after ' + nickOf(m.username) + ' read you this same fingerprint outside Mills';
+      b.title = 'Only after ' + nickOf(m.username) + ' read you this same fingerprint outside VibeRoller';
       b.onclick = () => acceptKey(m.username);
       d.append(' ', b);
     }
     det.append(d);
   }
-  const hint = document.createElement('div'); hint.textContent = 'Compare these with each other once, outside Mills. If they match, nobody in between can read the chat.';
+  const hint = document.createElement('div'); hint.textContent = 'Compare these with each other once, outside VibeRoller. If they match, nobody in between can read the chat.';
   det.append(hint); box.append(det);
   updateUnread();
 }
@@ -2706,7 +2706,7 @@ function updateUnread() {
   for (const c of convs) { per[c] = unreadIn(c); total += per[c]; }
   setBadge($('chatBadge'), total); setBadge($('railRoomBadge'), total);
   for (const b of document.querySelectorAll('[data-conv-badge]')) setBadge(b, per[b.dataset.convBadge] || 0);
-  document.title = (total ? `(${total}) ` : '') + 'Mills · ' + me.display;
+  document.title = (total ? `(${total}) ` : '') + 'VibeRoller · ' + me.display;
 }
 function roomVisible() {
   if (!me || document.visibilityState !== 'visible') return false;
@@ -2923,7 +2923,7 @@ function dictStart(box, btn, submit) {
   if (!SpeechRec) return;
   if (!store.get('mills.dictateNoted')) {
     store.set('mills.dictateNoted', '1');
-    (box === $('roomInput') ? sysRoom : sys)('Dictation uses your browser\'s speech recognition. In Chrome and Edge your voice is sent to the browser maker\'s speech service to be turned into text (it is not part of Mills\' end-to-end encryption). The text itself is sent encrypted as usual.');
+    (box === $('roomInput') ? sysRoom : sys)('Dictation uses your browser\'s speech recognition. In Chrome and Edge your voice is sent to the browser maker\'s speech service to be turned into text (it is not part of VibeRoller\' end-to-end encryption). The text itself is sent encrypted as usual.');
   }
   const rec = new SpeechRec();
   rec.continuous = true; rec.interimResults = true; rec.lang = navigator.language || 'en-US';
@@ -3012,7 +3012,7 @@ function openMsgMenu(rec, e) {
   if (mine && !rec.m.deleted && !rec.locked && !rec.audio) add('edit', 'Edit', () => { closeMsgMenu(); startEdit(rec); });
   const conv = convOfMsg(rec.m), pinned = GUILDS.pinned(conv, rec.m.seq);
   if (!rec.m.deleted && GUILDS.canPin(conv)) add('pin', pinned ? 'Unpin' : 'Pin', () => { closeMsgMenu(); GUILDS.pin(conv, rec.m.seq, !pinned); });
-  const modDelete = !mine && !rec.m.to && GUILDS.canModerate(conv); // "manage messages" in a server channel / Mills #general
+  const modDelete = !mine && !rec.m.to && GUILDS.canModerate(conv); // "manage messages" in a server channel / VibeRoller #general
   if ((mine || modDelete) && !rec.m.deleted) add('trash', mine ? 'Delete' : 'Delete (moderator)', (b) => {
     if (b.dataset.armed !== '1') { b.dataset.armed = '1'; label(b, 'trash', 'Click again to delete'); return; }
     closeMsgMenu();
@@ -3352,7 +3352,7 @@ function openSettings() {
   $('setAutosave').value = String(P.autosave);
   const th = $('setTheme'); th.textContent = '';
   const opt = (v, l) => { const o = document.createElement('option'); o.value = v; o.textContent = l; th.append(o); };
-  opt('', 'Mills default');
+  opt('', 'VibeRoller default');
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
@@ -3360,9 +3360,9 @@ function openSettings() {
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
-function renderAbout() { // Settings → App settings: "Mills x.y.z" (+ every module's version when opened)
-  const sum = $('aboutMills').querySelector('summary'), box = $('aboutModules');
-  sum.textContent = 'Mills ' + (me.version || 'unknown') + (APP_MODE ? ' · Mills Chat app' : '') + ' · module versions';
+function renderAbout() { // Settings → App settings: "VibeRoller x.y.z" (+ every module's version when opened)
+  const sum = $('aboutVibeRoller').querySelector('summary'), box = $('aboutModules');
+  sum.textContent = 'VibeRoller ' + (me.version || 'unknown') + (APP_MODE ? ' · VibeRoller Chat app' : '') + ' · module versions';
   box.textContent = '';
   for (const [m, v] of Object.entries(me.versions || {})) { const r = document.createElement('div'); r.className = 'row'; const a = document.createElement('code'); a.textContent = m; const b = document.createElement('small'); b.textContent = v; r.append(a, b); box.append(r); }
 }
@@ -3668,7 +3668,7 @@ function watchContext() {
     if (lines.length) parts.push(`${nickOf(owner)}'s shared Work session (latest):\n` + lines.join('\n'));
   }
   if (!parts.length) return '';
-  return `[Automatic context, not written by ${USER_NAME}: summaries of teammates' shared Mills Work sessions ${USER_NAME} is watching. They work in their own worktrees; use this only to stay in sync, do not act on their behalf.]\n\n` + parts.join('\n\n');
+  return `[Automatic context, not written by ${USER_NAME}: summaries of teammates' shared VibeRoller Work sessions ${USER_NAME} is watching. They work in their own worktrees; use this only to stay in sync, do not act on their behalf.]\n\n` + parts.join('\n\n');
 }
 
 // ── Admin: accounts + hub controls; the hub checks the admin flag on every call ──

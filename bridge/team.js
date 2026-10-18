@@ -1,4 +1,4 @@
-// Mills team tools for Claude in a Work run (bridge/team-mcp.js → /internal/team): post into the
+// VibeRoller team tools for Claude in a Work run (bridge/team-mcp.js → /internal/team): post into the
 // team chat as "<person> · Claude" and see who is here. Kept apart from server.js so the chat room,
 // the presence table and this relay stay separate pieces.
 //
@@ -12,7 +12,7 @@ module.exports = function createTeam({ accounts, agentSay, presenceList, display
   const ok = (result) => ({ ok: true, result });
   const no = (error) => ({ ok: false, error });
   const tools = {
-    team_channel_create(acct, args) { // a channel in a server this person is in (the Mills server included)
+    team_channel_create(acct, args) { // a channel in a server this person is in (the VibeRoller server included)
       if (!guilds) return no('Servers are not available.');
       try { const ch = guilds.ops.createChannel(acct.username, { server: String(args.server || 'mills'), name: String(args.name || ''), topic: String(args.topic || '') }); return ok({ created: true, conv: 'ch:' + String(args.server || 'mills') + '/' + ch.id, channel: ch }); }
       catch (e) { return no(e.message); }

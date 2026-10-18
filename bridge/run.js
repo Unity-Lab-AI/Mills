@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mills supervisor — what start.bat / start.sh run. It owns the Cloudflare quick tunnel and the
+// VibeRoller supervisor — what start.bat / start.sh run. It owns the Cloudflare quick tunnel and the
 // gist that advertises it, and keeps the bridge app (server.js) running underneath:
 //   - app exits 75  → it asked to restart (Claude changed code/config and the current run has
 //                     finished): respawned at once, under the SAME tunnel, so the public address

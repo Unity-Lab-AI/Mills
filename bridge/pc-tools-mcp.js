@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MCP stdio server launched by Claude Code. Each tool call is relayed to the Mills
+// MCP stdio server launched by Claude Code. Each tool call is relayed to the VibeRoller
 // bridge, which forwards it to the user's browser; the browser performs it on the
 // folder they opened on their PC and posts the result back.
 'use strict';

@@ -1,10 +1,44 @@
-# Mills changelog
+# VibeRoller changelog (formerly Mills)
 
 Semantic versioning (hub law 14): `versions.json` holds the project's version and every module's.
 MAJOR = something stops working the old way (routes, stored files, message format, a removed feature),
 MINOR = something new that leaves the rest working, PATCH = a fix or polish. Each change bumps every module it
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
+
+## 1.3.0 — 2026-10-18
+
+### Added
+- Autostart, so the host is always there for AI: `bridge/autostart-windows.cmd` puts a launcher into the
+  Windows Startup folder that opens `start.bat` minimized at every sign-in (`remove` undoes it), and
+  `bridge/viberoller.service` does the same on Linux as a systemd user service, at boot with lingering on.
+  A second copy is harmless. Gee's PC already has the launcher.
+- The host's AI switch and the host tools. `start-viberoller-host.exe` (black heart) and
+  `stop-viberoller-host.exe` (knife) switch THIS machine's AI hosting on and off, never the system. Stopping
+  pauses only the AI that runs here: Work runs on the host's Claude, the API's answers from it, Unity's
+  assistant and Unity in the chat (who says she is paused). Chat, the board, calls, notes and people's own
+  AI keys keep working for everyone. Starting brings it back at once, and starts VibeRoller here if it is
+  not running. Build them once with `bridge/host-tools/build.cmd`, which draws the icons and compiles both
+  tools with the C# compiler that ships with Windows, then puts shortcuts on the Desktop. Linux twins:
+  `start-viberoller-host.sh` / `stop-viberoller-host.sh`. `/api/check` reports `aiHost`. Regression check
+  R136. Modules: bridge/server.js 1.3.0, bridge/providers.js 1.1.0.
+
+### Changed
+- **Mills is now VibeRoller.** The new name shows everywhere people see it: the site, the sign-in card, the
+  menu, Settings, the installed app (now "VibeRoller Chat"), the team-chat welcome lines, Claude's and
+  Unity's instructions, the hub's messages and the README. The everyone-server takes the name once. Stored
+  names stay as they were so nothing breaks: the `mills` account and server id, conversation ids, folders,
+  `MILLS_*` settings and the `X-Mills-*` internal headers. Older sections of this changelog keep the old name.
+- Modules: bridge/assistant.js 1.0.1, bridge/board-mcp.js 1.0.1, bridge/guild-perms.js 1.1.1,
+  bridge/guilds.js 1.1.1, bridge/openai.js 1.0.1, bridge/pc-tools-mcp.js 1.0.1, bridge/run.js 1.0.1,
+  bridge/server.js 1.2.1, bridge/team-mcp.js 1.0.1, bridge/team.js 1.0.1, web/app.js 1.0.1,
+  web/board.js 1.0.1, web/calls.js 1.0.1, web/guild-settings.js 1.1.1, web/guilds.js 1.0.2,
+  web/index.html 1.1.1, web/md.js 1.0.1, web/notes.js 1.0.1, web/polish.css 1.0.1, web/profile.js 1.0.1,
+  web/sw.js 1.0.1 (app cache renamed, so installed apps refresh).
+- Work runs may now also create Forgejo repos and inspect them (`fj repo create`, `fj repo view`,
+  `fj whoami`), and manage git remotes, push, fetch and list remote branches (`git remote`, `git push`,
+  `git fetch`, `git ls-remote`). Needed for the VibeRoller repo, because Forgejo does not create repos
+  on push. No module changed.
 
 ## 1.2.0 — 2026-10-18
 
