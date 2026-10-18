@@ -1144,7 +1144,8 @@ async function run() {
   const modsOnDisk = [...fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => 'bridge/' + f), ...fs.readdirSync(path.join(MILLS, 'web')).filter((f) => /\.(js|css)$/.test(f) || f === 'index.html').map((f) => 'web/' + f)];
   const unlisted = modsOnDisk.filter((m) => !(m in V.modules)), ghosts = Object.keys(V.modules).filter((m) => !modsOnDisk.includes(m));
   const badSem = [V.project, ...Object.values(V.modules)].filter((s) => !SEMVER.test(String(s)));
-  const same = (rel) => { try { return fs.readFileSync(path.join(MILLS, rel)).equals(fs.readFileSync(path.join(prodRoot, rel))); } catch { return false; } };
+  const eolFree = (b) => b.toString('latin1').replace(/\r\n/g, '\n'); // .bat / .cmd / .ps1 are checked out with CRLF (.gitattributes): line endings are not a change
+  const same = (rel) => { try { return eolFree(fs.readFileSync(path.join(MILLS, rel))) === eolFree(fs.readFileSync(path.join(prodRoot, rel))); } catch { return false; } };
   const notBumped = [], changedMods = [];
   if (PV && PV.modules) for (const m of Object.keys(V.modules)) {
     if (!(m in PV.modules)) { changedMods.push(m); continue; } // new module (starts at 1.0.0)
