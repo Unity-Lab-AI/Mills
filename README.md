@@ -181,7 +181,7 @@ Mills uses semantic versioning (MAJOR.MINOR.PATCH) for the project as a whole an
 - **MINOR**: something new that leaves the rest working, such as a feature, route, setting or permission.
 - **PATCH**: a fix or polish that adds nothing new.
 
-Every change bumps each module it touches, and the project by the largest of those bumps, with a changelog section in the same commit. The regression suite (R132) refuses a module that differs from the production checkout without a higher version, and a project change without a higher project version and its changelog section. Settings → App settings shows "Mills x.y.z", and the module versions when opened, on the site and in the Mills Chat app. `/api/check` returns them too. The first versioned release is **1.0.0**.
+Every change bumps each module it touches, and the project by the largest of those bumps, with a changelog section in the same commit. **The changelog records every change** (hub law 15): any tracked file, including README, docs, tests and workflows, not only modules. A change that touches no module still moves the project's PATCH version. Sections run newest first, with Added / Changed / Fixed / Removed / Security lists written for the team, and old sections are never rewritten. R133 checks it. The regression suite (R132) refuses a module that differs from the production checkout without a higher version, and a project change without a higher project version and its changelog section. Settings → App settings shows "Mills x.y.z", and the module versions when opened, on the site and in the Mills Chat app. `/api/check` returns them too. The first versioned release is **1.0.0**.
 
 ## Publishing updates
 
