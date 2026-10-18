@@ -646,7 +646,7 @@ async function run() {
     && !!changed && !!changed.editedAt && (await roomRead(privA, changed)) === v2('after edit', dm.data.seq));
 
   const revB = (await call('/api/room/messages?rev=0', A)).data.latestRev;
-  const delOther = await call('/api/room/delete', A, { seq: mine.data.seq });
+  const delOther = await call('/api/room/delete', D, { seq: mine.data.seq }); // a plain member (hub admins own the Mills server: they may moderate #general, R125)
   const delOwn = await call('/api/room/delete', U, { seq: mine.data.seq });
   const gone2 = ((await call('/api/room/messages?rev=' + revB, A)).data.messages || []).find((m) => m.seq === mine.data.seq);
   const diskDel = (fs.readFileSync(path.join(SCRATCH, 'Chat', 'messages.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.seq === mine.data.seq) || {});
@@ -1283,7 +1283,7 @@ async function run() {
   await call('/api/guilds/group/leave', A, { group: g23.id });
   const gs23 = fs.readFileSync(path.join(MILLS, 'web', 'guild-settings.js'), 'utf8');
   check('R123', 'servers like Discord: personal invitations to accept, server settings only with "manage server", roles with permissions + ranks (a moderator cannot kick the owner), password lock (hash never sent; no / wrong password refused), invite links with max uses + expiry + temporary membership, kick + ban (banned cannot rejoin) + unban, private channels only for their roles, announcement channels only for the announce permission, server nicknames, audit log only for managers, owner must hand over before leaving, only the owner deletes; the Mills server is edited by hub admins only and has no invites; groups: only the owner removes / hands over; [static] Server Settings tabs + join / invitation dialogs',
-    mk23.status === 200 && aBefore && acc23.status === 200 && updNo.status === 400 && updOk.status === 200 && roleM && roleM.perms.join() === 'KICK,CREATE_CHANNELS' && giveM.status === 200 && kickOwner.status === 400
+    mk23.status === 200 && aBefore && acc23.status === 200 && updNo.status === 400 && updOk.status === 200 && roleM && roleM.perms.join() === 'KICK_MEMBERS,CREATE_CHANNELS' && giveM.status === 200 && kickOwner.status === 400
     && pw23.status === 200 && !leak23 && pv23 && pv23.locked === true && pv23.members === 2 && joinNoPw.status === 400 && joinBadPw.status === 400 && joinOk.status === 200 && used23.status === 400 && dIn
     && kickD.status === 200 && dOut && ban23.status === 200 && joinBanned.status === 400 && unban23.status === 200 && joinTemp.status === 200 && tempListed.includes('mills')
     && priv23.status === 200 && news23.status === 200 && !aSeesPriv && aPrivSend.status === 400 && aNews.status === 403 && uNews.status === 200 && aSeesPriv2
@@ -1293,6 +1293,81 @@ async function run() {
     && gRmNo.status === 400 && gRmOk.status === 200 && gXfer.status === 200 && gAfter && gAfter.owner === 't-admin' && !gAfter.members.includes('t-user')
     && /'overview', 'Overview'/.test(gs23) && /'security', 'Security'/.test(gs23) && /'audit', 'Audit log'/.test(gs23) && /function drawJoin\(/.test(gs23) && /\?invite=/.test(gs23) && /<script src="guild-settings\.js">/.test(html),
     `make ${mk23.status}, invited ${aBefore} accept ${acc23.status}, update ${updNo.status}/${updOk.status}, role ${roleM && roleM.perms}, kick owner ${kickOwner.status}, pw ${pw23.status} leak ${leak23}, preview ${JSON.stringify(pv23)}, join ${joinNoPw.status}/${joinBadPw.status}/${joinOk.status} used ${used23.status}, kick ${kickD.status} out ${dOut}, ban ${ban23.status} rejoin ${joinBanned.status} unban ${unban23.status} temp ${joinTemp.status} ${tempListed}, priv ${priv23.status} seen ${aSeesPriv}→${aSeesPriv2} send ${aPrivSend.status}, news ${aNews.status}/${uNews.status}, nick ${nickSeen}, audit ${audit23.slice(0, 8)}, D audit ${dNoAudit}, leave ${leaveOwner.status} xfer ${xfer.status} leave ${leaveAfter.status} del ${delOld.status}/${delNew.status}, mills ${millsU.status}/${millsA.status} ${millsName} inv ${millsInv.status}, group ${gRmNo.status}/${gRmOk.status}/${gXfer.status} owner ${gAfter && gAfter.owner}`);
+
+  // Discord's permission model: levels, timeouts, slowmode, read history, pins, manage messages, channel overwrites,
+  // server mute in calls, only-grant-what-you-hold, welcome lines, paused invites, ban that deletes recent messages.
+  const roomMsgs = async (tok, after) => ((await call('/api/room/messages?since=' + after, tok)).data.messages || []);
+  const seq25 = async () => Math.max(0, ...(await roomMsgs(U, 0)).map((m) => m.seq));
+  const mk25 = (await call('/api/guilds/server', U, { name: 'Perms r125', levels: true, members: ['t-admin'] })).data.result;
+  const s25 = mk25.id, gen25 = 'ch:' + s25 + '/general';
+  const v25 = () => gq(U).then((v) => sv23(v, s25) || {});
+  const lv25 = await v25();
+  const roleBy = (n) => (lv25.roles || []).find((r) => r.name === n) || {};
+  const levelsOk = ['Admin', 'Moderator', 'Member'].every((n) => roleBy(n).id) && roleBy('Admin').position > roleBy('Moderator').position && roleBy('Moderator').position > roleBy('Member').position && roleBy('Admin').perms.includes('ADMINISTRATOR');
+  await call('/api/guilds/invitation/accept', A, { server: s25 });
+  await call('/api/guilds/member/roles', U, { server: s25, user: 't-admin', roles: [roleBy('Member').id] });
+  // read history: @everyone without READ_MESSAGE_HISTORY sees only what arrives after joining; welcome line
+  await call('/api/guilds/server/update', U, { server: s25, settings: { systemChannel: 'general', systemJoins: true }, everyonePerms: ['VIEW_CHANNEL', 'SEND_MESSAGES', 'CONNECT', 'SPEAK', 'CHANGE_NICKNAME'] });
+  const before25 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'before D r125', gen25));
+  await call('/api/guilds/server/invite', U, { server: s25, add: ['mills'] }); await call('/api/guilds/invitation/accept', D, { server: s25 });
+  const after25 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'after D r125', gen25));
+  const dSees = (await roomMsgs(D, 0)).filter((m) => m.conv === gen25).map((m) => m.seq);
+  const welcome25 = (await roomMsgs(U, before25.data.seq)).some((m) => m.conv === gen25 && m.as === 'Mills');
+  const histOk = !dSees.includes(before25.data.seq) && dSees.includes(after25.data.seq);
+  // timeout: A cannot post, type or call; ended → can again
+  const to25 = await call('/api/guilds/member/timeout', U, { server: s25, user: 't-admin', minutes: 5, reason: 'r125' });
+  const toSend = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'while timed out r125', gen25));
+  const toCall = await call('/api/call/join', A, { conv: gen25, mic: true });
+  const toKickOwner = await call('/api/guilds/member/timeout', A, { server: s25, user: 't-user', minutes: 5 });
+  await call('/api/guilds/member/timeout', U, { server: s25, user: 't-admin', minutes: 0 });
+  const toAfter = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'after timeout r125', gen25));
+  // slowmode (owner bypasses)
+  await call('/api/guilds/channel', U, { server: s25, name: 'slow', slowmode: 10 });
+  const slowConv = 'ch:' + s25 + '/slow';
+  const sl1 = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'slow 1 r125', slowConv));
+  const sl2 = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'slow 2 r125', slowConv));
+  const slU1 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'owner 1 r125', slowConv)), slU2 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'owner 2 r125', slowConv));
+  // pins: Member (A) may pin, plain @everyone (D) may not; manage messages: a Moderator deletes others' messages
+  const pinA = await call('/api/guilds/pin', A, { conv: gen25, seq: after25.data.seq });
+  const pinD = await call('/api/guilds/pin', D, { conv: gen25, seq: after25.data.seq });
+  const pinBad = await call('/api/guilds/pin', A, { conv: gen25, seq: before25.data.seq - 100000 });
+  const pinsSeen = ((await v25()).channels.find((c) => c.id === 'general') || {}).pins || [];
+  const delNoMod = await call('/api/room/delete', A, { seq: after25.data.seq });
+  await call('/api/guilds/member/roles', U, { server: s25, user: 't-admin', roles: [roleBy('Moderator').id] });
+  const delMod = await call('/api/room/delete', A, { seq: after25.data.seq });
+  const delDm = await call('/api/room/delete', D, { seq: slU1.data.seq });
+  // only grant what you hold: the Moderator cannot make an administrator role (no manage roles at all here) …
+  const grantNo = await call('/api/guilds/role', A, { server: s25, name: 'sneaky', perms: ['ADMINISTRATOR'] });
+  // channel overwrites: deny A sending in #slow, allow D to view a private channel
+  const owSet = await call('/api/guilds/channel/update', U, { server: s25, channel: 'slow', overwrites: [{ type: 'member', id: 't-admin', allow: [], deny: ['SEND_MESSAGES'] }] });
+  await sleep(10500); // past the slowmode, so the 403 below is the overwrite
+  const owSend = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'denied r125', slowConv));
+  await call('/api/guilds/channel', U, { server: s25, name: 'hidden', overwrites: [{ type: 'role', id: 'everyone', allow: [], deny: ['VIEW_CHANNEL'] }, { type: 'member', id: 'mills', allow: ['VIEW_CHANNEL'], deny: [] }] });
+  const hidV = (tok) => gq(tok).then((v) => ((sv23(v, s25) || { channels: [] }).channels || []).some((c) => c.id === 'hidden'));
+  const hidD = await hidV(D), hidA = await hidV(A);
+  // server mute in calls: the mic flag is held off for everyone to see
+  await call('/api/guilds/member/mute', U, { server: s25, user: 't-admin', on: true });
+  const mj = await call('/api/call/join', A, { conv: gen25, mic: true });
+  const mjMe = ((mj.data.calls || {})[gen25] || []).find((p) => p.user === 't-admin') || {};
+  await call('/api/call/leave', A, {});
+  await call('/api/guilds/member/mute', U, { server: s25, user: 't-admin', on: false });
+  // paused invites
+  await call('/api/guilds/server/update', U, { server: s25, settings: { invitesPaused: true } });
+  const ivPaused = await call('/api/guilds/invite', U, { server: s25 });
+  // ban + delete the last hour of their messages
+  const aLast = toAfter.data && toAfter.data.seq;
+  const ban25 = await call('/api/guilds/member/ban', U, { server: s25, user: 't-admin', deleteSeconds: 3600 });
+  const aGone = (await roomMsgs(U, 0)).find((m) => m.seq === aLast);
+  const gs25 = fs.readFileSync(path.join(MILLS, 'web', 'guild-settings.js'), 'utf8'), gp25 = fs.readFileSync(path.join(BRIDGE, 'guild-perms.js'), 'utf8');
+  await call('/api/guilds/server/delete', U, { server: s25 });
+  check('R125', 'Discord permission model: permission levels Admin / Moderator / Member on a new server; without read history only messages after joining; welcome line by "Mills"; timeout blocks posting + calls (and nobody times out the owner); slowmode (owner bypasses); pins need "pin messages"; "manage messages" deletes others\' messages; nobody grants what they do not hold; channel overwrites (member deny send, private channel with one person allowed); server mute holds the mic flag off; paused invites; a ban deletes the last hour of their messages; [static] grouped permissions, Settings tab, timeout / mute / ban panels, overwrite editor',
+    levelsOk && histOk && welcome25 && to25.status === 200 && toSend.status === 403 && toCall.status === 403 && toKickOwner.status === 400 && toAfter.status === 200
+    && sl1.status === 200 && sl2.status === 403 && slU1.status === 200 && slU2.status === 200
+    && pinA.status === 200 && pinD.status === 400 && pinBad.status === 400 && pinsSeen.some((p) => p.seq === after25.data.seq) && delNoMod.status === 403 && delMod.status === 200 && delDm.status === 403
+    && grantNo.status === 400 && owSet.status === 200 && owSend.status === 403 && hidD && !hidA
+    && mj.status === 200 && mjMe.mic === false && mjMe.held === 'muted' && ivPaused.status === 400 && ban25.status === 200 && ban25.data.result.deleted >= 1 && aGone && aGone.deleted === true
+    && /\['Voice', \{/.test(gp25) && /MODERATE_MEMBERS/.test(gp25) && /function settings\(s\)/.test(gs25) && /'Time out'/.test(gs25) && /Mute in calls/.test(gs25) && /add an override for/.test(gs25) && /Add ' \+ t\.name \+ ' level'/.test(gs25),
+    `levels ${levelsOk}, history ${histOk} welcome ${welcome25}, timeout ${to25.status} send ${toSend.status} call ${toCall.status} owner ${toKickOwner.status} after ${toAfter.status}, slow ${sl1.status}/${sl2.status} owner ${slU1.status}/${slU2.status}, pin ${pinA.status}/${pinD.status}/${pinBad.status} seen ${pinsSeen.length}, delete ${delNoMod.status}/${delMod.status}/${delDm.status}, grant ${grantNo.status}, overwrite ${owSet.status} send ${owSend.status}, hidden D ${hidD} A ${hidA}, mute ${mj.status} ${JSON.stringify(mjMe)}, paused ${ivPaused.status}, ban ${ban25.status} ${JSON.stringify(ban25.data.result)} gone ${aGone && aGone.deleted}`);
 
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });

@@ -432,6 +432,14 @@
   .gsetPreview { display: flex; align-items: center; gap: .6rem; margin: .5rem 0; }
   .gsetPreview .srv { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; font-weight: 800; color: #fff; }
   .gsetIcon { width: 6em; }
+  .gsetPerms .cat { grid-column: 1 / -1; font-weight: 700; color: var(--muted); margin-top: .3rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+  .owRow { display: grid; grid-template-columns: minmax(150px, 1fr) repeat(3, auto); gap: .2rem .5rem; align-items: center; font-size: .85rem; }
+  .owRow select { font-size: .8rem; }
+  .pinsPop { position: fixed; z-index: 45; width: min(370px, 94vw); max-height: 60vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .5rem; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+  .pinRow { display: flex; flex-wrap: wrap; gap: .3rem; align-items: baseline; padding: .35rem .2rem; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .pinRow:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .pinWho { font-weight: 700; } .pinText { flex: 1 1 100%; overflow-wrap: anywhere; } .pinRow small { color: var(--muted); }
+  .rmsg.flash { outline: 2px solid var(--accent); border-radius: 8px; }
   #gsetModal textarea { width: 100%; box-sizing: border-box; }
   #serverRail .srv .badge { position: absolute; right: -4px; bottom: -4px; background: var(--bad); color: #fff; border-radius: 999px; font-size: .62rem; padding: 0 .3rem; border: 2px solid var(--bg); }
   .chHead { display: flex; align-items: center; gap: .3rem; padding: .25rem .25rem .4rem; border-bottom: 1px solid var(--line); margin-bottom: .2rem; } .chHead b { flex: 1; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2389,6 +2397,11 @@ async function renderConvList() {
 }
 function selectConv(conv) {
   if (conv !== 'room' && !(isGuildConv(conv) ? GUILDS.has(conv) : memberOf(convPeer(conv)))) conv = 'room';
+  const fch = GUILDS.find(conv); // an age-restricted channel asks once per browser
+  if (fch && fch.kind === 'ch' && fch.channel.nsfw && !store.get('mills.nsfw.' + conv)) {
+    if (!window.confirm('#' + fch.channel.name + ' is marked age-restricted. Open it?')) conv = currentConv && currentConv !== conv ? currentConv : 'room';
+    else store.set('mills.nsfw.' + conv, '1');
+  }
   currentConv = conv; store.set('mills.conv.' + me.username, conv);
   if (isNarrow()) $('roomCore').classList.add('noside'); // phone: picking a conversation closes the drawer
   cancelCompose(); sendTyping(false);
@@ -2401,7 +2414,7 @@ function selectConv(conv) {
   log.scrollTop = log.scrollHeight;
   for (const b of $('roomSide').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
   const sv = GUILDS.serverOf(conv); if (sv && GUILDS.state.server !== sv) { GUILDS.state.server = sv; GUILDS.render(); }
-  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers();
+  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers(); GUILDS.renderPins();
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
@@ -2641,6 +2654,7 @@ function notify(rec) {
   const { m } = rec, c = convOfMsg(m), P = prefs(), q = rec.r && msgs.get(rec.r);
   const kind = q && q.m.from === me.username ? 'reply' : (m.to === me.username || mentionsMe(rec.text)) ? 'mention' : 'message';
   const watching = roomVisible() && document.hasFocus() && c === currentConv;
+  if (kind === 'message' && GUILDS.mentionsOnly(c)) return; // that server's default notifications: mentions only
   if (P.sound.on && !watching) playTone(kind, P.sound[kind]);
   if (P.toasts && !$('shell').hidden && !(roomVisible() && c === currentConv)) toast(rec, kind);
   const who = authorOf(m), how = kind === 'reply' ? ' replied' : m.to ? ' privately' : '';
@@ -2898,7 +2912,10 @@ function openMsgMenu(rec, e) {
   const mine = rec.m.from === me.username;
   if (!rec.m.deleted) add('reply', 'Reply', () => { closeMsgMenu(); startReply(rec); });
   if (mine && !rec.m.deleted && !rec.locked && !rec.audio) add('edit', 'Edit', () => { closeMsgMenu(); startEdit(rec); });
-  if (mine && !rec.m.deleted) add('trash', 'Delete', (b) => {
+  const conv = convOfMsg(rec.m), pinned = GUILDS.pinned(conv, rec.m.seq);
+  if (!rec.m.deleted && GUILDS.canPin(conv)) add('flag', pinned ? 'Unpin' : 'Pin', () => { closeMsgMenu(); GUILDS.pin(conv, rec.m.seq, !pinned); });
+  const modDelete = !mine && !rec.m.to && GUILDS.canModerate(conv); // "manage messages" in a server channel / Mills #general
+  if ((mine || modDelete) && !rec.m.deleted) add('trash', mine ? 'Delete' : 'Delete (moderator)', (b) => {
     if (b.dataset.armed !== '1') { b.dataset.armed = '1'; label(b, 'trash', 'Click again to delete'); return; }
     closeMsgMenu();
     json('/api/room/delete', { method: 'POST', body: JSON.stringify({ seq: rec.m.seq }) }).then(pollRoom).catch((err) => sysRoom('Could not delete: ' + err.message));

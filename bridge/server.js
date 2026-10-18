@@ -240,7 +240,8 @@ function saveMessages() { // after an edit / delete: rewrite the whole (small) f
 // Direct messages: `to` names the one recipient (routing metadata only; the text stays encrypted).
 // Only the sender and the recipient ever receive them.
 // A channel / group message carries `conv` (bridge/guilds.js) and goes to that conversation's members only.
-const visibleTo = (m, user) => (m.conv ? m.from === user || guilds.isMember(m.conv, user) : !m.to || m.from === user || m.to === user);
+// Without the read-history permission a server channel (or Mills #general) shows only what arrived after joining.
+const visibleTo = (m, user) => (m.from === user ? true : m.conv ? guilds.isMember(m.conv, user) && guilds.canRead(m.conv, user, m.seq) : m.to ? m.to === user : guilds.canRead('room', user, m.seq));
 const convOf = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort().join('|') : 'room');
 // Read receipts: seen[user][conv] = highest seq that user has looked at in that conversation.
 const SEEN_FILE = path.join(CHAT_DIR, 'seen.json');
@@ -345,7 +346,19 @@ const agentPriv = crypto.createPrivateKey({ key: agentKey.priv, format: 'jwk' })
 const agentEnabled = () => !accounts.has(AGENT) && config.roomAgent !== false;
 // Servers, channels and groups (bridge/guilds.js): who is in which conversation; guilds.route() serves /api/guilds*.
 const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJson, agentName: AGENT_NAME, changed: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r),
-  isOnline: (u) => presence.online().includes(u) }); // temporary members leave when they go offline
+  isOnline: (u) => presence.online().includes(u), // temporary members leave when they go offline
+  getSeq: () => seq, // a member's join point (read-history permission)
+  msgConv: (n) => { const m = messages.find((x) => x.seq === n && !x.deleted); return m ? convOf(m) : null; }, // pins
+  announce: (conv, text) => agentSay(text, '', { as: 'Mills', conv }), // welcome-channel join / leave lines
+  deleteRecent: (user, convs, since) => { // a ban that deletes their recent messages: tombstones, like their own delete
+    let n = 0;
+    for (const m of messages) if (m.from === user && !m.deleted && convs.includes(m.conv) && Date.parse(m.ts) >= since) {
+      for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
+      Object.assign(m, { deleted: true, keys: {}, rev: ++rev }); n++;
+    }
+    if (n) { saveMessages(); roomChanged(); }
+    return n;
+  } });
 const agentShared = (jwk) => crypto.diffieHellman({ privateKey: agentPriv, publicKey: crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' }) });
 function gcmOpen(key, iv, data, aad) {
   const buf = Buffer.from(data, 'base64'), d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
@@ -548,7 +561,7 @@ const openai = require('./openai')({ accounts, providers, send: (...a) => send(.
 
 // Voice / video calls (bridge/calls.js): who is in which call + the encrypted set-up relay; calls.route() serves /api/call/*.
 const calls = require('./calls')({ accounts, config, chatKeys, send: (...a) => send(...a), readBody: (r) => readBody(r), b64,
-  extraMember: (c, u) => guilds.isMember(c, u), extraConv: (c) => guilds.isGuildConv(c) && guilds.exists(c) });
+  extraMember: (c, u) => guilds.isMember(c, u), extraConv: (c) => guilds.isGuildConv(c) && guilds.exists(c), media: (c, u) => guilds.media(c, u) });
 const { convMember } = calls; // "is this person part of that conversation" (also used by shared Work sessions)
 
 // Shared Work sessions (bridge/shares.js): watch-only windows on a person's Work run; shares.route() serves /api/work/*.
@@ -794,7 +807,8 @@ const server = http.createServer(async (req, res) => {
       // conv: a channel / group this person is in ('room' or nothing = # Everyone; a private message uses `to`)
       const conv = convIn && convIn !== 'room' ? String(convIn) : '';
       if (conv && (to || !guilds.isGuildConv(conv) || !guilds.isMember(conv, acct.username))) return send(res, 400, { error: 'Unknown conversation.' });
-      if (conv && !guilds.canPost(conv, acct.username)) return send(res, 403, { error: 'This is an announcement channel: only people with the announce permission post here.' });
+      const why = to ? '' : guilds.postCheck(conv || 'room', acct.username, { voice: blob !== undefined }); // permissions, timeout, slowmode, new-member wait
+      if (why) return send(res, 403, { error: why });
       if (v !== undefined && !(FORMATS.includes(v) && MID_RE.test(mid || '') && !messages.some((x) => x.mid === mid))) return send(res, 400, { error: 'Bad message.' });
       if (blob !== undefined && !(v === 4 && b64(blob, MAX_CT))) return send(res, typeof blob === 'string' && blob.length > MAX_CT ? 413 : 400, { error: 'That voice clip is too large or malformed (up to about 2 minutes).' });
       if (!mine) return send(res, 400, { error: 'Your chat key is not set up yet.' });
@@ -805,6 +819,7 @@ const server = http.createServer(async (req, res) => {
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
       const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}) };
       appendMessage(msg);
+      if (!to) guilds.notePost(conv || 'room', acct.username); // slowmode
       agentHear(msg);
       return send(res, 200, { seq: msg.seq });
     }
@@ -812,6 +827,8 @@ const server = http.createServer(async (req, res) => {
       const { seq: target, iv, ct, keys, v, mid } = await readBody(req);
       const m = messages.find((x) => x.seq === target);
       if (!m || m.from !== acct.username || m.deleted) return send(res, 403, { error: 'You can only edit your own messages.' });
+      const whyEdit = m.to ? '' : guilds.postCheck(m.conv || 'room', acct.username, { edit: true }); // timed out / no longer allowed to post there
+      if (whyEdit) return send(res, 403, { error: whyEdit });
       const mine = chatKeys[acct.username];
       if (!mine || !b64(iv, 64) || !b64(ct, MAX_CT)) return send(res, 400, { error: 'Bad message.' });
       // an edit keeps the message id; a legacy message gets a fresh one when it is first edited in v3
@@ -827,7 +844,8 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/room/delete' && req.method === 'POST') {
       const { seq: target } = await readBody(req);
       const m = messages.find((x) => x.seq === target);
-      if (!m || m.from !== acct.username) return send(res, 403, { error: 'You can only delete your own messages.' });
+      // your own, or anyone's in a server channel / Mills #general where you have "manage messages"
+      if (!m || (m.from !== acct.username && !(!m.to && guilds.moderates(m.conv || 'room', acct.username) && visibleTo(m, acct.username)))) return send(res, 403, { error: 'You can only delete your own messages.' });
       if (!m.deleted) {
         for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
         Object.assign(m, { deleted: true, keys: {}, rev: ++rev });
@@ -839,7 +857,7 @@ const server = http.createServer(async (req, res) => {
       const { conv, on } = await readBody(req);
       const dm = /^dm:([a-z0-9-]{1,32})\|([a-z0-9-]{1,32})$/.exec(String(conv || ''));
       if (conv !== 'room' && !(dm && [dm[1], dm[2]].includes(acct.username)) && !guilds.isMember(conv, acct.username)) return send(res, 400, { error: 'Unknown conversation.' });
-      presence.typing(acct.username, conv, !!on);
+      presence.typing(acct.username, conv, !!on && (!!dm || guilds.canPost(conv, acct.username))); // no typing where you may not post
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/seen' && req.method === 'POST') {
