@@ -432,6 +432,8 @@
   .gsetPreview { display: flex; align-items: center; gap: .6rem; margin: .5rem 0; }
   .gsetPreview .srv { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; font-weight: 800; color: #fff; }
   .gsetIcon { width: 6em; }
+  .roleChip { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 0 .55rem; font-size: .8rem; font-weight: 600; }
+  .mention.role { font-weight: 700; }
   .gsetPerms .cat { grid-column: 1 / -1; font-weight: 700; color: var(--muted); margin-top: .3rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
   .owRow { display: grid; grid-template-columns: minmax(150px, 1fr) repeat(3, auto); gap: .2rem .5rem; align-items: center; font-size: .85rem; }
   .owRow select { font-size: .8rem; }
@@ -2262,7 +2264,8 @@ const convOfMsg = (m) => (m.conv ? m.conv : m.to ? 'dm:' + [m.from, m.to].sort()
 // Who a message is shown as: normally the sender; a Work run's Claude posts through the hub's key with
 // `as` = "<person> · Claude" and `via` = that person (whose colour it takes).
 const authorOf = (m) => m.as || (typeof GUILDS !== 'undefined' && GUILDS.nickIn(m.conv || currentConv, m.from)) || nickOf(m.from); // server nickname inside its channels
-const authorColor = (m) => colorOf(m.via || m.from);
+// inside a server (Mills #general included) a name takes the colour of the person's highest coloured role there
+const authorColor = (m) => (typeof GUILDS !== 'undefined' && GUILDS.colorIn(convOfMsg(m), m.via || m.from)) || colorOf(m.via || m.from);
 const dmConv = (u) => 'dm:' + [me.username, u].sort().join('|');
 const isGuildConv = (c) => /^(ch|grp):/.test(String(c || '')); // a server channel or a group (web/guilds.js)
 const convPeer = (c) => (c === 'room' || isGuildConv(c) ? '' : c.slice(3).split('|').find((u) => u !== me.username) || '');
@@ -2521,8 +2524,12 @@ function renderRich(el, text) { // markdown + @mentions, with host pictures / Yo
 function renderRichText(el, text) { // full markdown + mermaid (web/md.js), with highlighted @mentions
   MD.render(el, text, { mention: (h) => {
     const owner = handleOwner(h);
-    if (!owner) return null;
-    const s = document.createElement('span'); s.className = 'mention' + (owner === me.username ? ' you' : ''); s.textContent = '@' + h; s.style.color = colorOf(owner);
+    if (!owner) { // a mentionable server role (@Moderator, @SuperModerator …) in this conversation's server
+      const r = GUILDS.roleByHandle(currentConv, h); if (!r) return null;
+      const s = document.createElement('span'); s.className = 'mention role' + (r.mine ? ' you' : ''); s.textContent = '@' + r.name; s.title = 'everyone with the ' + r.name + ' role'; if (r.color) s.style.color = r.color;
+      return s;
+    }
+    const s = document.createElement('span'); s.className = 'mention' + (owner === me.username ? ' you' : ''); s.textContent = '@' + h; s.style.color = GUILDS.colorIn(currentConv, owner) || colorOf(owner);
     return s;
   } });
 }
@@ -2652,7 +2659,7 @@ function playTone(kind, volume) {
 document.addEventListener('pointerdown', () => { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === 'suspended') audioCtx.resume(); } catch {} }, { capture: true });
 function notify(rec) {
   const { m } = rec, c = convOfMsg(m), P = prefs(), q = rec.r && msgs.get(rec.r);
-  const kind = q && q.m.from === me.username ? 'reply' : (m.to === me.username || mentionsMe(rec.text)) ? 'mention' : 'message';
+  const kind = q && q.m.from === me.username ? 'reply' : (m.to === me.username || mentionsMe(rec.text) || GUILDS.mentionsMyRole(c, rec.text)) ? 'mention' : 'message';
   const watching = roomVisible() && document.hasFocus() && c === currentConv;
   if (kind === 'message' && GUILDS.mentionsOnly(c)) return; // that server's default notifications: mentions only
   if (P.sound.on && !watching) playTone(kind, P.sound[kind]);
@@ -3038,10 +3045,16 @@ function updateMentionList() {
   const hits = roomMembers.filter((m) => m.username !== me.username && (m.username.startsWith(q) || (m.nick || m.display).replace(/\s+/g, '').toLowerCase().startsWith(q))).slice(0, 6);
   for (const m of hits) {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.user = m.username;
-    b.textContent = nickOf(m.username) + ' @' + m.username; b.style.color = colorOf(m.username);
+    b.textContent = nickOf(m.username) + ' @' + m.username; b.style.color = GUILDS.colorIn(currentConv, m.username) || colorOf(m.username);
     b.onclick = () => insertMention(m.username); box.append(b);
   }
-  box.hidden = !hits.length;
+  const roleHits = GUILDS.mentionableRoles(currentConv).filter((r) => r.handle.startsWith(q)).slice(0, 4); // mentionable roles of this server
+  for (const r of roleHits) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.user = r.handle;
+    b.textContent = '@' + r.name + ' (role)'; if (r.color) b.style.color = r.color;
+    b.onclick = () => insertMention(r.handle); box.append(b);
+  }
+  box.hidden = !hits.length && !roleHits.length;
 }
 function insertMention(u) {
   const el = $('roomInput'), pos = el.selectionStart, before = el.value.slice(0, pos).replace(/@[\w.-]*$/, '@' + u + ' ');

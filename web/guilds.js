@@ -26,7 +26,15 @@ const GUILDS = (() => {
   const current = () => (G.data ? G.data.servers.find((x) => x.id === G.server) || G.data.servers[0] : null);
   const can = (s, p) => !!(s && s.me && s.me.perms.includes(p));
   const nickIn = (c, u) => { const f = find(c); return f && f.kind === 'ch' && f.server.nicks ? f.server.nicks[u] || '' : ''; };
-  const roleColor = (s, u) => { const ids = (s.memberRoles || {})[u] || []; const r = (s.roles || []).find((x) => ids.includes(x.id) && x.color); return r ? r.color : ''; };
+  // ── role-based looks: the highest coloured role decides a name's colour inside that server only ──
+  const rolesOfUser = (s, u) => { const ids = (s.memberRoles || {})[u] || []; return (s.roles || []).filter((x) => ids.includes(x.id) || (s.everyone && x.builtin === 'member')).sort((a, b) => b.position - a.position); };
+  const roleColor = (s, u) => { const r = rolesOfUser(s, u).find((x) => x.color); return r ? r.color : ''; };
+  const serverOfConv = (c) => { const f = find(c); return f && f.kind === 'ch' ? f.server : null; }; // 'room' = Mills (its #general)
+  const colorIn = (c, u) => { const s = serverOfConv(c); return s && s.members.includes(u) ? roleColor(s, u) : ''; };
+  const roleHandle = (r) => String(r.name).replace(/\s+/g, '').toLowerCase();
+  const mentionableRoles = (c) => { const s = serverOfConv(c); if (!s) return []; const mine = new Set(rolesOfUser(s, me.username).map((r) => r.id)); return (s.roles || []).filter((r) => r.mentionable).map((r) => ({ id: r.id, name: r.name, color: r.color, handle: roleHandle(r), mine: mine.has(r.id) })); };
+  const roleByHandle = (c, h) => mentionableRoles(c).find((r) => r.handle === String(h).toLowerCase()) || null;
+  const mentionsMyRole = (c, text) => (String(text || '').match(/@([\w.-]+)/g) || []).some((x) => { const r = roleByHandle(c, x.slice(1)); return !!(r && r.mine); });
   const canPost = (c) => { const f = find(c); return !f || f.kind !== 'ch' || f.channel.canPost !== false; };
   // ── per-conversation permissions the page needs (the hub checks them again) ──
   const chanPerms = (c) => { const f = find(c); return f && f.kind === 'ch' ? f.channel.perms || [] : null; }; // null = not a server channel
@@ -185,5 +193,5 @@ const GUILDS = (() => {
     const u = new URL(location.href); u.searchParams.delete('invite'); history.replaceState(null, '', u.pathname + u.search + u.hash);
     setTimeout(() => GSET.join(code), 300);
   }
-  return { isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, renderPins, op, can, current, nickIn, canPost, canPin, canModerate, pinned, pin, mentionsOnly, pendingInvite, state: G };
+  return { isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, renderPins, op, can, current, nickIn, canPost, canPin, canModerate, pinned, pin, mentionsOnly, pendingInvite, colorIn, roleColor, mentionableRoles, roleByHandle, mentionsMyRole, rolesOfUser, state: G };
 })();

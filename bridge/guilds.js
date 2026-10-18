@@ -278,9 +278,15 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     let position = Math.min(myRank - 1, 11);
     while (position > 0 && isBuiltinPos(position)) position--;
     if (!(position >= 1) || !(myRank > position)) throw new Error('You can only make roles below your own.');
-    const r = { id: crypto.randomBytes(4).toString('hex'), name, color: COLOR_RE.test(b.color || (tpl && tpl.color) || '') ? b.color || tpl.color : '', perms, position, hoist: b.hoist !== false, mentionable: !!b.mentionable };
+    const r = { id: crypto.randomBytes(4).toString('hex'), name, color: COLOR_RE.test(b.color || (tpl && tpl.color) || '') ? b.color || tpl.color : '', perms, position, hoist: b.hoist !== false, mentionable: !!b.mentionable, selfAssign: false };
+    if (b.selfAssign) { safeForSelf(perms); r.selfAssign = true; }
     s.roles.push(r); return r;
   }
+  // Self-assignable roles ("pick your roles", like Discord's onboarding / reaction roles): members give them to
+  // themselves. They can carry only harmless permissions, so nobody climbs by picking one; channel overwrites can
+  // still open opt-in channels to them.
+  const SELF_SAFE = ['VIEW_CHANNEL', 'CHANGE_NICKNAME', 'SEND_MESSAGES', 'SEND_VOICE_MESSAGES', 'READ_MESSAGE_HISTORY', 'CONNECT', 'SPEAK', 'STREAM'];
+  function safeForSelf(perms) { const bad = perms.filter((p) => !SELF_SAFE.includes(p)); if (bad.length) throw new Error('A self-assignable role may only carry everyday permissions (not: ' + bad.map(permName).join(', ') + ').'); }
   function cleanOverwrites(s, user, list) {
     const out = [];
     for (const o of Array.isArray(list) ? list : []) {
@@ -423,6 +429,15 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
       audit(s, user, 'changed the roles of', nameOf(who) + ': ' + (want.map((id) => s.roles.find((r) => r.id === id).name).join(', ') || 'none'));
       save(); return true;
     },
+    selfRole(user, b) { // pick / drop a self-assignable role (no permission needed beyond being a member)
+      const s = member(b.server, user); const r = s.roles.find((x) => x.id === b.role);
+      if (!r || !r.selfAssign) throw new Error('That role is not one you can pick yourself.');
+      if (P.timedOut(s, user)) throw new Error('Not while you are timed out.');
+      const cur = s.memberRoles[user] || [];
+      s.memberRoles[user] = b.on === false ? cur.filter((id) => id !== r.id) : [...new Set([...cur, r.id])];
+      if (!s.memberRoles[user].length) delete s.memberRoles[user];
+      save(); return true;
+    },
     // ---- roles ----
     createRole(user, b) { const s = need(b.server, user, 'MANAGE_ROLES'); const r = newRole(s, user, b); audit(s, user, 'made the role', r.name); save(); return r; },
     updateRole(user, b) {
@@ -432,6 +447,8 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
       if (b.color !== undefined) r.color = COLOR_RE.test(b.color || '') ? b.color : '';
       if (b.hoist !== undefined) r.hoist = !!b.hoist;
       if (b.mentionable !== undefined) r.mentionable = !!b.mentionable;
+      if (b.selfAssign !== undefined) { if (b.selfAssign && r.builtin) throw new Error('Built-in levels are handed out, not picked.'); if (b.selfAssign) safeForSelf(b.perms !== undefined ? P.cleanPerms(b.perms) : r.perms); r.selfAssign = !!b.selfAssign; }
+      if (b.perms !== undefined && r.selfAssign) safeForSelf(P.cleanPerms(b.perms));
       if (b.perms !== undefined && (r.builtin === 'coowner' || r.builtin === 'superadmin')) throw new Error(r.name + ' always has every permission.');
       if (b.position !== undefined && r.builtin) throw new Error('The built-in levels keep their order; move your own roles between them.');
       if (b.perms !== undefined) {
@@ -612,7 +629,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     '/api/guilds/server/add': 'addMembers', '/api/guilds/server/invite': 'invitePeople', '/api/guilds/server/remove': 'removeMember',
     '/api/guilds/invitation/cancel': 'cancelInvitation', '/api/guilds/invitation/accept': 'acceptInvitation', '/api/guilds/invitation/decline': 'declineInvitation',
     '/api/guilds/member/kick': 'kick', '/api/guilds/member/ban': 'ban', '/api/guilds/member/unban': 'unban', '/api/guilds/member/nick': 'setNick', '/api/guilds/member/roles': 'setRoles',
-    '/api/guilds/member/timeout': 'timeout', '/api/guilds/member/mute': 'voiceMute',
+    '/api/guilds/member/timeout': 'timeout', '/api/guilds/member/mute': 'voiceMute', '/api/guilds/member/selfrole': 'selfRole',
     '/api/guilds/role': 'createRole', '/api/guilds/role/update': 'updateRole', '/api/guilds/role/delete': 'deleteRole',
     '/api/guilds/invite': 'createInvite', '/api/guilds/invite/revoke': 'revokeInvite', '/api/guilds/invite/preview': 'previewInvite', '/api/guilds/invite/join': 'joinByCode',
     '/api/guilds/channel': 'createChannel', '/api/guilds/channel/update': 'updateChannel', '/api/guilds/channel/move': 'moveChannel', '/api/guilds/channel/delete': 'deleteChannel',
