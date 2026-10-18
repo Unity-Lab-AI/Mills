@@ -1,0 +1,189 @@
+/* Mills — the finish layer.
+   Loaded after the page's own styles. Everything here is built from the theme's variables (--bg, --panel,
+   --line, --text, --muted, --accent, --on-accent, --good, --bad), so all 23 themes and the default get the
+   same depth and polish without per-theme work. Layout, sizes and breakpoints stay in index.html; this file
+   only changes surfaces, depth, shape, colour mixing and motion. */
+
+:root {
+  /* derived tokens */
+  --surface-1: var(--panel);
+  --surface-2: color-mix(in srgb, var(--panel) 82%, var(--text) 4%);
+  --surface-sunk: color-mix(in srgb, var(--bg) 78%, #000 22%);
+  --hairline: color-mix(in srgb, var(--line) 80%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 38%, transparent);
+  --accent-2: color-mix(in srgb, var(--accent) 72%, #ff6ad5 28%);           /* a second hue for gradients */
+  --grad-accent: linear-gradient(135deg, var(--accent), var(--accent-2));
+  --grad-sheen: linear-gradient(180deg, color-mix(in srgb, #fff 10%, transparent), transparent 60%);
+  --r-s: 8px; --r-m: 12px; --r-l: 18px;
+  --sh-1: 0 1px 2px color-mix(in srgb, #000 30%, transparent), 0 1px 1px color-mix(in srgb, #000 12%, transparent);
+  --sh-2: 0 6px 18px color-mix(in srgb, #000 28%, transparent), 0 2px 4px color-mix(in srgb, #000 16%, transparent);
+  --sh-3: 0 18px 50px color-mix(in srgb, #000 45%, transparent), 0 4px 12px color-mix(in srgb, #000 20%, transparent);
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+
+/* ── the page: a soft accent glow behind everything, never in the way ── */
+body {
+  background:
+    radial-gradient(1200px 600px at 12% -10%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, color-mix(in srgb, var(--accent-2) 8%, transparent), transparent 60%),
+    var(--bg);
+}
+::selection { background: var(--accent-glow); color: var(--text); }
+
+/* ── buttons: primary = gradient with a sheen; ghost = quiet until touched ── */
+button { border-radius: var(--r-s); letter-spacing: .01em; }
+/* :where() keeps this at plain "button" strength, so every button with its own class / id styling keeps it */
+button:where(:not(.ghost):not(.srv):not(.cv):not(.tile)) {
+  background: var(--grad-sheen), var(--grad-accent);
+  box-shadow: var(--sh-1), inset 0 1px 0 color-mix(in srgb, #fff 18%, transparent);
+}
+button:where(:not(.ghost):not(.srv):not(.cv):not(.tile):not(:disabled)):hover { filter: none; box-shadow: 0 6px 20px var(--accent-glow), inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent); }
+button.ghost { background: transparent; color: var(--muted); border-color: var(--hairline); }
+button.ghost:not(:disabled):hover { filter: none; color: var(--text); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+button.ghost.on { color: var(--text); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+button.armed { background: color-mix(in srgb, var(--bad) 20%, transparent) !important; color: var(--bad) !important; border-color: var(--bad) !important; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb, var(--accent) 75%, transparent); }
+
+/* ── fields ── */
+input, textarea, select { background: var(--surface-sunk); border-color: var(--hairline); border-radius: var(--r-s); }
+input:hover, textarea:hover, select:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+input:focus, textarea:focus, select:focus { background: color-mix(in srgb, var(--surface-sunk) 70%, var(--panel)); }
+input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
+input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: var(--accent); }
+input[type="checkbox"] { width: 1.05rem; height: 1.05rem; vertical-align: -.18em; cursor: pointer; }
+input[type="color"] { padding: .15rem; width: 2.6rem; height: 2.2rem; cursor: pointer; }
+/* a select's arrow drawn from the theme's muted colour */
+select {
+  appearance: none; -webkit-appearance: none; padding-right: 1.9rem;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+
+/* ── screen headers: a little glass, a hairline that catches the accent ── */
+.screen > header, #shell > header {
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2); backdrop-filter: blur(10px) saturate(1.2);
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 40%, var(--line)), transparent) 1;
+}
+header b { font-weight: 750; letter-spacing: .01em; }
+.bar { border-bottom-color: var(--hairline); }
+
+/* ── the mark ── */
+.brandMark { width: 68px; height: 68px; fill: none; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 8px 22px var(--accent-glow)); animation: markFloat 6s ease-in-out infinite; }
+.brandMark.small { width: 48px; height: 48px; }
+@keyframes markFloat { 50% { transform: translateY(-3px); filter: drop-shadow(0 12px 26px var(--accent-glow)); } }
+
+/* ── sign-in: a card on the glow ── */
+#login.center {
+  width: min(410px, 92vw); padding: 2rem 1.8rem 1.6rem; border-radius: var(--r-l); align-items: stretch;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, transparent), color-mix(in srgb, var(--panel) 80%, transparent));
+  border: 1px solid var(--hairline); box-shadow: var(--sh-3);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+#login .brandMark { align-self: center; }
+#login h1 { text-align: center; font-size: 2rem; font-weight: 800; background: var(--grad-accent); -webkit-background-clip: text; background-clip: text; color: transparent; }
+#login p { text-align: center; }
+#login button[type="submit"] { padding: .7rem 1rem; font-size: 1rem; }
+
+/* ── main menu: greeting + a grid of tiles ── */
+#menu { gap: 1rem; padding: 1.5rem 1rem; }
+#menuUser { font-size: clamp(1.9rem, 4vw, 2.7rem); font-weight: 800; background: linear-gradient(135deg, var(--text), color-mix(in srgb, var(--accent) 70%, var(--text))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+#menu .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: .8rem; width: min(760px, 94vw); align-items: stretch; }
+#menu .choices button.tile {
+  width: auto; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: .8rem; row-gap: .15rem; align-items: center;
+  text-align: left; padding: 1rem 1.1rem; font-size: 1.08rem; font-weight: 700; color: var(--text);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--panel) 96%, var(--accent) 4%), var(--panel));
+  border: 1px solid var(--hairline); border-radius: var(--r-m); box-shadow: var(--sh-1);
+}
+#menu .choices button.tile .ic { grid-row: 1 / span 2; width: 2.4rem; height: 2.4rem; padding: .5rem; border-radius: 11px; color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
+#menu .choices button.tile small { grid-column: 2; font-size: .78rem; font-weight: 450; color: var(--muted); line-height: 1.3; }
+#menu .choices button.tile:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: var(--sh-2), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent); }
+#menu .choices button.tile:hover .ic { background: var(--grad-accent); color: var(--on-accent); }
+#menu .badge { background: var(--grad-accent); color: var(--on-accent); box-shadow: 0 2px 10px var(--accent-glow); top: .5rem; right: .5rem; }
+.menuFoot { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: center; }
+.whoChip { background: var(--surface-2); border-color: var(--hairline); box-shadow: var(--sh-1); }
+
+/* ── dialogs: blurred backdrop, a lifted panel, a soft entrance ── */
+.modal, #archive { background: color-mix(in srgb, #000 55%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.modal .box, #archive .box { border-radius: var(--r-l); border-color: var(--hairline); box-shadow: var(--sh-3); background: linear-gradient(180deg, var(--surface-2), var(--panel)); animation: boxIn .22s var(--ease); }
+.modal .box > .bar, #archive .box > .bar { font-weight: 700; font-size: .95rem; border-bottom-color: var(--hairline); }
+@keyframes boxIn { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+.setSection { background: color-mix(in srgb, var(--surface-sunk) 55%, transparent); border: 1px solid var(--hairline); border-radius: var(--r-m); padding: .75rem .85rem; }
+.setSection > b:first-child { font-size: .92rem; }
+.setTabs, .gsetTabs { gap: .3rem; }
+.setTabs button, .gsetTabs button { border-radius: 999px; padding: .32rem .85rem; font-size: .82rem; }
+.setTabs button.on, .gsetTabs button.on { background: var(--grad-accent); color: var(--on-accent); border-color: transparent; box-shadow: 0 4px 14px var(--accent-glow); }
+.swatches button { border-radius: 50%; box-shadow: var(--sh-1); }
+.swatches button.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+
+/* ── menus, pop-overs, toasts: glass panels ── */
+#msgMenu, .pinsPop, #themeMenu {
+  background: color-mix(in srgb, var(--panel) 88%, transparent); -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2);
+  border-color: var(--hairline); border-radius: var(--r-m); box-shadow: var(--sh-3); animation: boxIn .14s var(--ease);
+}
+#msgMenu button:hover { background: var(--accent-soft); }
+.toast { background: color-mix(in srgb, var(--panel) 90%, transparent); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-radius: var(--r-m); box-shadow: var(--sh-2); }
+
+/* ── chat: side bar, channels, messages ── */
+#serverRail { background: linear-gradient(180deg, var(--surface-sunk), color-mix(in srgb, var(--surface-sunk) 85%, var(--accent) 6%)); }
+#serverRail .srv { box-shadow: var(--sh-1); }
+#serverRail .srv:hover { transform: translateY(-1px); box-shadow: var(--sh-2); }
+#serverRail .srv.on { box-shadow: 0 0 0 2px var(--surface-sunk), 0 0 0 4px color-mix(in srgb, var(--accent) 65%, transparent), var(--sh-2); }
+#serverRail .srv.on::before { background: var(--grad-accent); }
+#serverRail .srv.add { color: var(--accent); border-style: dashed; }
+#serverRail .srv .ic { width: 1.25rem; height: 1.25rem; }
+#sideLists { background: color-mix(in srgb, var(--panel) 70%, transparent); }
+.chHead { padding: .45rem .35rem .55rem; border-bottom-color: var(--hairline); }
+.chHead b { font-weight: 800; letter-spacing: .01em; }
+.chSect span { font-weight: 750; }
+.cv { border-radius: var(--r-s); transition: background-color .12s ease, color .12s ease; color: color-mix(in srgb, var(--text) 82%, var(--muted)); }
+.cv:hover { background: var(--accent-soft); color: var(--text); }
+.cv.on { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 22%, transparent), color-mix(in srgb, var(--accent) 6%, transparent)); outline: 0; color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.cv .badge, #rail .badge { background: var(--grad-accent); color: var(--on-accent); font-weight: 800; box-shadow: 0 2px 8px var(--accent-glow); }
+.cv .dot.hash .ic { width: .95rem; height: .95rem; opacity: .85; }
+#roomLog { gap: .55rem; }
+.rmsg { border-radius: var(--r-m); transition: background-color .12s ease, box-shadow .12s ease; }
+.rmsg:hover { box-shadow: 0 0 0 1px var(--hairline); }
+.rmsg .mention.you { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); border-radius: 4px; }
+.rmsg .mention.role { padding: 0 .2rem; border-radius: 4px; background: color-mix(in srgb, currentColor 14%, transparent); }
+#roomComposer { background: linear-gradient(0deg, color-mix(in srgb, var(--panel) 70%, transparent), transparent); border-top-color: var(--hairline); }
+#roomComposer textarea { background: var(--surface-sunk); border-radius: var(--r-m); }
+.roomTop { border-bottom-color: var(--hairline); }
+#memberList { background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 80%, var(--bg)), color-mix(in srgb, var(--panel) 70%, var(--bg))); border-left-color: var(--hairline); }
+#memberList .mRow:hover { background: var(--accent-soft); }
+#memberList .mHead { font-weight: 800; letter-spacing: .06em; }
+
+/* ── badges + tags ── */
+.botTag { background: var(--grad-accent); color: var(--on-accent); border-radius: 5px; padding: .05rem .35rem; box-shadow: 0 1px 6px var(--accent-glow); }
+.roleChip { background: color-mix(in srgb, currentColor 10%, transparent); padding: .05rem .6rem; }
+
+/* ── profile card ── */
+.pCard { border-radius: var(--r-l); box-shadow: var(--sh-3); border-color: var(--hairline); animation: boxIn .16s var(--ease); background: linear-gradient(180deg, var(--surface-2), var(--panel)); }
+.pBanner { height: 72px; background-image: var(--grad-sheen) !important; background-blend-mode: overlay; position: relative; }
+.pBanner::after { content: ''; position: absolute; inset: 0; background: radial-gradient(120% 140% at 85% 0%, color-mix(in srgb, #fff 22%, transparent), transparent 55%); }
+.pAvatar { box-shadow: var(--sh-2); top: 36px; }
+.pFacts { display: flex; align-items: center; gap: .35rem; }
+.pLinks a { display: inline-flex; align-items: center; gap: .3rem; color: var(--accent); text-decoration: none; }
+.pLinks a:hover { text-decoration: underline; }
+.botTag .ic { width: .8em; height: .8em; margin-right: .2em; vertical-align: -.08em; }
+.pStatus { color: color-mix(in srgb, var(--text) 85%, var(--muted)); }
+#profilePreview { padding: .4rem; border-radius: var(--r-m); background: var(--surface-sunk); }
+
+/* ── board + calendar cards: lift on hover (layout untouched) ── */
+.bdCard, .calTask { border-radius: var(--r-s); box-shadow: var(--sh-1); transition: transform .1s ease, box-shadow .15s ease, border-color .15s ease; }
+.bdCard:hover { transform: translateY(-1px); box-shadow: var(--sh-2); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.bdCol { border-radius: var(--r-m); }
+
+/* ── Work: the rail + floating windows ── */
+#rail { background: linear-gradient(180deg, var(--panel), color-mix(in srgb, var(--panel) 85%, var(--accent) 5%)); border-right-color: var(--hairline); }
+#rail button:hover { background: var(--accent-soft); color: var(--text); }
+#rail button.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.floatWin { border-radius: var(--r-m); box-shadow: var(--sh-3); border-color: var(--hairline); }
+.split { background: var(--hairline); }
+
+/* motion respects the system setting (the page's own rule covers animations; this stops the mark too) */
+@media (prefers-reduced-motion: reduce) { .brandMark { animation: none; } }

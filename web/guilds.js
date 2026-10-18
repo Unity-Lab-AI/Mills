@@ -48,7 +48,7 @@ const GUILDS = (() => {
     const name = $('convName'); if (!name) return;
     let b = $('pinsBtn');
     if (!b) { b = el('button', 'ghost tiny'); b.id = 'pinsBtn'; b.type = 'button'; b.title = 'Pinned messages'; name.after(b); b.onclick = (e) => { e.stopPropagation(); showPins(); }; }
-    const n = pinsOf(currentConv).length; b.textContent = ''; b.append(ic('flag')); if (n) b.append(' ' + n); b.hidden = !n;
+    const n = pinsOf(currentConv).length; b.textContent = ''; b.append(ic('pin')); if (n) b.append(' ' + n); b.hidden = !n;
   }
   function showPins() {
     const old = $('pinsPop'); if (old) { old.remove(); return; }
@@ -92,9 +92,9 @@ const GUILDS = (() => {
       rail.append(b);
     }
     const inv = G.data.invitations || [];
-    if (inv.length) { const b = el('button', 'srv invites'); b.type = 'button'; b.title = inv.length + ' server invitation' + (inv.length === 1 ? '' : 's'); b.append(ic('flag')); const n = el('span', 'badge', String(inv.length)); b.append(n); b.onclick = () => GSET.invitations(); rail.append(b); }
+    if (inv.length) { const b = el('button', 'srv invites'); b.type = 'button'; b.title = inv.length + ' server invitation' + (inv.length === 1 ? '' : 's'); b.append(ic('mail')); const n = el('span', 'badge', String(inv.length)); b.append(n); b.onclick = () => GSET.invitations(); rail.append(b); }
     const add = el('button', 'srv add'); add.type = 'button'; add.title = 'Make a server'; add.append(ic('plus')); add.onclick = () => GSET.newServer(); rail.append(add);
-    const join = el('button', 'srv add'); join.type = 'button'; join.title = 'Join a server with an invite code or link'; join.append(ic('share')); join.onclick = () => GSET.join(); rail.append(join);
+    const join = el('button', 'srv add'); join.type = 'button'; join.title = 'Join a server with an invite code or link'; join.append(ic('link')); join.onclick = () => GSET.join(); rail.append(join);
   }
   // ── channels of the picked server (by category), then groups ──
   function renderChannels() {
@@ -124,9 +124,8 @@ const GUILDS = (() => {
   }
   function convButton(conv, prefix, name, sub, ch, g, s) {
     const b = el('button', 'cv ch' + (conv === currentConv ? ' on' : '')); b.type = 'button';
-    const dot = el('span', 'dot hash', prefix || '');
-    if (!prefix) dot.append(ic(ch && ch.private ? 'lock' : 'chat'));
-    if (ch && ch.announce) { dot.textContent = ''; dot.append(ic('flag')); }
+    const dot = el('span', 'dot hash'); // a drawn icon, never a typed character: # / lock / megaphone for channels, people for groups
+    dot.append(ic(ch ? (ch.announce ? 'megaphone' : ch.private ? 'lock' : 'hash') : 'users'));
     const nm = el('span', 'nm', name); const sm = el('small', '', sub); nm.append(sm);
     const badge = el('span', 'badge'); badge.dataset.convBadge = conv; badge.hidden = true;
     b.append(dot, nm, badge); b.onclick = () => selectConv(conv);
@@ -161,7 +160,7 @@ const GUILDS = (() => {
       const nick = (s && s.nicks && s.nicks[u]) || nickOf(u);
       const nm = el('span', 'mName', nick + (u === me.username ? ' (you)' : '')); nm.style.color = (s && roleColor(s, u)) || colorOf(u);
       r.append(dot, nm);
-      if (s && !s.everyone && s.owner === u) { const o = el('span', 'botTag', 'OWNER'); r.append(o); }
+      if (s && !s.everyone && s.owner === u) { const o = el('span', 'botTag', 'OWNER'); o.prepend(ic('crown')); o.title = 'owns ' + s.name; r.append(o); }
       else if (s) { const co = (s.roles || []).find((x) => x.builtin === 'coowner'); if (co && ((s.memberRoles || {})[u] || []).includes(co.id)) r.append(el('span', 'botTag', 'CO-OWNER')); }
       if (s && (s.temp || []).includes(u)) { const t = el('span', 'botTag', 'TEMP'); r.append(t); }
       if (s && s.timeouts && s.timeouts[u]) { const t = el('span', 'botTag', 'TIMEOUT'); t.title = 'timed out until ' + new Date(s.timeouts[u]).toLocaleString(); r.append(t); }
