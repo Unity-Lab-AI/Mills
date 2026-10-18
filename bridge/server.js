@@ -53,6 +53,15 @@ const VERSIONS = (() => { try { const v = JSON.parse(fs.readFileSync(path.join(M
 // the AI that runs on this machine pauses (Work runs and API answers on the host's Claude login or another Claude
 // Code login here, Unity's assistant brains, Unity in the chat). Everything else keeps running: chat, board, calls,
 // notes, and people's own API keys / endpoints. Only this one AI host is affected, never the system.
+// Server mode (the hub on a server behind nginx, deploy/): config "publicUrl": "https://<host>" is the fixed
+// public address. The page the hub serves gets it filled in (its security policy + hub-address check accept it),
+// that origin may call the API, and with "behindProxy": true a request carrying X-Forwarded-For counts as coming
+// from outside (like the tunnel's cf-connecting-ip): anonymous status stays minimal and the client's address is
+// taken from the proxy's X-Real-IP. Without these settings nothing changes.
+const PUBLIC_URL = /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(String(config.publicUrl || '').replace(/\/+$/, '')) ? String(config.publicUrl).replace(/\/+$/, '').toLowerCase() : '';
+const BEHIND_PROXY = config.behindProxy === true;
+const viaOutside = (req) => !!req.headers['cf-connecting-ip'] || (BEHIND_PROXY && !!(req.headers['x-forwarded-for'] || req.headers['x-real-ip']));
+const outsideIp = (req) => String(req.headers['cf-connecting-ip'] || (BEHIND_PROXY ? req.headers['x-real-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0] : '') || '').trim();
 const AI_HOST_OFF = path.join(ROOT, 'ai-host.off');
 const aiHostOn = () => !fs.existsSync(AI_HOST_OFF);
 const AI_OFF_TEXT = "The host's AI is switched off right now (its host paused it). Chat, the board and your own AI keep working; pick your own AI in the model dropdown, or try again once it is back.";
@@ -563,7 +572,9 @@ function agentHear(msg) {
 // exits with code 75 and run.js starts it again under the same tunnel (same public address).
 // Nobody — no account's Work run and not the room agent — is mid-run.
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
-const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300) });
+// AI nodes (bridge/ai-nodes.js): machines lending Unity's local engines to this hub when it runs elsewhere
+const aiNodes = require('./ai-nodes')({ config, send: (...a) => send(...a), readBody: (r) => readBody(r) });
+const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300), aiNodes });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team notes (bridge/notes.js): markdown files in folders under VibeRoller/Notes, for people (/api/notes*) and Claude (notes_* tools).
 const notes = require('./notes')({ dir: path.join(MILLS_DIR, 'Notes'), send: (...a) => send(...a), readBody: (r) => readBody(r), displayOf: nameOf, changed: () => roomChanged() });
@@ -652,9 +663,10 @@ const server = http.createServer(async (req, res) => {
 
     // OpenAI-compatible API: its own bearer keys (Settings → API access), for harnesses, not the browser app.
     if (p === '/v1' || p.startsWith('/v1/')) return openai.handle(req, res, p);
+    if (p.startsWith('/node/')) { if (await aiNodes.route(p, req, res)) return; } // AI nodes: their own name + secret, no browser session
 
     const origin = req.headers.origin;
-    if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin))) {
+    if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin) || (PUBLIC_URL && origin.toLowerCase() === PUBLIC_URL))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -667,6 +679,10 @@ const server = http.createServer(async (req, res) => {
     if (!p.startsWith('/api/')) {
       const file = path.join(WEB_DIR, p === '/' ? 'index.html' : path.normalize(p));
       if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, { error: 'Not found' });
+      if (PUBLIC_URL && path.basename(file) === 'index.html') { // server mode: the page learns its hub's fixed address
+        res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' });
+        return res.end(fs.readFileSync(file, 'utf8').split('__MILLS_HUB_HOST__').join(PUBLIC_URL));
+      }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
       return fs.createReadStream(file).pipe(res);
     }
@@ -675,7 +691,7 @@ const server = http.createServer(async (req, res) => {
       // The only thing anyone may learn without signing in is that a VibeRoller hub is here (the page needs
       // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
       // the regression runner), which call from this machine, never through the tunnel.
-      const viaTunnel = !!req.headers['cf-connecting-ip'];
+      const viaTunnel = viaOutside(req); // the tunnel, or nginx in server mode
       return send(res, 200, viaTunnel ? { ok: true, hub: true } : { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy() });
     }
 
@@ -710,7 +726,7 @@ const server = http.createServer(async (req, res) => {
       failures.delete(uname);
       const token = crypto.randomBytes(32).toString('hex');
       sessions.set(token, { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
-      assistant.learnClient(acct, client, String(req.headers['cf-connecting-ip'] || '').trim()).catch(() => {}).then(() => agentGreet(acct));
+      assistant.learnClient(acct, client, outsideIp(req)).catch(() => {}).then(() => agentGreet(acct));
       return send(res, 200, { token, username: acct.username });
     }
 
@@ -731,7 +747,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
         models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct), prefs: acct.state.prefs || {}, share: shares.convOf(acct.username),
-        provider: acct.state.provider || 'host', providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules, aiHost: aiHostOn() });
+        provider: acct.state.provider || 'host', providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules, aiHost: aiHostOn(), aiNodes: aiNodes.status() });
     }
     // ----- AI providers: everyone manages their own; the host's Claude is always there -----
     if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });

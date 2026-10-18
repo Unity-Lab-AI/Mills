@@ -33,7 +33,10 @@ function loadProfile(PROFILE) {
     process.exit(1);
   }
   const PROFILE_DIR = PROFILE ? path.join(ROOT, 'profiles', PROFILE) : ROOT;
-  const baseConfig = readJson(path.join(ROOT, 'config.json'), {});
+  // config.json (tracked, the shared defaults) + config.local.json (gitignored, this machine's own settings, e.g. a
+  // server's publicUrl / tunnel: false / behindProxy / worktreeRoot): the local file wins key by key, so a server's
+  // git checkout stays clean and a deploy is a plain fast-forward pull.
+  const baseConfig = Object.assign(readJson(path.join(ROOT, 'config.json'), {}), readJson(path.join(ROOT, 'config.local.json'), {}));
   let profileConfig = PROFILE ? readJson(path.join(PROFILE_DIR, 'config.json'), null) : {};
   // An account whose config.json went missing still has its password: keep it signing in
   // (display name = username, not admin) instead of silently dropping the account.

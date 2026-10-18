@@ -188,11 +188,11 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'hub.log', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'hub.log', 'ai-node.log', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results` }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
@@ -209,13 +209,25 @@ async function setup() {
     sp(['--profile', name, `pw-${name}-0001`]);
   }
 }
+// The throwaway hub runs Unity's engines THROUGH an AI node (bridge/ai-node.js, its own process), the way the hub on
+// the server will: every Unity check below then also tests the node path end to end (R137).
+const NODE_SECRET = 'test-node-secret-0123456789abcdef';
+let aiNodeProc = null;
+function startAiNode() {
+  if (aiNodeProc) return;
+  const f = path.join(SB, 'ai-node.json'), base = `http://127.0.0.1:${OLLAMA_PORT}`;
+  fs.writeFileSync(f, JSON.stringify({ hub: H, name: 'test-node', token: NODE_SECRET, engines: { ollama: base, image: base, voice: base, speech: base } }));
+  const log = fs.openSync(path.join(SCRATCH, 'ai-node.log'), 'a');
+  aiNodeProc = spawn(process.execPath, [path.join(SB, 'ai-node.js'), '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
+}
 async function startHub() {
   const log = fs.openSync(path.join(SCRATCH, 'hub.log'), 'a');
   hub = spawn(process.execPath, [path.join(SB, 'run.js'), '--no-tunnel'], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
-  for (let i = 0; i < 40; i++) { if ((await call('/api/status')).status === 200) return true; await sleep(250); }
+  for (let i = 0; i < 40; i++) { if ((await call('/api/status')).status === 200) { startAiNode(); return true; } await sleep(250); }
   return false;
 }
 function stopHub() {
+  if (aiNodeProc) { try { if (WIN) execFileSync('taskkill', ['/pid', String(aiNodeProc.pid), '/T', '/F'], { stdio: 'ignore' }); else aiNodeProc.kill('SIGTERM'); } catch {} aiNodeProc = null; }
   if (!hub) return;
   try { if (WIN) execFileSync('taskkill', ['/pid', String(hub.pid), '/T', '/F'], { stdio: 'ignore' }); else hub.kill('SIGTERM'); } catch {}
   hub = null;
@@ -1573,6 +1585,20 @@ async function run() {
     && /start-viberoller-host\.exe/.test(ht('build-host-tools.ps1')) && /stop-viberoller-host\.exe/.test(ht('build-host-tools.ps1')) && /rm -f ai-host\.off/.test(ht('start-viberoller-host.sh')) && /> ai-host\.off/.test(ht('stop-viberoller-host.sh'))
     && /^bridge\/ai-host\.off$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /^bridge\/host-tools\/\*\.exe$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     `off: check ${offCheck.aiHost} work "${offWork.slice(0, 60)}" v1 ${offV1.status} assistant ${offAssist.status} unity ${offUnity ? 'said paused' : 'no reply'} chat ${offChatOk} board ${offBoardOk}; on: check ${onCheck.aiHost} work "${onWork.slice(0, 40)}"`);
+
+  // AI nodes (bridge/ai-nodes.js + bridge/ai-node.js): this hub runs Unity's engines through a node process.
+  const nodeList = ((await call('/api/check', U)).data.aiNodes || []);
+  const nodeBad = await fetch(H + '/node/poll', { headers: { 'X-VR-Node': 'test-node', 'X-VR-Node-Token': 'wrong-secret-0123456789abcdef' } });
+  const nodeUnknown = await fetch(H + '/node/poll', { headers: { 'X-VR-Node': 'nobody', 'X-VR-Node-Token': NODE_SECRET } });
+  const nodeReplyStray = await fetch(H + '/node/reply', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Node': 'test-node', 'X-VR-Node-Token': NODE_SECRET }, body: JSON.stringify({ id: 'nope', status: 200 }) });
+  const unityState = (await call('/api/assistant/state', U)).data || {};
+  const nodeLog = fs.existsSync(path.join(SCRATCH, 'ai-node.log')) ? fs.readFileSync(path.join(SCRATCH, 'ai-node.log'), 'utf8') : '';
+  const nodeSrc = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), hubNodeSrc = fs.readFileSync(path.join(BRIDGE, 'ai-nodes.js'), 'utf8');
+  check('R137', 'AI nodes: a machine lends Unity\'s local engines to a hub running elsewhere by connecting OUT (long poll + reply, its own name + secret); this throwaway hub runs every Unity check through such a node; wrong secret / unknown node → 401, a stray reply → 404; the hub sends only an engine name + path (the node builds the address from its own list, so nothing else on its network is reachable); the knife (ai-host.off) pauses the node; /api/check lists the nodes',
+    nodeList.some((n) => n.name === 'test-node' && n.online) && nodeBad.status === 401 && nodeUnknown.status === 401 && nodeReplyStray.status === 404 && unityState.local && unityState.local.up === true && unityState.local.model === true && /lending ollama, image, voice, speech/.test(nodeLog)
+    && /const base = ENGINES\[job\.engine\]/.test(nodeSrc) && /PAUSE_FILE/.test(nodeSrc) && /engine: engine|\{ id, engine, path/.test(hubNodeSrc) && /timingSafeEqual/.test(hubNodeSrc)
+    && /^bridge\/ai-node\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
+    `nodes ${JSON.stringify(nodeList)}, bad ${nodeBad.status} unknown ${nodeUnknown.status} stray ${nodeReplyStray.status}, unity ${JSON.stringify(unityState.local || {})}, log "${nodeLog.split('\n')[0]}"`);
 
   // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.
   const seedV = (await gq(U)).servers || [], seedS = seedV.find((s) => s.id === 'seedtest') || {}, millsS = seedV.find((s) => s.id === 'mills') || {};
