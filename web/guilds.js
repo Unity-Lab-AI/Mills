@@ -157,6 +157,7 @@ const GUILDS = (() => {
     const shown = new Set();
     const row = (u) => {
       const r = el('div', 'mRow'); const dot = el('i', 'pdot ' + statusOf(u).cls); dot.style.background = colorOf(u);
+      const av = typeof PROFILE !== 'undefined' && PROFILE.avatarOf(u); if (av) { dot.classList.add('hasAv'); dot.style.backgroundImage = `url("${av}")`; } // their picture, with the presence dot on it
       const nick = (s && s.nicks && s.nicks[u]) || nickOf(u);
       const nm = el('span', 'mName', nick + (u === me.username ? ' (you)' : '')); nm.style.color = (s && roleColor(s, u)) || colorOf(u);
       r.append(dot, nm);
