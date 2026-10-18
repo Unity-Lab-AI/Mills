@@ -1773,6 +1773,13 @@ async function run() {
   await call('/api/admin/room/clear', A, {});
   check('R30', 'clear chat empties history', ((await call('/api/room/messages?since=0', U)).data.messages || []).length === 0);
 
+  // Work state (bridge/work-state.js) set before the restart, checked after it (R135)
+  const ws0 = (await call('/api/work/current', U)).data;
+  const wsSave = await call('/api/work/current', U, { transcript: [{ cls: 'me', text: 'hello r135' }, { cls: 'claude', text: 'answer r135' }, { cls: 'tool', text: 'Read file r135' }, { cls: 'bogus', text: 'dropped' }], archiveId: 'a-r135', archiveTitle: 'Title r135' });
+  const wsQueue = await call('/api/work/queue', U, { queue: ['first queued r135', '', 'second queued r135'], sendNow: 'send now r135' });
+  const wsBad = await call('/api/work/queue', U, { queue: 'nope' });
+  const wsOther = (await call('/api/work/current', A)).data;
+  const wsFile = fs.existsSync(path.join(SB, 'profiles', 't-user', 'work-current.json'));
   // Persistence & restart (scratch restart.js: graceful flag only)
   const authBefore = sha(path.join(SB, 'profiles', 't-admin', 'auth.json'));
   const pid1 = (await call('/api/status')).data.pid;
@@ -1782,6 +1789,15 @@ async function run() {
   const after = await call('/api/check', U);
   check('R9', 'graceful restart: new pid, token kept, lock + model kept, flag consumed', pid2 && pid2 !== pid1 && after.status === 200 && after.data.model === 'claude-opus-5-5'
     && (await login('t-user', 'pw-t-user-0001', devA)).status === 403 && !fs.existsSync(path.join(SB, '.restart')));
+  const ws1 = (await call('/api/work/current', U)).data;
+  await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });
+  check('R135', 'Work state survives restarts: the conversation on screen (me / claude / tool entries, its saved-session id + title) and the queue + a pending "Send now" are kept per person on the hub (their profile folder), come back unchanged after a hub restart, and are nobody else\'s; bad input refused, empty messages dropped; [static] every queue change is saved, opening Work restores the conversation and the queue and starts the queue running, New chat clears it',
+    wsSave.status === 200 && wsQueue.status === 200 && wsBad.status === 400 && wsFile && (ws0.transcript || []).length === 0 && (wsOther.transcript || []).length === 0 && (wsOther.queue || []).length === 0
+    && pid2 !== pid1 && (ws1.transcript || []).map((t) => t.cls + ':' + t.text).join('|') === 'me:hello r135|claude:answer r135|tool:Read file r135' && ws1.archiveId === 'a-r135' && ws1.archiveTitle === 'Title r135'
+    && (ws1.queue || []).join('|') === 'first queued r135|second queued r135' && ws1.sendNow === 'send now r135'
+    && /function saveQueue\(\)/.test(html) && /x\.onclick = \(\) => \{[^\n]*saveQueue\(\)/.test(html) && /next\.el\.remove\(\); saveQueue\(\); send\(next\.message\)/.test(html) && /sendNowMessage = text;[^\n]*saveQueue\(\)/.test(html)
+    && /restoreFolder\(\); restoreWork\(\);/.test(html) && /function restoreWork\(/.test(html) && /function record\(cls, text\) \{ transcript\.push\(\{ cls, text \}\); saveCurrentSoon\(\); \}/.test(html) && /transcript = items; saveCurrentSoon\(\)/.test(html),
+    `after restart (pid ${pid1}→${pid2}): ${JSON.stringify(ws1).slice(0, 220)}`);
 
   const pid3 = (await call('/api/status')).data.pid;
   const slow2 = chat(U, 'SLOW during restart');

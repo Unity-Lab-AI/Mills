@@ -1544,7 +1544,7 @@ function showScreen(name) {
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
   if (name === 'notes') NOTES.show(); // web/notes.js
   presenceTick(); // tell the others where you are now
-  if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); }
+  if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); restoreWork(); } // the previous conversation + queue come back
   if (name === 'shell') refreshUsage();
   applyLayout(); // places the team chat where it belongs for this screen (and hides the floating window elsewhere)
   if (name === 'room') openRoom();
@@ -1797,18 +1797,22 @@ $('composer').addEventListener('submit', (e) => {
   if (message.startsWith('/') && runLocalSlash(message)) return; // a Mills command: done here, nothing goes to Claude
   if (busy) enqueue(message); else send(message);
 });
-function enqueue(message) {
-  const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', 'Queued: goes after the current reply');
+// The queue (and a pending "Send now") is kept on the hub (bridge/work-state.js), so a reload, closing the
+// browser or a hub restart loses nothing: every change is saved, and opening Work brings the queue back.
+function saveQueue() { json('/api/work/queue', { method: 'POST', body: JSON.stringify({ queue: queue.map((q) => q.message), sendNow: sendNowMessage }) }).catch(() => {}); }
+function enqueue(message, restoring) {
+  const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', restoring ? 'Queued (kept through the restart / reload): goes next' : 'Queued: goes after the current reply');
   const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.append(ic('close')); x.title = 'Remove from queue'; x.setAttribute('aria-label', 'Remove from queue');
-  x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); postLive(); };
+  x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); postLive(); saveQueue(); };
   el.prepend(x); scroll();
   queue.push({ message, el });
   postLive();
+  if (!restoring) saveQueue();
 }
 function drain() { // a run just ended: "Send now" text first, then the queue in order
-  if (sendNowMessage) { const m = sendNowMessage; sendNowMessage = null; return send(m); }
+  if (sendNowMessage) { const m = sendNowMessage; sendNowMessage = null; saveQueue(); return send(m); }
   const next = queue.shift();
-  if (next) { next.el.remove(); send(next.message); }
+  if (next) { next.el.remove(); saveQueue(); send(next.message); }
   postLive();
 }
 
@@ -1955,7 +1959,7 @@ $('input').addEventListener('keydown', (e) => {
 });
 $('stop').onclick = () => {
   const text = $('input').value.trim();
-  if (text) { sendNowMessage = text; $('input').value = ''; updateStopButton(); sys('Stopping Claude — your message goes next.'); }
+  if (text) { sendNowMessage = text; $('input').value = ''; updateStopButton(); saveQueue(); sys('Stopping Claude — your message goes next.'); }
   api('/api/stop', { method: 'POST' }).catch(() => {});
 };
 $('newChat').onclick = () => {
@@ -2029,9 +2033,28 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 // ---------- past sessions (saved Claude conversations, stored on the host PC in Mills/Archive) ----------
 let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSaveAt = 0;
-function record(cls, text) { transcript.push({ cls, text }); }
+// The conversation on screen is also kept on the hub (bridge/work-state.js) a moment after every change, so
+// opening Work later (after a reload, a restart, on another device) puts it back and Claude continues it.
+let currentSaveTimer = null;
+function saveCurrentSoon() { clearTimeout(currentSaveTimer); currentSaveTimer = setTimeout(saveCurrent, 800); }
+function saveCurrent() { clearTimeout(currentSaveTimer); if (me) json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle }) }).catch(() => {}); }
+function record(cls, text) { transcript.push({ cls, text }); saveCurrentSoon(); }
+async function restoreWork() { // opening Work: the previous conversation, then the queue (which starts running)
+  let s; try { s = await json('/api/work/current'); } catch { return; }
+  if ((s.transcript || []).length && !transcript.length) {
+    for (const t of s.transcript) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
+    archiveId = s.archiveId; archiveTitle = s.archiveTitle; transcript = s.transcript; savedLen = s.transcript.length;
+    if (archiveTitle) label($('convTitle'), 'archive', archiveTitle); else $('convTitle').textContent = 'Unsaved session';
+    fresh = false;
+    sys('Your previous conversation is back' + (s.updatedAt ? ' (last change ' + new Date(s.updatedAt).toLocaleString() + ')' : '') + ': Claude continues it. "New chat" starts a fresh one.');
+  }
+  if (s.sendNow && !sendNowMessage) sendNowMessage = s.sendNow;
+  for (const m of s.queue || []) enqueue(m, true);
+  if ((s.queue || []).length || s.sendNow) sys('Your queue is back: ' + ((s.queue || []).length + (s.sendNow ? 1 : 0)) + ' message(s) still to go.' + (busy ? '' : ' Running the next one now.'));
+  if (!busy && (sendNowMessage || queue.length)) drain();
+}
 function setConversation(id, title, items) {
-  archiveId = id; archiveTitle = title; transcript = items;
+  archiveId = id; archiveTitle = title; transcript = items; saveCurrentSoon();
   savedLen = items.length; // what is on screen now counts as saved (a fresh chat, an opened session, or a just-deleted one)
   if (!id && !items.length) lastSaveAt = 0;
   if (title) label($('convTitle'), 'archive', title); else $('convTitle').textContent = 'Unsaved session';
