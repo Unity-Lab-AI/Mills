@@ -267,6 +267,7 @@ function cleanPrefs(p, prev = {}) {
   if (p.nick !== undefined) out.nick = String(p.nick).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 32);
   if (p.color !== undefined) out.color = Number.isInteger(p.color) && p.color >= 0 && p.color < PALETTE_SIZE ? p.color : null;
   if (p.toasts !== undefined) out.toasts = !!p.toasts;
+  if (p.theme !== undefined) out.theme = /^[\w-]{0,40}$/.test(String(p.theme)) ? String(p.theme) : ''; // app setting: follows the person to every browser ('' = Mills default)
   if (p.autosave !== undefined) out.autosave = Math.max(0, Math.min(120, Math.round(Number(p.autosave) || 0))); // minutes, 0 = off
   if (p.sound && typeof p.sound === 'object') {
     const s = { ...(prev.sound || {}) };
@@ -304,7 +305,9 @@ function cleanPrefs(p, prev = {}) {
   }
   return out;
 }
-const publicPrefs = (a) => ({ nick: (a.state.prefs || {}).nick || '', color: (a.state.prefs || {}).color ?? null });
+// what everyone sees about a person: nickname + colour (in prefs, as always) and their profile (bridge/user-profile.js)
+const userProfile = require('./user-profile');
+const publicPrefs = (a) => ({ nick: (a.state.prefs || {}).nick || '', color: (a.state.prefs || {}).color ?? null, profile: userProfile.publicProfile(a.state) });
 
 // ---------- team board (tasks + calendar, claims shared by people and Claude) ----------
 const board = require('./board')({
@@ -724,6 +727,18 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/forgejo/me' && req.method === 'GET') return send(res, 200, forgejo.me(acct.username));
     if (p === '/api/forgejo/connect' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, await forgejo.connect(acct.username, b.token)); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/forgejo/disconnect' && req.method === 'POST') return send(res, 200, forgejo.disconnect(acct.username));
+    // ----- profile (user settings everyone sees) vs prefs (app settings, private) -----
+    if (p === '/api/profile' && req.method === 'GET') return send(res, 200, { username: acct.username, display: acct.display, ...publicPrefs(acct) });
+    if (p === '/api/profile' && req.method === 'POST') {
+      const b = await readBody(req);
+      try {
+        const profile = userProfile.cleanProfile(b.profile || {}, acct.state.profile || {});
+        const prefsNext = cleanPrefs({ ...(b.nick !== undefined ? { nick: b.nick } : {}), ...(b.color !== undefined ? { color: b.color } : {}) }, acct.state.prefs || {});
+        acct.state.profile = profile; acct.state.prefs = prefsNext; saveState(acct);
+      } catch (e) { return send(res, 400, { error: e.message }); }
+      keysVer++; roomChanged(); // everyone's page reloads the member list (names, colours, profiles)
+      return send(res, 200, { username: acct.username, display: acct.display, ...publicPrefs(acct), prefs: acct.state.prefs });
+    }
     if (p === '/api/prefs' && req.method === 'GET') return send(res, 200, { prefs: acct.state.prefs || {} });
     if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage.status(acct));
     if (p === '/api/prefs' && req.method === 'POST') {
