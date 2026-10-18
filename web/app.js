@@ -49,3 +49,25 @@ if (APP_MODE) { // app mode: the chat is the whole app
   const back = () => { for (const b of document.querySelectorAll('[data-back]')) b.hidden = true; };
   back();
 }
+// The app's user panel (bottom of the side bar, like Discord's): picture or initials, name in your colour, your
+// status, and the two things the hidden chat header held: Settings (profile, picture, app settings, theme,
+// connections) and Sign out. Only in app mode; the site keeps them in its headers and menu.
+function renderAppUser() {
+  if (!APP_MODE || !me) return;
+  const host = $('sideLists'); if (!host) return;
+  let box = $('appUser');
+  if (!box) { box = document.createElement('div'); box.id = 'appUser'; }
+  host.append(box); // always last
+  box.textContent = '';
+  const mine = (roomMembers.find((m) => m.username === me.username) || {}).profile || {};
+  const av = document.createElement('div'); av.className = 'auAv'; av.style.background = colorOf(me.username); av.dataset.profile = '1';
+  if (mine.avatar) { const img = document.createElement('img'); img.src = mine.avatar; img.alt = ''; av.append(img); } else av.textContent = nickOf(me.username).slice(0, 2).toUpperCase();
+  av.onclick = (e) => PROFILE.show(me.username, e);
+  const who = document.createElement('div'); who.className = 'auWho';
+  const n = document.createElement('b'); n.textContent = nickOf(me.username); n.style.color = colorOf(me.username);
+  const s = document.createElement('small'); s.textContent = mine.status || '@' + me.username;
+  who.append(n, s);
+  const set = document.createElement('button'); set.type = 'button'; set.className = 'ghost tiny'; set.title = 'Settings: profile, picture, app settings, theme'; set.append(ic('gear')); set.onclick = () => openSettings();
+  const out = document.createElement('button'); out.type = 'button'; out.className = 'ghost tiny'; out.title = 'Sign out'; out.append(ic('logout')); out.onclick = () => signOut();
+  box.append(av, who, set, out);
+}

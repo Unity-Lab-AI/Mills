@@ -474,7 +474,7 @@
   /* (web/guilds.js shows the member column in app mode and on screens 1500 px and wider while the Chat screen is open) */
   /* ── app mode (index.html?app=1, the installed Mills Chat): chat only, Discord-shaped, fancier ── */
   body.appMode #room header { display: none; }
-  body.appMode #room { --panel: #171b23; --line: #272c37; }
+  body.appMode #room { --panel: color-mix(in srgb, var(--panel) 92%, var(--accent) 3%); --line: color-mix(in srgb, var(--line) 90%, var(--bg)); } /* follows the theme, like the site */
   body.appMode #roomSide { width: 296px; max-width: 42%; }
   body.appMode #sideLists { padding: .6rem .5rem; }
   body.appMode .roomTop { padding: .6rem .9rem; font-size: .95rem; box-shadow: 0 2px 10px rgba(0,0,0,.25); position: relative; z-index: 1; }
@@ -484,7 +484,7 @@
   body.appMode .rmsg.me { align-self: stretch; color: var(--text); }
   body.appMode .rmsg small b { font-size: .95rem; }
   body.appMode #roomComposer { padding: .5rem 1.1rem 1rem; border-top: 0; }
-  body.appMode #roomComposer textarea { background: #1f2430; border-color: transparent; border-radius: 10px; height: 3rem; }
+  body.appMode #roomComposer textarea { background: color-mix(in srgb, var(--panel) 80%, var(--text) 5%); border-color: transparent; border-radius: 10px; height: 3rem; }
   body.appMode #memberList { display: block; }
   @media (max-width: 900px) { body.appMode #memberList { display: none; } }
   #callSideHost:empty { display: none; }
@@ -2480,7 +2480,7 @@ function selectConv(conv) {
   log.scrollTop = log.scrollHeight;
   for (const b of $('roomSide').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
   const sv = GUILDS.serverOf(conv); if (sv && GUILDS.state.server !== sv) { GUILDS.state.server = sv; GUILDS.render(); }
-  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers(); GUILDS.renderPins();
+  updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers(); GUILDS.renderPins(); renderAppUser(); // the app's user panel (web/app.js) shows the latest name / picture
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
