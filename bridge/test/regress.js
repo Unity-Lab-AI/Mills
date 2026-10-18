@@ -1408,6 +1408,40 @@ async function run() {
     && custom && custom.position === 11 && moved26 && moved26.position === 21 && xfer26.status === 200 && oldOwnerCo && exKick.status === 400 && coLeave.status === 200,
     `ladder ${ladderOk} member ${joinedMember} mills ${millsLadder}, builtin del ${delBuiltin.status} move ${moveBuiltin.status} sa ${permsSA.status}, co ${coOn.status} rename ${coRename.status} pw ${coPw.status} kick ${coKick.status}/${coKickOwner.status} co→co ${coMakeCo.status} co→sa ${coMakeAdmin.status} delete ${coDelete.status} transfer ${coTransfer.status}, custom ${custom && custom.position}→${moved26 && moved26.position}, handover ${xfer26.status} old owner co ${oldOwnerCo}, kick new owner ${exKick.status}, leave ${coLeave.status}`);
 
+  // Role-based features: admins + owners make coloured roles, people hold many, the highest coloured role colours the
+  // name inside that server only, mentionable roles, self-assignable roles (everyday permissions only).
+  const s27 = (await call('/api/guilds/server', U, { name: 'Colors r127', members: ['t-admin', 'mills'] })).data.result.id;
+  await call('/api/guilds/invitation/accept', A, { server: s27 }); await call('/api/guilds/invitation/accept', D, { server: s27 });
+  const v27 = async (tok = U) => sv23(await gq(tok), s27) || {};
+  const b27 = (n) => v27().then((v) => (v.roles || []).find((r) => r.name === n || r.builtin === n) || {});
+  const red = (await call('/api/guilds/role', U, { server: s27, name: 'Red r127', color: '#ff0000' })).data.result;
+  const blue = (await call('/api/guilds/role', U, { server: s27, name: 'Blue r127', color: '#0000ff' })).data.result;
+  await call('/api/guilds/role/update', U, { server: s27, role: blue.id, position: 12 });
+  const mem27 = await b27('member'), adm27 = await b27('admin');
+  const multi = await call('/api/guilds/member/roles', U, { server: s27, user: 't-admin', roles: [mem27.id, red.id, blue.id] });
+  const giveAdmin = await call('/api/guilds/member/roles', U, { server: s27, user: 'mills', roles: [mem27.id, adm27.id] });
+  const adminMakes = await call('/api/guilds/role', D, { server: s27, name: 'Green r127', color: '#00ff00' });
+  const plainMakes = await call('/api/guilds/role', A, { server: s27, name: 'Nope r127' });
+  const ment27 = await call('/api/guilds/role/update', U, { server: s27, role: red.id, mentionable: true });
+  const self27 = (await call('/api/guilds/role', U, { server: s27, name: 'Gamers r127', color: '#aa00aa', selfAssign: true })).data.result;
+  const selfBad = await call('/api/guilds/role', U, { server: s27, name: 'Bad r127', perms: ['KICK_MEMBERS'], selfAssign: true });
+  const selfBuiltin = await call('/api/guilds/role/update', U, { server: s27, role: mem27.id, selfAssign: true });
+  const pickOn = await call('/api/guilds/member/selfrole', A, { server: s27, role: self27 && self27.id, on: true });
+  const pickNot = await call('/api/guilds/member/selfrole', A, { server: s27, role: adm27.id, on: true });
+  const aRoles = ((await v27(A)).memberRoles || {})['t-admin'] || [];
+  const pickOff = await call('/api/guilds/member/selfrole', A, { server: s27, role: self27 && self27.id, on: false });
+  const aRoles2 = ((await v27(A)).memberRoles || {})['t-admin'] || [];
+  const rl27 = (await v27()).roles || [], blueNow = rl27.find((r) => r.id === blue.id) || {}, redNow = rl27.find((r) => r.id === red.id) || {};
+  const gj27 = fs.readFileSync(path.join(MILLS, 'web', 'guilds.js'), 'utf8'), gs27 = fs.readFileSync(path.join(MILLS, 'web', 'guild-settings.js'), 'utf8');
+  await call('/api/guilds/server/delete', U, { server: s27 });
+  check('R127', 'role features: owners and admins (manage roles) make coloured roles, plain members cannot; many roles per person; roles listed highest first so the highest coloured role colours the name, only inside that server (chat names, mentions, autocomplete, member column); mentionable roles (@Role highlights + notifies its holders); self-assignable roles members pick / drop themselves, limited to everyday permissions, never a built-in level or a role not marked pickable',
+    multi.status === 200 && aRoles.includes(red.id) && aRoles.includes(blue.id) && giveAdmin.status === 200 && adminMakes.status === 200 && plainMakes.status === 400
+    && blueNow.position > redNow.position && rl27.findIndex((r) => r.id === blue.id) < rl27.findIndex((r) => r.id === red.id) && ment27.status === 200 && redNow.mentionable === true
+    && self27 && self27.selfAssign === true && selfBad.status === 400 && selfBuiltin.status === 400 && pickOn.status === 200 && pickNot.status === 400 && aRoles.includes(self27.id) && pickOff.status === 200 && !aRoles2.includes(self27.id)
+    && /const roleColor = \(s, u\) => \{ const r = rolesOfUser\(s, u\)\.find/.test(gj27) && /\.sort\(\(a, b\) => b\.position - a\.position\)/.test(gj27) && /GUILDS\.colorIn\(convOfMsg\(m\)/.test(html) && /GUILDS\.roleByHandle\(currentConv, h\)/.test(html) && /GUILDS\.mentionsMyRole\(c, rec\.text\)/.test(html) && /mentionableRoles\(currentConv\)/.test(html)
+    && /'Your roles'/.test(gs27) && /member\/selfrole/.test(gs27),
+    `multi ${multi.status} ${aRoles.length} roles, admin makes ${adminMakes.status} plain ${plainMakes.status}, order blue ${blueNow.position} red ${redNow.position}, mentionable ${redNow.mentionable}, self ${self27 && self27.selfAssign} bad ${selfBad.status} builtin ${selfBuiltin.status} pick ${pickOn.status}/${pickNot.status} off ${pickOff.status}`);
+
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });
   const shareListU = (await call('/api/room/messages?rev=0', U)).data.shares || [], shareListA = (await call('/api/room/messages?rev=0', A)).data.shares || [];
