@@ -43,6 +43,8 @@ bridge/providers.json
 Api/
 # Forgejo issue mirroring: the host's token + repo (never committed); team notes live on the host only
 bridge/forgejo.json
+# server owners + co-owners set by the host (names stay off the remotes)
+bridge/server-owners.json
 # profile pictures (Settings → Profile), on the host only
 Avatars/
 # My Forgejo: everyone's own Forgejo token (Settings), kept on the host only

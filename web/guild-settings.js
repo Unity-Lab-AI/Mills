@@ -60,7 +60,7 @@ const GSET = (() => {
     ['invites', 'Invites', (s) => !s.everyone && (can(s, 'CREATE_INVITE') || can(s, 'MANAGE_INVITES'))],
     ['roles', 'Roles', (s) => can(s, 'MANAGE_ROLES') || (s.roles || []).length > 0], ['channels', 'Channels', (s) => can(s, 'MANAGE_CHANNELS') || can(s, 'CREATE_CHANNELS')],
     ['bans', 'Bans', (s) => !s.everyone && can(s, 'BAN_MEMBERS')], ['security', 'Security', (s) => !s.everyone && can(s, 'MANAGE_SERVER')],
-    ['audit', 'Audit log', (s) => can(s, 'VIEW_AUDIT_LOG')], ['owner', 'Ownership', (s) => !s.everyone && s.me.owner],
+    ['audit', 'Audit log', (s) => can(s, 'VIEW_AUDIT_LOG')], ['owner', 'Ownership', (s) => s.me.owner],
   ];
   const sel = (pairs, value) => { const x = el('select'); for (const [v, t] of pairs) { const o = el('option', '', t); o.value = v; x.append(o); } x.value = String(value); return x; };
   const mins = (m) => (m >= 1440 ? m / 1440 + ' day' + (m > 1440 ? 's' : '') : m >= 60 ? m / 60 + ' hour' + (m > 60 ? 's' : '') : m + ' minute' + (m > 1 ? 's' : ''));
@@ -109,7 +109,7 @@ const GSET = (() => {
       row(...(mineR.length ? mineR.map(chip) : [el('small', '', 'none')])),
       ...(pickable.length ? [el('small', '', 'Roles you can pick yourself:'), row(...pickable.map((r) => { const on = mineR.some((x) => x.id === r.id); const c = check(r.name, on); if (r.color) c.style.color = r.color; c.box.onchange = () => op('member/selfrole', { server: s.id, role: r.id, on: c.box.checked }); return c; }))] : [])));
     if (s.timeouts && s.timeouts[me.username]) bodyEl.append(sect('Timeout', el('div', 'status', 'You are timed out until ' + when(s.timeouts[me.username]) + ': you can read but not post, type or join calls.')));
-    const facts = [s.everyone ? 'Everyone with a Mills account is in this server.' : `${s.members.length} member${s.members.length === 1 ? '' : 's'} · owner ${nick(s, s.owner)}`, s.locked ? 'Password locked: joining with an invite code asks for its password.' : '', 'Your permissions: ' + (s.me.perms.map((p) => p.toLowerCase().replace(/_/g, ' ')).join(', ') || 'none')].filter(Boolean);
+    const facts = [s.everyone ? 'Everyone with a Mills account is in this server.' + (s.owner ? ' Owner: ' + nick(s, s.owner) + '.' : '') : `${s.members.length} member${s.members.length === 1 ? '' : 's'} · owner ${nick(s, s.owner)}`, s.locked ? 'Password locked: joining with an invite code asks for its password.' : '', 'Your permissions: ' + (s.me.perms.map((p) => p.toLowerCase().replace(/_/g, ' ')).join(', ') || 'none')].filter(Boolean);
     bodyEl.append(sect('About', ...facts.map((t) => el('div', '', t))));
     if (!s.everyone && !s.me.owner) bodyEl.append(sect('Leave', armed('Leave ' + s.name, async () => { if (await op('server/leave', { server: s.id })) { close(); GUILDS.state.server = 'mills'; selectConv('room'); } })));
   }
@@ -133,7 +133,7 @@ const GSET = (() => {
       const below = u !== me.username && myRank > rankOf(u);
       const acts = el('div', 'row');
       const co = (s.roles || []).find((r) => r.builtin === 'coowner');
-      if (co && s.me.owner && u !== me.username && !(s.everyone ? false : u === s.owner)) { // the owner names co-owners
+      if (co && s.me.owner && u !== me.username && u !== s.owner) { // the owner names co-owners
         const isCo = ((s.memberRoles || {})[u] || []).includes(co.id), cur = (s.memberRoles || {})[u] || [];
         acts.append(isCo ? armed('Remove co-owner', () => op('member/roles', { server: s.id, user: u, roles: cur.filter((id) => id !== co.id) })) : btn('Make co-owner', () => op('member/roles', { server: s.id, user: u, roles: [...cur, co.id] }), 'ghost'));
       }
@@ -267,6 +267,7 @@ const GSET = (() => {
     const to = el('select'); for (const u of s.members.filter((u) => u !== me.username)) { const op_ = el('option', '', nick(s, u)); op_.value = u; to.append(op_); }
     const stay = check('stay on as Co-owner', true);
     bodyEl.append(sect('Hand the server over', el('small', '', 'The new owner gets every right, including deleting the server and naming co-owners. You stay a member, and by default a Co-owner.'), row(to, stay, armed('Make them the owner', () => to.value && op('server/transfer', { server: s.id, user: to.value, keepCoOwner: stay.box.checked })))));
+    if (s.everyone) return; // the Mills server is everyone's: it can be handed on, never deleted
     bodyEl.append(sect('Delete the server', el('small', '', 'Its channels and settings go for everyone. Messages already sent stay encrypted on the host but nobody can open the channels again.'),
       row(armed('Delete ' + s.name, async () => { if (await op('server/delete', { server: s.id })) { close(); GUILDS.state.server = 'mills'; selectConv('room'); } }))));
   }
