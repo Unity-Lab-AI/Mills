@@ -11,7 +11,11 @@ const ICE_DEFAULT = [{ urls: 'stun:stun.l.google.com:19302' }]; // finds each br
 
 // extraMember(conv, user) / extraConv(conv): membership and existence of the server-channel and group
 // conversations (bridge/guilds.js); room and private conversations are judged here.
-module.exports = function createCalls({ accounts, config, chatKeys, send, readBody, b64, extraMember = () => false, extraConv = () => false }) {
+// media(conv, user) → { connect, speak, stream, muted }: server permissions (bridge/guilds.js). Without connect the
+// hub refuses the join; without speak (or while server-muted) the mic flag is held off, without stream cam + screen.
+// The flags tell every browser what to show and the person's own page turns the mic / camera off itself; the media
+// goes browser-to-browser, so the hub cannot cut it, it can only refuse the call.
+module.exports = function createCalls({ accounts, config, chatKeys, send, readBody, b64, extraMember = () => false, extraConv = () => false, media = () => ({ connect: true, speak: true, stream: true, muted: false }) }) {
   const calls = new Map();   // conv -> Map(username -> { cam, mic, screen, since, seen })
   const mailbox = new Map(); // username -> [{ n, from, conv, iv, ct }]
   const waiters = new Map(); // username -> Set(wake fn) of open long-polls
@@ -27,7 +31,8 @@ module.exports = function createCalls({ accounts, config, chatKeys, send, readBo
   function changed(conv) { callVer++; wake([...accounts.keys()].filter((u) => convMember(conv, u))); }
   function state(user) { // the calls this person may see, with who is in them
     const out = {};
-    for (const [c, ps] of calls) if (ps.size && convMember(c, user)) out[c] = [...ps].map(([u, p]) => ({ user: u, cam: p.cam, mic: p.mic, screen: !!p.screen, since: p.since }));
+    for (const [c, ps] of calls) if (ps.size && convMember(c, user)) out[c] = [...ps].map(([u, p]) => { const md = media(c, u), held = !md.speak || md.muted;
+      return { user: u, cam: p.cam && md.stream, mic: p.mic && !held, screen: !!p.screen && md.stream, since: p.since, ...(held ? { held: md.muted ? 'muted' : 'nospeak' } : {}), ...(md.stream ? {} : { nostream: true }) }; });
     return out;
   }
   function leave(user) { // out of every call (sign-out, account deleted, Leave)
@@ -45,6 +50,7 @@ module.exports = function createCalls({ accounts, config, chatKeys, send, readBo
       const { conv, cam, mic, screen } = await readBody(req);
       if (!validConv(conv) || !convMember(conv, acct.username)) { send(res, 400, { error: 'Unknown conversation.' }); return true; }
       if (!chatKeys[acct.username]) { send(res, 400, { error: 'Your chat key is not set up yet.' }); return true; }
+      if (!media(conv, acct.username).connect) { send(res, 403, { error: 'You may not join calls here (no "connect" permission, or you are timed out).' }); return true; }
       for (const [c, ps] of calls) if (c !== conv && ps.delete(acct.username)) { if (!ps.size) calls.delete(c); changed(c); }
       const ps = calls.get(conv) || new Map(); calls.set(conv, ps);
       const prev = ps.get(acct.username);

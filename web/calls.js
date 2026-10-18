@@ -45,6 +45,11 @@ async function onCallState(state) {
     if (restarted) { // the hub restarted (or dropped us): quietly join again, and keep the existing connections meanwhile
       try { await json('/api/call/join', { method: 'POST', body: JSON.stringify({ conv: call.conv, cam: !!call.cam, mic: !!(call.mic && call.mic.enabled) }) }); } catch {}
     }
+    // server permissions (bridge/guilds.js via the hub): a moderator's mute / no "speak" turns my mic off, no "stream" my camera + screen
+    const self = list.find((p) => p.user === me.username);
+    if (self && self.held && call.mic && call.mic.enabled) { call.mic.enabled = false; updateCallButtons(); callMsg(self.held === 'muted' ? 'A moderator muted you in calls on this server.' : 'You may not talk in calls here.'); }
+    if (self && self.nostream && (call.cam || call.screen)) { if (call.cam) $('callCam').click(); if (call.screen) $('callScreen').click(); callMsg('You may not use the camera or share your screen here.'); }
+    call.held = self ? self.held || '' : ''; call.nostream = !!(self && self.nostream);
     const others = list.filter((p) => p.user !== me.username);
     for (const p of others) if (!call.peers.has(p.user)) connectPeer(p.user);
     if (!restarted) for (const u of [...call.peers.keys()]) if (!others.some((p) => p.user === u)) dropPeer(u);
@@ -295,6 +300,7 @@ async function stopScreen() {
 $('callScreen').onclick = async () => {
   if (!call.conv) return;
   if (call.screen) return stopScreen();
+  if (call.nostream) return callMsg('You may not share your screen here.');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return callMsg('This browser cannot share a screen (needs Chrome, Edge or Firefox on a computer).');
   let s;
   try { s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false }); }
@@ -359,6 +365,7 @@ function pushCallState() {
 }
 $('callMic').onclick = async () => {
   if (!call.conv) return;
+  if (call.held && !(call.mic && call.mic.enabled)) return callMsg(call.held === 'muted' ? 'A moderator muted you in calls on this server.' : 'You may not talk in calls here.');
   if (!call.mic) { // permission was refused earlier: try again
     try { call.mic = (await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() })).getAudioTracks()[0]; callMsg(''); }
     catch { return callMsg('Microphone still not allowed.'); }
@@ -374,6 +381,7 @@ document.addEventListener('keydown', (e) => { // M = mute / unmute yourself whil
 $('callCam').onclick = async () => {
   if (!call.conv) return;
   if (call.cam) { call.cam.stop(); call.cam = null; }
+  else if (call.nostream) return callMsg('You may not turn the camera on here.');
   else {
     const [w, h, fps] = VQ[prefs().call.quality] || VQ.medium;
     try { call.cam = (await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps, max: fps } } })).getVideoTracks()[0]; }
