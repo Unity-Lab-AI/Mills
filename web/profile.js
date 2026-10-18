@@ -1,9 +1,9 @@
-// Mills profiles, page side (hub side: bridge/user-profile.js; routes /api/profile in bridge/server.js).
+// VibeRoller profiles, page side (hub side: bridge/user-profile.js; routes /api/profile in bridge/server.js).
 // Loaded after the page script and web/guilds.js; uses the page's helpers at call time ($, json, me, nickOf,
 // colorOf, PALETTE, lightTheme, roomMembers, selectConv, dmConv, currentConv, pickedColor, refreshMembers, GUILDS).
 //
 // Settings is split in three tabs: Profile (what others see: nickname, colour, bio, pronouns, status, location,
-// links, banner colour, local time; saved with "Save profile"), App settings (how Mills behaves for you, saved with
+// links, banner colour, local time; saved with "Save profile"), App settings (how VibeRoller behaves for you, saved with
 // "Save app settings", private) and Connections (API key, AIs, Forgejo, the Chat app).
 // A profile card opens when you click a name (in messages and the member column): banner in the person's accent
 // (by default their own colour), name in their colour (inside a server: their highest coloured role), nickname

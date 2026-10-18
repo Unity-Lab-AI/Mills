@@ -1,9 +1,9 @@
-// Mills servers, channels, groups and the member column, page side (hub side: bridge/guilds.js).
+// VibeRoller servers, channels, groups and the member column, page side (hub side: bridge/guilds.js).
 // Loaded after the page script and calls.js; uses the page's helpers at call time ($, json, me, nickOf,
 // colorOf, statusOf, ic, selectConv, currentConv, roomMembers, sysRoom, store). Server Settings, the join /
 // invitation dialogs and group settings live in web/guild-settings.js (GSET).
 //
-// The chat's side bar is Discord-shaped: a rail of servers on the far left (the "Mills" server is
+// The chat's side bar is Discord-shaped: a rail of servers on the far left (the "VibeRoller" server is
 // everyone's and always first; its #general is the old # Everyone), with buttons for pending invitations and
 // joining by invite code; then the picked server's channels by category (private ones carry a lock,
 // announcement ones a flag), group conversations and private messages. The member column (app mode, or wide
@@ -29,7 +29,7 @@ const GUILDS = (() => {
   // ── role-based looks: the highest coloured role decides a name's colour inside that server only ──
   const rolesOfUser = (s, u) => { const ids = (s.memberRoles || {})[u] || []; return (s.roles || []).filter((x) => ids.includes(x.id) || (s.everyone && x.builtin === 'member')).sort((a, b) => b.position - a.position); };
   const roleColor = (s, u) => { const r = rolesOfUser(s, u).find((x) => x.color); return r ? r.color : ''; };
-  const serverOfConv = (c) => { const f = find(c); return f && f.kind === 'ch' ? f.server : null; }; // 'room' = Mills (its #general)
+  const serverOfConv = (c) => { const f = find(c); return f && f.kind === 'ch' ? f.server : null; }; // 'room' = VibeRoller (its #general)
   const colorIn = (c, u) => { const s = serverOfConv(c); return s && s.members.includes(u) ? roleColor(s, u) : ''; };
   const roleHandle = (r) => String(r.name).replace(/\s+/g, '').toLowerCase();
   const mentionableRoles = (c) => { const s = serverOfConv(c); if (!s) return []; const mine = new Set(rolesOfUser(s, me.username).map((r) => r.id)); return (s.roles || []).filter((r) => r.mentionable).map((r) => ({ id: r.id, name: r.name, color: r.color, handle: roleHandle(r), mine: mine.has(r.id) })); };

@@ -1,4 +1,4 @@
-// Mills voice / video calls, page side (hub side: bridge/calls.js). Loaded right after the main page
+// VibeRoller voice / video calls, page side (hub side: bridge/calls.js). Loaded right after the main page
 // script, so it may use the page's helpers ($, json, store, prefs, me, nickOf, colorOf, ic, label, layout,
 // sysRoom, playTone, speak, chat keys …) at load and at call time; the main script calls into
 // placeCall / leaveCall / renderCallBanner / callPollLoop and reads `call`.

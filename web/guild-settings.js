@@ -1,4 +1,4 @@
-// Mills Server Settings and the server / group dialogs (page side; hub side: bridge/guilds.js, roles in
+// VibeRoller Server Settings and the server / group dialogs (page side; hub side: bridge/guilds.js, roles in
 // bridge/guild-perms.js). Loaded after web/guilds.js; uses GUILDS plus the page's helpers ($, json, me,
 // nickOf, colorOf, roomMembers, selectConv, currentConv, ic).
 //
@@ -75,7 +75,7 @@ const GSET = (() => {
     const wait = sel(D.waits.map((m) => [m, m ? 'new members wait ' + m + ' minutes before posting (unless given a role)' : 'new members may post at once']), st.wait || 0);
     if (s.everyone) { sys.disabled = true; joins.box.disabled = leaves.box.disabled = paused.box.disabled = true; }
     bodyEl.append(
-      sect('Welcome channel', el('small', '', 'Where the hub posts join / leave lines as "Mills".'), row(sys), joins, leaves),
+      sect('Welcome channel', el('small', '', 'Where the hub posts join / leave lines as "VibeRoller".'), row(sys), joins, leaves),
       sect('Rules channel', el('small', '', 'Named in the welcome line and marked in the channel list.'), row(rules)),
       sect('Default notifications', el('small', '', 'For everyone in this server: sound, pop-ups and reading aloud for every message, or only when someone @mentions or replies to you.'), row(notify)),
       sect('Safety', paused, row(wait)),
@@ -109,7 +109,7 @@ const GSET = (() => {
       row(...(mineR.length ? mineR.map(chip) : [el('small', '', 'none')])),
       ...(pickable.length ? [el('small', '', 'Roles you can pick yourself:'), row(...pickable.map((r) => { const on = mineR.some((x) => x.id === r.id); const c = check(r.name, on); if (r.color) c.style.color = r.color; c.box.onchange = () => op('member/selfrole', { server: s.id, role: r.id, on: c.box.checked }); return c; }))] : [])));
     if (s.timeouts && s.timeouts[me.username]) bodyEl.append(sect('Timeout', el('div', 'status', 'You are timed out until ' + when(s.timeouts[me.username]) + ': you can read but not post, type or join calls.')));
-    const facts = [s.everyone ? 'Everyone with a Mills account is in this server.' + (s.owner ? ' Owner: ' + nick(s, s.owner) + '.' : '') : `${s.members.length} member${s.members.length === 1 ? '' : 's'} · owner ${nick(s, s.owner)}`, s.locked ? 'Password locked: joining with an invite code asks for its password.' : '', 'Your permissions: ' + (s.me.perms.map((p) => p.toLowerCase().replace(/_/g, ' ')).join(', ') || 'none')].filter(Boolean);
+    const facts = [s.everyone ? 'Everyone with a VibeRoller account is in this server.' + (s.owner ? ' Owner: ' + nick(s, s.owner) + '.' : '') : `${s.members.length} member${s.members.length === 1 ? '' : 's'} · owner ${nick(s, s.owner)}`, s.locked ? 'Password locked: joining with an invite code asks for its password.' : '', 'Your permissions: ' + (s.me.perms.map((p) => p.toLowerCase().replace(/_/g, ' ')).join(', ') || 'none')].filter(Boolean);
     bodyEl.append(sect('About', ...facts.map((t) => el('div', '', t))));
     if (!s.everyone && !s.me.owner) bodyEl.append(sect('Leave', armed('Leave ' + s.name, async () => { if (await op('server/leave', { server: s.id })) { close(); GUILDS.state.server = 'mills'; selectConv('room'); } })));
   }
@@ -170,7 +170,7 @@ const GSET = (() => {
     const uses = el('select'); for (const n of [0, 1, 5, 10, 25, 100]) { const op_ = el('option', '', n ? 'up to ' + n + ' use' + (n === 1 ? '' : 's') : 'no use limit'); op_.value = n; uses.append(op_); }
     const temp = check('temporary membership (they leave when they go offline, unless given a role)');
     const out = el('div');
-    bodyEl.append(sect('Make an invite link', el('small', '', 'Anyone with a Mills account who has the link (and the password, if the server is locked) can join.'), row(age, uses), temp,
+    bodyEl.append(sect('Make an invite link', el('small', '', 'Anyone with a VibeRoller account who has the link (and the password, if the server is locked) can join.'), row(age, uses), temp,
       row(btn('Make invite', async () => { const iv = await op('invite', { server: s.id, maxAge: Number(age.value), maxUses: Number(uses.value), temporary: temp.box.checked }); if (iv && iv.code) { out.textContent = ''; out.append(linkRow(iv.code)); } })), out));
     const list = sect('Open invites');
     for (const iv of s.invites || []) {
@@ -267,7 +267,7 @@ const GSET = (() => {
     const to = el('select'); for (const u of s.members.filter((u) => u !== me.username)) { const op_ = el('option', '', nick(s, u)); op_.value = u; to.append(op_); }
     const stay = check('stay on as Co-owner', true);
     bodyEl.append(sect('Hand the server over', el('small', '', 'The new owner gets every right, including deleting the server and naming co-owners. You stay a member, and by default a Co-owner.'), row(to, stay, armed('Make them the owner', () => to.value && op('server/transfer', { server: s.id, user: to.value, keepCoOwner: stay.box.checked })))));
-    if (s.everyone) return; // the Mills server is everyone's: it can be handed on, never deleted
+    if (s.everyone) return; // the VibeRoller server is everyone's: it can be handed on, never deleted
     bodyEl.append(sect('Delete the server', el('small', '', 'Its channels and settings go for everyone. Messages already sent stay encrypted on the host but nobody can open the channels again.'),
       row(armed('Delete ' + s.name, async () => { if (await op('server/delete', { server: s.id })) { close(); GUILDS.state.server = 'mills'; selectConv('room'); } }))));
   }

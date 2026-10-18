@@ -1,4 +1,4 @@
-// Mills markdown renderer, shared by the Work (Claude) chat and the team chat.
+// VibeRoller markdown renderer, shared by the Work (Claude) chat and the team chat.
 //
 // It builds DOM nodes directly and never assigns HTML strings, so markdown from anyone in the team
 // chat cannot inject markup or script. Raw HTML in a message is shown as text.

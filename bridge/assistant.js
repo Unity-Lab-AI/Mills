@@ -1,4 +1,4 @@
-// Mills Unity section: Unity as a personal assistant for every account, with tools, running entirely on
+// VibeRoller Unity section: Unity as a personal assistant for every account, with tools, running entirely on
 // the host (the machine that runs start.bat). People only use their browser.
 //
 // Brains (per account, dropdown): "local" = the unity-brain model on the host's Ollama (native tool
@@ -104,7 +104,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   async function getJson(url, ttl = 600000, headers = {}) {
     const hit = cache.get(url);
     if (hit && Date.now() - hit.t < ttl) return hit.v;
-    const r = await fetch(url, { headers: { 'User-Agent': 'Mills/1.0 (team app)', ...headers }, signal: AbortSignal.timeout(10000) });
+    const r = await fetch(url, { headers: { 'User-Agent': 'VibeRoller/1.0 (team app)', ...headers }, signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw new Error(`${new URL(url).host} answered ${r.status}`);
     const v = url.includes('/rss') ? await r.text() : await r.json();
     cache.set(url, { t: Date.now(), v });
@@ -363,7 +363,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   tool('get_news', 'Current news headlines: local to where the person is, on a topic, or top stories in their country.', { topic: P('Topic to search, optional'), local: P('true for news about where they are', 'boolean') }, [], (a, s, ci) => news(ci, a.topic, a.local === true || a.local === 'true'));
   // ---- the person's OWN computer, done by their browser (nothing runs on the host). Admins switch
   // these per account (Admin: "PC files" / "Run code"); both are on unless an admin turns them off.
-  tool('pc_list', 'List files and folders in the folder they opened in Mills (on THEIR computer).', { path: P('Path inside that folder, "" for the folder itself') }, [], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'list', args: { path: String(a.path || '') } }), { group: 'pc' });
+  tool('pc_list', 'List files and folders in the folder they opened in VibeRoller (on THEIR computer).', { path: P('Path inside that folder, "" for the folder itself') }, [], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'list', args: { path: String(a.path || '') } }), { group: 'pc' });
   tool('pc_read', 'Read a text file in the folder they opened (on their computer).', { path: P('Path inside that folder') }, ['path'], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'read', args: { path: String(a.path) } }), { group: 'pc' });
   tool('pc_write', 'Create or overwrite a text file in the folder they opened (on their computer).', { path: P('Path inside that folder'), content: P('The whole file content') }, ['path', 'content'], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'write', args: { path: String(a.path), content: String(a.content) } }), { group: 'pc' });
   tool('pc_mkdir', 'Make a folder in the folder they opened (on their computer).', { path: P('Path inside that folder') }, ['path'], (a, s, ci) => browserCall(ci, 'pc_tool', { name: 'mkdir', args: { path: String(a.path) } }), { group: 'pc' });
@@ -438,7 +438,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   tool('today_events', "Today's calendar events (the person's local day).", {}, [], (a, s, ci) => { const k = dayKey(Date.now(), ci); return { ok: true, events: s.events.filter((e) => dayKey(e.at, ci) === k).sort((x, y) => x.at - y.at).map((e) => ({ ...e, at: fmt(e.at, ci) })) }; });
   tool('upcoming_events', 'Calendar events for the next N days.', { days: P('Days ahead (default 7)', 'integer') }, [], (a, s, ci) => { const end = Date.now() + (Number(a.days) || 7) * 864e5; return { ok: true, events: s.events.filter((e) => e.at >= Date.now() - 36e5 && e.at <= end).sort((x, y) => x.at - y.at).map((e) => ({ ...e, at: fmt(e.at, ci) })) }; });
   tool('delete_event', 'Delete a calendar event by id.', { event_id: P('Event id like E002') }, ['event_id'], (a, s) => { const i = s.events.findIndex((e) => e.id.toLowerCase() === String(a.event_id).toLowerCase()); if (i < 0) return { ok: false, error: 'No event ' + a.event_id }; return { ok: true, deleted: s.events.splice(i, 1)[0].title }; }, { confirm: true });
-  tool('set_reminder', 'Set a reminder; it pops up in Mills (and is spoken) when due.', { text: P('What to remind about'), when: P('When, e.g. "in 20 minutes", "18:30", "2026-10-20 09:00"') }, ['text', 'when'], (a, s, ci) => {
+  tool('set_reminder', 'Set a reminder; it pops up in VibeRoller (and is spoken) when due.', { text: P('What to remind about'), when: P('When, e.g. "in 20 minutes", "18:30", "2026-10-20 09:00"') }, ['text', 'when'], (a, s, ci) => {
     const at = parseWhen(a.when, ci); if (!at) return { ok: false, error: 'Could not read that time.' };
     const r = { id: nextId(s, 'R'), text: String(a.text).slice(0, 300), at, fired: false }; s.reminders.push(r); return { ok: true, reminder: { ...r, at: fmt(at, ci) } };
   });
@@ -456,7 +456,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     return { ok: true, results: scored.slice(0, 10).map((x) => ({ id: x.k.id, fact: x.k.fact, tags: x.k.tags })) };
   });
   tool('forget_knowledge', 'Delete a knowledge entry by id.', { entry_id: P('Knowledge id like K004') }, ['entry_id'], (a, s) => { const i = s.knowledge.findIndex((k) => k.id.toLowerCase() === String(a.entry_id).toLowerCase()); if (i < 0) return { ok: false, error: 'No entry ' + a.entry_id }; s.knowledge.splice(i, 1); return { ok: true }; }, { confirm: true });
-  tool('list_capabilities', 'What you can do for the person in Mills.', {}, [], () => ({ ok: true, tools: Object.values(TOOLS).filter((t) => t.name !== 'say').map((t) => `${t.name}: ${t.description}`) }));
+  tool('list_capabilities', 'What you can do for the person in VibeRoller.', {}, [], () => ({ ok: true, tools: Object.values(TOOLS).filter((t) => t.name !== 'say').map((t) => `${t.name}: ${t.description}`) }));
 
   // Calls that the person's browser carries out, answered through POST /api/assistant/pc-result.
   const waiting = new Map(); // id -> { resolve, timer, user }
@@ -497,7 +497,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     const pending = s.tasks.filter((t) => t.status === 'pending'), overdue = pending.filter((t) => t.due && t.due < Date.now());
     const mem = Object.entries(s.memory).slice(0, 12);
     return [
-      `You are talking with ${acct.display} (Mills username "${acct.username}"). Their local time: ${localNow(ci)} (${ci.tz}).`
+      `You are talking with ${acct.display} (VibeRoller username "${acct.username}"). Their local time: ${localNow(ci)} (${ci.tz}).`
         + (ci.lat !== null ? ` Where they are: ${ci.place || `${ci.lat.toFixed(3)}, ${ci.lon.toFixed(3)}`} (use get_weather / get_news for anything local).` : ' Their location is unknown; ask which city for local things.'),
       pending.length ? `${acct.display} has ${pending.length} pending task(s)${overdue.length ? `, ${overdue.length} overdue` : ''} (counts only; call list_tasks for the items, never invent them).` : '',
       mem.length ? 'Working memory: ' + mem.map(([k, v]) => `${k}=${v}`).join('; ') + '.' : '',

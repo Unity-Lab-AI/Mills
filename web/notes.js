@@ -1,4 +1,4 @@
-// Mills team notes, page side (hub side: bridge/notes.js). Loaded after the page script; uses its
+// VibeRoller team notes, page side (hub side: bridge/notes.js). Loaded after the page script; uses its
 // helpers at call time ($, json, me, ic, label, MD, showScreen, store, sys…).
 // Left: the folder tree with search; right: the note (edit / preview, Save = Ctrl+S, rename / move, delete).
 // Saving sends the time the note was opened, so two people never silently overwrite each other.

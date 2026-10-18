@@ -1,8 +1,8 @@
-// Mills servers ("guilds"; the two words mean the same here), channels and group conversations: the
+// VibeRoller servers ("guilds"; the two words mean the same here), channels and group conversations: the
 // Discord-shaped side of the chat.
 //
 // Conversation ids the hub routes by (the text inside stays end-to-end encrypted; these are metadata):
-//   'room'                  #general of the everyone-server "Mills": every account, Unity included (unchanged)
+//   'room'                  #general of the everyone-server "VibeRoller": every account, Unity included (unchanged)
 //   'dm:<a>|<b>'            a private conversation between two people (unchanged, carried by `to`)
 //   'ch:<server>/<channel>' a channel of a server: the server's members who may view that channel
 //   'grp:<id>'              a group conversation: its members only (up to GROUP_MAX people)
@@ -21,12 +21,12 @@
 //   - moderation: kick, ban (optionally deleting their messages of the last hour / day / week), timeout (read only
 //     for a while), server mute in calls; the audit log keeps the last AUDIT_KEEP changes;
 //   - settings: name, icon, colour, description, welcome channel (join / leave messages posted by the hub as
-//     "Mills"), rules channel, default notifications (all / mentions), a wait-before-posting rule for new members;
+//     "VibeRoller"), rules channel, default notifications (all / mentions), a wait-before-posting rule for new members;
 //   - channels: categories, order, topic, display name, slowmode, age-restricted flag, announcement, overwrites;
 //   - pins: per conversation (server channels need PIN_MESSAGES; groups and private conversations: any member).
-// The everyone-server "Mills" is a server record too (editable by the hub admins, who act as its owner), but
+// The everyone-server "VibeRoller" is a server record too (editable by the hub admins, who act as its owner), but
 // everyone is always in it: no invites, password, kick or ban (timeouts and mutes do work there).
-// Storage: Mills/Chat/guilds.json (gitignored, next to the chat ciphertext; names, member lists, settings; the
+// Storage: VibeRoller/Chat/guilds.json (gitignored, next to the chat ciphertext; names, member lists, settings; the
 // password only as a salted scrypt hash).
 'use strict';
 
@@ -103,8 +103,9 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
   const memberRole = (s) => s.roles.find((r) => r.builtin === 'member');
   const realRoles = (s, u) => (s.memberRoles[u] || []).filter((id) => { const r = s.roles.find((x) => x.id === id); return r && r.builtin !== 'member'; }); // roles beyond the automatic Member
   let mills = db.servers.find((s) => s.id === 'mills');
-  if (!mills) { mills = { id: 'mills', name: 'Mills', everyone: true, channels: [{ id: 'general', name: 'general', topic: 'the whole team' }], createdBy: '' }; db.servers.unshift(mills); }
+  if (!mills) { mills = { id: 'mills', name: 'VibeRoller', everyone: true, channels: [{ id: 'general', name: 'general', topic: 'the whole team' }], createdBy: '' }; db.servers.unshift(mills); }
   mills.everyone = true;
+  if (mills.name === 'Mills') mills.name = 'VibeRoller'; // the project's rename (1.3.0): the everyone-server takes the new name once; its id stays "mills"
   db.servers.forEach(normServer);
   for (const g of db.groups) g.owner = g.owner || g.createdBy || g.members[0] || '';
   let ver = 1;
@@ -154,7 +155,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     if (m) return { kind: 'grp', group: m[1] };
     return null;
   }
-  function chanOf(conv) { // 'room' and 'ch:…' → { s, ch } (room = Mills #general); anything else → null
+  function chanOf(conv) { // 'room' and 'ch:…' → { s, ch } (room = VibeRoller #general); anything else → null
     const c = parse(conv); if (!c) return null;
     if (c.kind === 'room') return { s: mills, ch: mills.channels.find((x) => x.id === 'general') };
     if (c.kind !== 'ch') return null;
@@ -179,7 +180,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
   }
   const isGuildConv = (conv) => /^(ch|grp):/.test(String(conv || ''));
   function isMember(conv, user) { const list = members(conv); return !!list && list.includes(user); }
-  // ---- permission checks the hub's chat / call routes use (room = Mills #general; groups + private: no roles) ----
+  // ---- permission checks the hub's chat / call routes use (room = VibeRoller #general; groups + private: no roles) ----
   function allows(conv, user, perm) { const f = chanOf(conv); return f ? P.canIn(f.s, f.ch, user, perm) : true; }
   const lastPost = new Map(); // `${conv}|${user}` -> ms (slowmode)
   function postCheck(conv, user, { voice = false, edit = false } = {}) { // '' = may post; otherwise why not
@@ -249,8 +250,8 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
   function member(id, user) { const s = server(id); if (!s) throw new Error('No such server.'); if (!inServer(s, user)) throw new Error('You are not in that server.'); return s; }
   const permName = (p) => p.toLowerCase().replace(/_/g, ' ');
   function need(id, user, perm) { const s = member(id, user); if (!P.can(s, user, perm)) throw new Error(`You need the "${permName(perm)}" permission in ${s.name}.`); return s; }
-  function owned(id, user) { const s = member(id, user); if (s.everyone) throw new Error('The Mills server is everyone\'s.'); if (s.owner !== user) throw new Error('Only the server\'s owner may do that.'); return s; }
-  const notEveryone = (s, what) => { if (s.everyone) throw new Error(`Everyone is always in the Mills server, so it has no ${what}.`); };
+  function owned(id, user) { const s = member(id, user); if (s.everyone) throw new Error('The VibeRoller server is everyone\'s.'); if (s.owner !== user) throw new Error('Only the server\'s owner may do that.'); return s; }
+  const notEveryone = (s, what) => { if (s.everyone) throw new Error(`Everyone is always in the VibeRoller server, so it has no ${what}.`); };
   function inGroup(id, user) { const g = group(id); if (!g || !g.members.includes(user)) throw new Error('No such group (or you are not in it).'); return g; }
   function target(s, user, who, perm) {
     who = String(who || '').toLowerCase();
@@ -261,7 +262,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     if (!P.outranks(s, user, who)) throw new Error(`${nameOf(who)} is not below you in ${s.name}'s roles.`);
     return who;
   }
-  const sysSay = (s, text, key) => { // welcome channel messages ("Mills" posts, sealed by the hub like Unity's)
+  const sysSay = (s, text, key) => { // welcome channel messages ("VibeRoller" posts, sealed by the hub like Unity's)
     if (s.everyone || !s.settings.systemChannel || !s.settings[key]) return;
     const ch = s.channels.find((c) => c.id === s.settings.systemChannel); if (!ch) return;
     try { announce(`ch:${s.id}/${ch.id}`, text); } catch {}
@@ -359,7 +360,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
       if (b.icon !== undefined) { s.icon = cleanName(b.icon, 2); ch.push('icon'); }
       if (b.color !== undefined) { s.color = COLOR_RE.test(b.color) ? b.color : ''; ch.push('colour'); }
       if (b.description !== undefined) { s.description = cleanName(b.description, 300); ch.push('description'); }
-      if (b.settings && typeof b.settings === 'object') { if (s.everyone && (b.settings.invitesPaused || b.settings.systemChannel)) throw new Error('The Mills server has no invites or join messages.'); cleanSettings(s, b.settings); ch.push('settings'); }
+      if (b.settings && typeof b.settings === 'object') { if (s.everyone && (b.settings.invitesPaused || b.settings.systemChannel)) throw new Error('The VibeRoller server has no invites or join messages.'); cleanSettings(s, b.settings); ch.push('settings'); }
       if (b.everyonePerms !== undefined) {
         if (!P.can(s, user, 'MANAGE_ROLES')) throw new Error('You need the "manage roles" permission.');
         const perms = P.cleanPerms(b.everyonePerms).filter((p) => p !== 'ADMINISTRATOR');

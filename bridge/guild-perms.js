@@ -1,9 +1,9 @@
-// Mills server permissions (bridge/guilds.js), modelled on Discord's (docs.discord.com → Topics → Permissions).
+// VibeRoller server permissions (bridge/guilds.js), modelled on Discord's (docs.discord.com → Topics → Permissions).
 //
 // Server level: every server has the implicit role "@everyone" (permissions = the server's `everyonePerms`) plus
 // named roles with a colour, a position (higher outranks lower) and permissions. A person's server permissions =
 // @everyone's + every role they hold. The owner has every permission, and so does anyone with ADMINISTRATOR (which
-// also skips channel overwrites). In the everyone-server "Mills" the hub's admin accounts count as owners.
+// also skips channel overwrites). In the everyone-server "VibeRoller" the hub's admin accounts count as owners.
 //
 // Channel level (Discord's order, each step overriding the one before):
 //   server permissions → @everyone deny → @everyone allow → role denies (all roles held) → role allows → member deny
@@ -14,7 +14,7 @@
 // Ranking: you manage people and roles strictly below your own highest role (the owner outranks everyone), and you
 // can only hand out permissions you hold yourself.
 //
-// Some Discord permissions have no Mills feature behind them (stickers, threads, stage channels, webhooks, apps,
+// Some Discord permissions have no VibeRoller feature behind them (stickers, threads, stage channels, webhooks, apps,
 // polls, soundboard, events, insights) and are left out. Text content is end-to-end encrypted, so permissions that
 // depend on reading it (embed links, attach files, mention @everyone) cannot be enforced by the hub and are left out
 // too rather than pretended.
@@ -24,14 +24,14 @@ const CATEGORIES = [
   ['General', {
     VIEW_CHANNEL: 'See channels and read them (deny it on a channel to make it private)',
     MANAGE_CHANNELS: 'Make, change, reorder and delete any channel, and set channel permissions',
-    CREATE_CHANNELS: 'Make channels, and change or delete the ones they made (a Mills extra)',
+    CREATE_CHANNELS: 'Make channels, and change or delete the ones they made (a VibeRoller extra)',
     MANAGE_ROLES: 'Make, change and hand out roles below their own',
     VIEW_AUDIT_LOG: 'Read the audit log',
     MANAGE_SERVER: 'Change the server: name, icon, colour, description, password lock, welcome channel, other settings',
   }],
   ['Membership', {
     CREATE_INVITE: 'Make invite links and invite people by name',
-    MANAGE_INVITES: 'See and revoke everyone\'s invites (a Mills extra)',
+    MANAGE_INVITES: 'See and revoke everyone\'s invites (a VibeRoller extra)',
     CHANGE_NICKNAME: 'Change their own server nickname',
     MANAGE_NICKNAMES: 'Change other people\'s server nicknames',
     KICK_MEMBERS: 'Remove people from the server',
@@ -44,7 +44,7 @@ const CATEGORIES = [
     READ_MESSAGE_HISTORY: 'Read messages sent before they joined (without it: only what arrives while they are a member)',
     MANAGE_MESSAGES: 'Delete other people\'s messages',
     PIN_MESSAGES: 'Pin and unpin messages',
-    ANNOUNCE: 'Post in announcement channels (a Mills extra)',
+    ANNOUNCE: 'Post in announcement channels (a VibeRoller extra)',
     BYPASS_SLOWMODE: 'Post without waiting for a channel\'s slowmode',
   }],
   ['Voice', {
@@ -60,7 +60,7 @@ const CATEGORIES = [
 const PERMS = Object.assign({}, ...CATEGORIES.map(([, p]) => p));
 const PERM_IDS = Object.keys(PERMS);
 const CHANNEL_PERMS = ['VIEW_CHANNEL', 'MANAGE_CHANNELS', 'MANAGE_ROLES', 'CREATE_INVITE', 'SEND_MESSAGES', 'SEND_VOICE_MESSAGES', 'READ_MESSAGE_HISTORY', 'MANAGE_MESSAGES', 'PIN_MESSAGES', 'ANNOUNCE', 'BYPASS_SLOWMODE', 'CONNECT', 'SPEAK', 'STREAM', 'MUTE_MEMBERS'];
-// what @everyone may do in a new server (Discord's defaults, for the features Mills has)
+// what @everyone may do in a new server (Discord's defaults, for the features VibeRoller has)
 const DEFAULT_EVERYONE = ['VIEW_CHANNEL', 'CREATE_INVITE', 'CHANGE_NICKNAME', 'CREATE_CHANNELS', 'SEND_MESSAGES', 'SEND_VOICE_MESSAGES', 'READ_MESSAGE_HISTORY', 'CONNECT', 'SPEAK', 'STREAM'];
 // The built-in role ladder every server has (made with the server, added to older ones, never deleted; the owner
 // may rename, recolour and re-permission them). Each level holds everything below it. Positions leave gaps so
