@@ -28,6 +28,35 @@ const GUILDS = (() => {
   const nickIn = (c, u) => { const f = find(c); return f && f.kind === 'ch' && f.server.nicks ? f.server.nicks[u] || '' : ''; };
   const roleColor = (s, u) => { const ids = (s.memberRoles || {})[u] || []; const r = (s.roles || []).find((x) => ids.includes(x.id) && x.color); return r ? r.color : ''; };
   const canPost = (c) => { const f = find(c); return !f || f.kind !== 'ch' || f.channel.canPost !== false; };
+  // ── per-conversation permissions the page needs (the hub checks them again) ──
+  const chanPerms = (c) => { const f = find(c); return f && f.kind === 'ch' ? f.channel.perms || [] : null; }; // null = not a server channel
+  const canPin = (c) => { const p = chanPerms(c); return p ? p.includes('PIN_MESSAGES') : /^(grp|dm):/.test(String(c || '')); };
+  const canModerate = (c) => { const p = chanPerms(c); return !!p && p.includes('MANAGE_MESSAGES'); };
+  const pinsOf = (c) => { const f = find(c); if (f) return (f.kind === 'ch' ? f.channel.pins : f.group.pins) || []; return ((G.data && G.data.dmPins) || {})[c] || []; };
+  const pinned = (c, seq) => pinsOf(c).some((p) => p.seq === seq);
+  async function pin(c, seq, on) { const r = await op('pin', { conv: c, seq, on }); if (r) renderPins(); }
+  const mentionsOnly = (c) => { const f = find(c); return !!(f && f.kind === 'ch' && f.server.settings && f.server.settings.notify === 'mentions'); };
+  function renderPins() { // a "Pins (n)" button next to the conversation name; its list jumps to the message
+    const name = $('convName'); if (!name) return;
+    let b = $('pinsBtn');
+    if (!b) { b = el('button', 'ghost tiny'); b.id = 'pinsBtn'; b.type = 'button'; b.title = 'Pinned messages'; name.after(b); b.onclick = (e) => { e.stopPropagation(); showPins(); }; }
+    const n = pinsOf(currentConv).length; b.textContent = ''; b.append(ic('flag')); if (n) b.append(' ' + n); b.hidden = !n;
+  }
+  function showPins() {
+    const old = $('pinsPop'); if (old) { old.remove(); return; }
+    const pop = el('div', 'pinsPop'); pop.id = 'pinsPop';
+    pop.append(el('b', '', 'Pinned in ' + label(currentConv)));
+    for (const p of [...pinsOf(currentConv)].reverse()) {
+      const rec = msgs.get(p.seq);
+      const row = el('div', 'pinRow'); row.append(el('span', 'pinWho', rec ? authorOf(rec.m) : '?'), el('span', 'pinText', rec ? snippet(rec) : '(an older message, not loaded)'), el('small', '', 'pinned by ' + nickOf(p.by)));
+      row.onclick = () => { pop.remove(); if (rec && rec.el) { rec.el.scrollIntoView({ block: 'center' }); rec.el.classList.add('flash'); setTimeout(() => rec.el && rec.el.classList.remove('flash'), 1500); } };
+      if (canPin(currentConv)) { const x = el('button', 'ghost tiny', 'Unpin'); x.type = 'button'; x.onclick = (e) => { e.stopPropagation(); pin(currentConv, p.seq, false); pop.remove(); }; row.append(x); }
+      pop.append(row);
+    }
+    document.body.append(pop);
+    const r = $('pinsBtn').getBoundingClientRect(); pop.style.top = (r.bottom + 6) + 'px'; pop.style.left = Math.max(8, Math.min(r.left, innerWidth - 380)) + 'px';
+    setTimeout(() => document.addEventListener('click', function off(e) { if (!e.target.closest('#pinsPop')) { pop.remove(); document.removeEventListener('click', off); } }), 0);
+  }
   async function refresh() {
     if (!me) return;
     try { G.data = await json('/api/guilds'); G.ver = G.data.ver; } catch { return; }
@@ -68,7 +97,7 @@ const GUILDS = (() => {
     const head = el('div', 'chHead');
     const name = el('b', '', s.name); name.title = s.description || ''; head.append(name);
     if (s.locked) { const l = ic('lock'); l.setAttribute('aria-label', 'password locked'); head.append(l); }
-    if (!s.everyone && can(s, 'INVITE')) { const inv = el('button', 'ghost tiny'); inv.type = 'button'; inv.title = 'Invite people'; inv.append(ic('plus')); inv.onclick = () => GSET.openServer(s.id, 'invites'); head.append(inv); }
+    if (!s.everyone && can(s, 'CREATE_INVITE')) { const inv = el('button', 'ghost tiny'); inv.type = 'button'; inv.title = 'Invite people'; inv.append(ic('plus')); inv.onclick = () => GSET.openServer(s.id, 'invites'); head.append(inv); }
     const set = el('button', 'ghost tiny'); set.type = 'button'; set.title = 'Server settings: overview, members, roles, channels, invites' + (s.everyone ? '' : ', bans, password lock, audit log'); set.append(ic('gear')); set.onclick = () => GSET.openServer(s.id); head.append(set);
     box.append(head);
     const cats = []; for (const ch of s.channels) { const c = ch.category || 'Text channels'; if (!cats.includes(c)) cats.push(c); }
@@ -77,7 +106,7 @@ const GUILDS = (() => {
       const sect = el('div', 'chSect'); sect.append(el('span', '', cat));
       if (i === 0 && (can(s, 'CREATE_CHANNELS') || can(s, 'MANAGE_CHANNELS'))) { const plus = el('button', 'ghost tiny'); plus.type = 'button'; plus.title = 'New channel'; plus.append(ic('plus')); plus.onclick = () => GSET.newChannel(s); sect.append(plus); }
       box.append(sect);
-      for (const ch of s.channels.filter((c) => (c.category || 'Text channels') === cat)) box.append(convButton(ch.conv, ch.private ? '' : '#', ch.name, ch.topic || (ch.conv === 'room' ? 'the whole team' : ''), ch, null, s));
+      for (const ch of s.channels.filter((c) => (c.category || 'Text channels') === cat)) box.append(convButton(ch.conv, ch.private ? '' : '#', ch.name, [s.settings && s.settings.rulesChannel === ch.id ? 'rules' : '', ch.slowmode ? 'slowmode' : '', ch.topic || (ch.conv === 'room' ? 'the whole team' : '')].filter(Boolean).join(' · '), ch, null, s));
     });
     const gs = el('div', 'chSect'); gs.append(el('span', '', 'Groups'));
     const gp = el('button', 'ghost tiny'); gp.type = 'button'; gp.title = 'New group conversation'; gp.append(ic('plus')); gp.onclick = () => GSET.newGroup(); gs.append(gp); box.append(gs);
@@ -126,6 +155,8 @@ const GUILDS = (() => {
       r.append(dot, nm);
       if (s && !s.everyone && s.owner === u) { const o = el('span', 'botTag', 'OWNER'); r.append(o); }
       if (s && (s.temp || []).includes(u)) { const t = el('span', 'botTag', 'TEMP'); r.append(t); }
+      if (s && s.timeouts && s.timeouts[u]) { const t = el('span', 'botTag', 'TIMEOUT'); t.title = 'timed out until ' + new Date(s.timeouts[u]).toLocaleString(); r.append(t); }
+      if (s && (s.voiceMuted || []).includes(u)) { const t = el('span', 'botTag', 'MUTED'); t.title = 'muted in calls by a moderator'; r.append(t); }
       r.title = statusOf(u).text + (nick !== nickOf(u) ? ' · ' + nickOf(u) : '');
       r.onclick = () => { if (u !== me.username) selectConv('dm:' + [me.username, u].sort().join('|')); };
       if (s) r.oncontextmenu = (e) => { e.preventDefault(); GSET.openServer(s.id, 'members', u); };
@@ -145,7 +176,7 @@ const GUILDS = (() => {
       box.append(r);
     }
   }
-  function render() { renderRail(); renderChannels(); renderMembers(); if (typeof updateUnread === 'function') updateUnread(); }
+  function render() { renderRail(); renderChannels(); renderMembers(); renderPins(); if (typeof updateUnread === 'function') updateUnread(); }
   // an invite link opened this page (?invite=CODE): offer the join once signed in
   function pendingInvite() {
     const code = new URLSearchParams(location.search).get('invite');
@@ -153,5 +184,5 @@ const GUILDS = (() => {
     const u = new URL(location.href); u.searchParams.delete('invite'); history.replaceState(null, '', u.pathname + u.search + u.hash);
     setTimeout(() => GSET.join(code), 300);
   }
-  return { isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, op, can, current, nickIn, canPost, pendingInvite, state: G };
+  return { isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, renderPins, op, can, current, nickIn, canPost, canPin, canModerate, pinned, pin, mentionsOnly, pendingInvite, state: G };
 })();
