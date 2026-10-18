@@ -309,6 +309,7 @@ function cleanPrefs(p, prev = {}) {
 }
 // what everyone sees about a person: nickname + colour (in prefs, as always) and their profile (bridge/user-profile.js)
 const userProfile = require('./user-profile');
+const workState = require('./work-state')({ send: (...a) => send(...a), readBody: (r) => readBody(r) }); // Work conversation + queue per person
 const avatars = userProfile.createAvatars(path.join(MILLS_DIR, 'Avatars')); // profile pictures, one per person
 const publicPrefs = (a) => ({ nick: (a.state.prefs || {}).nick || '', color: (a.state.prefs || {}).color ?? null, profile: { ...userProfile.publicProfile(a.state), avatar: avatars.get(a.username) } });
 
@@ -895,6 +896,7 @@ const server = http.createServer(async (req, res) => {
       if (v > (mine[conv] || 0)) { mine[conv] = v; saveSeen(); roomChanged(); }
       return send(res, 200, { ok: true });
     }
+    if (await workState.route(p, req, res, acct)) return; // the Work conversation + queue, kept across restarts: /api/work/current, /api/work/queue
     if (await shares.route(p, req, res, acct, url)) return; // shared Work sessions: /api/work/*
 
     if (await calls.route(p, req, res, acct, url)) return; // voice / video calls: /api/call/*
