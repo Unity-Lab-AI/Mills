@@ -62,12 +62,25 @@ const PERM_IDS = Object.keys(PERMS);
 const CHANNEL_PERMS = ['VIEW_CHANNEL', 'MANAGE_CHANNELS', 'MANAGE_ROLES', 'CREATE_INVITE', 'SEND_MESSAGES', 'SEND_VOICE_MESSAGES', 'READ_MESSAGE_HISTORY', 'MANAGE_MESSAGES', 'PIN_MESSAGES', 'ANNOUNCE', 'BYPASS_SLOWMODE', 'CONNECT', 'SPEAK', 'STREAM', 'MUTE_MEMBERS'];
 // what @everyone may do in a new server (Discord's defaults, for the features Mills has)
 const DEFAULT_EVERYONE = ['VIEW_CHANNEL', 'CREATE_INVITE', 'CHANGE_NICKNAME', 'CREATE_CHANNELS', 'SEND_MESSAGES', 'SEND_VOICE_MESSAGES', 'READ_MESSAGE_HISTORY', 'CONNECT', 'SPEAK', 'STREAM'];
-// permission levels offered when a server is made (and as templates in Roles)
-const TEMPLATES = {
-  admin: { name: 'Admin', color: '#e74c3c', perms: ['ADMINISTRATOR'] },
-  moderator: { name: 'Moderator', color: '#3498db', perms: ['VIEW_AUDIT_LOG', 'MANAGE_NICKNAMES', 'KICK_MEMBERS', 'BAN_MEMBERS', 'MODERATE_MEMBERS', 'MANAGE_MESSAGES', 'PIN_MESSAGES', 'BYPASS_SLOWMODE', 'MUTE_MEMBERS', 'MANAGE_INVITES', 'ANNOUNCE'] },
-  member: { name: 'Member', color: '#2ecc71', perms: ['PIN_MESSAGES'] },
-};
+// The built-in role ladder every server has (made with the server, added to older ones, never deleted; the owner
+// may rename, recolour and re-permission them). Each level holds everything below it. Positions leave gaps so
+// custom roles can sit between levels. The owner stays above all of them; Co-owner is "owner rights, under the owner":
+// every permission, outranks everyone else, but cannot delete the server, hand it over, or manage other co-owners.
+// Everyone who joins gets Member (except temporary members, who stay without a role until someone gives them one).
+const MEMBER = ['VIEW_CHANNEL', 'CHANGE_NICKNAME', 'CREATE_INVITE', 'SEND_MESSAGES', 'SEND_VOICE_MESSAGES', 'READ_MESSAGE_HISTORY', 'CONNECT', 'SPEAK', 'STREAM'];
+const MODERATOR = [...MEMBER, 'MANAGE_MESSAGES', 'PIN_MESSAGES', 'MODERATE_MEMBERS', 'MUTE_MEMBERS', 'KICK_MEMBERS', 'MANAGE_NICKNAMES', 'BYPASS_SLOWMODE', 'VIEW_AUDIT_LOG'];
+const SUPER_MODERATOR = [...MODERATOR, 'BAN_MEMBERS', 'MANAGE_INVITES', 'ANNOUNCE', 'CREATE_CHANNELS'];
+const ADMIN = [...SUPER_MODERATOR, 'MANAGE_CHANNELS', 'MANAGE_ROLES', 'MANAGE_SERVER'];
+const BUILTINS = [ // key, name, colour, position, permissions (lowest first)
+  { key: 'member', name: 'Member', color: '#2ecc71', position: 10, perms: MEMBER },
+  { key: 'moderator', name: 'Moderator', color: '#3498db', position: 20, perms: MODERATOR },
+  { key: 'supermod', name: 'Super Moderator', color: '#1abc9c', position: 30, perms: SUPER_MODERATOR },
+  { key: 'admin', name: 'Admin', color: '#e67e22', position: 40, perms: ADMIN },
+  { key: 'superadmin', name: 'Super Admin', color: '#e74c3c', position: 50, perms: ['ADMINISTRATOR'] },
+  { key: 'coowner', name: 'Co-owner', color: '#f1c40f', position: 60, perms: ['ADMINISTRATOR'] },
+];
+const COOWNER_POS = 60;
+const TEMPLATES = Object.fromEntries(BUILTINS.map((b) => [b.key, { name: b.name, color: b.color, perms: b.perms }])); // also offered as templates for custom roles
 // older stored names → Discord's
 const RENAMED = { INVITE: 'CREATE_INVITE', KICK: 'KICK_MEMBERS', BAN: 'BAN_MEMBERS', ADMIN: 'ADMINISTRATOR' };
 
@@ -75,7 +88,11 @@ const cleanPerms = (list, allowed = PERM_IDS) => [...new Set((Array.isArray(list
 
 module.exports = function createPerms({ isHubAdmin }) {
   const isOwner = (s, user) => (s.everyone ? isHubAdmin(user) : s.owner === user);
-  const rolesOf = (s, user) => (s.memberRoles[user] || []).map((id) => s.roles.find((r) => r.id === id)).filter(Boolean);
+  const rolesOf = (s, user) => { // in the everyone-server everybody holds Member (accounts come and go; nobody joins it)
+    const list = (s.memberRoles[user] || []).map((id) => s.roles.find((r) => r.id === id)).filter(Boolean);
+    if (s.everyone) { const m = s.roles.find((r) => r.builtin === 'member'); if (m && !list.includes(m)) list.push(m); }
+    return list;
+  };
   const timedOut = (s, user) => !!(s.timeouts && s.timeouts[user] && Date.parse(s.timeouts[user]) > Date.now());
   const isAdmin = (s, user) => isOwner(s, user) || rolesOf(s, user).some((r) => r.perms.includes('ADMINISTRATOR')) || (s.everyonePerms || []).includes('ADMINISTRATOR');
   function base(s, user) { // server level, before timeouts
@@ -115,6 +132,7 @@ module.exports = function createPerms({ isHubAdmin }) {
   const outranks = (s, user, other) => rank(s, user) > rank(s, other);
   const roleBelow = (s, user, role) => rank(s, user) > role.position;
   const grantable = (s, user, perms) => { const mine = base(s, user); return perms.every((p) => mine.has(p)); }; // only what you hold yourself
-  return { PERMS, PERM_IDS, CATEGORIES, CHANNEL_PERMS, DEFAULT_EVERYONE, TEMPLATES, cleanPerms, isOwner, isAdmin, rolesOf, timedOut, permsOf, permsIn, can, canIn, rank, outranks, roleBelow, grantable };
+  const isCoOwner = (s, user) => rolesOf(s, user).some((r) => r.builtin === 'coowner');
+  return { PERMS, PERM_IDS, CATEGORIES, CHANNEL_PERMS, DEFAULT_EVERYONE, TEMPLATES, BUILTINS, COOWNER_POS, isCoOwner, cleanPerms, isOwner, isAdmin, rolesOf, timedOut, permsOf, permsIn, can, canIn, rank, outranks, roleBelow, grantable };
 };
-Object.assign(module.exports, { PERMS, PERM_IDS, CATEGORIES, CHANNEL_PERMS, DEFAULT_EVERYONE, TEMPLATES, RENAMED, cleanPerms });
+Object.assign(module.exports, { PERMS, PERM_IDS, CATEGORIES, CHANNEL_PERMS, DEFAULT_EVERYONE, TEMPLATES, BUILTINS, COOWNER_POS, RENAMED, cleanPerms });

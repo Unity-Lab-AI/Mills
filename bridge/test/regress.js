@@ -1303,11 +1303,12 @@ async function run() {
   const v25 = () => gq(U).then((v) => sv23(v, s25) || {});
   const lv25 = await v25();
   const roleBy = (n) => (lv25.roles || []).find((r) => r.name === n) || {};
-  const levelsOk = ['Admin', 'Moderator', 'Member'].every((n) => roleBy(n).id) && roleBy('Admin').position > roleBy('Moderator').position && roleBy('Moderator').position > roleBy('Member').position && roleBy('Admin').perms.includes('ADMINISTRATOR');
+  const levelsOk = ['Super Admin', 'Admin', 'Moderator', 'Member'].every((n) => roleBy(n).id) && roleBy('Admin').position > roleBy('Moderator').position && roleBy('Moderator').position > roleBy('Member').position && roleBy('Super Admin').perms.includes('ADMINISTRATOR');
   await call('/api/guilds/invitation/accept', A, { server: s25 });
   await call('/api/guilds/member/roles', U, { server: s25, user: 't-admin', roles: [roleBy('Member').id] });
-  // read history: @everyone without READ_MESSAGE_HISTORY sees only what arrives after joining; welcome line
+  // read history: neither @everyone nor Member may read history → only what arrives after joining; welcome line
   await call('/api/guilds/server/update', U, { server: s25, settings: { systemChannel: 'general', systemJoins: true }, everyonePerms: ['VIEW_CHANNEL', 'SEND_MESSAGES', 'CONNECT', 'SPEAK', 'CHANGE_NICKNAME'] });
+  await call('/api/guilds/role/update', U, { server: s25, role: roleBy('Member').id, perms: ['VIEW_CHANNEL', 'SEND_MESSAGES', 'CONNECT', 'SPEAK'] });
   const before25 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'before D r125', gen25));
   await call('/api/guilds/server/invite', U, { server: s25, add: ['mills'] }); await call('/api/guilds/invitation/accept', D, { server: s25 });
   const after25 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'after D r125', gen25));
@@ -1327,13 +1328,13 @@ async function run() {
   const sl1 = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'slow 1 r125', slowConv));
   const sl2 = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'slow 2 r125', slowConv));
   const slU1 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'owner 1 r125', slowConv)), slU2 = await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'owner 2 r125', slowConv));
-  // pins: Member (A) may pin, plain @everyone (D) may not; manage messages: a Moderator deletes others' messages
+  // pins: a Moderator (A) may pin, a Member (D) may not; manage messages: a Moderator deletes others' messages, a Member cannot
+  const delNoMod = await call('/api/room/delete', D, { seq: after25.data.seq });
+  await call('/api/guilds/member/roles', U, { server: s25, user: 't-admin', roles: [roleBy('Moderator').id] });
   const pinA = await call('/api/guilds/pin', A, { conv: gen25, seq: after25.data.seq });
   const pinD = await call('/api/guilds/pin', D, { conv: gen25, seq: after25.data.seq });
   const pinBad = await call('/api/guilds/pin', A, { conv: gen25, seq: before25.data.seq - 100000 });
   const pinsSeen = ((await v25()).channels.find((c) => c.id === 'general') || {}).pins || [];
-  const delNoMod = await call('/api/room/delete', A, { seq: after25.data.seq });
-  await call('/api/guilds/member/roles', U, { server: s25, user: 't-admin', roles: [roleBy('Moderator').id] });
   const delMod = await call('/api/room/delete', A, { seq: after25.data.seq });
   const delDm = await call('/api/room/delete', D, { seq: slU1.data.seq });
   // only grant what you hold: the Moderator cannot make an administrator role (no manage roles at all here) …
@@ -1366,8 +1367,46 @@ async function run() {
     && pinA.status === 200 && pinD.status === 400 && pinBad.status === 400 && pinsSeen.some((p) => p.seq === after25.data.seq) && delNoMod.status === 403 && delMod.status === 200 && delDm.status === 403
     && grantNo.status === 400 && owSet.status === 200 && owSend.status === 403 && hidD && !hidA
     && mj.status === 200 && mjMe.mic === false && mjMe.held === 'muted' && ivPaused.status === 400 && ban25.status === 200 && ban25.data.result.deleted >= 1 && aGone && aGone.deleted === true
-    && /\['Voice', \{/.test(gp25) && /MODERATE_MEMBERS/.test(gp25) && /function settings\(s\)/.test(gs25) && /'Time out'/.test(gs25) && /Mute in calls/.test(gs25) && /add an override for/.test(gs25) && /Add ' \+ t\.name \+ ' level'/.test(gs25),
+    && /\['Voice', \{/.test(gp25) && /MODERATE_MEMBERS/.test(gp25) && /function settings\(s\)/.test(gs25) && /'Time out'/.test(gs25) && /Mute in calls/.test(gs25) && /add an override for/.test(gs25) && /Built-in levels/.test(gs25),
     `levels ${levelsOk}, history ${histOk} welcome ${welcome25}, timeout ${to25.status} send ${toSend.status} call ${toCall.status} owner ${toKickOwner.status} after ${toAfter.status}, slow ${sl1.status}/${sl2.status} owner ${slU1.status}/${slU2.status}, pin ${pinA.status}/${pinD.status}/${pinBad.status} seen ${pinsSeen.length}, delete ${delNoMod.status}/${delMod.status}/${delDm.status}, grant ${grantNo.status}, overwrite ${owSet.status} send ${owSend.status}, hidden D ${hidD} A ${hidA}, mute ${mj.status} ${JSON.stringify(mjMe)}, paused ${ivPaused.status}, ban ${ban25.status} ${JSON.stringify(ban25.data.result)} gone ${aGone && aGone.deleted}`);
+
+  // Built-in levels + co-owners: the ladder on every server (Mills too), Member for who joins, co-owners with owner
+  // rights under the owner, handing over keeps the old owner as Co-owner, custom roles sit between levels.
+  const s26 = (await call('/api/guilds/server', U, { name: 'Ladder r126', members: ['t-admin', 'mills'] })).data.result.id;
+  await call('/api/guilds/invitation/accept', A, { server: s26 }); await call('/api/guilds/invitation/accept', D, { server: s26 });
+  const v26 = (tok = U) => gq(tok).then((v) => sv23(v, s26) || {});
+  const L = await v26();
+  const rb = (n) => (L.roles || []).find((r) => r.name === n) || {};
+  const ladder = ['Co-owner', 'Super Admin', 'Admin', 'Super Moderator', 'Moderator', 'Member'];
+  const ladderOk = ladder.every((n, i) => rb(n).builtin && (i === 0 || rb(ladder[i - 1]).position > rb(n).position)) && rb('Co-owner').perms.includes('ADMINISTRATOR');
+  const joinedMember = ['t-admin', 'mills'].every((u) => (L.memberRoles[u] || []).includes(rb('Member').id));
+  const millsLadder = ((sv23(await gq(U), 'mills') || {}).roles || []).filter((r) => r.builtin).length === 6;
+  const delBuiltin = await call('/api/guilds/role/delete', U, { server: s26, role: rb('Moderator').id });
+  const moveBuiltin = await call('/api/guilds/role/update', U, { server: s26, role: rb('Admin').id, position: 45 });
+  const permsSA = await call('/api/guilds/role/update', U, { server: s26, role: rb('Super Admin').id, perms: ['KICK_MEMBERS'] });
+  const coOn = await call('/api/guilds/member/roles', U, { server: s26, user: 't-admin', roles: [rb('Member').id, rb('Co-owner').id] });
+  const coRename = await call('/api/guilds/server/update', A, { server: s26, name: 'Ladder co r126' });
+  const coPw = await call('/api/guilds/server/password', A, { server: s26, password: 'co-pass-r126' });
+  const coKick = await call('/api/guilds/member/kick', A, { server: s26, user: 'mills' });
+  const coKickOwner = await call('/api/guilds/member/kick', A, { server: s26, user: 't-user' });
+  await call('/api/guilds/server/invite', A, { server: s26, add: ['mills'] }); await call('/api/guilds/invitation/accept', D, { server: s26 });
+  const coMakeCo = await call('/api/guilds/member/roles', A, { server: s26, user: 'mills', roles: [rb('Member').id, rb('Co-owner').id] });
+  const coMakeAdmin = await call('/api/guilds/member/roles', A, { server: s26, user: 'mills', roles: [rb('Member').id, rb('Super Admin').id] });
+  const coDelete = await call('/api/guilds/server/delete', A, { server: s26 });
+  const coTransfer = await call('/api/guilds/server/transfer', A, { server: s26, user: 'mills' });
+  const custom = (await call('/api/guilds/role', A, { server: s26, name: 'Helpers r126' })).data.result;
+  const moved26 = (await call('/api/guilds/role/update', A, { server: s26, role: custom.id, position: 20 })).data.result; // Moderator's spot → hops to 21
+  const xfer26 = await call('/api/guilds/server/transfer', U, { server: s26, user: 't-admin' });
+  const after26 = await v26(A), uRoles = (after26.memberRoles || {})['t-user'] || [];
+  const oldOwnerCo = after26.owner === 't-admin' && after26.me.owner && uRoles.includes(rb('Co-owner').id) && !((after26.memberRoles || {})['t-admin'] || []).includes(rb('Co-owner').id);
+  const exKick = await call('/api/guilds/member/kick', U, { server: s26, user: 't-admin' });
+  const coLeave = await call('/api/guilds/server/leave', U, { server: s26 });
+  await call('/api/guilds/server/delete', A, { server: s26 });
+  check('R126', 'built-in levels on every server (Mills too): Co-owner > Super Admin > Admin > Super Moderator > Moderator > Member, cannot be deleted or reordered, Co-owner / Super Admin keep every permission; who joins becomes a Member; a co-owner (many allowed) has owner rights under the owner: changes settings + password, kicks, invites, hands out Super Admin, but cannot name co-owners, kick the owner, delete or hand over the server; custom roles start above Member and hop over the built-in spots; handing over keeps the old owner as Co-owner (who cannot kick the new owner)',
+    ladderOk && joinedMember && millsLadder && delBuiltin.status === 400 && moveBuiltin.status === 400 && permsSA.status === 400
+    && coOn.status === 200 && coRename.status === 200 && coPw.status === 200 && coKick.status === 200 && coKickOwner.status === 400 && coMakeCo.status === 400 && coMakeAdmin.status === 200 && coDelete.status === 400 && coTransfer.status === 400
+    && custom && custom.position === 11 && moved26 && moved26.position === 21 && xfer26.status === 200 && oldOwnerCo && exKick.status === 400 && coLeave.status === 200,
+    `ladder ${ladderOk} member ${joinedMember} mills ${millsLadder}, builtin del ${delBuiltin.status} move ${moveBuiltin.status} sa ${permsSA.status}, co ${coOn.status} rename ${coRename.status} pw ${coPw.status} kick ${coKick.status}/${coKickOwner.status} co→co ${coMakeCo.status} co→sa ${coMakeAdmin.status} delete ${coDelete.status} transfer ${coTransfer.status}, custom ${custom && custom.position}→${moved26 && moved26.position}, handover ${xfer26.status} old owner co ${oldOwnerCo}, kick new owner ${exKick.status}, leave ${coLeave.status}`);
 
   // Shared Work sessions: watch-only windows with live typing / queue, summaries as context
   const shA = await call('/api/work/share', A, { conv: 'room', transcript: [{ cls: 'me', text: 'seed-hello-r58' }, { cls: 'claude', text: 'seed-reply-r58' }] });
