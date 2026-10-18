@@ -102,6 +102,12 @@ const GSET = (() => {
       edit ? row(btn('Save', () => op('server/update', { server: s.id, name: name.value, icon: icon.value, color: noColor.box.checked ? '' : color.value, description: desc.value }))) : el('small', '', 'Only people with "manage server" change these.')));
     const myNick = input((s.nicks || {})[me.username] || '', nickOf(me.username)); myNick.maxLength = 32; myNick.disabled = !can(s, 'CHANGE_NICKNAME');
     bodyEl.append(sect('Your nickname in ' + s.name, el('small', '', can(s, 'CHANGE_NICKNAME') ? 'Shown instead of your name inside this server only.' : 'Changing your nickname is not allowed for you here.'), row(myNick, can(s, 'CHANGE_NICKNAME') ? btn('Save', () => op('member/nick', { server: s.id, user: me.username, nick: myNick.value })) : null)));
+    // your roles here (highest first; the top coloured one colours your name in this server), and the ones you may pick
+    const mineR = GUILDS.rolesOfUser(s, me.username), chip = (r) => { const c = el('span', 'roleChip', r.name); if (r.color) { c.style.borderColor = r.color; c.style.color = r.color; } return c; };
+    const pickable = (s.roles || []).filter((r) => r.selfAssign);
+    bodyEl.append(sect('Your roles', el('small', '', 'Your name shows in the colour of your highest coloured role, inside this server only.'),
+      row(...(mineR.length ? mineR.map(chip) : [el('small', '', 'none')])),
+      ...(pickable.length ? [el('small', '', 'Roles you can pick yourself:'), row(...pickable.map((r) => { const on = mineR.some((x) => x.id === r.id); const c = check(r.name, on); if (r.color) c.style.color = r.color; c.box.onchange = () => op('member/selfrole', { server: s.id, role: r.id, on: c.box.checked }); return c; }))] : [])));
     if (s.timeouts && s.timeouts[me.username]) bodyEl.append(sect('Timeout', el('div', 'status', 'You are timed out until ' + when(s.timeouts[me.username]) + ': you can read but not post, type or join calls.')));
     const facts = [s.everyone ? 'Everyone with a Mills account is in this server.' : `${s.members.length} member${s.members.length === 1 ? '' : 's'} · owner ${nick(s, s.owner)}`, s.locked ? 'Password locked: joining with an invite code asks for its password.' : '', 'Your permissions: ' + (s.me.perms.map((p) => p.toLowerCase().replace(/_/g, ' ')).join(', ') || 'none')].filter(Boolean);
     bodyEl.append(sect('About', ...facts.map((t) => el('div', '', t))));
@@ -212,12 +218,14 @@ const GSET = (() => {
       const nm = input(r.name); nm.maxLength = 32; nm.disabled = !edit || !mine;
       const col = input(r.color || '#99aab5', '', 'color'); col.disabled = !edit || !mine;
       const hoist = check('show its members separately', r.hoist); hoist.box.disabled = !edit || !mine;
+      const ment = check('anyone may @mention it', r.mentionable); ment.box.disabled = !edit || !mine;
+      const selfA = check('members may pick it themselves (everyday permissions only)', r.selfAssign); selfA.box.disabled = !edit || !mine || !!r.builtin;
       const fixed = r.builtin === 'coowner' || r.builtin === 'superadmin';
       const boxes = permBoxes(s, r.perms, { readOnly: !edit || !mine || fixed });
       const who = s.members.filter((u) => ((s.memberRoles || {})[u] || []).includes(r.id)).map((u) => nick(s, u)).join(', ');
-      const box = sect(r.name + (r.builtin ? ' · built-in level' : ' · custom role') + ' · position ' + r.position, el('small', '', who ? 'held by ' + who : r.builtin === 'member' && s.everyone ? 'everyone' : 'nobody has it yet'), row(nm, col, hoist), el('div', 'gsetPerms'));
+      const box = sect(r.name + (r.builtin ? ' · built-in level' : ' · custom role') + ' · position ' + r.position, el('small', '', who ? 'held by ' + who : r.builtin === 'member' && s.everyone ? 'everyone' : 'nobody has it yet'), row(nm, col, hoist), row(ment, selfA), el('div', 'gsetPerms'));
       box.querySelector('.gsetPerms').append(...boxes);
-      if (edit && mine) box.append(row(btn('Save', () => op('role/update', { server: s.id, role: r.id, name: nm.value, color: col.value, hoist: hoist.box.checked, ...(fixed ? {} : { perms: ticked(boxes) }) })),
+      if (edit && mine) box.append(row(btn('Save', () => op('role/update', { server: s.id, role: r.id, name: nm.value, color: col.value, hoist: hoist.box.checked, mentionable: ment.box.checked, ...(r.builtin ? {} : { selfAssign: selfA.box.checked }), ...(fixed ? {} : { perms: ticked(boxes) }) })),
         ...(r.builtin ? [] : [btn('Move up', () => op('role/update', { server: s.id, role: r.id, position: r.position + 1 }), 'ghost'), btn('Move down', () => op('role/update', { server: s.id, role: r.id, position: Math.max(1, r.position - 1) }), 'ghost'),
           armed('Delete role', () => op('role/delete', { server: s.id, role: r.id }))])));
       else if (!mine) box.append(el('small', '', 'Above or level with your own highest role: you cannot change it.'));
