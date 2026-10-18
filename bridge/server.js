@@ -354,6 +354,7 @@ const agentEnabled = () => !accounts.has(AGENT) && config.roomAgent !== false;
 const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJson, agentName: AGENT_NAME, changed: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r),
   isOnline: (u) => presence.online().includes(u), // temporary members leave when they go offline
   getSeq: () => seq, // a member's join point (read-history permission)
+  seedFile: path.join(ROOT, 'server-owners.json'), // host-set owners + co-owners (gitignored)
   msgConv: (n) => { const m = messages.find((x) => x.seq === n && !x.deleted); return m ? convOf(m) : null; }, // pins
   announce: (conv, text) => agentSay(text, '', { as: 'Mills', conv }), // welcome-channel join / leave lines
   deleteRecent: (user, convs, since) => { // a ban that deletes their recent messages: tombstones, like their own delete

@@ -45,7 +45,7 @@ const WAITS = [0, 5, 10];                                // minutes a new member
 const PW_TRIES = 5, PW_WINDOW = 10 * 60e3, TEMP_GRACE = 60e3;
 
 module.exports = function createGuilds({ dir, accounts, readJson, writeJson, agentName, changed, send, readBody, isOnline = () => true,
-  getSeq = () => 0, msgConv = () => null, announce = () => {}, deleteRecent = () => 0 }) {
+  getSeq = () => 0, msgConv = () => null, announce = () => {}, deleteRecent = () => 0, seedFile = '' }) {
   const FILE = path.join(dir, 'guilds.json');
   const P = createPerms({ isHubAdmin: (u) => !!(accounts.get(u) && accounts.get(u).admin) });
   let db = readJson(FILE, null);
@@ -109,6 +109,33 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
   for (const g of db.groups) g.owner = g.owner || g.createdBy || g.members[0] || '';
   let ver = 1;
   const save = () => { writeJson(FILE, db); ver++; changed(); };
+  // Owners + co-owners set by the host (bridge/server-owners.json, gitignored, names never in git):
+  //   { "servers": { "mills": { "owner": "gee", "coOwners": ["mills", "sponge"] } } }
+  // Each server's entry is applied ONCE (its exact text is remembered in guilds.json), so changes made later in
+  // Server Settings stick; editing the entry applies it again at the next start. Unknown accounts are skipped.
+  function applySeeds() { // run once below, after every helper it uses exists
+    const seed = seedFile ? readJson(seedFile, null) : null;
+    if (!seed || !seed.servers || typeof seed.servers !== 'object') return;
+    if (!db.seeds || typeof db.seeds !== 'object') db.seeds = {};
+    let any = false;
+    for (const [id, e] of Object.entries(seed.servers)) {
+      const s = db.servers.find((x) => x.id === id); const key = JSON.stringify(e || {});
+      if (!s || !e || db.seeds[id] === key) continue;
+      const owner = String(e.owner || '').toLowerCase(), co = s.roles.find((r) => r.builtin === 'coowner');
+      if (owner && accounts.has(owner)) {
+        if (!s.everyone && !s.members.includes(owner)) s.members.push(owner);
+        s.owner = owner; if (co && s.memberRoles[owner]) s.memberRoles[owner] = s.memberRoles[owner].filter((x) => x !== co.id);
+      }
+      for (const u0 of Array.isArray(e.coOwners) ? e.coOwners : []) {
+        const u = String(u0).toLowerCase();
+        if (!co || !accounts.has(u) || u === s.owner || (!s.everyone && !s.members.includes(u))) continue;
+        s.memberRoles[u] = [...new Set([...(s.memberRoles[u] || []), co.id])];
+      }
+      audit(s, 'host', 'set the owner and co-owners', [owner && 'owner ' + owner, (e.coOwners || []).length && 'co-owners ' + e.coOwners.join(', ')].filter(Boolean).join('; '));
+      db.seeds[id] = key; any = true;
+    }
+    if (any) writeJson(FILE, db);
+  }
   const server = (id) => db.servers.find((s) => s.id === id);
   const group = (id) => db.groups.find((g) => g.id === id);
   const serverMembers = (s) => (s.everyone ? [...accounts.keys()] : s.members.filter((u) => accounts.has(u)));
@@ -189,7 +216,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     const servers = db.servers.filter((s) => inServer(s, user)).map((s) => {
       const perms = P.permsOf(s, user), has = (p) => perms.includes(p), manage = has('MANAGE_CHANNELS') || has('MANAGE_ROLES');
       return {
-        id: s.id, name: s.name, icon: s.icon, color: s.color, description: s.description, everyone: !!s.everyone, owner: s.everyone ? '' : s.owner, createdBy: s.createdBy || '',
+        id: s.id, name: s.name, icon: s.icon, color: s.color, description: s.description, everyone: !!s.everyone, owner: s.owner || '', createdBy: s.createdBy || '',
         locked: !!s.password, settings: s.settings, members: serverMembers(s), temp: Object.keys(s.temp), nicks: s.nicks,
         timeouts: Object.fromEntries(Object.entries(s.timeouts).filter(([u, t]) => Date.parse(t) > Date.now() && (u === user || has('MODERATE_MEMBERS')))),
         voiceMuted: Object.keys(s.voiceMuted),
@@ -355,7 +382,8 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
       save(); return { locked: !!s.password };
     },
     transferServer(user, b) {
-      const s = owned(b.server, user); const to = String(b.user || '').toLowerCase();
+      const s0 = server(b.server); // the everyone-server can be handed on too, by its owner (or a hub admin)
+      const s = s0 && s0.everyone ? (P.isOwner(s0, user) ? s0 : owned(b.server, user)) : owned(b.server, user); const to = String(b.user || '').toLowerCase();
       if (!inServer(s, to) || to === user) throw new Error('Hand it to another member of the server.');
       const co = s.roles.find((r) => r.builtin === 'coowner');
       s.owner = to; delete s.temp[to]; delete s.timeouts[to]; delete s.voiceMuted[to];
@@ -637,6 +665,7 @@ module.exports = function createGuilds({ dir, accounts, readJson, writeJson, age
     '/api/guilds/group': 'createGroup', '/api/guilds/group/rename': 'renameGroup', '/api/guilds/group/add': 'addToGroup', '/api/guilds/group/remove': 'removeFromGroup',
     '/api/guilds/group/transfer': 'transferGroup', '/api/guilds/group/leave': 'leaveGroup',
   };
+  applySeeds(); // host-set owners + co-owners (bridge/server-owners.json)
   const pub = (r) => (r && typeof r === 'object' && 'password' in r && 'members' in r ? { id: r.id, name: r.name } : r); // a server record never leaves whole (password hash)
   async function route(p, req, res, acct) {
     if (!p.startsWith('/api/guilds')) return false;

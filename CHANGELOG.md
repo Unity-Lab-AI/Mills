@@ -6,6 +6,23 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 1.1.0 — 2026-10-18
+
+### Added
+- The Mills server can have a named owner, shown to everyone, and the owner can name co-owners like on any
+  other server. The hub's admin accounts keep owner rights there, so the host can always recover it. The
+  Mills server can be handed on (Server Settings → Ownership) but never deleted.
+- Host-set owners: `bridge/server-owners.json` (gitignored, so names stay off the remotes) gives any server
+  its owner and co-owners when the hub starts. Each entry applies once, so later changes in Server Settings
+  stick. Unknown accounts are skipped, and the audit log shows the change by "host".
+- On this hub: Gee is the Mills server's owner, with Mills and Sponge as co-owners.
+- Regression check R134.
+
+### Changed
+- Modules: bridge/guild-perms.js 1.1.0, bridge/guilds.js 1.1.0, bridge/server.js 1.1.0,
+  web/guild-settings.js 1.1.0, web/guilds.js 1.0.1 (the OWNER tag shows on the Mills server too).
+- The regression runner starts its throwaway hub with a pre-made server and a seed file (R113 ignores it).
+
 ## 1.0.1 — 2026-10-18
 
 ### Added

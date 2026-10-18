@@ -87,7 +87,9 @@ const RENAMED = { INVITE: 'CREATE_INVITE', KICK: 'KICK_MEMBERS', BAN: 'BAN_MEMBE
 const cleanPerms = (list, allowed = PERM_IDS) => [...new Set((Array.isArray(list) ? list : String(list || '').split(/[,\s]+/)).map((p) => String(p).trim().toUpperCase()).map((p) => RENAMED[p] || p).filter((p) => allowed.includes(p)))];
 
 module.exports = function createPerms({ isHubAdmin }) {
-  const isOwner = (s, user) => (s.everyone ? isHubAdmin(user) : s.owner === user);
+  // The everyone-server's owner is its named owner (set from the host, bridge/server-owners.json); the hub's admin
+  // accounts keep owner rights there too, so the host can always recover it. Other servers: their owner only.
+  const isOwner = (s, user) => (s.everyone ? (!!s.owner && s.owner === user) || isHubAdmin(user) : s.owner === user);
   const rolesOf = (s, user) => { // in the everyone-server everybody holds Member (accounts come and go; nobody joins it)
     const list = (s.memberRoles[user] || []).map((id) => s.roles.find((r) => r.id === id)).filter(Boolean);
     if (s.everyone) { const m = s.roles.find((r) => r.builtin === 'member'); if (m && !list.includes(m)) list.push(m); }
