@@ -6,6 +6,13 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 1.3.1 — 2026-10-18
+
+### Fixed
+- The version checks (R132, R133) counted Windows line endings as a change. `.bat`, `.cmd` and `.ps1`
+  files are checked out with CRLF on purpose (`.gitattributes`), so the checks now compare files with line
+  endings ignored. No module changed.
+
 ## 1.3.0 — 2026-10-18
 
 ### Added
