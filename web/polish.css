@@ -157,6 +157,15 @@ header b { font-weight: 750; letter-spacing: .01em; }
 #memberList .mRow:hover { background: var(--accent-soft); }
 #memberList .mHead { font-weight: 800; letter-spacing: .06em; }
 
+/* ── the Mills Chat app's user panel (web/app.js; app mode only) ── */
+#appUser { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: center; gap: .5rem; padding: .55rem .5rem; border-radius: var(--r-m);
+  background: color-mix(in srgb, var(--surface-sunk) 85%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border: 1px solid var(--hairline); box-shadow: var(--sh-2); }
+#appUser .auAv { width: 2.1rem; height: 2.1rem; flex: none; border-radius: 50%; overflow: hidden; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: .8rem; cursor: pointer; box-shadow: var(--sh-1); }
+#appUser .auAv img { width: 100%; height: 100%; object-fit: cover; }
+#appUser .auWho { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
+#appUser .auWho b, #appUser .auWho small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#appUser .auWho small { color: var(--muted); font-size: .72rem; }
+
 /* ── badges + tags ── */
 .botTag { background: var(--grad-accent); color: var(--on-accent); border-radius: 5px; padding: .05rem .35rem; box-shadow: 0 1px 6px var(--accent-glow); }
 .roleChip { background: color-mix(in srgb, currentColor 10%, transparent); padding: .05rem .6rem; }

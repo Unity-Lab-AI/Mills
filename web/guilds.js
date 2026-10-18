@@ -185,7 +185,7 @@ const GUILDS = (() => {
       box.append(r);
     }
   }
-  function render() { renderRail(); renderChannels(); renderMembers(); renderPins(); if (typeof updateUnread === 'function') updateUnread(); }
+  function render() { renderRail(); renderChannels(); renderMembers(); renderPins(); if (typeof renderAppUser === 'function') renderAppUser(); if (typeof updateUnread === 'function') updateUnread(); }
   // an invite link opened this page (?invite=CODE): offer the join once signed in
   function pendingInvite() {
     const code = new URLSearchParams(location.search).get('invite');
