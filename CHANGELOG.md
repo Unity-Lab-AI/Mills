@@ -6,6 +6,21 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 1.2.0 — 2026-10-18
+
+### Added
+- Work keeps your place. The conversation on screen and your message queue, including a pending "Send now",
+  are kept on the hub per person, in your own profile folder. They survive hub restarts, page reloads,
+  closing the browser and switching devices.
+- Opening Work brings back your previous conversation with its saved-session title, and Claude continues it.
+  Queued messages come back too and start running. "New chat" clears the saved conversation.
+- New module bridge/work-state.js 1.0.0 (routes /api/work/current and /api/work/queue, with size caps).
+- Regression check R135: the conversation and the queue come back unchanged after a hub restart, and belong
+  only to their person.
+
+### Changed
+- Modules: bridge/server.js 1.2.0, web/index.html 1.1.0.
+
 ## 1.1.0 — 2026-10-18
 
 ### Added
