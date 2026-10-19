@@ -417,6 +417,10 @@
   #serverRail .srv { position: relative; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 0; color: #fff; font-weight: 800; font-size: .8rem; letter-spacing: .02em; display: flex; align-items: center; justify-content: center; transition: border-radius .15s ease, transform .1s ease; }
   #serverRail .srv:hover, #serverRail .srv.on { border-radius: 14px; }
   #serverRail .srv.on::before { content: ''; position: absolute; left: -8px; top: 8px; width: 4px; height: 24px; border-radius: 0 4px 4px 0; background: var(--text); }
+  #serverRail .srv.dms { background: var(--panel); color: var(--accent); } /* Direct messages: always first, above every server */
+  #serverRail .srv.dms.on, #serverRail .srv.dms:hover { background: var(--accent); color: #fff; }
+  #serverRail .railSep { flex: none; width: 28px; height: 2px; border-radius: 2px; background: var(--line); }
+  #grpList { display: flex; flex-direction: column; gap: .25rem; }
   #serverRail .srv.add { background: var(--panel); color: var(--good); border: 1px dashed var(--line); }
   #serverRail .srv.invites { background: var(--panel); color: var(--accent); border: 1px solid var(--accent); position: relative; }
   #serverRail .srv.invites .badge { position: absolute; top: -4px; right: -4px; }
@@ -696,6 +700,7 @@
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3.5h7.5l4.5 4.5v12.5h-12z"/><path d="M13.5 3.5V8.5h5M9.5 13h5M9.5 16.5h5"/></symbol>
   <symbol id="i-code" viewBox="0 0 24 24"><path d="M8 7.5L3.5 12 8 16.5M16 7.5l4.5 4.5-4.5 4.5M13.5 5l-3 14"/></symbol>
   <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4.5" y="8" width="15" height="11.5" rx="3.5"/><path d="M12 8V5M9.3 16.3h5.4"/><circle cx="12" cy="3.8" r="1.2"/><circle cx="9.3" cy="12.6" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.7" cy="12.6" r="1.1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-dms" viewBox="0 0 24 24"><path d="M3.5 5.5A2 2 0 0 1 5.5 3.5h8a2 2 0 0 1 2 2v4.5a2 2 0 0 1-2 2H9l-3.5 3v-3a2 2 0 0 1-2-2z"/><path d="M15.5 8.5h3a2 2 0 0 1 2 2V15a2 2 0 0 1-2 2v3L15 17h-4.5a2 2 0 0 1-2-2v-1"/><path d="M7 7.75h5"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 5.5h15a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H10l-5.5 4v-4h0a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/></symbol>
   <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4.5" rx="1"/><path d="M5 9v9.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></symbol>
   <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 4.3a2 2 0 0 1 3.4 0l7.2 12.6a2 2 0 0 1-1.7 3H4.8a2 2 0 0 1-1.7-3z"/><path d="M12 9.5v4.5"/><circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/></symbol>
@@ -790,7 +795,7 @@
   <div id="roomCore">
     <aside id="roomSide">
       <nav id="serverRail" aria-label="Servers"></nav>
-      <div id="sideLists"><div id="callSideHost"></div><div id="chanList"></div><div id="convList"></div></div>
+      <div id="sideLists"><div id="callSideHost"></div><div id="chanList"></div><div id="convList"></div><div id="grpList"></div><div id="keyList"></div></div>
     </aside>
     <div class="roomMain">
       <div class="roomTop">
@@ -2491,7 +2496,7 @@ async function refreshMembers() {
 let convListRun = 0;
 async function renderConvList() {
   const run = ++convListRun;
-  const box = $('convList'); box.textContent = '';
+  const box = $('convList'); box.textContent = ''; $('keyList').textContent = '';
   const add = (conv, label, color, sub) => {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'cv' + (conv === currentConv ? ' on' : '');
     if (conv !== 'room') b.dataset.user = convPeer(conv);
@@ -2503,7 +2508,8 @@ async function renderConvList() {
     const badge = document.createElement('span'); badge.className = 'badge'; badge.dataset.convBadge = conv; badge.hidden = true;
     b.append(dot, nm, badge); b.onclick = () => selectConv(conv); box.append(b);
   };
-  // (# general and the other channels / groups are drawn by web/guilds.js above this list)
+  // the Direct messages view (the DM button above the servers, web/guilds.js): these one-to-one DMs, then the group DMs
+  // (#grpList) and the key fingerprints (#keyList); a server's channels are drawn by web/guilds.js into #chanList
   for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'BOT · ' : 'private · ') + '@' + m.username);
   const det = document.createElement('details'); const sum = document.createElement('summary'); sum.textContent = 'Key fingerprints';
   det.append(sum);
@@ -2523,7 +2529,7 @@ async function renderConvList() {
     det.append(d);
   }
   const hint = document.createElement('div'); hint.textContent = 'Compare these with each other once, outside VibeRoller. If they match, nobody in between can read the chat.';
-  det.append(hint); box.append(det);
+  det.append(hint); $('keyList').append(det);
   updateUnread();
 }
 function selectConv(conv) {
@@ -2544,7 +2550,9 @@ function selectConv(conv) {
   for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
   log.scrollTop = log.scrollHeight;
   for (const b of $('roomSide').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
-  const sv = GUILDS.serverOf(conv); if (sv && GUILDS.state.server !== sv) { GUILDS.state.server = sv; GUILDS.render(); }
+  const sv = GUILDS.serverOf(conv) || (GUILDS.isDmConv(conv) ? GUILDS.DM : ''); // a DM or group DM opens the Direct messages view
+  if (GUILDS.isDmConv(conv)) store.set('mills.lastDm.' + me.username, conv);
+  if (sv && GUILDS.state.server !== sv) { GUILDS.state.server = sv; GUILDS.render(); }
   updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers(); GUILDS.renderPins(); renderAppUser(); // the app's user panel (web/app.js) shows the latest name / picture
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
@@ -2746,6 +2754,11 @@ function updateUnread() {
   for (const c of convs) { per[c] = unreadIn(c); total += per[c]; }
   setBadge($('chatBadge'), total); setBadge($('railRoomBadge'), total);
   for (const b of document.querySelectorAll('[data-conv-badge]')) setBadge(b, per[b.dataset.convBadge] || 0);
+  for (const b of document.querySelectorAll('[data-server-badge]')) { // the rail: unread per server, and on the DM button for DMs + group DMs
+    const id = b.dataset.serverBadge; let n = 0;
+    for (const c in per) if (id === GUILDS.DM ? GUILDS.isDmConv(c) : GUILDS.serverOf(c) === id) n += per[c];
+    setBadge(b, n);
+  }
   document.title = (total ? `(${total}) ` : '') + 'VibeRoller · ' + me.display;
 }
 function roomVisible() {
