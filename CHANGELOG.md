@@ -6,6 +6,56 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.2.0 — 2026-10-19
+
+The stability pass (board T-114). Sponge: worktrees that stay fresh, Forgejo used as intended, older AI hosts accepted,
+everything updating itself, nothing breaking, data always kept and a bad version rolled back by itself.
+
+### Added
+- **The worktree law** (`LAWS.md`, a tracked laws file every Work run now reads next to the host's own `CLAUDE.md`):
+  never build on a stale worktree. `node bridge/worktree.js check <user>` fetches Forgejo and says FRESH or STALE (exit
+  3): behind Forgejo, or on the wrong branch. `update <user>` fast-forwards a clean one, merges Forgejo's integration
+  branch into your own commits, or renews it. `renew <user>` makes a NEW worktree from Forgejo and carries over your
+  commits, uncommitted changes and untracked files, then deletes just the old one. If something does not come over, the
+  old one stays next to it with the reason. Its state is kept under `refs/viberoller/renewed/` either way, so nothing is
+  ever lost. The hub checks worktrees in the background (when a run starts, on a project switch, every 5 minutes for
+  anyone active) and fast-forwards a clean one by itself. Each run's instructions carry the latest finding. Check R150.
+- **Forgejo is the source of truth.** `merge` merges onto Forgejo's develop in a scratch checkout and pushes FIRST; `live`
+  merges Forgejo's develop into Forgejo's main and pushes it FIRST. A failed push changes nothing anywhere (it says to
+  connect your Forgejo account if that is why). The server's auto-deploy then ships it. Local integration branches are
+  brought level with Forgejo whenever the tool runs.
+- **Deploys roll themselves back.** `deploy/autodeploy.sh` snapshots the hub's data before every deploy (the last 10, in
+  `snapshots/`), then checks the hub really comes up on the new commit (`/api/status` now reports `version` + `commit`
+  locally). A version that does not come up within 2 minutes of its restart (or never answers) is put back to the last
+  good commit by itself. The team chat is told on the next start, and that commit is skipped until main moves on. A
+  version whose scripts do not parse never starts. Data is never touched. Check R151.
+- **AI hosts update themselves from the hub** (`GET /node/update`: the host's files with their sha256, signed with that
+  host's own secret; `/node/update/file/<name>`). A host from this version on checks after every hello and every 10
+  minutes, between answers only. It downloads what changed, verifies it, starts the new version once with
+  `--selftest`, swaps it in with a backup and restarts on it. After 3 starts that never reach the hub it goes back by
+  itself. A host running from a git checkout (Gee's PC) fast-forwards the checkout to the hub's commit instead.
+  Launchers are never swapped while running. `"autoUpdate": false` in `ai-node.json` switches it off. Check R152.
+
+### Changed
+- **Older AI hosts keep working.** A host that does not say it can relay a login (every host before this version) is
+  asked once with a relay job to an address no host forwards. A 3.x host refuses it (nothing leaves that machine); a
+  2.x host does not know relays, and its Claude then runs Work the way it did then, instead of every run failing. Gee's
+  3.0 host keeps working exactly as now; updating it once brings the self-updater, after which it never needs a hand.
+- `start-node.bat` / `start-node.sh` start the host again on exit 3 (new code or an update) and 10 s after a crash; they
+  used to close, so a host restarting itself for new code stayed off until someone started it.
+- **Sign-in limits are per address.** The lockout used to be per username, so five wrong guesses from anywhere locked
+  a teammate out; and flooding made-up usernames wiped every counter. Now: 5 failures for one username from one address
+  or 20 from one address in total → that address waits 15 minutes; at most 3 sign-ins in flight per address; counters
+  expire one by one. Pre-sign-in bodies are capped (16 KB for sign-in; too large → 413). `deploy/nginx-portal.conf` adds
+  matching nginx rate and connection limits (applied when the site file is installed again; the hub's own limits work
+  without it).
+- The hub keeps running after an unexpected error in a callback (logged), and system errors are answered without
+  server paths. The internal secret is compared in constant time.
+- `worktree.js` run from inside a worktree reads the main checkout's `config.local.json` (it looked for worktrees in
+  the wrong folder on the server).
+- The regression runner drops a Work run's Forgejo login from its own environment (it leaked into the test hub's runs).
+- Modules: bridge/ai-node.js 3.1.0, bridge/ai-nodes.js 2.3.0, bridge/server.js 3.1.0, bridge/worktree.js 2.1.0.
+
 ## 3.1.1 — 2026-10-19
 
 ### Fixed

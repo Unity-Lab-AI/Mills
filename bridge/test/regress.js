@@ -24,6 +24,9 @@ const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { spawn, spawnSync, execFileSync } = require('child_process');
+// Run from a Work run, this process carries that person's Forgejo login (FORGEJO_* and a git extraHeader through
+// GIT_CONFIG_*); the throwaway hub and its git calls must never see it (it leaked into R122's runs once).
+for (const k of Object.keys(process.env)) if (/^(FORGEJO_|GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$)/.test(k)) delete process.env[k];
 
 const BRIDGE = path.join(__dirname, '..');
 const MILLS = path.join(BRIDGE, '..');
@@ -228,7 +231,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET }, aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd' }, aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
@@ -248,6 +251,7 @@ async function setup() {
 // The throwaway hub runs Unity's engines THROUGH an AI node (bridge/ai-node.js, its own process), the way the hub on
 // the server will: every Unity check below then also tests the node path end to end (R137).
 const NODE_SECRET = 'test-node-secret-0123456789abcdef';
+const OLD_NODE_SECRET = 'old-node-secret-0123456789abcdef'; // R152: a 2.x host (no login relay), played by the test itself
 let aiNodeProc = null;
 function startAiNode() {
   if (aiNodeProc) return;
@@ -379,6 +383,22 @@ async function run() {
   for (let i = 0; i < 5; i++) await login('nobody-x', 'wrong-password', devB);
   const blocked = await login('nobody-x', 'wrong-password', devB), other = await login('t-user', 'pw-t-user-0001', devB);
   check('R5', '5 failures → 429 for that username only', blocked.status === 429 && other.status === 200);
+
+  // R153: a stranger cannot lock a teammate out; floods from one address stop; big pre-sign-in bodies are refused
+  {
+    const from = (ip, body, raw) => fetch(H + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip }, body: raw || JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+    for (let i = 0; i < 6; i++) await from('203.0.113.9', { username: 't-user', password: 'guess-' + i, deviceId: devB });
+    const strangerBlocked = await from('203.0.113.9', { username: 't-user', password: 'pw-t-user-0001', deviceId: devB });
+    const ownerFine = await login('t-user', 'pw-t-user-0001', devB); // t-user from their own address: not affected
+    for (let i = 0; i < 20; i++) await from('203.0.113.10', { username: 'made-up-' + i, password: 'x', deviceId: devB });
+    const sprayBlocked = await from('203.0.113.10', { username: 'another-made-up', password: 'x', deviceId: devB });
+    const bigBody = await from('203.0.113.11', null, JSON.stringify({ username: 't-user', password: 'x'.repeat(40000) }));
+    const srv153 = fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8'), ngx = fs.readFileSync(path.join(MILLS, 'deploy', 'nginx-portal.conf'), 'utf8');
+    check('R153', 'sign-in limits are per address: 5 wrong guesses at a teammate\'s password from a stranger\'s address block only that address (the teammate still signs in); 20 failures from one address (any usernames) block it; a sign-in body over 16 KB → 413; counters are never wiped all at once; system errors are answered without server paths; [static] nginx adds per-address rate + connection limits',
+      strangerBlocked.status === 429 && ownerFine.status === 200 && sprayBlocked.status === 429 && bigBody.status === 413
+      && !/failures\.clear\(\)/.test(srv153) && /'<path>'/.test(srv153) && /limit_req zone=vr_portal_login/.test(ngx) && /limit_conn vr_portal_conn/.test(ngx),
+      `stranger ${strangerBlocked.status} owner ${ownerFine.status} spray ${sprayBlocked.status} big ${bigBody.status}`);
+  }
 
   const locked = await login('t-user', 'pw-t-user-0001', devA);
   check('R6', 'right password from a different device → 403 locked', locked.status === 403 && /locked to another device/.test(locked.data.error || ''));
@@ -657,6 +677,56 @@ async function run() {
       && /worktree\.js/.test(toolsLine) && !/wt=[^|]*worktree\.js/.test(texts(ownRun.events)) && pMerged && /Merged work\/t-user into develop/.test(pMergeOut) && /demo-app/.test(pStatus) && /demo-app/.test(pProjects) && /pulled/.test(pProjects)
       && back.status === 200 && samePath(back.data.dir, wtU) && samePath(cwdOf(backRun.events), wtU),
       `switch ${sw.status} ${JSON.stringify(sw.data).slice(0, 100)} cwd ${cwdOf(pRun.events)} tools "${toolsLine}" merged ${pMerged} ${pMergeOut.split('\n')[0]}`);
+
+    // R150: the worktree law. "pulled" has a Forgejo stand-in (the bare repo as origin); someone else pushes to it.
+    const g = (cwd, ...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+    const other = path.join(SCRATCH, 'other-machine');
+    g(SCRATCH, 'clone', '-q', '-b', 'develop', bare, other);
+    const otherPush = (file, text) => { fs.writeFileSync(path.join(other, file), text); g(other, 'add', '-A'); g(other, '-c', 'user.name=other', '-c', 'user.email=o@x', 'commit', '-q', '-m', 'other ' + file); return g(other, 'push', '-q', 'origin', 'develop').status === 0; };
+    const qDir = path.join(PR, 'pulled', 't-user');
+    wt('--project', 'pulled', 'ensure', 't-user');
+    const pushed1 = otherPush('other1.txt', 'one\n');
+    const chk1 = wt('--project', 'pulled', 'check', 't-user');
+    const auto1 = wt('--project', 'pulled', 'auto', 't-user');
+    const ff1 = fs.existsSync(path.join(qDir, 'other1.txt'));
+    const chk2 = wt('--project', 'pulled', 'check', 't-user');
+    // own commit + an uncommitted edit + an untracked file, then Forgejo moves again → update renews it, carrying all of it
+    fs.writeFileSync(path.join(qDir, 'mine.txt'), 'my commit\n'); g(qDir, 'add', 'mine.txt'); g(qDir, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-m', 'my work');
+    fs.appendFileSync(path.join(qDir, 'README.md'), 'my uncommitted line\n');
+    fs.writeFileSync(path.join(qDir, 'scratch-note.txt'), 'untracked\n');
+    g(qDir, 'checkout', '-q', '--detach'); // and on the wrong branch, like a worktree made by hand
+    const pushed2 = otherPush('other2.txt', 'two\n');
+    const chk3 = wt('--project', 'pulled', 'check', 't-user');
+    const upd = wt('--project', 'pulled', 'update', 't-user');
+    const rd = (f) => { try { return fs.readFileSync(path.join(qDir, f), 'utf8'); } catch { return ''; } };
+    const renewed = g(qDir, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim() === 'work/t-user' && rd('other2.txt') === 'two\n' && rd('mine.txt') === 'my commit\n'
+      && /my uncommitted line/.test(rd('README.md')) && rd('scratch-note.txt') === 'untracked\n' && g(qDir, 'log', '-1', '--format=%s').stdout.trim() === 'my work'
+      && !fs.readdirSync(path.join(PR, 'pulled')).some((d) => d.startsWith('_old-')) && /refs\/viberoller\/renewed\/t-user-/.test(g(path.join(PR, 'pulled', '_repo'), 'for-each-ref', 'refs/viberoller').stdout);
+    // an uncommitted edit that clashes with Forgejo's: the new worktree is made, the old one is KEPT with the reason
+    g(qDir, 'add', '-A'); g(qDir, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-m', 'carried');
+    fs.writeFileSync(path.join(qDir, 'other2.txt'), 'mine instead\n');
+    otherPush('other2.txt', 'theirs instead\n');
+    const clash = wt('--project', 'pulled', 'renew', 't-user');
+    const oldKept = fs.readdirSync(path.join(PR, 'pulled')).find((d) => d.startsWith('_old-t-user-')) || '';
+    const oldHasEdit = oldKept && fs.readFileSync(path.join(PR, 'pulled', oldKept, 'other2.txt'), 'utf8') === 'mine instead\n';
+    if (oldKept) g(path.join(PR, 'pulled', '_repo'), 'worktree', 'remove', '--force', path.join(PR, 'pulled', oldKept));
+    // merge pushes to Forgejo first; a refused push changes nothing anywhere
+    const mergeOk = wt('--project', 'pulled', 'merge', 't-user');
+    const onForgejo = g(bare, 'log', '-1', '--format=%s', 'develop').stdout.trim();
+    fs.writeFileSync(path.join(qDir, 'blocked.txt'), 'x\n'); g(qDir, 'add', '-A'); g(qDir, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-m', 'blocked');
+    const hook = path.join(bare, 'hooks', 'pre-receive'); fs.writeFileSync(hook, '#!/bin/sh\necho refused-by-test >&2\nexit 1\n'); fs.chmodSync(hook, 0o755);
+    const devBefore = g(path.join(PR, 'pulled', '_repo'), 'rev-parse', 'develop').stdout.trim();
+    const mergeRefused = wt('--project', 'pulled', 'merge', 't-user');
+    const devAfter = g(path.join(PR, 'pulled', '_repo'), 'rev-parse', 'develop').stdout.trim();
+    fs.rmSync(hook, { force: true });
+    const wtSrc150 = fs.readFileSync(path.join(BRIDGE, 'worktree.js'), 'utf8'), srvSrc150 = fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8'), laws = (() => { try { return fs.readFileSync(path.join(MILLS, 'LAWS.md'), 'utf8'); } catch { return ''; } })();
+    check('R150', 'the worktree law: "check" fetches Forgejo and says STALE (exit 3) when a worktree is behind or on the wrong branch, FRESH (exit 0) otherwise; the hub\'s background "auto" fast-forwards a clean one by itself; "update" renews a dirty / wrong-branch one: a NEW worktree on work/<user> from Forgejo with the own commit, the uncommitted edit and the untracked file carried over, then the old one deleted (a backup ref kept); when an uncommitted edit clashes, the old worktree is KEPT with the reason; "merge" pushes to Forgejo first and a refused push changes nothing; run from inside a worktree it reads the main checkout\'s config.local.json; every Work run gets LAWS.md and the freshness instructions with the latest background finding',
+      pushed1 && pushed2 && chk1.status === 3 && /1 commit\(s\) behind origin\/develop/.test(chk1.stdout) && /fast-forwarded/.test(auto1.stdout) && ff1 && chk2.status === 0 && /FRESH/.test(chk2.stdout)
+      && chk3.status === 3 && /wrong branch/.test(chk3.stdout) && renewed && /Everything came over/.test(upd.stdout)
+      && /NOT everything came over/.test(clash.stdout) && oldHasEdit
+      && /pushed it to Forgejo/.test(mergeOk.stdout) && onForgejo === 'Merge work/t-user into develop' && mergeRefused.status !== 0 && /nothing was merged anywhere/.test(mergeRefused.stderr) && devBefore === devAfter
+      && /config\.local\.json/.test(wtSrc150) && /const CFG = \(\(\) => \{/.test(wtSrc150) && /\['LAWS\.md', 'CLAUDE\.md'\]/.test(srvSrc150) && /freshLaw\(acct, wd\)/.test(srvSrc150) && /checkFresh\(acct\); \/\/ the finding lands/.test(srvSrc150) && /Worktree law/.test(laws),
+      `parts ${JSON.stringify({ pushed1, pushed2, chk1: chk1.status, chk3: chk3.status, chk3wrong: /wrong branch/.test(chk3.stdout), renewed, updAll: /Everything came over/.test(upd.stdout), clash: /NOT everything came over/.test(clash.stdout), oldHasEdit, mergeOk: /pushed it to Forgejo/.test(mergeOk.stdout), onForgejo, refusedMsg: /nothing was merged anywhere/.test(mergeRefused.stderr), devSame: devBefore === devAfter, laws: /Worktree law/.test(laws) })} upd "${upd.stdout.replace(/\s+/g, ' ').slice(-200)}"; chk1 ${chk1.status} "${chk1.stdout.trim().slice(0, 120)}"; auto "${auto1.stdout.trim().slice(-60)}" ff ${ff1}; chk2 ${chk2.status}; chk3 ${chk3.status}; renewed ${renewed} "${upd.stdout.replace(/\s+/g, ' ').slice(0, 300)}"; clash kept ${!!oldKept} edit ${oldHasEdit}; merge "${mergeOk.stdout.split('\n')[0]}" forgejo "${onForgejo}"; refused ${mergeRefused.status} "${mergeRefused.stderr.trim().slice(0, 100)}" dev same ${devBefore === devAfter}`);
   }
 
   // OpenAI-compatible API (/v1) with one key per person (bridge/openai.js), answered by the host's Claude (the fake one here).
@@ -1844,6 +1914,55 @@ async function run() {
       && /v == null \|\| v === '' \? NaN/.test(nodesSrc) && /onUsage: usage\.noteWindows, savedUsage: usage\.windows/.test(serverSrc) && /usageStatus: \(a\) => usage\.status\(a, usageSourceOf\(a\)\)/.test(serverSrc),
       `api 7d ${JSON.stringify(usageA2.seven_day)}; unit ${JSON.stringify(st1.five_hour)} / ${JSON.stringify(st1.seven_day)}; after restart ${JSON.stringify(st2.five_hour)} / ${JSON.stringify(st2.seven_day)}`);
 
+    // R152: older AI hosts keep working, and hosts update themselves from the hub
+    const oh = { 'X-VR-Host': 'old-node', 'X-VR-Host-Token': OLD_NODE_SECRET, 'Content-Type': 'application/json' };
+    // a 2.x host: hello without caps, offering its Claude as "claude-cli"; it knows no login relays (404 "does not lend")
+    const oldHello = await fetch(H + '/node/hello', { method: 'POST', headers: oh, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex'), user: 't-admin', providers: [{ id: 'claude', kind: 'claude-cli', label: 'Old Claude', models: ['claude-haiku-5-5'], allowedUsers: ['t-user'] }], engines: [], version: '2.0.0' }) });
+    const oldHelloJ = await oldHello.json().catch(() => ({}));
+    let probed = '';
+    for (let i = 0; i < 12 && !probed; i++) {
+      const pr = await fetch(H + '/node/poll', { headers: oh, signal: AbortSignal.timeout(30000) }).then((r) => r.json()).catch(() => ({}));
+      for (const j of pr.jobs || []) {
+        probed = String(j.engine) + ' ' + String(j.path);
+        await fetch(H + '/node/reply', { method: 'POST', headers: oh, body: JSON.stringify({ id: j.id, status: 404, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"error":"This host does not lend the ' + j.engine + ' engine."}').toString('base64') }) });
+      }
+    }
+    await sleep(300);
+    const oldProv = ((await call('/api/check', U)).data.providers || []).find((p) => p.id === 'h:old-node/claude') || {};
+    const newProv = ((await call('/api/check', U)).data.providers || []).find((p) => p.id === 'h:test-node/claude') || {};
+    // updates: a signed manifest of the host's files as the hub runs them, and the files themselves
+    const th = { 'X-VR-Host': 'test-node', 'X-VR-Host-Token': NODE_SECRET };
+    const manR = await fetch(H + '/node/update', { headers: th }), man = await manR.json().catch(() => ({}));
+    const sigOk = !!man.sig && man.sig === crypto.createHmac('sha256', NODE_SECRET).update(JSON.stringify({ version: man.version, commit: man.commit, files: man.files })).digest('hex');
+    const aiEntry = (man.files || []).find((f) => f.name === 'ai-node.js') || {};
+    const fileR = await fetch(H + '/node/update/file/ai-node.js', { headers: th }), fileB = Buffer.from(await fileR.arrayBuffer());
+    const fileOk = fileR.status === 200 && crypto.createHash('sha256').update(fileB).digest('hex') === aiEntry.sha256 && aiEntry.sha256 === crypto.createHash('sha256').update(fs.readFileSync(path.join(SB, 'ai-node.js'))).digest('hex');
+    const notHost = (await fetch(H + '/node/update/file/config.json', { headers: th })).status, sneaky = (await fetch(H + '/node/update/file/..%2Fauth.json', { headers: th })).status, anon = (await fetch(H + '/node/update')).status;
+    const selfT = spawnSync(process.execPath, [path.join(SB, 'ai-node.js'), '--selftest', '--config', path.join(SB, 'ai-node.json')], { encoding: 'utf8', timeout: 30000 });
+    // a real host updating itself end to end: its copy of host-relay.js differs from the hub's → download, selftest,
+    // swap with a backup, exit 3; the next start reaches the hub and confirms the update
+    const uh = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-hostupd-')), upd = { first: null, swapped: false, trial: false, backup: false, confirmed: false };
+    try {
+      for (const f of (man.files || [])) fs.copyFileSync(path.join(SB, f.name), path.join(uh, f.name));
+      fs.appendFileSync(path.join(uh, 'host-relay.js'), '\n// an older copy\n');
+      fs.writeFileSync(path.join(uh, 'ai-node.json'), JSON.stringify({ hub: H, id: 'upd-node', token: OLD_NODE_SECRET + '-upd', user: 't-admin', providers: [], engines: {} }));
+      const runHost = (ms) => new Promise((resolve) => { const pr = spawn(process.execPath, [path.join(uh, 'ai-node.js')], { cwd: uh, stdio: ['ignore', 'pipe', 'pipe'] }); let out = ''; pr.stdout.on('data', (d) => { out += d; }); pr.stderr.on('data', (d) => { out += d; }); const t = setTimeout(() => pr.kill(), ms); pr.on('exit', (code) => { clearTimeout(t); resolve({ code, out }); }); });
+      upd.first = await runHost(30000);
+      upd.swapped = upd.first.code === 3 && fs.readFileSync(path.join(uh, 'host-relay.js'), 'utf8') === fs.readFileSync(path.join(SB, 'host-relay.js'), 'utf8');
+      upd.trial = fs.existsSync(path.join(uh, '.update-trial.json')); upd.backup = /an older copy/.test(fs.readFileSync(path.join(uh, '.update-backup', 'host-relay.js'), 'utf8'));
+      const second = await runHost(9000);
+      upd.confirmed = /update to .* confirmed/.test(second.out) && !fs.existsSync(path.join(uh, '.update-trial.json')) && !fs.existsSync(path.join(uh, '.update-backup'));
+      upd.first = upd.first.code + ' ' + upd.first.out.replace(/\s+/g, ' ').slice(-160);
+    } catch (e) { upd.error = e.message; } finally { try { fs.rmSync(uh, { recursive: true, force: true }); } catch {} }
+    const nodeSrc152 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), bat = fs.readFileSync(path.join(BRIDGE, 'start-node.bat'), 'utf8'), nsh = fs.readFileSync(path.join(BRIDGE, 'start-node.sh'), 'utf8');
+    check('R152', 'older AI hosts keep working: a 2.x host (no caps, its Claude as claude-cli) is asked once with a relay job to an address nobody forwards, answers 404 "does not lend", and from then on its Claude runs Work the old way (claude-cli-work) instead of failing; a current host says it can relay + update and is not probed; hosts update from the hub: GET /node/update is a manifest of the host files (sha256) signed with that host\'s own secret, each file is served byte-exact, nothing else is (config, ../) and nobody else gets it (401); the host tries a new version with --selftest before swapping, keeps a backup, puts it back after 3 starts that never reach the hub, never swaps launchers, and "autoUpdate": false switches it off; the launchers start the host again on exit 3 (update) and after a crash',
+      oldHello.status === 200 && oldHelloJ.update && typeof oldHelloJ.update.version === 'string' && /^relay:claude \/v1\/__viberoller_probe$/.test(probed) && oldProv.remoteKind === 'claude-cli-work' && newProv.remoteKind === 'claude-relay'
+      && manR.status === 200 && sigOk && fileOk && notHost === 404 && sneaky === 404 && anon === 401 && selfT.status === 0 && /selftest: .* loads/.test(selfT.stdout)
+      && upd.swapped && upd.trial && upd.backup && upd.confirmed
+      && /CAPS = \['relay', 'update'\]/.test(nodeSrc152) && /cfg\.autoUpdate !== false/.test(nodeSrc152) && /t\.starts <= 3/.test(nodeSrc152) && /selftest\(UPD\.stage\)/.test(nodeSrc152) && /timingSafeEqual\(got, want\)/.test(nodeSrc152)
+      && /if errorlevel 3 goto run/.test(bat) && /if errorlevel 4 goto crashed/.test(bat) && /3\) ;;/.test(nsh) && /sleep 10/.test(nsh),
+      `old hello ${oldHello.status} probed "${probed}" old ${oldProv.remoteKind} new ${newProv.remoteKind}; manifest ${manR.status} sig ${sigOk} files ${(man.files || []).map((f) => f.name).join(',')}; file ${fileR.status} ok ${fileOk}; other ${notHost}/${sneaky} anon ${anon}; selftest ${selfT.status} "${String(selfT.stdout || selfT.stderr).trim().slice(0, 120)}"; self-update ${JSON.stringify(upd)}`);
+
     // local models and the host's Claude through the API (bridge/openai.js → providers → the host)
     const keyR = await call('/api/apikey/rotate', A, {});
     const setLocal = await call('/api/apikey/settings', A, { provider: 'h:test-node/local', model: 'tiny-local' });
@@ -1995,6 +2114,60 @@ async function run() {
     check('R149', 'auto-deploy: a server checkout that is ahead of Forgejo main (commits made on the server) is left alone (no "deployed", no restart), while a main that really has something new still asks for one; it never restarts the hub every minute for the same commit',
       /git merge-base --is-ancestor "\$REMOTE" "\$LOCAL" && exit 0/.test(ad) && (!runnable || (ahead === '0 restart false' && fresh === '0 restart true')),
       `${runnable ? '' : 'sh not available, source check only; '}ahead → ${ahead}; new main → ${fresh}`);
+  }
+
+  // R151: a deploy that does not come up rolls itself back; the data is snapshotted first and never touched
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-rollback-')), g = (cwd, ...a) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8' });
+    const bare = path.join(tmp, 'origin.git'), seed = path.join(tmp, 'seed'), app = path.join(tmp, 'app'), statusFile = path.join(tmp, 'status.txt');
+    const ad = fs.readFileSync(path.join(MILLS, 'deploy', 'autodeploy.sh'), 'utf8');
+    const runnable = !spawnSync('sh', ['-c', 'true']).error && !spawnSync('curl', ['--version']).error;
+    const port = await freePort(47610);
+    // a stand-in hub: answers /api/status with the commit written in status.txt, or 500 when it says "down"
+    const fake = spawn(process.execPath, ['-e', `require('http').createServer((q, s) => { const t = require('fs').readFileSync(${JSON.stringify(statusFile)}, 'utf8').trim(); if (t === 'down') { s.writeHead(500); return s.end(); } s.end(JSON.stringify({ ok: true, hub: true, commit: t })); }).listen(${port}, '127.0.0.1')`], { stdio: 'ignore' });
+    const out = {};
+    try {
+      if (!runnable) throw new Error('skip');
+      g(tmp, 'init', '-q', '--bare', '-b', 'main', bare); g(tmp, 'clone', '-q', bare, seed);
+      for (const d of ['bridge', 'deploy']) fs.mkdirSync(path.join(seed, d));
+      fs.writeFileSync(path.join(seed, 'bridge', 'a.js'), '1;\n'); fs.writeFileSync(path.join(seed, 'bridge', 'config.json'), JSON.stringify({ port }) + '\n');
+      fs.writeFileSync(path.join(seed, 'versions.json'), '{ "project": "1.0.0" }\n'); fs.writeFileSync(path.join(seed, 'deploy', 'autodeploy.sh'), ad);
+      fs.writeFileSync(path.join(seed, '.gitignore'), 'bridge/.restart\nbridge/.rolled-back\nbridge/state.json\n');
+      const push = (file, text, ver) => { fs.writeFileSync(path.join(seed, 'bridge', file), text); fs.writeFileSync(path.join(seed, 'versions.json'), `{ "project": "${ver}" }\n`); g(seed, 'add', '-A'); g(seed, 'commit', '-qm', ver); g(seed, 'push', '-q', 'origin', 'HEAD:main'); return g(seed, 'rev-parse', 'HEAD').stdout.trim(); };
+      g(seed, 'add', '-A'); g(seed, 'commit', '-qm', 'one'); g(seed, 'push', '-q', 'origin', 'HEAD:main');
+      g(tmp, 'clone', '-q', '-b', 'main', bare, app);
+      fs.writeFileSync(path.join(app, 'bridge', 'state.json'), '{"precious":true}\n'); // the hub's data: gitignored
+      const head = () => g(app, 'rev-parse', 'HEAD').stdout.trim(), restartAsked = () => fs.existsSync(path.join(app, 'bridge', '.restart'));
+      const run = () => spawnSync('sh', [path.join(app, 'deploy', 'autodeploy.sh'), app], { encoding: 'utf8' });
+      const hubRestarts = (to) => { fs.rmSync(path.join(app, 'bridge', '.restart'), { force: true }); fs.writeFileSync(statusFile, to); };
+      const one = head(); fs.writeFileSync(statusFile, one);
+      await sleep(400); // the stand-in is listening
+      // a good release: deployed, snapshot taken, verified once the hub runs it
+      const good = push('b.js', '2;\n', '1.1.0');
+      const d1 = run(); out.deployed = head() === good && restartAsked() && /deployed/.test(d1.stdout);
+      out.snapshot = fs.readdirSync(path.join(tmp, 'snapshots')).some((f) => /^data-.*\.tar\.gz$/.test(f));
+      hubRestarts(good); const v1 = run(); out.verified = /verified/.test(v1.stdout) && fs.readFileSync(path.join(tmp, 'deploy-state', 'last-good'), 'utf8').trim() === good;
+      // a broken release: the hub never comes back → after 3 runs it is rolled back to the good one
+      const bad = push('c.js', '3;\n', '1.2.0');
+      run(); hubRestarts('down');
+      const w1 = run(), w2 = run(); // two misses: still waiting, still on the new one
+      out.waited = !/ROLLED BACK/.test(w1.stdout + w2.stdout) && head() === bad;
+      const rb = run();
+      out.rolledBack = /ROLLED BACK/.test(rb.stdout) && head() === good && restartAsked() && fs.existsSync(path.join(app, 'bridge', '.rolled-back'));
+      out.dataKept = fs.readFileSync(path.join(app, 'bridge', 'state.json'), 'utf8') === '{"precious":true}\n';
+      hubRestarts(good); const again = run(); out.notRetried = head() === good && !/deployed/.test(again.stdout);
+      // the fix moves main on: deployed (a fast-forward from the good one)
+      const fix = push('c.js', '4;\n', '1.2.1'); const d3 = run(); out.fixDeployed = head() === fix && /deployed/.test(d3.stdout);
+      // a release that does not even parse is never started: it stays on the running one
+      const broken = push('d.js', 'this is not javascript (\n', '1.3.0'); hubRestarts(fix); run(); // (verify the fix first)
+      const d4 = run(); out.parseRefused = head() === fix && /node --check failed/.test(d4.stdout) && fs.readFileSync(path.join(tmp, 'deploy-state', 'bad'), 'utf8').trim() === broken;
+    } catch (e) { if (e.message !== 'skip') out.error = e.message; }
+    finally { fake.kill(); try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} }
+    const srv151 = fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8');
+    check('R151', 'deploys never break the hub: the auto-deploy snapshots the data first, asks for a graceful restart and checks the hub comes up on the new commit (/api/status reports it, locally only); a release that does not come up is rolled back to the last good commit by itself (the data untouched, the chat told on the next start) and not retried until main moves on; one that does not parse never starts; a later fix deploys normally; [static] the hub announces a rollback and keeps running after an uncaught error',
+      (!runnable || (out.deployed && out.snapshot && out.verified && out.waited && out.rolledBack && out.dataKept && out.notRetried && out.fixDeployed && out.parseRefused))
+      && /commit: RUNNING_COMMIT/.test(srv151) && /\.rolled-back/.test(srv151) && /process\.on\('uncaughtException'/.test(srv151),
+      runnable ? JSON.stringify(out) : 'sh / curl not available: source checks only');
   }
 
   // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.

@@ -17,6 +17,13 @@
 //   POST /node/reply    the answer to an engine / provider job (whole, base64)
 //   POST /node/events   a batch of Work events (sealed), the final one with done + exit code; the answer may say cancel
 //   */node/job/<id>/internal/<tool>   the MCP tools of a Work run on the host (PC files, board, team), with the job's token
+//   GET  /node/update   the host's files as this hub runs them (name + sha256), signed with the host's own secret (HMAC),
+//   GET  /node/update/file/<name>      and each file: hosts that can ("caps": ["update"]) update themselves from it
+//
+// Older hosts keep working. Nothing new is required in a hello; extra fields in the answer are ignored by older hosts.
+// A host that does not say it can relay a login (no "relay" in caps: every host before 3.1) is asked once, with a relay
+// job to an address no host forwards: a 3.x host refuses it (403, nothing leaves the machine), a 2.x host does not know
+// relays (404); a 2.x host's Claude then runs Work the way it did then (Claude Code on the host), instead of failing.
 //
 // Jobs. engine (Unity: a name + a path, never an address), provider (an OpenAI-compatible call relayed to one of the
 // host's own endpoints, by provider id), work (a Claude Code run on the host, in the person's worktree there).
@@ -27,6 +34,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const POLL_MS = 25000, JOB_MS = 300000, PICKUP_MS = 40000, IDLE_MS = 600000, MAX_QUEUE = 200;
@@ -35,10 +43,13 @@ const ADJ = ['happy', 'silly', 'brave', 'quiet', 'swift', 'clever', 'gentle', 'b
 const ANIMAL = ['panda', 'crocodile', 'otter', 'falcon', 'badger', 'walrus', 'lynx', 'heron', 'gecko', 'koala', 'marmot', 'narwhal', 'ocelot', 'puffin', 'quokka', 'raccoon', 'sparrow', 'tapir', 'urchin', 'viper', 'wombat', 'yak', 'zebra', 'beaver', 'dolphin', 'ferret', 'ibis', 'jackal', 'kiwi', 'moose'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NICK_RE = /^[a-z0-9]+(-[a-z0-9]+){1,3}$/;
+// what a host runs (bridge/ai-node.js and what it loads); launchers (.bat / .sh / the service) are never swapped while running
+const HOST_FILES = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js'];
 
 // onUsage(source, windows) / savedUsage(source): a host provider's 5h / 7d windows are kept by bridge/usage.js (on disk), so
 // they survive a hub restart and show in /api/usage; source = "h:<hostId>/<providerId>".
-module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson, writeJson, accounts = null, log = () => {}, onUsage = () => {}, savedUsage = () => null }) {
+// release() = { version, commit } of the code this hub runs (what /node/update hands to hosts).
+module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson, writeJson, accounts = null, log = () => {}, onUsage = () => {}, savedUsage = () => null, release = () => ({ version: '', commit: '' }) }) {
   const FILE = path.join(ROOT, 'ai-hosts.json');
   const OFFLINE_MS = Math.max(1000, Number(config.aiNodeOfflineMs) || 60000);
   const db = readJson(FILE, { hosts: {} }); if (!db.hosts || typeof db.hosts !== 'object') db.hosts = {};
@@ -117,7 +128,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       const n = live.get(r.id); if (!n || !n.hello) continue;
       for (const p of n.hello.providers) {
         if (!mayUse(r, p, user)) continue;
-        out.push({ id: `h:${r.id}/${p.id}`, kind: hubKind(p.kind), remoteKind: p.kind, label: p.label, owner: ownerOf(r), shared: true, models: p.models, hostId: r.id, nickname: r.nickname, online: online(r.id), max5h: p.max5h, max7d: p.max7d, usage: usageOf(n, p), capped: overCap(n, p) });
+        out.push({ id: `h:${r.id}/${p.id}`, kind: hubKind(p.kind), remoteKind: remoteKindOf(n, p), label: p.label, owner: ownerOf(r), shared: true, models: p.models, hostId: r.id, nickname: r.nickname, online: online(r.id), max5h: p.max5h, max7d: p.max7d, usage: usageOf(n, p), capped: overCap(n, p) });
       }
     }
     return out;
@@ -126,8 +137,37 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     const m = /^h:([^/]+)\/([a-z0-9-]+)$/.exec(String(id || '')); if (!m) return null;
     const r = record(m[1]), n = live.get(m[1]); if (!r || !n || !n.hello) return null;
     const p = n.hello.providers.find((x) => x.id === m[2]); if (!p || (user && !mayUse(r, p, user))) return null;
-    return { id, kind: hubKind(p.kind), remoteKind: p.kind, label: p.label, owner: ownerOf(r), shared: true, models: p.models, hostId: r.id, providerId: p.id, nickname: r.nickname, online: online(r.id), max5h: p.max5h, max7d: p.max7d, usage: usageOf(n, p), capped: overCap(n, p) };
+    return { id, kind: hubKind(p.kind), remoteKind: remoteKindOf(n, p), label: p.label, owner: ownerOf(r), shared: true, models: p.models, hostId: r.id, providerId: p.id, nickname: r.nickname, online: online(r.id), max5h: p.max5h, max7d: p.max7d, usage: usageOf(n, p), capped: overCap(n, p) };
   }
+  // ---------- older hosts: can this one relay a login, or does its Claude run Work itself (2.x)? ----------
+  // A relay job to a path no host forwards: 3.x refuses it (403, nothing leaves that machine), 2.x knows no relays (404).
+  async function probeRelays(id) {
+    const n = live.get(id); if (!n || !n.hello) return;
+    for (const p of n.hello.providers.filter((x) => x.kind === 'claude-cli' || x.kind === 'claude-relay')) {
+      try {
+        const res = await relay(id, { engine: 'relay:' + p.id, path: '/v1/__viberoller_probe' }, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }, 'provider', true);
+        const text = await res.text().catch(() => '');
+        n.relayOk[p.id] = !(res.status === 404 && /does not lend/i.test(text));
+        if (!n.relayOk[p.id]) log(`[ai-host] ${(record(id) || {}).nickname || id} is an older host (no login relay): its Claude runs Work on that machine, as it did before`);
+      } catch {} // offline or slow: asked again at its next hello
+    }
+  }
+  // the kind the hub uses: a 2.x host's Claude runs Work itself ("claude-cli-work", the legacy path in server.js)
+  const remoteKindOf = (n, p) => (p.kind === 'claude-cli' && n.relayOk && n.relayOk[p.id] === false ? 'claude-cli-work' : p.kind);
+
+  // ---------- updates for hosts: the files a host runs, as this hub runs them ----------
+  let manifestCache = { stamp: '', m: null };
+  function updateManifest() {
+    const rel = release();
+    const stats = HOST_FILES.map((f) => { try { const s = fs.statSync(path.join(ROOT, f)); return `${f}:${s.mtimeMs}:${s.size}`; } catch { return f + ':-'; } }).join('|');
+    if (manifestCache.stamp !== stats + rel.commit) {
+      const files = HOST_FILES.filter((f) => fs.existsSync(path.join(ROOT, f))).map((f) => { const b = fs.readFileSync(path.join(ROOT, f)); return { name: f, sha256: crypto.createHash('sha256').update(b).digest('hex'), size: b.length }; });
+      manifestCache = { stamp: stats + rel.commit, m: { version: String(rel.version || ''), commit: String(rel.commit || ''), files } };
+    }
+    return manifestCache.m && manifestCache.m.files.length ? manifestCache.m : null;
+  }
+  const updateInfo = () => { const rel = release(); return { version: String(rel.version || ''), commit: String(rel.commit || '') }; };
+
   function noteHostUsage(id, providerId, usage) { // the host reports its own windows with every event batch
     const n = state(id); if (!usage || typeof usage !== 'object') return;
     const num = (v) => (v == null || v === '' ? NaN : Number(v)); // a missing number is unknown, not 0 %
@@ -271,9 +311,26 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       if (!/^[0-9a-f]{32,64}$/.test(hostNonce)) { send(res, 400, { error: 'hello needs a hex nonce (32+ characters).' }); return true; }
       const serverNonce = crypto.randomBytes(16).toString('hex');
       n.key = derive(r.secret, hostNonce, serverNonce); n.kid = keyId(n.key);
-      n.hello = { at: Date.now(), nickname: r.nickname, user: r.user || String(b.user || ''), providers: cleanProviders(b.providers), engines: (Array.isArray(b.engines) ? b.engines : Object.keys(b.engines || {})).filter((e) => ENGINES.includes(e)), version: String(b.version || '').slice(0, 20), os: String(b.os || '').slice(0, 20), pc: b.pc === true && !!(r.user || /^[a-z0-9-]{1,32}$/.test(String(b.user || ''))) };
-      log(`[ai-host] ${r.nickname} (${n.hello.user || 'no owner'}) connected: ${n.hello.providers.length} provider(s), engines ${n.hello.engines.join(', ') || 'none'}, key ${n.kid}`);
-      send(res, 200, { id: r.id, nickname: r.nickname, user: r.user, serverNonce, kid: n.kid, pollMs: POLL_MS, offlineMs: OFFLINE_MS, group: cleanUsers(config.hostGroup || []) });
+      const caps = (Array.isArray(b.caps) ? b.caps : []).map(String).filter((c) => /^[a-z-]{1,20}$/.test(c)).slice(0, 20);
+      n.hello = { at: Date.now(), nickname: r.nickname, user: r.user || String(b.user || ''), providers: cleanProviders(b.providers), engines: (Array.isArray(b.engines) ? b.engines : Object.keys(b.engines || {})).filter((e) => ENGINES.includes(e)), version: String(b.version || '').slice(0, 20), os: String(b.os || '').slice(0, 20), pc: b.pc === true && !!(r.user || /^[a-z0-9-]{1,32}$/.test(String(b.user || ''))), caps };
+      n.relayOk = {};
+      log(`[ai-host] ${r.nickname} (${n.hello.user || 'no owner'}) connected: ${n.hello.providers.length} provider(s), engines ${n.hello.engines.join(', ') || 'none'}, key ${n.kid}${caps.length ? ', can ' + caps.join(' ') : ', an older host'}`);
+      // extra fields are safe: every host so far reads only the ones it knows
+      send(res, 200, { id: r.id, nickname: r.nickname, user: r.user, serverNonce, kid: n.kid, pollMs: POLL_MS, offlineMs: OFFLINE_MS, group: cleanUsers(config.hostGroup || []), update: updateInfo() });
+      if (!caps.includes('relay')) setTimeout(() => probeRelays(r.id), 1500); // an older host: can it relay a login, or only run Work itself?
+      return true;
+    }
+    if (p === '/node/update' && req.method === 'GET') { // the host's files as this hub runs them, signed with the host's own secret
+      const m = updateManifest();
+      if (!m) { send(res, 404, { error: 'No updates here.' }); return true; }
+      send(res, 200, { ...m, sig: crypto.createHmac('sha256', String(r.secret)).update(JSON.stringify(m)).digest('hex') });
+      return true;
+    }
+    if (p.startsWith('/node/update/file/') && req.method === 'GET') {
+      const name = p.slice('/node/update/file/'.length);
+      if (!HOST_FILES.includes(name)) { send(res, 404, { error: 'Not a host file.' }); return true; }
+      let buf; try { buf = fs.readFileSync(path.join(ROOT, name)); } catch { send(res, 404, { error: 'Not here.' }); return true; }
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length, 'Cache-Control': 'no-store' }); res.end(buf);
       return true;
     }
     if (p === '/node/poll' && req.method === 'GET') {
