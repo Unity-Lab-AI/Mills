@@ -133,7 +133,7 @@ Needs Chrome, Chromium, Brave or Edge. If VibeRoller is only reachable from insi
     ] },
   'ai-host-windows': { group: 'ai-host', os: 'Windows', title: 'Vibe Roller AI Host', file: 'VibeRollerAIHost-windows.zip',
     build: (hub, cfg) => [
-      ...take('VibeRollerAIHost', ['ai-node.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'start-node.bat', 'host-tools/HostTool.cs', 'host-tools/AiHostService.cs', 'host-tools/build-host-tools.ps1', 'host-tools/build.cmd', 'host-tools/install-ai-host-service.cmd']),
+      ...take('VibeRollerAIHost', ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'start-node.bat', 'host-tools/HostTool.cs', 'host-tools/AiHostService.cs', 'host-tools/build-host-tools.ps1', 'host-tools/build.cmd', 'host-tools/install-ai-host-service.cmd']),
       { name: 'VibeRollerAIHost/ai-node.example.json', data: aiHostExample(hub) },
       ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []),
       { name: 'VibeRollerAIHost/README.txt', data: crlf(`Vibe Roller AI Host (Windows)
@@ -161,7 +161,7 @@ resume it.
     ] },
   'ai-host-linux': { group: 'ai-host', os: 'Linux', title: 'Vibe Roller AI Host', file: 'VibeRollerAIHost-linux.zip',
     build: (hub, cfg) => [
-      ...take('VibeRollerAIHost', ['ai-node.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'host-tools/viberoller-ai-host.service']),
+      ...take('VibeRollerAIHost', ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'host-tools/viberoller-ai-host.service']),
       ...take('VibeRollerAIHost', ['start-node.sh', 'host-tools/install-ai-host-service.sh', 'host-tools/start-viberoller-host.sh', 'host-tools/stop-viberoller-host.sh'], true),
       { name: 'VibeRollerAIHost/ai-node.example.json', data: aiHostExample(hub) },
       ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []),

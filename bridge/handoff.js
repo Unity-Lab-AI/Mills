@@ -14,6 +14,9 @@
 //       the autostart launcher, the service) runs the AI host (bridge/ai-node.js, config bridge/ai-node.json) here
 //       instead of the hub. The hub lives on the server. Run it LAST: the Work run that calls it ends with the hub.
 //   node bridge/handoff.js tools        Windows: build the heart / knife / service programs, Desktop shortcuts (no admin needed)
+//   node bridge/handoff.js service      Windows: start the boot-service installer (the person at the PC clicks Yes once)
+//   node bridge/handoff.js probe        one tiny real call through each login this host shares (no token printed)
+//   node bridge/handoff.js restart-host restart the AI host here on its current code + config
 //   node bridge/handoff.js undo         remove .handoff and .maintenance: the hub serves here again on its next start
 //   node bridge/handoff.js status
 // Every flag lands in the RUNNING hub's bridge folder (the host folder's), never in a worktree's copy.
@@ -22,7 +25,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
 const { REPO } = require('./worktree');
 
 const BRIDGE = path.join(REPO, 'bridge');
@@ -113,6 +116,35 @@ function tools() {
   const exes = fs.readdirSync(path.join(BRIDGE, 'host-tools')).filter((f) => f.endsWith('.exe'));
   return [(r.stdout || '').trim(), `Built: ${exes.join(', ')}`];
 }
+// Restart this machine's AI host on its current code + config (it is started again at once by run.js or the service).
+// Newer hosts do this by themselves when their files change; this is for one that predates that.
+function restartHost() {
+  const lock = path.join(BRIDGE, 'ai-node.lock');
+  if (!fs.existsSync(lock)) return ['No AI host is running here (no bridge/ai-node.lock).'];
+  const pid = Number(fs.readFileSync(lock, 'utf8').trim());
+  try { process.kill(pid); } catch (e) { return [`Could not stop the AI host (pid ${pid}): ${e.message}`]; }
+  return [`Stopped the AI host (pid ${pid}); run.js / the service starts it again on the new code within a few seconds.`];
+}
+// Install the VibeRollerAIHost service (start at boot). Windows asks the person at this PC for administrator rights once.
+function service() {
+  if (process.platform !== 'win32') return ['On Linux: sudo sh bridge/host-tools/install-ai-host-service.sh (needs sudo).'];
+  const cmd = path.join(BRIDGE, 'host-tools', 'install-ai-host-service.cmd');
+  if (!fs.existsSync(path.join(BRIDGE, 'host-tools', 'VibeRollerAIHost.exe'))) throw new Error('Build the host tools first: node bridge/handoff.js tools');
+  spawn('cmd.exe', ['/c', 'start', '""', cmd], { cwd: path.dirname(cmd), detached: true, stdio: 'ignore', windowsHide: false }).unref();
+  return ['Started the service installer: Windows now shows an administrator prompt on this PC. Once Yes is clicked, the AI host runs as a service from every boot (the heart / knife start and stop it).'];
+}
+// Does this machine's shared AI answer? One tiny real call per login relay in bridge/ai-node.json (no token printed).
+async function probe() {
+  const cfgFile = path.join(BRIDGE, 'ai-node.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+  const relays = require('./host-relay');
+  const lines = [];
+  for (const p of (cfg.providers || []).filter((x) => relays.isRelay(x))) {
+    try { const r = await relays.probe(p, { sandbox: path.join(REPO, 'Api', 'sandbox'), log: (m) => lines.push('  ' + m) }); lines.push(`${p.id} (${r.kind}, ${r.model}): HTTP ${r.status}${r.said ? ', said "' + r.said + '"' : ''}${r.error ? ', ' + r.error : ''}${r.usage ? ', usage ' + JSON.stringify(r.usage) : ''}`); }
+    catch (e) { lines.push(`${p.id}: ${e.message}`); }
+  }
+  return lines.length ? lines : ['No login relays in ' + cfgFile];
+}
 function undo() { let n = 0; for (const f of [HANDOFF, MAINT]) if (fs.existsSync(f)) { fs.unlinkSync(f); n++; } return [n ? `Removed ${n} flag(s): the hub serves here again from its next start (node bridge/restart.js, or start.bat).` : 'Nothing to undo.']; }
 function status() { return [`host folder ${REPO}`, `handed off: ${fs.existsSync(HANDOFF)}`, `writes paused (maintenance): ${fs.existsSync(MAINT)}`, `AI host config: ${fs.existsSync(path.join(BRIDGE, 'ai-node.json'))}`]; }
 
@@ -127,6 +159,9 @@ if (require.main === module) {
     else if (cmd === 'switch') console.log(doSwitch(dry).join('\n'));
     else if (cmd === 'undo') console.log(undo().join('\n'));
     else if (cmd === 'tools') console.log(tools().join('\n'));
+    else if (cmd === 'restart-host') console.log(restartHost().join('\n'));
+    else if (cmd === 'service') console.log(service().join('\n'));
+    else if (cmd === 'probe') probe().then((l) => console.log(l.join('\n'))).catch((e) => { console.error(e.message); process.exit(1); });
     else if (cmd === 'status') console.log(status().join('\n'));
     else { console.error('Usage: node bridge/handoff.js pack [--to <ssh alias>] [--dir <server folder>] | switch [--dry-run] | undo | status'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }

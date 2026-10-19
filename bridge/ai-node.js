@@ -67,7 +67,7 @@ function open(enc) {
 // ---------- hello: what this host offers; the hub answers with the nickname and its nonce ----------
 async function hello() {
   const nonce = crypto.randomBytes(16).toString('hex');
-  const providers = PROVIDERS.map((p) => ({ id: p.id, kind: p.kind, label: p.label, models: p.models, allowedUsers: p.allowedUsers, max5h: p.max5h, max7d: p.max7d }));
+  const providers = PROVIDERS.map((p) => ({ id: p.id, kind: relayKind(p), label: p.label, models: p.models, allowedUsers: p.allowedUsers, max5h: p.max5h, max7d: p.max7d }));
   const r = await fetch(HUB + '/node/hello', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ nonce, user: USER, providers, engines: Object.keys(ENGINES), pc: !!PC_FOLDER, version: VERSION, os: process.platform }), signal: AbortSignal.timeout(20000) });
   if (r.status === 401) throw Object.assign(new Error('the hub does not know this host (id / token): check ai-node.json, or make the host again in Settings → My AI hosts'), { auth: true });
   if (!r.ok) throw new Error('hello answered ' + r.status);
@@ -75,7 +75,7 @@ async function hello() {
   key = derive(TOKEN, nonce, String(j.serverNonce || '')); kid = keyId(key);
   if (kid !== j.kid) { key = null; throw new Error('the key ids differ after the handshake (hub ' + j.kid + ', here ' + kid + '): is the token right?'); }
   nickname = j.nickname || nickname; pollMs = Number(j.pollMs) || pollMs;
-  if (cfg.nickname !== nickname) { try { cfg.nickname = nickname; fs.writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2) + '\n'); } catch {} }
+  if (cfg.nickname !== nickname) { try { cfg.nickname = nickname; fs.writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2) + '\n'); if (typeof ownWrite === 'function') ownWrite(); } catch {} }
   log(`connected to ${HUB} as "${nickname}"${USER ? ' (' + USER + ')' : ''}: ${providers.length} provider(s) [${providers.map((p) => p.id).join(', ')}], engines ${Object.keys(ENGINES).join(', ') || 'none'}${PC_FOLDER ? ', computer access to ' + PC_FOLDER : ''}, key ${kid}`);
 }
 
@@ -102,9 +102,29 @@ async function reply(job, status, headersOut, body) {
   try { await fetch(HUB + '/node/reply', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: job.id, status, headers: headersOut, body: body ? Buffer.from(body).toString('base64') : '' }), signal: AbortSignal.timeout(60000) }); }
   catch (e) { log('could not hand back a job:', e.message); }
 }
+// ---------- login relays: the hub's Claude Code / Codex run ON THE SERVER; only their model calls come here ----------
+// This machine adds its own login (Claude: <configDir>/.credentials.json, Codex: <codexHome>/auth.json), forwards the call to
+// the provider and streams the answer back. The token never leaves this machine, and nothing here touches a file the
+// caller chose: the hub can only reach the two fixed provider addresses below, under /v1/ (Claude) or /responses (Codex).
+const relays = require('./host-relay');
+const relayKind = relays.relayKind;
+const relayOpts = { sandbox: path.join(__dirname, '..', 'Api', 'sandbox'), log: (m) => log(m), claudeCommand: String(WORK.claudeCommand || 'claude') };
+async function loginRelay(job, p) {
+  const r = await relays.forward(p, { path: job.path, method: job.method, headers: job.headers, body: job.body ? Buffer.from(job.body, 'base64') : undefined }, relayOpts);
+  const u = relays.usageFrom(r.headers); if (u) usage[p.id] = { ...(usage[p.id] || {}), ...u };
+  const out = relays.passHeaders(r.headers);
+  if (r.body && /text\/event-stream/i.test(r.headers.get('content-type') || '')) return streamBack(job, r, out);
+  await reply(job, r.status, out, Buffer.from(await r.arrayBuffer()));
+}
 async function relayJob(job) {
   try {
     let base, extra = {};
+    if (String(job.engine).startsWith('relay:')) {
+      const p = PROVIDERS.find((x) => x.id === job.engine.slice(6) && relays.isRelay(x));
+      if (!p) throw Object.assign(new Error('This host shares no such login.'), { status: 404 });
+      const cap = overCap(p); if (cap) throw Object.assign(new Error(`${nickname}: ${cap}.`), { status: 429 });
+      return await loginRelay(job, p);
+    }
     if (String(job.engine).startsWith('provider:')) {
       const p = PROVIDERS.find((x) => x.id === job.engine.slice(9) && x.kind === 'openai');
       if (!p) throw Object.assign(new Error('This host offers no such endpoint.'), { status: 404 });
@@ -117,13 +137,13 @@ async function relayJob(job) {
     const r = await fetch(String(base).replace(/\/+$/, '') + job.path, { method: job.method || 'GET', headers: { ...(job.headers && job.headers['content-type'] ? { 'content-type': job.headers['content-type'] } : {}), ...extra }, body: job.body ? Buffer.from(job.body, 'base64') : undefined, signal: AbortSignal.timeout(290000) });
     const ct = r.headers.get('content-type') || '';
     // a streamed answer (SSE, NDJSON) goes back piece by piece as the engine produces it, so words show up as they are made
-    if (r.body && /text\/event-stream|ndjson|text\/plain/i.test(ct)) return streamBack(job, r, ct);
+    if (r.body && /text\/event-stream|ndjson|text\/plain/i.test(ct)) return streamBack(job, r, { 'content-type': ct });
     await reply(job, r.status, { 'content-type': ct }, Buffer.from(await r.arrayBuffer()));
-  } catch (e) { await reply(job, e.status || 502, { 'content-type': 'application/json' }, Buffer.from(JSON.stringify({ error: e.message }))); }
+  } catch (e) { await reply(job, e.status || 502, { 'content-type': 'application/json' }, Buffer.from(JSON.stringify({ error: { type: 'relay_error', message: e.message } }))); }
 }
-async function streamBack(job, r, ct) {
+async function streamBack(job, r, hdrs) {
   const post = (b) => fetch(HUB + '/node/stream', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: job.id, ...b }), signal: AbortSignal.timeout(60000) }).then((x) => x.status !== 404).catch(() => true);
-  if (!(await post({ status: r.status, headers: { 'content-type': ct } }))) return; // the hub no longer waits for this job
+  if (!(await post({ status: r.status, headers: hdrs }))) return; // the hub no longer waits for this job
   const reader = r.body.getReader(); let held = [], heldBytes = 0, lastSend = Date.now();
   const flush = async () => { if (!held.length) return true; const chunk = Buffer.concat(held); held = []; heldBytes = 0; lastSend = Date.now(); return post({ chunk: chunk.toString('base64') }); };
   try {
@@ -250,6 +270,14 @@ async function workJob(job) {
 }
 function kill(child) { try { if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); else child.kill('SIGTERM'); } catch {} }
 
+// ---------- new code or new config: restart on it by ourselves (run.js / the service start us again within seconds) ----------
+// so an update reaches Gee's PC without anyone touching it. Waits until no relayed answer is in flight.
+const WATCH = [__filename, path.join(__dirname, 'host-relay.js'), CFG_FILE];
+const stamp = () => WATCH.map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }).join(',');
+let started = stamp();
+const ownWrite = () => { started = stamp(); }; // our own nickname write into the config is not a change to restart on
+setInterval(() => { if (stamp() !== started && !runs.size) { log('new code or config here: restarting on it'); process.exit(3); } }, 20000).unref();
+
 // ---------- the loop ----------
 (async function loop() {
   let paused = false, quiet = 0;
@@ -265,7 +293,7 @@ function kill(child) { try { if (process.platform === 'win32') spawn('taskkill',
       quiet = 0;
       for (const id of cancel) stopRun(id, 'stopped by its person');
       for (const job of jobs) { // in parallel; the next poll starts right away
-        if (job.kind === 'work') workJob(job);
+        if (job.kind === 'work') { if (cfg.allowWork === true) workJob(job); else reply(job, 403, { 'content-type': 'application/json' }, Buffer.from('{"error":"This host shares its AI only, not its computer."}')); }
         else if (job.engine === 'pc') pcJob(job);
         else relayJob(job);
       }

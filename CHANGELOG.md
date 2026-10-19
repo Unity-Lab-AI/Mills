@@ -6,6 +6,36 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.0.0 — 2026-10-19
+
+**An AI host shares its AI, never its computer.** MAJOR because a host stops doing what it did: it no longer runs Work
+(Claude Code, files, tools) on its own machine.
+
+### Changed
+- **Work happens on the server, in sharedwork.** With a host's Claude chosen, Claude Code runs on the hub in the person's own
+  worktree; only its model calls travel to the host (`/llm/<token>` on the hub, local only, a 12-hour token per person and
+  provider), and the host adds its own login and forwards them to Anthropic. The login never leaves the host; no file on the
+  host is read or written. Usage and caps come from Anthropic's own usage headers. Check R144 (rewritten).
+- **The host refuses work and file jobs** unless its config says `"allowWork": true`; a host's `claude-cli` provider is
+  shared as a login relay. Modules: bridge/ai-node.js 3.0.0, bridge/ai-nodes.js 2.1.0, bridge/server.js 3.0.0,
+  bridge/providers.js 1.3.0.
+
+### Added
+- **ChatGPT / Codex shared by a host** (`codex-relay`, the Codex CLI's ChatGPT login): answers the API and Unity through
+  the Responses API, streamed. Work stays Claude. Settings show it as "AI host, ChatGPT / Codex". Check R145 (extended).
+- `bridge/host-relay.js` 1.0.0: the login relays (Claude → api.anthropic.com/v1/messages, Codex →
+  chatgpt.com/backend-api/codex/responses, nothing else), token refresh through the provider's own CLI, usage headers.
+- The host restarts itself on new code or config (within 20 s, between answers), so updates reach Gee's PC by themselves.
+- `node bridge/handoff.js probe` (one tiny real call per shared login, no token printed), `service` (starts the boot-service
+  installer: one administrator click at that PC), `restart-host`. Module: bridge/handoff.js 1.2.0.
+- The AI Host download carries host-relay.js; a new host's config offers Claude and Codex relays (bridge/downloads.js 1.1.1).
+- Gee's PC: shares Claude (fable-5.1, opus-5.5, sonnet-5.5, haiku-5.5; 90 % caps) and ChatGPT / Codex (gpt-6.1-sol) with
+  mills, sponge and gee. Probed live: both answered "OK".
+
+### Removed
+- Remote Work runs on a host by default (still possible only with `allowWork: true` in that host's own config).
+- The board: finished AI cards closed (T-45 … T-112); the Local / Cloud switch (T-109) is superseded.
+
 ## 2.2.1 — 2026-10-19
 
 ### Added
