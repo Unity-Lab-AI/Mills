@@ -37,7 +37,7 @@ module.exports = function createOpenAI({ accounts, providers, send, readBody, wr
     const a = acct.state.api || (acct.state.api = {});
     if (body.expiresDays !== undefined) a.expiresDays = clampDays(body.expiresDays);
     if (body.provider !== undefined) { const p = providers.get(String(body.provider), acct.username); if (!p) throw new Error('Unknown provider.'); a.provider = p.id; if (!(p.models || []).includes(a.model)) a.model = ''; }
-    if (body.model !== undefined) { const p = providers.get(a.provider || 'host', acct.username); a.model = p && (p.models || []).includes(body.model) ? body.model : ''; }
+    if (body.model !== undefined) { const p = providers.effective(acct.username, a.provider || ''); a.model = p && (p.models || []).includes(body.model) ? body.model : ''; }
     writeState(acct);
     return status(acct);
   }
@@ -61,7 +61,8 @@ module.exports = function createOpenAI({ accounts, providers, send, readBody, wr
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     const { acct, error } = accountForKey(req);
     if (error) return oaError(res, 401, error, 'authentication_error');
-    const a = acct.state.api, prov = providers.get(a.provider || 'host', acct.username) || providers.get('host');
+    const a = acct.state.api, prov = providers.effective(acct.username, a.provider || '');
+    if (!prov) return oaError(res, 503, 'No AI is available: this hub has no Claude of its own and no AI host offering one is connected.', 'service_unavailable');
     if (p === '/v1/models' && req.method === 'GET') {
       return send(res, 200, { object: 'list', data: (prov.models || []).map((m) => ({ id: m, object: 'model', created: 0, owned_by: prov.kind === 'host' ? 'mills' : prov.owner })) });
     }
@@ -81,12 +82,12 @@ module.exports = function createOpenAI({ accounts, providers, send, readBody, wr
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
           const chunk = (delta, finish = null) => res.write('data: ' + JSON.stringify({ id: cid, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta, finish_reason: finish }] }) + '\n\n');
           chunk({ role: 'assistant', content: '' });
-          const r = await providers.complete({ provider: prov.id, model, system, messages, maxTokens: body.max_tokens, signal: ctl.signal, onToken: (t) => chunk({ content: t }) });
+          const r = await providers.complete({ provider: prov.id, user: acct.username, model, system, messages, maxTokens: body.max_tokens, signal: ctl.signal, onToken: (t) => chunk({ content: t }) });
           chunk({}, 'stop');
           if (r.usage) res.write('data: ' + JSON.stringify({ id: cid, object: 'chat.completion.chunk', created, model: r.model || model, choices: [], usage: { ...r.usage, total_tokens: (r.usage.prompt_tokens || 0) + (r.usage.completion_tokens || 0) } }) + '\n\n');
           res.end('data: [DONE]\n\n');
         } else {
-          const r = await providers.complete({ provider: prov.id, model, system, messages, maxTokens: body.max_tokens, signal: ctl.signal });
+          const r = await providers.complete({ provider: prov.id, user: acct.username, model, system, messages, maxTokens: body.max_tokens, signal: ctl.signal });
           send(res, 200, { id: cid, object: 'chat.completion', created, model: r.model || model, choices: [{ index: 0, message: { role: 'assistant', content: r.text }, finish_reason: 'stop' }],
             usage: r.usage ? { ...r.usage, total_tokens: (r.usage.prompt_tokens || 0) + (r.usage.completion_tokens || 0) } : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } });
         }

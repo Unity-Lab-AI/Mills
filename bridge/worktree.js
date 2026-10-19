@@ -37,8 +37,11 @@ const { execFileSync } = require('child_process');
 const { MILLS_DIR, loadProfile } = require('./common');
 
 const CFG = loadProfile('').config;
-// The main checkout, even when this script runs from inside one of the worktrees.
+// The main checkout, even when this script runs from inside one of the worktrees. An AI host running the standalone
+// "VibeRoller AI Host" package names its VibeRoller clone with VIBEROLLER_HUB_REPO (or config hubRepo).
 const REPO = (() => {
+  const given = process.env.VIBEROLLER_HUB_REPO || CFG.hubRepo;
+  if (given) return path.resolve(given);
   try {
     const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: MILLS_DIR, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     return path.dirname(path.resolve(common));
