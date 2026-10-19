@@ -6,6 +6,14 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 2.2.1 — 2026-10-19
+
+### Added
+- `node bridge/handoff.js tools` builds the heart (`start-viberoller-ai-host.exe`), the knife (`stop-viberoller-ai-host.exe`)
+  and the service program on a Windows host and puts "Start / Stop VibeRoller AI Host" on its Desktop, so a Work run can do
+  it for the host's owner. Used on Gee's PC for the move. Module: bridge/handoff.js 1.1.0. (Project bumped by a MINOR
+  change in a PATCH number because the move was already under way; noted here so it is not mistaken for a fix.)
+
 ## 2.2.0 — 2026-10-19
 
 ### Added

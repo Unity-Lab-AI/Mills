@@ -13,6 +13,7 @@
 //       Hands off: writes bridge/.handoff and asks the hub for a graceful restart; from then on bridge/run.js (start.bat,
 //       the autostart launcher, the service) runs the AI host (bridge/ai-node.js, config bridge/ai-node.json) here
 //       instead of the hub. The hub lives on the server. Run it LAST: the Work run that calls it ends with the hub.
+//   node bridge/handoff.js tools        Windows: build the heart / knife / service programs, Desktop shortcuts (no admin needed)
 //   node bridge/handoff.js undo         remove .handoff and .maintenance: the hub serves here again on its next start
 //   node bridge/handoff.js status
 // Every flag lands in the RUNNING hub's bridge folder (the host folder's), never in a worktree's copy.
@@ -99,6 +100,19 @@ function doSwitch(dry) {
   fs.writeFileSync(RESTART, new Date().toISOString() + '\n');
   return lines.concat(`Written ${HANDOFF} and asked the hub for a graceful restart: as soon as no reply is in progress it restarts as the AI host. This Work run ends with it; carry on at the server's address.`);
 }
+// The heart and the knife (and the service program) for this machine: builds them with bridge/host-tools/build-host-tools.ps1
+// (Windows' own C# compiler) and puts "Start / Stop VibeRoller AI Host" on the Desktop. Installing the boot service needs
+// administrator rights, so that stays a separate, optional double-click (install-ai-host-service.cmd); without it the
+// Startup launcher starts the AI host at sign-in.
+function tools() {
+  if (process.platform !== 'win32') return ['On Linux the heart and knife are host-tools/start-viberoller-host.sh / stop-viberoller-host.sh (nothing to build).'];
+  const ps1 = path.join(BRIDGE, 'host-tools', 'build-host-tools.ps1');
+  if (!fs.existsSync(ps1)) throw new Error(ps1 + ' is missing.');
+  const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) throw new Error('Building the host tools failed:\n' + (r.stdout || '') + (r.stderr || ''));
+  const exes = fs.readdirSync(path.join(BRIDGE, 'host-tools')).filter((f) => f.endsWith('.exe'));
+  return [(r.stdout || '').trim(), `Built: ${exes.join(', ')}`];
+}
 function undo() { let n = 0; for (const f of [HANDOFF, MAINT]) if (fs.existsSync(f)) { fs.unlinkSync(f); n++; } return [n ? `Removed ${n} flag(s): the hub serves here again from its next start (node bridge/restart.js, or start.bat).` : 'Nothing to undo.']; }
 function status() { return [`host folder ${REPO}`, `handed off: ${fs.existsSync(HANDOFF)}`, `writes paused (maintenance): ${fs.existsSync(MAINT)}`, `AI host config: ${fs.existsSync(path.join(BRIDGE, 'ai-node.json'))}`]; }
 
@@ -112,6 +126,7 @@ if (require.main === module) {
     if (cmd === 'pack') console.log(pack({ to, dir }).join('\n'));
     else if (cmd === 'switch') console.log(doSwitch(dry).join('\n'));
     else if (cmd === 'undo') console.log(undo().join('\n'));
+    else if (cmd === 'tools') console.log(tools().join('\n'));
     else if (cmd === 'status') console.log(status().join('\n'));
     else { console.error('Usage: node bridge/handoff.js pack [--to <ssh alias>] [--dir <server folder>] | switch [--dry-run] | undo | status'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }
