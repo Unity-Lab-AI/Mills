@@ -1970,6 +1970,33 @@ async function run() {
       `rail dms ${railSrc.indexOf("'srv dms'")} servers ${railSrc.indexOf('for (const s of G.data.servers)')}; channels groups ${/G\.data\.groups/.test(chanSrc)}`);
   }
 
+  // R149: the server's auto-deploy restarts the hub only for a really new main (production bug 2026-10-19: commits made
+  // on the server and not on Forgejo made it "deploy" the same commit every minute, and every AI host lost its line)
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-autodeploy-')), g = (cwd, ...a) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8' });
+    const bare = path.join(tmp, 'origin.git'), seed = path.join(tmp, 'seed'), app = path.join(tmp, 'app');
+    const ad = fs.readFileSync(path.join(MILLS, 'deploy', 'autodeploy.sh'), 'utf8');
+    let ahead = '?', fresh = '?', runnable = true;
+    try {
+      g(tmp, 'init', '-q', '--bare', '-b', 'main', bare); g(tmp, 'clone', '-q', bare, seed);
+      fs.mkdirSync(path.join(seed, 'bridge')); fs.mkdirSync(path.join(seed, 'deploy'));
+      fs.writeFileSync(path.join(seed, 'bridge', 'a.js'), '1;\n'); fs.writeFileSync(path.join(seed, 'versions.json'), '{ "project": "9.9.9" }\n'); fs.writeFileSync(path.join(seed, 'deploy', 'autodeploy.sh'), ad);
+      fs.writeFileSync(path.join(seed, '.gitignore'), 'bridge/.restart\n');
+      g(seed, 'add', '-A'); g(seed, 'commit', '-qm', 'one'); g(seed, 'push', '-q', 'origin', 'HEAD:main');
+      g(tmp, 'clone', '-q', '-b', 'main', bare, app);
+      fs.writeFileSync(path.join(app, 'bridge', 'b.js'), '2;\n'); g(app, 'add', '-A'); g(app, 'commit', '-qm', 'made on the server');
+      const run = () => spawnSync('sh', [path.join(app, 'deploy', 'autodeploy.sh'), app], { encoding: 'utf8' });
+      const r1 = run(); if (r1.error) runnable = false;
+      ahead = `${r1.status} restart ${fs.existsSync(path.join(app, 'bridge', '.restart'))}`;
+      g(app, 'reset', '-q', '--hard', 'origin/main');
+      fs.writeFileSync(path.join(seed, 'bridge', 'c.js'), '3;\n'); g(seed, 'add', '-A'); g(seed, 'commit', '-qm', 'new on forgejo'); g(seed, 'push', '-q', 'origin', 'HEAD:main');
+      const r2 = run(); fresh = `${r2.status} restart ${fs.existsSync(path.join(app, 'bridge', '.restart'))}`;
+    } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} }
+    check('R149', 'auto-deploy: a server checkout that is ahead of Forgejo main (commits made on the server) is left alone (no "deployed", no restart), while a main that really has something new still asks for one; it never restarts the hub every minute for the same commit',
+      /git merge-base --is-ancestor "\$REMOTE" "\$LOCAL" && exit 0/.test(ad) && (!runnable || (ahead === '0 restart false' && fresh === '0 restart true')),
+      `${runnable ? '' : 'sh not available, source check only; '}ahead → ${ahead}; new main → ${fresh}`);
+  }
+
   // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.
   const seedV = (await gq(U)).servers || [], seedS = seedV.find((s) => s.id === 'seedtest') || {}, millsS = seedV.find((s) => s.id === 'mills') || {};
   const seedCo = (seedS.roles || []).find((r) => r.builtin === 'coowner') || {};

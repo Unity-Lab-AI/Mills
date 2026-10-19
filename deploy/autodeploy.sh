@@ -2,7 +2,7 @@
 # VibeRoller auto-deploy: every push to main on Forgejo goes live on the server by itself, without a deploy key, a runner
 # or any secret. A systemd user timer (deploy/viberoller-autodeploy.timer, installed by deploy/setup-server.sh) runs this
 # every minute as the hub's account:
-#   fetch main · nothing new → done · else fast-forward the live checkout (never anything but a fast-forward: a checkout
+#   fetch main · nothing new (same commit, or already inside the checkout) → done · else fast-forward the live checkout (never anything but a fast-forward: a checkout
 #   someone changed by hand stops the deploy instead of being overwritten) · check every hub script parses · ask the hub
 #   for a graceful restart (bridge/.restart: same address, nobody signed out, it waits for any reply in progress).
 # It never touches the hub's data: accounts, chat, board, notes and pictures are gitignored, and a fast-forward never
@@ -17,6 +17,9 @@ cd "$APP"
 git fetch -q origin main || { say "fetch failed"; exit 1; }
 LOCAL=$(git rev-parse HEAD); REMOTE=$(git rev-parse origin/main)
 [ "$LOCAL" = "$REMOTE" ] && exit 0
+# origin/main already inside the checkout (commits made on the server that are not on Forgejo yet): nothing new to deploy.
+# Without this the hub was restarted every minute for nothing (production bug 2026-10-19: every AI host lost its line).
+git merge-base --is-ancestor "$REMOTE" "$LOCAL" && exit 0
 [ -z "$(git status --porcelain)" ] || { say "live checkout has uncommitted changes; not deploying $(echo "$REMOTE" | cut -c1-7)"; exit 1; }
 git merge -q --ff-only origin/main || { say "main moved in a way that is not a fast-forward; not deploying"; exit 1; }
 for f in bridge/*.js; do node --check "$f" || { say "node --check failed for $f after $(echo "$REMOTE" | cut -c1-7); the hub keeps running the old code until this is fixed"; exit 1; }; done

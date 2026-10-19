@@ -6,6 +6,17 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.1.1 — 2026-10-19
+
+### Fixed
+- **AI hosts no longer drop off every minute.** When the server's checkout held commits that were not on Forgejo yet, the
+  auto-deploy "deployed" the same commit every minute and restarted the hub each time, so every AI host (turned on with
+  the heart) lost its line with "hub answered 502". `deploy/autodeploy.sh` now restarts only when Forgejo's `main` really
+  has something new. The 3.1.0 commits that were made on the server are now on every remote. Check R149.
+
+### Changed
+- No module versions moved (deploy script and regression runner only).
+
 ## 3.1.0 — 2026-10-19
 
 ### Added
