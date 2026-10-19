@@ -1,6 +1,6 @@
 {
   "_": "Copy to bridge/ai-node.json (gitignored) on the machine that lends its AI engines to the hub. The token is the same secret the hub has under aiNodes.<name> in its bridge/config.local.json.",
-  "hub": "https://viberoller.git.unityailab.com",
+  "hub": "https://portal.git.unityailab.com",
   "name": "gee-pc",
   "token": "<24+ random characters, the same as on the hub>",
   "engines": {

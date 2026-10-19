@@ -105,6 +105,13 @@ header b { font-weight: 750; letter-spacing: .01em; }
 #menu .choices button.tile:hover .ic { background: var(--grad-accent); color: var(--on-accent); }
 #menu .badge { background: var(--grad-accent); color: var(--on-accent); box-shadow: 0 2px 10px var(--accent-glow); top: .5rem; right: .5rem; }
 .menuFoot { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: center; }
+/* the Download row sits above Settings / Sign out: Vibe Roller Desktop + Vibe Roller AI Host (Windows + Linux) */
+.menuFoot.menuDl { margin-bottom: -.3rem; }
+.menuFoot.menuDl button { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--accent); background: var(--accent-soft); }
+.menuFoot.menuDl button:hover { background: var(--grad-accent); color: var(--on-accent); border-color: transparent; }
+#dlBody .setSection + .setSection { margin-top: .7rem; }
+#dlBody .row { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
+#appUser button.tiny { flex: none; }
 .whoChip { background: var(--surface-2); border-color: var(--hairline); box-shadow: var(--sh-1); }
 
 /* ── dialogs: blurred backdrop, a lifted panel, a soft entrance ── */

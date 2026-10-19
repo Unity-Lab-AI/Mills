@@ -2,8 +2,9 @@
 rem VibeRoller: pack this hub's DATA for the move to the server, exactly as it is (accounts with their password hashes
 rem and device locks, chat, keys, board, notes, pictures, saved sessions, settings). Nothing is reset or changed, and
 rem no code is included. Run on the host PC from the VibeRoller folder, WITH THE HUB STOPPED (close its window first):
-rem   deploy\pack-data.cmd      → %USERPROFILE%\Desktop\viberoller-data-<date>.tar.gz  (copy it to the server, then
-rem                               there: sudo sh deploy/restore-data.sh <that file>)
+rem   deploy\pack-data.cmd            → %USERPROFILE%\Desktop\viberoller-data-<date>.tar.gz
+rem   deploy\pack-data.cmd ovh        → the same, then copied to the server with scp (ovh = your SSH alias for it) into
+rem                                     /srv/apps/VibeRoller/, ready for: sh deploy/restore-data.sh <that file>
 setlocal
 cd /d "%~dp0.."
 curl -s -m 2 http://127.0.0.1:7777/api/status >nul 2>nul && (echo The hub is still running here. Stop it first ^(close its window^), then run this again. & pause & exit /b 1)
@@ -19,6 +20,11 @@ if errorlevel 1 (echo Packing failed. & pause & exit /b 1)
 echo Packed:!LIST!
 echo.
 echo → %OUT%
-echo Copy that file to the server, then there: sudo sh deploy/restore-data.sh viberoller-data-%STAMP%.tar.gz
+if not "%~1"=="" (
+  echo Copying to %~1:/srv/apps/VibeRoller/ ...
+  scp "%OUT%" "%~1:/srv/apps/VibeRoller/" && (echo Copied. On the server: sh /srv/apps/VibeRoller/app/deploy/restore-data.sh /srv/apps/VibeRoller/viberoller-data-%STAMP%.tar.gz) || echo The copy failed; copy the file to the server by hand.
+) else (
+  echo Copy that file to the server ^(e.g. scp "%OUT%" ovh:/srv/apps/VibeRoller/^), then there: sh deploy/restore-data.sh viberoller-data-%STAMP%.tar.gz
+)
 echo (bridge\config.json, bridge\tunnel.json and the code are not included on purpose.)
 pause

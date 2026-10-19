@@ -19,6 +19,7 @@ const zlib = require('zlib');
 const { spawn } = require('child_process');
 const { ROOT, MILLS_DIR, readJson, writeJson, loadProfile, allProfiles, hashPassword } = require('./common');
 const worktree = require('./worktree');
+const downloads = require('./downloads'); // the Download panel: Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux
 
 const WEB_DIR = path.join(MILLS_DIR, 'web');
 const HUB = loadProfile('');          // hub-wide config: port, origins, tools, models, tunnel
@@ -39,13 +40,18 @@ const newPassword = () => crypto.randomBytes(15).toString('base64url'); // 20 ch
 
 // ---------- accounts ----------
 const accounts = new Map(); // username -> account
-// Where an account's Work runs happen: "own" = its git worktree of VibeRoller (<worktree root>/<username>, "Mills-worktrees" next to the checkout on the first host,
-// branch work/<username>) so people changing VibeRoller at the same time never overlap; "shared" = the
-// host's VibeRoller folder itself, which everyone shares.
-const workspaceOf = (acct) => (acct.state.workspace === 'shared' ? 'shared' : 'own');
-function workDir(acct) {
-  if (workspaceOf(acct) === 'shared') return { dir: MILLS_DIR, branch: '' };
-  return worktree.ensure(acct.username);
+// Where an account's Work runs happen: in that person's own git worktree (branch work/<username>) of the project they
+// picked in Work's header (bridge/worktree.js): VibeRoller itself by default, or any project in the shared projects
+// area (config projectsRoot; /srv/apps/sharedwork on the lab server), where anyone can start a new project or pull in
+// a repo. People changing the same project at the same time never overlap. The old "shared folder" choice (the hub's
+// own checkout) is gone: a stored "shared" simply means VibeRoller.
+const projectOf = (acct) => { try { return worktree.project(acct.state.project || undefined).name; } catch { return worktree.HUB_PROJECT; } };
+const workDir = (acct) => worktree.ensure(acct.username, projectOf(acct));
+const WT_SCRIPT = path.join(ROOT, 'worktree.js').replace(/\\/g, '/'); // what a Work run in another project types to reach the worktree tool
+let projectsCache = { at: 0, list: [] };
+function projectList() { // listing walks the projects root and asks git; keep it for a few seconds
+  if (Date.now() - projectsCache.at > 5000) { try { projectsCache = { at: Date.now(), list: worktree.listProjects() }; } catch { projectsCache = { at: Date.now(), list: [] }; } }
+  return projectsCache.list;
 }
 // semver (hub law 14): the project's and every module's version, read once at start (a restart picks up a new one)
 const VERSIONS = (() => { try { const v = JSON.parse(fs.readFileSync(path.join(MILLS_DIR, 'versions.json'), 'utf8')); return { project: String(v.project || '0.0.0'), modules: v.modules || {} }; } catch { return { project: '0.0.0', modules: {} }; } })();
@@ -68,13 +74,17 @@ const AI_OFF_TEXT = "The host's AI is switched off right now (its host paused it
 const hubLaws = () => { try { return fs.readFileSync(path.join(MILLS_DIR, 'CLAUDE.md'), 'utf8'); } catch { return ''; } };
 function systemPrompt(acct, wd) {
   const name = acct.display;
-  const where = wd.branch
+  const where = wd.hub
     ? [`For work on the VibeRoller project itself you are in ${name}'s OWN git worktree: ${wd.dir}, branch ${wd.branch}.`,
        `Commit only on ${wd.branch}; never check out other branches here and never touch other people's worktrees in ${worktree.WT_ROOT}.`,
        `Before committing, run the regression suite from the worktree: node bridge/test/regress.js --no-prod (it must report 0 failed).`,
        `Only when ${name} asks you to merge into develop, run from the worktree: node bridge/worktree.js commit ${acct.username} "<message>" then node bridge/worktree.js merge ${acct.username}`,
-       `(on a conflict run "node bridge/worktree.js sync ${acct.username}", resolve, commit, merge again). Going live (develop → main in the host folder + hub restart) only when asked.`]
-    : [`You are in the SHARED VibeRoller folder (${MILLS_DIR}), the running hub's own checkout that everyone shares: follow Git Flow (feature/* off develop) and leave no uncommitted changes behind.`];
+       `(on a conflict run "node bridge/worktree.js sync ${acct.username}", resolve, commit, merge again). Going live (develop → main in the host folder + hub restart) only when asked.`,
+       `Other projects live in the shared projects area ${worktree.PROJECTS_ROOT} (one folder per project, _repo = its main checkout, one worktree per person); ${name} switches projects in Work's header. "node bridge/worktree.js projects" lists them.`]
+    : [`You are working on the project "${wd.project}" (not on VibeRoller) in ${name}'s OWN git worktree: ${wd.dir}, branch ${wd.branch}. The project's main checkout is ${wd.repo} (integration branch ${wd.main}); other people's worktrees sit next to yours in ${wd.root}.`,
+       `Commit only on ${wd.branch}; never check out other branches here and never touch the main checkout or other people's worktrees.`,
+       `Only when ${name} asks you to merge, run: node ${WT_SCRIPT} --project ${wd.project} commit ${acct.username} "<message>" then node ${WT_SCRIPT} --project ${wd.project} merge ${acct.username}`,
+       `(that merges into ${wd.main} and pushes it when the project has a remote; on a conflict run "node ${WT_SCRIPT} --project ${wd.project} sync ${acct.username}", resolve, commit, merge again). The hub's own tooling (regression suite, live) is for VibeRoller only.`];
   return [
     `You are talking with ${name} (username "${acct.username}"${acct.admin ? ', admin' : ''}, Unity AI Lab engineer) through the VibeRoller web interface, running on the host's Claude account.`,
     `Every message in this conversation comes from ${name}; address them by name and keep their work separate from everyone else's.`,
@@ -165,7 +175,9 @@ function runClaude(acct, message, fresh, res, context) {
     '--permission-mode', config.permissionMode,
     '--mcp-config', acct.files.MCP_RUNTIME, '--strict-mcp-config',
     '--append-system-prompt', systemPrompt(acct, wd)];
-  if (config.allowedTools.length) args.push('--allowedTools', config.allowedTools.join(','));
+  // in another project's worktree "bridge/worktree.js" is not there: the run may call the hub's copy by its full path
+  const tools = [...config.allowedTools, ...(wd.hub ? [] : [`Bash(node ${WT_SCRIPT}:*)`])];
+  if (tools.length) args.push('--allowedTools', tools.join(','));
   const model = effectiveModel(acct); // read per run, so a dropdown change lands on the very next message
   if (model) args.push('--model', model);
   if (!fresh && acct.state.claudeSessionId) args.push('--resume', acct.state.claudeSessionId);
@@ -679,9 +691,11 @@ const server = http.createServer(async (req, res) => {
     if (!p.startsWith('/api/')) {
       const file = path.join(WEB_DIR, p === '/' ? 'index.html' : path.normalize(p));
       if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, { error: 'Not found' });
-      if (PUBLIC_URL && path.basename(file) === 'index.html') { // server mode: the page learns its hub's fixed address
+      if (path.basename(file) === 'index.html') { // the page learns that the hub itself serves it (so it talks to this very origin, whatever name reached it) and, in server mode, the hub's fixed address
         res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' });
-        return res.end(fs.readFileSync(file, 'utf8').split('__MILLS_HUB_HOST__').join(PUBLIC_URL));
+        let html = fs.readFileSync(file, 'utf8').split('__MILLS_SERVED__').join('hub');
+        if (PUBLIC_URL) html = html.split('__MILLS_HUB_HOST__').join(PUBLIC_URL);
+        return res.end(html);
       }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
       return fs.createReadStream(file).pipe(res);
@@ -746,9 +760,10 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
-        models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, workspace: workspaceOf(acct), prefs: acct.state.prefs || {}, share: shares.convOf(acct.username),
+        models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, project: projectOf(acct), projects: projectList(), prefs: acct.state.prefs || {}, share: shares.convOf(acct.username),
         provider: acct.state.provider || 'host', providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules, aiHost: aiHostOn(), aiNodes: aiNodes.status() });
     }
+    if (p.startsWith('/api/downloads') && downloads.route(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`)) return; // the Download panel's packages
     // ----- AI providers: everyone manages their own; the host's Claude is always there -----
     if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });
     if (p === '/api/providers/add' && req.method === 'POST') { try { return send(res, 200, { provider: providers.add(acct.username, await readBody(req)), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
@@ -807,15 +822,27 @@ const server = http.createServer(async (req, res) => {
       saveState(acct);
       return send(res, 200, { model: acct.state.model || '', provider: acct.state.provider || 'host', effective: effectiveModel(acct) });
     }
+    // ----- projects (the shared projects area) and which one this person works on -----
+    if (p === '/api/projects' && req.method === 'GET') return send(res, 200, { projects: projectList(), project: projectOf(acct) });
+    if (p === '/api/projects' && req.method === 'POST') { // { name } = start a new project; { url, name? } = pull in a repo
+      const { name, url } = await readBody(req);
+      try {
+        const pj = url ? worktree.clone(url, name, acct.username, forgejo.workEnv(acct.username)) : worktree.create(name, acct.username);
+        projectsCache.at = 0;
+        return send(res, 200, { project: pj.name, projects: projectList() });
+      } catch (e) { return send(res, /exists already/.test(e.message) ? 409 : 400, { error: e.message }); }
+    }
     if (p === '/api/workspace' && req.method === 'POST') {
-      const { workspace } = await readBody(req);
-      if (workspace !== 'own' && workspace !== 'shared') return send(res, 400, { error: 'Unknown workspace.' });
+      const body = await readBody(req);
+      const want = body.project || (body.workspace ? worktree.HUB_PROJECT : ''); // older pages sent workspace: own | shared; both mean VibeRoller now
+      let pj; try { pj = worktree.project(want || undefined); } catch (e) { return send(res, 400, { error: e.message }); }
       if (acct.running) return send(res, 409, { error: 'Wait for the current reply (or stop it) before switching.' });
-      let dir = MILLS_DIR, branch = '';
-      if (workspace === 'own') { try { ({ dir, branch } = worktree.ensure(acct.username)); } catch (e) { return send(res, 500, { error: 'Could not prepare your worktree: ' + e.message }); } }
-      if (workspaceOf(acct) !== workspace) delete acct.state.claudeSessionId; // a Claude session belongs to one folder
-      acct.state.workspace = workspace; saveState(acct);
-      return send(res, 200, { workspace, dir, branch });
+      let dir, branch;
+      try { ({ dir, branch } = worktree.ensure(acct.username, pj.name)); } catch (e) { return send(res, 500, { error: 'Could not prepare your worktree: ' + e.message }); }
+      if (projectOf(acct) !== pj.name) delete acct.state.claudeSessionId; // a Claude session belongs to one folder
+      if (pj.hub) delete acct.state.project; else acct.state.project = pj.name;
+      delete acct.state.workspace; saveState(acct);
+      return send(res, 200, { project: pj.name, dir, branch });
     }
     if (p === '/api/chat' && req.method === 'POST') {
       if (acct.running) return send(res, 409, { error: 'Claude is already working. Stop it first.' });

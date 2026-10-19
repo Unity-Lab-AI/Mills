@@ -6,6 +6,59 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 2.0.0 — 2026-10-19
+
+The hub's home is the lab server. This release makes the server layout real (the team's shared accounts, no root), turns
+Work into a projects area, gives every computer a way to become an AI host from boot, and puts both applications behind a
+Download button. MAJOR because one thing stops working the old way: Work's "shared folder" choice is gone (see Removed).
+
+### Added
+- **Projects (the sharedwork area).** Work's header now picks a **project** instead of "my worktree / shared folder". Every
+  project is worked on in your own worktree of it (branch `work/<you>`), so people never overlap. **＋ New project…** starts
+  an empty repo in the team's shared projects area (`projectsRoot`; `/srv/apps/sharedwork` on the server), **⤓ Pull in a
+  repo…** clones an existing one by its https:// or ssh address (your saved Forgejo token signs you in; local paths and
+  other git helpers are refused). Layout: `<projects root>/<project>/_repo` (main checkout, integration branch checked out)
+  + one worktree per person. VibeRoller itself is the default project. Claude is told which project and worktree it is in,
+  and merges with `worktree.js --project <name>` (commit, merge into the integration branch and push, sync); the hub's own
+  tooling stays VibeRoller-only. `node bridge/worktree.js projects | new <name> | clone <url> [name]`, and every command
+  takes `--project`. Checks R140, R141.
+- **The private front door.** `deploy/nginx-portal.conf`: `portal.unityailab.com` (and `portal.git.unityailab.com`, which the
+  lab's wildcard certificate already covers) shows the hub's sign-in only to connections that come from the server itself
+  (an SSH tunnel used as a SOCKS proxy, a VPN that ends there); everyone else gets a real 404 page, *These are not the
+  droids you are looking for.* The page the hub serves now always talks to the hub that served it, whatever name reached it.
+- **VibeRollerAIHost, the boot-time service.** `bridge/host-tools/AiHostService.cs` is a Windows service that runs this PC's
+  AI node from boot (before anyone signs in), restarts it, logs to `ai-node.log`; `install-ai-host-service.cmd` registers it
+  (asks for administrator rights once) and lets signed-in users start and stop it; `build.cmd` builds it with the heart and
+  the knife and offers the install. The heart (`start-viberoller-ai-host.exe`) starts the service, the knife
+  (`stop-viberoller-ai-host.exe`) stops it; without the service they fall back to the pause switch as before. Linux:
+  `viberoller-ai-host.service` + `install-ai-host-service.sh`, and the heart / knife scripts drive it. Check R136 (extended).
+- **Download.** A Download button above Settings in the menu (and a download icon in the app's user panel) opens the two
+  applications for Windows and Linux, built by the hub from its own code so they point back at this hub
+  (`bridge/downloads.js` 1.0.0, a dependency-free zip writer): **Vibe Roller Desktop** (VibeRoller Chat in its own window:
+  the browser's own install card, plus a launcher for Chrome / Edge / Brave with a Start-menu / application-menu entry) and
+  **Vibe Roller AI Host** (the node, the service, the heart and the knife, a README with the steps, an example config that
+  already names this hub). Signed-in people only. Check R142.
+- **The deploy kit for the real server layout** (`deploy/README.md`): `setup-server.sh` now runs as the hub's account without
+  root (user-local Node 22 + Claude Code, the live checkout, settings with a fresh node secret, the systemd user services,
+  the nginx files in `deploy-ready/`, the printed root steps); `autodeploy.sh` on a user timer fast-forwards every push to
+  `main` within a minute (syntax check, graceful restart), so no deploy key, runner or secret is needed; `pack-data … ovh`
+  copies the archive over by scp; `restore-data.sh` runs as the account and shares the files with the group. Check R139.
+
+### Changed
+- `bridge/config.local.json` merges nested objects one level deep, so `assistant.via` can be set alone (bridge/common.js 1.2.0).
+- `/api/check` answers `project` + `projects` (the list) instead of `workspace`; `/api/workspace` takes `{ project }` (an old
+  `{ workspace }` still lands in VibeRoller); new `/api/projects` (GET list, POST new / pull in) and `/api/downloads`.
+- Modules: bridge/server.js 2.0.0, bridge/worktree.js 2.0.0, bridge/common.js 1.2.0, bridge/downloads.js 1.0.0 (new),
+  web/index.html 1.2.0, web/app.js 1.1.0, web/polish.css 1.0.2. The Windows / Linux app (VibeRoller Chat) gains the Download
+  entry in its user panel; its shell list is unchanged (the page, app.js and polish.css load network-first).
+- README: the address is the portal; the Work section describes projects; the host section describes the VibeRollerAIHost
+  service. `.forgejo/workflows/deploy.yml` is the optional path now.
+
+### Removed
+- Work's **"shared folder"** choice (Claude working in the hub's own checkout). Everyone works in their own worktree of a
+  project; a stored "shared" choice simply means VibeRoller. The old `start-viberoller-host.exe` / `stop-viberoller-host.exe`
+  names are replaced by `start-viberoller-ai-host.exe` / `stop-viberoller-ai-host.exe` (the build removes the old ones).
+
 ## 1.5.1 — 2026-10-19
 
 ### Changed

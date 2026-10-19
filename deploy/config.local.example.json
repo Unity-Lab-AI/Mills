@@ -1,10 +1,13 @@
 {
-  "_": "Copy to bridge/config.local.json on the server (gitignored). It is laid over bridge/config.json key by key.",
+  "_": "Copy to bridge/config.local.json on the server (gitignored). It is laid over bridge/config.json key by key (nested objects one level deep). deploy/setup-server.sh writes it from this file with a fresh node secret.",
   "port": 7777,
   "tunnel": false,
-  "publicUrl": "https://viberoller.git.unityailab.com",
+  "publicUrl": "https://portal.unityailab.com",
   "behindProxy": true,
-  "allowedOrigins": ["https://unity-lab-ai.github.io"],
-  "worktreeRoot": "/srv/viberoller/worktrees",
-  "forgejoUrl": "https://git.unityailab.com"
+  "allowedOrigins": ["https://portal.git.unityailab.com", "https://viberoller.git.unityailab.com", "https://unity-lab-ai.github.io"],
+  "worktreeRoot": "/srv/apps/sharedwork/VibeRoller",
+  "projectsRoot": "/srv/apps/sharedwork",
+  "forgejoUrl": "https://git.unityailab.com",
+  "aiNodes": { "gee-pc": "__NODE_SECRET__" },
+  "assistant": { "via": "node" }
 }

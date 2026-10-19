@@ -2,7 +2,8 @@
 # VibeRoller: pack this hub's DATA for the move to the server, exactly as it is (accounts with their password hashes
 # and device locks, chat, keys, board, notes, pictures, saved sessions, settings). Nothing is reset or changed, and no
 # code is included. Run on the host from the VibeRoller folder, WITH THE HUB STOPPED:
-#   sh deploy/pack-data.sh     → ~/viberoller-data-<date>.tar.gz   (then on the server: sudo sh deploy/restore-data.sh <file>)
+#   sh deploy/pack-data.sh          → ~/viberoller-data-<date>.tar.gz
+#   sh deploy/pack-data.sh ovh      → the same, then copied with scp to <alias>:/srv/apps/VibeRoller/ for restore-data.sh
 set -eu
 cd "$(dirname "$0")/.."
 PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' bridge/config.local.json bridge/config.json 2>/dev/null | head -n 1); PORT=${PORT:-7777}
@@ -17,5 +18,9 @@ done
 tar -czf "$OUT" --exclude='*.tmp' --exclude='*.log' $LIST
 echo "Packed:$LIST"
 echo "→ $OUT"
-echo "Copy that file to the server, then there: sudo sh deploy/restore-data.sh $(basename "$OUT")"
+if [ -n "${1:-}" ]; then
+  scp "$OUT" "$1:/srv/apps/VibeRoller/" && echo "Copied. On the server: sh /srv/apps/VibeRoller/app/deploy/restore-data.sh /srv/apps/VibeRoller/$(basename "$OUT")"
+else
+  echo "Copy that file to the server (e.g. scp \"$OUT\" ovh:/srv/apps/VibeRoller/), then there: sh deploy/restore-data.sh $(basename "$OUT")"
+fi
 echo "(bridge/config.json, bridge/tunnel.json and the code are not included on purpose.)"

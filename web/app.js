@@ -6,8 +6,8 @@
 const APP_MODE = new URLSearchParams(location.search).get('app') === '1' || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches && new URLSearchParams(location.search).has('app'));
 if (APP_MODE) document.body.classList.add('appMode');
 let installPrompt = null; // Chrome / Edge hand us the install prompt once the page qualifies
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; const b = $('appInstall'); if (b) b.hidden = false; });
-window.addEventListener('appinstalled', () => { installPrompt = null; const b = $('appInstall'); if (b) b.hidden = true; });
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; for (const b of document.querySelectorAll('.appInstall')) b.hidden = false; });
+window.addEventListener('appinstalled', () => { installPrompt = null; for (const b of document.querySelectorAll('.appInstall')) b.hidden = true; });
 // The service worker makes the install possible and keeps the app shell opening even when the site is
 // slow; it never caches hub answers (everything under /api, /v1 and the hub's own address goes to the network).
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
@@ -23,16 +23,16 @@ function appOs() {
   return 'your computer';
 }
 const appUrl = () => location.origin + location.pathname.replace(/[^/]*$/, '') + 'index.html?app=1';
-function renderAppCard() { // Settings → "VibeRoller Chat app"
-  const box = $('appBox'); if (!box) return;
+function renderAppCard(target) { // Settings → "VibeRoller Chat app", and the Download panel's Vibe Roller Desktop card
+  const box = target || $('appBox'); if (!box) return;
   box.textContent = '';
   const os = appOs(), chromium = /chrome|edg|chromium|brave/i.test(navigator.userAgent) && !/firefox/i.test(navigator.userAgent);
   const line = (...kids) => { const d = document.createElement('div'); d.className = 'row'; d.append(...kids); box.append(d); return d; };
   const p = document.createElement('div');
   p.textContent = `Detected: ${os}. VibeRoller Chat installs as its own app (own window, own icon, launcher entry) on Windows and Linux from Chrome, Edge or Brave; it is the chat side of VibeRoller only (servers, channels, groups, private messages, calls, Unity), always signed in with your VibeRoller account.`;
   box.append(p);
-  const inst = document.createElement('button'); inst.type = 'button'; inst.id = 'appInstall'; inst.textContent = 'Install VibeRoller Chat for ' + os; inst.hidden = !installPrompt;
-  inst.onclick = async () => { if (!installPrompt) return; const ev = installPrompt; installPrompt = null; try { await ev.prompt(); } catch {} renderAppCard(); };
+  const inst = document.createElement('button'); inst.type = 'button'; inst.className = 'appInstall'; inst.textContent = 'Install VibeRoller Chat for ' + os; inst.hidden = !installPrompt;
+  inst.onclick = async () => { if (!installPrompt) return; const ev = installPrompt; installPrompt = null; try { await ev.prompt(); } catch {} renderAppCard(box); };
   const open = document.createElement('button'); open.type = 'button'; open.className = 'ghost'; open.textContent = 'Open VibeRoller Chat (app view)';
   open.onclick = () => { window.open(appUrl(), '_blank', 'noopener'); };
   const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'ghost'; copy.textContent = 'Copy app link';
@@ -67,7 +67,8 @@ function renderAppUser() {
   const n = document.createElement('b'); n.textContent = nickOf(me.username); n.style.color = colorOf(me.username);
   const s = document.createElement('small'); s.textContent = mine.status || '@' + me.username;
   who.append(n, s);
+  const dl = document.createElement('button'); dl.type = 'button'; dl.className = 'ghost tiny'; dl.title = 'Download: Vibe Roller Desktop and Vibe Roller AI Host (Windows + Linux)'; dl.append(ic('download')); dl.onclick = () => openDownloads();
   const set = document.createElement('button'); set.type = 'button'; set.className = 'ghost tiny'; set.title = 'Settings: profile, picture, app settings, theme'; set.append(ic('gear')); set.onclick = () => openSettings();
   const out = document.createElement('button'); out.type = 'button'; out.className = 'ghost tiny'; out.title = 'Sign out'; out.append(ic('logout')); out.onclick = () => signOut();
-  box.append(av, who, set, out);
+  box.append(av, who, dl, set, out);
 }
