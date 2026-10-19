@@ -24,9 +24,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
-const VERSION = '2.0.0';
+const VERSION = '3.1.0'; // this file's module version (versions.json); the hub shows it under My AI hosts
+const CAPS = ['relay', 'update']; // told to the hub in hello: login relays, self-update (older hosts send none)
+const SELFTEST = process.argv.includes('--selftest'); // load everything, then exit 0: an update is tried this way first
 const CFG_FILE = process.argv.includes('--config') ? process.argv[process.argv.indexOf('--config') + 1] : path.join(__dirname, 'ai-node.json');
 const PAUSE_FILE = path.join(__dirname, 'ai-host.off');
 const LOCK_FILE = path.join(__dirname, 'ai-node.lock');
@@ -42,6 +44,7 @@ if (WORK.hubRepo) process.env.VIBEROLLER_HUB_REPO = path.resolve(String(WORK.hub
 const headers = { 'X-VR-Host': ID, 'X-VR-Host-Token': TOKEN, 'X-VR-Node': ID, 'X-VR-Node-Token': TOKEN };
 // one host per machine: a lock file with the running pid (exit code 2 = already running, like the hub's run.js)
 (function singleInstance() {
+  if (SELFTEST) return;
   try {
     const pid = Number(fs.readFileSync(LOCK_FILE, 'utf8').trim());
     if (pid && pid !== process.pid) { process.kill(pid, 0); console.log(`[ai-host] already running (pid ${pid}); nothing to do.`); process.exit(2); }
@@ -68,7 +71,7 @@ function open(enc) {
 async function hello() {
   const nonce = crypto.randomBytes(16).toString('hex');
   const providers = PROVIDERS.map((p) => ({ id: p.id, kind: relayKind(p), label: p.label, models: p.models, allowedUsers: p.allowedUsers, max5h: p.max5h, max7d: p.max7d }));
-  const r = await fetch(HUB + '/node/hello', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ nonce, user: USER, providers, engines: Object.keys(ENGINES), pc: !!PC_FOLDER, version: VERSION, os: process.platform }), signal: AbortSignal.timeout(20000) });
+  const r = await fetch(HUB + '/node/hello', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ nonce, user: USER, providers, engines: Object.keys(ENGINES), pc: !!PC_FOLDER, version: VERSION, os: process.platform, caps: CAPS }), signal: AbortSignal.timeout(20000) });
   if (r.status === 401) throw Object.assign(new Error('the hub does not know this host (id / token): check ai-node.json, or make the host again in Settings → My AI hosts'), { auth: true });
   if (!r.ok) throw new Error('hello answered ' + r.status);
   const j = await r.json();
@@ -77,6 +80,8 @@ async function hello() {
   nickname = j.nickname || nickname; pollMs = Number(j.pollMs) || pollMs;
   if (cfg.nickname !== nickname) { try { cfg.nickname = nickname; fs.writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2) + '\n'); if (typeof ownWrite === 'function') ownWrite(); } catch {} }
   log(`connected to ${HUB} as "${nickname}"${USER ? ' (' + USER + ')' : ''}: ${providers.length} provider(s) [${providers.map((p) => p.id).join(', ')}], engines ${Object.keys(ENGINES).join(', ') || 'none'}${PC_FOLDER ? ', computer access to ' + PC_FOLDER : ''}, key ${kid}`);
+  if (typeof updateConfirmed === 'function') updateConfirmed(); // reaching the hub is what makes an update good
+  if (j.update && j.update.commit && typeof checkUpdate === 'function') setTimeout(checkUpdate, 5000);
 }
 
 // ---------- usage caps: this host's own view of its Claude windows, from the events of its runs ----------
@@ -277,6 +282,104 @@ const stamp = () => WATCH.map((f) => { try { return fs.statSync(f).mtimeMs; } ca
 let started = stamp();
 const ownWrite = () => { started = stamp(); }; // our own nickname write into the config is not a change to restart on
 setInterval(() => { if (stamp() !== started && !runs.size) { log('new code or config here: restarting on it'); process.exit(3); } }, 20000).unref();
+
+// ---------- updates from the hub (on by default; "autoUpdate": false in ai-node.json switches them off) ----------
+// The hub hands out the files a host runs, as it runs them itself, in a manifest signed with THIS host's secret (HMAC),
+// so only the hub that knows our token can give us code. Checked after every hello and every 10 minutes, and acted on
+// only between answers: the changed files are downloaded and checked against the manifest's sha256, the new version is
+// started once on its own (--selftest: it must load), then swapped in with the old files kept in .update-backup, and we
+// restart on it. A host that runs from a git checkout (a hub folder handed off to hosting, like Gee's PC) fast-forwards
+// the checkout to the hub's commit instead (only when the checkout is clean). The first starts after an update are a
+// trial: a version that has not reached the hub after 3 starts is put back and skipped from then on.
+const AUTO_UPDATE = cfg.autoUpdate !== false;
+const UPD = { trial: path.join(__dirname, '.update-trial.json'), bad: path.join(__dirname, '.update-bad'), backup: path.join(__dirname, '.update-backup'), stage: path.join(__dirname, '.update-staging') };
+const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
+const gitHere = (...a) => require('child_process').execFileSync('git', a, { cwd: __dirname, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).trim();
+const IN_GIT = (() => { try { return gitHere('rev-parse', '--is-inside-work-tree') === 'true'; } catch { return false; } })();
+(function trialStart() {
+  if (SELFTEST) return;
+  let t; try { t = JSON.parse(fs.readFileSync(UPD.trial, 'utf8')); } catch { return; }
+  t.starts = (t.starts || 0) + 1;
+  if (t.starts <= 3) { fs.writeFileSync(UPD.trial, JSON.stringify(t)); return; }
+  log(`the update to ${t.to} has not reached the hub in 3 starts: going back to ${t.from}`);
+  try {
+    if (t.git) gitHere('reset', '-q', '--hard', t.from);
+    else for (const f of fs.readdirSync(UPD.backup)) fs.copyFileSync(path.join(UPD.backup, f), path.join(__dirname, f));
+    fs.writeFileSync(UPD.bad, String(t.to));
+  } catch (e) { log('could not go back:', e.message); }
+  fs.rmSync(UPD.trial, { force: true });
+  process.exit(3); // run.js / the service start the old version again
+})();
+function updateConfirmed() {
+  if (!fs.existsSync(UPD.trial)) return;
+  let t = {}; try { t = JSON.parse(fs.readFileSync(UPD.trial, 'utf8')); } catch {}
+  fs.rmSync(UPD.trial, { force: true }); fs.rmSync(UPD.backup, { recursive: true, force: true });
+  log(`update to ${t.to || 'the new version'} confirmed: it reached the hub`);
+}
+// the new version must at least load (every file it requires, its config): run it once with --selftest
+function selftest(dir) {
+  const r = spawnSync(process.execPath, [path.join(dir, 'ai-node.js'), '--selftest', '--config', CFG_FILE], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+  if (r.status !== 0) throw new Error('the new version does not start: ' + String(r.stderr || r.stdout || (r.error && r.error.message) || '').trim().split('\n').slice(-2).join(' ').slice(0, 300));
+}
+let updating = false;
+async function checkUpdate() {
+  if (!AUTO_UPDATE || SELFTEST || updating || runs.size || !key || fs.existsSync(UPD.trial)) return;
+  updating = true;
+  try {
+    const r = await fetch(HUB + '/node/update', { headers, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return; // an older hub hands out no updates
+    const m = await r.json(), body = JSON.stringify({ version: m.version, commit: m.commit, files: m.files });
+    const want = Buffer.from(crypto.createHmac('sha256', TOKEN).update(body).digest('hex')), got = Buffer.from(String(m.sig || ''));
+    if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) { log('an update manifest not signed by our hub: ignored'); return; }
+    let bad = ''; try { bad = fs.readFileSync(UPD.bad, 'utf8').trim(); } catch {}
+    if (bad && (bad === m.commit || bad === m.version)) return; // that one was tried and put back
+    const files = (Array.isArray(m.files) ? m.files : []).filter((f) => f && /^[a-z0-9-]+\.js$/.test(f.name) && /^[0-9a-f]{64}$/.test(f.sha256));
+    if (!files.some((f) => f.name === 'ai-node.js')) return;
+    const changed = files.filter((f) => { try { return sha256(fs.readFileSync(path.join(__dirname, f.name))) !== f.sha256; } catch { return true; } });
+    if (!changed.length) return;
+    fs.rmSync(UPD.stage, { recursive: true, force: true }); fs.mkdirSync(UPD.stage, { recursive: true });
+    if (IN_GIT) return gitUpdate(m, files);
+    for (const f of files) {
+      if (!changed.includes(f)) { fs.copyFileSync(path.join(__dirname, f.name), path.join(UPD.stage, f.name)); continue; }
+      const d = await fetch(HUB + '/node/update/file/' + f.name, { headers, signal: AbortSignal.timeout(120000) });
+      const b = Buffer.from(await d.arrayBuffer());
+      if (!d.ok || sha256(b) !== f.sha256) throw new Error(`${f.name} did not match the signed manifest`);
+      fs.writeFileSync(path.join(UPD.stage, f.name), b);
+    }
+    selftest(UPD.stage);
+    if (runs.size) return; // a run started meanwhile: next time
+    fs.rmSync(UPD.backup, { recursive: true, force: true }); fs.mkdirSync(UPD.backup, { recursive: true });
+    for (const f of changed) { try { fs.copyFileSync(path.join(__dirname, f.name), path.join(UPD.backup, f.name)); } catch {} }
+    fs.writeFileSync(UPD.trial, JSON.stringify({ from: VERSION, to: m.version || m.commit.slice(0, 7), starts: 0 }));
+    for (const f of changed) fs.copyFileSync(path.join(UPD.stage, f.name), path.join(__dirname, f.name));
+    log(`updated from the hub to ${m.version} (${changed.map((f) => f.name).join(', ')}): restarting on it`);
+    process.exit(3);
+  } catch (e) { log('update skipped:', e.message); }
+  finally { updating = false; try { fs.rmSync(UPD.stage, { recursive: true, force: true }); } catch {} }
+}
+// a host running from a git checkout: fast-forward it to the hub's commit (fetching first), only when it is clean
+function gitUpdate(m, files) {
+  if (!/^[0-9a-f]{40}$/.test(String(m.commit || ''))) return;
+  if (gitHere('status', '--porcelain', '--untracked-files=no')) { log(`this checkout has changes of its own, so it is not updated (the hub runs ${m.version})`); return; }
+  const from = gitHere('rev-parse', 'HEAD');
+  if (from === m.commit) return;
+  try { gitHere('cat-file', '-e', m.commit + '^{commit}'); } catch { try { gitHere('fetch', '-q', '--all'); } catch (e) { log('update: git fetch failed:', String(e.stderr || e.message).trim().split('\n').pop()); return; } }
+  try { gitHere('merge-base', '--is-ancestor', from, m.commit); } catch { log(`the hub's version (${m.commit.slice(0, 7)}) is not ahead of this checkout: not updated`); return; }
+  const prefix = gitHere('rev-parse', '--show-prefix'); // e.g. "bridge/"
+  for (const f of files) {
+    const b = require('child_process').execFileSync('git', ['show', `${m.commit}:${prefix}${f.name}`], { cwd: __dirname, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (sha256(b) !== f.sha256) { log(`update: ${f.name} at ${m.commit.slice(0, 7)} differs from what the hub runs: not updated`); return; }
+    fs.writeFileSync(path.join(UPD.stage, f.name), b);
+  }
+  selftest(UPD.stage);
+  if (runs.size) return;
+  fs.writeFileSync(UPD.trial, JSON.stringify({ git: true, from, to: m.commit, starts: 0 }));
+  gitHere('merge', '--ff-only', '-q', m.commit);
+  log(`updated this checkout to the hub's ${m.version} (${m.commit.slice(0, 7)}): restarting on it`);
+  process.exit(3);
+}
+setInterval(() => { checkUpdate(); }, 10 * 60000).unref();
+if (SELFTEST) { console.log('[ai-host] selftest: ' + VERSION + ' loads'); process.exit(0); }
 
 // ---------- the loop ----------
 (async function loop() {

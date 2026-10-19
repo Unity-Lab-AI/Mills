@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { ROOT, MILLS_DIR, readJson, writeJson, loadProfile, allProfiles, hashPassword } = require('./common');
 const worktree = require('./worktree');
 const downloads = require('./downloads'); // the Download panel: Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux
@@ -54,6 +54,8 @@ function projectList() { // listing walks the projects root and asks git; keep i
   return projectsCache.list;
 }
 // semver (hub law 14): the project's and every module's version, read once at start (a restart picks up a new one)
+// the commit this process started from: the auto-deploy's health check compares it with what it deployed
+const RUNNING_COMMIT = (() => { try { return require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], { cwd: MILLS_DIR, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 }).trim(); } catch { return ''; } })();
 const VERSIONS = (() => { try { const v = JSON.parse(fs.readFileSync(path.join(MILLS_DIR, 'versions.json'), 'utf8')); return { project: String(v.project || '0.0.0'), modules: v.modules || {} }; } catch { return { project: '0.0.0', modules: {} }; } })();
 // The host's AI on/off switch (the black-heart / knife host tools, bridge/host-tools/): while bridge/ai-host.off exists,
 // the AI that runs on this machine pauses (Work runs and API answers on the host's Claude login or another Claude
@@ -72,7 +74,31 @@ const AI_HOST_OFF = path.join(ROOT, 'ai-host.off');
 const MAINTENANCE = path.join(ROOT, '.maintenance'); // bridge/handoff.js: this hub's data has moved to the server
 const aiHostOn = () => !fs.existsSync(AI_HOST_OFF);
 const AI_OFF_TEXT = "The host's AI is switched off right now (its host paused it). Chat, the board and your own AI keep working; pick your own AI in the model dropdown, or try again once it is back.";
-const hubLaws = () => { try { return fs.readFileSync(path.join(MILLS_DIR, 'CLAUDE.md'), 'utf8'); } catch { return ''; } };
+// The laws every Work run follows: LAWS.md (tracked, the team's shared laws) and CLAUDE.md (a host's own, untracked).
+const hubLaws = () => ['LAWS.md', 'CLAUDE.md'].map((f) => { try { return fs.readFileSync(path.join(MILLS_DIR, f), 'utf8').trim(); } catch { return ''; } }).filter(Boolean).join('\n\n');
+// Worktree freshness (the worktree law, LAWS.md): checked in the background, never holding a run up. Each check
+// fetches Forgejo and fast-forwards a clean worktree with no commits of its own by itself (nothing to lose); anything
+// else it only reports. A run's instructions carry the latest finding, so a stale worktree gets updated / renewed
+// (node bridge/worktree.js update <user>) before work starts. Checked when a run starts and every 5 minutes for anyone
+// who ran something in the last day.
+const fresh = new Map(); // `${username}|${project}` -> { text, stale, at, busy }
+function checkFresh(acct) {
+  let pj; try { pj = projectOf(acct); } catch { return; }
+  const key = acct.username + '|' + pj, cur = fresh.get(key) || {};
+  if (cur.busy || (cur.at && Date.now() - cur.at < 60000)) return;
+  fresh.set(key, { ...cur, busy: true });
+  execFile(process.execPath, [path.join(ROOT, 'worktree.js'), '--project', pj, 'auto', acct.username], { cwd: MILLS_DIR, timeout: 150000, windowsHide: true, env: { ...process.env, ...forgejo.workEnv(acct.username), GIT_TERMINAL_PROMPT: '0' } }, (err, out, errOut) => {
+    const text = (String(out || '').trim() || String(errOut || (err && err.message) || '').trim()).split('\n').slice(-2).join(' ').slice(0, 600);
+    fresh.set(key, { text, stale: /STALE/.test(text), at: Date.now(), busy: false });
+  });
+}
+setInterval(() => { for (const a of accounts.values()) if (a.state && a.state.lastRunAt && Date.now() - a.state.lastRunAt < 86400e3) checkFresh(a); }, 5 * 60e3).unref();
+function freshLaw(acct, wd) {
+  const cmd = wd.hub ? 'node bridge/worktree.js' : `node ${WT_SCRIPT} --project ${wd.project}`;
+  const f = fresh.get(acct.username + '|' + wd.project);
+  return `Worktree law: never build on a stale worktree. Before changing anything, check it: ${cmd} check ${acct.username} (it fetches Forgejo first; exit code 3 = stale). If it is STALE, run ${cmd} update ${acct.username}: it fast-forwards, merges Forgejo's ${wd.main} into your own commits, or makes a NEW worktree from Forgejo with your commits, uncommitted changes and untracked files carried over and then deletes just the old one (${cmd} renew ${acct.username} does that directly).`
+    + (f && f.text ? ` Latest background check (${Math.max(1, Math.round((Date.now() - f.at) / 60000))} min ago): ${f.text}` : '');
+}
 function systemPrompt(acct, wd) {
   const name = acct.display;
   const where = wd.hub
@@ -80,12 +106,14 @@ function systemPrompt(acct, wd) {
        `Commit only on ${wd.branch}; never check out other branches here and never touch other people's worktrees in ${worktree.WT_ROOT}.`,
        `Before committing, run the regression suite from the worktree: node bridge/test/regress.js --no-prod (it must report 0 failed).`,
        `Only when ${name} asks you to merge into develop, run from the worktree: node bridge/worktree.js commit ${acct.username} "<message>" then node bridge/worktree.js merge ${acct.username}`,
-       `(on a conflict run "node bridge/worktree.js sync ${acct.username}", resolve, commit, merge again). Going live (develop → main in the host folder + hub restart) only when asked.`,
+       `(it merges onto Forgejo's develop and pushes to Forgejo first; on a conflict run "node bridge/worktree.js update ${acct.username}", resolve, commit, merge again). Going live (node bridge/worktree.js live: Forgejo's develop → main, pushed first; the server's auto-deploy ships it, health-checks it and rolls back by itself) only when asked.`,
+       freshLaw(acct, wd),
        `Other projects live in the shared projects area ${worktree.PROJECTS_ROOT} (one folder per project, _repo = its main checkout, one worktree per person); ${name} switches projects in Work's header. "node bridge/worktree.js projects" lists them.`]
     : [`You are working on the project "${wd.project}" (not on VibeRoller) in ${name}'s OWN git worktree: ${wd.dir}, branch ${wd.branch}. The project's main checkout is ${wd.repo} (integration branch ${wd.main}); other people's worktrees sit next to yours in ${wd.root}.`,
        `Commit only on ${wd.branch}; never check out other branches here and never touch the main checkout or other people's worktrees.`,
        `Only when ${name} asks you to merge, run: node ${WT_SCRIPT} --project ${wd.project} commit ${acct.username} "<message>" then node ${WT_SCRIPT} --project ${wd.project} merge ${acct.username}`,
-       `(that merges into ${wd.main} and pushes it when the project has a remote; on a conflict run "node ${WT_SCRIPT} --project ${wd.project} sync ${acct.username}", resolve, commit, merge again). The hub's own tooling (regression suite, live) is for VibeRoller only.`];
+       `(that merges into ${wd.main} and pushes it when the project has a remote; on a conflict run "node ${WT_SCRIPT} --project ${wd.project} sync ${acct.username}", resolve, commit, merge again). The hub's own tooling (regression suite, live) is for VibeRoller only.`,
+       freshLaw(acct, wd)];
   return [
     `You are talking with ${name} (username "${acct.username}"${acct.admin ? ', admin' : ''}, Unity AI Lab engineer) through the VibeRoller web interface, running on the host's Claude account.`,
     `Every message in this conversation comes from ${name}; address them by name and keep their work separate from everyone else's.`,
@@ -160,7 +188,10 @@ function dropSessions(username) {
   for (const [t, s] of sessions) if (s.user === username) sessions.delete(t);
   saveSessions();
 }
-const failures = new Map(); // username -> { count, blockedUntil }
+const failures = new Map(); // "<username>|<address>" and "ip|<address>" -> { count, blockedUntil, inflight, at }
+const failState = (k) => { let f = failures.get(k); if (!f) { f = { count: 0, blockedUntil: 0, inflight: 0, at: Date.now() }; failures.set(k, f); } return f; };
+// forget counters nobody has touched for 30 minutes (never all at once: wiping them was a way around the limit)
+setInterval(() => { const old = Date.now() - 30 * 60e3; for (const [k, f] of failures) if (!f.inflight && f.blockedUntil < Date.now() && f.at < old) failures.delete(k); }, 5 * 60e3).unref();
 
 // ---------- claude runner + pc tool relay (one per account) ----------
 function emit(acct, ev) { if (acct.stream) acct.stream.write(JSON.stringify(ev) + '\n'); }
@@ -172,6 +203,7 @@ function runClaude(acct, message, fresh, res, context) {
     res.end(JSON.stringify({ type: 'bridge_error', text: 'Could not prepare your worktree: ' + e.message + ' (switch to the shared folder or ask the host).' }) + '\n');
     return;
   }
+  acct.state.lastRunAt = Date.now(); checkFresh(acct); // the finding lands in the next run's instructions
   const args = ['-p', '--output-format', 'stream-json', '--verbose',
     '--permission-mode', config.permissionMode,
     '--mcp-config', acct.files.MCP_RUNTIME, '--strict-mcp-config',
@@ -656,7 +688,7 @@ function agentHear(msg) {
 // Nobody — no account's Work run and not the room agent — is mid-run.
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 // AI nodes (bridge/ai-nodes.js): machines lending Unity's local engines to this hub when it runs elsewhere
-const aiNodes = require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows });
+const aiNodes = require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }) });
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300), aiNodes });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team notes (bridge/notes.js): markdown files in folders under VibeRoller/Notes, for people (/api/notes*) and Claude (notes_* tools).
@@ -694,12 +726,15 @@ function send(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); // API answers are never cached
   res.end(JSON.stringify(body));
 }
-function readBody(req) {
+// A JSON body, at most `limit` bytes (20 MB by default: pictures and voice clips; sign-in and other routes reached before
+// signing in pass a small limit). Too big → an error with status 413, and the connection is closed.
+function readBody(req, limit = 20e6) {
   return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (c) => { data += c; if (data.length > 20e6) req.destroy(); });
-    req.on('end', () => { try { resolve(data ? JSON.parse(data) : {}); } catch (e) { reject(e); } });
-    req.on('error', reject);
+    let data = '', over = false;
+    // too big: stop keeping it (the rest is read and dropped) and answer 413; the connection closes after the answer
+    req.on('data', (c) => { if (over) return; data += c; if (data.length > limit) { over = true; data = ''; reject(Object.assign(new Error('That request is too large.'), { status: 413 })); } });
+    req.on('end', () => { if (over) return; try { resolve(data ? JSON.parse(data) : {}); } catch { reject(Object.assign(new Error('That request is not valid JSON.'), { status: 400 })); } });
+    req.on('error', (e) => { if (!over) reject(e); });
   });
 }
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
@@ -743,7 +778,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/internal/assistant-tool') return await assistant.internal(req, res);
     // Internal channel from the MCP relay (same machine, shared secret, names the account).
     if (p === '/internal/pc-tool' || p === '/internal/board' || p === '/internal/team') {
-      if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
+      if (!crypto.timingSafeEqual(crypto.createHash('sha256').update(String(req.headers['x-mills-internal'] || '')).digest(), crypto.createHash('sha256').update(INTERNAL_SECRET).digest())) return send(res, 403, { ok: false, error: 'forbidden' });
       return internalTool(p.slice('/internal/'.length), req, res, String(req.headers['x-mills-account'] || '') || DEFAULT_USERNAME);
     }
     // The same tools for a Work run that runs ON AN AI HOST (Claude Code on Gee's PC for the hub on the server): the
@@ -781,7 +816,7 @@ const server = http.createServer(async (req, res) => {
         return res.end(html);
       }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
-      return fs.createReadStream(file).pipe(res);
+      return fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
     }
 
     if (p === '/api/status' && req.method === 'GET') {
@@ -789,7 +824,7 @@ const server = http.createServer(async (req, res) => {
       // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
       // the regression runner), which call from this machine, never through the tunnel.
       const viaTunnel = viaOutside(req); // the tunnel, or nginx in server mode
-      return send(res, 200, viaTunnel ? { ok: true, hub: true } : { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy() });
+      return send(res, 200, viaTunnel ? { ok: true, hub: true } : { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy(), version: VERSIONS.project || '', commit: RUNNING_COMMIT });
     }
 
     // Moving house (bridge/handoff.js pack): while bridge/.maintenance exists this hub's data belongs to the server, so
@@ -801,25 +836,30 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/login' && req.method === 'POST') {
-      const { username, password, deviceId, client } = await readBody(req);
+      const { username, password, deviceId, client } = await readBody(req, 16384);
       const uname = String(username || '').trim().toLowerCase();
-      if (failures.size > 1000 && !failures.has(uname)) failures.clear();
-      // One shared counter per username, registered before the (async) hash, so parallel guesses all
-      // count; attempts already in flight count as failures until they succeed.
-      const f = failures.get(uname) || { count: 0, blockedUntil: 0, inflight: 0 };
-      failures.set(uname, f);
-      if (Date.now() < f.blockedUntil || f.count + f.inflight >= 5) return send(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
-      f.inflight = (f.inflight || 0) + 1;
+      // Limits, all per address, so a stranger can never lock a teammate out (the lockout used to be per username: five
+      // wrong guesses from anywhere locked the account for everyone): 5 failures for one username from one address →
+      // that address waits 15 minutes for it; 20 failures from one address (any usernames) → it waits 15 minutes; at most 3
+      // sign-ins in flight per address (each costs a scrypt). Attempts in flight count as failures until they succeed.
+      const ip = outsideIp(req) || 'local', now = Date.now();
+      const f = failState(uname + '|' + ip), g = failState('ip|' + ip);
+      if (now < f.blockedUntil || now < g.blockedUntil || f.count + f.inflight >= 5 || g.count + g.inflight >= 20) return send(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
+      if (g.inflight >= 3) return send(res, 429, { error: 'Too many sign-ins at once from here. Try again in a moment.' });
+      f.inflight++; g.inflight++;
       const acct = USERNAME_RE.test(uname) ? accounts.get(uname) : null;
       let good = false;
       try {
         if (!acct) await scrypt(String(password || ''), 'mills-no-such-user', { N: 16384, r: 8, p: 1 }); // same cost either way
         good = !!acct && (await checkPassword(acct, password)) && typeof deviceId === 'string' && deviceId.length >= 16;
-      } finally { f.inflight--; }
+      } finally { f.inflight--; g.inflight--; }
       if (!good) {
+        f.at = g.at = Date.now();
         if (++f.count >= 5) { f.blockedUntil = Date.now() + 15 * 60 * 1000; f.count = 0; }
+        if (++g.count >= 20) { g.blockedUntil = Date.now() + 15 * 60 * 1000; g.count = 0; }
         return send(res, 401, { error: 'Wrong username or password.' });
       }
+      failures.delete(uname + '|' + ip);
       const deviceHash = crypto.createHash('sha256').update(deviceId).digest('hex');
       if (!acct.state.lockedDevice) {
         acct.state.lockedDevice = deviceHash; acct.state.lockedAt = new Date().toISOString(); saveState(acct);
@@ -828,7 +868,6 @@ const server = http.createServer(async (req, res) => {
         console.log(`[mills] ${acct.username}: refused a sign-in from another device.`);
         return send(res, 403, { error: 'This account is locked to another device. Ask an admin to reset it.' });
       }
-      failures.delete(uname);
       const token = crypto.randomBytes(32).toString('hex');
       sessions.set(token, { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
       assistant.learnClient(acct, client, outsideIp(req)).catch(() => {}).then(() => agentGreet(acct));
@@ -941,6 +980,7 @@ const server = http.createServer(async (req, res) => {
       if (projectOf(acct) !== pj.name) delete acct.state.claudeSessionId; // a Claude session belongs to one folder
       if (pj.hub) delete acct.state.project; else acct.state.project = pj.name;
       delete acct.state.workspace; saveState(acct);
+      checkFresh(acct); // the new project's worktree is checked before the first run there
       return send(res, 200, { project: pj.name, dir, branch });
     }
     if (p === '/api/chat' && req.method === 'POST') {
@@ -1171,7 +1211,12 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 404, { error: 'Unknown endpoint' });
   } catch (e) {
-    return send(res, 400, { error: e.message });
+    // our own messages (and the 413 / bad JSON of readBody) go back as they are; anything from the system (a file error
+    // with a path in it, a stack) is logged here and answered plainly
+    if (res.headersSent) { try { res.end(); } catch {} return; }
+    if (e && e.status === 413) res.setHeader('Connection', 'close');
+    if (e && e.code && /^E[A-Z]+$/.test(e.code)) { console.error('[mills] request failed:', p, e); return send(res, 500, { error: 'Something went wrong on the hub; it is logged. Try again.' }); }
+    return send(res, (e && e.status) || 400, { error: String((e && e.message) || e).replace(/(?:\/srv|\/home|\/tmp|[A-Z]:\\)[^\s'"]*/g, '<path>') });
   }
 });
 
@@ -1182,7 +1227,18 @@ server.listen(config.port, '127.0.0.1', () => {
   }
   console.log(`[mills] Sign-ins kept from before this start: ${sessions.size}.`);
   if (!SUPERVISED && config.tunnel && !process.argv.includes('--no-tunnel')) console.log('[mills] Started without run.js: no tunnel and no self-restart. Use start.bat / start.sh for the full hub.');
+  // deploy/autodeploy.sh went back to the last good version: say so in the team chat once
+  const rolled = path.join(ROOT, '.rolled-back');
+  if (fs.existsSync(rolled)) setTimeout(() => {
+    let text = ''; try { text = fs.readFileSync(rolled, 'utf8').trim(); } catch {}
+    try { fs.rmSync(rolled, { force: true }); agentSay(`**VibeRoller rolled itself back.** ${text || 'A new version did not come up, so the hub went back to the last good one.'} Nothing was lost: deploys never touch data. Whoever shipped it: look at the deploy log, fix, and ship again.`, '', { as: 'VibeRoller' }); } catch (e) { console.error('[mills] could not announce the rollback: ' + e.message); }
+  }, 3000);
 });
+// A throw inside some callback must not take the whole hub down for everyone: log it and keep serving (a crash at start
+// still exits, so a broken deploy is caught by the auto-deploy's health check and rolled back).
+let started = false; server.on('listening', () => { started = true; });
+process.on('uncaughtException', (e) => { console.error('[mills] uncaught error (kept running):', e && e.stack || e); if (!started) process.exit(1); });
+process.on('unhandledRejection', (e) => { console.error('[mills] unhandled rejection (kept running):', e && e.stack || e); });
 server.on('error', (e) => {
   if (e.code !== 'EADDRINUSE') throw e;
   console.log(`[mills] VibeRoller is ALREADY RUNNING in another window (port ${config.port} is taken).`);
