@@ -6,6 +6,12 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 1.5.1 — 2026-10-19
+
+### Changed
+- Work runs may run `ssh ovh …`: the host PC's SSH alias for the lab server (Gee's key, set up on that PC only), so
+  the move to the server can be finished from a Work session instead of by hand. No module changed.
+
 ## 1.5.0 — 2026-10-18
 
 ### Added
