@@ -54,8 +54,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   function ensureOllama() {
     if (ollamaState.starting) return ollamaState.starting;
     ollamaState.starting = (async () => {
-      if (!(await ollamaUp())) {
-        if (!VIA_NODE) { try { spawn(A.ollamaCommand || 'ollama', ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {} } // via a node: its host runs Ollama
+      if (!(await ollamaUp()) && !VIA_NODE) { // start Ollama here and give it time; via a node its host runs it, and a missing node must not hold anyone up
+        try { spawn(A.ollamaCommand || 'ollama', ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
         for (let i = 0; i < 30 && !(await ollamaUp()); i++) await new Promise((r) => setTimeout(r, 1000));
       }
       ollamaState.up = await ollamaUp();
@@ -546,7 +546,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   async function runLocal(acct, text, ci, out, signal, opts = {}) {
     const st = await ensureOllama();
     const model = st.model ? LOCAL_MODEL : FALLBACK_MODEL;
-    if (!st.up || !model) throw new Error(st.up ? `The local brain (${LOCAL_MODEL}) is not loaded on the host yet.` : 'The local brain (Ollama) is not running on the host.');
+    if (!st.up || !model) throw new Error(st.up ? `The local brain (${LOCAL_MODEL}) is not loaded on the AI host yet.` : (VIA_NODE && aiNodes.reason()) || "Unity's brain (Ollama) is not running on the AI host.");
     const s = store(acct);
     const native = await nativeTools(model);
     const sayMode = model.startsWith('unity-brain');
@@ -717,7 +717,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     async route(p, req, res, acct) {
       if (!p.startsWith('/api/assistant/')) return false;
       if (p === '/api/assistant/state' && req.method === 'GET') {
-        if (Date.now() - ollamaState.checked > 30000) await ensureOllama();
+        if (Date.now() - ollamaState.checked > (VIA_NODE ? 3000 : 30000)) await ensureOllama(); // via a node, re-check quickly: the AI host comes and goes
         send(res, 200, overview(acct)); return true;
       }
       if (p === '/api/assistant/brain' && req.method === 'POST') {

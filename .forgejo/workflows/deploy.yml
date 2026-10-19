@@ -1,16 +1,17 @@
 # VibeRoller: deploy to the lab server on every push to main (Forgejo Actions).
 #
 # OFF until the server is set up (deploy/README.md): it only runs when the repo variable VIBEROLLER_DEPLOY is "on".
-# What it does: SSH to the server as the VibeRoller service user, fast-forward the live checkout to the pushed main,
-# check every hub script parses, and ask the hub for a graceful restart (bridge/restart.js: same address, nobody
-# signed out, it waits for any reply in progress). It never touches the hub's data: accounts, chat, board, notes,
-# pictures and every other runtime file are gitignored, and a fast-forward pull never deletes ignored files. A pull
-# that is not a fast-forward (someone changed the live checkout by hand) stops the deploy instead of overwriting.
+# What it does: SSH to the server with the deploy key that deploy/setup-server.sh made. That key is locked to ONE
+# command on the server (sshd runs it whatever the client asks for): fast-forward the live checkout to main, check
+# every hub script parses, and ask the hub for a graceful restart (bridge/restart.js: same address, nobody signed
+# out, it waits for any reply in progress). It never touches the hub's data: accounts, chat, board, notes, pictures
+# and every other runtime file are gitignored, and a fast-forward pull never deletes ignored files. A pull that is
+# not a fast-forward (someone changed the live checkout by hand) stops the deploy instead of overwriting.
 #
-# Repo settings (Forgejo → the repo → Settings → Actions):
+# Repo settings (Forgejo → the repo → Settings → Actions), all printed by deploy/setup-server.sh:
 #   variables  VIBEROLLER_DEPLOY = on            the switch
-#              VIBEROLLER_DIR    = /srv/viberoller/app   the live checkout (outside any web root)
-#   secrets    VIBEROLLER_SSH_KEY  base64 of the service user's deploy key (private)
+#              VIBEROLLER_DIR    = /srv/viberoller/app   the live checkout (informational)
+#   secrets    VIBEROLLER_SSH_KEY  base64 of the deploy key (private; the server keeps it in /srv/viberoller/deploy-key.b64)
 #              VIBEROLLER_SSH_HOST the server's host name
 #              VIBEROLLER_SSH_USER the service user (e.g. viberoller)
 name: deploy
@@ -25,24 +26,16 @@ jobs:
     if: ${{ vars.VIBEROLLER_DEPLOY == 'on' }}
     runs-on: ubuntu-24.04
     steps:
-      - name: Deploy to the server (fast-forward + graceful restart)
+      - name: Deploy to the server (fast-forward + graceful restart, through the key's one command)
         env:
           KEY: ${{ secrets.VIBEROLLER_SSH_KEY }}
           HOST: ${{ secrets.VIBEROLLER_SSH_HOST }}
           USER: ${{ secrets.VIBEROLLER_SSH_USER }}
-          DIR: ${{ vars.VIBEROLLER_DIR }}
           SHA: ${{ github.sha }}
         run: |
-          test -n "$KEY" && test -n "$HOST" && test -n "$USER" && test -n "$DIR" || { echo "Set the VIBEROLLER_* secrets and VIBEROLLER_DIR (see deploy/README.md)."; exit 1; }
+          test -n "$KEY" && test -n "$HOST" && test -n "$USER" || { echo "Set the VIBEROLLER_SSH_* secrets (deploy/README.md; deploy/setup-server.sh prints them)."; exit 1; }
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s' "$KEY" | base64 -d > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
-          ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=accept-new "${USER}@${HOST}" "DIR='$DIR' SHA='$SHA' sh -s" <<'REMOTE'
-          set -e
-          cd "$DIR"
-          git fetch --quiet origin main
-          git merge --ff-only --quiet origin/main
-          test "$(git rev-parse HEAD)" = "$SHA" || echo "note: live checkout is at $(git rev-parse --short HEAD) (a newer main arrived meanwhile)"
-          for f in bridge/*.js; do node --check "$f"; done
-          node bridge/restart.js
-          echo "Deployed $(git rev-parse --short HEAD); the hub restarts as soon as no reply is in progress."
-          REMOTE
+          out=$(ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=accept-new "${USER}@${HOST}" deploy)
+          echo "$out"
+          echo "$out" | grep -q "deployed $(printf %s "$SHA" | cut -c1-7)" || echo "note: the live checkout reports a different commit than this push (a newer main may have arrived meanwhile)"
