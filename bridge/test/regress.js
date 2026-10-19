@@ -188,11 +188,11 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'hub.log', 'ai-node.log', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'hub.log', 'ai-node.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET }, aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
@@ -226,8 +226,14 @@ async function startHub() {
   for (let i = 0; i < 40; i++) { if ((await call('/api/status')).status === 200) { startAiNode(); return true; } await sleep(250); }
   return false;
 }
+function stopAiNode() {
+  if (!aiNodeProc) return;
+  try { if (WIN) execFileSync('taskkill', ['/pid', String(aiNodeProc.pid), '/T', '/F'], { stdio: 'ignore' }); else aiNodeProc.kill('SIGTERM'); } catch {}
+  aiNodeProc = null;
+  try { fs.unlinkSync(path.join(SB, 'ai-node.lock')); } catch {} // a killed node leaves its lock behind; a real one removes it on exit
+}
 function stopHub() {
-  if (aiNodeProc) { try { if (WIN) execFileSync('taskkill', ['/pid', String(aiNodeProc.pid), '/T', '/F'], { stdio: 'ignore' }); else aiNodeProc.kill('SIGTERM'); } catch {} aiNodeProc = null; }
+  stopAiNode();
   if (!hub) return;
   try { if (WIN) execFileSync('taskkill', ['/pid', String(hub.pid), '/T', '/F'], { stdio: 'ignore' }); else hub.kill('SIGTERM'); } catch {}
   hub = null;
@@ -1599,6 +1605,46 @@ async function run() {
     && /const base = ENGINES\[job\.engine\]/.test(nodeSrc) && /PAUSE_FILE/.test(nodeSrc) && /engine: engine|\{ id, engine, path/.test(hubNodeSrc) && /timingSafeEqual/.test(hubNodeSrc)
     && /^bridge\/ai-node\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     `nodes ${JSON.stringify(nodeList)}, bad ${nodeBad.status} unknown ${nodeUnknown.status} stray ${nodeReplyStray.status}, unity ${JSON.stringify(unityState.local || {})}, log "${nodeLog.split('\n')[0]}"`);
+
+  { // No AI host (own block so its names never clash): the node goes away (Gee's PC off or paused) and everything else stays reachable, Unity says so at once.
+  const assistantSay = async (tok, message) => { // one /api/assistant/chat run, all its events
+    const t0 = Date.now(), r = await fetch(H + '/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ message, client: { tz: 'Asia/Tokyo', locale: 'en-US' } }) });
+    const events = (await r.text()).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } });
+    return { status: r.status, events, ms: Date.now() - t0 };
+  };
+  stopAiNode();
+  await sleep(5500); // past aiNodeOfflineMs (4 s in this hub): the hub now counts the node as gone
+  const offNodes = (await call('/api/check', U)).data.aiNodes || [];
+  const offState = ((await call('/api/assistant/state', U)).data || {}).local || {};
+  const offSay = await assistantSay(U, 'anyone there r138');
+  const offErr = (offSay.events.find((e) => e.type === 'error') || {}).text || '';
+  const seq38 = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+  await call('/api/room/send', U, await sealConv(U, restored, 't-user', '@unity hello while off r138', 'room', true));
+  const offUnity = await waitAgent(U, restored, seq38, (t) => /AI host is offline/.test(t), 12000);
+  const offChat = (await call('/api/room/send', U, await sealConv(U, restored, 't-user', 'chat without an AI host r138', 'room'))).status;
+  const offBoard = (await call('/api/board', U)).status, offNotes = (await call('/api/notes', U)).status, offWork = (await call('/api/work/current', U)).status;
+  const offLogin = (await login('t-user', 'pw-t-user-0001', devB)).status;
+  startAiNode();
+  let backState = {};
+  for (let i = 0; i < 60; i++) { backState = ((await call('/api/assistant/state', U)).data || {}).local || {}; if (backState.up && backState.model) break; await sleep(500); }
+  check('R138', 'no AI host: when the node that lends Unity\'s engines goes away (the AI host is off or paused), the hub counts it offline within aiNodeOfflineMs, Unity\'s state shows her brain down, the Unity section answers at once with "AI host is offline" (no long wait), @unity in the chat posts the same plainly, while sending chat, the board, notes, Work\'s saved conversation and signing in all keep working; the node coming back brings Unity back without a restart',
+    offNodes.some((n) => n.name === 'test-node' && n.online === false) && offState.up === false && offSay.status === 200 && /AI host is offline/.test(offErr) && offSay.ms < 15000
+    && !!offUnity && offChat === 200 && offBoard === 200 && offNotes === 200 && offWork === 200 && offLogin === 200 && backState.up === true && backState.model === true,
+    `offline listed ${offNodes.some((n) => n.online === false)}, state up ${offState.up}, unity section ${offSay.status} in ${offSay.ms} ms "${offErr.slice(0, 50)}", chat unity ${offUnity ? 'said offline' : 'no reply'}, chat ${offChat} board ${offBoard} notes ${offNotes} work ${offWork} login ${offLogin}; back: up ${backState.up} model ${backState.model}`);
+  // The move kit: everything a person runs on the server / the old host, checked for shape (they cannot run here).
+  const dk = (f) => fs.readFileSync(path.join(MILLS, 'deploy', f), 'utf8');
+  const setupSh = dk('setup-server.sh'), restoreSh = dk('restore-data.sh'), packCmd = dk('pack-data.cmd'), packSh = dk('pack-data.sh'), deployYml = fs.readFileSync(path.join(MILLS, '.forgejo', 'workflows', 'deploy.yml'), 'utf8');
+  const pagesYml = fs.readFileSync(path.join(MILLS, '.github', 'workflows', 'pages.yml'), 'utf8');
+  const dataList = ['bridge/auth.json', 'bridge/profiles', 'Chat', 'Archive', 'Board', 'Notes', 'Avatars'];
+  const autostart = fs.readFileSync(path.join(BRIDGE, 'autostart-windows.cmd'), 'utf8'), hostTool = fs.readFileSync(path.join(BRIDGE, 'host-tools', 'HostTool.cs'), 'utf8'), wtSrc = fs.readFileSync(path.join(BRIDGE, 'worktree.js'), 'utf8');
+  check('R139', '[static] the move kit: deploy/setup-server.sh makes the service user, the live checkout, the server settings, the service, a deploy key locked to one command and (with --with-nginx) the nginx site, and prints the people steps; pack-data (.cmd + .sh) packs exactly the data folders with the hub stopped, no code; restore-data.sh refuses anything but hub data and never overwrites existing accounts; deploy.yml only calls the key\'s one command; pages.yml runs on GitHub only; on the old host the autostart and the heart start the AI node once ai-node.json exists, the node has a single-instance lock, and worktree.js repairs worktree pointers after the host folder moves',
+    /useradd --system/.test(setupSh) && /viberoller-hub\.service/.test(setupSh) && /command="\$DEPLOY_CMD"|command="%s"/.test(setupSh) && /deploy-key\.b64/.test(setupSh) && /--with-nginx/.test(setupSh) && /claude login/.test(setupSh)
+    && dataList.every((d) => packCmd.includes(d.replace('/', '\\')) && packSh.includes(d) && restoreSh.includes(d.split('/').pop())) && /api\/status/.test(packCmd) && /api\/status/.test(packSh) && /Refusing to overwrite/.test(restoreSh) && /agent-key\.json/.test(restoreSh)
+    && /"\$\{USER\}@\$\{HOST\}" deploy/.test(deployYml) && !/sh -s/.test(deployYml) && /github\.server_url == 'https:\/\/github\.com'/.test(pagesYml)
+    && /ai-node\.json/.test(autostart) && /start-node\.bat/.test(autostart) && /NodeRuns\(/.test(hostTool) && /start-node\.bat/.test(hostTool) && /LOCK_FILE/.test(nodeSrc) && /process\.exit\(2\)/.test(nodeSrc)
+    && /function repair\(/.test(wtSrc) && /if \(!healthy\(dir\)\) git\(REPO, 'worktree', 'repair', dir\)/.test(wtSrc) && fs.existsSync(path.join(BRIDGE, 'start-node.bat')) && fs.existsSync(path.join(BRIDGE, 'start-node.sh')) && fs.existsSync(path.join(BRIDGE, 'ai-node.example.json')),
+    'see the check text');
+  }
 
   // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.
   const seedV = (await gq(U)).servers || [], seedS = seedV.find((s) => s.id === 'seedtest') || {}, millsS = seedV.find((s) => s.id === 'mills') || {};

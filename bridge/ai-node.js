@@ -22,6 +22,17 @@ const HUB = String(cfg.hub || '').replace(/\/+$/, '');
 const ENGINES = cfg.engines && typeof cfg.engines === 'object' ? cfg.engines : {};
 if (!/^https?:\/\//.test(HUB) || !cfg.name || !cfg.token) { console.error('[ai-node] ai-node.json needs hub, name and token.'); process.exit(1); }
 const headers = { 'X-VR-Node': String(cfg.name), 'X-VR-Node-Token': String(cfg.token) };
+// one node per machine: a lock file with the running pid (exit code 2 = already running, like the hub's run.js)
+const LOCK_FILE = path.join(__dirname, 'ai-node.lock');
+(function singleInstance() {
+  try {
+    const pid = Number(fs.readFileSync(LOCK_FILE, 'utf8').trim());
+    if (pid && pid !== process.pid) { process.kill(pid, 0); console.log(`[ai-node] already running (pid ${pid}); nothing to do.`); process.exit(2); }
+  } catch {} // no lock, unreadable, or that pid is gone
+  fs.writeFileSync(LOCK_FILE, String(process.pid));
+  const bye = () => { try { if (Number(fs.readFileSync(LOCK_FILE, 'utf8').trim()) === process.pid) fs.unlinkSync(LOCK_FILE); } catch {} };
+  process.on('exit', bye); for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => process.exit(0));
+})();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), '[ai-node]', ...a);
 

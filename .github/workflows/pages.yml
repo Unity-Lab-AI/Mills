@@ -16,6 +16,9 @@ concurrency:
 
 jobs:
   deploy:
+    # GitHub only: Forgejo Actions reads this folder too, and GitHub Pages does not exist there (the lab server
+    # deploy is .forgejo/workflows/deploy.yml)
+    if: ${{ github.server_url == 'https://github.com' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages

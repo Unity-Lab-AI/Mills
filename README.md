@@ -2,6 +2,8 @@
 
 *Formerly **Mills** (renamed in 1.3.0). Stored names stay as they were so nothing breaks: the default account `mills`, the everyone-server's id `mills`, conversation ids like `ch:mills/…`, the `MILLS_*` settings, the `X-Mills-*` internal headers, and on the first host the `Mills` folder, `Mills-worktrees` and the GitHub repo `Unity-Lab-AI/Mills`. The web address below changes once the new repo is live.*
 
+**Host folder:** on Gee's PC the checkout is now `Desktop\VibeRoller` (renamed from `Mills`); the worktrees stay in `Desktop\Mills-worktrees`. After such a rename, `node bridge/worktree.js repair` fixes every worktree's pointer, and a Work run heals its own.
+
 **Repos:** the new home is **https://git.unityailab.com/GFourteen/VibeRoller** (Forgejo). Every release is also pushed to the original Forgejo repo `GFourteen/Mills` and to GitHub `Unity-Lab-AI/Mills`, which still publishes the web page through GitHub Pages. The go-live script pushes `develop` and `main` to every remote the checkout has.
 
 A private workspace for a small team: talk to Claude in the browser and have it build and edit files on your own PC, and talk to each other in an end-to-end encrypted chat room. There's nothing to install on your side.
@@ -187,7 +189,9 @@ Gee's Claude Code login on the host answers everything by default, and nothing b
 
 ## On a server (the lab box), with the AI from home
 
-`deploy/README.md` is the hand-off for moving the hub onto the lab server, where every push to `main` on Forgejo then deploys it. It covers the workflow, the locked-down systemd service, the nginx site and the data move.
+`deploy/README.md` is the step-by-step move of the hub onto the lab server, where every push to `main` on Forgejo then deploys it. Three scripts do the work: `deploy/setup-server.sh` (root, every server step, idempotent), `deploy/pack-data.cmd` / `.sh` (the old host's data, hub stopped, nothing reset) and `deploy/restore-data.sh` (the server). The people steps that remain are Gee's Claude login on the server, the Forgejo secrets, and Gee's approval of the data move.
+
+**No AI host never blocks anything.** The hub stays up on the server whether Gee's PC is on or not. With his PC off or paused, only Unity's engines are missing: the hub notices within a minute, Unity says "my AI host is offline" at once in her section and in the chat, and chat, board, notes, Work's saved conversations, sign-in and everyone's own AI keys keep working. Work on the server uses Gee's Claude login there, so it works without his PC too.
 
 - **Server mode.** `bridge/config.local.json` (gitignored) is laid over `bridge/config.json` key by key, so a server keeps its own settings and its git checkout stays clean. `deploy/config.local.example.json` is the server's version:
   - `publicUrl` is the fixed address. The page the hub serves learns it, and that origin may call the API.
@@ -197,7 +201,8 @@ Gee's Claude Code login on the host answers everything by default, and nothing b
   - **How it connects.** `node bridge/ai-node.js` runs on that machine, configured by the gitignored `bridge/ai-node.json` (hub address, node name, secret, and its own engine addresses). It connects **out** to the hub over HTTPS, so no port opens at home.
   - **What the hub can reach.** The hub sends a job naming an engine and a path, never an address, so it can only reach the engines the node chose to lend.
   - **Hub settings.** The hub accepts the node with `"aiNodes": { "<name>": "<secret>" }` and sends Unity's engine calls through it with `"assistant": { "via": "node" }`, both in its `config.local.json`.
-  - **Pausing.** The knife on the lending machine (`ai-host.off`) pauses the node, so the hub sees it offline. The heart brings it back. Answers come back whole, so Unity's words appear at the end rather than word by word.
+  - **Running it.** `bridge/start-node.bat` (Windows) or `bridge/start-node.sh` (Linux) starts the node; a second copy finds the first and closes. With `bridge/ai-node.json` present, `bridge/autostart-windows.cmd` makes the node start at sign-in instead of the hub, and the heart starts the node.
+  - **Pausing.** The knife on the lending machine (`ai-host.off`) pauses the node, so the hub sees it offline within a minute. The heart brings it back. Answers come back whole, so Unity's words appear at the end rather than word by word.
   - **What it doesn't cover.** Work runs need Claude Code and the files, so on the server they run there on Gee's Claude login. They don't go through a node.
 
 ## Versions

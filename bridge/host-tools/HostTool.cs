@@ -27,15 +27,20 @@ static class HostTool {
     }
 #if START
     try { if (File.Exists(flag)) File.Delete(flag); } catch (Exception e) { return Fail("Could not switch the AI back on: " + e.Message); }
-    bool running = HubAnswers(bridge);
+    // Two shapes of AI host: the hub itself on this machine (no bridge\ai-node.json), or this machine's AI node lending
+    // its engines to the hub on the server (bridge\ai-node.json present). Start whichever is not running yet.
+    bool nodeMode = File.Exists(Path.Combine(bridge, "ai-node.json"));
+    bool running = nodeMode ? NodeRuns(bridge) : HubAnswers(bridge);
     if (!running) {
-      var psi = new ProcessStartInfo("cmd.exe", "/c start \"VibeRoller (leave this window open)\" /min \"" + Path.Combine(bridge, "start.bat") + "\"");
+      string script = Path.Combine(bridge, nodeMode ? "start-node.bat" : "start.bat");
+      var psi = new ProcessStartInfo("cmd.exe", "/c start \"VibeRoller (leave this window open)\" /min \"" + script + "\"");
       psi.WorkingDirectory = bridge; psi.UseShellExecute = false; psi.CreateNoWindow = true;
       try { Process.Start(psi); } catch (Exception e) { return Fail("Could not start VibeRoller: " + e.Message); }
     }
     MessageBox.Show(running
       ? "This machine hosts AI for VibeRoller again.\n\nWork, the API and Unity can use it right away."
-      : "VibeRoller is starting on this machine (a minimized window), and its AI is switched on.\n\nGive it a few seconds.",
+      : (nodeMode ? "This PC's AI node is starting (a minimized window): it lends Unity's engines to the VibeRoller server.\n\nGive it a few seconds."
+                  : "VibeRoller is starting on this machine (a minimized window), and its AI is switched on.\n\nGive it a few seconds."),
       "VibeRoller host: on", MessageBoxButtons.OK, MessageBoxIcon.Information);
 #else
     try { File.WriteAllText(flag, "AI paused by this machine's host at " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "\r\n"); }
@@ -46,6 +51,9 @@ static class HostTool {
     return 0;
   }
   static int Fail(string text) { MessageBox.Show(text, "VibeRoller host", MessageBoxButtons.OK, MessageBoxIcon.Error); return 1; }
+  static bool NodeRuns(string bridge) { // the node keeps bridge\ai-node.lock with its pid while it runs
+    try { int pid = int.Parse(File.ReadAllText(Path.Combine(bridge, "ai-node.lock")).Trim()); Process.GetProcessById(pid); return true; } catch { return false; }
+  }
   static bool HubAnswers(string bridge) { // is a hub already serving on this machine? (its port from bridge\config.json)
     int port = 7777;
     try { var m = Regex.Match(File.ReadAllText(Path.Combine(bridge, "config.json")), "\"port\"\\s*:\\s*(\\d+)"); if (m.Success) port = int.Parse(m.Groups[1].Value); } catch { }
