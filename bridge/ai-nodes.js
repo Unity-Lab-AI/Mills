@@ -36,7 +36,9 @@ const ANIMAL = ['panda', 'crocodile', 'otter', 'falcon', 'badger', 'walrus', 'ly
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NICK_RE = /^[a-z0-9]+(-[a-z0-9]+){1,3}$/;
 
-module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson, writeJson, accounts = null, log = () => {} }) {
+// onUsage(source, windows) / savedUsage(source): a host provider's 5h / 7d windows are kept by bridge/usage.js (on disk), so
+// they survive a hub restart and show in /api/usage; source = "h:<hostId>/<providerId>".
+module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson, writeJson, accounts = null, log = () => {}, onUsage = () => {}, savedUsage = () => null }) {
   const FILE = path.join(ROOT, 'ai-hosts.json');
   const OFFLINE_MS = Math.max(1000, Number(config.aiNodeOfflineMs) || 60000);
   const db = readJson(FILE, { hosts: {} }); if (!db.hosts || typeof db.hosts !== 'object') db.hosts = {};
@@ -99,7 +101,12 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
   // whose host: the record's owner (hosts made in Settings); a legacy config host (no owner) is whose it says in hello
   const ownerOf = (r) => r.user || (live.get(r.id) && live.get(r.id).hello ? live.get(r.id).hello.user : '') || '';
   const mayUse = (r, prov, user) => !!user && (user === ownerOf(r) || allowed(r, prov).includes(user));
-  const usageOf = (n, prov) => ({ five_hour: (n.usage[prov.id] || {}).five_hour || null, seven_day: (n.usage[prov.id] || {}).seven_day || null });
+  const usageOf = (n, prov) => { // what this hub saw since it started, else the windows kept on disk (a restart forgets nothing)
+    const seen = n.usage[prov.id] || {}, kept = savedUsage(`h:${hostIdOf(n)}/${prov.id}`) || {};
+    const pick = (k) => (seen[k] && seen[k].utilization != null ? seen[k] : kept[k] || seen[k] || null);
+    return { five_hour: pick('five_hour'), seven_day: pick('seven_day') };
+  };
+  const hostIdOf = (n) => { for (const [id, x] of live) if (x === n) return id; return ''; };
   const overCap = (n, prov) => { const u = usageOf(n, prov); const pc = (w) => (w && Number.isFinite(w.utilization) && (!w.resetsAt || w.resetsAt > Date.now()) ? w.utilization * 100 : 0); return pc(u.five_hour) >= prov.max5h ? `its 5-hour usage is at the ${prov.max5h}% cap its host set` : pc(u.seven_day) >= prov.max7d ? `its weekly usage is at the ${prov.max7d}% cap its host set` : ''; };
   // hub-side kind: a host's Claude (login relay) runs Work on THIS hub with the host's login; Codex and endpoints answer the API
   const hubKind = (k) => (k === 'openai' ? 'host-openai' : k === 'codex-relay' ? 'host-codex' : 'host-claude');
@@ -123,8 +130,10 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
   }
   function noteHostUsage(id, providerId, usage) { // the host reports its own windows with every event batch
     const n = state(id); if (!usage || typeof usage !== 'object') return;
-    const clean = (w) => (w && typeof w === 'object' ? { utilization: Number.isFinite(Number(w.utilization)) ? Math.max(0, Math.min(1, Number(w.utilization) > 1 ? Number(w.utilization) / 100 : Number(w.utilization))) : null, resetsAt: Number(w.resetsAt) || null, status: String(w.status || '') } : null);
+    const num = (v) => (v == null || v === '' ? NaN : Number(v)); // a missing number is unknown, not 0 %
+    const clean = (w) => (w && typeof w === 'object' ? { utilization: Number.isFinite(num(w.utilization)) ? Math.max(0, Math.min(1, num(w.utilization) > 1 ? num(w.utilization) / 100 : num(w.utilization))) : null, resetsAt: Number(w.resetsAt) || null, status: String(w.status || '') } : null);
     n.usage[providerId] = { five_hour: clean(usage.five_hour), seven_day: clean(usage.seven_day), at: Date.now() };
+    onUsage(`h:${id}/${providerId}`, n.usage[providerId]);
   }
 
   // ---------- Settings → My AI hosts ----------

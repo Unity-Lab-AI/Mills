@@ -3,16 +3,19 @@
 // colorOf, statusOf, ic, selectConv, currentConv, roomMembers, sysRoom, store). Server Settings, the join /
 // invitation dialogs and group settings live in web/guild-settings.js (GSET).
 //
-// The chat's side bar is Discord-shaped: a rail of servers on the far left (the "VibeRoller" server is
-// everyone's and always first; its #general is the old # Everyone), with buttons for pending invitations and
-// joining by invite code; then the picked server's channels by category (private ones carry a lock,
-// announcement ones a flag), group conversations and private messages. The member column (app mode, or wide
-// screens) lists who is in the current conversation by hoisted role and presence; Unity and
-// "<person> · Claude" carry a BOT badge.
+// The chat's side bar is Discord-shaped: a rail on the far left with the Direct messages button first (its own
+// icon, above every server), then the servers (the "VibeRoller" server is everyone's and the first of them; its
+// #general is the old # Everyone), with buttons for pending invitations and joining by invite code. A server shows
+// only its channels by category (private ones carry a lock, announcement ones a flag). Direct messages is its own
+// view: the one-to-one DMs (#convList, drawn by the page), then the group DMs (#grpList) and the key fingerprints.
+// The member column (app mode, or wide screens) lists who is in the current conversation by hoisted role and
+// presence; Unity and "<person> · Claude" carry a BOT badge.
 const GUILDS = (() => {
+  const DM = '@dm'; // G.server while the Direct messages view is open
   const G = { data: null, ver: 0, server: 'mills' };
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const isGuildConv = (c) => /^(ch|grp):/.test(String(c || ''));
+  const isDmConv = (c) => /^(dm|grp):/.test(String(c || '')); // a DM or a group DM: the Direct messages view
   const has = (c) => !!(G.data && (G.data.servers.some((s) => s.channels.some((ch) => ch.conv === c)) || G.data.groups.some((g) => g.conv === c)));
   function find(c) { // → { kind: 'ch', server, channel } | { kind: 'grp', group } | null
     if (!G.data) return null;
@@ -23,7 +26,7 @@ const GUILDS = (() => {
   const label = (c) => { const f = find(c); return !f ? c : f.kind === 'ch' ? '# ' + f.channel.name : f.group.name; };
   const members = (c) => { const f = find(c); return !f ? [] : f.kind === 'ch' ? f.channel.members || f.server.members : f.group.members; }; // a private channel: only who may see it
   const serverOf = (c) => { const f = find(c); return f && f.kind === 'ch' ? f.server.id : null; };
-  const current = () => (G.data ? G.data.servers.find((x) => x.id === G.server) || G.data.servers[0] : null);
+  const current = () => (G.data && G.server !== DM ? G.data.servers.find((x) => x.id === G.server) || G.data.servers[0] : null);
   const can = (s, p) => !!(s && s.me && s.me.perms.includes(p));
   const nickIn = (c, u) => { const f = find(c); return f && f.kind === 'ch' && f.server.nicks ? f.server.nicks[u] || '' : ''; };
   // ── role-based looks: the highest coloured role decides a name's colour inside that server only ──
@@ -68,8 +71,8 @@ const GUILDS = (() => {
   async function refresh() {
     if (!me) return;
     try { G.data = await json('/api/guilds'); G.ver = G.data.ver; } catch { return; }
-    if (!G.data.servers.some((s) => s.id === G.server)) G.server = 'mills';
-    const sv = serverOf(currentConv); if (sv) G.server = sv;
+    if (G.server !== DM && !G.data.servers.some((s) => s.id === G.server)) G.server = 'mills';
+    const sv = serverOf(currentConv); if (sv) G.server = sv; else if (isDmConv(currentConv)) G.server = DM;
     if (isGuildConv(currentConv) && !has(currentConv)) selectConv('room'); // kicked, banned, left, or the channel went private
     render();
     if (typeof GSET !== 'undefined') GSET.refreshOpen();
@@ -82,6 +85,9 @@ const GUILDS = (() => {
   function renderRail() {
     const rail = $('serverRail'); if (!rail || !G.data) return;
     rail.textContent = '';
+    const dm = el('button', 'srv dms' + (G.server === DM ? ' on' : '')); dm.type = 'button'; dm.title = 'Direct messages and group DMs';
+    dm.append(ic('dms')); const dmBadge = el('span', 'badge'); dmBadge.hidden = true; dmBadge.dataset.serverBadge = DM; dm.append(dmBadge);
+    dm.onclick = () => openDms(); rail.append(dm, el('div', 'railSep'));
     for (const s of G.data.servers) {
       const b = el('button', 'srv' + (s.id === G.server ? ' on' : '')); b.type = 'button';
       b.title = s.name + (s.everyone ? ' · everyone' : ' · ' + s.members.length + ' member' + (s.members.length === 1 ? '' : 's')) + (s.locked ? ' · password locked' : '') + (s.description ? '\n' + s.description : '');
@@ -96,10 +102,30 @@ const GUILDS = (() => {
     const add = el('button', 'srv add'); add.type = 'button'; add.title = 'Make a server'; add.append(ic('plus')); add.onclick = () => GSET.newServer(); rail.append(add);
     const join = el('button', 'srv add'); join.type = 'button'; join.title = 'Join a server with an invite code or link'; join.append(ic('link')); join.onclick = () => GSET.join(); rail.append(join);
   }
-  // ── channels of the picked server (by category), then groups ──
+  // ── the Direct messages view: open it on the last DM (or group DM) you were in ──
+  function openDms() {
+    G.server = DM; render();
+    if (isDmConv(currentConv)) return;
+    const last = store.get('mills.lastDm.' + me.username), ok = (c) => c && (/^grp:/.test(c) ? has(c) : memberOf(convPeer(c)));
+    const first = (G.data.groups[0] || {}).conv || (roomMembers.find((m) => m.username !== me.username) ? dmConv(roomMembers.find((m) => m.username !== me.username).username) : '');
+    const to = ok(last) ? last : first; if (to) selectConv(to);
+  }
+  function renderDms(box) {
+    const head = el('div', 'chHead'); head.append(el('b', '', 'Direct messages')); box.append(head);
+    const glist = $('grpList'); if (!glist) return;
+    const gs = el('div', 'chSect'); gs.append(el('span', '', 'Group DMs'));
+    const gp2 = el('button', 'ghost tiny'); gp2.type = 'button'; gp2.title = 'New group DM'; gp2.append(ic('plus')); gp2.onclick = () => GSET.newGroup(); gs.append(gp2); glist.append(gs);
+    for (const g of G.data.groups) glist.append(convButton(g.conv, '', g.name, g.members.map((u) => nickOf(u)).join(', '), null, g));
+    if (!G.data.groups.length) glist.append(el('div', 'chNone', 'no group DMs yet'));
+  }
+  // ── channels of the picked server (by category); DMs and group DMs live in the Direct messages view ──
   function renderChannels() {
     const box = $('chanList'); if (!box || !G.data) return;
     box.textContent = '';
+    const glist = $('grpList'); if (glist) glist.textContent = '';
+    const inDms = G.server === DM;
+    for (const id of ['convList', 'grpList', 'keyList']) if ($(id)) $(id).hidden = !inDms;
+    if (inDms) return renderDms(box);
     const s = current();
     if (!s) return;
     const head = el('div', 'chHead');
@@ -116,11 +142,6 @@ const GUILDS = (() => {
       box.append(sect);
       for (const ch of s.channels.filter((c) => (c.category || 'Text channels') === cat)) box.append(convButton(ch.conv, ch.private ? '' : '#', ch.name, [s.settings && s.settings.rulesChannel === ch.id ? 'rules' : '', ch.slowmode ? 'slowmode' : '', ch.topic || (ch.conv === 'room' ? 'the whole team' : '')].filter(Boolean).join(' · '), ch, null, s));
     });
-    const gs = el('div', 'chSect'); gs.append(el('span', '', 'Groups'));
-    const gp = el('button', 'ghost tiny'); gp.type = 'button'; gp.title = 'New group conversation'; gp.append(ic('plus')); gp.onclick = () => GSET.newGroup(); gs.append(gp); box.append(gs);
-    for (const g of G.data.groups) box.append(convButton(g.conv, '', g.name, g.members.map((u) => nickOf(u)).join(', '), null, g));
-    if (!G.data.groups.length) box.append(el('div', 'chNone', 'no groups yet'));
-    const dmHead = el('div', 'chSect'); dmHead.append(el('span', '', 'Direct messages')); box.append(dmHead);
   }
   function convButton(conv, prefix, name, sub, ch, g, s) {
     const b = el('button', 'cv ch' + (conv === currentConv ? ' on' : '')); b.type = 'button';
@@ -193,5 +214,5 @@ const GUILDS = (() => {
     const u = new URL(location.href); u.searchParams.delete('invite'); history.replaceState(null, '', u.pathname + u.search + u.hash);
     setTimeout(() => GSET.join(code), 300);
   }
-  return { isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, renderPins, op, can, current, nickIn, canPost, canPin, canModerate, pinned, pin, mentionsOnly, pendingInvite, colorIn, roleColor, mentionableRoles, roleByHandle, mentionsMyRole, rolesOfUser, state: G };
+  return { DM, isDmConv, openDms, isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, renderPins, op, can, current, nickIn, canPost, canPin, canModerate, pinned, pin, mentionsOnly, pendingInvite, colorIn, roleColor, mentionableRoles, roleByHandle, mentionsMyRole, rolesOfUser, state: G };
 })();
