@@ -1,0 +1,9 @@
+# VibeRoller auto-deploy (one run; the timer below fires it every minute). deploy/setup-server.sh installs both to
+# ~/.config/systemd/user/ with the path filled in.
+[Unit]
+Description=VibeRoller: deploy a new main from Forgejo to the live checkout
+
+[Service]
+Type=oneshot
+Environment=PATH=__BASE__/node/current/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/sh __BASE__/app/deploy/autodeploy.sh __BASE__/app

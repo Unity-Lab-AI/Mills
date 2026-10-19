@@ -1,0 +1,22 @@
+# VibeRollerAIHost on Linux: a systemd SYSTEM service that runs this machine's VibeRoller AI node (ai-node.js) from boot,
+# before anyone signs in. install-ai-host-service.sh fills in the folder and the user and installs it (sudo, once).
+#   start:  sudo systemctl start viberoller-ai-host      (or start-viberoller-host.sh, the heart)
+#   stop:   sudo systemctl stop viberoller-ai-host       (or stop-viberoller-host.sh, the knife)
+#   logs:   journalctl -u viberoller-ai-host -f
+[Unit]
+Description=VibeRoller AI Host (lends this machine's AI engines to the VibeRoller server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=/usr/bin/env node ai-node.js
+Restart=always
+RestartSec=5
+# exit code 2 = another node already runs here (its single-instance lock): not a failure, try again later
+SuccessExitStatus=0 2
+
+[Install]
+WantedBy=multi-user.target
