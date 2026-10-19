@@ -62,8 +62,8 @@ nginx -t && systemctl reload nginx
 ```
 
 Then the short name: a DNS `A` record `portal.unityailab.com → 135.148.100.111` (and `AAAA 2604:2dc0:100:386f::`), and
-`certbot --nginx -d portal.unityailab.com` (or expand the `unityailab.com` certificate with that name). Until then
-`https://portal.git.unityailab.com` is the address, and `publicUrl` in `bridge/config.local.json` should say so.
+`certbot --nginx -d portal.unityailab.com` (or expand the `unityailab.com` certificate with that name). Done on
+2026-10-19: both names answer, the certificate covers them, and the hub's `publicUrl` is `https://portal.unityailab.com`.
 
 ## 3. Nobody's login on the server
 

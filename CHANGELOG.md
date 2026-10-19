@@ -6,6 +6,20 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 2.1.1 — 2026-10-19
+
+### Fixed
+- `deploy/setup-server.sh` sets `core.fileMode false` on the live checkout, so marking the deploy script executable on the
+  server no longer counts as a local change that blocks the auto-deploy (it blocked the 2.1.0 deploy once; the server
+  was fixed by hand). No module changed.
+
+### Changed
+- The portal is live: nginx sites installed, `portal.unityailab.com` has its DNS record and certificate, and the server
+  hub's `publicUrl` is `https://portal.unityailab.com`.
+- Both nginx site files now open `/node/` to everyone (an AI host connects from its home and answers only to its own id +
+  secret) while everything else stays inside-only, and `viberoller.git.unityailab.com` follows the same rules as the
+  portal, so there is no second, public sign-in page. (Needs the root reload once more.)
+
 ## 2.1.0 — 2026-10-19
 
 **AI hosts become providers.** Nobody's login sits on the server: Gee's PC (or anyone's) runs the VibeRoller AI Host
