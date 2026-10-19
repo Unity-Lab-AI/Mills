@@ -9,6 +9,7 @@
 // Running server.js directly still works for local use, but gives no tunnel and no self-restart.
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const { ROOT, readJson, writeJson, profileFromArgv, loadProfile } = require('./common');
@@ -21,7 +22,22 @@ const tag = `[mills${PROFILE ? ':' + PROFILE : ''}]`;
 let app = null, cf = null, shuttingDown = false, crashes = [];
 
 // ---------- bridge app ----------
+// Handed off (bridge/.handoff, written by bridge/handoff.js switch): the hub lives on the server now, and this machine
+// runs the AI host (bridge/ai-node.js) instead, lending its Claude and Unity's engines to it. No tunnel then.
+const HANDED_OFF = () => fs.existsSync(path.join(ROOT, '.handoff'));
 function startApp() {
+  if (HANDED_OFF()) {
+    console.log(`${tag} Handed off: the hub lives on the server; this machine runs the VibeRoller AI Host (bridge/ai-node.js). "node bridge/handoff.js undo" brings the hub back here.`);
+    app = spawn(process.execPath, [path.join(ROOT, 'ai-node.js')], { stdio: 'inherit', windowsHide: true });
+    app.on('exit', (code) => {
+      app = null;
+      if (shuttingDown) return;
+      if (code === 0 || code === 2) return shutdown(code); // 2 = another AI host already runs here
+      console.log(`${tag} AI host exited with code ${code}; restarting in 5 s.`);
+      setTimeout(startApp, 5000);
+    });
+    return;
+  }
   app = spawn(process.execPath, [path.join(ROOT, 'server.js'), ...process.argv.slice(2)], {
     stdio: 'inherit', env: { ...process.env, MILLS_SUPERVISED: '1' }, windowsHide: true,
   });
@@ -107,5 +123,5 @@ process.on('exit', () => { if (cf) cf.kill(); if (app) app.kill(); });
 
 startApp();
 // Open the tunnel only once the app has survived startup: if its port was already taken (another
-// window has this bridge) we must not overwrite that bridge's published address.
-if (!NO_TUNNEL) setTimeout(() => { if (app && !shuttingDown) startTunnel(); }, 1500);
+// window has this bridge) we must not overwrite that bridge's published address. Never after a hand-off.
+if (!NO_TUNNEL && !HANDED_OFF()) setTimeout(() => { if (app && !shuttingDown && !HANDED_OFF()) startTunnel(); }, 1500);

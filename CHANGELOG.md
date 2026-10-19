@@ -6,6 +6,27 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 2.2.0 — 2026-10-19
+
+### Added
+- **The hand-off: the move with nothing for Gee to do.** `node bridge/handoff.js pack --to ovh` makes the running hub pack
+  its own data (accounts with their password hashes and device locks, chat + key, board, notes, pictures, saved sessions,
+  settings; a tar.gz written by the hub itself), carry it to the server over ssh and run the restore there; meanwhile this
+  hub pauses writes (`bridge/.maintenance`: sign-ins, chat, board and notes answer "VibeRoller has moved to …", the Work
+  run doing the move keeps going). `node bridge/handoff.js switch` then hands off: `bridge/.handoff` makes `run.js`
+  (start.bat, the autostart launcher, the service) run the **AI host** here instead of the hub, from the next graceful
+  restart and at every start, with no tunnel. `undo` brings the hub back. A Work run may run it (allowed tool). Check R146.
+  Modules: bridge/handoff.js 1.0.0 (new), bridge/run.js 1.1.0, bridge/server.js 2.2.0.
+- Gee's PC's AI host config now offers his Claude to the group (mills, sponge, gee) besides Unity's engines, so once handed
+  off his PC is the team's Claude with his login staying there.
+
+### Changed
+- **The portal is a normal address.** Sponge: "All of this is actually way too much for gee or mills to directly handle with
+  this hyper security shit, I think instead of 404, people who go there with no username and password cant do anything."
+  Both nginx site files drop the inside-only rule and the droids 404: anyone can reach the sign-in page at
+  https://portal.unityailab.com, and the sign-in (username + password + device lock) is the protection. No SSH tunnel or
+  proxy is needed any more. README, deploy/README and check R139 follow.
+
 ## 2.1.1 — 2026-10-19
 
 ### Fixed
