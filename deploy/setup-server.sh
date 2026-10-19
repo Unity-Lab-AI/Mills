@@ -53,6 +53,7 @@ say "Live checkout ($APP)"
 if [ -d "$APP/.git" ]; then git -C "$APP" fetch -q origin main && git -C "$APP" merge -q --ff-only origin/main && echo "fast-forwarded to $(git -C "$APP" rev-parse --short HEAD)"
 else git clone -q "$REPO" "$APP" && echo "cloned $(git -C "$APP" rev-parse --short HEAD)"; fi
 git -C "$APP" config core.sharedRepository group
+git -C "$APP" config core.fileMode false # a chmod on the server (the deploy script's +x) is not a change that should block a deploy
 [ -f "$HOME_DIR/.gitconfig" ] || HOME=$HOME_DIR git config --global user.name "VibeRoller hub" && HOME=$HOME_DIR git config --global user.email "viberoller@$HOST"
 
 say "Server settings (bridge/config.local.json)"
