@@ -550,7 +550,7 @@ function runAgentLocal(target, caller) {
   roomChanged(); // browsers show "Unity is typing…" while she composes
   assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' })
     .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join('') + (r.media || []).map((v) => `\n[[youtube:${v}]]`).join(''))
-    .catch((e) => `(my brain glitched: ${e.message})`)
+    .catch((e) => (/AI host is offline/.test(e.message) ? e.message : `(my brain glitched: ${e.message})`)) // no AI host: say so plainly
     .then((text) => {
       agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
       if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }

@@ -6,6 +6,32 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 1.5.0 — 2026-10-18
+
+### Added
+- **The move kit is complete** (`deploy/README.md`): `deploy/setup-server.sh` does every root step on the server in
+  one go (service user, live checkout, settings, systemd service, a deploy key locked to one command, the nginx site)
+  and prints what is left for people; `deploy/pack-data.cmd` / `.sh` pack exactly the hub's data on the old host with
+  the hub stopped; `deploy/restore-data.sh` puts it on the server, refusing anything that is not hub data and never
+  overwriting existing accounts. Checks R139.
+- **No AI host, everything still reachable.** When the machine lending Unity's engines is off or paused, the hub counts
+  its node offline within a minute (`aiNodeOfflineMs`), refuses new engine calls at once instead of waiting, fails a
+  job no node picks up within 40 s, and Unity says "my AI host is offline" plainly in her section and in the chat.
+  Chat, the board, notes, Work's saved conversation, sign-in and people's own AI keys never wait on it. Checks R138.
+- **Gee's PC after the move runs the AI node**: `bridge/start-node.bat` / `.sh`, `bridge/ai-node.example.json`; the
+  autostart launcher and the heart start the node when `bridge/ai-node.json` exists (the hub otherwise); the node has
+  a single-instance lock (`bridge/ai-node.lock`), so a second copy just closes.
+- `node bridge/worktree.js repair [--repo <host folder>]`: after the host folder is renamed or moved (it became
+  `VibeRoller` today), every person's worktree pointer is fixed; a Work run also heals its own worktree by itself.
+
+### Fixed
+- The GitHub Pages workflow ran on Forgejo too (and failed there); it now runs on GitHub only.
+- Gee's autostart launcher pointed at the old `Mills` folder after the rename.
+
+### Changed
+- Modules: bridge/ai-node.js 1.1.0, bridge/ai-nodes.js 1.1.0, bridge/assistant.js 1.1.1, bridge/server.js 1.4.1,
+  bridge/worktree.js 1.1.0. The deploy workflow now makes one SSH call to the key's fixed command.
+
 ## 1.4.0 — 2026-10-18
 
 ### Added

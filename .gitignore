@@ -48,6 +48,7 @@ bridge/forgejo.json
 # this machine's own hub settings, laid over config.json (deploy/config.local.example.json)
 bridge/config.local.json
 bridge/ai-node.json
+bridge/ai-node.lock
 # the host's AI on/off switch + the host tools built on that machine (bridge/host-tools/build.cmd)
 bridge/ai-host.off
 bridge/host-tools/*.exe

@@ -1,15 +1,18 @@
 #!/usr/bin/env node
-// Per-account git worktrees for working ON the Mills project, so several people can have Claude
-// change Mills at the same time without stepping on each other.
+// Per-account git worktrees for working ON VibeRoller itself, so several people can have Claude change it at the
+// same time without stepping on each other.
 //
-//   <Desktop>/Mills-worktrees/<username>   branch work/<username>, created from develop on first use
+//   <worktree root>/<username>             branch work/<username>, created from develop on first use; the root is
+//                                          config worktreeRoot, else "Mills-worktrees" next to the host folder
 //   merges into develop happen where develop is checked out (e.g. the host folder), or else in a
-//   temporary detached checkout (Mills-worktrees/_merge-<pid>) removed right after, so develop
+//   temporary detached checkout (<root>/_merge-<pid>) removed right after, so develop
 //   stays free for the host folder to check out
-//   Mills/ (the host folder)               the "shared folder": the running hub's own checkout
+//   the host folder                        the "shared folder": the running hub's own checkout
 //
 //   node bridge/worktree.js status                  every worktree, its branch and whether it has uncommitted changes
 //   node bridge/worktree.js ensure <username>       create the worktree if it does not exist yet, print its path
+//   node bridge/worktree.js repair [--repo <dir>]   after the host folder was renamed or moved: fix every worktree's
+//                                                   pointer back to it (ensure does this by itself for one worktree)
 //   node bridge/worktree.js commit <username> [msg] stage and commit everything uncommitted in that worktree
 //   node bridge/worktree.js sync <username>        merge the latest develop into work/<username>
 //   node bridge/worktree.js merge <username>        merge work/<username> into develop and push develop
@@ -52,12 +55,32 @@ const dirty = (dir) => git(dir, 'status', '--porcelain').length > 0;
 const branchExists = (b) => tryGit(REPO, 'rev-parse', '--verify', '--quiet', 'refs/heads/' + b).ok;
 function checkUser(u) { if (!USERNAME_RE.test(u || '')) throw new Error('Usage: a username (lowercase letters, digits, dashes).'); return u; }
 
+// A worktree's .git file names the main checkout's folder. Renaming or moving the host folder leaves every worktree
+// pointing at the old place, and git refuses to work inside them until `git worktree repair <dir>` (run from the main
+// checkout) rewrites the pointer. ensure() heals the one it hands out; repair() heals them all.
+const healthy = (dir) => tryGit(dir, 'rev-parse', '--git-dir').ok;
+function repair(repo = REPO) {
+  const root = path.resolve(loadProfile('').config.worktreeRoot || path.join(repo, '..', 'Mills-worktrees'));
+  const dirs = fs.existsSync(root) ? fs.readdirSync(root).map((d) => path.join(root, d)).filter((d) => !path.basename(d).startsWith('_') && fs.existsSync(path.join(d, '.git'))) : [];
+  const lines = [];
+  for (const d of dirs) {
+    if (healthy(d)) continue;
+    const r = tryGit(repo, 'worktree', 'repair', d);
+    lines.push(`${path.basename(d)}: ${r.ok && healthy(d) ? 'repaired (pointed back at ' + repo + ')' : 'could not repair: ' + r.out.split('\n').pop()}`);
+  }
+  tryGit(repo, 'worktree', 'prune');
+  return lines.length ? lines : [`Every worktree under ${root} is fine.`];
+}
+
 function ensure(username) {
   checkUser(username);
   const dir = path.join(WT_ROOT, username), branch = 'work/' + username;
   const existing = worktrees().find((w) => same(w.dir, dir));
-  if (existing) return { dir, branch: existing.branch || branch, created: false };
-  if (fs.existsSync(dir)) throw new Error(`${dir} exists but is not a git worktree of Mills. Move it away first.`);
+  if (existing) {
+    if (!healthy(dir)) git(REPO, 'worktree', 'repair', dir); // the host folder moved since this worktree was made
+    return { dir, branch: existing.branch || branch, created: false };
+  }
+  if (fs.existsSync(dir)) throw new Error(`${dir} exists but is not a git worktree of VibeRoller. Move it away first.`);
   fs.mkdirSync(WT_ROOT, { recursive: true });
   tryGit(REPO, 'worktree', 'prune');
   if (branchExists(branch)) git(REPO, 'worktree', 'add', dir, branch);
@@ -164,17 +187,23 @@ function live(opts = {}) {
   return lines;
 }
 
-module.exports = { ensure, WT_ROOT, REPO };
+module.exports = { ensure, repair, WT_ROOT, REPO };
 
 if (require.main === module) {
-  const [cmd, user, ...rest] = process.argv.slice(2);
+  const argv = process.argv.slice(2), repoAt = argv.indexOf('--repo'), repoArg = repoAt >= 0 ? path.resolve(argv.splice(repoAt, 2)[1] || '') : '';
+  const [cmd, user, ...rest] = argv;
   try {
     if (cmd === 'status') console.log(status());
+    else if (cmd === 'repair') {
+      const repo = repoArg || REPO;
+      if (!tryGit(repo, 'rev-parse', '--git-dir').ok) throw new Error(`${repo} is not a git checkout. From a worktree whose pointer is broken, name the host folder: node bridge/worktree.js repair --repo <host folder>`);
+      console.log(repair(repo).join('\n'));
+    }
     else if (cmd === 'ensure') { const w = ensure(user); console.log(`${w.created ? 'Created' : 'Exists'}: ${w.dir} (${w.branch})`); }
     else if (cmd === 'commit') console.log(commit(user, rest.join(' ')));
     else if (cmd === 'sync') console.log(sync(user));
     else if (cmd === 'merge') console.log(merge(user));
     else if (cmd === 'live') console.log(live({ restart: process.argv.includes('--restart') }).join('\n'));
-    else { console.error('Usage: node bridge/worktree.js status | ensure <username> | commit <username> [message] | sync <username> | merge <username> | live [--restart]'); process.exit(1); }
+    else { console.error('Usage: node bridge/worktree.js status | repair [--repo <host folder>] | ensure <username> | commit <username> [message] | sync <username> | merge <username> | live [--restart]'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }
 }
