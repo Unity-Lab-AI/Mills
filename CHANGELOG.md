@@ -6,6 +6,15 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.2.1 — 2026-10-19
+
+### Fixed
+- `LAWS.md` is published: the whitelist `.gitignore` (only listed top-level files go to the remotes) kept it out of
+  3.2.0, so the server's Work runs did not get the worktree law. Check R150 now makes sure it is not ignored.
+- The auto-deploy runs from a copy of itself (`deploy-state/autodeploy.run.sh`): a deploy rewrites `autodeploy.sh`
+  while it runs, and sh reads a script as it goes (the 3.2.0 deploy ran half old, half new and skipped its log line).
+  No module changed.
+
 ## 3.2.0 — 2026-10-19
 
 The stability pass (board T-114). Sponge: worktrees that stay fresh, Forgejo used as intended, older AI hosts accepted,

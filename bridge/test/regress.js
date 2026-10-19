@@ -725,7 +725,8 @@ async function run() {
       && chk3.status === 3 && /wrong branch/.test(chk3.stdout) && renewed && /Everything came over/.test(upd.stdout)
       && /NOT everything came over/.test(clash.stdout) && oldHasEdit
       && /pushed it to Forgejo/.test(mergeOk.stdout) && onForgejo === 'Merge work/t-user into develop' && mergeRefused.status !== 0 && /nothing was merged anywhere/.test(mergeRefused.stderr) && devBefore === devAfter
-      && /config\.local\.json/.test(wtSrc150) && /const CFG = \(\(\) => \{/.test(wtSrc150) && /\['LAWS\.md', 'CLAUDE\.md'\]/.test(srvSrc150) && /freshLaw\(acct, wd\)/.test(srvSrc150) && /checkFresh\(acct\); \/\/ the finding lands/.test(srvSrc150) && /Worktree law/.test(laws),
+      && /config\.local\.json/.test(wtSrc150) && /const CFG = \(\(\) => \{/.test(wtSrc150) && /\['LAWS\.md', 'CLAUDE\.md'\]/.test(srvSrc150) && /freshLaw\(acct, wd\)/.test(srvSrc150) && /checkFresh\(acct\); \/\/ the finding lands/.test(srvSrc150) && /Worktree law/.test(laws)
+      && spawnSync('git', ['check-ignore', '-q', 'LAWS.md'], { cwd: MILLS }).status === 1, // published, not swallowed by the whitelist .gitignore (3.2.0 shipped without it)
       `parts ${JSON.stringify({ pushed1, pushed2, chk1: chk1.status, chk3: chk3.status, chk3wrong: /wrong branch/.test(chk3.stdout), renewed, updAll: /Everything came over/.test(upd.stdout), clash: /NOT everything came over/.test(clash.stdout), oldHasEdit, mergeOk: /pushed it to Forgejo/.test(mergeOk.stdout), onForgejo, refusedMsg: /nothing was merged anywhere/.test(mergeRefused.stderr), devSame: devBefore === devAfter, laws: /Worktree law/.test(laws) })} upd "${upd.stdout.replace(/\s+/g, ' ').slice(-200)}"; chk1 ${chk1.status} "${chk1.stdout.trim().slice(0, 120)}"; auto "${auto1.stdout.trim().slice(-60)}" ff ${ff1}; chk2 ${chk2.status}; chk3 ${chk3.status}; renewed ${renewed} "${upd.stdout.replace(/\s+/g, ' ').slice(0, 300)}"; clash kept ${!!oldKept} edit ${oldHasEdit}; merge "${mergeOk.stdout.split('\n')[0]}" forgejo "${onForgejo}"; refused ${mergeRefused.status} "${mergeRefused.stderr.trim().slice(0, 100)}" dev same ${devBefore === devAfter}`);
   }
 
@@ -2166,7 +2167,7 @@ async function run() {
     const srv151 = fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8');
     check('R151', 'deploys never break the hub: the auto-deploy snapshots the data first, asks for a graceful restart and checks the hub comes up on the new commit (/api/status reports it, locally only); a release that does not come up is rolled back to the last good commit by itself (the data untouched, the chat told on the next start) and not retried until main moves on; one that does not parse never starts; a later fix deploys normally; [static] the hub announces a rollback and keeps running after an uncaught error',
       (!runnable || (out.deployed && out.snapshot && out.verified && out.waited && out.rolledBack && out.dataKept && out.notRetried && out.fixDeployed && out.parseRefused))
-      && /commit: RUNNING_COMMIT/.test(srv151) && /\.rolled-back/.test(srv151) && /process\.on\('uncaughtException'/.test(srv151),
+      && /VR_AUTODEPLOY_COPY=1 exec sh/.test(ad) && /commit: RUNNING_COMMIT/.test(srv151) && /\.rolled-back/.test(srv151) && /process\.on\('uncaughtException'/.test(srv151),
       runnable ? JSON.stringify(out) : 'sh / curl not available: source checks only');
   }
 
