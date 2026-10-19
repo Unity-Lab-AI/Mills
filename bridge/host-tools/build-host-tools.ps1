@@ -1,6 +1,7 @@
-# Builds the VibeRoller host tools on Windows, once:  right-click > Run with PowerShell, or run build.cmd.
-#   start-viberoller-host.exe  (black heart icon)  switch this machine's AI hosting on (starts VibeRoller if needed)
-#   stop-viberoller-host.exe   (knife icon)        pause this machine's AI hosting; VibeRoller keeps running for everyone
+# Builds the VibeRoller AI host tools on Windows, once:  right-click > Run with PowerShell, or run build.cmd.
+#   start-viberoller-ai-host.exe  (black heart icon)  start this PC's AI host (the VibeRollerAIHost service, or the node / hub)
+#   stop-viberoller-ai-host.exe   (knife icon)        stop it; VibeRoller on the server keeps running for everyone
+#   VibeRollerAIHost.exe          (heart icon)        the Windows service itself (install-ai-host-service.cmd registers it to start at boot)
 # Uses only what Windows already has: .NET Framework's C# compiler (csc.exe) and System.Drawing for the icons.
 # Output lands next to this script; it also puts shortcuts on the Desktop. Re-run any time (it overwrites).
 $ErrorActionPreference = 'Stop'
@@ -53,20 +54,28 @@ $g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255
 foreach ($x in 178, 206) { $g.FillEllipse((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 210, 214, 224))), $x, 120, 12, 12) }
 $g.Dispose(); Save-Ico $b (Join-Path $here 'knife.ico'); $b.Dispose()
 
-# ── compile both tools from HostTool.cs with the C# compiler that ships with Windows ──
+# ── compile the tools with the C# compiler that ships with Windows ──
 $csc = Get-ChildItem "$env:WINDIR\Microsoft.NET\Framework64\v4*\csc.exe", "$env:WINDIR\Microsoft.NET\Framework\v4*\csc.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
 if (-not $csc) { throw 'The .NET Framework 4 C# compiler (csc.exe) was not found under Windows\Microsoft.NET.' }
 $src = Join-Path $here 'HostTool.cs'
-& $csc.FullName /nologo /target:winexe /optimize+ /define:START /win32icon:"$here\heart.ico" /reference:System.Windows.Forms.dll /out:"$here\start-viberoller-host.exe" $src
-if ($LASTEXITCODE) { throw 'Building start-viberoller-host.exe failed.' }
-& $csc.FullName /nologo /target:winexe /optimize+ /define:STOP /win32icon:"$here\knife.ico" /reference:System.Windows.Forms.dll /out:"$here\stop-viberoller-host.exe" $src
-if ($LASTEXITCODE) { throw 'Building stop-viberoller-host.exe failed.' }
+$refs = '/reference:System.Windows.Forms.dll', '/reference:System.ServiceProcess.dll'
+& $csc.FullName /nologo /target:winexe /optimize+ /define:START /win32icon:"$here\heart.ico" @refs /out:"$here\start-viberoller-ai-host.exe" $src
+if ($LASTEXITCODE) { throw 'Building start-viberoller-ai-host.exe failed.' }
+& $csc.FullName /nologo /target:winexe /optimize+ /define:STOP /win32icon:"$here\knife.ico" @refs /out:"$here\stop-viberoller-ai-host.exe" $src
+if ($LASTEXITCODE) { throw 'Building stop-viberoller-ai-host.exe failed.' }
+# the service: a console-subsystem exe (services must not be winexe), with the heart as its icon
+& $csc.FullName /nologo /target:exe /optimize+ /win32icon:"$here\heart.ico" /reference:System.ServiceProcess.dll /out:"$here\VibeRollerAIHost.exe" (Join-Path $here 'AiHostService.cs')
+if ($LASTEXITCODE) { throw 'Building VibeRollerAIHost.exe failed.' }
+# older names from before the service existed: remove them so there is one heart and one knife
+foreach ($old in 'start-viberoller-host.exe', 'stop-viberoller-host.exe') { Remove-Item (Join-Path $here $old) -ErrorAction SilentlyContinue }
+$desk = [Environment]::GetFolderPath('Desktop')
+foreach ($old in 'Start VibeRoller AI host.lnk', 'Stop VibeRoller AI host.lnk') { Remove-Item (Join-Path $desk $old) -ErrorAction SilentlyContinue }
 
 # ── Desktop shortcuts (they keep the icons) ──
 $shell = New-Object -ComObject WScript.Shell
-$desk = [Environment]::GetFolderPath('Desktop')
-foreach ($t in @(@('start-viberoller-host', 'Start VibeRoller AI host'), @('stop-viberoller-host', 'Stop VibeRoller AI host'))) {
+foreach ($t in @(@('start-viberoller-ai-host', 'Start VibeRoller AI Host'), @('stop-viberoller-ai-host', 'Stop VibeRoller AI Host'))) {
   $lnk = $shell.CreateShortcut((Join-Path $desk ($t[1] + '.lnk')))
   $lnk.TargetPath = Join-Path $here ($t[0] + '.exe'); $lnk.WorkingDirectory = $here; $lnk.Description = $t[1]; $lnk.Save()
 }
-Write-Host 'Built start-viberoller-host.exe (heart) and stop-viberoller-host.exe (knife), with shortcuts on the Desktop.'
+Write-Host 'Built start-viberoller-ai-host.exe (heart), stop-viberoller-ai-host.exe (knife) and VibeRollerAIHost.exe (the service), with shortcuts on the Desktop.'
+Write-Host 'Next: install-ai-host-service.cmd registers the service to start at boot (it asks for administrator rights once).'

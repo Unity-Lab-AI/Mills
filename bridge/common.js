@@ -27,6 +27,13 @@ function profileFromArgv(argv = process.argv) {
   return (i >= 0 && argv[i + 1]) || process.env.MILLS_PROFILE || '';
 }
 
+const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+function overlay(base, local) {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(local || {})) out[k] = isPlain(v) && isPlain(base[k]) ? { ...base[k], ...v } : v;
+  return out;
+}
+
 function loadProfile(PROFILE) {
   if (PROFILE && !/^[a-z0-9-]{1,32}$/.test(PROFILE)) {
     console.error('Profile names use lowercase letters, digits and dashes only.');
@@ -34,9 +41,10 @@ function loadProfile(PROFILE) {
   }
   const PROFILE_DIR = PROFILE ? path.join(ROOT, 'profiles', PROFILE) : ROOT;
   // config.json (tracked, the shared defaults) + config.local.json (gitignored, this machine's own settings, e.g. a
-  // server's publicUrl / tunnel: false / behindProxy / worktreeRoot): the local file wins key by key, so a server's
-  // git checkout stays clean and a deploy is a plain fast-forward pull.
-  const baseConfig = Object.assign(readJson(path.join(ROOT, 'config.json'), {}), readJson(path.join(ROOT, 'config.local.json'), {}));
+  // server's publicUrl / tunnel: false / behindProxy / worktreeRoot / projectsRoot): the local file wins key by key, so
+  // a server's git checkout stays clean and a deploy is a plain fast-forward pull. A nested object (assistant, aiNodes)
+  // is merged one level deep, so the local file can set assistant.via without repeating the rest of assistant.
+  const baseConfig = overlay(readJson(path.join(ROOT, 'config.json'), {}), readJson(path.join(ROOT, 'config.local.json'), {}));
   let profileConfig = PROFILE ? readJson(path.join(PROFILE_DIR, 'config.json'), null) : {};
   // An account whose config.json went missing still has its password: keep it signing in
   // (display name = username, not admin) instead of silently dropping the account.

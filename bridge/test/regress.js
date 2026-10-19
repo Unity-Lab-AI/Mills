@@ -181,6 +181,9 @@ async function setup() {
     if ((f.endsWith('.js') && f !== 'master-logins.js') || f === 'cloudflared-quick.yml') fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   }
   fs.copyFileSync(path.join(__dirname, 'fake-claude.js'), path.join(SB, 'test', 'fake-claude.js'));
+  // what the Download panel packs (bridge/downloads.js): the AI node's launchers, example config and host tools
+  for (const f of ['ai-node.example.json', 'start-node.bat', 'start-node.sh']) fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
+  fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
   for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
   PORT = await freePort(7799);
@@ -188,11 +191,11 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'hub.log', 'ai-node.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'hub.log', 'ai-node.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET }, aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET }, aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
@@ -510,17 +513,17 @@ async function run() {
   const ckU = (await call('/api/check', U)).data;
   const ownRun = await chat(U, 'where am I', { fresh: true });
   const branchU = fs.existsSync(wtU) ? execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: wtU, encoding: 'utf8' }).trim() : '';
-  check('R39', 'default workspace "own": run happens in worktrees/<username> on work/<username>', ckU.workspace === 'own' && samePath(cwdOf(ownRun.events), wtU) && branchU === 'work/t-user', cwdOf(ownRun.events));
-  const badWs = await call('/api/workspace', U, { workspace: 'elsewhere' });
-  const toShared = await call('/api/workspace', U, { workspace: 'shared' });
-  const sharedRun = await chat(U, 'where am I now', { fresh: true });
+  check('R39', 'default project VibeRoller: the run happens in worktrees/<username> on work/<username>; /api/check names the project and lists the projects (VibeRoller first)', ckU.project === 'VibeRoller' && Array.isArray(ckU.projects) && ckU.projects[0] && ckU.projects[0].name === 'VibeRoller' && ckU.projects[0].hub === true && samePath(cwdOf(ownRun.events), wtU) && branchU === 'work/t-user', cwdOf(ownRun.events));
+  const badWs = await call('/api/workspace', U, { project: 'elsewhere' });
+  const legacyShared = await call('/api/workspace', U, { workspace: 'shared' }); // an older page's request: the shared folder is gone, it means VibeRoller
+  const legacyRun = await chat(U, 'where am I now', { fresh: true });
   const slowWs = chat(U, 'SLOW hold'); await sleep(700);
-  const busyWs = await call('/api/workspace', U, { workspace: 'own' });
+  const busyWs = await call('/api/workspace', U, { project: 'VibeRoller' });
   await call('/api/stop', U, {}); await slowWs;
-  const backOwn = await call('/api/workspace', U, { workspace: 'own' });
-  const keptWs = (await call('/api/check', U)).data.workspace, otherWs = (await call('/api/check', A)).data.workspace;
-  check('R40', 'shared runs in the Mills folder; unknown → 400; while running → 409; back to own; per account', badWs.status === 400 && toShared.status === 200
-    && samePath(cwdOf(sharedRun.events), SCRATCH) && busyWs.status === 409 && backOwn.status === 200 && samePath(backOwn.data.dir, wtU) && keptWs === 'own' && otherWs === 'own');
+  const backOwn = await call('/api/workspace', U, { project: 'vibEROLLER' });
+  const keptWs = (await call('/api/check', U)).data.project, otherWs = (await call('/api/check', A)).data.project;
+  check('R40', 'the shared-folder choice is gone: an old "shared" request lands in the person\'s own VibeRoller worktree (never the hub\'s checkout); unknown project → 400; while running → 409; the project name is case-insensitive; per account', badWs.status === 400 && legacyShared.status === 200 && legacyShared.data.project === 'VibeRoller'
+    && samePath(cwdOf(legacyRun.events), wtU) && !samePath(cwdOf(legacyRun.events), SCRATCH) && busyWs.status === 409 && backOwn.status === 200 && samePath(backOwn.data.dir, wtU) && keptWs === 'VibeRoller' && otherWs === 'VibeRoller', `legacy ${legacyShared.status} ${JSON.stringify(legacyShared.data)} cwd ${cwdOf(legacyRun.events)}`);
   const mg = { status: -1, stdout: '', stderr: 'no worktree' };
   let onDevelop = false, again = '', stOut = '', badUser = false;
   if (fs.existsSync(wtU)) {
@@ -557,6 +560,57 @@ async function run() {
   check('R109', 'worktree.js live: develop → main (--no-ff) in the checkout that has main, pushes every remote, reports the deploy; second run = nothing to ship; main folder left clean; no restart without --restart; --restart writes the flag into the MAIN checkout\'s bridge (never its own copy) and works with nothing to ship too',
     lv.status === 0 && /Merged develop into main/.test(lv.stdout) && onMain && /Nothing to ship/.test(lvAgain) && mainClean && !fs.existsSync(path.join(SB, '.restart'))
     && /path\.join\(at\.dir, 'bridge', '\.restart'\)/.test(wtSrc109) && !/loadProfile\(''\)\.RESTART_FLAG|const \{ RESTART_FLAG \} = loadProfile/.test(wtSrc109) && /\.\.\.\(opts\.restart \? \[restart\(\)\] : \[\]\)/.test(wtSrc109), String(lv.stdout || lv.stderr).trim().split('\n')[0]);
+
+  // Projects (the shared projects area, config projectsRoot): anyone starts a new project or pulls in a repo; everyone
+  // works on a project in their own worktree of it; worktree.js --project merges work/<user> into its integration branch.
+  {
+    const wtJs = path.join(SB, 'worktree.js'), PR = path.join(SCRATCH, 'projects');
+    const wt = (...a) => spawnSync(process.execPath, [wtJs, ...a], { cwd: SB, encoding: 'utf8' });
+    const listBefore = await call('/api/projects', U);
+    const made = await call('/api/projects', U, { name: 'demo-app' });
+    const dup = await call('/api/projects', A, { name: 'Demo-App' });
+    const badName = await call('/api/projects', U, { name: '../evil' });
+    const badName2 = await call('/api/projects', U, { name: '_repo' });
+    const badUrl = await call('/api/projects', U, { url: 'ext::sh -c id' });
+    const badUrl2 = await call('/api/projects', U, { url: '/etc' });
+    const badUrl3 = await call('/api/projects', U, { url: 'C:\\Windows' });
+    const repoDir = path.join(PR, 'demo-app', '_repo');
+    const repoBranch = fs.existsSync(repoDir) ? spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).stdout.trim() : '';
+    const repoMain = fs.existsSync(repoDir) ? spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/main'], { cwd: repoDir, encoding: 'utf8' }).status === 0 : false;
+    // a bare "upstream" with develop + main, pulled in as a second project
+    const bare = path.join(SCRATCH, 'upstream.git');
+    spawnSync('git', ['init', '-q', '--bare', bare], { encoding: 'utf8' });
+    if (fs.existsSync(repoDir)) spawnSync('git', ['push', '-q', bare, 'main', 'develop'], { cwd: repoDir, encoding: 'utf8' });
+    const pulled = await call('/api/projects', U, { url: 'file://' + bare.replace(/\\/g, '/'), name: 'pulled' });
+    const pulledDir = path.join(PR, 'pulled', '_repo');
+    const pulledBranch = fs.existsSync(pulledDir) ? spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: pulledDir, encoding: 'utf8' }).stdout.trim() : '';
+    const listAfter = await call('/api/projects', U);
+    const names = (listAfter.data.projects || []).map((p) => p.name);
+    check('R140', 'projects: POST /api/projects { name } starts a new project in <projectsRoot>/<name>/_repo (README as the first commit, main + develop, develop checked out); a name taken (any case) → 409; bad names and local / helper clone addresses → 400; { url } pulls a repo in (develop checked out when it has one); GET lists VibeRoller first, then the projects by name',
+      listBefore.status === 200 && listBefore.data.projects.length === 1 && made.status === 200 && made.data.project === 'demo-app' && dup.status === 409 && badName.status === 400 && badName2.status === 400 && badUrl.status === 400 && badUrl2.status === 400 && badUrl3.status === 400
+      && repoBranch === 'develop' && repoMain && fs.existsSync(path.join(repoDir, 'README.md')) && pulled.status === 200 && pulled.data.project === 'pulled' && pulledBranch === 'develop' && names.join(',') === 'VibeRoller,demo-app,pulled',
+      `made ${made.status} ${JSON.stringify(made.data).slice(0, 80)} dup ${dup.status} bad ${badName.status}/${badName2.status}/${badUrl.status}/${badUrl2.status}/${badUrl3.status} repo ${repoBranch} pulled ${pulled.status} ${pulledBranch} list ${names.join(',')}`);
+    const sw = await call('/api/workspace', U, { project: 'demo-app' });
+    const pRun = await chat(U, 'where am I in the project', { fresh: true });
+    const pDir = path.join(PR, 'demo-app', 't-user');
+    const pBranch = fs.existsSync(pDir) ? spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: pDir, encoding: 'utf8' }).stdout.trim() : '';
+    const swA = await call('/api/workspace', A, { project: 'demo-app' });
+    const toolsLine = (texts(pRun.events).match(/wt=([^|]*)/) || [])[1] || '';
+    let pMerged = false, pMergeOut = '', pStatus = '', pProjects = '';
+    if (fs.existsSync(pDir)) {
+      fs.writeFileSync(path.join(pDir, 'feature.txt'), 'from t-user in demo-app\n');
+      pMergeOut = wt('--project', 'demo-app', 'commit', 't-user', 'a feature').stdout + wt('--project', 'demo-app', 'merge', 't-user').stdout;
+      pMerged = spawnSync('git', ['show', 'develop:feature.txt'], { cwd: repoDir, encoding: 'utf8' }).stdout.includes('from t-user in demo-app');
+      pStatus = wt('status').stdout; pProjects = wt('projects').stdout;
+    }
+    const back = await call('/api/workspace', U, { project: 'VibeRoller' });
+    const backRun = await chat(U, 'back home', { fresh: true });
+    check('R141', 'working on a project: switching to it puts the run in <projectsRoot>/<project>/<username> on work/<username> (each person their own); the run may call the hub\'s worktree.js by its full path (not in the VibeRoller worktree); worktree.js --project commit + merge land the work on the project\'s develop; status and projects list it; switching back returns to the VibeRoller worktree',
+      sw.status === 200 && samePath(sw.data.dir, pDir) && sw.data.branch === 'work/t-user' && samePath(cwdOf(pRun.events), pDir) && pBranch === 'work/t-user' && swA.status === 200 && samePath(swA.data.dir, path.join(PR, 'demo-app', 't-admin'))
+      && /worktree\.js/.test(toolsLine) && !/wt=[^|]*worktree\.js/.test(texts(ownRun.events)) && pMerged && /Merged work\/t-user into develop/.test(pMergeOut) && /demo-app/.test(pStatus) && /demo-app/.test(pProjects) && /pulled/.test(pProjects)
+      && back.status === 200 && samePath(back.data.dir, wtU) && samePath(cwdOf(backRun.events), wtU),
+      `switch ${sw.status} ${JSON.stringify(sw.data).slice(0, 100)} cwd ${cwdOf(pRun.events)} tools "${toolsLine}" merged ${pMerged} ${pMergeOut.split('\n')[0]}`);
+  }
 
   // OpenAI-compatible API (/v1) with one key per person (bridge/openai.js), answered by the host's Claude (the fake one here).
   const v1 = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, text: await r.text(), ct: r.headers.get('content-type') || '' }; };
@@ -1584,11 +1638,15 @@ async function run() {
   const onWork = texts((await chat(U, 'back on r136', { fresh: true })).events);
   await call('/api/apikey/revoke', U, {});
   const ht = (f) => fs.readFileSync(path.join(BRIDGE, 'host-tools', f), 'utf8');
-  check('R136', 'the host\'s AI switch: with bridge/ai-host.off the AI hosted on this machine pauses (Work runs on the host\'s Claude, the API → 503, the Unity section → 503, Unity in the chat says it is paused) while chat and the board keep working and /api/check reports it; removing the file brings the AI back at once; [static] the heart / knife host tools (start-viberoller-host / stop-viberoller-host from one C# file, icons drawn by the build script, Desktop shortcuts, Linux twins) only touch that switch and start the hub if it is not running; their build output is gitignored',
+  check('R136', 'the host\'s AI switch: with bridge/ai-host.off the AI hosted on this machine pauses (Work runs on the host\'s Claude, the API → 503, the Unity section → 503, Unity in the chat says it is paused) while chat and the board keep working and /api/check reports it; removing the file brings the AI back at once; [static] the heart / knife host tools (start-viberoller-ai-host / stop-viberoller-ai-host from one C# file, icons drawn by the build script, Desktop shortcuts, Linux twins) start / stop the VibeRollerAIHost service when it is installed and otherwise only touch that switch and start the node or hub; the service (AiHostService.cs) runs node ai-node.js from boot, restarts it, logs to ai-node.log; the installer registers it with start= auto and lets signed-in users start / stop it; the Linux unit + installer do the same; the build output is gitignored',
     offCheck.aiHost === false && /switched off right now/.test(offWork) && offV1.status === 503 && offAssist.status === 503 && !!offUnity && offChatOk === 200 && offBoardOk === 200
     && onCheck.aiHost === true && /echo: back on r136/.test(onWork)
-    && /#if START/.test(ht('HostTool.cs')) && /ai-host\.off/.test(ht('HostTool.cs')) && /start\.bat/.test(ht('HostTool.cs')) && /heart\.ico/.test(ht('build-host-tools.ps1')) && /knife\.ico/.test(ht('build-host-tools.ps1'))
-    && /start-viberoller-host\.exe/.test(ht('build-host-tools.ps1')) && /stop-viberoller-host\.exe/.test(ht('build-host-tools.ps1')) && /rm -f ai-host\.off/.test(ht('start-viberoller-host.sh')) && /> ai-host\.off/.test(ht('stop-viberoller-host.sh'))
+    && /#if START/.test(ht('HostTool.cs')) && /ai-host\.off/.test(ht('HostTool.cs')) && /start\.bat/.test(ht('HostTool.cs')) && /ServiceController/.test(ht('HostTool.cs')) && /svc\.Start\(\)/.test(ht('HostTool.cs')) && /svc\.Stop\(\)/.test(ht('HostTool.cs')) && /heart\.ico/.test(ht('build-host-tools.ps1')) && /knife\.ico/.test(ht('build-host-tools.ps1'))
+    && /start-viberoller-ai-host\.exe/.test(ht('build-host-tools.ps1')) && /stop-viberoller-ai-host\.exe/.test(ht('build-host-tools.ps1')) && /VibeRollerAIHost\.exe/.test(ht('build-host-tools.ps1')) && /System\.ServiceProcess\.dll/.test(ht('build-host-tools.ps1'))
+    && /ServiceBase\.Run/.test(ht('AiHostService.cs')) && /ai-node\.js/.test(ht('AiHostService.cs')) && /ai-node\.log/.test(ht('AiHostService.cs')) && /OnStop/.test(ht('AiHostService.cs'))
+    && /sc create %NAME% binPath=/.test(ht('install-ai-host-service.cmd')) && /start= auto/.test(ht('install-ai-host-service.cmd')) && /sc sdset/.test(ht('install-ai-host-service.cmd')) && /;;;IU\)/.test(ht('install-ai-host-service.cmd')) && /-Verb RunAs/.test(ht('install-ai-host-service.cmd'))
+    && /WantedBy=multi-user\.target/.test(ht('viberoller-ai-host.service')) && /ExecStart=\/usr\/bin\/env node ai-node\.js/.test(ht('viberoller-ai-host.service')) && /systemctl enable/.test(ht('install-ai-host-service.sh')) && /polkit/.test(ht('install-ai-host-service.sh'))
+    && /rm -f ai-host\.off/.test(ht('start-viberoller-host.sh')) && /systemctl start viberoller-ai-host/.test(ht('start-viberoller-host.sh')) && /> ai-host\.off/.test(ht('stop-viberoller-host.sh')) && /systemctl stop viberoller-ai-host/.test(ht('stop-viberoller-host.sh'))
     && /^bridge\/ai-host\.off$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /^bridge\/host-tools\/\*\.exe$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     `off: check ${offCheck.aiHost} work "${offWork.slice(0, 60)}" v1 ${offV1.status} assistant ${offAssist.status} unity ${offUnity ? 'said paused' : 'no reply'} chat ${offChatOk} board ${offBoardOk}; on: check ${onCheck.aiHost} work "${onWork.slice(0, 40)}"`);
 
@@ -1637,13 +1695,54 @@ async function run() {
   const pagesYml = fs.readFileSync(path.join(MILLS, '.github', 'workflows', 'pages.yml'), 'utf8');
   const dataList = ['bridge/auth.json', 'bridge/profiles', 'Chat', 'Archive', 'Board', 'Notes', 'Avatars'];
   const autostart = fs.readFileSync(path.join(BRIDGE, 'autostart-windows.cmd'), 'utf8'), hostTool = fs.readFileSync(path.join(BRIDGE, 'host-tools', 'HostTool.cs'), 'utf8'), wtSrc = fs.readFileSync(path.join(BRIDGE, 'worktree.js'), 'utf8');
-  check('R139', '[static] the move kit: deploy/setup-server.sh makes the service user, the live checkout, the server settings, the service, a deploy key locked to one command and (with --with-nginx) the nginx site, and prints the people steps; pack-data (.cmd + .sh) packs exactly the data folders with the hub stopped, no code; restore-data.sh refuses anything but hub data and never overwrites existing accounts; deploy.yml only calls the key\'s one command; pages.yml runs on GitHub only; on the old host the autostart and the heart start the AI node once ai-node.json exists, the node has a single-instance lock, and worktree.js repairs worktree pointers after the host folder moves',
-    /useradd --system/.test(setupSh) && /viberoller-hub\.service/.test(setupSh) && /command="\$DEPLOY_CMD"|command="%s"/.test(setupSh) && /deploy-key\.b64/.test(setupSh) && /--with-nginx/.test(setupSh) && /claude login/.test(setupSh)
-    && dataList.every((d) => packCmd.includes(d.replace('/', '\\')) && packSh.includes(d) && restoreSh.includes(d.split('/').pop())) && /api\/status/.test(packCmd) && /api\/status/.test(packSh) && /Refusing to overwrite/.test(restoreSh) && /agent-key\.json/.test(restoreSh)
+  const autoSh = dk('autodeploy.sh'), autoTimer = dk('viberoller-autodeploy.timer'), hubUnit = dk('viberoller-hub.service'), portal = dk('nginx-portal.conf'), localEx = dk('config.local.example.json');
+  check('R139', '[static] the move kit for the real server layout (no root): deploy/setup-server.sh runs as the hub\'s account and makes the user-local Node + Claude Code, the live checkout, the server settings with a fresh node secret, the systemd USER services (hub + auto-deploy timer), the nginx site files in deploy-ready, and prints the root steps (linger, nginx, DNS + certificate) and the people steps; the auto-deploy fast-forwards main every minute, checks the scripts parse and asks for a graceful restart; pack-data (.cmd + .sh) packs exactly the data folders with the hub stopped, no code, and copies them by scp when given a host; restore-data.sh runs as the account, refuses anything but hub data and never overwrites existing accounts; the portal site answers insiders with the hub and everyone else with the droids 404; deploy.yml only calls a key\'s one command; pages.yml runs on GitHub only; on the old host the autostart and the heart start the AI node once ai-node.json exists, the node has a single-instance lock, and worktree.js repairs worktree pointers after the host folder moves',
+    /not root/.test(setupSh) && !/useradd/.test(setupSh) && /viberoller-hub\.service/.test(setupSh) && /viberoller-autodeploy\.timer/.test(setupSh) && /systemctl --user/.test(setupSh) && /deploy-ready/.test(setupSh) && /claude login/.test(setupSh) && /enable-linger/.test(setupSh) && /__NODE_SECRET__/.test(setupSh) && /nginx-portal\.conf/.test(setupSh)
+    && /WantedBy=default\.target/.test(hubUnit) && /__BASE__\/node\/current\/bin\/node run\.js --no-tunnel/.test(hubUnit) && /UMask=0007/.test(hubUnit) && /projectsRoot/.test(localEx) && /__NODE_SECRET__/.test(localEx)
+    && /--ff-only/.test(autoSh) && /node --check/.test(autoSh) && /bridge\/\.restart/.test(autoSh) && /git status --porcelain/.test(autoSh) && /OnUnitActiveSec=1min/.test(autoTimer)
+    && /These are not the droids you are looking for/.test(portal) && /geo \$vr_inside/.test(portal) && /if \(\$vr_inside = 0\) \{ return 404; \}/.test(portal) && /server_name portal\.unityailab\.com portal\.git\.unityailab\.com/.test(portal) && /proxy_pass http:\/\/127\.0\.0\.1:7777/.test(portal) && /CF-Connecting-IP ""/.test(portal)
+    && dataList.every((d) => packCmd.includes(d.replace('/', '\\')) && packSh.includes(d) && restoreSh.includes(d.split('/').pop())) && /api\/status/.test(packCmd) && /api\/status/.test(packSh) && /scp /.test(packCmd) && /scp /.test(packSh) && /Refusing to overwrite/.test(restoreSh) && /agent-key\.json/.test(restoreSh) && /systemctl --user stop viberoller-hub/.test(restoreSh) && /not root/.test(restoreSh)
     && /"\$\{USER\}@\$\{HOST\}" deploy/.test(deployYml) && !/sh -s/.test(deployYml) && /github\.server_url == 'https:\/\/github\.com'/.test(pagesYml)
     && /ai-node\.json/.test(autostart) && /start-node\.bat/.test(autostart) && /NodeRuns\(/.test(hostTool) && /start-node\.bat/.test(hostTool) && /LOCK_FILE/.test(nodeSrc) && /process\.exit\(2\)/.test(nodeSrc)
-    && /function repair\(/.test(wtSrc) && /if \(!healthy\(dir\)\) git\(REPO, 'worktree', 'repair', dir\)/.test(wtSrc) && fs.existsSync(path.join(BRIDGE, 'start-node.bat')) && fs.existsSync(path.join(BRIDGE, 'start-node.sh')) && fs.existsSync(path.join(BRIDGE, 'ai-node.example.json')),
+    && /function repair\(/.test(wtSrc) && /if \(!healthy\(dir\)\) git\(p\.repo, 'worktree', 'repair', dir\)/.test(wtSrc) && fs.existsSync(path.join(BRIDGE, 'start-node.bat')) && fs.existsSync(path.join(BRIDGE, 'start-node.sh')) && fs.existsSync(path.join(BRIDGE, 'ai-node.example.json')),
     'see the check text');
+  }
+
+  // The Download panel (Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux), and the page served by the hub itself.
+  {
+    const anon = await call('/api/downloads');
+    const dl = await call('/api/downloads', U);
+    const items = dl.data.items || [];
+    const zipRes = await fetch(H + '/api/downloads/ai-host-windows.zip', { headers: { Authorization: 'Bearer ' + U } });
+    const zipBuf = Buffer.from(await zipRes.arrayBuffer());
+    const unknown = await fetch(H + '/api/downloads/nope.zip', { headers: { Authorization: 'Bearer ' + U } });
+    // read the zip like an unzipper would: the central directory names every entry and points at its local header;
+    // deflated entries are inflated, so the files inside can be checked (the README names this hub)
+    const unzip = (buf) => {
+      const out = []; let i = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+      while (i >= 0 && i < buf.length && buf.readUInt32LE(i) === 0x02014b50) {
+        const method = buf.readUInt16LE(i + 10), csize = buf.readUInt32LE(i + 20), n = buf.readUInt16LE(i + 28), x = buf.readUInt16LE(i + 30), c = buf.readUInt16LE(i + 32), off = buf.readUInt32LE(i + 42);
+        const name = buf.toString('utf8', i + 46, i + 46 + n), ln = buf.readUInt16LE(off + 26), lx = buf.readUInt16LE(off + 28), start = off + 30 + ln + lx;
+        const raw = buf.subarray(start, start + csize);
+        out.push({ name, data: method === 8 ? require('zlib').inflateRawSync(raw) : raw });
+        i += 46 + n + x + c;
+      }
+      return out;
+    };
+    const entries = unzip(zipBuf), names = entries.map((e) => e.name);
+    const linuxZip = Buffer.from(await (await fetch(H + '/api/downloads/desktop-linux.zip', { headers: { Authorization: 'Bearer ' + U } })).arrayBuffer());
+    const linuxFiles = unzip(linuxZip);
+    const page = await (await fetch(H + '/')).text();
+    const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), appJs = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
+    check('R142', 'Download: signed-in people get the four packages (Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux) listed with sizes and as real zip files (PK header, attachment, every file of the AI host inside, the hub\'s own address in them); anonymous → 401; unknown → 404; the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download button sits above Settings in the menu and in the app\'s user panel',
+      anon.status === 401 && dl.status === 200 && items.length === 4 && ['desktop-windows', 'desktop-linux', 'ai-host-windows', 'ai-host-linux'].every((id) => items.some((it) => it.id === id && it.bytes > 1000 && /\.zip$/.test(it.file)))
+      && zipRes.status === 200 && zipBuf.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && /attachment; filename="VibeRollerAIHost-windows\.zip"/.test(zipRes.headers.get('content-disposition') || '') && zipRes.headers.get('content-type') === 'application/zip'
+      && ['VibeRollerAIHost/ai-node.js', 'VibeRollerAIHost/ai-node.example.json', 'VibeRollerAIHost/start-node.bat', 'VibeRollerAIHost/host-tools/HostTool.cs', 'VibeRollerAIHost/host-tools/AiHostService.cs', 'VibeRollerAIHost/host-tools/build-host-tools.ps1', 'VibeRollerAIHost/host-tools/build.cmd', 'VibeRollerAIHost/host-tools/install-ai-host-service.cmd', 'VibeRollerAIHost/README.txt'].every((n) => names.includes(n))
+      && linuxZip.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && linuxFiles.length === 3 && linuxFiles.every((e) => e.data.toString('utf8').includes(H)) && entries.some((e) => e.name.endsWith('README.txt') && e.data.toString('utf8').includes(H))
+      && entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js')))) && unknown.status === 404
+      && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
+      && /class="menuFoot menuDl"/.test(html) && html.indexOf('data-downloads') < html.indexOf('id="goSettings"') && /id="downloads" class="modal"/.test(html) && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs),
+      `anon ${anon.status} list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')} zip ${zipRes.status} ${names.length} entries; linux ${linuxFiles.length} files, hub named ${linuxFiles.filter((e) => e.data.toString('utf8').includes(H)).length}; unknown ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
   }
 
   // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.

@@ -736,6 +736,7 @@
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></symbol>
   <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.2 5.1 1.8-5.1 1.9L12 17.6l-1.9-5.2L5 10.5l5.1-1.8z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></symbol>
   <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 4.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5H14M10.5 12H20M16.5 8.5L20 12l-3.5 3.5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v10.5M7.5 10.5L12 15l4.5-4.5M4.5 16.5v1.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-1.5"/></symbol>
   <!-- the VibeRoller mark (the app icon's "M" in its rounded square), stroked with a gradient of the theme's own
        accent colours and the "live" dot in its good colour; used on the sign-in card and the menu -->
   <defs><linearGradient id="gMark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color: var(--accent)"/><stop offset="1" style="stop-color: var(--accent-2, var(--accent))"/></linearGradient></defs>
@@ -767,6 +768,7 @@
     <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
     <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
   </div>
+  <div class="menuFoot menuDl"><button class="ghost" id="goDownloads" data-downloads title="Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux"><svg class="ic lead"><use href="#i-download"/></svg>Download</button></div>
   <div class="menuFoot">
     <button class="ghost" id="goSettings" data-settings><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button>
     <button class="ghost" id="menuLogout"><svg class="ic lead"><use href="#i-logout"/></svg>Sign out</button>
@@ -848,6 +850,13 @@
 
 <div id="toasts"></div>
 
+<div id="downloads" class="modal" hidden>
+  <div class="box">
+    <div class="bar"><span>Download</span><button class="ghost" id="closeDownloads">Close</button></div>
+    <!-- the two applications, each for Windows and Linux, built by the hub from its own code (bridge/downloads.js) -->
+    <div class="setBody" id="dlBody"></div>
+  </div>
+</div>
 <div id="settings" class="modal" hidden>
   <div class="box">
     <div class="bar"><span>Settings</span><button class="ghost" id="closeSettings">Close</button></div>
@@ -1032,8 +1041,7 @@
     <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
     <button class="ghost" id="openArchive" title="Your saved Claude sessions">Past sessions</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
-    <select id="workspace" title="Where Claude works on the VibeRoller project: your own git worktree (nobody else's changes get in the way) or the shared VibeRoller folder everyone uses" hidden>
-      <option value="own">My worktree</option><option value="shared">Shared folder</option></select>
+    <select id="workspace" title="Which project Claude works on, always in your own git worktree of it (branch work/you), so nobody else's changes get in the way. New project starts an empty repo in the team's shared projects area; Pull in a repo clones an existing one by its address." hidden></select>
     <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
       <div id="themeMenu" hidden></div></span>
     <button class="ghost" id="logout">Sign out</button>
@@ -1195,9 +1203,12 @@ let base = null;
 // A named tunnel's fixed address (https://<hostname>) is filled in at deploy time from the MILLS_HUB_HOST
 // repository variable; without it (local dev, quick tunnels only) only *.trycloudflare.com addresses count.
 const HUB_HOST = (() => { const v = '__MILLS_HUB_HOST__'; return /^https:\/\/[a-z0-9.-]+$/i.test(v) ? v.toLowerCase() : ''; })();
+// The hub fills this in when it serves the page itself (any name that reaches it: the portal, a tunnel, localhost):
+// then the hub is simply this page's own origin, and no published address is looked up.
+const SERVED_BY_HUB = '__MILLS_SERVED__' === 'hub';
 const HUB_URL_RE = HUB_HOST ? new RegExp('^(?:' + HUB_HOST.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '|https://[a-z0-9-]+\\.trycloudflare\\.com)$') : /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
 async function findBridge(fresh) {
-  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com') || (HUB_HOST && location.origin === HUB_HOST)) return location.origin;
+  if (SERVED_BY_HUB || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com') || (HUB_HOST && location.origin === HUB_HOST)) return location.origin;
   // Last good address first: skips two GitHub API round trips (and its 60-an-hour limit) on every load.
   const cached = store.get('mills.hub');
   if (!fresh && cached && HUB_URL_RE.test(cached)) {
@@ -1525,7 +1536,7 @@ async function enter() {
   $('goAdmin').hidden = !me.admin;
   $('login').hidden = true;
   showModels(me);
-  if (me.workspace) { $('workspace').value = me.workspace; $('workspace').hidden = false; }
+  renderProjects();
   myShare = me.share || '';
   loadLayout();
   currentConv = store.get('mills.conv.' + me.username) || 'room';
@@ -1761,14 +1772,36 @@ function showModels(d) {
   if (sel.selectedIndex < 0) sel.value = '';
   sel.hidden = false;
 }
+// The project picker (Work header): every project in the shared projects area, VibeRoller first; each is worked on in
+// your own worktree of it. The two last entries start a new project or pull in an existing repo by its address.
+function renderProjects() {
+  const sel = $('workspace');
+  if (!me || !Array.isArray(me.projects)) { sel.hidden = true; return; }
+  sel.textContent = '';
+  const opt = (v, l, title) => { const o = document.createElement('option'); o.value = v; o.textContent = l; if (title) o.title = title; sel.append(o); };
+  for (const p of me.projects) opt(p.name, p.name + ' · my worktree', p.dir + (p.remote ? '  ←  ' + p.remote : '') + (p.people.length ? '  ·  worktrees: ' + p.people.join(', ') : ''));
+  opt('__new', '＋ New project…'); opt('__clone', '⤓ Pull in a repo…');
+  sel.value = me.project || 'VibeRoller';
+  sel.hidden = false;
+}
 $('workspace').onchange = async () => {
-  const sel = $('workspace'), want = sel.value;
+  const sel = $('workspace'), want = sel.value, before = me.project || 'VibeRoller';
   try {
-    const d = await json('/api/workspace', { method: 'POST', body: JSON.stringify({ workspace: want }) });
+    let project = want;
+    if (want === '__new' || want === '__clone') {
+      const url = want === '__clone' ? (prompt('Address of the repo to pull in (https://host/owner/repo.git or git@host:owner/repo.git). Your saved Forgejo token is used for the lab\'s Forgejo.') || '').trim() : '';
+      if (want === '__clone' && !url) { sel.value = before; return; }
+      const name = prompt(want === '__new' ? 'Name of the new project (letters, digits, dots, dashes, underscores):' : 'Project name (leave empty to use the repo\'s own name):', '');
+      if (name === null || (want === '__new' && !name.trim())) { sel.value = before; return; }
+      sys(want === '__new' ? 'Starting the project ' + name.trim() + '…' : 'Pulling in ' + url + '…');
+      const made = await json('/api/projects', { method: 'POST', body: JSON.stringify(want === '__new' ? { name: name.trim() } : { url, name: name.trim() }) });
+      project = made.project; me.projects = made.projects;
+    }
+    const d = await json('/api/workspace', { method: 'POST', body: JSON.stringify({ project }) });
+    me.project = d.project; renderProjects();
     fresh = true; // a Claude session belongs to one folder: the next message starts a new one
-    sys(d.workspace === 'own' ? 'Working in your own worktree: ' + d.dir + ' (branch ' + d.branch + '). Ask Claude to "merge into develop" when you are done. Next message starts a new chat.'
-      : 'Working in the shared VibeRoller folder everyone uses. Next message starts a new chat.');
-  } catch (err) { sel.value = want === 'own' ? 'shared' : 'own'; sys(err.message, true); }
+    sys('Working on ' + d.project + ' in your own worktree: ' + d.dir + ' (branch ' + d.branch + '). Ask Claude to "merge" when your change is done. Next message starts a new chat.');
+  } catch (err) { sel.value = before; sys(err.message, true); }
 };
 $('model').onchange = async () => {
   try {
@@ -3520,6 +3553,44 @@ $('saveSettings').onclick = async () => {
 $('closeSettings').onclick = () => { $('settings').hidden = true; };
 $('settings').onclick = (e) => { if (e.target.id === 'settings') $('settings').hidden = true; };
 document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = openSettings; });
+// ── Download: Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux (packages built by the hub) ──
+async function openDownloads() {
+  const box = $('dlBody'); box.textContent = 'Loading…'; $('downloads').hidden = false;
+  let d; try { d = await json('/api/downloads'); } catch (e) { box.textContent = e.message; return; }
+  box.textContent = '';
+  const os = typeof appOs === 'function' ? appOs() : '';
+  const note = document.createElement('div'); note.className = 'status'; box.append(note);
+  const grab = async (it, b) => {
+    b.disabled = true; note.textContent = 'Preparing ' + it.file + '…';
+    try {
+      const r = await api('/api/downloads/' + it.id + '.zip'); if (!r.ok) throw new Error('The download failed (' + r.status + ').');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = it.file; document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000); note.textContent = it.file + ' downloaded. The README.txt inside has the steps.';
+    } catch (e) { note.textContent = e.message; }
+    b.disabled = false;
+  };
+  for (const group of ['desktop', 'ai-host']) {
+    const sec = document.createElement('div'); sec.className = 'setSection';
+    const h = document.createElement('b'); h.textContent = group === 'desktop' ? 'Vibe Roller Desktop' : 'Vibe Roller AI Host'; sec.append(h);
+    const p = document.createElement('div'); p.className = 'status';
+    p.textContent = group === 'desktop'
+      ? 'VibeRoller Chat in its own window: servers, channels, groups, private messages, calls and Unity, signed in with your account. The best install is from the browser itself (below); the download is a launcher for Chrome, Edge or Brave with a Start-menu / application-menu entry.'
+      : 'Makes a computer an AI host: it lends the AI engines running there (Unity\'s brain, image, voice, speech) to this VibeRoller. Starts at boot as the VibeRollerAIHost service; the heart and the knife start and stop it. Needs Node.js, and a node name + token from an admin.';
+    sec.append(p);
+    const row = document.createElement('div'); row.className = 'row';
+    for (const it of d.items.filter((i) => i.group === group)) {
+      const b = document.createElement('button'); b.type = 'button'; if (it.os !== os) b.className = 'ghost';
+      b.append(ic('download', 'lead'), document.createTextNode(it.os + ' · ' + it.file + ' (' + Math.max(1, Math.round(it.bytes / 1024)) + ' KB)'));
+      b.onclick = () => grab(it, b);
+      row.append(b);
+    }
+    sec.append(row);
+    if (group === 'desktop' && typeof renderAppCard === 'function') { const inst = document.createElement('div'); inst.className = 'apiBox'; sec.append(inst); renderAppCard(inst); }
+    box.append(sec);
+  }
+}
+document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = openDownloads; });
+$('closeDownloads').onclick = () => { $('downloads').hidden = true; };
 window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) applyLayout(); });
 
 // ── Shared Work sessions: share yours (watch-only for others), watch theirs in their own windows ──

@@ -1,0 +1,12 @@
+# VibeRoller auto-deploy timer: every minute, is there a new main on Forgejo? (deploy/autodeploy.sh)
+#   systemctl --user list-timers viberoller-autodeploy      journalctl --user -u viberoller-autodeploy -n 20
+[Unit]
+Description=VibeRoller: look for a new main on Forgejo every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

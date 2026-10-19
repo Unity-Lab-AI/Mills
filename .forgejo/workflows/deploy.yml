@@ -1,6 +1,9 @@
-# VibeRoller: deploy to the lab server on every push to main (Forgejo Actions).
+# VibeRoller: deploy to the lab server on every push to main (Forgejo Actions) — the OPTIONAL path.
 #
-# OFF until the server is set up (deploy/README.md): it only runs when the repo variable VIBEROLLER_DEPLOY is "on".
+# The server deploys itself without this workflow: deploy/autodeploy.sh runs every minute from a systemd user timer
+# (deploy/setup-server.sh installs it) and fast-forwards the live checkout whenever main moved, so no deploy key, runner
+# or secret is needed. This workflow is the alternative for a server where that timer cannot run.
+# OFF until switched on (deploy/README.md): it only runs when the repo variable VIBEROLLER_DEPLOY is "on".
 # What it does: SSH to the server with the deploy key that deploy/setup-server.sh made. That key is locked to ONE
 # command on the server (sshd runs it whatever the client asks for): fast-forward the live checkout to main, check
 # every hub script parses, and ask the hub for a graceful restart (bridge/restart.js: same address, nobody signed
