@@ -338,7 +338,7 @@ const GSET = (() => {
   // ── groups ──
   function newGroup() { show({ kind: 'newGroup' }); }
   function drawNewGroup() {
-    titleEl.textContent = 'New group conversation';
+    titleEl.textContent = 'New group DM';
     const who = input('', 'usernames, comma separated (up to ' + (data().groupMax - 1) + ' others)'); who.setAttribute('list', 'gsetPeople2');
     const dl = el('datalist'); dl.id = 'gsetPeople2'; for (const u of people().filter((u) => u !== me.username)) { const op_ = el('option'); op_.value = u; op_.label = nickOf(u); dl.append(op_); }
     const name = input('', 'group name (optional)'); name.maxLength = 40;
