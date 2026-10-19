@@ -118,6 +118,25 @@ function startFakeOllama() {
         const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
         res.writeHead(200, { 'Content-Type': 'image/png', 'X-Seconds': '0.01' }); return res.end(png);
       }
+      // fake Anthropic + ChatGPT backends behind an AI host's login relays: they only answer to the HOST's tokens (never
+      // the hub's placeholder), and report usage like Anthropic does (CAPTEST in the body = 95 % used, resets in 3 s)
+      if (req.url.startsWith('/anthropic/v1/messages')) {
+        const ok = req.headers.authorization === 'Bearer fake-oauth-token' && /oauth-2025-04-20/.test(req.headers['anthropic-beta'] || '');
+        if (!ok) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'bad relay auth: ' + String(req.headers.authorization || '').slice(0, 30) } })); }
+        const b = JSON.parse(body || '{}'), cap = body.includes('CAPTEST');
+        const rl = { 'anthropic-ratelimit-unified-5h-utilization': cap ? '0.95' : '0.42', 'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + (cap ? 3 : 7200)), 'anthropic-ratelimit-unified-5h-status': 'allowed' };
+        const last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' };
+        const said = 'upstream ok: ' + String(typeof last.content === 'string' ? last.content : JSON.stringify(last.content)).slice(0, 60) + (Array.isArray(b.system) && /Claude Code/.test(JSON.stringify(b.system[0] || '')) ? ' [cc]' : '');
+        if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rl }); res.write('data: ' + JSON.stringify({ type: 'message_start', message: { model: b.model, usage: { input_tokens: 3 } } }) + '\n\n'); for (const w of said.split(' ')) res.write('data: ' + JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: w + ' ' } }) + '\n\n'); return res.end('data: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n'); }
+        res.writeHead(200, { 'Content-Type': 'application/json', ...rl }); return res.end(JSON.stringify({ model: b.model, content: [{ type: 'text', text: said }], usage: { input_tokens: 3, output_tokens: 4 } }));
+      }
+      if (req.url.startsWith('/codex/responses')) {
+        if (req.headers.authorization !== 'Bearer fake-codex-token' || req.headers['chatgpt-account-id'] !== 'acct-1') { res.writeHead(401); return res.end('{"error":"bad codex auth"}'); }
+        const b = JSON.parse(body || '{}'), txt = 'codex says: ' + JSON.stringify(b.input || []).match(/"text":"([^"]*)"/)[1];
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        for (const w of txt.split(' ')) res.write('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: w + ' ' }) + '\n\n');
+        return res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { model: b.model, usage: { input_tokens: 2, output_tokens: 3 } } }) + '\n\n');
+      }
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
       if (req.url === '/oai/chat/completions') {
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
@@ -204,7 +223,7 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'Api/', 'bridge/host2/', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
@@ -234,11 +253,15 @@ function startAiNode() {
   const f = path.join(SB, 'ai-node.json'), base = `http://127.0.0.1:${OLLAMA_PORT}`;
   // the test host offers Unity's engines, a "Claude" (the fake one) for t-user and t-admin's Work, a local model (the fake
   // OpenAI endpoint) and direct computer access to a folder in the scratch area (like the native app would)
-  fs.mkdirSync(path.join(SCRATCH, 'host-pc'), { recursive: true }); fs.writeFileSync(path.join(SCRATCH, 'host-pc', 'hello.txt'), 'from the host pc\n');
+  // the host's own logins (fake tokens), which must never leave it: the fake backends answer only to these
+  const cl = path.join(SCRATCH, 'host-claude-login'), cx = path.join(SCRATCH, 'host-codex');
+  fs.mkdirSync(cl, { recursive: true }); fs.mkdirSync(cx, { recursive: true });
+  fs.writeFileSync(path.join(cl, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'fake-oauth-token', refreshToken: 'x', expiresAt: Date.now() + 86400e3 } }));
+  fs.writeFileSync(path.join(cx, 'auth.json'), JSON.stringify({ tokens: { access_token: 'fake-codex-token', account_id: 'acct-1' } }));
   fs.writeFileSync(f, JSON.stringify({ hub: H, id: 'test-node', token: NODE_SECRET, user: 't-admin', engines: { ollama: base, image: base, voice: base, speech: base },
-    providers: [{ id: 'claude', kind: 'claude-cli', label: 'Tadmin\'s Claude', models: ['claude-fable-5-1', 'claude-haiku-5-5'], max5h: 90, max7d: 90, allowedUsers: ['t-user'], configDir: path.join(SCRATCH, 'host-claude-login') },
-      { id: 'local', kind: 'openai', label: 'Host local model', baseUrl: base + '/oai', models: ['tiny-local'], allowedUsers: ['t-user'] }],
-    pc: { folder: path.join(SCRATCH, 'host-pc') }, work: { claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] } }));
+    providers: [{ id: 'claude', kind: 'claude-relay', label: 'Tadmin\'s Claude', models: ['claude-fable-5-1', 'claude-haiku-5-5'], max5h: 90, max7d: 90, allowedUsers: ['t-user'], configDir: cl, baseUrl: base + '/anthropic' },
+      { id: 'codex', kind: 'codex-relay', label: 'Tadmin\'s Codex', models: ['gpt-test'], allowedUsers: ['t-user'], codexHome: cx, baseUrl: base + '/codex' },
+      { id: 'local', kind: 'openai', label: 'Host local model', baseUrl: base + '/oai', models: ['tiny-local'], allowedUsers: ['t-user'] }] }));
   const log = fs.openSync(path.join(SCRATCH, 'ai-node.log'), 'a');
   aiNodeProc = spawn(process.execPath, [path.join(SB, 'ai-node.js'), '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
 }
@@ -1735,7 +1758,7 @@ async function run() {
     const cfgJson = cfgEntry ? JSON.parse(cfgEntry.data.toString('utf8')) : {};
     const cfgZipOther = await fetch(H + '/api/downloads/ai-host-linux.zip?host=' + newId, { headers: { Authorization: 'Bearer ' + U } });
     // a hub-made host (UUID + secret from Settings) really connects: a second host program with that config
-    const host2Dir = path.join(SB, 'host2'); fs.mkdirSync(host2Dir, { recursive: true }); fs.copyFileSync(path.join(SB, 'ai-node.js'), path.join(host2Dir, 'ai-node.js'));
+    const host2Dir = path.join(SB, 'host2'); fs.mkdirSync(host2Dir, { recursive: true }); for (const f of ['ai-node.js', 'host-relay.js']) fs.copyFileSync(path.join(SB, f), path.join(host2Dir, f));
     fs.writeFileSync(path.join(host2Dir, 'ai-node.json'), JSON.stringify({ ...cfgJson, providers: [], engines: {} }));
     const host2Log = fs.openSync(path.join(SCRATCH, 'host2.log'), 'a');
     const host2 = spawn(process.execPath, [path.join(host2Dir, 'ai-node.js')], { cwd: host2Dir, stdio: ['ignore', host2Log, host2Log], windowsHide: true });
@@ -1745,7 +1768,7 @@ async function run() {
     const removed = await call('/api/hosts/remove', A, { id: newId });
     const hubNodeSrc2 = fs.readFileSync(path.join(BRIDGE, 'ai-nodes.js'), 'utf8'), nodeSrc2 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), html2 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
     check('R143', 'AI hosts: a host is a UUID + secret + nickname (adjective-animal); hello with the wrong secret → 401, without a nonce → 400; the handshake gives both sides the same e2e key (vr-… id) and the host tells the hub its user, providers (models, caps, allowed users) and engines; Settings → My AI hosts: new host (uuid, nickname), rename (bad nickname refused, only the owner), remove; the AI Host download with ?host= carries that host\'s config (owner only), and a host run from it connects and shows online; [static] HKDF + AES-256-GCM on both sides, randomUUID ids, ai-hosts.json gitignored, the Settings panels exist',
-      testHost.online === true && testHost.nickname === 'test-node' && /^vr-[0-9a-f]{24}$/.test(testHost.kid || '') && testHost.user === '' && (testHost.providers || []).join(',') === 'claude,local' && (testHost.engines || []).length === 4
+      testHost.online === true && testHost.nickname === 'test-node' && /^vr-[0-9a-f]{24}$/.test(testHost.kid || '') && testHost.user === '' && (testHost.providers || []).join(',') === 'claude,codex,local' && (testHost.engines || []).length === 4
       && helloBad.status === 401 && helloNoNonce.status === 400 && mine0.status === 200 && mine0.data.mine.length === 0 && made.status === 200 && /^[0-9a-f-]{36}$/.test(newId) && /^[a-z]+-[a-z]+(-\d+)?$/.test(made.data.host.nickname) && made.data.host.user === 't-admin'
       && renamed.status === 200 && renamed.data.host.nickname === 'brave-walrus-test' && badNick.status === 400 && notMine.status === 400 && mine1.data.mine.length === 1
       && cfgZip.status === 200 && cfgJson.id === newId && cfgJson.token && cfgJson.token.length >= 24 && cfgJson.user === 't-admin' && cfgJson.hub === H && Array.isArray(cfgJson.providers) && cfgZipOther.status === 500
@@ -1753,9 +1776,9 @@ async function run() {
       && /hkdfSync/.test(hubNodeSrc2) && /aes-256-gcm/.test(hubNodeSrc2) && /randomUUID/.test(hubNodeSrc2) && /hkdfSync/.test(nodeSrc2) && /aes-256-gcm/.test(nodeSrc2) && /^bridge\/ai-hosts\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /id="hostBox"/.test(html2) && /id="srcBox"/.test(html2),
       `host ${JSON.stringify(testHost).slice(0, 160)}; hello bad ${helloBad.status} nonce ${helloNoNonce.status}; new ${made.status} ${JSON.stringify(made.data).slice(0, 120)}; rename ${renamed.status} bad ${badNick.status} other ${notMine.status}; zip ${cfgZip.status} cfg id ok ${cfgJson.id === newId} other ${cfgZipOther.status}; host2 ${JSON.stringify(h2 || {}).slice(0, 80)} log "${host2Text.split('\n')[0].slice(0, 100)}"`);
 
-    // Work on the host's Claude: t-admin picks it, the run happens on the host (its own login), events stream back
+    // Work with a host's Claude: the run happens HERE (this hub's worktree), only its model calls go to the host, which adds its login
     const remoteId = 'h:test-node/claude';
-    const pickBad = await call('/api/model', A, { provider: 'h:test-node/local', model: 'tiny-local' }); // not Claude → not for Work
+    const pickBad = await call('/api/model', A, { provider: 'h:test-node/codex', model: 'gpt-test' }); // not Claude → not for Work
     const pickNo = await call('/api/model', U, { provider: 'h:test-node/nope', model: '' });
     const pick = await call('/api/model', A, { provider: remoteId, model: 'claude-haiku-5-5' });
     await call('/api/workspace', A, { project: 'VibeRoller' }); // back from demo-app (R141): the run should land in the host's VibeRoller worktree
@@ -1767,11 +1790,11 @@ async function run() {
     const sess2 = (r2.events.find((e) => e.type === 'system') || {}).session_id || '';
     const board1 = await chat(A, 'BOARDTOOL remote r144');
     const boardOut = (texts(board1.events).match(/BOARD:(\{.*?\})/) || [])[1] || '{}';
-    const pcA = await chat(A, 'PCTOOL remote r144'); // t-admin owns the host and it offers computer access: the PC tool acts on the host's folder
+    const pcA = await chat(A, 'PCTOOL remote r144'); // the host shares AI only: the PC tools go to the person's own browser, never to the host
     const pcAOut = (texts(pcA.events).match(/PC:(\{.*\})/) || [])[1] || '{}';
-    await call('/api/model', U, { provider: remoteId, model: 'claude-fable-5-1' }); // t-user is allowed to use it; without a host of their own, their PC tools go to the browser (the runner answers like one)
-    const pcU = await chat(U, 'PCTOOL remote r144', { fresh: true });
-    const pcUOut = (texts(pcU.events).match(/PC:(\{.*\})/) || [])[1] || '{}';
+    await call('/api/model', U, { provider: remoteId, model: 'claude-fable-5-1' }); // t-user is allowed to use it too
+    const pcU = await chat(U, 'teammate run r144', { fresh: true });
+    const pcUOut = texts(pcU.events);
     const slowR = chat(A, 'SLOW remote hold r144'); await sleep(900);
     const busyR = (await call('/api/status')).data.busy;
     const stopR = await call('/api/stop', A, {}); const slowDone = await slowR;
@@ -1779,6 +1802,9 @@ async function run() {
     const usageA = (await call('/api/usage', A)).data;
     const usRun = await chat(A, 'USAGE remote r144', { fresh: true });
     const usageA2 = (await call('/api/usage', A)).data;
+    // the relay from outside this machine, and with a made-up token: refused
+    const relayBad = await fetch(H + '/llm/' + 'a'.repeat(48) + '/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const relayOutside = await fetch(H + '/llm/' + 'a'.repeat(48) + '/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '8.8.8.8', 'CF-Connecting-IP': '8.8.8.8' }, body: '{}' });
     await chat(A, 'CAPTEST remote r144', { fresh: true });
     const capped = await chat(A, 'over the cap r144', { fresh: true });
     const capErr = (capped.events.find((e) => e.type === 'bridge_error') || {}).text || '';
@@ -1790,13 +1816,15 @@ async function run() {
     const offErr2 = (offRun.events.find((e) => e.type === 'bridge_error') || {}).text || '';
     const offProv = ((await call('/api/check', A)).data.providers || []).find((p) => p.id === remoteId) || {};
     startAiNode(); for (let i = 0; i < 60; i++) { if (((await call('/api/check', A)).data.aiNodes || []).some((h) => h.id === 'test-node' && h.online)) break; await sleep(250); }
-    check('R144', 'Work on an AI host: a person picks a host\'s Claude (not its local model: not Claude → 400; unknown → 400); the run happens ON the host with its own login (cwd = the host\'s worktree, CLAUDE_CONFIG_DIR = the host\'s), the page is told which host runs it, the model is the chosen one; a follow-up resumes the same session there; the board tools work through the hub\'s job relay; the PC tools of the host\'s owner act on the host\'s own folder (direct computer access) while a teammate\'s go to their browser; Stop ends the run on the host; /api/usage shows that host\'s windows (from its reported events); past its cap the hub refuses the run until the window resets; with the host gone the run fails at once and the provider shows offline',
+    const aiNodeSrc = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), relaySrc = fs.readFileSync(path.join(BRIDGE, 'host-relay.js'), 'utf8');
+    check('R144', 'a host shares its AI, not its computer: a person picks a host\'s Claude (not its local model / Codex for Work → 400; unknown → 400); Claude Code runs HERE in the person\'s own worktree on this hub (not on the host, no host login folder), with ANTHROPIC_BASE_URL on this hub\'s local relay; its model calls reach the provider through the host, which adds ITS login (the backend sees only the host\'s token, never the placeholder); a follow-up resumes the session; board + PC tools stay on this side (PC → the person\'s browser); a teammate allowed by the host can use it; Stop ends the run; /api/usage shows that host\'s windows (from the provider\'s usage headers); past its cap the hub refuses the run until the window resets; the relay refuses a made-up token and anyone from outside; with the host gone the run fails at once and the provider shows offline; [static] the host refuses work jobs unless its config says allowWork, and relays only to the two fixed provider addresses',
       pickBad.status === 400 && pickNo.status === 400 && pick.status === 200 && pick.data.provider === remoteId && ckA.provider === remoteId && ckA.effectiveProvider === remoteId
-      && /Running on test-node/.test(info1) && /cwd=.*worktrees[\\/]t-admin/.test(t1) && /cfg=.*host-claude-login/.test(t1) && /model=claude-haiku-5-5/.test(t1) && !!sess1 && sess1 === sess2
-      && /"made":true/.test(boardOut) && /"claimed":true/.test(boardOut) && /"noted":true/.test(boardOut) && /hello\.txt/.test(pcAOut) && !/fake-listing/.test(pcAOut) && /fake-listing/.test(pcUOut)
-      && busyR === true && stopR.status === 200 && stoppedCode === 130 && usageA.of === remoteId && usageA2.of === remoteId && usageA2.five_hour.source === 'claude' && Math.abs(usageA2.five_hour.utilization - 0.42) < 0.01 && /echo: USAGE/.test(texts(usRun.events))
+      && /work happens here on the server/.test(info1) && /cwd=.*worktrees[\\/]t-admin/.test(t1) && !/cfg=.*host-claude-login/.test(t1) && /relay=200:upstream ok/.test(t1) && /model=claude-haiku-5-5/.test(t1) && !!sess1 && sess1 === sess2
+      && /"made":true/.test(boardOut) && /"claimed":true/.test(boardOut) && /"noted":true/.test(boardOut) && /fake-listing/.test(pcAOut) && /relay=200:upstream ok/.test(pcUOut) && /cwd=.*worktrees[\\/]t-user/.test(pcUOut)
+      && busyR === true && stopR.status === 200 && slowDone.events.some((e) => e.type === 'bridge_done') && usageA.of === remoteId && usageA2.of === remoteId && usageA2.five_hour.source === 'claude' && Math.abs(usageA2.five_hour.utilization - 0.42) < 0.01 && /echo: USAGE/.test(texts(usRun.events))
+      && relayBad.status === 401 && relayOutside.status === 401 && /cfg\.allowWork === true/.test(aiNodeSrc) && /https:\/\/api\.anthropic\.com/.test(relaySrc) && /https:\/\/chatgpt\.com\/backend-api\/codex/.test(relaySrc)
       && /cap/.test(capErr) && !!ckCap.capped && /echo: after the cap/.test(texts(afterCap.events)) && /offline/.test(offErr2) && offProv.online === false,
-      `pick ${pick.status}/${pickBad.status}/${pickNo.status} eff ${ckA.effectiveProvider}; info "${info1}"; run "${t1.slice(0, 120)}"; sess ${sess1 === sess2}; board ${boardOut}; pcA ${pcAOut.slice(0, 60)}; pcU ${pcUOut.slice(0, 60)}; busy ${busyR} stop ${stoppedCode}; usage ${usageA2.of} ${JSON.stringify(usageA2.five_hour)}; cap "${capErr.slice(0, 80)}" ${!!ckCap.capped}; after ${/echo: after/.test(texts(afterCap.events))}; off "${offErr2.slice(0, 60)}" ${offProv.online}`);
+      `pick ${pick.status}/${pickBad.status}/${pickNo.status} eff ${ckA.effectiveProvider}; info "${info1}"; run "${t1.slice(0, 200)}"; sess ${sess1 === sess2}; board ${boardOut}; pcA ${pcAOut.slice(0, 60)}; teammate "${pcUOut.slice(0, 120)}"; busy ${busyR} stop ${stoppedCode}; usage ${usageA2.of} ${JSON.stringify(usageA2.five_hour)}; relay bad ${relayBad.status} outside ${relayOutside.status}; cap "${capErr.slice(0, 80)}" ${!!ckCap.capped}; after ${/echo: after/.test(texts(afterCap.events))}; off "${offErr2.slice(0, 60)}" ${offProv.online}`);
 
     // local models and the host's Claude through the API (bridge/openai.js → providers → the host)
     const keyR = await call('/api/apikey/rotate', A, {});
@@ -1806,15 +1834,21 @@ async function run() {
     const v1LocalStream = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyR.data.key }, body: JSON.stringify({ model: 'tiny-local', stream: true, messages: [{ role: 'user', content: 'stream r145' }] }) }).then((r) => r.text());
     await call('/api/apikey/settings', A, { provider: remoteId, model: 'claude-fable-5-1' });
     const v1Claude = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyR.data.key }, body: JSON.stringify({ model: 'claude-fable-5-1', messages: [{ role: 'user', content: 'sandbox r145' }] }) }).then((r) => r.json());
+    const v1ClaudeStream = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyR.data.key }, body: JSON.stringify({ model: 'claude-fable-5-1', stream: true, messages: [{ role: 'user', content: 'claude stream r145' }] }) }).then((r) => r.text());
+    const setCodex = await call('/api/apikey/settings', A, { provider: 'h:test-node/codex', model: 'gpt-test' });
+    const v1Codex = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyR.data.key }, body: JSON.stringify({ model: 'gpt-test', messages: [{ role: 'user', content: 'codex r145' }] }) }).then((r) => r.json());
+    const codexStream = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyR.data.key }, body: JSON.stringify({ model: 'gpt-test', stream: true, messages: [{ role: 'user', content: 'codex stream r145' }] }) }).then((r) => r.text());
+    const codexPieces = (codexStream.match(/"content":"[^"]+"/g) || []).length;
     const streamed = v1LocalStream.split('\n').filter((l) => l.startsWith('data: {')).map((l) => { try { return ((JSON.parse(l.slice(6)).choices || [])[0] || {}).delta?.content || ''; } catch { return ''; } }).join('');
     const streamPieces = (v1LocalStream.match(/"content":"[^"]+"/g) || []).length;
     const setOther = await call('/api/apikey/settings', U, { provider: 'h:test-node/local' }); // t-user is allowed; t-admin (the owner) sees it too
     const ownerSees = ((await call('/api/check', A)).data.providers || []).some((p) => p.id === 'h:test-node/local');
     await call('/api/apikey/revoke', A, {}); await call('/api/model', A, { provider: 'host', model: '' }); await call('/api/model', U, { provider: 'host', model: 'claude-opus-5-5' }); // back to what the restart check (R9) expects for t-user
-    check('R145', 'local models through a host: a host\'s OpenAI-compatible endpoint (its Ollama) is a provider for the people it allows; the API answers through it, plain and STREAMING (the host forwards the endpoint\'s pieces as they come, so the words arrive one by one, several pieces, not one block), lists its models, and the host\'s Claude answers the API in a sandbox there; the owner and the allowed teammate may use it',
+    check('R145', 'the API through a host, streaming: its local model (OpenAI-compatible endpoint) answers plain and streamed piece by piece; its Claude login answers through the relay (Messages API, the Claude Code identity block first, the host\'s token only) plain and streamed; its ChatGPT / Codex login answers through the relay (Responses API, the host\'s token + account) plain and streamed; models listed; the owner and the allowed teammate may use them',
       keyR.status === 200 && setLocal.status === 200 && (v1Models.data || []).some((m) => m.id === 'tiny-local') && /oai says: through the host r145/.test(((v1Local.choices || [])[0] || {}).message?.content || '') && /oai says: stream r145/.test(streamed) && streamPieces >= 3 && /\[DONE\]/.test(v1LocalStream)
-      && /echo: .*sandbox r145/.test(((v1Claude.choices || [])[0] || {}).message?.content || '') && setOther.status === 200 && ownerSees === true,
-      `models ${(v1Models.data || []).map((m) => m.id).join(',')}; local "${(((v1Local.choices || [])[0] || {}).message || {}).content || JSON.stringify(v1Local).slice(0, 80)}"; streamed "${streamed}" in ${streamPieces} pieces; claude "${((((v1Claude.choices || [])[0] || {}).message || {}).content || JSON.stringify(v1Claude).slice(0, 80)).slice(0, 60)}"`);
+      && /upstream ok: sandbox r145 \[cc\]/.test(((v1Claude.choices || [])[0] || {}).message?.content || '') && /upstream/.test(v1ClaudeStream) && (v1ClaudeStream.match(/"content":"[^"]+"/g) || []).length >= 3
+      && setCodex.status === 200 && /codex says: codex r145/.test(((v1Codex.choices || [])[0] || {}).message?.content || '') && codexPieces >= 3 && setOther.status === 200 && ownerSees === true,
+      `models ${(v1Models.data || []).map((m) => m.id).join(',')}; local "${(((v1Local.choices || [])[0] || {}).message || {}).content || JSON.stringify(v1Local).slice(0, 80)}"; streamed ${streamPieces} pieces; claude "${((((v1Claude.choices || [])[0] || {}).message || {}).content || JSON.stringify(v1Claude).slice(0, 120)).slice(0, 120)}"; codex "${((((v1Codex.choices || [])[0] || {}).message || {}).content || JSON.stringify(v1Codex).slice(0, 120)).slice(0, 80)}" ${codexPieces} pieces`);
   }
   // The move kit: everything a person runs on the server / the old host, checked for shape (they cannot run here).
   const dk = (f) => fs.readFileSync(path.join(MILLS, 'deploy', f), 'utf8');
@@ -1856,7 +1890,7 @@ async function run() {
       && entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js')))) && unknown.status === 404
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
       && /class="menuFoot menuDl"/.test(html) && html.indexOf('data-downloads') < html.indexOf('id="goSettings"') && /id="downloads" class="modal"/.test(html) && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs),
-      `anon ${anon.status} list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')} zip ${zipRes.status} ${names.length} entries; linux ${linuxFiles.length} files, hub named ${linuxFiles.filter((e) => e.data.toString('utf8').includes(H)).length}; unknown ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
+      `anon ${anon.status} list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')} zip ${zipRes.status} ${names.length} entries (${names.join(' ')}); ai-node same ${entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js'))))}; linux ${linuxFiles.length} files, hub named ${linuxFiles.filter((e) => e.data.toString('utf8').includes(H)).length}; unknown ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
   }
 
   { // The hand-off (bridge/handoff.js): the running hub packs its own data, pauses writes, and can turn this machine into an AI host.

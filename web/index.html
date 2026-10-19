@@ -1769,7 +1769,7 @@ function showModels(d) {
   def.value = ''; def.textContent = 'Default' + (defProv && defProv.id !== 'host' ? ' (' + provName(defProv) + ')' : d.defaultModel ? ' (' + modelName(d.defaultModel) + ')' : '');
   sel.append(def);
   if (d.hubClaude !== false) for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
-  for (const p of provs.filter((x) => x.id !== 'host' && x.kind !== 'openai' && x.kind !== 'host-openai')) {
+  for (const p of provs.filter((x) => x.id !== 'host' && x.kind !== 'openai' && x.kind !== 'host-openai' && x.kind !== 'host-codex')) {
     const g = document.createElement('optgroup'); g.label = provName(p) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
     for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); o.disabled = p.online === false; g.append(o); }
     sel.append(g);
@@ -3513,7 +3513,7 @@ async function renderProviders() {
 }
 function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
 // ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
-const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint' };
+const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint' };
 async function renderSource() {
   const box = $('srcBox'); if (!box) return;
   let d; try { d = await json('/api/check'); } catch (e) { box.textContent = e.message; return; }
@@ -3523,7 +3523,7 @@ async function renderSource() {
   const defP = (d.providers || []).find((p) => p.id === d.defaultProvider);
   const sel = document.createElement('select');
   const o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'Default' + (defP ? ': ' + provName(defP) : ': none available'); sel.append(o0);
-  for (const p of (d.providers || []).filter((p) => p.kind !== 'openai' && p.kind !== 'host-openai')) { const o = document.createElement('option'); o.value = p.id; o.textContent = provName(p); sel.append(o); }
+  for (const p of (d.providers || []).filter((p) => p.kind !== 'openai' && p.kind !== 'host-openai' && p.kind !== 'host-codex')) { const o = document.createElement('option'); o.value = p.id; o.textContent = provName(p); sel.append(o); }
   sel.value = d.provider && d.provider !== 'host' ? d.provider : ''; if (sel.selectedIndex < 0) sel.value = '';
   const mdl = document.createElement('select');
   const fill = () => { mdl.textContent = ''; const p = (d.providers || []).find((x) => x.id === (sel.value || d.defaultProvider)) || { models: (d.models || []).map((m) => m.id) }; const m0 = document.createElement('option'); m0.value = ''; m0.textContent = 'model: the provider\'s first / default'; mdl.append(m0); for (const m of p.models || []) { const o = document.createElement('option'); o.value = m; o.textContent = modelName(m); mdl.append(o); } mdl.value = d.model || ''; if (mdl.selectedIndex < 0) mdl.value = ''; };

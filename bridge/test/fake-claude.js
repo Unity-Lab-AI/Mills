@@ -115,8 +115,20 @@ process.stdin.on('end', async () => {
     out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed' } });
     out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'seven_day', status: 'allowed', utilization: 55, resetsAt: Math.floor(Date.now() / 1000) + 86400 } });
   }
+  // Run with a relayed login (ANTHROPIC_BASE_URL = the hub's /llm/<token>): make one model call through it, like the real
+  // Claude Code does, report what came back, and turn the usage headers into a rate_limit_event (as the real one does).
+  let relay = '';
+  if (process.env.ANTHROPIC_BASE_URL) {
+    try {
+      const r = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (process.env.ANTHROPIC_AUTH_TOKEN || ''), 'anthropic-version': '2023-06-01', 'anthropic-beta': 'claude-code-20250219' }, body: JSON.stringify({ model, max_tokens: 50, messages: [{ role: 'user', content: input.slice(0, 80) }] }) });
+      const j = await r.json().catch(() => ({}));
+      relay = `${r.status}:${((j.content || [])[0] || {}).text || (j.error || {}).message || ''}`;
+      const u = r.headers.get('anthropic-ratelimit-unified-5h-utilization');
+      if (u) out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed', utilization: Number(u), resetsAt: Number(r.headers.get('anthropic-ratelimit-unified-5h-reset')) } });
+    } catch (e) { relay = 'error:' + e.message; }
+  }
   // "CAPTEST": the 5-hour window is 95 % used and resets in 3 s (an AI host's cap check must refuse the next run until then)
-  if (input.includes('CAPTEST')) out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed', utilization: 0.95, resetsAt: Math.floor(Date.now() / 1000) + 3 } });
+  if (input.includes('CAPTEST') && !process.env.ANTHROPIC_BASE_URL) out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed', utilization: 0.95, resetsAt: Math.floor(Date.now() / 1000) + 3 } });
   const usage = input.includes('USAGE');
   if (usage) out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed', utilization: 0.42, resetsAt: Math.floor(Date.now() / 1000) + 7200 } });
   if (input.includes('ASSISTTOOL')) {
@@ -130,7 +142,7 @@ process.stdin.on('end', async () => {
   }
   // cfg / key: which Claude login / API key this run was handed (a person's own provider), '' = the host's
   // wt: the allowed-tools entries that name worktree.js (a run in another project may call the hub's copy by its full path)
-  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')}` }],
+  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | relay=${relay} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')}` }],
     ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
   // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
   out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
