@@ -47,8 +47,7 @@ const take = (folder, rels, exec = false) => rels.map((rel) => ({ name: folder +
 
 function aiHostExample(hub) {
   const ex = JSON.parse(src('ai-node.example.json').toString('utf8'));
-  ex.hub = hub; ex.name = '<this machine, e.g. gee-pc>';
-  ex._ = 'Copy to ai-node.json (next to ai-node.js). hub = the VibeRoller server; name + token = what the VibeRoller admin set for this machine under aiNodes in the hub\'s bridge/config.local.json.';
+  ex.hub = hub;
   return JSON.stringify(ex, null, 2) + '\n';
 }
 const packages = {
@@ -133,9 +132,10 @@ Needs Chrome, Chromium, Brave or Edge. If VibeRoller is only reachable from insi
 ` },
     ] },
   'ai-host-windows': { group: 'ai-host', os: 'Windows', title: 'Vibe Roller AI Host', file: 'VibeRollerAIHost-windows.zip',
-    build: (hub) => [
-      ...take('VibeRollerAIHost', ['ai-node.js', 'start-node.bat', 'host-tools/HostTool.cs', 'host-tools/AiHostService.cs', 'host-tools/build-host-tools.ps1', 'host-tools/build.cmd', 'host-tools/install-ai-host-service.cmd']),
+    build: (hub, cfg) => [
+      ...take('VibeRollerAIHost', ['ai-node.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'start-node.bat', 'host-tools/HostTool.cs', 'host-tools/AiHostService.cs', 'host-tools/build-host-tools.ps1', 'host-tools/build.cmd', 'host-tools/install-ai-host-service.cmd']),
       { name: 'VibeRollerAIHost/ai-node.example.json', data: aiHostExample(hub) },
+      ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []),
       { name: 'VibeRollerAIHost/README.txt', data: crlf(`Vibe Roller AI Host (Windows)
 =============================
 Makes this PC an AI host for VibeRoller: it lends the AI engines running here (Unity's Ollama brain, and the image, voice
@@ -160,10 +160,11 @@ resume it.
 `) },
     ] },
   'ai-host-linux': { group: 'ai-host', os: 'Linux', title: 'Vibe Roller AI Host', file: 'VibeRollerAIHost-linux.zip',
-    build: (hub) => [
-      ...take('VibeRollerAIHost', ['ai-node.js', 'host-tools/viberoller-ai-host.service']),
+    build: (hub, cfg) => [
+      ...take('VibeRollerAIHost', ['ai-node.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'host-tools/viberoller-ai-host.service']),
       ...take('VibeRollerAIHost', ['start-node.sh', 'host-tools/install-ai-host-service.sh', 'host-tools/start-viberoller-host.sh', 'host-tools/stop-viberoller-host.sh'], true),
       { name: 'VibeRollerAIHost/ai-node.example.json', data: aiHostExample(hub) },
+      ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []),
       { name: 'VibeRollerAIHost/README.txt', data: `Vibe Roller AI Host (Linux)
 ===========================
 Makes this machine an AI host for VibeRoller: it lends the AI engines running here (Unity's Ollama brain, and the image,
@@ -187,8 +188,9 @@ Without the service (no sudo), sh start-node.sh runs the node in a terminal, and
     ] },
 };
 
-const cache = new Map(); // id → { hub, data }
-function build(id, hub) {
+const cache = new Map(); // id → { hub, data }  (the plain packages; one with a host's config inside is built fresh and never cached)
+function build(id, hub, cfg) {
+  if (cfg) return zip(packages[id].build(hub, cfg));
   const c = cache.get(id);
   if (c && c.hub === hub) return c.data;
   const data = zip(packages[id].build(hub));
@@ -199,14 +201,18 @@ function list(hub) {
   return Object.entries(packages).map(([id, p]) => ({ id, group: p.group, os: p.os, title: p.title, file: p.file, bytes: build(id, hub).length }));
 }
 // Signed-in people only (the hub routes here after its session check). hub = this hub's address for the packages.
-function route(p, req, res, hub) {
+// ?host=<id> puts that person's own AI host config (Settings → My AI hosts) into the AI Host package: unzip and run.
+function route(p, req, res, hub, hostConfig = null) {
   if (req.method !== 'GET') return false;
-  const m = /^\/api\/downloads\/([a-z-]+)\.zip$/.exec(p);
+  const m = /^\/api\/downloads\/([a-z-]+)\.zip(?:\?.*)?$/.exec(p);
   if (p !== '/api/downloads' && (!m || !packages[m[1]])) return false;
   try { // everything is built before the first byte goes out, so a missing file is a clean 500, never a half answer
     if (!m) { const body = JSON.stringify({ items: list(hub) }); res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(body); return true; }
-    const data = build(m[1], hub);
-    res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': data.length, 'Content-Disposition': `attachment; filename="${packages[m[1]].file}"`, 'Cache-Control': 'no-store' });
+    const hostId = new URL(req.url, 'http://x').searchParams.get('host');
+    let cfg = null;
+    if (hostId && packages[m[1]].group === 'ai-host') { if (!hostConfig) throw new Error('No host config available.'); cfg = hostConfig(hostId); }
+    const data = build(m[1], hub, cfg);
+    res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': data.length, 'Content-Disposition': `attachment; filename="${cfg ? packages[m[1]].file.replace('.zip', '-' + cfg.nickname + '.zip') : packages[m[1]].file}"`, 'Cache-Control': 'no-store' });
     res.end(data);
   } catch (e) {
     res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

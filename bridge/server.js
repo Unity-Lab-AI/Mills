@@ -180,22 +180,53 @@ function runClaude(acct, message, fresh, res, context) {
   if (tools.length) args.push('--allowedTools', tools.join(','));
   const model = effectiveModel(acct); // read per run, so a dropdown change lands on the very next message
   if (model) args.push('--model', model);
-  if (!fresh && acct.state.claudeSessionId) args.push('--resume', acct.state.claudeSessionId);
+  // Whose Claude answers: the provider this person picked, or the default (config defaultProvider, e.g. Gee's AI host;
+  // this hub's own login on the first host). A host's Claude means the run happens ON that host, relayed by the hub.
+  const prov = providers.effective(acct.username, acct.state.provider || '');
+  const fail = (text) => { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ type: 'bridge_error', text }) + '\n'); };
+  if (!prov) return fail('No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings.');
+  const provEnv = providers.claudeEnv(prov);
+  if (provEnv === null) return fail('Your chosen AI provider is not Claude, so it cannot run Work. Pick a Claude model in the dropdown.');
+  if ((prov.kind === 'host' || prov.kind === 'claude-cli') && !aiHostOn()) return fail(AI_OFF_TEXT); // the host paused its AI (an Anthropic key of your own still works)
+  const source = prov.kind === 'host' ? 'hub' : prov.kind === 'host-claude' ? prov.id : ''; // whose usage windows this run moves
+  // a Claude session lives where it ran: a run on another machine than the last one starts a new conversation
+  const where = prov.kind === 'host-claude' ? prov.hostId : 'hub';
+  if (!fresh && acct.state.claudeSessionId && (acct.state.claudeSessionWhere || 'hub') === where) args.push('--resume', acct.state.claudeSessionId);
+  acct.state.claudeSessionWhere = where;
+  const input = context ? `${message}\n\n---\n${context}` : message; // context = automatic summaries of the shared Work sessions this person is watching (added by their browser)
+  acct.runProvider = prov.kind !== 'host' ? prov.id : '';
+  if (source) noteActivity(source);
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+  acct.stream = res;
+  const keepAlive = setInterval(() => emit(acct, { type: 'ping' }), 15000);
+  const onEvent = (ev) => { if (ev && ev.session_id) acct.state.claudeSessionId = ev.session_id; if (source) noteUsage(acct, ev, source); else if (!/rate_limit/.test(String(ev.type || ''))) noteUsage(acct, ev, 'hub'); shares.mirrorEvent(acct, ev); emit(acct, ev); };
+  const finish = (code) => {
+    clearInterval(keepAlive);
+    for (const [id, p] of acct.pending) { clearTimeout(p.timer); send(p.res, 200, { ok: false, error: 'Run ended' }); acct.pending.delete(id); }
+    acct.running = null; saveState(acct);
+    res.end(JSON.stringify({ type: 'bridge_done', code }) + '\n');
+    acct.stream = null;
+    setTimeout(maybeRestart, 300); // a restart requested during this run happens now that it is over
+  };
 
-  // claudeCommand / claudeArgs exist only so the regression runner's throwaway hub can use a fake
+  if (prov.kind === 'host-claude') { // ---- on an AI host: Claude Code runs there, in that person's worktree of the project ----
+    const payload = { account: acct.username, display: acct.display, project: wd.project, hub: wd.hub, branch: wd.branch, repoUrl: repoUrlFor(wd), message: input, systemPrompt: systemPrompt(acct, wd), model,
+      resume: args.includes('--resume') ? acct.state.claudeSessionId : '', permissionMode: config.permissionMode, allowedTools: config.allowedTools, hubUrl: PUBLIC_URL || `http://127.0.0.1:${config.port}`, env: forgejo.workEnv(acct.username) };
+    let run;
+    try {
+      run = aiNodes.runWork(prov.hostId, prov.providerId, payload, { onEvent, onDone: (r) => finish(r.code), onError: (text) => { emit(acct, { type: 'bridge_error', text }); finish(1); } });
+    } catch (e) { clearInterval(keepAlive); acct.stream = null; res.end(JSON.stringify({ type: 'bridge_error', text: e.message }) + '\n' + JSON.stringify({ type: 'bridge_done', code: 1 }) + '\n'); return; }
+    emit(acct, { type: 'bridge_info', text: `Running on ${prov.nickname}${prov.owner ? ` (${nameOf(prov.owner)}'s AI host)` : ' (AI host)'}.` });
+    acct.running = { remote: run, pid: 0 };
+    return;
+  }
+
+  // ---- here: claudeCommand / claudeArgs exist only so the regression runner's throwaway hub can use a fake
   // Claude (bridge/test/fake-claude.js); production config leaves them unset → the real `claude`.
   const command = config.claudeCommand || 'claude';
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
-  // Whose Claude answers: the host's (default, nothing added) or the provider this person picked (their own
-  // Anthropic key / Claude Code login, passed to the claude process through its environment).
-  const prov = providers.get(acct.state.provider || 'host', acct.username), provEnv = prov ? providers.claudeEnv(prov) : {};
-  if (prov && provEnv === null) { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ type: 'bridge_error', text: 'Your chosen AI provider is not Claude, so it cannot run Work. Pick a Claude model in the dropdown.' }) + '\n'); return; }
-  if ((!prov || prov.kind === 'host' || prov.kind === 'claude-cli') && !aiHostOn()) { res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.end(JSON.stringify({ type: 'bridge_error', text: AI_OFF_TEXT }) + '\n'); return; } // the host paused its AI (an Anthropic key of your own still works)
-  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...(provEnv || {}), ...forgejo.workEnv(acct.username) } }); // + their own Forgejo token, if they saved one
-  acct.running = child; acct.stream = res; acct.runProvider = prov && prov.kind !== 'host' ? prov.id : '';
-  if (!acct.runProvider) noteActivity(); // only the host's own usage windows are shared by everyone
-  res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
-  const keepAlive = setInterval(() => emit(acct, { type: 'ping' }), 15000);
+  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...provEnv, ...forgejo.workEnv(acct.username) } }); // + their own Forgejo token, if they saved one
+  acct.running = child;
   let buf = '';
   child.stdout.on('data', (chunk) => {
     buf += chunk;
@@ -203,23 +234,19 @@ function runClaude(acct, message, fresh, res, context) {
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
       if (!line) continue;
-      try { const ev = JSON.parse(line); if (ev.session_id) acct.state.claudeSessionId = ev.session_id; if (!acct.runProvider || !/rate_limit/.test(String(ev.type || ''))) noteUsage(acct, ev); shares.mirrorEvent(acct, ev); emit(acct, ev); }
-      catch { emit(acct, { type: 'raw', text: line }); }
+      try { onEvent(JSON.parse(line)); } catch { emit(acct, { type: 'raw', text: line }); }
     }
   });
   child.stderr.on('data', (d) => emit(acct, { type: 'stderr', text: String(d) }));
   child.on('error', (e) => emit(acct, { type: 'bridge_error', text: 'Could not start claude: ' + e.message }));
-  child.on('close', (code) => {
-    clearInterval(keepAlive);
-    for (const [id, p] of acct.pending) { clearTimeout(p.timer); send(p.res, 200, { ok: false, error: 'Run ended' }); acct.pending.delete(id); }
-    acct.running = null; saveState(acct);
-    res.end(JSON.stringify({ type: 'bridge_done', code }) + '\n');
-    acct.stream = null;
-    setTimeout(maybeRestart, 300); // a restart requested during this run happens now that it is over
-  });
-  // context = automatic summaries of the shared Work sessions this person is watching (added by
-  // their browser); it goes to Claude after their message, clearly marked, and is not mirrored.
-  child.stdin.end(context ? `${message}\n\n---\n${context}` : message);
+  child.on('close', finish);
+  child.stdin.end(input);
+}
+// Where an AI host clones a project it does not have yet: VibeRoller from config hubRepoUrl (else this checkout's
+// origin), other projects from config projectsGitBase + "/<project>/_repo" (an ssh address on the server).
+function repoUrlFor(wd) {
+  if (wd.hub) return String(config.hubRepoUrl || '') || (() => { try { return require('child_process').execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: MILLS_DIR, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } })();
+  return config.projectsGitBase ? `${String(config.projectsGitBase).replace(/\/+$/, '')}/${wd.project}/_repo` : '';
 }
 // Usage (bridge/usage.js): the host account's 5h / 7d limits, shared by every Work run on it, and each
 // account's context window; noteActivity() when a run starts, noteUsage() per stream event, status() for /api/usage.
@@ -227,9 +254,11 @@ const usage = require('./usage')({ ROOT, config, readJson, writeJson });
 const { noteActivity, noteUsage } = usage;
 function stopClaude(acct) {
   if (!acct.running) return;
+  if (acct.running.remote) return acct.running.remote.cancel(); // a run on an AI host: the host is told to stop it
   if (process.platform === 'win32') spawn('taskkill', ['/pid', String(acct.running.pid), '/T', '/F'], { windowsHide: true });
   else acct.running.kill('SIGTERM');
 }
+const usageSourceOf = (acct) => { const p = providers.effective(acct.username, acct.state.provider || ''); return p && p.kind === 'host-claude' ? p.id : 'hub'; };
 
 // Past sessions (bridge/archive.js): each account's saved Claude conversations; archive.route() serves /api/archive/*.
 const archive = require('./archive')({ readJson, writeJson, send: (...a) => send(...a), readBody: (r) => readBody(r), saveState });
@@ -585,7 +614,7 @@ function agentHear(msg) {
 // Nobody — no account's Work run and not the room agent — is mid-run.
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 // AI nodes (bridge/ai-nodes.js): machines lending Unity's local engines to this hub when it runs elsewhere
-const aiNodes = require('./ai-nodes')({ config, send: (...a) => send(...a), readBody: (r) => readBody(r) });
+const aiNodes = require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m) });
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300), aiNodes });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team notes (bridge/notes.js): markdown files in folders under VibeRoller/Notes, for people (/api/notes*) and Claude (notes_* tools).
@@ -595,7 +624,7 @@ const team = require('./team')({ accounts, agentSay, presenceList: presence.list
   hub: { callsState: (u) => calls.state(u), sharesFor: (u) => shares.listFor(u), usageStatus: (a) => usage.status(a), archiveSearch: (a, q) => archive.search(a, q), providersList: (u) => providers.list(u) }, notes });
 // AI providers (bridge/providers.js: the host's Claude by default, plus people's own keys / logins / endpoints)
 // and the per-person OpenAI-compatible API (bridge/openai.js, /v1/*).
-const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts, aiHostOn });
+const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts, aiHostOn, aiNodes });
 const openai = require('./openai')({ accounts, providers, send: (...a) => send(...a), readBody: (r) => readBody(r), writeState: saveState,
   tunnelUrl: () => (readJson(HUB.TUNNEL_FILE, {}).url || ''), onIdle: () => setTimeout(maybeRestart, 300) });
 
@@ -643,6 +672,27 @@ function accountSummary(a) {
   };
 }
 
+// The MCP tools of a Work run, wherever Claude runs (here, or on an AI host): PC files (relayed to the person's own AI
+// host when it offers their computer, else to their browser), the team board, the team chat.
+async function internalTool(tool, req, res, account) {
+  const acct = accounts.get(account);
+  if (tool === 'board') return board.internal(req, res, account);
+  if (!acct) return send(res, 200, { ok: false, error: 'Unknown account.' });
+  const { name, args } = await readBody(req);
+  if (tool === 'team') return send(res, 200, team.call(name, args, acct));
+  // pc-tool: the person's own AI host with direct computer access first (the native app), else the browser's open folder
+  const viaHost = aiNodes.pcHostFor(acct.username);
+  if (viaHost) {
+    try { const r = await aiNodes.pcTool(viaHost, name, args || {}); return send(res, 200, r); }
+    catch (e) { if (!acct.stream) return send(res, 200, { ok: false, error: `${acct.display}'s computer did not answer: ${e.message}` }); }
+  }
+  if (!acct.stream) return send(res, 200, { ok: false, error: `${acct.display}'s browser is not connected (and no AI host of theirs offers their computer).` });
+  const id = crypto.randomBytes(8).toString('hex');
+  const timer = setTimeout(() => { acct.pending.delete(id); send(res, 200, { ok: false, error: 'Timed out waiting for the browser.' }); }, 120000);
+  acct.pending.set(id, { res, timer });
+  return emit(acct, { type: 'pc_tool', id, name, args });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
@@ -650,32 +700,22 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/internal/assistant-tool') return await assistant.internal(req, res);
     // Internal channel from the MCP relay (same machine, shared secret, names the account).
-    if (p === '/internal/pc-tool') {
+    if (p === '/internal/pc-tool' || p === '/internal/board' || p === '/internal/team') {
       if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
-      const acct = accounts.get(String(req.headers['x-mills-account'] || '') || DEFAULT_USERNAME);
-      const { name, args } = await readBody(req);
-      if (!acct || !acct.stream) return send(res, 200, { ok: false, error: `${acct ? acct.display : 'The user'}'s browser is not connected.` });
-      const id = crypto.randomBytes(8).toString('hex');
-      const timer = setTimeout(() => { acct.pending.delete(id); send(res, 200, { ok: false, error: 'Timed out waiting for the browser.' }); }, 120000);
-      acct.pending.set(id, { res, timer });
-      return emit(acct, { type: 'pc_tool', id, name, args });
+      return internalTool(p.slice('/internal/'.length), req, res, String(req.headers['x-mills-account'] || '') || DEFAULT_USERNAME);
     }
-
-    if (p === '/internal/board') { // board MCP tools of a Work run (same machine, shared secret, names the account)
-      if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
-      return board.internal(req, res, String(req.headers['x-mills-account'] || '') || DEFAULT_USERNAME);
-    }
-    if (p === '/internal/team') { // team MCP tools of a Work run: post into the chat as "<person> · Claude", presence
-      if (req.headers['x-mills-internal'] !== INTERNAL_SECRET) return send(res, 403, { ok: false, error: 'forbidden' });
-      const who = accounts.get(String(req.headers['x-mills-account'] || '') || DEFAULT_USERNAME);
-      if (!who) return send(res, 200, { ok: false, error: 'Unknown account.' });
-      const { name, args } = await readBody(req);
-      return send(res, 200, team.call(name, args, who));
+    // The same tools for a Work run that runs ON AN AI HOST (Claude Code on Gee's PC for the hub on the server): the
+    // host's MCP relays call /node/job/<job id>/internal/<tool> with the job's own token, good for that one run only.
+    const nj = /^\/node\/job\/([A-Za-z0-9_-]+)\/internal\/(pc-tool|board|team)$/.exec(p);
+    if (nj) {
+      const job = aiNodes.jobFor(nj[1], req.headers['x-mills-internal']);
+      if (!job) return send(res, 403, { ok: false, error: 'forbidden' });
+      return internalTool(nj[2], req, res, job.account);
     }
 
     // OpenAI-compatible API: its own bearer keys (Settings → API access), for harnesses, not the browser app.
     if (p === '/v1' || p.startsWith('/v1/')) return openai.handle(req, res, p);
-    if (p.startsWith('/node/')) { if (await aiNodes.route(p, req, res)) return; } // AI nodes: their own name + secret, no browser session
+    if (p.startsWith('/node/')) { if (await aiNodes.route(p, req, res)) return; } // AI hosts: their own id + secret, no browser session
 
     const origin = req.headers.origin;
     if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin) || (PUBLIC_URL && origin.toLowerCase() === PUBLIC_URL))) {
@@ -761,9 +801,10 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/check' && req.method === 'GET') {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
         models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, project: projectOf(acct), projects: projectList(), prefs: acct.state.prefs || {}, share: shares.convOf(acct.username),
-        provider: acct.state.provider || 'host', providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules, aiHost: aiHostOn(), aiNodes: aiNodes.status() });
+        provider: acct.state.provider || 'host', effectiveProvider: (providers.effective(acct.username, acct.state.provider || '') || {}).id || '', defaultProvider: (providers.defaultFor(acct.username) || {}).id || '', hubClaude: providers.HUB_CLAUDE,
+        providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules, aiHost: aiHostOn(), aiNodes: aiNodes.status(), pcHost: aiNodes.pcHostFor(acct.username) });
     }
-    if (p.startsWith('/api/downloads') && downloads.route(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`)) return; // the Download panel's packages
+    if (p.startsWith('/api/downloads') && downloads.route(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`, (hostId) => aiNodes.hosts.configFor(acct.username, hostId, PUBLIC_URL || `http://127.0.0.1:${config.port}`))) return; // the Download panel's packages (+ this person's own AI host config)
     // ----- AI providers: everyone manages their own; the host's Claude is always there -----
     if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });
     if (p === '/api/providers/add' && req.method === 'POST') { try { return send(res, 200, { provider: providers.add(acct.username, await readBody(req)), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
@@ -793,7 +834,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/profile/avatar/remove' && req.method === 'POST') { avatars.remove(acct.username); keysVer++; roomChanged(); return send(res, 200, { username: acct.username, ...publicPrefs(acct) }); }
     if (p === '/api/prefs' && req.method === 'GET') return send(res, 200, { prefs: acct.state.prefs || {} });
-    if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage.status(acct));
+    if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage.status(acct, usageSourceOf(acct)));
     if (p === '/api/prefs' && req.method === 'POST') {
       acct.state.prefs = cleanPrefs(await readBody(req), acct.state.prefs || {});
       saveState(acct);
@@ -811,17 +852,24 @@ const server = http.createServer(async (req, res) => {
       // { model, provider? }: the model must belong to the provider (host = the config.json models; someone's
       // own Claude key / login = its model list). A provider that is not Claude cannot run Work at all.
       const { model, provider } = await readBody(req);
-      const prov = providers.get(provider === undefined ? acct.state.provider || 'host' : String(provider || 'host'), acct.username);
+      const want = provider === undefined ? acct.state.provider || '' : String(provider || '');
+      const prov = want && want !== 'host' ? providers.get(want, acct.username) : providers.defaultFor(acct.username) || providers.get('host');
       if (!prov) return send(res, 400, { error: 'Unknown provider.' });
       if (providers.claudeEnv(prov) === null) return send(res, 400, { error: 'That provider is not Claude; Work runs need Claude Code. Use it for the API or the Unity section instead.' });
       const ids = prov.kind === 'host' ? modelIds() : prov.models || [];
       if (typeof model !== 'string' || (model && !ids.includes(model))) return send(res, 400, { error: 'Unknown model.' });
       if (model) acct.state.model = model; else delete acct.state.model;
-      if (prov.kind === 'host') delete acct.state.provider; else acct.state.provider = prov.id;
-      if (prov.kind !== 'host' && !model) acct.state.model = ids[0]; // a provider always runs a model of its own list
+      if (!want || want === 'host') delete acct.state.provider; else acct.state.provider = prov.id; // nothing stored = the default (Gee's host on the server, this hub's Claude on the first host)
+      if (acct.state.provider && !model) acct.state.model = ids[0]; // a provider always runs a model of its own list
       saveState(acct);
-      return send(res, 200, { model: acct.state.model || '', provider: acct.state.provider || 'host', effective: effectiveModel(acct) });
+      return send(res, 200, { model: acct.state.model || '', provider: acct.state.provider || 'host', effective: effectiveModel(acct), effectiveProvider: (providers.effective(acct.username, acct.state.provider || '') || {}).id || '' });
     }
+    // ----- AI hosts: machines lending their AI to this hub (Settings → My AI hosts) -----
+    if (p === '/api/hosts' && req.method === 'GET') return send(res, 200, { mine: aiNodes.hosts.mine(acct.username), all: aiNodes.hosts.all().map((h) => ({ id: h.id, nickname: h.nickname, user: h.user, online: h.online, providers: h.providers.filter((x) => x.allowedUsers.includes(acct.username) || h.user === acct.username).map((x) => ({ id: x.id, kind: x.kind, label: x.label, models: x.models, capped: x.capped })) })), defaultProvider: (providers.defaultFor(acct.username) || {}).id || '', group: config.hostGroup || [] });
+    if (p === '/api/hosts/new' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { host: aiNodes.hosts.create(acct.username, b.nickname ? String(b.nickname) : ''), mine: aiNodes.hosts.mine(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/hosts/rename' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { host: aiNodes.hosts.rename(acct.username, String(b.id || ''), String(b.nickname || '')) }); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/hosts/remove' && req.method === 'POST') { const b = await readBody(req); try { aiNodes.hosts.remove(acct.username, String(b.id || '')); return send(res, 200, { mine: aiNodes.hosts.mine(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/hosts/share' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { host: aiNodes.hosts.setShare(acct.username, String(b.id || ''), String(b.provider || ''), b.users === null ? null : Array.isArray(b.users) ? b.users : []) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     // ----- projects (the shared projects area) and which one this person works on -----
     if (p === '/api/projects' && req.method === 'GET') return send(res, 200, { projects: projectList(), project: projectOf(acct) });
     if (p === '/api/projects' && req.method === 'POST') { // { name } = start a new project; { url, name? } = pull in a repo

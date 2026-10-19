@@ -905,6 +905,10 @@
         <div id="apiBox" class="apiBox"></div></div>
       <div class="setSection"><b>VibeRoller Chat app</b> — the chat side of VibeRoller as its own installed app on Windows or Linux (servers, channels, groups, private messages, calls, Unity).
         <div id="appBox" class="apiBox"></div></div>
+      <div class="setSection"><b>AI source</b> — whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).
+        <div id="srcBox" class="apiBox"></div></div>
+      <div class="setSection"><b>My AI hosts</b> — your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.
+        <div id="hostBox" class="apiBox"></div></div>
       <div class="setSection"><b>My AIs</b> — hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.
         <div id="provBox" class="provBox"></div></div>
       <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
@@ -1759,13 +1763,15 @@ function showModels(d) {
   if (!Array.isArray(d.models)) { sel.hidden = true; return; } // bridge from before the picker existed
   modelLabels = Object.fromEntries(d.models.map((m) => [m.id, m.label]));
   sel.innerHTML = '';
+  const provs = d.providers || [], defProv = provs.find((x) => x.id === d.defaultProvider) || null;
+  const provName = (p) => (p.nickname ? p.nickname + ' · ' : '') + p.label + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '');
   const def = document.createElement('option');
-  def.value = ''; def.textContent = 'Default' + (d.defaultModel ? ' (' + modelName(d.defaultModel) + ')' : '');
+  def.value = ''; def.textContent = 'Default' + (defProv && defProv.id !== 'host' ? ' (' + provName(defProv) + ')' : d.defaultModel ? ' (' + modelName(d.defaultModel) + ')' : '');
   sel.append(def);
-  for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
-  for (const p of (d.providers || []).filter((x) => x.id !== 'host' && x.kind !== 'openai')) {
-    const g = document.createElement('optgroup'); g.label = p.label + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '');
-    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); g.append(o); }
+  if (d.hubClaude !== false) for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
+  for (const p of provs.filter((x) => x.id !== 'host' && x.kind !== 'openai' && x.kind !== 'host-openai')) {
+    const g = document.createElement('optgroup'); g.label = provName(p) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
+    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); o.disabled = p.online === false; g.append(o); }
     sel.append(g);
   }
   sel.value = d.provider && d.provider !== 'host' ? d.provider + '|' + (d.model || '') : d.model || '';
@@ -1911,6 +1917,7 @@ function handleEvent(ev) {
     else sys('Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
   } else if (ev.type === 'stderr') stderrText = (stderrText + ev.text).slice(-600);
   else if (ev.type === 'bridge_error') { sys(ev.text, true); runOutcome = { state: 'failed', text: 'Failed: ' + ev.text }; }
+  else if (ev.type === 'bridge_info') sys(ev.text); // e.g. which AI host runs this reply
   else if (ev.type === 'bridge_done' && ev.code) sys('Claude stopped (code ' + ev.code + ')' + (stderrText.trim() ? ': ' + stderrText.trim() : ''), true);
   scroll();
 }
@@ -3389,7 +3396,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo();
+  renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderSource(); renderHosts();
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
@@ -3505,6 +3512,66 @@ async function renderProviders() {
   form.append(kind, label, secret, where, models, shared, add, msg); box.append(form);
 }
 function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
+// ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
+const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint' };
+async function renderSource() {
+  const box = $('srcBox'); if (!box) return;
+  let d; try { d = await json('/api/check'); } catch (e) { box.textContent = e.message; return; }
+  me.providers = d.providers; me.provider = d.provider; me.defaultProvider = d.defaultProvider; me.hubClaude = d.hubClaude;
+  box.textContent = '';
+  const provName = (p) => (p.nickname ? p.nickname + ' · ' : '') + p.label + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '') + ' — ' + (SRC_KINDS[p.kind] || p.kind) + (p.online === false ? ', offline' : p.capped ? ', at its usage cap' : '');
+  const defP = (d.providers || []).find((p) => p.id === d.defaultProvider);
+  const sel = document.createElement('select');
+  const o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'Default' + (defP ? ': ' + provName(defP) : ': none available'); sel.append(o0);
+  for (const p of (d.providers || []).filter((p) => p.kind !== 'openai' && p.kind !== 'host-openai')) { const o = document.createElement('option'); o.value = p.id; o.textContent = provName(p); sel.append(o); }
+  sel.value = d.provider && d.provider !== 'host' ? d.provider : ''; if (sel.selectedIndex < 0) sel.value = '';
+  const mdl = document.createElement('select');
+  const fill = () => { mdl.textContent = ''; const p = (d.providers || []).find((x) => x.id === (sel.value || d.defaultProvider)) || { models: (d.models || []).map((m) => m.id) }; const m0 = document.createElement('option'); m0.value = ''; m0.textContent = 'model: the provider\'s first / default'; mdl.append(m0); for (const m of p.models || []) { const o = document.createElement('option'); o.value = m; o.textContent = modelName(m); mdl.append(o); } mdl.value = d.model || ''; if (mdl.selectedIndex < 0) mdl.value = ''; };
+  fill();
+  const msg = document.createElement('span'); msg.className = 'status';
+  const apply = async () => { try { const r = await json('/api/model', { method: 'POST', body: JSON.stringify({ provider: sel.value || 'host', model: mdl.value }) }); msg.textContent = 'Saved: ' + modelName(r.effective || '') + (r.effectiveProvider && r.effectiveProvider !== 'host' ? ' via ' + r.effectiveProvider.split('/').pop() : ''); await refreshProviders(); refreshUsageSoon(); } catch (e) { msg.textContent = e.message; } };
+  sel.onchange = () => { fill(); apply(); }; mdl.onchange = apply;
+  const row = document.createElement('div'); row.className = 'row'; row.append(sel, mdl, msg); box.append(row);
+  const note = document.createElement('div'); note.className = 'status';
+  note.textContent = (d.hubClaude === false ? 'This hub has no Claude of its own: Work and the API run on an AI host. ' : '') + 'AI hosts show up here when they are connected; their owners choose who may use them (My AI hosts).';
+  box.append(note);
+}
+// ── Settings → My AI hosts: this person's own hosts (UUID + nickname), their providers and who may use them ──
+async function renderHosts() {
+  const box = $('hostBox'); if (!box) return;
+  let d; try { d = await json('/api/hosts'); } catch (e) { box.textContent = e.message; return; }
+  box.textContent = '';
+  const line = (...kids) => { const r = document.createElement('div'); r.className = 'row'; r.append(...kids); return r; };
+  const dl = (h, os) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.append(ic('download', 'lead'), document.createTextNode(os)); b.title = 'The AI Host package for ' + os + ' with this host\'s config inside (keep it private)';
+    b.onclick = async () => { b.disabled = true; try { const r = await api('/api/downloads/ai-host-' + os.toLowerCase() + '.zip?host=' + encodeURIComponent(h.id)); if (!r.ok) throw new Error('Download failed (' + r.status + ')'); const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'VibeRollerAIHost-' + os.toLowerCase() + '-' + h.nickname + '.zip'; document.body.append(a); a.click(); a.remove(); } catch (e) { sysSettings(e.message); } b.disabled = false; }; return b; };
+  for (const h of d.mine || []) {
+    const it = document.createElement('div'); it.className = 'provItem';
+    const b = document.createElement('b'); b.textContent = h.nickname; const dot = document.createElement('span'); dot.textContent = h.online ? ' · online' : h.seen ? ' · offline (last seen ' + new Date(h.seen).toLocaleString() + ')' : ' · never connected yet'; dot.style.color = h.online ? 'var(--ok, #3ddc84)' : 'var(--muted)'; b.append(dot); it.append(b);
+    const s = document.createElement('small'); s.textContent = 'id ' + h.id + (h.kid ? ' · key ' + h.kid : '') + (h.version ? ' · host app ' + h.version + (h.os ? ' on ' + h.os : '') : '') + (h.engines && h.engines.length ? ' · engines: ' + h.engines.join(', ') : ''); it.append(s);
+    for (const p of h.providers || []) {
+      const pr = document.createElement('div'); pr.className = 'row';
+      const pl = document.createElement('span'); pl.textContent = `${p.label} (${p.kind}${p.models.length ? ': ' + p.models.map(modelName).join(', ') : ''}${p.max5h ? `; caps ${p.max5h}% / ${p.max7d}%` : ''}${p.capped ? '; ' + p.capped : ''}) · shared with:`;
+      const users = document.createElement('input'); users.value = (p.allowedUsers || []).join(', '); users.placeholder = 'usernames, comma separated'; users.title = 'Who may use this provider (you always can). Empty = nobody else. The host declared: ' + (p.declared || []).join(', ');
+      users.onchange = () => json('/api/hosts/share', { method: 'POST', body: JSON.stringify({ id: h.id, provider: p.id, users: users.value.split(/[,\s]+/).filter(Boolean) }) }).then(() => { renderHosts(); refreshProviders(); }).catch((e) => sysSettings(e.message));
+      const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'ghost'; reset.textContent = 'as the host says'; reset.title = 'Forget this override and use the list in the host\'s own config';
+      reset.onclick = () => json('/api/hosts/share', { method: 'POST', body: JSON.stringify({ id: h.id, provider: p.id, users: null }) }).then(() => { renderHosts(); refreshProviders(); }).catch((e) => sysSettings(e.message));
+      pr.append(pl, users, reset); it.append(pr);
+    }
+    if (!(h.providers || []).length) { const n = document.createElement('small'); n.textContent = h.online ? 'This host offers no providers yet (its ai-node.json providers list is empty).' : 'Download the package below, unzip it on that computer and run it (host-tools\\build.cmd on Windows, say Y to the service; sh host-tools/install-ai-host-service.sh on Linux). Its providers appear here once it connects.'; it.append(n); }
+    const ren = document.createElement('button'); ren.type = 'button'; ren.className = 'ghost'; ren.textContent = 'Rename';
+    ren.onclick = () => { const n = prompt('New nickname (two to four lowercase words joined by dashes):', h.nickname); if (!n) return; json('/api/hosts/rename', { method: 'POST', body: JSON.stringify({ id: h.id, nickname: n }) }).then(renderHosts).catch((e) => sysSettings(e.message)); };
+    const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
+    rm.onclick = () => { if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; return; } json('/api/hosts/remove', { method: 'POST', body: JSON.stringify({ id: h.id }) }).then(() => { renderHosts(); refreshProviders(); }).catch((e) => sysSettings(e.message)); };
+    it.append(line(dl(h, 'Windows'), dl(h, 'Linux'), ren, rm));
+    box.append(it);
+  }
+  const add = document.createElement('button'); add.type = 'button'; add.textContent = 'New host (this computer, or another of yours)';
+  add.onclick = () => json('/api/hosts/new', { method: 'POST', body: '{}' }).then((r) => { renderHosts(); sysSettings('Made ' + r.host.nickname + '. Download its package below and run it on that computer.'); }).catch((e) => sysSettings(e.message));
+  const others = (d.all || []).filter((h) => h.user !== me.username && h.providers.length);
+  const info = document.createElement('div'); info.className = 'status';
+  info.textContent = others.length ? 'Hosts you may use: ' + others.map((h) => `${h.nickname} (${nickOf(h.user)}${h.online ? '' : ', offline'}: ${h.providers.map((p) => p.label).join(', ')})`).join('; ') + '.' : 'No teammate\'s host is shared with you right now.';
+  box.append(line(add), info);
+}
 async function refreshProviders() { try { const d = await json('/api/check'); me.providers = d.providers; me.provider = d.provider; showModels(me); } catch {} }
 $('setTheme').onchange = () => applyTheme($('setTheme').value);
 function fillVoices(chosen) { // voices load late in some browsers, so this also runs on voiceschanged

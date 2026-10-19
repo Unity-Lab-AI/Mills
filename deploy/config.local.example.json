@@ -8,6 +8,11 @@
   "worktreeRoot": "/srv/apps/sharedwork/VibeRoller",
   "projectsRoot": "/srv/apps/sharedwork",
   "forgejoUrl": "https://git.unityailab.com",
+  "hubClaude": false,
+  "defaultProvider": "host:gee",
+  "hostGroup": ["mills", "sponge", "gee"],
+  "hubRepoUrl": "https://git.unityailab.com/GFourteen/VibeRoller.git",
+  "projectsGitBase": "gee@git.unityailab.com:/srv/apps/sharedwork",
   "aiNodes": { "gee-pc": "__NODE_SECRET__" },
   "assistant": { "via": "node" }
 }

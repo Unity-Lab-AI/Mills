@@ -115,6 +115,8 @@ process.stdin.on('end', async () => {
     out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed' } });
     out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'seven_day', status: 'allowed', utilization: 55, resetsAt: Math.floor(Date.now() / 1000) + 86400 } });
   }
+  // "CAPTEST": the 5-hour window is 95 % used and resets in 3 s (an AI host's cap check must refuse the next run until then)
+  if (input.includes('CAPTEST')) out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed', utilization: 0.95, resetsAt: Math.floor(Date.now() / 1000) + 3 } });
   const usage = input.includes('USAGE');
   if (usage) out({ type: 'rate_limit_event', session_id: session, rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed', utilization: 0.42, resetsAt: Math.floor(Date.now() / 1000) + 7200 } });
   if (input.includes('ASSISTTOOL')) {

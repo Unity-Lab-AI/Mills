@@ -49,6 +49,9 @@ bridge/forgejo.json
 bridge/config.local.json
 bridge/ai-node.json
 bridge/ai-node.lock
+# AI hosts (UUID + secret + nickname per host; Settings → My AI hosts) and a host's per-run MCP files
+bridge/ai-hosts.json
+bridge/.mcp-host-*.json
 # the host's AI on/off switch + the host tools built on that machine (bridge/host-tools/build.cmd)
 bridge/ai-host.off
 bridge/host-tools/*.exe

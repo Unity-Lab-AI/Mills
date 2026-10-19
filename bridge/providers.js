@@ -22,24 +22,43 @@ const { spawn } = require('child_process');
 const KINDS = ['anthropic', 'claude-cli', 'openai'];
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts, aiHostOn = () => true }) {
+// Two more kinds come from AI hosts (bridge/ai-nodes.js: machines that lend their AI to this hub, id "h:<hostId>/<provider>"):
+//   host-claude  a Claude login / key ON that machine → Work runs and API answers run there, relayed by the hub
+//   host-openai  an OpenAI-compatible endpoint ON that machine (a local model) → calls relayed through it
+// A hub with no Claude of its own (the server: "hubClaude": false) has no "host" entry; the default is then the first
+// Claude a host offers, preferring the person named by config "defaultProvider": "host:<user>" (Gee).
+module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts, aiHostOn = () => true, aiNodes = null }) {
   const FILE = path.join(ROOT, 'providers.json');
   const SANDBOX = path.join(MILLS_DIR, 'Api', 'sandbox'); // empty folder `claude -p` runs in for API calls: no project files in reach
   let db = readJson(FILE, { providers: [] });
   if (!Array.isArray(db.providers)) db = { providers: [] };
   const save = () => writeJson(FILE, db);
   const hostModels = () => config.models.map((m) => m.id);
+  const HUB_CLAUDE = config.hubClaude !== false; // does this machine itself have a Claude login (the first host did; the server does not)
 
   // ---- registry ----
   const HOST = { id: 'host', kind: 'host', label: 'Host Claude (default)', owner: '', shared: true, models: hostModels() };
   const pub = (p) => ({ id: p.id, kind: p.kind, label: p.label, owner: p.owner, shared: !!p.shared, models: p.models || [], baseUrl: p.baseUrl || undefined, configDir: p.configDir || undefined, hasKey: !!p.apiKey, createdAt: p.createdAt });
   const visible = (p, user) => p.shared || p.owner === user;
-  function list(user) { return [{ ...HOST, models: hostModels() }, ...db.providers.filter((p) => visible(p, user)).map(pub)]; }
+  const remote = (user) => (aiNodes ? aiNodes.providersFor(user) : []);
+  const isRemote = (p) => !!p && (p.kind === 'host-claude' || p.kind === 'host-openai');
+  function list(user) { return [...(HUB_CLAUDE ? [{ ...HOST, models: hostModels() }] : []), ...db.providers.filter((p) => visible(p, user)).map(pub), ...remote(user)]; }
   function get(id, user) {
-    if (!id || id === 'host') return { ...HOST, models: hostModels() };
+    if (!id || id === 'host') return HUB_CLAUDE ? { ...HOST, models: hostModels() } : null;
+    if (String(id).startsWith('h:')) return aiNodes ? aiNodes.provider(id, user) : null;
     const p = db.providers.find((x) => x.id === id);
     return p && (!user || visible(p, user)) ? p : null;
   }
+  // The provider a person gets when they picked none: config defaultProvider "host:<user>" → that person's online Claude
+  // host (first one allowed), else this hub's own Claude, else the first Claude any host offers them, else nothing.
+  function defaultFor(user) {
+    const want = /^host:([a-z0-9-]+)$/.exec(String(config.defaultProvider || ''));
+    const claudes = remote(user).filter((p) => p.kind === 'host-claude');
+    if (want) { const p = claudes.find((x) => x.owner === want[1] && x.online && !x.capped) || claudes.find((x) => x.owner === want[1]); if (p) return p; }
+    if (HUB_CLAUDE) return { ...HOST, models: hostModels() };
+    return claudes.find((x) => x.online && !x.capped) || claudes[0] || null;
+  }
+  const effective = (user, chosenId) => (chosenId ? get(chosenId, user) : null) || defaultFor(user);
   function add(user, body) {
     const kind = String(body.kind || '');
     if (!KINDS.includes(kind)) throw new Error('kind must be anthropic, claude-cli or openai.');
@@ -87,8 +106,9 @@ module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, w
     return true;
   }
   // Environment a Work run's `claude` gets when its person picked a Claude-capable provider: nothing for the host.
+  // A host's Claude (host-claude) also answers {}: the run happens on that host, which adds its own login there.
   function claudeEnv(p) {
-    if (!p || p.kind === 'host') return {};
+    if (!p || p.kind === 'host' || p.kind === 'host-claude') return {};
     if (p.kind === 'anthropic') return { ANTHROPIC_API_KEY: p.apiKey };
     if (p.kind === 'claude-cli') return { CLAUDE_CONFIG_DIR: p.configDir };
     return null; // not Claude: a Work run cannot use it
@@ -181,14 +201,54 @@ module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, w
       }
     }
   }
-  async function complete({ provider, model, system = '', messages = [], onToken = null, signal, maxTokens }) {
-    const p = get(provider) || HOST;
+  // A host's local model: the same OpenAI-compatible call, carried to the host and from there to its endpoint.
+  async function completeHostOpenAI(p, { model, system, messages, onToken, signal, maxTokens }) {
+    const body = { model: model || p.models[0], stream: !!onToken, messages: [...(system ? [{ role: 'system', content: system }] : []), ...messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: String(m.content) }))] };
+    if (maxTokens) body.max_tokens = maxTokens;
+    const r = await aiNodes.providerFetch(p.hostId, p.providerId, '/chat/completions', { method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(`${p.nickname}'s endpoint answered ` + r.status + ': ' + (await r.text()).slice(0, 300));
+    if (!onToken) { const j = await r.json(); return { text: ((j.choices || [])[0] || {}).message?.content || '', model: j.model || body.model, usage: j.usage || null }; }
+    // the host streams the endpoint's SSE back piece by piece: words are handed on as they arrive
+    let text = '', usedModel = body.model, usage = null;
+    if (!/text\/event-stream/i.test(r.headers.get('content-type') || '')) { // the endpoint ignored stream: true
+      const j = await r.json().catch(() => null);
+      if (j) { text = ((j.choices || [])[0] || {}).message?.content || ''; if (text) onToken(text); usage = j.usage || null; usedModel = j.model || usedModel; }
+      return { text, model: usedModel, usage };
+    }
+    for await (const ev of sse(r.body)) { const d = ((ev.choices || [])[0] || {}).delta || {}; if (d.content) { text += d.content; onToken(d.content); } if (ev.model) usedModel = ev.model; if (ev.usage) usage = ev.usage; }
+    return { text, model: usedModel, usage };
+  }
+  // A host's Claude for the API: a sandboxed `claude -p` on that host (no project files, no tools), text back whole.
+  function completeHostClaude(p, { model, system, messages, signal, onToken }) {
+    return new Promise((resolve, reject) => {
+      let text = '', usedModel = model || '', usage = null, err = '';
+      let run;
+      try {
+        run = aiNodes.runWork(p.hostId, p.providerId, { sandbox: true, account: 'api', display: 'API', message: flatten(system, messages), systemPrompt: system, model, hubUrl: '' }, {
+          onEvent: (ev) => {
+            if (ev.type === 'system' && ev.model) usedModel = ev.model;
+            if (ev.type === 'assistant' && ev.message) { if (ev.message.model) usedModel = ev.message.model; if (ev.message.usage) usage = ev.message.usage; for (const b of ev.message.content || []) if (b.type === 'text' && b.text) { text += b.text; if (onToken) onToken(b.text); } }
+            if (ev.type === 'result' && ev.is_error) err = String(ev.result || ev.subtype || 'error');
+            if (ev.type === 'bridge_error' || ev.type === 'stderr') err = (err + ' ' + String(ev.text || '')).slice(-600);
+          },
+          onDone: () => (text ? resolve({ text, model: usedModel, usage: usage ? { prompt_tokens: (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0), completion_tokens: usage.output_tokens || 0 } : null }) : reject(new Error(err.trim() || 'the host\'s Claude gave no answer'))),
+          onError: (m) => reject(Object.assign(new Error(m), { status: 503 })),
+        });
+      } catch (e) { return reject(Object.assign(e, { status: 503 })); }
+      if (signal) signal.addEventListener('abort', () => { run.cancel(); reject(new Error('cancelled')); }, { once: true });
+    });
+  }
+  async function complete({ provider, model, system = '', messages = [], onToken = null, signal, maxTokens, user = '' }) {
+    const p = (provider ? get(provider, user || undefined) : null) || defaultFor(user);
+    if (!p) { const e = new Error('No AI is available: this hub has no Claude of its own and no AI host is connected.'); e.status = 503; throw e; }
     if ((p.kind === 'host' || p.kind === 'claude-cli') && !aiHostOn()) { const e = new Error("The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers."); e.status = 503; throw e; } // the host tools' switch
     const m = pickModel(p, model);
+    if (p.kind === 'host-openai') return completeHostOpenAI(p, { model: m, system, messages, onToken, signal, maxTokens });
+    if (p.kind === 'host-claude') return completeHostClaude(p, { model: m, system, messages, onToken, signal });
     if (p.kind === 'openai') return completeOpenAI(p, { model: m, system, messages, onToken, signal, maxTokens });
     if (p.kind === 'anthropic') return completeAnthropic(p, { model: m, system, messages, onToken, signal, maxTokens });
     return completeClaudeCli(p, { model: m, system, messages, onToken, signal }); // host or claude-cli
   }
 
-  return { list, get, add, update, remove, claudeEnv, pickModel, complete, KINDS, FILE, SANDBOX };
+  return { list, get, defaultFor, effective, isRemote, add, update, remove, claudeEnv, pickModel, complete, KINDS, FILE, SANDBOX, HUB_CLAUDE };
 };
