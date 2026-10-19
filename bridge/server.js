@@ -189,9 +189,11 @@ function runClaude(acct, message, fresh, res, context) {
   const provEnv = providers.claudeEnv(prov);
   if (provEnv === null) return fail('Your chosen AI provider is not Claude, so it cannot run Work. Pick a Claude model in the dropdown.');
   if ((prov.kind === 'host' || prov.kind === 'claude-cli') && !aiHostOn()) return fail(AI_OFF_TEXT); // the host paused its AI (an Anthropic key of your own still works)
+  if (prov.kind === 'host-claude' && !aiNodes.hostOnline(prov.hostId)) return fail(`${prov.nickname}${prov.owner ? ` (${nameOf(prov.owner)}'s AI host)` : ''} is offline right now. Pick another AI in the dropdown, or wait for it.`);
+  if (prov.kind === 'host-claude' && prov.capped) return fail(`${prov.nickname}: ${prov.capped}. Pick another AI or wait for the window to reset.`);
   const source = prov.kind === 'host' ? 'hub' : prov.kind === 'host-claude' ? prov.id : ''; // whose usage windows this run moves
-  // a Claude session lives where it ran: a run on another machine than the last one starts a new conversation
-  const where = prov.kind === 'host-claude' ? prov.hostId : 'hub';
+  // a Claude session lives where it ran (relayed runs run here, on this hub)
+  const where = prov.kind === 'host-claude' && prov.remoteKind === 'claude-cli-work' ? prov.hostId : 'hub';
   if (!fresh && acct.state.claudeSessionId && (acct.state.claudeSessionWhere || 'hub') === where) args.push('--resume', acct.state.claudeSessionId);
   acct.state.claudeSessionWhere = where;
   const input = context ? `${message}\n\n---\n${context}` : message; // context = automatic summaries of the shared Work sessions this person is watching (added by their browser)
@@ -210,7 +212,15 @@ function runClaude(acct, message, fresh, res, context) {
     setTimeout(maybeRestart, 300); // a restart requested during this run happens now that it is over
   };
 
-  if (prov.kind === 'host-claude') { // ---- on an AI host: Claude Code runs there, in that person's worktree of the project ----
+  let relayEnv = {};
+  if (prov.kind === 'host-claude' && prov.remoteKind !== 'claude-cli-work') {
+    // ---- a host's Claude login, shared as AI only: Claude Code runs HERE, in this person's worktree on this hub (the
+    // shared projects area), and only its model calls travel to the host, which adds its login. No file on the host is
+    // ever touched, and the login never leaves the host.
+    const tok = llmToken(acct.username, prov.hostId, prov.providerId);
+    relayEnv = { ANTHROPIC_BASE_URL: `http://127.0.0.1:${config.port}/llm/${tok}`, ANTHROPIC_AUTH_TOKEN: 'viberoller-relay', ANTHROPIC_API_KEY: '', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+    emit(acct, { type: 'bridge_info', text: `Using ${prov.nickname}${prov.owner ? ` (${nameOf(prov.owner)}'s AI)` : ''}; the work happens here on the server.` });
+  } else if (prov.kind === 'host-claude') { // ---- legacy: Claude Code runs on the host (only for a host that allows work) ----
     const payload = { account: acct.username, display: acct.display, project: wd.project, hub: wd.hub, branch: wd.branch, repoUrl: repoUrlFor(wd), message: input, systemPrompt: systemPrompt(acct, wd), model,
       resume: args.includes('--resume') ? acct.state.claudeSessionId : '', permissionMode: config.permissionMode, allowedTools: config.allowedTools, hubUrl: PUBLIC_URL || `http://127.0.0.1:${config.port}`, env: forgejo.workEnv(acct.username) };
     let run;
@@ -226,7 +236,7 @@ function runClaude(acct, message, fresh, res, context) {
   // Claude (bridge/test/fake-claude.js); production config leaves them unset → the real `claude`.
   const command = config.claudeCommand || 'claude';
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
-  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...provEnv, ...forgejo.workEnv(acct.username) } }); // + their own Forgejo token, if they saved one
+  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...provEnv, ...relayEnv, ...forgejo.workEnv(acct.username) } }); // + their own Forgejo token, if they saved one
   acct.running = child;
   let buf = '';
   child.stdout.on('data', (chunk) => {
@@ -242,6 +252,37 @@ function runClaude(acct, message, fresh, res, context) {
   child.on('error', (e) => emit(acct, { type: 'bridge_error', text: 'Could not start claude: ' + e.message }));
   child.on('close', finish);
   child.stdin.end(input);
+}
+// Login relays (/llm/<token>/…): this hub's own Claude Code / API calls reach a host's shared login through here. A token
+// names one person + one host provider, lives 12 hours, and is only good from this machine (127.0.0.1).
+const llmTokens = new Map(); // token -> { user, hostId, providerId, exp }
+function llmToken(user, hostId, providerId) {
+  for (const [t, v] of llmTokens) if (v.exp < Date.now()) llmTokens.delete(t);
+  for (const [t, v] of llmTokens) if (v.user === user && v.hostId === hostId && v.providerId === providerId && v.exp - Date.now() > 3600e3) return t;
+  const t = crypto.randomBytes(24).toString('hex');
+  llmTokens.set(t, { user, hostId, providerId, exp: Date.now() + 12 * 3600e3 });
+  return t;
+}
+async function llmRoute(p, req, res) {
+  const m = /^\/llm\/([0-9a-f]{48})(\/.*)$/.exec(p);
+  const ent = m && llmTokens.get(m[1]);
+  const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) && !viaOutside(req);
+  if (!ent || ent.exp < Date.now() || !local) return send(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'Unknown relay.' } });
+  const chunks = []; for await (const c of req) chunks.push(c);
+  const q = req.url.indexOf('?') >= 0 ? req.url.slice(req.url.indexOf('?')) : '';
+  try {
+    const r = await aiNodes.loginFetch(ent.hostId, ent.providerId, m[2] + q, { method: req.method, headers: req.headers, body: chunks.length ? Buffer.concat(chunks) : undefined });
+    const h = {}; r.headers.forEach((v, k) => { h[k] = v; });
+    res.writeHead(r.status, { ...h, 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+    if (!r.body) return res.end();
+    const reader = r.body.getReader();
+    req.on('close', () => { try { reader.cancel(); } catch {} });
+    for (;;) { const { value, done } = await reader.read(); if (done) break; res.write(Buffer.from(value)); }
+    res.end();
+  } catch (e) {
+    if (!res.headersSent) send(res, e.status || 503, { type: 'error', error: { type: e.status === 429 ? 'rate_limit_error' : 'overloaded_error', message: e.message } });
+    else { try { res.end(); } catch {} }
+  }
 }
 // Where an AI host clones a project it does not have yet: VibeRoller from config hubRepoUrl (else this checkout's
 // origin), other projects from config projectsGitBase + "/<project>/_repo" (an ssh address on the server).
@@ -717,6 +758,7 @@ const server = http.createServer(async (req, res) => {
     // OpenAI-compatible API: its own bearer keys (Settings → API access), for harnesses, not the browser app.
     if (p === '/v1' || p.startsWith('/v1/')) return openai.handle(req, res, p);
     if (p.startsWith('/node/')) { if (await aiNodes.route(p, req, res)) return; } // AI hosts: their own id + secret, no browser session
+    if (p.startsWith('/llm/')) return llmRoute(p, req, res); // this hub's Claude Code → a host's shared login (local only, per-run token)
 
     const origin = req.headers.origin;
     if (origin && (config.allowedOrigins.includes(origin) || localOrigins.includes(origin) || (PUBLIC_URL && origin.toLowerCase() === PUBLIC_URL))) {

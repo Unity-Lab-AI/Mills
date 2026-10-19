@@ -41,7 +41,7 @@ module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, w
   const pub = (p) => ({ id: p.id, kind: p.kind, label: p.label, owner: p.owner, shared: !!p.shared, models: p.models || [], baseUrl: p.baseUrl || undefined, configDir: p.configDir || undefined, hasKey: !!p.apiKey, createdAt: p.createdAt });
   const visible = (p, user) => p.shared || p.owner === user;
   const remote = (user) => (aiNodes ? aiNodes.providersFor(user) : []);
-  const isRemote = (p) => !!p && (p.kind === 'host-claude' || p.kind === 'host-openai');
+  const isRemote = (p) => !!p && (p.kind === 'host-claude' || p.kind === 'host-openai' || p.kind === 'host-codex');
   function list(user) { return [...(HUB_CLAUDE ? [{ ...HOST, models: hostModels() }] : []), ...db.providers.filter((p) => visible(p, user)).map(pub), ...remote(user)]; }
   function get(id, user) {
     if (!id || id === 'host') return HUB_CLAUDE ? { ...HOST, models: hostModels() } : null;
@@ -218,7 +218,38 @@ module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, w
     for await (const ev of sse(r.body)) { const d = ((ev.choices || [])[0] || {}).delta || {}; if (d.content) { text += d.content; onToken(d.content); } if (ev.model) usedModel = ev.model; if (ev.usage) usage = ev.usage; }
     return { text, model: usedModel, usage };
   }
-  // A host's Claude for the API: a sandboxed `claude -p` on that host (no project files, no tools), text back whole.
+  // A host's Claude login for the API: the Messages API, carried to the host, which adds its login (a subscription login
+  // answers only when the system prompt opens as Claude Code, so the first block says so). Streams when asked.
+  async function completeHostAnthropic(p, { model, system, messages, onToken, signal, maxTokens }) {
+    const body = { model: model || p.models[0], max_tokens: maxTokens || 4096, stream: !!onToken,
+      system: [{ type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." }, ...(system ? [{ type: 'text', text: system }] : [])],
+      messages: messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) })) };
+    const r = await aiNodes.loginFetch(p.hostId, p.providerId, '/v1/messages', { method: 'POST', signal, headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body) });
+    if (!r.ok) throw Object.assign(new Error(`${p.nickname}'s Claude answered ` + r.status + ': ' + (await r.text()).slice(0, 300)), { status: r.status === 429 ? 429 : 502 });
+    if (!onToken) { const j = await r.json(); return { text: (j.content || []).map((c) => c.text || '').join(''), model: j.model, usage: j.usage ? { prompt_tokens: j.usage.input_tokens, completion_tokens: j.usage.output_tokens } : null }; }
+    let text = '', usedModel = body.model, usage = null;
+    for await (const ev of sse(r.body)) {
+      if (ev.type === 'content_block_delta' && ev.delta && ev.delta.text) { text += ev.delta.text; onToken(ev.delta.text); }
+      if (ev.type === 'message_start' && ev.message) { usedModel = ev.message.model || usedModel; usage = { prompt_tokens: (ev.message.usage || {}).input_tokens || 0, completion_tokens: 0 }; }
+      if (ev.type === 'message_delta' && ev.usage && usage) usage.completion_tokens = ev.usage.output_tokens || 0;
+    }
+    return { text, model: usedModel, usage };
+  }
+  // A host's ChatGPT login (Codex) for the API: the Responses API, carried to the host, which adds its login. Always streamed
+  // upstream (the ChatGPT backend wants that); handed on word by word, or gathered when the caller wants one answer.
+  async function completeHostCodex(p, { model, system, messages, onToken, signal }) {
+    const input = messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: [{ type: m.role === 'assistant' ? 'output_text' : 'input_text', text: String(m.content) }] }));
+    const body = { model: model || p.models[0], instructions: system || 'You are a helpful assistant.', input, stream: true, store: false };
+    const r = await aiNodes.loginFetch(p.hostId, p.providerId, '/responses', { method: 'POST', signal, headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(body) });
+    if (!r.ok) throw Object.assign(new Error(`${p.nickname}'s Codex answered ` + r.status + ': ' + (await r.text()).slice(0, 300)), { status: r.status === 429 ? 429 : 502 });
+    let text = '', usedModel = body.model, usage = null;
+    for await (const ev of sse(r.body)) {
+      if (ev.type === 'response.output_text.delta' && ev.delta) { text += ev.delta; if (onToken) onToken(ev.delta); }
+      if (ev.type === 'response.completed' && ev.response) { usedModel = ev.response.model || usedModel; const u = ev.response.usage; if (u) usage = { prompt_tokens: u.input_tokens || 0, completion_tokens: u.output_tokens || 0 }; }
+    }
+    return { text, model: usedModel, usage };
+  }
+  // Legacy: a host that allows work runs a sandboxed `claude -p` there (allowWork in its config).
   function completeHostClaude(p, { model, system, messages, signal, onToken }) {
     return new Promise((resolve, reject) => {
       let text = '', usedModel = model || '', usage = null, err = '';
@@ -244,7 +275,8 @@ module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, w
     if ((p.kind === 'host' || p.kind === 'claude-cli') && !aiHostOn()) { const e = new Error("The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers."); e.status = 503; throw e; } // the host tools' switch
     const m = pickModel(p, model);
     if (p.kind === 'host-openai') return completeHostOpenAI(p, { model: m, system, messages, onToken, signal, maxTokens });
-    if (p.kind === 'host-claude') return completeHostClaude(p, { model: m, system, messages, onToken, signal });
+    if (p.kind === 'host-codex') return completeHostCodex(p, { model: m, system, messages, onToken, signal });
+    if (p.kind === 'host-claude') return p.remoteKind === 'claude-cli-work' ? completeHostClaude(p, { model: m, system, messages, onToken, signal }) : completeHostAnthropic(p, { model: m, system, messages, onToken, signal, maxTokens });
     if (p.kind === 'openai') return completeOpenAI(p, { model: m, system, messages, onToken, signal, maxTokens });
     if (p.kind === 'anthropic') return completeAnthropic(p, { model: m, system, messages, onToken, signal, maxTokens });
     return completeClaudeCli(p, { model: m, system, messages, onToken, signal }); // host or claude-cli

@@ -89,7 +89,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     const out = [];
     for (const p of Array.isArray(list) ? list.slice(0, 20) : []) {
       const id = String(p.id || '').trim(), kind = String(p.kind || '');
-      if (!/^[a-z0-9-]{1,32}$/.test(id) || !['claude-cli', 'anthropic', 'openai'].includes(kind) || out.some((x) => x.id === id)) continue;
+      if (!/^[a-z0-9-]{1,32}$/.test(id) || !['claude-cli', 'claude-relay', 'codex-relay', 'anthropic', 'openai'].includes(kind) || out.some((x) => x.id === id)) continue;
       out.push({ id, kind, label: String(p.label || id).trim().slice(0, 60) || id, models: cleanModels(p.models), allowedUsers: cleanUsers(p.allowedUsers), max5h: pct(p.max5h, 90), max7d: pct(p.max7d, 90) });
     }
     return out;
@@ -101,6 +101,8 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
   const mayUse = (r, prov, user) => !!user && (user === ownerOf(r) || allowed(r, prov).includes(user));
   const usageOf = (n, prov) => ({ five_hour: (n.usage[prov.id] || {}).five_hour || null, seven_day: (n.usage[prov.id] || {}).seven_day || null });
   const overCap = (n, prov) => { const u = usageOf(n, prov); const pc = (w) => (w && Number.isFinite(w.utilization) && (!w.resetsAt || w.resetsAt > Date.now()) ? w.utilization * 100 : 0); return pc(u.five_hour) >= prov.max5h ? `its 5-hour usage is at the ${prov.max5h}% cap its host set` : pc(u.seven_day) >= prov.max7d ? `its weekly usage is at the ${prov.max7d}% cap its host set` : ''; };
+  // hub-side kind: a host's Claude (login relay) runs Work on THIS hub with the host's login; Codex and endpoints answer the API
+  const hubKind = (k) => (k === 'openai' ? 'host-openai' : k === 'codex-relay' ? 'host-codex' : 'host-claude');
   // the providers people can pick: id "h:<hostId>/<providerId>"; offline hosts stay listed (greyed), so a choice survives
   function providersFor(user) {
     const out = [];
@@ -108,7 +110,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       const n = live.get(r.id); if (!n || !n.hello) continue;
       for (const p of n.hello.providers) {
         if (!mayUse(r, p, user)) continue;
-        out.push({ id: `h:${r.id}/${p.id}`, kind: p.kind === 'openai' ? 'host-openai' : 'host-claude', remoteKind: p.kind, label: p.label, owner: ownerOf(r), shared: true, models: p.models, hostId: r.id, nickname: r.nickname, online: online(r.id), max5h: p.max5h, max7d: p.max7d, usage: usageOf(n, p), capped: overCap(n, p) });
+        out.push({ id: `h:${r.id}/${p.id}`, kind: hubKind(p.kind), remoteKind: p.kind, label: p.label, owner: ownerOf(r), shared: true, models: p.models, hostId: r.id, nickname: r.nickname, online: online(r.id), max5h: p.max5h, max7d: p.max7d, usage: usageOf(n, p), capped: overCap(n, p) });
       }
     }
     return out;
@@ -117,7 +119,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     const m = /^h:([^/]+)\/([a-z0-9-]+)$/.exec(String(id || '')); if (!m) return null;
     const r = record(m[1]), n = live.get(m[1]); if (!r || !n || !n.hello) return null;
     const p = n.hello.providers.find((x) => x.id === m[2]); if (!p || (user && !mayUse(r, p, user))) return null;
-    return { id, kind: p.kind === 'openai' ? 'host-openai' : 'host-claude', remoteKind: p.kind, label: p.label, owner: ownerOf(r), shared: true, models: p.models, hostId: r.id, providerId: p.id, nickname: r.nickname, online: online(r.id), max5h: p.max5h, max7d: p.max7d, usage: usageOf(n, p), capped: overCap(n, p) };
+    return { id, kind: hubKind(p.kind), remoteKind: p.kind, label: p.label, owner: ownerOf(r), shared: true, models: p.models, hostId: r.id, providerId: p.id, nickname: r.nickname, online: online(r.id), max5h: p.max5h, max7d: p.max7d, usage: usageOf(n, p), capped: overCap(n, p) };
   }
   function noteHostUsage(id, providerId, usage) { // the host reports its own windows with every event batch
     const n = state(id); if (!usage || typeof usage !== 'object') return;
@@ -146,7 +148,8 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     configFor(user, id, hub) {
       const r = db.hosts[id]; if (!r || r.user !== user) throw new Error('Not your host.');
       return { _: `VibeRoller AI Host "${r.nickname}" of ${user}: made in Settings → My AI hosts. Keep this file private: the token is this host's key to the hub.`, hub, id: r.id, nickname: r.nickname, user, token: r.secret,
-        providers: [{ id: 'claude', kind: 'claude-cli', label: `${user}'s Claude`, models: (config.models || []).map((m) => m.id), max5h: 90, max7d: 90, allowedUsers: cleanUsers(config.hostGroup || []) }],
+        providers: [{ id: 'claude', kind: 'claude-relay', label: `${user}'s Claude`, models: (config.models || []).map((m) => m.id), max5h: 90, max7d: 90, allowedUsers: cleanUsers(config.hostGroup || []) },
+          { id: 'codex', kind: 'codex-relay', label: `${user}'s ChatGPT / Codex`, models: ['gpt-5.5'], allowedUsers: cleanUsers(config.hostGroup || []) }],
         engines: { ollama: 'http://127.0.0.1:11434', image: 'http://127.0.0.1:5124', voice: 'http://127.0.0.1:5123', speech: 'http://127.0.0.1:5125' } };
     },
   };
@@ -189,11 +192,30 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     if (!online(hostId)) throw Object.assign(new Error(`That AI host (${(record(hostId) || {}).nickname || hostId}) is offline right now.`), { status: 503 });
     return relay(hostId, { engine: 'provider:' + providerId, path }, init, 'provider');
   }
-  async function relay(id, target, init, kind) {
+  // A login relay: a model call of this hub's own Claude Code / Codex, carried to the host that adds its login (never the
+  // caller's headers for auth: the host replaces them). Answers stream back. Usage headers feed the host's caps here.
+  async function loginFetch(hostId, providerId, path, init = {}) {
+    if (!online(hostId)) throw Object.assign(new Error(`That AI host (${(record(hostId) || {}).nickname || hostId}) is offline right now.`), { status: 503 });
+    const n = live.get(hostId), prov = n && n.hello ? n.hello.providers.find((p) => p.id === providerId) : null;
+    if (prov) { const cap = overCap(n, prov); if (cap) throw Object.assign(new Error(`${(record(hostId) || {}).nickname}: ${cap}.`), { status: 429 }); }
+    const res = await relay(hostId, { engine: 'relay:' + providerId, path }, init, 'provider', true);
+    noteHeaders(hostId, providerId, res.headers);
+    return res;
+  }
+  function noteHeaders(hostId, providerId, h) {
+    const w = (name) => { const u = h.get(`anthropic-ratelimit-unified-${name}-utilization`), rs = h.get(`anthropic-ratelimit-unified-${name}-reset`); return u == null ? null : { utilization: Number(u), resetsAt: rs ? Number(rs) * 1000 : null, status: h.get(`anthropic-ratelimit-unified-${name}-status`) || '' }; };
+    const five = w('5h'), seven = w('7d');
+    if (five || seven) { const n = state(hostId), prev = n.usage[providerId] || {}; noteHostUsage(hostId, providerId, { five_hour: five || prev.five_hour, seven_day: seven || prev.seven_day }); }
+  }
+  const PASS_RES = /^(content-type|request-id|anthropic-ratelimit-[\w-]+|retry-after|x-codex-[\w-]+|openai-[\w-]+)$/i;
+  const pickHeaders = (src) => { const o = {}; for (const [k, v] of Object.entries(src && typeof src === 'object' ? src : {})) if (PASS_RES.test(k) && typeof v === 'string') o[k.toLowerCase()] = v; return o; };
+  async function relay(id, target, init, kind, allHeaders = false) {
     const req = new Request('http://engine.invalid' + target.path, init); // turns any body (string, buffer, form) into bytes + headers
     const body = init.body !== undefined ? Buffer.from(await req.arrayBuffer()).toString('base64') : '';
     const jobId = crypto.randomBytes(9).toString('base64url');
-    const job = { id: jobId, kind, engine: target.engine, path: target.path, method: req.method, headers: { 'content-type': req.headers.get('content-type') || '' }, body };
+    const hdrs = { 'content-type': req.headers.get('content-type') || '' };
+    if (allHeaders) req.headers.forEach((v, k) => { if (!/^(authorization|x-api-key|host|content-length|connection|cookie)$/i.test(k)) hdrs[k] = v; }); // the host keeps only what the provider needs
+    const job = { id: jobId, kind, engine: target.engine, path: target.path, method: req.method, headers: hdrs, body };
     return new Promise((resolve, reject) => {
       const entry = { kind, resolve, reject, timer: setTimeout(() => finish(jobId, new Error('The AI host did not answer in time.')), JOB_MS) };
       if (init.signal) { if (init.signal.aborted) return reject(new Error('cancelled')); init.signal.addEventListener('abort', () => finish(jobId, new Error('cancelled')), { once: true }); }
@@ -258,7 +280,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     if (p === '/node/reply' && req.method === 'POST') { // a whole answer in one go
       const b = await readBody(req), job = pending.get(String(b.id || ''));
       if (!job || job.host !== r.id || job.kind === 'work' || job.controller) { send(res, 404, { error: 'No such job.' }); return true; }
-      const headers = {}; if (b.headers && typeof b.headers['content-type'] === 'string') headers['content-type'] = b.headers['content-type'];
+      const headers = pickHeaders(b.headers);
       finish(b.id, null, new Response(b.body ? Buffer.from(String(b.body), 'base64') : null, { status: Number(b.status) || 502, headers }));
       send(res, 200, { ok: true }); return true;
     }
@@ -266,7 +288,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       const b = await readBody(req), job = pending.get(String(b.id || ''));
       if (!job || job.host !== r.id || job.kind === 'work') { send(res, 404, { error: 'No such job.' }); return true; }
       if (!job.controller) { // the first piece carries the status + headers: the Response goes out now, its body fills up behind it
-        const headers = {}; if (b.headers && typeof b.headers['content-type'] === 'string') headers['content-type'] = b.headers['content-type'];
+        const headers = pickHeaders(b.headers);
         let ctl = null;
         const body = new ReadableStream({ start(c) { ctl = c; }, cancel() { finish(String(b.id), new Error('cancelled')); } });
         job.controller = ctl; clearTimeout(job.pickup);
@@ -291,5 +313,5 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
   }
   const status = () => allRecords().map((r) => { const n = live.get(r.id); return { id: r.id, name: r.nickname, nickname: r.nickname, user: r.user, online: online(r.id), polling: !!n && n.waiters.size > 0, seen: n && n.seen ? new Date(n.seen).toISOString() : null, queued: n ? n.queue.length : 0, engines: n && n.hello ? n.hello.engines : [], providers: n && n.hello ? n.hello.providers.map((p) => p.id) : [], kid: n ? n.kid : '' }; });
   const pubHostFlags = (r) => { const n = live.get(r.id); return n && n.hello ? { pc: !!n.hello.pc } : { pc: false }; };
-  return { route, engineFetch, providerFetch, runWork, jobFor, pcHostFor, pcTool, status, reason, online: () => !!pickEngineHost('ollama'), hostOnline: online, providersFor, provider, hosts, hostFlags: pubHostFlags, ENGINES, enabled: allRecords().length > 0, FILE };
+  return { route, engineFetch, providerFetch, loginFetch, runWork, jobFor, pcHostFor, pcTool, status, reason, online: () => !!pickEngineHost('ollama'), hostOnline: online, providersFor, provider, hosts, hostFlags: pubHostFlags, ENGINES, enabled: allRecords().length > 0, FILE };
 };
