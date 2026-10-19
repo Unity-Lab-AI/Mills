@@ -6,6 +6,26 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.1.0 — 2026-10-19
+
+### Added
+- **Direct messages are their own place in the chat.** The rail starts with a DM button (its own icon, with an unread
+  count) above every server. It opens the Direct messages view: the one-to-one DMs, then the group DMs as DM channels
+  ("New group DM"), and the key fingerprints. A server shows only its channels; groups are no longer listed inside it.
+  Opening a DM or group DM from anywhere (a profile card, Unity in the member list) switches to that view, and the DM
+  button reopens the last one. The rail also counts unread messages per server. Check R148.
+
+### Fixed
+- **Accurate 5h / 7d.** The exact numbers Anthropic sends with every call through an AI host's Claude (both the 5-hour
+  and the 7-day window) now reach the usage bar: they are kept in `bridge/usage.json`, so a hub restart or deploy no
+  longer forgets them, and Claude Code's own usage events, which often carry no number, no longer wipe them. A missing
+  number counts as unknown instead of 0 %. The team tools' hub_status reads the windows of the AI the person actually
+  uses (it read the hub's old login before). Nothing changes on the AI host. Check R147.
+
+### Changed
+- Modules: bridge/usage.js 1.2.0, bridge/ai-nodes.js 2.2.0, bridge/server.js 3.0.1, web/guilds.js 1.1.0,
+  web/index.html 1.4.0, web/guild-settings.js 1.1.2.
+
 ## 3.0.0 — 2026-10-19
 
 **An AI host shares its AI, never its computer.** MAJOR because a host stops doing what it did: it no longer runs Work

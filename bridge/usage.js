@@ -41,6 +41,10 @@ module.exports = function createUsage({ ROOT, config, readJson, writeJson }) {
         const resetsAt = toMs(info.resetsAt || info.resets_at) || (prev.resetsAt > Date.now() ? prev.resetsAt : null);
         const raw = info.utilization ?? info.usage ?? null, u = raw == null || raw === '' ? NaN : Number(raw);
         const sameWindow = prev.resetsAt && resetsAt === prev.resetsAt;
+        if (prev.exact && prev.resetsAt > Date.now() && !Number.isFinite(u)) { // Anthropic's header numbers stand; an event without a number only updates the status
+          if (info.status) { L[key] = { ...prev, status: String(info.status) }; save(); }
+          return;
+        }
         L[key] = {
           status: String(info.status || (sameWindow ? prev.status : '') || ''),
           utilization: Number.isFinite(u) ? Math.max(0, Math.min(1, u > 1 ? u / 100 : u)) : sameWindow ? prev.utilization ?? null : null,
@@ -63,6 +67,22 @@ module.exports = function createUsage({ ROOT, config, readJson, writeJson }) {
       save();
     }
   }
+  // Anthropic's own numbers for one source (the anthropic-ratelimit-unified-5h / -7d headers of every relayed model call):
+  // exact utilization and reset time, kept here (on disk) so they survive a restart and win over Claude Code's events,
+  // which often carry no utilization at all.
+  function noteWindows(source, w) {
+    if (!w || typeof w !== 'object') return;
+    const b = bucket(source), L = b.limits || (b.limits = {});
+    let changed = false;
+    for (const key of ['five_hour', 'seven_day']) {
+      const x = w[key], u = x && x.utilization != null && x.utilization !== '' ? Number(x.utilization) : NaN, resetsAt = x ? toMs(x.resetsAt) : null;
+      if (!Number.isFinite(u) || !resetsAt) continue;
+      L[key] = { status: String(x.status || ''), utilization: Math.max(0, Math.min(1, u > 1 ? u / 100 : u)), resetsAt, at: Date.now(), exact: true };
+      changed = true;
+    }
+    if (changed) save();
+  }
+  const windows = (source) => { const L = bucket(source).limits || {}, now = Date.now(), ok = (l) => (l && l.exact && l.resetsAt > now ? { utilization: l.utilization, resetsAt: l.resetsAt, status: l.status } : null); return { five_hour: ok(L.five_hour), seven_day: ok(L.seven_day) }; };
   function status(acct, source) { // the /api/usage answer for one account: the windows of the source its provider uses
     const b = bucket(source), now = Date.now(), L = b.limits || {};
     const win = (key, start, len) => { // official numbers when Claude Code reported them, otherwise the estimate
@@ -75,5 +95,5 @@ module.exports = function createUsage({ ROOT, config, readJson, writeJson }) {
     return { now, of: source || 'hub', five_hour: win('five_hour', b.fiveStart, FIVE_H), seven_day: win('seven_day', b.weekStart, SEVEN_D),
       context: ctx ? { tokens: ctx.tokens, window: ctx.window || config.contextWindow || 200000, model: ctx.model } : null };
   }
-  return { noteActivity, noteUsage, status };
+  return { noteActivity, noteUsage, noteWindows, windows, status };
 };

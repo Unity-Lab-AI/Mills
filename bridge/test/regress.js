@@ -124,7 +124,8 @@ function startFakeOllama() {
         const ok = req.headers.authorization === 'Bearer fake-oauth-token' && /oauth-2025-04-20/.test(req.headers['anthropic-beta'] || '');
         if (!ok) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'bad relay auth: ' + String(req.headers.authorization || '').slice(0, 30) } })); }
         const b = JSON.parse(body || '{}'), cap = body.includes('CAPTEST');
-        const rl = { 'anthropic-ratelimit-unified-5h-utilization': cap ? '0.95' : '0.42', 'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + (cap ? 3 : 7200)), 'anthropic-ratelimit-unified-5h-status': 'allowed' };
+        const rl = { 'anthropic-ratelimit-unified-5h-utilization': cap ? '0.95' : '0.42', 'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + (cap ? 3 : 7200)), 'anthropic-ratelimit-unified-5h-status': 'allowed',
+          'anthropic-ratelimit-unified-7d-utilization': '0.37', 'anthropic-ratelimit-unified-7d-reset': String(Math.floor(Date.now() / 1000) + 4 * 86400), 'anthropic-ratelimit-unified-7d-status': 'allowed' }; // the 7d window reaches the hub only through these headers (fake-claude reports 5h alone)
         const last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' };
         const said = 'upstream ok: ' + String(typeof last.content === 'string' ? last.content : JSON.stringify(last.content)).slice(0, 60) + (Array.isArray(b.system) && /Claude Code/.test(JSON.stringify(b.system[0] || '')) ? ' [cc]' : '');
         if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rl }); res.write('data: ' + JSON.stringify({ type: 'message_start', message: { model: b.model, usage: { input_tokens: 3 } } }) + '\n\n'); for (const w of said.split(' ')) res.write('data: ' + JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: w + ' ' } }) + '\n\n'); return res.end('data: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n'); }
@@ -1826,6 +1827,23 @@ async function run() {
       && /cap/.test(capErr) && !!ckCap.capped && /echo: after the cap/.test(texts(afterCap.events)) && /offline/.test(offErr2) && offProv.online === false,
       `pick ${pick.status}/${pickBad.status}/${pickNo.status} eff ${ckA.effectiveProvider}; info "${info1}"; run "${t1.slice(0, 200)}"; sess ${sess1 === sess2}; board ${boardOut}; pcA ${pcAOut.slice(0, 60)}; teammate "${pcUOut.slice(0, 120)}"; busy ${busyR} stop ${stoppedCode}; usage ${usageA2.of} ${JSON.stringify(usageA2.five_hour)}; relay bad ${relayBad.status} outside ${relayOutside.status}; cap "${capErr.slice(0, 80)}" ${!!ckCap.capped}; after ${/echo: after/.test(texts(afterCap.events))}; off "${offErr2.slice(0, 60)}" ${offProv.online}`);
 
+    // R147: a host's exact usage numbers (Anthropic's headers) are what people see, and a restart forgets nothing
+    const uDir = fs.mkdtempSync(path.join(SCRATCH, 'usage-'));
+    const mkUsage = () => require(path.join(BRIDGE, 'usage.js'))({ ROOT: uDir, config: {}, readJson: (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } }, writeJson: (f, v) => fs.writeFileSync(f, JSON.stringify(v)) });
+    const u1 = mkUsage(), src = 'h:x/claude', in1h = Date.now() + 3600e3, in3d = Date.now() + 3 * 86400e3, acctU = { state: {} };
+    u1.noteWindows(src, { five_hour: { utilization: 0.31, resetsAt: in1h, status: 'allowed' }, seven_day: { utilization: 0.64, resetsAt: in3d, status: 'allowed' } });
+    u1.noteUsage(acctU, { type: 'rate_limit_event', rate_limit_info: { rateLimitType: 'five_hour', status: 'allowed_warning', resetsAt: Math.floor(in1h / 1000) } }, src); // Claude Code's event: no number
+    const st1 = u1.status(acctU, src);
+    await sleep(1300); // usage.json is written a second after a change
+    const st2 = mkUsage().status(acctU, src); // a fresh start reads it back
+    const nodesSrc = fs.readFileSync(path.join(BRIDGE, 'ai-nodes.js'), 'utf8'), serverSrc = fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8');
+    check('R147', 'accurate 5h / 7d: the windows an AI host\'s Claude reports in Anthropic\'s usage headers (both 5h and 7d) reach /api/usage; Claude Code\'s events without a number never wipe them (only the status follows); they are kept in usage.json, so a restart shows them at once; a missing number is unknown, never 0 %; the team tools\' hub_status reads the windows of the AI the person uses',
+      usageA2.seven_day && usageA2.seven_day.source === 'claude' && Math.abs(usageA2.seven_day.utilization - 0.37) < 0.01
+      && st1.five_hour.source === 'claude' && Math.abs(st1.five_hour.utilization - 0.31) < 0.001 && st1.five_hour.status === 'allowed_warning' && Math.abs(st1.seven_day.utilization - 0.64) < 0.001
+      && Math.abs(st2.five_hour.utilization - 0.31) < 0.001 && Math.abs(st2.seven_day.utilization - 0.64) < 0.001 && st2.seven_day.resetsAt === in3d
+      && /v == null \|\| v === '' \? NaN/.test(nodesSrc) && /onUsage: usage\.noteWindows, savedUsage: usage\.windows/.test(serverSrc) && /usageStatus: \(a\) => usage\.status\(a, usageSourceOf\(a\)\)/.test(serverSrc),
+      `api 7d ${JSON.stringify(usageA2.seven_day)}; unit ${JSON.stringify(st1.five_hour)} / ${JSON.stringify(st1.seven_day)}; after restart ${JSON.stringify(st2.five_hour)} / ${JSON.stringify(st2.seven_day)}`);
+
     // local models and the host's Claude through the API (bridge/openai.js → providers → the host)
     const keyR = await call('/api/apikey/rotate', A, {});
     const setLocal = await call('/api/apikey/settings', A, { provider: 'h:test-node/local', model: 'tiny-local' });
@@ -1939,6 +1957,17 @@ async function run() {
       && lockSeen && /Handed off/.test(run2Log) && hubStillOurs && /HANDED_OFF\(\)/.test(runSrc) && /ai-node\.js/.test(runSrc) && /require\('\.\/worktree'\)/.test(hoSrc) && /path\.join\(REPO, 'bridge'\)/.test(hoSrc) && /Bash\(node bridge\/handoff\.js:\*\)/.test(cfgTools)
       && /^bridge\/\.handoff$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /^bridge\/\.maintenance$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
       `pack ${packed.status} ${tarNames.length} entries (${tarNames.slice(0, 4).join(', ')}…); maint ${maintOn} blocked ${blockedSend}/${blockedBoard}/${blockedLogin} read ${stillRead} chat ${stillChat}; undo ${undone.status} off ${maintOff} after ${afterUndo}; dry "${dry.stdout.split('\n')[0].slice(0, 60)}" nocfg ${noCfg.status}; run2 lock ${lockSeen} log "${run2Log.split('\n')[0].slice(0, 80)}"`);
+  }
+
+  // R148: Direct messages are their own place in the chat, not part of a server
+  {
+    const gj = fs.readFileSync(path.join(MILLS, 'web', 'guilds.js'), 'utf8'), page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const railSrc = (gj.match(/function renderRail\(\) \{[\s\S]*?\n  \}/) || [''])[0], chanSrc = (gj.match(/function renderChannels\(\) \{[\s\S]*?\n  \}/) || [''])[0];
+    check('R148', 'Direct messages: the rail starts with a DM button (its own SVG icon i-dms, with an unread badge) above every server and a divider; it opens the Direct messages view: the one-to-one DMs, then the group DMs as DM channels, and the key fingerprints; a server shows only its channels (no groups, no DMs); opening a DM or group DM from anywhere switches to that view; the rail counts unread per server and on the DM button',
+      /<symbol id="i-dms" viewBox="0 0 24 24">/.test(page) && railSrc.indexOf("'srv dms'") > -1 && railSrc.indexOf("'srv dms'") < railSrc.indexOf('for (const s of G.data.servers)') && /railSep/.test(railSrc) && /ic\('dms'\)/.test(railSrc) && /serverBadge = DM/.test(railSrc)
+      && /if \(inDms\) return renderDms\(box\)/.test(chanSrc) && !/G\.data\.groups/.test(chanSrc) && /\['convList', 'grpList', 'keyList'\]/.test(chanSrc) && /Group DMs/.test(gj) && /glist\.append\(convButton\(g\.conv/.test(gj)
+      && /<div id="convList"><\/div><div id="grpList"><\/div><div id="keyList"><\/div>/.test(page) && /\$\('keyList'\)\.append\(det\)/.test(page) && /GUILDS\.isDmConv\(conv\) \? GUILDS\.DM/.test(page) && /data-server-badge/.test(page) && /const isDmConv = \(c\) => \/\^\(dm\|grp\):\//.test(gj),
+      `rail dms ${railSrc.indexOf("'srv dms'")} servers ${railSrc.indexOf('for (const s of G.data.servers)')}; channels groups ${/G\.data\.groups/.test(chanSrc)}`);
   }
 
   // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.
