@@ -13,11 +13,9 @@ graceful restart). The AI keeps coming from where it is supplied: Work runs use 
 engines stay on Gee's PC and reach the hub through its **AI node**, the VibeRollerAIHost service that starts at boot
 (Download → Vibe Roller AI Host). With that PC off, everything but Unity's engines keeps working, and Unity says so.
 
-**The address** is the private front door `https://portal.unityailab.com` (today also `https://portal.git.unityailab.com`,
-which the lab's wildcard certificate already covers). nginx shows the hub's sign-in only to connections that come from the
-server itself; everyone else gets a 404 page: *These are not the droids you are looking for.* To be "inside", open an SSH
-tunnel and use it as a SOCKS proxy: `ssh -D 1080 ovh`, then point the browser (or a browser profile) at
-`socks5://127.0.0.1:1080`. A VPN that ends on the server works the same way once its range is in the site file.
+**The address** is `https://portal.unityailab.com` (also `portal.git.unityailab.com` and `viberoller.git.unityailab.com`).
+Anyone can open the sign-in page; without a username, a password and an unlocked device nobody can do anything, and the
+hub tells anonymous callers nothing but that a hub is here. No tunnel or proxy is needed.
 
 Nothing here changes a machine by itself. The scripts do the work; people run them.
 
@@ -25,9 +23,8 @@ Nothing here changes a machine by itself. The scripts do the work; people run th
 |---|---|---|
 | gee (or mills / sponge) | the server | `sh deploy/setup-server.sh` (no root; safe to run again) |
 | root (Sponge / Red), once | the server | `loginctl enable-linger gee`; the two nginx sites from `/srv/apps/VibeRoller/deploy-ready/`; DNS + certificate for `portal.unityailab.com` |
-| Gee | his PC, hub stopped | `deploy\pack-data.cmd ovh` (packs the data and copies it over) |
-| gee | the server | `sh /srv/apps/VibeRoller/app/deploy/restore-data.sh /srv/apps/VibeRoller/viberoller-data-<date>.tar.gz` |
-| Gee | his PC | Settings → My AI hosts → New host → Download (Windows): unzip, `host-tools\build.cmd`, Y to the service. His Claude login stays on his PC; the server never gets one. |
+| Claude, in a Work run on the old hub | Gee's PC | `node bridge/handoff.js pack --to ovh` then `node bridge/handoff.js switch`: data to the server, Gee's PC becomes the AI host (his Claude login stays on his PC; the server never gets one) |
+| Gee, optional | his PC | `bridge\host-tools\build.cmd` → Y: the heart / knife on the Desktop and the service that starts the host at boot (without it, the Startup launcher starts it at sign-in) |
 
 ## The files
 
@@ -36,8 +33,8 @@ Nothing here changes a machine by itself. The scripts do the work; people run th
 | `deploy/setup-server.sh` | as the hub's account, idempotent: user-local Node 22 + Claude Code, the live checkout, `bridge/config.local.json` with a fresh node secret, the hub's git identity, the systemd user services (hub + auto-deploy timer), the nginx site files in `deploy-ready/`, and the printed root / people steps. |
 | `deploy/autodeploy.sh` + `viberoller-autodeploy.service` / `.timer` | every minute: a new `main` on Forgejo → fast-forward the live checkout (never anything else), `node --check` every hub script, `bridge/.restart` for a graceful restart. Log: `/srv/apps/VibeRoller/autodeploy.log`. |
 | `deploy/viberoller-hub.service` | the hub as a user service: its own Node, Claude Code and HOME under `/srv/apps/VibeRoller`, group-writable files (`UMask=0007`), restart on failure, graceful restarts inside `run.js`. |
-| `deploy/nginx-portal.conf` | `portal.unityailab.com` + `portal.git.unityailab.com`: TLS, insiders (the server's own addresses) → the hub, everyone else → the droids 404; streaming unbuffered, WebSocket-ready, `/internal/` blocked, forged forwarding headers dropped. |
-| `deploy/nginx-viberoller.conf` | the plain name `viberoller.git.unityailab.com` (no inside / outside rule), same proxy settings. |
+| `deploy/nginx-portal.conf` | `portal.unityailab.com` + `portal.git.unityailab.com`: TLS, streaming unbuffered, WebSocket-ready, `/internal/` blocked, forged forwarding headers dropped. |
+| `deploy/nginx-viberoller.conf` | the plain name `viberoller.git.unityailab.com`, the same settings. |
 | `deploy/config.local.example.json` | the server's own hub settings: fixed address, no tunnel, behind a proxy, worktrees + projects under `/srv/apps/sharedwork`, the AI node secret, Unity's engines via the node. |
 | `deploy/pack-data.cmd` / `.sh` | on the old host, hub stopped: packs exactly the data (accounts with their password hashes and device locks, chat, keys, board, notes, pictures, saved sessions, settings). With a host alias it also copies the archive over by `scp`. No code, nothing reset. |
 | `deploy/restore-data.sh` | as the hub's account: refuses anything that is not hub data, never overwrites existing accounts, unpacks group-shared, counts the accounts, checks Unity's chat key, restarts the hub. |
@@ -73,16 +70,22 @@ hands it the jobs of the people he allows (`"hostGroup": ["mills", "sponge", "ge
 can be a host the same way (Settings → My AI hosts), for a Claude login, an Anthropic key or a local model. With Gee's PC
 off, Work says so at once and offers the other AIs; chat, board, notes and sign-in never depend on it.
 
-## 4. The data (Gee's approval; a few minutes of pause)
+## 4. The data: the hand-off (a Work run does it; a few minutes of pause)
 
-1. Announce it in the team chat. On Gee's PC close the hub window (the knife only pauses the AI).
-2. On Gee's PC: `deploy\pack-data.cmd ovh` → `Desktop\viberoller-data-<date>.tar.gz`, copied to `/srv/apps/VibeRoller/`.
-3. On the server: `sh /srv/apps/VibeRoller/app/deploy/restore-data.sh /srv/apps/VibeRoller/viberoller-data-<date>.tar.gz`.
+Nothing for Gee to type. In a Work run on the old hub (Claude, from a worktree):
+
+1. Announce it in the team chat.
+2. `node bridge/handoff.js pack --to ovh`: the hub packs its own data, pauses its writes (sign-ins, chat, board and notes
+   answer "moved to https://portal.unityailab.com"), copies the archive to `/srv/apps/VibeRoller/` and runs
+   `deploy/restore-data.sh` on the server. It prints the account count and "the hub is up with the data".
+3. `node bridge/handoff.js switch` as the very last step: from its next graceful restart (and at every start after it)
+   Gee's PC runs the AI host instead of the hub. The Work run ends with the old hub.
 4. Sign in at the portal with every account (a right password from a new device answers "locked to another device": that
-   proves it without touching the lock).
+   proves it without touching the lock). `node bridge/handoff.js undo` on Gee's PC brings the old hub back if ever needed.
 
-Passwords, device locks and keys arrive exactly as they were (hub laws 1, 2, 8). `bridge/config.json` is tracked and
-`bridge/tunnel.json` belongs to the old tunnel: neither moves.
+By hand instead: close the hub window, `deploy\pack-data.cmd ovh`, then `restore-data.sh` on the server. Passwords, device
+locks and keys arrive exactly as they were (hub laws 1, 2, 8). `bridge/config.json` is tracked and `bridge/tunnel.json`
+belongs to the old tunnel: neither moves.
 
 ## 5. Gee's PC afterwards: the AI host
 

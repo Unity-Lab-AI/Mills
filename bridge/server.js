@@ -69,6 +69,7 @@ const BEHIND_PROXY = config.behindProxy === true;
 const viaOutside = (req) => !!req.headers['cf-connecting-ip'] || (BEHIND_PROXY && !!(req.headers['x-forwarded-for'] || req.headers['x-real-ip']));
 const outsideIp = (req) => String(req.headers['cf-connecting-ip'] || (BEHIND_PROXY ? req.headers['x-real-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0] : '') || '').trim();
 const AI_HOST_OFF = path.join(ROOT, 'ai-host.off');
+const MAINTENANCE = path.join(ROOT, '.maintenance'); // bridge/handoff.js: this hub's data has moved to the server
 const aiHostOn = () => !fs.existsSync(AI_HOST_OFF);
 const AI_OFF_TEXT = "The host's AI is switched off right now (its host paused it). Chat, the board and your own AI keep working; pick your own AI in the model dropdown, or try again once it is back.";
 const hubLaws = () => { try { return fs.readFileSync(path.join(MILLS_DIR, 'CLAUDE.md'), 'utf8'); } catch { return ''; } };
@@ -747,6 +748,14 @@ const server = http.createServer(async (req, res) => {
       // the regression runner), which call from this machine, never through the tunnel.
       const viaTunnel = viaOutside(req); // the tunnel, or nginx in server mode
       return send(res, 200, viaTunnel ? { ok: true, hub: true } : { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy() });
+    }
+
+    // Moving house (bridge/handoff.js pack): while bridge/.maintenance exists this hub's data belongs to the server, so
+    // sign-ins, chat, board, notes and settings answer "moved"; only the Work run doing the move (chat, stop, PC results)
+    // keeps going. The file's text is the new address.
+    if (req.method === 'POST' && !['/api/chat', '/api/stop', '/api/pc-result'].includes(p) && fs.existsSync(MAINTENANCE)) {
+      const where = fs.readFileSync(MAINTENANCE, 'utf8').trim() || 'the server';
+      return send(res, 503, { error: `VibeRoller has moved to ${where}: open it there and sign in as usual. This copy is read-only now.` });
     }
 
     if (p === '/api/login' && req.method === 'POST') {
