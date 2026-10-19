@@ -21,6 +21,12 @@ BASE=$(cd "$APP/.." && pwd)
 LOG=$BASE/autodeploy.log
 ST=$BASE/deploy-state
 mkdir -p "$ST"
+# Run from a copy: a deploy rewrites this very file, and sh reads a script as it goes (the 3.2.0 deploy ran half old,
+# half new and skipped its log line).
+if [ "${VR_AUTODEPLOY_COPY:-}" != 1 ]; then
+  cp "$APP/deploy/autodeploy.sh" "$ST/autodeploy.run.sh"
+  VR_AUTODEPLOY_COPY=1 exec sh "$ST/autodeploy.run.sh" "$APP"
+fi
 say() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
 [ -s "$LOG" ] && [ "$(wc -l < "$LOG")" -gt 500 ] && tail -n 200 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 cd "$APP"
