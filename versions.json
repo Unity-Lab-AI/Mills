@@ -1,5 +1,5 @@
 {
-  "project": "2.1.1",
+  "project": "2.2.0",
   "modules": {
     "bridge/ai-node.js": "2.0.0",
     "bridge/ai-nodes.js": "2.0.0",
@@ -13,6 +13,7 @@
     "bridge/downloads.js": "1.1.0",
     "bridge/forgejo.js": "1.0.0",
     "bridge/guild-perms.js": "1.1.1",
+    "bridge/handoff.js": "1.0.0",
     "bridge/guilds.js": "1.1.1",
     "bridge/master-logins.js": "1.0.0",
     "bridge/notes.js": "1.0.0",
@@ -21,8 +22,8 @@
     "bridge/presence.js": "1.0.0",
     "bridge/providers.js": "1.2.0",
     "bridge/restart.js": "1.0.0",
-    "bridge/run.js": "1.0.1",
-    "bridge/server.js": "2.1.0",
+    "bridge/run.js": "1.1.0",
+    "bridge/server.js": "2.2.0",
     "bridge/set-password.js": "1.0.0",
     "bridge/shares.js": "1.0.0",
     "bridge/team-mcp.js": "1.0.1",

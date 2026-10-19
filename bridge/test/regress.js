@@ -1823,11 +1823,11 @@ async function run() {
   const dataList = ['bridge/auth.json', 'bridge/profiles', 'Chat', 'Archive', 'Board', 'Notes', 'Avatars'];
   const autostart = fs.readFileSync(path.join(BRIDGE, 'autostart-windows.cmd'), 'utf8'), hostTool = fs.readFileSync(path.join(BRIDGE, 'host-tools', 'HostTool.cs'), 'utf8'), wtSrc = fs.readFileSync(path.join(BRIDGE, 'worktree.js'), 'utf8');
   const autoSh = dk('autodeploy.sh'), autoTimer = dk('viberoller-autodeploy.timer'), hubUnit = dk('viberoller-hub.service'), portal = dk('nginx-portal.conf'), localEx = dk('config.local.example.json');
-  check('R139', '[static] the move kit for the real server layout (no root): deploy/setup-server.sh runs as the hub\'s account and makes the user-local Node + Claude Code, the live checkout, the server settings with a fresh node secret, the systemd USER services (hub + auto-deploy timer), the nginx site files in deploy-ready, and prints the root steps (linger, nginx, DNS + certificate) and the people steps; the auto-deploy fast-forwards main every minute, checks the scripts parse and asks for a graceful restart; pack-data (.cmd + .sh) packs exactly the data folders with the hub stopped, no code, and copies them by scp when given a host; restore-data.sh runs as the account, refuses anything but hub data and never overwrites existing accounts; the portal site answers insiders with the hub and everyone else with the droids 404; deploy.yml only calls a key\'s one command; pages.yml runs on GitHub only; on the old host the autostart and the heart start the AI node once ai-node.json exists, the node has a single-instance lock, and worktree.js repairs worktree pointers after the host folder moves',
+  check('R139', '[static] the move kit for the real server layout (no root): deploy/setup-server.sh runs as the hub\'s account and makes the user-local Node + Claude Code, the live checkout, the server settings with a fresh node secret, the systemd USER services (hub + auto-deploy timer), the nginx site files in deploy-ready, and prints the root steps (linger, nginx, DNS + certificate) and the people steps; the auto-deploy fast-forwards main every minute, checks the scripts parse and asks for a graceful restart; pack-data (.cmd + .sh) packs exactly the data folders with the hub stopped, no code, and copies them by scp when given a host; restore-data.sh runs as the account, refuses anything but hub data and never overwrites existing accounts; the portal site is a plain front door (TLS, streaming unbuffered, /internal/ blocked, forged forwarding headers dropped; the sign-in is the protection, no inside / outside rule); deploy.yml only calls a key\'s one command; pages.yml runs on GitHub only; on the old host the autostart and the heart start the AI node once ai-node.json exists, the node has a single-instance lock, and worktree.js repairs worktree pointers after the host folder moves',
     /not root/.test(setupSh) && !/useradd/.test(setupSh) && /viberoller-hub\.service/.test(setupSh) && /viberoller-autodeploy\.timer/.test(setupSh) && /systemctl --user/.test(setupSh) && /deploy-ready/.test(setupSh) && /claude login/.test(setupSh) && /enable-linger/.test(setupSh) && /__NODE_SECRET__/.test(setupSh) && /nginx-portal\.conf/.test(setupSh)
     && /WantedBy=default\.target/.test(hubUnit) && /__BASE__\/node\/current\/bin\/node run\.js --no-tunnel/.test(hubUnit) && /UMask=0007/.test(hubUnit) && /projectsRoot/.test(localEx) && /__NODE_SECRET__/.test(localEx)
     && /--ff-only/.test(autoSh) && /node --check/.test(autoSh) && /bridge\/\.restart/.test(autoSh) && /git status --porcelain/.test(autoSh) && /OnUnitActiveSec=1min/.test(autoTimer)
-    && /These are not the droids you are looking for/.test(portal) && /geo \$vr_inside/.test(portal) && /if \(\$vr_inside = 0\) \{ return 404; \}/.test(portal) && /server_name portal\.unityailab\.com portal\.git\.unityailab\.com/.test(portal) && /proxy_pass http:\/\/127\.0\.0\.1:7777/.test(portal) && /CF-Connecting-IP ""/.test(portal)
+    && !/vr_inside|droids/.test(portal) && /server_name portal\.unityailab\.com portal\.git\.unityailab\.com/.test(portal) && /proxy_pass http:\/\/127\.0\.0\.1:7777/.test(portal) && /CF-Connecting-IP ""/.test(portal) && /location \^~ \/internal\/ \{ return 404; \}/.test(portal) && /proxy_buffering off/.test(portal)
     && dataList.every((d) => packCmd.includes(d.replace('/', '\\')) && packSh.includes(d) && restoreSh.includes(d.split('/').pop())) && /api\/status/.test(packCmd) && /api\/status/.test(packSh) && /scp /.test(packCmd) && /scp /.test(packSh) && /Refusing to overwrite/.test(restoreSh) && /agent-key\.json/.test(restoreSh) && /systemctl --user stop viberoller-hub/.test(restoreSh) && /not root/.test(restoreSh)
     && /"\$\{USER\}@\$\{HOST\}" deploy/.test(deployYml) && !/sh -s/.test(deployYml) && /github\.server_url == 'https:\/\/github\.com'/.test(pagesYml)
     && /ai-node\.json/.test(autostart) && /start-node\.bat/.test(autostart) && /NodeRuns\(/.test(hostTool) && /start-node\.bat/.test(hostTool) && /LOCK_FILE/.test(nodeSrc) && /process\.exit\(2\)/.test(nodeSrc)
@@ -1857,6 +1857,54 @@ async function run() {
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
       && /class="menuFoot menuDl"/.test(html) && html.indexOf('data-downloads') < html.indexOf('id="goSettings"') && /id="downloads" class="modal"/.test(html) && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs),
       `anon ${anon.status} list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')} zip ${zipRes.status} ${names.length} entries; linux ${linuxFiles.length} files, hub named ${linuxFiles.filter((e) => e.data.toString('utf8').includes(H)).length}; unknown ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
+  }
+
+  { // The hand-off (bridge/handoff.js): the running hub packs its own data, pauses writes, and can turn this machine into an AI host.
+    const hoJs = path.join(SB, 'handoff.js');
+    const ho = (...a) => spawnSync(process.execPath, [hoJs, ...a], { cwd: SB, encoding: 'utf8' });
+    const packed = ho('pack');
+    const outFile = (packed.stdout.match(/→ (.+?\.tar\.gz)/) || [])[1] || '';
+    // read the archive like tar would: gunzip, walk the 512-byte headers
+    const tarNames = [];
+    if (outFile && fs.existsSync(outFile)) {
+      const buf = require('zlib').gunzipSync(fs.readFileSync(outFile)); let i = 0;
+      while (i + 512 <= buf.length && buf[i] !== 0) {
+        const name = buf.toString('utf8', i, i + 100).replace(/\0.*$/, ''), prefix = buf.toString('utf8', i + 345, i + 500).replace(/\0.*$/, ''), size = parseInt(buf.toString('ascii', i + 124, i + 136).replace(/\0.*$/, '').trim() || '0', 8);
+        let sum = 0; for (let k = 0; k < 512; k++) sum += k >= 148 && k < 156 ? 32 : buf[i + k];
+        const stored = parseInt(buf.toString('ascii', i + 148, i + 156).replace(/[\0 ]/g, ''), 8);
+        tarNames.push((prefix ? prefix + '/' : '') + name + (sum === stored ? '' : ' (BAD CHECKSUM)'));
+        i += 512 + Math.ceil(size / 512) * 512;
+      }
+      try { fs.unlinkSync(outFile); } catch {}
+    }
+    const maintOn = fs.existsSync(path.join(SB, '.maintenance'));
+    const blockedSend = (await call('/api/room/send', U, { iv: 'x', ct: 'x', keys: {} })).status, blockedBoard = (await call('/api/board/create', A, { title: 'during the move', status: 'todo' })).status, blockedLogin = (await login('t-user', 'pw-t-user-0001', devA)).status;
+    const stillRead = (await call('/api/board', U)).status, stillChat = (await chat(U, 'during the move r146', { fresh: true })).events.some((e) => e.type === 'result');
+    const undone = ho('undo');
+    const maintOff = !fs.existsSync(path.join(SB, '.maintenance'));
+    const afterUndo = (await call('/api/board/create', A, { title: 'after the move r146', status: 'todo' })).status;
+    const dry = ho('switch', '--dry-run');
+    const noCfg = (() => { const keep = path.join(SB, 'ai-node.json'), tmp = keep + '.away'; fs.renameSync(keep, tmp); const r = ho('switch', '--dry-run'); fs.renameSync(tmp, keep); return r; })();
+    // run.js in handed-off mode starts the AI host instead of the hub: a copy of the scratch bridge with the flag
+    const SB2 = path.join(SCRATCH, 'bridge-handoff'); fs.mkdirSync(SB2, { recursive: true });
+    for (const f of fs.readdirSync(SB)) if (/\.js$/.test(f) || f === 'config.json') fs.copyFileSync(path.join(SB, f), path.join(SB2, f));
+    fs.writeFileSync(path.join(SB2, 'ai-node.json'), JSON.stringify({ hub: H, id: 'nobody-here', token: 'x'.repeat(32), engines: {} }));
+    fs.writeFileSync(path.join(SB2, '.handoff'), 'test\n');
+    const ho2Log = fs.openSync(path.join(SCRATCH, 'handoff-run.log'), 'a');
+    const run2 = spawn(process.execPath, [path.join(SB2, 'run.js'), '--no-tunnel'], { cwd: SB2, stdio: ['ignore', ho2Log, ho2Log], windowsHide: true });
+    let lockSeen = false; for (let i = 0; i < 24 && !lockSeen; i++) { await sleep(250); lockSeen = fs.existsSync(path.join(SB2, 'ai-node.lock')); }
+    const hubStillOurs = (await call('/api/status')).data.pid === (await call('/api/status')).data.pid && (await call('/api/status')).status === 200;
+    try { if (WIN) execFileSync('taskkill', ['/pid', String(run2.pid), '/T', '/F'], { stdio: 'ignore' }); else run2.kill('SIGTERM'); } catch {}
+    await sleep(500);
+    const run2Log = fs.readFileSync(path.join(SCRATCH, 'handoff-run.log'), 'utf8');
+    const hoSrc = fs.readFileSync(path.join(BRIDGE, 'handoff.js'), 'utf8'), runSrc = fs.readFileSync(path.join(BRIDGE, 'run.js'), 'utf8'), cfgTools = (readJson(path.join(BRIDGE, 'config.json'), {}).allowedTools || []).join(',');
+    check('R146', 'the hand-off: "handoff.js pack" packs exactly the hub\'s data (accounts, chat + key, board, notes…, no code) into a valid tar.gz (good checksums) and pauses writes: sign-in, chat sends and board changes answer 503 "moved" while reading and the Work run keep going; "undo" lifts it; "switch" refuses without an AI host config and (dry run) says what it does; run.js with bridge/.handoff starts the AI host instead of the hub and opens no tunnel (the hub here untouched); the flags land in the host folder\'s bridge, never a worktree\'s; a Work run may call handoff.js',
+      packed.status === 0 && tarNames.includes('bridge/profiles/t-user/auth.json') && tarNames.includes('Chat/agent-key.json') && tarNames.some((n) => n.startsWith('Board/')) && !tarNames.some((n) => /BAD CHECKSUM|bridge\/server\.js|bridge\/config\.json|\.log$/.test(n))
+      && maintOn && blockedSend === 503 && blockedBoard === 503 && blockedLogin === 503 && stillRead === 200 && stillChat && undone.status === 0 && maintOff && afterUndo === 200
+      && dry.status === 0 && /dry run/.test(dry.stdout) && noCfg.status !== 0 && /ai-node\.json is missing/.test(noCfg.stderr)
+      && lockSeen && /Handed off/.test(run2Log) && hubStillOurs && /HANDED_OFF\(\)/.test(runSrc) && /ai-node\.js/.test(runSrc) && /require\('\.\/worktree'\)/.test(hoSrc) && /path\.join\(REPO, 'bridge'\)/.test(hoSrc) && /Bash\(node bridge\/handoff\.js:\*\)/.test(cfgTools)
+      && /^bridge\/\.handoff$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /^bridge\/\.maintenance$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
+      `pack ${packed.status} ${tarNames.length} entries (${tarNames.slice(0, 4).join(', ')}…); maint ${maintOn} blocked ${blockedSend}/${blockedBoard}/${blockedLogin} read ${stillRead} chat ${stillChat}; undo ${undone.status} off ${maintOff} after ${afterUndo}; dry "${dry.stdout.split('\n')[0].slice(0, 60)}" nocfg ${noCfg.status}; run2 lock ${lockSeen} log "${run2Log.split('\n')[0].slice(0, 80)}"`);
   }
 
   // Host-set owners + co-owners (bridge/server-owners.json), applied once at start; the Mills server's named owner.
