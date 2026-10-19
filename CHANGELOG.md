@@ -6,6 +6,48 @@ MINOR = something new that leaves the rest working, PATCH = a fix or polish. Eac
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 2.1.0 — 2026-10-19
+
+**AI hosts become providers.** Nobody's login sits on the server: Gee's PC (or anyone's) runs the VibeRoller AI Host
+with its own Claude login, the hub on the server hands it the Work runs and API calls of the people it allows, and relays
+the answers back. The hub itself needs no Claude.
+
+### Added
+- **Host identity.** Every AI host has a UUID, a secret and a **nickname** the hub issues (adjective-animal, e.g.
+  silly-panda; renameable). Settings → Connections → **My AI hosts**: New host, rename, remove, who may use each of its
+  providers, and the AI Host download **with that host's config inside** (unzip, run; nothing to type). Registry:
+  `bridge/ai-hosts.json` (gitignored). The legacy `aiNodes` config still works (name = id). Check R143.
+- **The handshake.** The host says hello with what it offers (user, providers with models, caps and allowed users, Unity's
+  engines, computer access) and both sides derive one session key (HKDF of the secret and two nonces; the key id `vr-…`
+  shows in Settings). Work jobs and their events travel sealed with it (AES-256-GCM) on top of TLS.
+- **Host providers.** What a host offers appears in everyone's AI pickers as `nickname · label (owner)`: its **Claude**
+  (Work runs and API answers happen on the host, with its login), its **local models** (OpenAI-compatible endpoints such as
+  Ollama, carried to the host and back, no port opened at home). Each provider names who may use it (the host's config,
+  overridable by its owner in Settings) and its usage caps (`max5h`, `max7d`, default 90 %): the hub refuses a run past the
+  cap until the window resets, and the host refuses too. The usage bars show the windows of whichever Claude you use.
+- **Default = Gee's host.** Config `defaultProvider: "host:gee"` makes Gee's online Claude host the default for everyone
+  who may use it; `hubClaude: false` tells a hub it has no Claude of its own. Settings → **AI source** picks host → provider
+  → model per person (the Work dropdown shows the same, with offline / capped marked). Check R144, R145.
+- **Remote Work runs.** Claude Code runs on the host in that machine's own worktree of the project (cloning VibeRoller or a
+  sharedwork project from the hub's address when it has no copy: `hubRepoUrl`, `projectsGitBase`), the page says which
+  host runs the reply, Stop stops it there, a follow-up resumes the same session there, and the PC / board / team tools of
+  the run reach the hub through `/node/job/<id>/internal/<tool>` with a per-run token.
+- **Direct computer access.** A host with `pc.folder` answers its owner's PC tools on that folder itself (the native app
+  on your own PC), instead of the browser's open folder; the browser remains the fallback.
+- **Streaming through a host.** A streamed answer (SSE, NDJSON: a local model, Unity's brain) is forwarded by the host piece
+  by piece as its engine produces it (`POST /node/stream`), so words arrive as they are made instead of in one block at the
+  end; whole answers (pictures, voice clips) still come in one go.
+- The AI Host download now carries the MCP relays and the worktree tool (`common.js`, `worktree.js`, `pc-tools-mcp.js`,
+  `board-mcp.js`, `team-mcp.js`); `ai-node.example.json` shows the full 2.0 config.
+
+### Changed
+- Modules: bridge/ai-nodes.js 2.0.0 and bridge/ai-node.js 2.0.0 (the protocol above), bridge/providers.js 1.2.0,
+  bridge/usage.js 1.1.0 (per-source windows), bridge/server.js 2.1.0, bridge/openai.js 1.1.0 (default provider when the
+  hub has no Claude), bridge/downloads.js 1.1.0, bridge/worktree.js 2.0.1 (`VIBEROLLER_HUB_REPO` / `hubRepo`),
+  web/index.html 1.3.0 (AI source + My AI hosts panels, host-aware model dropdown). The Windows / Linux app is unchanged
+  (Work and Settings → Connections are the site's); its shell list is unchanged.
+- `/api/check` adds `effectiveProvider`, `defaultProvider`, `hubClaude`, `pcHost`; `/api/usage` adds `of` (the source).
+
 ## 2.0.0 — 2026-10-19
 
 The hub's home is the lab server. This release makes the server layout real (the team's shared accounts, no root), turns

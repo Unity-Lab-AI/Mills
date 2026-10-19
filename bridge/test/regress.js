@@ -77,6 +77,19 @@ function listening(port) {
 }
 
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null;
+// read a zip like an unzipper would (the Download packages): the central directory names every entry and points at its
+// local header; deflated entries are inflated, so the files inside can be checked
+function unzipAll(buf) {
+  const out = []; let i = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  while (i >= 0 && i < buf.length && buf.readUInt32LE(i) === 0x02014b50) {
+    const method = buf.readUInt16LE(i + 10), csize = buf.readUInt32LE(i + 20), n = buf.readUInt16LE(i + 28), x = buf.readUInt16LE(i + 30), c = buf.readUInt16LE(i + 32), off = buf.readUInt32LE(i + 42);
+    const name = buf.toString('utf8', i + 46, i + 46 + n), ln = buf.readUInt16LE(off + 26), lx = buf.readUInt16LE(off + 28), start = off + 30 + ln + lx;
+    const raw = buf.subarray(start, start + csize);
+    out.push({ name, data: method === 8 ? require('zlib').inflateRawSync(raw) : raw });
+    i += 46 + n + x + c;
+  }
+  return out;
+}
 const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
 const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [] };
 let fakeSawPhoto = false;
@@ -191,7 +204,7 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'hub.log', 'ai-node.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'Api/', 'bridge/host2/', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
@@ -219,7 +232,13 @@ let aiNodeProc = null;
 function startAiNode() {
   if (aiNodeProc) return;
   const f = path.join(SB, 'ai-node.json'), base = `http://127.0.0.1:${OLLAMA_PORT}`;
-  fs.writeFileSync(f, JSON.stringify({ hub: H, name: 'test-node', token: NODE_SECRET, engines: { ollama: base, image: base, voice: base, speech: base } }));
+  // the test host offers Unity's engines, a "Claude" (the fake one) for t-user and t-admin's Work, a local model (the fake
+  // OpenAI endpoint) and direct computer access to a folder in the scratch area (like the native app would)
+  fs.mkdirSync(path.join(SCRATCH, 'host-pc'), { recursive: true }); fs.writeFileSync(path.join(SCRATCH, 'host-pc', 'hello.txt'), 'from the host pc\n');
+  fs.writeFileSync(f, JSON.stringify({ hub: H, id: 'test-node', token: NODE_SECRET, user: 't-admin', engines: { ollama: base, image: base, voice: base, speech: base },
+    providers: [{ id: 'claude', kind: 'claude-cli', label: 'Tadmin\'s Claude', models: ['claude-fable-5-1', 'claude-haiku-5-5'], max5h: 90, max7d: 90, allowedUsers: ['t-user'], configDir: path.join(SCRATCH, 'host-claude-login') },
+      { id: 'local', kind: 'openai', label: 'Host local model', baseUrl: base + '/oai', models: ['tiny-local'], allowedUsers: ['t-user'] }],
+    pc: { folder: path.join(SCRATCH, 'host-pc') }, work: { claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] } }));
   const log = fs.openSync(path.join(SCRATCH, 'ai-node.log'), 'a');
   aiNodeProc = spawn(process.execPath, [path.join(SB, 'ai-node.js'), '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
 }
@@ -243,7 +262,7 @@ function stopHub() {
 }
 
 // ---------- http helpers ----------
-async function call(p, token, body, extraHeaders = {}) {
+async function call(p, token, body, extraHeaders = {}, retry = true) {
   try {
     const r = await fetch(H + p, {
       method: body !== undefined ? 'POST' : 'GET',
@@ -251,7 +270,11 @@ async function call(p, token, body, extraHeaders = {}) {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     return { status: r.status, data: await r.json().catch(() => ({})) };
-  } catch (e) { return { status: 0, data: { error: e.message } }; }
+  } catch (e) {
+    // a GET on a pooled connection the hub just closed as idle (its keep-alive timeout) fails with "fetch failed": ask once more
+    if (retry && body === undefined) { await sleep(150); return call(p, token, body, extraHeaders, false); }
+    return { status: 0, data: { error: e.message } };
+  }
 }
 const login = (username, password, deviceId) => call('/api/login', null, { username, password, deviceId });
 // Run a chat to completion; answers pc_tool events like a browser would.
@@ -589,7 +612,7 @@ async function run() {
     check('R140', 'projects: POST /api/projects { name } starts a new project in <projectsRoot>/<name>/_repo (README as the first commit, main + develop, develop checked out); a name taken (any case) → 409; bad names and local / helper clone addresses → 400; { url } pulls a repo in (develop checked out when it has one); GET lists VibeRoller first, then the projects by name',
       listBefore.status === 200 && listBefore.data.projects.length === 1 && made.status === 200 && made.data.project === 'demo-app' && dup.status === 409 && badName.status === 400 && badName2.status === 400 && badUrl.status === 400 && badUrl2.status === 400 && badUrl3.status === 400
       && repoBranch === 'develop' && repoMain && fs.existsSync(path.join(repoDir, 'README.md')) && pulled.status === 200 && pulled.data.project === 'pulled' && pulledBranch === 'develop' && names.join(',') === 'VibeRoller,demo-app,pulled',
-      `made ${made.status} ${JSON.stringify(made.data).slice(0, 80)} dup ${dup.status} bad ${badName.status}/${badName2.status}/${badUrl.status}/${badUrl2.status}/${badUrl3.status} repo ${repoBranch} pulled ${pulled.status} ${pulledBranch} list ${names.join(',')}`);
+      `before ${listBefore.status} ${(listBefore.data.projects || []).length}; made ${made.status} ${JSON.stringify(made.data).slice(0, 80)} dup ${dup.status} bad ${badName.status}/${badName2.status}/${badUrl.status}/${badUrl2.status}/${badUrl3.status} repo ${repoBranch} main ${repoMain} readme ${fs.existsSync(path.join(repoDir, 'README.md'))} pulled ${pulled.status} ${pulledBranch} list ${names.join(',')}`);
     const sw = await call('/api/workspace', U, { project: 'demo-app' });
     const pRun = await chat(U, 'where am I in the project', { fresh: true });
     const pDir = path.join(PR, 'demo-app', 't-user');
@@ -1659,8 +1682,8 @@ async function run() {
   const nodeLog = fs.existsSync(path.join(SCRATCH, 'ai-node.log')) ? fs.readFileSync(path.join(SCRATCH, 'ai-node.log'), 'utf8') : '';
   const nodeSrc = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), hubNodeSrc = fs.readFileSync(path.join(BRIDGE, 'ai-nodes.js'), 'utf8');
   check('R137', 'AI nodes: a machine lends Unity\'s local engines to a hub running elsewhere by connecting OUT (long poll + reply, its own name + secret); this throwaway hub runs every Unity check through such a node; wrong secret / unknown node → 401, a stray reply → 404; the hub sends only an engine name + path (the node builds the address from its own list, so nothing else on its network is reachable); the knife (ai-host.off) pauses the node; /api/check lists the nodes',
-    nodeList.some((n) => n.name === 'test-node' && n.online) && nodeBad.status === 401 && nodeUnknown.status === 401 && nodeReplyStray.status === 404 && unityState.local && unityState.local.up === true && unityState.local.model === true && /lending ollama, image, voice, speech/.test(nodeLog)
-    && /const base = ENGINES\[job\.engine\]/.test(nodeSrc) && /PAUSE_FILE/.test(nodeSrc) && /engine: engine|\{ id, engine, path/.test(hubNodeSrc) && /timingSafeEqual/.test(hubNodeSrc)
+    nodeList.some((n) => n.name === 'test-node' && n.online) && nodeBad.status === 401 && nodeUnknown.status === 401 && nodeReplyStray.status === 404 && unityState.local && unityState.local.up === true && unityState.local.model === true && /engines ollama, image, voice, speech/.test(nodeLog)
+    && /base = ENGINES\[job\.engine\]/.test(nodeSrc) && /PAUSE_FILE/.test(nodeSrc) && /engine: target\.engine, path: target\.path/.test(hubNodeSrc) && /timingSafeEqual/.test(hubNodeSrc)
     && /^bridge\/ai-node\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     `nodes ${JSON.stringify(nodeList)}, bad ${nodeBad.status} unknown ${nodeUnknown.status} stray ${nodeReplyStray.status}, unity ${JSON.stringify(unityState.local || {})}, log "${nodeLog.split('\n')[0]}"`);
 
@@ -1689,6 +1712,110 @@ async function run() {
     offNodes.some((n) => n.name === 'test-node' && n.online === false) && offState.up === false && offSay.status === 200 && /AI host is offline/.test(offErr) && offSay.ms < 15000
     && !!offUnity && offChat === 200 && offBoard === 200 && offNotes === 200 && offWork === 200 && offLogin === 200 && backState.up === true && backState.model === true,
     `offline listed ${offNodes.some((n) => n.online === false)}, state up ${offState.up}, unity section ${offSay.status} in ${offSay.ms} ms "${offErr.slice(0, 50)}", chat unity ${offUnity ? 'said offline' : 'no reply'}, chat ${offChat} board ${offBoard} notes ${offNotes} work ${offWork} login ${offLogin}; back: up ${backState.up} model ${backState.model}`);
+
+  { // AI hosts as providers: identity (UUID + secret + nickname), the handshake, Settings → My AI hosts, remote Work runs,
+    // computer access and local models through the host, caps, offline. The test host (startAiNode) belongs to t-user and
+    // offers its "Claude" (the fake one) and a local model to t-admin.
+    const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
+    let hostsNow = []; for (let i = 0; i < 40 && !hostsNow.some((h) => h.id === 'test-node' && h.online && h.providers.length); i++) { hostsNow = (await call('/api/check', U)).data.aiNodes || []; if (!hostsNow.some((h) => h.id === 'test-node' && h.online && h.providers.length)) await sleep(250); }
+    const testHost = hostsNow.find((h) => h.id === 'test-node') || {};
+    const helloBad = await fetch(H + '/node/hello', { method: 'POST', headers: hostHdr('test-node', 'wrong-secret-0123456789abcdef'), body: JSON.stringify({ nonce: 'a'.repeat(32) }) });
+    const helloNoNonce = await fetch(H + '/node/hello', { method: 'POST', headers: hostHdr('test-node', NODE_SECRET), body: JSON.stringify({}) });
+    const mine0 = await call('/api/hosts', A);
+    const made = await call('/api/hosts/new', A, {});
+    const newId = made.data.host ? made.data.host.id : '';
+    const renamed = await call('/api/hosts/rename', A, { id: newId, nickname: 'brave-walrus-test' });
+    const badNick = await call('/api/hosts/rename', A, { id: newId, nickname: 'Bad Name!' });
+    const notMine = await call('/api/hosts/rename', U, { id: newId, nickname: 'stolen-yak' });
+    const mine1 = await call('/api/hosts', A);
+    // the package with this host's config inside, for its owner only
+    const cfgZip = await fetch(H + '/api/downloads/ai-host-linux.zip?host=' + newId, { headers: { Authorization: 'Bearer ' + A } });
+    const cfgZipBuf = Buffer.from(await cfgZip.arrayBuffer());
+    const cfgEntry = cfgZip.status === 200 ? unzipAll(cfgZipBuf).find((e) => e.name.endsWith('/ai-node.json')) : null;
+    const cfgJson = cfgEntry ? JSON.parse(cfgEntry.data.toString('utf8')) : {};
+    const cfgZipOther = await fetch(H + '/api/downloads/ai-host-linux.zip?host=' + newId, { headers: { Authorization: 'Bearer ' + U } });
+    // a hub-made host (UUID + secret from Settings) really connects: a second host program with that config
+    const host2Dir = path.join(SB, 'host2'); fs.mkdirSync(host2Dir, { recursive: true }); fs.copyFileSync(path.join(SB, 'ai-node.js'), path.join(host2Dir, 'ai-node.js'));
+    fs.writeFileSync(path.join(host2Dir, 'ai-node.json'), JSON.stringify({ ...cfgJson, providers: [], engines: {} }));
+    const host2Log = fs.openSync(path.join(SCRATCH, 'host2.log'), 'a');
+    const host2 = spawn(process.execPath, [path.join(host2Dir, 'ai-node.js')], { cwd: host2Dir, stdio: ['ignore', host2Log, host2Log], windowsHide: true });
+    let h2 = null; for (let i = 0; i < 40; i++) { h2 = ((await call('/api/hosts', A)).data.mine || []).find((h) => h.id === newId); if (h2 && h2.online) break; await sleep(250); }
+    try { if (WIN) execFileSync('taskkill', ['/pid', String(host2.pid), '/T', '/F'], { stdio: 'ignore' }); else host2.kill('SIGTERM'); } catch {}
+    const host2Text = fs.readFileSync(path.join(SCRATCH, 'host2.log'), 'utf8');
+    const removed = await call('/api/hosts/remove', A, { id: newId });
+    const hubNodeSrc2 = fs.readFileSync(path.join(BRIDGE, 'ai-nodes.js'), 'utf8'), nodeSrc2 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), html2 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R143', 'AI hosts: a host is a UUID + secret + nickname (adjective-animal); hello with the wrong secret → 401, without a nonce → 400; the handshake gives both sides the same e2e key (vr-… id) and the host tells the hub its user, providers (models, caps, allowed users) and engines; Settings → My AI hosts: new host (uuid, nickname), rename (bad nickname refused, only the owner), remove; the AI Host download with ?host= carries that host\'s config (owner only), and a host run from it connects and shows online; [static] HKDF + AES-256-GCM on both sides, randomUUID ids, ai-hosts.json gitignored, the Settings panels exist',
+      testHost.online === true && testHost.nickname === 'test-node' && /^vr-[0-9a-f]{24}$/.test(testHost.kid || '') && testHost.user === '' && (testHost.providers || []).join(',') === 'claude,local' && (testHost.engines || []).length === 4
+      && helloBad.status === 401 && helloNoNonce.status === 400 && mine0.status === 200 && mine0.data.mine.length === 0 && made.status === 200 && /^[0-9a-f-]{36}$/.test(newId) && /^[a-z]+-[a-z]+(-\d+)?$/.test(made.data.host.nickname) && made.data.host.user === 't-admin'
+      && renamed.status === 200 && renamed.data.host.nickname === 'brave-walrus-test' && badNick.status === 400 && notMine.status === 400 && mine1.data.mine.length === 1
+      && cfgZip.status === 200 && cfgJson.id === newId && cfgJson.token && cfgJson.token.length >= 24 && cfgJson.user === 't-admin' && cfgJson.hub === H && Array.isArray(cfgJson.providers) && cfgZipOther.status === 500
+      && !!h2 && h2.online === true && /^vr-[0-9a-f]{24}$/.test(h2.kid || '') && /connected to .* as "brave-walrus-test" \(t-admin\)/.test(host2Text) && removed.status === 200 && removed.data.mine.length === 0
+      && /hkdfSync/.test(hubNodeSrc2) && /aes-256-gcm/.test(hubNodeSrc2) && /randomUUID/.test(hubNodeSrc2) && /hkdfSync/.test(nodeSrc2) && /aes-256-gcm/.test(nodeSrc2) && /^bridge\/ai-hosts\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /id="hostBox"/.test(html2) && /id="srcBox"/.test(html2),
+      `host ${JSON.stringify(testHost).slice(0, 160)}; hello bad ${helloBad.status} nonce ${helloNoNonce.status}; new ${made.status} ${JSON.stringify(made.data).slice(0, 120)}; rename ${renamed.status} bad ${badNick.status} other ${notMine.status}; zip ${cfgZip.status} cfg id ok ${cfgJson.id === newId} other ${cfgZipOther.status}; host2 ${JSON.stringify(h2 || {}).slice(0, 80)} log "${host2Text.split('\n')[0].slice(0, 100)}"`);
+
+    // Work on the host's Claude: t-admin picks it, the run happens on the host (its own login), events stream back
+    const remoteId = 'h:test-node/claude';
+    const pickBad = await call('/api/model', A, { provider: 'h:test-node/local', model: 'tiny-local' }); // not Claude → not for Work
+    const pickNo = await call('/api/model', U, { provider: 'h:test-node/nope', model: '' });
+    const pick = await call('/api/model', A, { provider: remoteId, model: 'claude-haiku-5-5' });
+    await call('/api/workspace', A, { project: 'VibeRoller' }); // back from demo-app (R141): the run should land in the host's VibeRoller worktree
+    const ckA = (await call('/api/check', A)).data;
+    const r1 = await chat(A, 'where am I remote r144', { fresh: true });
+    const t1 = texts(r1.events), info1 = (r1.events.find((e) => e.type === 'bridge_info') || {}).text || '';
+    const sess1 = (r1.events.find((e) => e.type === 'system') || {}).session_id || '';
+    const r2 = await chat(A, 'again r144'); // not fresh: resumed on the same host
+    const sess2 = (r2.events.find((e) => e.type === 'system') || {}).session_id || '';
+    const board1 = await chat(A, 'BOARDTOOL remote r144');
+    const boardOut = (texts(board1.events).match(/BOARD:(\{.*?\})/) || [])[1] || '{}';
+    const pcA = await chat(A, 'PCTOOL remote r144'); // t-admin owns the host and it offers computer access: the PC tool acts on the host's folder
+    const pcAOut = (texts(pcA.events).match(/PC:(\{.*\})/) || [])[1] || '{}';
+    await call('/api/model', U, { provider: remoteId, model: 'claude-fable-5-1' }); // t-user is allowed to use it; without a host of their own, their PC tools go to the browser (the runner answers like one)
+    const pcU = await chat(U, 'PCTOOL remote r144', { fresh: true });
+    const pcUOut = (texts(pcU.events).match(/PC:(\{.*\})/) || [])[1] || '{}';
+    const slowR = chat(A, 'SLOW remote hold r144'); await sleep(900);
+    const busyR = (await call('/api/status')).data.busy;
+    const stopR = await call('/api/stop', A, {}); const slowDone = await slowR;
+    const stoppedCode = (slowDone.events.find((e) => e.type === 'bridge_done') || {}).code;
+    const usageA = (await call('/api/usage', A)).data;
+    const usRun = await chat(A, 'USAGE remote r144', { fresh: true });
+    const usageA2 = (await call('/api/usage', A)).data;
+    await chat(A, 'CAPTEST remote r144', { fresh: true });
+    const capped = await chat(A, 'over the cap r144', { fresh: true });
+    const capErr = (capped.events.find((e) => e.type === 'bridge_error') || {}).text || '';
+    const ckCap = ((await call('/api/check', A)).data.providers || []).find((p) => p.id === remoteId) || {};
+    await sleep(3500); // the fake window resets
+    const afterCap = await chat(A, 'after the cap r144', { fresh: true });
+    stopAiNode(); await sleep(5500);
+    const offRun = await chat(A, 'host gone r144', { fresh: true });
+    const offErr2 = (offRun.events.find((e) => e.type === 'bridge_error') || {}).text || '';
+    const offProv = ((await call('/api/check', A)).data.providers || []).find((p) => p.id === remoteId) || {};
+    startAiNode(); for (let i = 0; i < 60; i++) { if (((await call('/api/check', A)).data.aiNodes || []).some((h) => h.id === 'test-node' && h.online)) break; await sleep(250); }
+    check('R144', 'Work on an AI host: a person picks a host\'s Claude (not its local model: not Claude → 400; unknown → 400); the run happens ON the host with its own login (cwd = the host\'s worktree, CLAUDE_CONFIG_DIR = the host\'s), the page is told which host runs it, the model is the chosen one; a follow-up resumes the same session there; the board tools work through the hub\'s job relay; the PC tools of the host\'s owner act on the host\'s own folder (direct computer access) while a teammate\'s go to their browser; Stop ends the run on the host; /api/usage shows that host\'s windows (from its reported events); past its cap the hub refuses the run until the window resets; with the host gone the run fails at once and the provider shows offline',
+      pickBad.status === 400 && pickNo.status === 400 && pick.status === 200 && pick.data.provider === remoteId && ckA.provider === remoteId && ckA.effectiveProvider === remoteId
+      && /Running on test-node/.test(info1) && /cwd=.*worktrees[\\/]t-admin/.test(t1) && /cfg=.*host-claude-login/.test(t1) && /model=claude-haiku-5-5/.test(t1) && !!sess1 && sess1 === sess2
+      && /"made":true/.test(boardOut) && /"claimed":true/.test(boardOut) && /"noted":true/.test(boardOut) && /hello\.txt/.test(pcAOut) && !/fake-listing/.test(pcAOut) && /fake-listing/.test(pcUOut)
+      && busyR === true && stopR.status === 200 && stoppedCode === 130 && usageA.of === remoteId && usageA2.of === remoteId && usageA2.five_hour.source === 'claude' && Math.abs(usageA2.five_hour.utilization - 0.42) < 0.01 && /echo: USAGE/.test(texts(usRun.events))
+      && /cap/.test(capErr) && !!ckCap.capped && /echo: after the cap/.test(texts(afterCap.events)) && /offline/.test(offErr2) && offProv.online === false,
+      `pick ${pick.status}/${pickBad.status}/${pickNo.status} eff ${ckA.effectiveProvider}; info "${info1}"; run "${t1.slice(0, 120)}"; sess ${sess1 === sess2}; board ${boardOut}; pcA ${pcAOut.slice(0, 60)}; pcU ${pcUOut.slice(0, 60)}; busy ${busyR} stop ${stoppedCode}; usage ${usageA2.of} ${JSON.stringify(usageA2.five_hour)}; cap "${capErr.slice(0, 80)}" ${!!ckCap.capped}; after ${/echo: after/.test(texts(afterCap.events))}; off "${offErr2.slice(0, 60)}" ${offProv.online}`);
+
+    // local models and the host's Claude through the API (bridge/openai.js → providers → the host)
+    const keyR = await call('/api/apikey/rotate', A, {});
+    const setLocal = await call('/api/apikey/settings', A, { provider: 'h:test-node/local', model: 'tiny-local' });
+    const v1Models = await fetch(H + '/v1/models', { headers: { Authorization: 'Bearer ' + keyR.data.key } }).then((r) => r.json());
+    const v1Local = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyR.data.key }, body: JSON.stringify({ model: 'tiny-local', messages: [{ role: 'user', content: 'through the host r145' }] }) }).then((r) => r.json());
+    const v1LocalStream = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyR.data.key }, body: JSON.stringify({ model: 'tiny-local', stream: true, messages: [{ role: 'user', content: 'stream r145' }] }) }).then((r) => r.text());
+    await call('/api/apikey/settings', A, { provider: remoteId, model: 'claude-fable-5-1' });
+    const v1Claude = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyR.data.key }, body: JSON.stringify({ model: 'claude-fable-5-1', messages: [{ role: 'user', content: 'sandbox r145' }] }) }).then((r) => r.json());
+    const streamed = v1LocalStream.split('\n').filter((l) => l.startsWith('data: {')).map((l) => { try { return ((JSON.parse(l.slice(6)).choices || [])[0] || {}).delta?.content || ''; } catch { return ''; } }).join('');
+    const streamPieces = (v1LocalStream.match(/"content":"[^"]+"/g) || []).length;
+    const setOther = await call('/api/apikey/settings', U, { provider: 'h:test-node/local' }); // t-user is allowed; t-admin (the owner) sees it too
+    const ownerSees = ((await call('/api/check', A)).data.providers || []).some((p) => p.id === 'h:test-node/local');
+    await call('/api/apikey/revoke', A, {}); await call('/api/model', A, { provider: 'host', model: '' }); await call('/api/model', U, { provider: 'host', model: 'claude-opus-5-5' }); // back to what the restart check (R9) expects for t-user
+    check('R145', 'local models through a host: a host\'s OpenAI-compatible endpoint (its Ollama) is a provider for the people it allows; the API answers through it, plain and STREAMING (the host forwards the endpoint\'s pieces as they come, so the words arrive one by one, several pieces, not one block), lists its models, and the host\'s Claude answers the API in a sandbox there; the owner and the allowed teammate may use it',
+      keyR.status === 200 && setLocal.status === 200 && (v1Models.data || []).some((m) => m.id === 'tiny-local') && /oai says: through the host r145/.test(((v1Local.choices || [])[0] || {}).message?.content || '') && /oai says: stream r145/.test(streamed) && streamPieces >= 3 && /\[DONE\]/.test(v1LocalStream)
+      && /echo: .*sandbox r145/.test(((v1Claude.choices || [])[0] || {}).message?.content || '') && setOther.status === 200 && ownerSees === true,
+      `models ${(v1Models.data || []).map((m) => m.id).join(',')}; local "${(((v1Local.choices || [])[0] || {}).message || {}).content || JSON.stringify(v1Local).slice(0, 80)}"; streamed "${streamed}" in ${streamPieces} pieces; claude "${((((v1Claude.choices || [])[0] || {}).message || {}).content || JSON.stringify(v1Claude).slice(0, 80)).slice(0, 60)}"`);
+  }
   // The move kit: everything a person runs on the server / the old host, checked for shape (they cannot run here).
   const dk = (f) => fs.readFileSync(path.join(MILLS, 'deploy', f), 'utf8');
   const setupSh = dk('setup-server.sh'), restoreSh = dk('restore-data.sh'), packCmd = dk('pack-data.cmd'), packSh = dk('pack-data.sh'), deployYml = fs.readFileSync(path.join(MILLS, '.forgejo', 'workflows', 'deploy.yml'), 'utf8');
@@ -1716,28 +1843,15 @@ async function run() {
     const zipRes = await fetch(H + '/api/downloads/ai-host-windows.zip', { headers: { Authorization: 'Bearer ' + U } });
     const zipBuf = Buffer.from(await zipRes.arrayBuffer());
     const unknown = await fetch(H + '/api/downloads/nope.zip', { headers: { Authorization: 'Bearer ' + U } });
-    // read the zip like an unzipper would: the central directory names every entry and points at its local header;
-    // deflated entries are inflated, so the files inside can be checked (the README names this hub)
-    const unzip = (buf) => {
-      const out = []; let i = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
-      while (i >= 0 && i < buf.length && buf.readUInt32LE(i) === 0x02014b50) {
-        const method = buf.readUInt16LE(i + 10), csize = buf.readUInt32LE(i + 20), n = buf.readUInt16LE(i + 28), x = buf.readUInt16LE(i + 30), c = buf.readUInt16LE(i + 32), off = buf.readUInt32LE(i + 42);
-        const name = buf.toString('utf8', i + 46, i + 46 + n), ln = buf.readUInt16LE(off + 26), lx = buf.readUInt16LE(off + 28), start = off + 30 + ln + lx;
-        const raw = buf.subarray(start, start + csize);
-        out.push({ name, data: method === 8 ? require('zlib').inflateRawSync(raw) : raw });
-        i += 46 + n + x + c;
-      }
-      return out;
-    };
-    const entries = unzip(zipBuf), names = entries.map((e) => e.name);
+    const entries = unzipAll(zipBuf), names = entries.map((e) => e.name);
     const linuxZip = Buffer.from(await (await fetch(H + '/api/downloads/desktop-linux.zip', { headers: { Authorization: 'Bearer ' + U } })).arrayBuffer());
-    const linuxFiles = unzip(linuxZip);
+    const linuxFiles = unzipAll(linuxZip);
     const page = await (await fetch(H + '/')).text();
     const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), appJs = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
     check('R142', 'Download: signed-in people get the four packages (Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux) listed with sizes and as real zip files (PK header, attachment, every file of the AI host inside, the hub\'s own address in them); anonymous → 401; unknown → 404; the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download button sits above Settings in the menu and in the app\'s user panel',
       anon.status === 401 && dl.status === 200 && items.length === 4 && ['desktop-windows', 'desktop-linux', 'ai-host-windows', 'ai-host-linux'].every((id) => items.some((it) => it.id === id && it.bytes > 1000 && /\.zip$/.test(it.file)))
       && zipRes.status === 200 && zipBuf.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && /attachment; filename="VibeRollerAIHost-windows\.zip"/.test(zipRes.headers.get('content-disposition') || '') && zipRes.headers.get('content-type') === 'application/zip'
-      && ['VibeRollerAIHost/ai-node.js', 'VibeRollerAIHost/ai-node.example.json', 'VibeRollerAIHost/start-node.bat', 'VibeRollerAIHost/host-tools/HostTool.cs', 'VibeRollerAIHost/host-tools/AiHostService.cs', 'VibeRollerAIHost/host-tools/build-host-tools.ps1', 'VibeRollerAIHost/host-tools/build.cmd', 'VibeRollerAIHost/host-tools/install-ai-host-service.cmd', 'VibeRollerAIHost/README.txt'].every((n) => names.includes(n))
+      && ['VibeRollerAIHost/ai-node.js', 'VibeRollerAIHost/common.js', 'VibeRollerAIHost/worktree.js', 'VibeRollerAIHost/pc-tools-mcp.js', 'VibeRollerAIHost/board-mcp.js', 'VibeRollerAIHost/team-mcp.js', 'VibeRollerAIHost/ai-node.example.json', 'VibeRollerAIHost/start-node.bat', 'VibeRollerAIHost/host-tools/HostTool.cs', 'VibeRollerAIHost/host-tools/AiHostService.cs', 'VibeRollerAIHost/host-tools/build-host-tools.ps1', 'VibeRollerAIHost/host-tools/build.cmd', 'VibeRollerAIHost/host-tools/install-ai-host-service.cmd', 'VibeRollerAIHost/README.txt'].every((n) => names.includes(n)) && !names.some((n) => n.endsWith('/ai-node.json'))
       && linuxZip.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && linuxFiles.length === 3 && linuxFiles.every((e) => e.data.toString('utf8').includes(H)) && entries.some((e) => e.name.endsWith('README.txt') && e.data.toString('utf8').includes(H))
       && entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js')))) && unknown.status === 404
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)

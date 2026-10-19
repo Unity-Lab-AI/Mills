@@ -25,10 +25,9 @@ Nothing here changes a machine by itself. The scripts do the work; people run th
 |---|---|---|
 | gee (or mills / sponge) | the server | `sh deploy/setup-server.sh` (no root; safe to run again) |
 | root (Sponge / Red), once | the server | `loginctl enable-linger gee`; the two nginx sites from `/srv/apps/VibeRoller/deploy-ready/`; DNS + certificate for `portal.unityailab.com` |
-| Gee | the server, once | `HOME=/srv/apps/VibeRoller/home CLAUDE_CONFIG_DIR=/srv/apps/VibeRoller/home/.claude /srv/apps/VibeRoller/tools/bin/claude login` |
 | Gee | his PC, hub stopped | `deploy\pack-data.cmd ovh` (packs the data and copies it over) |
 | gee | the server | `sh /srv/apps/VibeRoller/app/deploy/restore-data.sh /srv/apps/VibeRoller/viberoller-data-<date>.tar.gz` |
-| Gee | his PC | Download → Vibe Roller AI Host (Windows): `ai-node.json`, `build.cmd`, Y to the service |
+| Gee | his PC | Settings → My AI hosts → New host → Download (Windows): unzip, `host-tools\build.cmd`, Y to the service. His Claude login stays on his PC; the server never gets one. |
 
 ## The files
 
@@ -66,14 +65,13 @@ Then the short name: a DNS `A` record `portal.unityailab.com → 135.148.100.111
 `certbot --nginx -d portal.unityailab.com` (or expand the `unityailab.com` certificate with that name). Until then
 `https://portal.git.unityailab.com` is the address, and `publicUrl` in `bridge/config.local.json` should say so.
 
-## 3. Gee's Claude login (Gee, once)
+## 3. Nobody's login on the server
 
-```sh
-HOME=/srv/apps/VibeRoller/home CLAUDE_CONFIG_DIR=/srv/apps/VibeRoller/home/.claude /srv/apps/VibeRoller/tools/bin/claude login
-```
-
-This puts Gee's Claude login on the server. It is his decision. Work runs then use it, as they use his PC's today.
-Until then Work says Claude is not available there; everything else works.
+The server's hub has no Claude of its own (`"hubClaude": false`). Work runs and API answers happen on an **AI host**: Gee's
+PC runs the VibeRoller AI Host with his own login (`"defaultProvider": "host:gee"` makes it everyone's default), the hub
+hands it the jobs of the people he allows (`"hostGroup": ["mills", "sponge", "gee"]`) and relays the words back. Anyone
+can be a host the same way (Settings → My AI hosts), for a Claude login, an Anthropic key or a local model. With Gee's PC
+off, Work says so at once and offers the other AIs; chat, board, notes and sign-in never depend on it.
 
 ## 4. The data (Gee's approval; a few minutes of pause)
 
@@ -88,10 +86,12 @@ Passwords, device locks and keys arrive exactly as they were (hub laws 1, 2, 8).
 
 ## 5. Gee's PC afterwards: the AI host
 
-Download → **Vibe Roller AI Host (Windows)** on the site. Unzip it somewhere permanent, copy `ai-node.example.json` to
-`ai-node.json` with the `gee-pc` secret from the server's `bridge/config.local.json`, run `host-tools\build.cmd` and say
-**Y** to the service. From then on the **VibeRollerAIHost** service starts at boot; the heart and the knife on the Desktop
-start and stop it. (Gee's checkout works the same way: `bridge\ai-node.json`, `bridge\host-tools\build.cmd`.)
+Settings → Connections → **My AI hosts** → **New host** (the hub issues a nickname and a UUID) → **Download Windows**: the
+package has `ai-node.json` filled in (hub address, id, secret, user, a Claude provider shared with the group, Unity's engine
+addresses). Unzip it somewhere permanent, run `host-tools\build.cmd` and say **Y** to the service. From then on the
+**VibeRollerAIHost** service starts at boot and his PC is the team's Claude (and Unity's engines); the heart and the knife
+on the Desktop start and stop it. (Gee's checkout works the same way: `bridge\ai-node.json`, `bridge\host-tools\build.cmd`.)
+The legacy `aiNodes.gee-pc` secret in the server's `config.local.json` keeps working for the engines-only config.
 
 ## 6. Deploys
 

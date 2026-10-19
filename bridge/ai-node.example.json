@@ -1,12 +1,20 @@
 {
-  "_": "Copy to bridge/ai-node.json (gitignored) on the machine that lends its AI engines to the hub. The token is the same secret the hub has under aiNodes.<name> in its bridge/config.local.json.",
+  "_": "VibeRoller AI Host config: copy to ai-node.json next to ai-node.js. The easy way: Settings → My AI hosts → New host → Download: the package then has this file filled in. id + token are the host's key to the hub (keep private), user is whose host it is, nickname is what the hub issued.",
   "hub": "https://portal.git.unityailab.com",
-  "name": "gee-pc",
-  "token": "<24+ random characters, the same as on the hub>",
+  "id": "<the host's UUID, from Settings → My AI hosts>",
+  "token": "<the host's secret, from the same place>",
+  "user": "gee",
+  "nickname": "silly-panda",
+  "providers": [
+    { "id": "claude", "kind": "claude-cli", "label": "Gee's Claude", "models": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], "max5h": 90, "max7d": 90, "allowedUsers": ["mills", "sponge", "gee"], "configDir": "" },
+    { "id": "ollama", "kind": "openai", "label": "Local Ollama", "baseUrl": "http://127.0.0.1:11434/v1", "apiKey": "", "models": ["llama3.1"], "allowedUsers": ["mills", "sponge", "gee"] }
+  ],
   "engines": {
     "ollama": "http://127.0.0.1:11434",
     "image": "http://127.0.0.1:5124",
     "voice": "http://127.0.0.1:5123",
     "speech": "http://127.0.0.1:5125"
-  }
+  },
+  "pc": { "folder": "" },
+  "work": { "hubRepo": "", "projectsRoot": "", "claudeCommand": "claude" }
 }
