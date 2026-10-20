@@ -1169,6 +1169,13 @@ const server = http.createServer(async (req, res) => {
     // Files: everything this person uploaded, where it went, when it was last used; and their Linux account's link
     if (p === '/api/library' && req.method === 'GET') return send(res, 200, { linux: linux.status(acct.username, files.work.fallbackDir(acct)), entries: files.library.list(acct) });
     if (p === '/api/library/delete' && req.method === 'POST') { const { id } = await readBody(req); return files.library.remove(acct, String(id || '')) ? send(res, 200, { ok: true }) : send(res, 404, { error: 'Not found.' }); }
+    if (p === '/api/library/save' && req.method === 'POST') { // the text editor: the raw new content, ?id=<file>
+      try { return send(res, 200, files.library.save(acct, String(url.searchParams.get('id') || ''), await files.readRaw(req))); } catch (e) { return send(res, e.status || 500, { error: e.message }); }
+    }
+    if (p === '/api/library/exec' && req.method === 'POST') {
+      const { id, on } = await readBody(req);
+      try { return send(res, 200, files.library.setExec(acct, String(id || ''), !!on)); } catch (e) { return send(res, e.status || 500, { error: e.message }); }
+    }
     if (p.startsWith('/api/work/file/') && req.method === 'GET') return files.work.serve(acct, p.slice('/api/work/file/'.length), res);
     if (p === '/api/room/blob' && req.method === 'GET') { // a voice clip's ciphertext, for a reader of that message
       const m = messages.find((x) => x.seq === Number(url.searchParams.get('seq')));

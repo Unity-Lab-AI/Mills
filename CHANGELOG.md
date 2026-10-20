@@ -7,6 +7,22 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.9.0 — 2026-10-20
+
+### Added
+- **Protocol adapters, both directions, one key** (bridge/openai.js; board T-120): `POST /v1/messages` takes
+  Anthropic's Messages format (system and content blocks, `max_tokens`, `stream`) and is answered by whichever provider
+  the key uses, an OpenAI-compatible endpoint or a host's local model too (Anthropic → OpenAI), in Anthropic's message
+  shape, streamed as Anthropic's events (`message_start` … `content_block_delta` … `message_stop`), errors in
+  Anthropic's shape. `POST /v1/chat/completions` (OpenAI format) keeps reaching every Claude (OpenAI → Anthropic).
+  `/v1/models` answers in Anthropic's list shape when `anthropic-version` is sent; `/v1/messages/count_tokens` gives a
+  rough count. The same `mills_…` key works as `Authorization: Bearer` or `x-api-key` on both. Text only: tool calls,
+  tool results and pictures are passed on as text.
+- **Files, complete** (board T-121): a Work file is edited in place (text up to 2 MB; Ctrl+S; its permissions kept),
+  made executable or not (chmod), and sent to Work as it is ("Use in Work", or "Run in Work": Claude runs it and
+  reports). Files put in `~/uploaded_files` outside VibeRoller (over SSH, by a Work run) show in the library too and
+  open, download, edit, run and delete like the rest. `POST /api/library/save?id=`, `POST /api/library/exec`. R160, R161.
+
 ## 3.8.0 — 2026-10-20
 
 ### Added

@@ -47,6 +47,11 @@ function safeName(raw) {
   return n || 'file';
 }
 const cleanMime = (m) => (/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(String(m || '').split(';')[0].trim()) ? String(m).split(';')[0].trim().toLowerCase() : 'application/octet-stream');
+// a type from the name, for files that came without one (put in uploaded_files by hand)
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', pdf: 'application/pdf', zip: 'application/zip',
+  txt: 'text/plain', md: 'text/markdown', json: 'application/json', js: 'text/javascript', ts: 'text/plain', py: 'text/x-python', sh: 'text/x-shellscript', html: 'text/html', css: 'text/css', csv: 'text/csv', rs: 'text/plain', toml: 'text/plain', yml: 'text/plain', yaml: 'text/plain', c: 'text/plain', h: 'text/plain', cpp: 'text/plain', go: 'text/plain', java: 'text/plain', log: 'text/plain', xml: 'text/xml' };
+const mimeOf = (name) => MIME[path.extname(name).slice(1).toLowerCase()] || 'application/octet-stream';
+const isExec = (p) => { try { return process.platform !== 'win32' && (fs.statSync(p).mode & 0o100) !== 0; } catch { return false; } };
 function serve(res, buf, name, mime) {
   res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length, 'Content-Disposition': `attachment; filename="${encodeURIComponent(name || 'file')}"`, 'X-VR-File-Type': mime || 'application/octet-stream', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(buf);
@@ -142,17 +147,39 @@ module.exports = function createFiles({ CHAT_DIR, send, accountOf, linux = null 
       updateIndex(acct, (e) => { e[id] = { id, kind: 'work', name, mime, size: buf.length, at: Date.now(), lastAccess: 0, path: file }; });
       return send(res, 200, { id, name, mime, size: buf.length });
     },
-    // { id, name, mime, size, path } of one of this person's uploads, or null
+    // { id, name, mime, size, path } of one of this person's uploads (or a file they put in their uploaded_files folder
+    // themselves), or null
     get(acct, id) {
       if (!ID_RE.test(String(id || ''))) return null;
       const e = readIndex(acct).entries[id];
       if (e && e.kind === 'work') return fs.existsSync(e.path) ? { id, name: e.name, mime: e.mime, size: e.size, path: e.path } : null;
+      const d = work.onDisk(acct).get(id);
+      if (d) return { id, name: d.name, mime: d.mime, size: d.size, path: d.path };
       const dir = path.join(work.fallbackDir(acct), id); // an upload from before the library (3.7.0: uploads/<id>/<name>)
       let m; try { m = JSON.parse(fs.readFileSync(path.join(dir, '.meta.json'), 'utf8')); } catch { return null; }
       const file = path.join(dir, safeName(m.name));
       return fs.existsSync(file) ? { id, name: m.name, mime: m.mime, size: m.size, path: file } : null;
     },
     serve(acct, id, res) { const f = work.get(acct, id); if (!f) return send(res, 404, { error: 'That file is no longer kept.' }); touch(acct, [id]); return serve(res, fs.readFileSync(f.path), f.name, f.mime); },
+    // files in the uploads folder that VibeRoller did not put there (made over SSH, by a Work run, copied in): listed too,
+    // id = a hash of the path. Old-layout folders (<id>/ with .meta.json) and dot files are left out; at most 2000 files.
+    onDisk(acct) {
+      const root = work.dirOf(acct), known = new Set(Object.values(readIndex(acct).entries).map((e) => e.path).filter(Boolean)), out = new Map();
+      const walk = (dir, depth) => {
+        let list; try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const d of list) {
+          if (out.size >= 2000 || d.name.startsWith('.') || d.name.endsWith('.tmp')) continue;
+          const p = path.join(dir, d.name);
+          if (d.isDirectory()) { if (depth < 4 && !(depth === 0 && ID_RE.test(d.name))) walk(p, depth + 1); continue; }
+          if (!d.isFile() || known.has(p)) continue;
+          let st; try { st = fs.statSync(p); } catch { continue; }
+          const id = crypto.createHash('sha1').update('disk:' + p).digest('hex').slice(0, 24);
+          out.set(id, { id, kind: 'work', disk: true, name: d.name, mime: mimeOf(d.name), size: st.size, at: st.mtimeMs, lastAccess: st.atimeMs, path: p });
+        }
+      };
+      walk(root, 0);
+      return out;
+    },
     sweep(accounts) { // the pre-library layout kept 30 days; library files stay until their owner deletes them
       for (const a of accounts) {
         const root = work.fallbackDir(a); if (!fs.existsSync(root)) continue;
@@ -164,15 +191,35 @@ module.exports = function createFiles({ CHAT_DIR, send, accountOf, linux = null 
   // ---------- the library ----------
   const library = {
     list(acct) {
-      const out = Object.values(readIndex(acct).entries).map((e) => ({ ...e, path: undefined, folder: e.path ? path.dirname(e.path) : '', missing: e.kind === 'work' ? !fs.existsSync(e.path || '') : !meta(e.id) }));
+      const out = Object.values(readIndex(acct).entries).map((e) => ({ ...e, path: undefined, folder: e.path ? path.dirname(e.path) : '', missing: e.kind === 'work' ? !fs.existsSync(e.path || '') : !meta(e.id), exec: e.kind === 'work' && isExec(e.path) }));
+      for (const d of work.onDisk(acct).values()) out.push({ ...d, path: undefined, folder: path.dirname(d.path), missing: false, exec: isExec(d.path) });
       return out.sort((a, b) => b.at - a.at);
     },
     remove(acct, id) {
-      const e = readIndex(acct).entries[id]; if (!e) return false;
+      const e = readIndex(acct).entries[id] || work.onDisk(acct).get(id); if (!e) return false;
       if (e.kind === 'work' && e.path) { fs.rmSync(e.path, { force: true }); try { fs.rmdirSync(path.dirname(e.path)); } catch {} } // the day's folder, when it is empty now
       if (e.kind === 'chat') { const m = meta(id); if (m && m.by === acct.username) removeCipher(id); }
       updateIndex(acct, (x) => { delete x[id]; });
       return true;
+    },
+    // edit: a Work file's new content (the page's text editor), its permissions kept; chat files are end-to-end encrypted,
+    // so they are copied into uploaded_files first and edited there
+    save(acct, id, buf) {
+      const f = work.get(acct, id); if (!f) throw Object.assign(new Error('Only your own Work files (uploaded_files) can be edited; copy a chat file there first.'), { status: 404 });
+      if (buf.includes(0)) throw Object.assign(new Error('That is not text; only text files are edited here.'), { status: 400 });
+      fs.writeFileSync(f.path + '.vr-save.tmp', buf); try { fs.chmodSync(f.path + '.vr-save.tmp', fs.statSync(f.path).mode & 0o7777); } catch {}
+      fs.renameSync(f.path + '.vr-save.tmp', f.path);
+      updateIndex(acct, (e) => { if (e[id]) { e[id].size = buf.length; e[id].edited = Date.now(); e[id].lastAccess = Date.now(); } });
+      return { id, size: buf.length };
+    },
+    // execute permission on a Work file (chmod u+x,g+x / off): run it in a terminal on the server, from a Work run
+    // ("Run in Work"), or in the Desktop app after downloading it. Not on Windows hubs (no such bit there).
+    setExec(acct, id, on) {
+      const f = work.get(acct, id); if (!f) throw Object.assign(new Error('Not found.'), { status: 404 });
+      if (process.platform === 'win32') throw Object.assign(new Error('This hub runs on Windows: files there have no execute permission to set.'), { status: 400 });
+      const mode = fs.statSync(f.path).mode & 0o7777;
+      try { fs.chmodSync(f.path, on ? mode | 0o110 : mode & ~0o111); } catch (e) { throw Object.assign(new Error('Could not change it (' + e.code + '): the file belongs to your own account, so run chmod there.'), { status: 403 }); }
+      return { id, exec: isExec(f.path) };
     },
   };
 

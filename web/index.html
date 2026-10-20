@@ -434,6 +434,10 @@
   .libMeta { display: flex; flex-wrap: wrap; gap: .2rem .9rem; font-size: .82rem; color: var(--muted); } .libMeta .libPath { font-family: ui-monospace, monospace; }
   .libActs { display: flex; flex-wrap: wrap; gap: .3rem; justify-content: flex-end; }
   @media (max-width: 820px) { .libRow { grid-template-columns: 1fr; } .libActs { justify-content: flex-start; } }
+  .libEdit { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  .libEdit > div { width: min(60rem, 100%); height: min(46rem, 100%); display: flex; flex-direction: column; gap: .5rem; padding: .75rem; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  .libEdit textarea { flex: 1; resize: none; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; white-space: pre; }
+  .libEdit .libActs { justify-content: space-between; align-items: center; }
   /* "Newest": sticks to the bottom of a conversation that has new content below while you read further up */
   .jumpNew { position: sticky; bottom: .5rem; align-self: center; z-index: 5; display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .8rem; border-radius: 999px; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); }
   #micBtn { padding: .35rem .6rem; }
@@ -1993,16 +1997,30 @@ async function uploadWorkFiles(list) {
   }
   return out;
 }
+// files already in the person's uploaded_files (Files → "Run in Work" / "Use in Work"): sent with the next Work message
+// as they are, no upload; shown as a line above the message box with a way to drop them
+let workLibFiles = [];
+function setWorkLibFiles(list, text) {
+  workLibFiles = list;
+  let bar = $('workLibBar');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'workLibBar'; bar.className = 'attTray'; $('workTray').after(bar); }
+  bar.textContent = ''; bar.hidden = !list.length;
+  if (list.length) {
+    bar.append(ic('file', 'lead'), 'From your files: ' + list.map((f) => f.n).join(', ') + ' ');
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'ghost'; x.textContent = 'Remove'; x.onclick = () => setWorkLibFiles([]); bar.append(x);
+  }
+  if (text !== undefined) { $('input').value = text; $('input').focus(); }
+}
 const workFileBytes = async (f) => { const r = await api('/api/work/file/' + f.id); if (!r.ok) throw new Error(r.status === 404 ? 'no longer kept (30 days)' : r.statusText); return r.arrayBuffer(); };
 $('composer').addEventListener('submit', async (e) => {
   e.preventDefault();
   let message = $('input').value.trim();
-  const picked = workTray.files.slice();
-  if (!message && !picked.length) return; // text, files, or both
-  if (message.startsWith('/') && !picked.length && runLocalSlash(message)) { $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true; return; } // a VibeRoller command: done here, nothing goes to Claude
-  if (picked.length) {
+  const picked = workTray.files.slice(), fromLib = workLibFiles.slice();
+  if (!message && !picked.length && !fromLib.length) return; // text, files, or both
+  if (message.startsWith('/') && !picked.length && !fromLib.length && runLocalSlash(message)) { $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true; return; } // a VibeRoller command: done here, nothing goes to Claude
+  if (picked.length || fromLib.length) {
     const b = $('send'); b.disabled = true; b.textContent = 'Uploading…';
-    try { message += '\n\n<!--vr-files ' + JSON.stringify(await uploadWorkFiles(picked)) + ' -->'; workTray.clear(); }
+    try { message += '\n\n<!--vr-files ' + JSON.stringify([...fromLib, ...(picked.length ? await uploadWorkFiles(picked) : [])]) + ' -->'; workTray.clear(); setWorkLibFiles([]); }
     catch (err) { sys('Not sent: ' + err.message, true); return; }
     finally { b.disabled = false; setBusy(busy); }
   }

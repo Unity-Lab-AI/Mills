@@ -800,6 +800,18 @@ async function run() {
   const oaiText = ((((JSON.parse(oaiChat.text || '{}').choices || [])[0] || {}).message || {}).content) || '';
   const oaiStream = await v1('/v1/chat/completions', useOai.key, { model: 'fake-gpt', stream: true, messages: [{ role: 'user', content: 'flow-r112' }] });
   const oaiStreamed = oaiStream.text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => ((JSON.parse(l.slice(6)).choices || [])[0] || {}).delta || {}).map((d) => d.content || '').join('');
+  // Anthropic → OpenAI: the Messages format in (Anthropic's x-api-key header, the same key), the OpenAI endpoint answers
+  const antHdr = { 'x-api-key': useOai.key, 'anthropic-version': '2023-06-01' };
+  const antMsg = await v1('/v1/messages', null, { model: 'claude-opus-5-5', max_tokens: 100, system: [{ type: 'text', text: 'sys' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'anthropic-in-r160' }] }] }, antHdr);
+  const antJ = (() => { try { return JSON.parse(antMsg.text); } catch { return {}; } })();
+  const antStream = await v1('/v1/messages', null, { model: 'fake-gpt', max_tokens: 100, stream: true, messages: [{ role: 'user', content: 'anthropic-stream-r160' }] }, antHdr);
+  const antEvents = antStream.text.split('\n').filter((l) => l.startsWith('event: ')).map((l) => l.slice(7));
+  const antStreamed = antStream.text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => { try { return JSON.parse(l.slice(6)); } catch { return {}; } }).filter((d) => d.type === 'content_block_delta').map((d) => d.delta.text).join('');
+  const antModels = await v1('/v1/models', null, undefined, antHdr), antModelsJ = (() => { try { return JSON.parse(antModels.text); } catch { return {}; } })();
+  const antCount = await v1('/v1/messages/count_tokens', null, { model: 'x', messages: [{ role: 'user', content: 'abcdefgh' }] }, antHdr);
+  const antNoKey = await v1('/v1/messages', null, { messages: [{ role: 'user', content: 'x' }] }, { 'anthropic-version': '2023-06-01' });
+  const antEmpty = await v1('/v1/messages', null, { max_tokens: 5, messages: [] }, antHdr);
+  const oaiXKey = await v1('/v1/chat/completions', null, { model: 'fake-gpt', messages: [{ role: 'user', content: 'xkey-r160' }] }, { 'x-api-key': useOai.key });
   const otherTouch = await call('/api/providers/update', A, { id: cli.provider.id, shared: true });
   const shareIt = await call('/api/providers/update', U, { id: cli.provider.id, shared: true });
   const nowSeenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
@@ -817,6 +829,22 @@ async function run() {
     && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByA.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
     && /id="provBox"/.test(html) && /\/api\/providers\/add/.test(html) && /o\.value = p\.id \+ '\|' \+ m/.test(html),
     `providers at start ${prov0.providers.map((p) => p.id).join(',')}; cli ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
+  // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
+  const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
+  const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });
+  const antClaudeJ = (() => { try { return JSON.parse(antClaude.text); } catch { return {}; } })(), antClaudeText = ((antClaudeJ.content || [])[0] || {}).text || '';
+  await call('/api/apikey/revoke', U, {});
+  const oaSrc160 = fs.readFileSync(path.join(BRIDGE, 'openai.js'), 'utf8');
+  check('R160', 'protocol adapters: Anthropic → OpenAI: POST /v1/messages (system / content blocks, x-api-key header with the person\'s key) is answered by an OpenAI-compatible endpoint in Anthropic\'s message shape, streamed as Anthropic\'s events (message_start … content_block_delta … message_stop); /v1/models in Anthropic\'s list shape when anthropic-version is sent; count_tokens answers; no key → 401 and empty messages → 400 in Anthropic\'s error shape; the same key in x-api-key also opens /v1/chat/completions; Anthropic in → the host\'s Claude answers with the asked model',
+    antMsg.status === 200 && antJ.type === 'message' && antJ.role === 'assistant' && /^oai says: anthropic-in-r160 \[sys 3\]/.test(((antJ.content || [])[0] || {}).text || '') && antJ.stop_reason === 'end_turn' && antJ.usage && typeof antJ.usage.input_tokens === 'number'
+    && antStream.status === 200 && /text\/event-stream/.test(antStream.ct) && antEvents[0] === 'message_start' && antEvents.includes('content_block_delta') && antEvents[antEvents.length - 1] === 'message_stop' && /anthropic-stream-r160/.test(antStreamed)
+    && antModels.status === 200 && Array.isArray(antModelsJ.data) && antModelsJ.data.some((m) => m.type === 'model' && m.id === 'fake-gpt') && antModelsJ.has_more === false
+    && antCount.status === 200 && JSON.parse(antCount.text).input_tokens >= 2
+    && antNoKey.status === 401 && /"type":"error"/.test(antNoKey.text) && /authentication_error/.test(antNoKey.text) && antEmpty.status === 400 && /invalid_request_error/.test(antEmpty.text)
+    && oaiXKey.status === 200 && /xkey-r160/.test(oaiXKey.text)
+    && antClaude.status === 200 && /claude-in-r160/.test(antClaudeText) && /model=claude-haiku-5-5/.test(antClaudeText)
+    && /x-api-key/.test(oaSrc160),
+    `messages ${antMsg.status} "${antMsg.text.slice(0, 120)}"; stream ${antStream.status} events ${antEvents.join(',')}; models ${antModels.status}; count ${antCount.status}; nokey ${antNoKey.status}; empty ${antEmpty.status}; oai x-key ${oaiXKey.status}; claude ${antClaude.status} "${antClaudeText.slice(0, 80)}"`);
 
   // Chat v2: settings, private messages, edit / delete, receipts, agent privacy
   const seal = async (tok, priv, plain, to) => { // like the page's sealFor: everyone, or only sender + recipient
@@ -1130,7 +1158,7 @@ async function run() {
   const slashCmds = [...html.matchAll(/\{ cmd: '(\/[a-z]+)'/g)].map((m) => m[1]);
   check('R115', '[static] slash commands in the Claude box: "/" opens a filtered menu of the common commands (compact, clear, model, review, cost, status, help, commit …), arrows / Tab / Enter pick, Esc closes; Mills commands run here (clear, stop, model, share, board …), the rest go to Claude Code as typed',
     /id="slashMenu"/.test(html) && slashCmds.length >= 20 && ['/compact', '/clear', '/model', '/review', '/cost', '/status', '/help', '/commit', '/stop', '/share'].every((c) => slashCmds.includes(c))
-    && /function renderSlash\(/.test(html) && /function runLocalSlash\(/.test(html) && /if \(message\.startsWith\('\/'\) && !picked\.length && runLocalSlash\(message\)\)/.test(html) && /e\.key === 'ArrowDown'/.test(html) && /pickSlash\(list\[slashIdx\]\)/.test(html),
+    && /function renderSlash\(/.test(html) && /function runLocalSlash\(/.test(html) && /if \(message\.startsWith\('\/'\) && !picked\.length && !fromLib\.length && runLocalSlash\(message\)\)/.test(html) && /e\.key === 'ArrowDown'/.test(html) && /pickSlash\(list\[slashIdx\]\)/.test(html),
     slashCmds.length + ' commands');
   check('R105', '[static] responsive: phone breakpoint (drawer chat list, board sheet + swipe columns, calendar agenda, full-screen dialogs, stacked Work panes, safe-area padding, no zoom-on-focus), touch-sized controls, laptop header tightening, admin table scrolls', !missing76.length, missing76.join(', '));
   check('R95', '[static] CSP, hub address pinned to the tunnel, key pinning (TOFU + Trust new key), call lip-sync + ICE batching, room long poll, v4 deflate + clips fetched on play', !missing66.length, missing66.join(', '));
@@ -1519,6 +1547,28 @@ async function run() {
       // the hub's own data never shows as a change in the live checkout (the auto-deploy refuses a checkout with changes)
       && ['bridge/uploads-index.json', 'bridge/uploads/x', 'bridge/ai-host-sessions.json', 'bridge/ai-node.status.json', 'Chat/files/x'].every((f) => spawnSync('git', ['check-ignore', '-q', f], { cwd: MILLS }).status === 0),
       `U linux ${JSON.stringify(libU.linux)}; A linked ${libA.linux && libA.linux.linked}; on disk ${onLinkedDisk}; work entry ${JSON.stringify({ k: wEntry.kind, n: wEntry.name, la: !!wEntry.lastAccess, uses: (wEntry.uses || []).length, f: wEntry.folder })}; chat U ${sByU1}/${sByU2} A ${sByA} entry ${JSON.stringify(sEntry.where || {})} del ${sDel.status} after ${sAfter}; notMine ${notMine.status}; work del ${wDel.status} gone ${wGone} serve ${wServe}`);
+    // R161: edit, execute, files put in uploaded_files outside VibeRoller, files sent to Work from the library
+    {
+      const up = await (await raw(U, '/api/work/file', Buffer.from('echo one\n'), { 'Content-Type': 'text/x-shellscript', 'X-File-Name': 'run-r161.sh' })).json().catch(() => ({}));
+      const saved = await raw(U, '/api/library/save?id=' + up.id, Buffer.from('echo two r161\n'), { 'Content-Type': 'application/octet-stream' });
+      const back = await (await raw(U, '/api/work/file/' + up.id)).text();
+      const saveOther = (await raw(A, '/api/library/save?id=' + up.id, Buffer.from('x'), { 'Content-Type': 'application/octet-stream' })).status;
+      const saveBin = (await raw(U, '/api/library/save?id=' + up.id, Buffer.from([1, 0, 2]), { 'Content-Type': 'application/octet-stream' })).status;
+      const exOn = await call('/api/library/exec', U, { id: up.id, on: true }), exOff = await call('/api/library/exec', U, { id: up.id, on: false }), exOther = await call('/api/library/exec', A, { id: up.id, on: true });
+      const handDir = path.join(FAKE_LINUX, 'home', 't-user', 'uploaded_files', 'by-hand'); fs.mkdirSync(handDir, { recursive: true }); fs.writeFileSync(path.join(handDir, 'made-over-ssh-r161.py'), 'print(1)\n');
+      const lib = (await call('/api/library', U)).data.entries || [], hand = lib.find((e) => e.name === 'made-over-ssh-r161.py') || {}, mine = lib.find((e) => e.id === up.id) || {};
+      const handGet = await (await raw(U, '/api/work/file/' + hand.id)).text().catch(() => '');
+      const handRun = texts((await chat(U, 'use it r161\n\n<!--vr-files ' + JSON.stringify([{ id: hand.id, n: hand.name, m: hand.mime, s: hand.size }]) + ' -->', { fresh: true })).events);
+      const handDel = await call('/api/library/delete', U, { id: hand.id }), handGone = !fs.existsSync(path.join(handDir, 'made-over-ssh-r161.py'));
+      await call('/api/library/delete', U, { id: up.id });
+      const lib161 = fs.readFileSync(path.join(MILLS, 'web', 'library.js'), 'utf8'), page161 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      check('R161', 'Files, complete: a Work file is edited in place (saved back, the owner only, text only), made executable and back (chmod, the owner only); a file put in uploaded_files outside VibeRoller (over SSH, by a Work run) shows in the library (type from its name, "disk"), opens, goes to Work as it is (its path handed to Claude) and deletes; [static] the Files screen has Edit (Ctrl+S), Executable, Use in Work / Run in Work, and Work sends library files with the message',
+        saved.status === 200 && /echo two r161/.test(back) && saveOther === 404 && saveBin === 400
+        && exOn.status === 200 && exOn.data.exec === true && exOff.data.exec === false && exOther.status === 404 && mine.size === 14 && mine.edited > 0
+        && hand.disk === true && hand.mime === 'text/x-python' && /by-hand$/.test(hand.folder || '') && /print\(1\)/.test(handGet) && /by-hand[\\/]made-over-ssh-r161\.py/.test(handRun) && handDel.status === 200 && handGone
+        && /function edit\(it\)/.test(lib161) && /\/api\/library\/save\?id=/.test(lib161) && /\/api\/library\/exec/.test(lib161) && /Run in Work/.test(lib161) && /function setWorkLibFiles/.test(page161) && /\.\.\.fromLib/.test(page161),
+        `save ${saved.status} back "${back.trim()}" other ${saveOther} bin ${saveBin}; exec ${exOn.status}/${exOn.data && exOn.data.exec}/${exOff.data && exOff.data.exec} other ${exOther.status}; mine ${JSON.stringify({ s: mine.size, e: !!mine.edited })}; hand ${JSON.stringify({ d: hand.disk, m: hand.mime, f: hand.folder })} get "${handGet.slice(0, 20)}" run "${handRun.slice(0, 120)}" del ${handDel.status} gone ${handGone}`);
+    }
   }
   const grpText = grpForU ? await read4(restored, grpForU).catch(() => null) : null;
   const addedInv = await call('/api/guilds/server/add', U, { server: gSid, add: ['t-admin'] }); // an invitation now…

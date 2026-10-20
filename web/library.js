@@ -5,6 +5,9 @@
 //   and whether that message was deleted since), when it was last opened or used. Open (pictures, players, the text /
 //   code viewer), Download, Delete (for good). A chat file can be copied into the person's uploaded_files folder (it is
 //   decrypted here, in the browser, and uploaded like a Work file: then it is a normal file to work on, edit, run).
+//   Work files (and anything else in the person's uploaded_files folder, put there over SSH or by a Work run) can also be
+//   edited in place (text, up to 2 MB), made executable or not, and sent to Work as they are ("Use in Work", or "Run in
+//   Work": Claude runs it there and reports).
 //   At the top: whether the person's Linux account on the server is linked (their uploads land in ~/uploaded_files),
 //   and how to link it.
 // Chat files' names and keys are sealed to their uploader (only this browser's chat key opens them): the hub never knows.
@@ -26,6 +29,7 @@ const LIBRARY = (() => {
     draw();
   }
   function whereOf(it) {
+    if (it.disk) return 'Put in your folder outside VibeRoller';
     if (it.kind === 'work') { const u = (it.uses || []).slice(-1)[0]; return 'Work' + (u && u.project ? ' · ' + u.project : '') + (it.uses && it.uses.length ? '' : ' (not sent yet)'); }
     if (!it.where) return 'Chat (never sent)';
     return 'Chat · ' + (typeof convLabel === 'function' ? convLabel(it.where.conv || 'room') : it.where.conv) + (it.where.deleted ? ' · message deleted' : '');
@@ -56,6 +60,16 @@ const LIBRARY = (() => {
       if (!it.missing && !it.locked) {
         btn('Open', 'file', () => ATTACH.open(it, () => bytesOf(it)));
         const d = btn('Download', 'download', () => ATTACH.download(it, () => bytesOf(it), d));
+        if (it.kind === 'work') {
+          if (k === 'text' && (it.s || it.size || 0) <= 2 * 1048576) btn('Edit', 'file', () => edit(it));
+          btn('Use in Work', 'plus', () => toWork(it, ''));
+          btn('Run in Work', 'play', () => toWork(it, `Run the attached file ${it.n}${it.exec ? '' : ' (make it executable first if it needs to be)'} and tell me what it did. Ask me first if it would change anything outside its own folder.`));
+          const x = btn(it.exec ? 'Executable' : 'Not executable', it.exec ? 'check' : 'warn', async () => {
+            x.disabled = true;
+            try { const r = await json('/api/library/exec', { method: 'POST', body: JSON.stringify({ id: it.id, on: !it.exec }) }); it.exec = r.exec; draw(); } catch (err) { x.disabled = false; alert(err.message); }
+          });
+          x.title = it.exec ? 'Can be run as a program. Click to take that away.' : 'Click to let it run as a program (chmod +x).';
+        }
         if (it.kind === 'chat' && L.linux && L.linux.linked) btn('Copy to my uploaded_files', 'plus', async (e) => {
           const b = e.currentTarget; b.disabled = true;
           try { const bytes = await bytesOf(it); const r = await api('/api/work/file', { method: 'POST', headers: { 'Content-Type': it.m, 'X-File-Name': encodeURIComponent(it.n) }, body: bytes }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); await load(); }
@@ -69,6 +83,38 @@ const LIBRARY = (() => {
       del.lastChild.textContent = 'Delete';
       row.append(name, meta, acts); box.append(row);
     }
+  }
+  // the file goes with the next Work message as it is (no new upload); Work opens with the message box ready
+  function toWork(it, text) {
+    showScreen('shell');
+    setWorkLibFiles([{ id: it.id, n: it.n, m: it.m, s: it.s || it.size || 0 }], text || $('input').value);
+  }
+  // the text editor: loads the file, saves it back in place (its permissions kept); Ctrl+S saves, Escape closes
+  async function edit(it) {
+    let text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(await bytesOf(it)); } catch { alert('This file is not UTF-8 text, so it cannot be edited here.'); return; }
+    const wrap = el('div', 'libEdit'), box = el('div'), head = el('div', 'libActs'), ta = el('textarea'), foot = el('div', 'libActs');
+    const state = el('small', '', it.folder ? it.folder + '/' + it.n : it.n);
+    ta.value = text; ta.spellcheck = false;
+    const close = () => { if (ta.value !== text && !confirm('Close without saving?')) return; wrap.remove(); };
+    const save = async () => {
+      sv.disabled = true; state.textContent = 'Saving…';
+      try {
+        const r = await api('/api/library/save?id=' + encodeURIComponent(it.id), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new TextEncoder().encode(ta.value) });
+        const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || r.statusText);
+        text = ta.value; it.s = it.size = d.size; state.textContent = 'Saved ' + new Date().toLocaleTimeString();
+      } catch (err) { state.textContent = 'Not saved: ' + err.message; }
+      sv.disabled = false;
+    };
+    const sv = el('button', '', 'Save'); sv.type = 'button'; sv.onclick = save;
+    const cx = el('button', 'ghost', 'Close'); cx.type = 'button'; cx.onclick = close;
+    ta.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end'); }
+    });
+    head.append(el('b', '', 'Edit ' + it.n), state);
+    const right = el('div'); right.append(cx, sv); foot.append(el('small', '', 'Ctrl+S saves · Esc closes'), right);
+    box.append(head, ta, foot); wrap.append(box); document.body.append(wrap); ta.focus();
   }
   function wire() {
     $('libSearch').oninput = () => { L.q = $('libSearch').value; draw(); };
