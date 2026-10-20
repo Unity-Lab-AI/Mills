@@ -695,7 +695,7 @@ const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.r
 const notes = require('./notes')({ dir: path.join(MILLS_DIR, 'Notes'), send: (...a) => send(...a), readBody: (r) => readBody(r), displayOf: nameOf, changed: () => roomChanged() });
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
 const team = require('./team')({ accounts, agentSay, presenceList: presence.list, displayOf: nameOf, chatKeys, guilds,
-  hub: { callsState: (u) => calls.state(u), sharesFor: (u) => shares.listFor(u), usageStatus: (a) => usage.status(a, usageSourceOf(a)), archiveSearch: (a, q) => archive.search(a, q), providersList: (u) => providers.list(u) }, notes });
+  hub: { callsState: (u) => calls.state(u), sharesFor: (u) => shares.listFor(u), usageStatus: (a) => usage.status(a, usageSourceOf(a)), archiveSearch: (a, q) => archive.search(a, q), providersList: (u) => providers.list(u), aiHosts: () => aiNodes.status() }, notes });
 // AI providers (bridge/providers.js: the host's Claude by default, plus people's own keys / logins / endpoints)
 // and the per-person OpenAI-compatible API (bridge/openai.js, /v1/*).
 const providers = require('./providers')({ ROOT, MILLS_DIR, config, readJson, writeJson, accounts, aiHostOn, aiNodes });
@@ -876,6 +876,7 @@ const server = http.createServer(async (req, res) => {
 
     const acct = sessionAccount(req);
     if (!acct) return send(res, 401, { error: 'Not signed in.' });
+    res.setHeader('X-VR-Version', VERSIONS.project); // signed-in pages notice a new version on their next call and update themselves
     // A requested restart wins the gap between two replies: while it is pending (supervised hub) no
     // NEW run starts; the page retries a 503 by itself and its message goes through on the new code.
     // Without this, queued messages that start the next run within milliseconds could hold the

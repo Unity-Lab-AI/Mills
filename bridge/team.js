@@ -8,7 +8,7 @@
 'use strict';
 
 module.exports = function createTeam({ accounts, agentSay, presenceList, displayOf, chatKeys, guilds = null, hub = {}, notes = null }) {
-  // hub: optional getters for the wider picture: callsState(user), sharesFor(user), usageStatus(acct), archiveSearch(acct, q), providersList(user)
+  // hub: optional getters for the wider picture: callsState(user), sharesFor(user), usageStatus(acct), archiveSearch(acct, q), providersList(user), aiHosts()
   const ok = (result) => ({ ok: true, result });
   const no = (error) => ({ ok: false, error });
   const tools = {
@@ -30,7 +30,9 @@ module.exports = function createTeam({ accounts, agentSay, presenceList, display
       const shares = hub.sharesFor ? hub.sharesFor(acct.username).map((s) => ({ user: s.user, name: displayOf(s.user), since: s.since })) : [];
       const usage = hub.usageStatus ? hub.usageStatus(acct) : null;
       const fmt = (w) => (!w ? null : { source: w.source, status: w.status, usedPercent: w.utilization == null ? null : Math.round(w.utilization * 100), resetsInMin: w.resetsAt ? Math.max(0, Math.round((w.resetsAt - now) / 60000)) : null });
-      return ok({ you: acct.username, people, calls: inCalls, sharedWorkSessions: shares, usage: usage ? { fiveHour: fmt(usage.five_hour), sevenDay: fmt(usage.seven_day), context: usage.context } : null });
+      // the AI hosts: up or down, since when, which version (the hub sees each one's heartbeat: its polls)
+      const aiHosts = hub.aiHosts ? hub.aiHosts().map((h) => ({ nickname: h.nickname, owner: h.user ? displayOf(h.user) : '', state: h.online ? 'up' : 'down', sinceMin: h.since ? Math.round((now - Date.parse(h.since)) / 60000) : null, lastSeenMin: h.seen ? Math.round((now - Date.parse(h.seen)) / 60000) : null, version: h.version || '', offers: h.providers })) : [];
+      return ok({ you: acct.username, people, calls: inCalls, sharedWorkSessions: shares, aiHosts, usage: usage ? { fiveHour: fmt(usage.five_hour), sevenDay: fmt(usage.seven_day), context: usage.context } : null });
     },
     sessions_search(acct, args) { // this person's own saved Claude sessions (titles + transcripts)
       if (!hub.archiveSearch) return no('Past sessions are not available.');

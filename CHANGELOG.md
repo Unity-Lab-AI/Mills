@@ -1,10 +1,45 @@
 # VibeRoller changelog (formerly Mills)
 
-Semantic versioning (hub law 14): `versions.json` holds the project's version and every module's.
-MAJOR = something stops working the old way (routes, stored files, message format, a removed feature),
-MINOR = something new that leaves the rest working, PATCH = a fix or polish. Each change bumps every module it
+Semantic versioning (hub law 14, with the versioning law in LAWS.md since 3.3.0): `versions.json` holds the project's
+version and every module's. MAJOR = an entire refactor / rework or a change to 50 % or more of the codebase, MINOR =
+moderate to large features or anything that might break, PATCH = fixes, minor features, small changes; a higher bump
+resets the lower numbers to 0, and every merge into develop moves the version up. Each change bumps every module it
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
+
+## 3.3.0 — 2026-10-20
+
+### Fixed
+- **Going live no longer cuts off Gee's AI host.** The hub kept each host's session (what it offers + the session key)
+  in memory only. Every restart or deploy forgot it, while the host, still holding its key, kept polling and never said
+  hello again: its Claude vanished for everyone until someone restarted the host by hand, usually as Gee was leaving.
+  Sessions are now kept in `bridge/ai-host-sessions.json` (gitignored) and restored at start, so a host carries on
+  through a hub restart as if nothing happened. This works with the host Gee runs today; nothing to do on his side. If
+  a session is missing anyway, the hub asks the host to say hello again (428 for hosts from this version, 401 for older
+  ones, which re-hello on it). 1.x hosts, which never say hello, keep polling as before. Check R154.
+
+### Added
+- **Heartbeats both ways.** A host's poll is its heartbeat; every poll answer now carries the hub's (time, version,
+  commit). The hub logs each host going down / coming back with how long it lasted; a host from this version logs the
+  same about the hub, reconnects within 1-5 s, says hello again at once when asked, and looks for an update when the hub's
+  version changes. `hub_status` (team tools) lists every AI host: up or down, since when, its version.
+- **Hosts never restart in the middle of an answer:** a restart for new code or an update waits until nothing is in
+  flight (relayed answers, engine and PC jobs, Work runs) and nothing came for 3 minutes (1 minute for new code).
+  `node bridge/ai-node.js --update` asks a running host to update from the hub at its next quiet moment.
+- **The page updates itself.** Every signed-in answer names the hub's version (`X-VR-Version`); a page loaded on an older
+  version reloads itself as soon as nothing would be lost (no reply streaming, no call, no unsent text, no open editor),
+  and says so until then. The desktop app is the same page, so it follows too.
+- **The versioning law** (LAWS.md): MAJOR for reworks of half the codebase or more, MINOR for moderate to large features
+  or anything that might break, PATCH for fixes and small changes; lower numbers reset; bump before merging into
+  develop, and bump again past a teammate who merged the same number. `worktree.js merge` refuses a branch whose version
+  is not above develop's and names the right next numbers. Check R41 (extended).
+- **The compatibility law** and **going live never cuts anyone off** (LAWS.md): Windows and Linux always; forwards and
+  backwards compatible (a feature may be missing on the older side, everything else keeps working); everything updates
+  itself.
+
+### Changed
+- Modules: bridge/ai-node.js 3.2.0, bridge/ai-nodes.js 2.4.0, bridge/server.js 3.2.0, bridge/team.js 1.1.0,
+  bridge/worktree.js 2.2.0, web/index.html 1.5.0.
 
 ## 3.2.1 — 2026-10-19
 

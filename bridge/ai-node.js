@@ -26,7 +26,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
-const VERSION = '3.1.0'; // this file's module version (versions.json); the hub shows it under My AI hosts
+const VERSION = '3.2.0'; // this file's module version (versions.json); the hub shows it under My AI hosts
 const CAPS = ['relay', 'update']; // told to the hub in hello: login relays, self-update (older hosts send none)
 const SELFTEST = process.argv.includes('--selftest'); // load everything, then exit 0: an update is tried this way first
 const CFG_FILE = process.argv.includes('--config') ? process.argv[process.argv.indexOf('--config') + 1] : path.join(__dirname, 'ai-node.json');
@@ -41,13 +41,18 @@ const PC_FOLDER = cfg.pc && cfg.pc.folder ? path.resolve(String(cfg.pc.folder)) 
 const WORK = cfg.work && typeof cfg.work === 'object' ? cfg.work : {};
 if (!/^https?:\/\//.test(HUB) || !ID || !TOKEN) { console.error('[ai-host] ai-node.json needs hub, id (or name) and token.'); process.exit(1); }
 if (WORK.hubRepo) process.env.VIBEROLLER_HUB_REPO = path.resolve(String(WORK.hubRepo));
-const headers = { 'X-VR-Host': ID, 'X-VR-Host-Token': TOKEN, 'X-VR-Node': ID, 'X-VR-Node-Token': TOKEN };
+const headers = { 'X-VR-Host': ID, 'X-VR-Host-Token': TOKEN, 'X-VR-Node': ID, 'X-VR-Node-Token': TOKEN, 'X-VR-Host-Version': VERSION };
+const UPDATE_NOW = path.join(__dirname, '.update-now'); // "node ai-node.js --update": the running host updates at its next quiet moment
 // one host per machine: a lock file with the running pid (exit code 2 = already running, like the hub's run.js)
 (function singleInstance() {
   if (SELFTEST) return;
   try {
     const pid = Number(fs.readFileSync(LOCK_FILE, 'utf8').trim());
-    if (pid && pid !== process.pid) { process.kill(pid, 0); console.log(`[ai-host] already running (pid ${pid}); nothing to do.`); process.exit(2); }
+    if (pid && pid !== process.pid) {
+      process.kill(pid, 0);
+      if (process.argv.includes('--update')) { fs.writeFileSync(UPDATE_NOW, new Date().toISOString()); console.log(`[ai-host] asked the running host (pid ${pid}) to update from the hub now; it does so as soon as nothing is in flight.`); process.exit(0); }
+      console.log(`[ai-host] already running (pid ${pid}); nothing to do.`); process.exit(2);
+    }
   } catch {} // no lock, unreadable, or that pid is gone
   fs.writeFileSync(LOCK_FILE, String(process.pid));
   const bye = () => { try { if (Number(fs.readFileSync(LOCK_FILE, 'utf8').trim()) === process.pid) fs.unlinkSync(LOCK_FILE); } catch {} };
@@ -189,6 +194,12 @@ async function pcJob(job) {
 
 // ---------- Work jobs: Claude Code runs here, in this machine's worktree of the project ----------
 const runs = new Map(); // job id -> { child, stopped }
+// what is in flight right now (relayed answers, engine and PC jobs) and when the last job came: a restart for new code
+// or an update waits until nothing is in flight and nothing came for 3 minutes, so it never cuts off an answer someone
+// is waiting for (the moment a host restarts is usually the moment its owner is leaving)
+let active = 0, lastJobAt = 0;
+function track(p) { active++; lastJobAt = Date.now(); return Promise.resolve(p).finally(() => { active--; lastJobAt = Date.now(); }); }
+const quiet = (ms = 180000) => !runs.size && !active && Date.now() - lastJobAt >= ms;
 function stopRun(id, why) { const r = runs.get(id); if (!r || r.stopped) return; r.stopped = true; log(`stopping run ${id} (${why})`); kill(r.child); }
 async function postEvents(jobId, batch) {
   try {
@@ -281,7 +292,10 @@ const WATCH = [__filename, path.join(__dirname, 'host-relay.js'), CFG_FILE];
 const stamp = () => WATCH.map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }).join(',');
 let started = stamp();
 const ownWrite = () => { started = stamp(); }; // our own nickname write into the config is not a change to restart on
-setInterval(() => { if (stamp() !== started && !runs.size) { log('new code or config here: restarting on it'); process.exit(3); } }, 20000).unref();
+setInterval(() => {
+  if (stamp() !== started && quiet(60000)) { log('new code or config here: restarting on it'); process.exit(3); }
+  if (fs.existsSync(UPDATE_NOW) && !runs.size && !active) { fs.rmSync(UPDATE_NOW, { force: true }); log('asked to update now'); checkUpdate({ now: true }); }
+}, 20000).unref();
 
 // ---------- updates from the hub (on by default; "autoUpdate": false in ai-node.json switches them off) ----------
 // The hub hands out the files a host runs, as it runs them itself, in a manifest signed with THIS host's secret (HMAC),
@@ -321,9 +335,10 @@ function selftest(dir) {
   const r = spawnSync(process.execPath, [path.join(dir, 'ai-node.js'), '--selftest', '--config', CFG_FILE], { encoding: 'utf8', timeout: 30000, windowsHide: true });
   if (r.status !== 0) throw new Error('the new version does not start: ' + String(r.stderr || r.stdout || (r.error && r.error.message) || '').trim().split('\n').slice(-2).join(' ').slice(0, 300));
 }
-let updating = false;
-async function checkUpdate() {
-  if (!AUTO_UPDATE || SELFTEST || updating || runs.size || !key || fs.existsSync(UPD.trial)) return;
+let updating = false, retry = null;
+async function checkUpdate({ now = false } = {}) {
+  if ((!AUTO_UPDATE && !now) || SELFTEST || updating || !key || fs.existsSync(UPD.trial)) return;
+  if (now ? runs.size || active : !quiet()) { if (!now && !retry) retry = setTimeout(() => { retry = null; checkUpdate(); }, 60000); return; } // in use: try again in a minute
   updating = true;
   try {
     const r = await fetch(HUB + '/node/update', { headers, signal: AbortSignal.timeout(20000) });
@@ -382,28 +397,36 @@ setInterval(() => { checkUpdate(); }, 10 * 60000).unref();
 if (SELFTEST) { console.log('[ai-host] selftest: ' + VERSION + ' loads'); process.exit(0); }
 
 // ---------- the loop ----------
+// The poll is the heartbeat both ways: the hub counts this host up while it keeps polling, and every answer carries the
+// hub's beat (time, version, commit). A failed poll means the hub (or the line to it) is down: reconnect within 1-5 s,
+// log how long it was gone, and carry on as if nothing happened (the hub keeps our session across its restarts; if it
+// lost it anyway, it answers 428 and we say hello again at once). A new hub version in the beat → look for an update.
 (async function loop() {
-  let paused = false, quiet = 0;
+  let paused = false, misses = 0, downSince = 0, hubCommit = '';
   for (;;) {
     if (fs.existsSync(PAUSE_FILE)) { if (!paused) { paused = true; log('paused by this machine\'s host (ai-host.off)'); } await sleep(3000); continue; }
     if (paused) { paused = false; log('back on'); }
     try {
       if (!key) await hello();
       const r = await fetch(HUB + '/node/poll', { headers, signal: AbortSignal.timeout(pollMs + 15000) });
+      if (r.status === 428) { log('the hub asks for a hello again (it restarted without our session)'); key = null; continue; }
       if (r.status === 401) { log('the hub does not know this host (id / token): check ai-node.json'); key = null; await sleep(30000); continue; }
       if (!r.ok) throw new Error('hub answered ' + r.status);
-      const { jobs = [], cancel = [] } = await r.json();
-      quiet = 0;
+      const { jobs = [], cancel = [], beat = null } = await r.json();
+      if (downSince) { log(`hub back after ${Math.round((Date.now() - downSince) / 1000)} s`); downSince = 0; }
+      misses = 0;
+      if (beat && beat.commit && beat.commit !== hubCommit) { if (hubCommit) { log(`the hub is now on ${beat.version || beat.commit.slice(0, 7)}`); setTimeout(checkUpdate, 15000); } hubCommit = beat.commit; }
       for (const id of cancel) stopRun(id, 'stopped by its person');
       for (const job of jobs) { // in parallel; the next poll starts right away
         if (job.kind === 'work') { if (cfg.allowWork === true) workJob(job); else reply(job, 403, { 'content-type': 'application/json' }, Buffer.from('{"error":"This host shares its AI only, not its computer."}')); }
-        else if (job.engine === 'pc') pcJob(job);
-        else relayJob(job);
+        else if (job.engine === 'pc') track(pcJob(job));
+        else track(relayJob(job));
       }
     } catch (e) {
       if (e.auth) { log(e.message); await sleep(60000); continue; }
-      if (quiet++ % 20 === 0) log('hub not reachable:', e.message);
-      await sleep(3000);
+      if (!downSince) downSince = Date.now();
+      if (misses++ % 30 === 0) log(`hub not reachable (${e.message}); reconnecting`);
+      await sleep(Math.min(5000, 1000 * misses)); // 1 s, 2 s … 5 s: back within seconds of the hub
     }
   }
 })();
