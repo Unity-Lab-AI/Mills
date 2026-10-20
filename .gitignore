@@ -50,6 +50,8 @@ bridge/forgejo.json
 bridge/config.local.json
 bridge/ai-node.json
 bridge/ai-node.lock
+# Work uploads of the default account (everyone else's are under bridge/profiles/<user>/uploads, ignored with profiles)
+bridge/uploads/
 # an AI host's own state: its live status for the control app, requests from it, its updates in progress
 bridge/ai-node.status.json
 bridge/ai-node.status.json.tmp

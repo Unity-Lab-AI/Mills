@@ -367,7 +367,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['attach.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -514,7 +514,7 @@ async function run() {
     text = dec.decode(await subtle.decrypt({ name: 'AES-GCM', iv: fromB64(got.iv) }, await subtle.importKey('raw', mk, 'AES-GCM', false, ['decrypt']), fromB64(got.ct)));
   } catch {}
   check('R23', 'A→B message decrypts with a restored key; reader gets only its own slot', text === 'regression secret text' && got && !got.keys);
-  const chatFiles = fs.readdirSync(path.join(SCRATCH, 'Chat')).map((f) => fs.readFileSync(path.join(SCRATCH, 'Chat', f), 'utf8')).join('');
+  const chatFiles = fs.readdirSync(path.join(SCRATCH, 'Chat'), { recursive: true }).map((f) => path.join(SCRATCH, 'Chat', String(f))).filter((f) => fs.statSync(f).isFile()).map((f) => fs.readFileSync(f, 'utf8')).join(''); // the attachment store (Chat/files) too
   check('R24', 'plaintext never in Chat/ files', !chatFiles.includes('regression secret text'));
 
   // Room agent (fake Claude answers "echo: <prompt>")
@@ -1125,7 +1125,7 @@ async function run() {
   const slashCmds = [...html.matchAll(/\{ cmd: '(\/[a-z]+)'/g)].map((m) => m[1]);
   check('R115', '[static] slash commands in the Claude box: "/" opens a filtered menu of the common commands (compact, clear, model, review, cost, status, help, commit …), arrows / Tab / Enter pick, Esc closes; Mills commands run here (clear, stop, model, share, board …), the rest go to Claude Code as typed',
     /id="slashMenu"/.test(html) && slashCmds.length >= 20 && ['/compact', '/clear', '/model', '/review', '/cost', '/status', '/help', '/commit', '/stop', '/share'].every((c) => slashCmds.includes(c))
-    && /function renderSlash\(/.test(html) && /function runLocalSlash\(/.test(html) && /if \(message\.startsWith\('\/'\) && runLocalSlash\(message\)\) return;/.test(html) && /e\.key === 'ArrowDown'/.test(html) && /pickSlash\(list\[slashIdx\]\)/.test(html),
+    && /function renderSlash\(/.test(html) && /function runLocalSlash\(/.test(html) && /if \(message\.startsWith\('\/'\) && !picked\.length && runLocalSlash\(message\)\)/.test(html) && /e\.key === 'ArrowDown'/.test(html) && /pickSlash\(list\[slashIdx\]\)/.test(html),
     slashCmds.length + ' commands');
   check('R105', '[static] responsive: phone breakpoint (drawer chat list, board sheet + swipe columns, calendar agenda, full-screen dialogs, stacked Work panes, safe-area padding, no zoom-on-focus), touch-sized controls, laptop header tightening, admin table scrolls', !missing76.length, missing76.join(', '));
   check('R95', '[static] CSP, hub address pinned to the tunnel, key pinning (TOFU + Trust new key), call lip-sync + ICE batching, room long poll, v4 deflate + clips fetched on play', !missing66.length, missing66.join(', '));
@@ -1449,6 +1449,43 @@ async function run() {
   const grpSent = await call('/api/room/send', A, await sealConv(A, privA, 't-admin', 'group hello-r113', grpConv));
   const grpForU = ((await call('/api/room/messages?since=' + (grpSent.data.seq - 1), U)).data.messages || []).find((m) => m.seq === grpSent.data.seq);
   const grpForD = ((await call('/api/room/messages?since=' + (grpSent.data.seq - 1), D)).data.messages || []).some((m) => m.seq === grpSent.data.seq);
+
+  // R158: attachments. Chat: ciphertext uploaded first, then the message naming it; only its readers fetch it. Work: the
+  // person's own uploads, which their Claude reads. Plus the page side (what shows how) and the auto-scroll setting.
+  {
+    const raw = (tok, p, body, headers = {}) => fetch(H + p, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: 'Bearer ' + tok, ...headers }, body });
+    const ct = crypto.randomBytes(3000); // stands for an encrypted file: the hub only ever sees bytes like these
+    const up = await raw(A, '/api/room/file', ct, { 'Content-Type': 'application/octet-stream' }), upId = (await up.json().catch(() => ({}))).id || '';
+    const beforeSendOther = (await raw(U, '/api/room/file/' + upId)).status; // not sent yet: only its uploader
+    const sentF = await call('/api/room/send', A, { ...(await sealConv(A, privA, 't-admin', 'a file r158', grpConv)), files: [upId] });
+    const getU = await raw(U, '/api/room/file/' + upId), getUBuf = Buffer.from(await getU.arrayBuffer());
+    const getD = (await raw(D, '/api/room/file/' + upId)).status; // not in that group
+    const again = await call('/api/room/send', A, { ...(await sealConv(A, privA, 't-admin', 'same file again', grpConv)), files: [upId] });
+    const upU = await raw(U, '/api/room/file', crypto.randomBytes(10), { 'Content-Type': 'application/octet-stream' }), upUId = (await upU.json().catch(() => ({}))).id;
+    const stolen = await call('/api/room/send', A, { ...(await sealConv(A, privA, 't-admin', 'not mine', grpConv)), files: [upUId] });
+    await call('/api/room/delete', A, { seq: sentF.data.seq });
+    const afterDelete = (await raw(U, '/api/room/file/' + upId)).status, onDisk = fs.existsSync(path.join(SCRATCH, 'Chat', 'files', upId));
+    const tooBig = await raw(A, '/api/room/file', Buffer.alloc(24 * 1024 * 1024 + 100), { 'Content-Type': 'application/octet-stream' }).then((r) => r.status).catch((e) => 'ERR ' + ((e.cause && (e.cause.code || e.cause.message)) || e.message));
+    // Work: upload, name made safe, served back to its owner only (never as a type a browser would run), read by Claude
+    const wUp = await raw(U, '/api/work/file', Buffer.from('# Notes\nhello r158\n'), { 'Content-Type': 'text/markdown', 'X-File-Name': encodeURIComponent('../../evil name.md') });
+    const wMeta = await wUp.json().catch(() => ({}));
+    const wGet = await raw(U, '/api/work/file/' + wMeta.id), wGetText = await wGet.text();
+    const wOther = (await raw(A, '/api/work/file/' + wMeta.id)).status;
+    const marker = '\n\n<!--vr-files ' + JSON.stringify([{ id: wMeta.id, n: wMeta.name, m: wMeta.mime, s: wMeta.size }]) + ' -->';
+    const wRun = texts((await chat(U, 'look at my notes r158' + marker, { fresh: true })).events);
+    const wOnly = texts((await chat(U, marker.trim(), { fresh: true })).events); // files only, no text
+    const prefOn = await call('/api/prefs', U, { autoScroll: true }), prefOff = await call('/api/prefs', U, { autoScroll: false });
+    const att = fs.readFileSync(path.join(MILLS, 'web', 'attach.js'), 'utf8'), page158 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R158', 'attachments: in the chat a file is encrypted in the browser and only its ciphertext uploaded; until it is sent only its uploader may fetch it; the message naming it makes it readable to exactly that message\'s readers (others 404), it can be sent once, never with someone else\'s file, and deleting the message deletes it; over 24 MB → 413. In Work a file goes to the person\'s own uploads (its name made safe), comes back only to them as an attachment (octet-stream + its real type in a header), and their Claude gets its path to read (text optional). The page: a + button and a tray on both message boxes (drop / paste too), pictures and video shown, text / markdown / code viewed with highlighting, anything else name + Download only (text only if no NUL byte and valid UTF-8); auto-scroll is a setting (off by default) that scrolling up switches off, with a "Newest" button',
+      up.status === 200 && /^[a-f0-9]{24}$/.test(upId) && beforeSendOther === 404 && sentF.status === 200 && getU.status === 200 && getUBuf.equals(ct) && getD === 404
+      && again.status === 400 && stolen.status === 400 && afterDelete === 404 && !onDisk && tooBig === 413
+      && wUp.status === 200 && wMeta.name === 'evil name.md' && wMeta.mime === 'text/markdown' && wGet.status === 200 && wGet.headers.get('content-type') === 'application/octet-stream' && wGet.headers.get('x-vr-file-type') === 'text/markdown' && /hello r158/.test(wGetText) && wOther === 404
+      && /Attached by the user: 1 file/.test(wRun) && new RegExp('uploads[\\\\/]' + wMeta.id + '[\\\\/]evil name\\.md').test(wRun) && /look at my notes r158/.test(wRun) && /adddir=\S*uploads/.test(wRun) && /no text: see the attached files/.test(wOnly)
+      && prefOn.data.prefs.autoScroll === true && prefOff.data.prefs.autoScroll === false
+      && /if \(b\.includes\(0\)\) return null/.test(att) && /fatal: true/.test(att) && /return 'binary'/.test(att) && /MD\.render\(body, fence \+ lang/.test(att) && /Not a picture, video or text/.test(att)
+      && /id="roomAttach"/.test(page158) && /id="workAttach"/.test(page158) && /sealChatFiles/.test(page158) && /additionalData: FILE_AAD/.test(page158) && /<!--vr-files /.test(page158) && /id="setAutoScroll"/.test(page158) && /if \(up && prefs\(\)\.autoScroll\) setAutoScroll\(false\)/.test(page158) && /className = 'jumpNew'/.test(page158),
+      `chat up ${up.status} pre ${beforeSendOther} send ${sentF.status} U ${getU.status} same ${getUBuf.equals(ct)} D ${getD} again ${again.status} stolen ${stolen.status} deleted ${afterDelete} disk ${onDisk} big ${tooBig}; work up ${wUp.status} ${JSON.stringify(wMeta)} get ${wGet.status} ${wGet.headers.get('x-vr-file-type')} other ${wOther}; run "${wRun.slice(0, 160)}"`);
+  }
   const grpText = grpForU ? await read4(restored, grpForU).catch(() => null) : null;
   const addedInv = await call('/api/guilds/server/add', U, { server: gSid, add: ['t-admin'] }); // an invitation now…
   const added = addedInv.status === 200 ? await call('/api/guilds/invitation/accept', A, { server: gSid }) : addedInv; // …that they accept

@@ -230,7 +230,10 @@ function runClaude(acct, message, fresh, res, context) {
   const where = prov.kind === 'host-claude' && prov.remoteKind === 'claude-cli-work' ? prov.hostId : 'hub';
   if (!fresh && acct.state.claudeSessionId && (acct.state.claudeSessionWhere || 'hub') === where) args.push('--resume', acct.state.claudeSessionId);
   acct.state.claudeSessionWhere = where;
-  const input = context ? `${message}\n\n---\n${context}` : message; // context = automatic summaries of the shared Work sessions this person is watching (added by their browser)
+  // attached files (the marker block at the end of the message): Claude gets their paths and may read that folder
+  const wm = files.workMessage(acct, message);
+  if (wm.files.length) args.push('--add-dir', files.work.dirOf(acct));
+  const input = context ? `${wm.text}\n\n---\n${context}` : wm.text; // context = automatic summaries of the shared Work sessions this person is watching (added by their browser)
   acct.runProvider = prov.kind !== 'host' ? prov.id : '';
   if (source) noteActivity(source);
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
@@ -355,6 +358,9 @@ let seq = messages.reduce((m, x) => Math.max(m, x.seq || 0), 0);
 // edits and deletions of older messages, not only new ones.
 let rev = messages.reduce((m, x) => Math.max(m, x.rev || x.seq || 0), 0);
 const b64 = (s, max) => typeof s === 'string' && s.length <= max && /^[A-Za-z0-9+/=_-]*$/.test(s);
+// Attachments (bridge/files.js): the chat's files are ciphertext like the messages; Work's are the person's own uploads
+const files = require('./files')({ CHAT_DIR, send: (...a) => send(...a) });
+setInterval(() => { try { files.chat.sweep(); files.work.sweep([...accounts.values()]); } catch (e) { console.error('[mills] file sweep: ' + e.message); } }, 3600e3).unref();
 const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv === 'P-256' && b64(k.x, 64) && b64(k.y, 64) && !k.d;
 // Long-poll for the room: browsers wait on /api/room/messages?wait=1&ver=N and are answered the moment
 // anything they show changes (a message, edit, delete, receipt, share, member key) instead of polling.
@@ -403,6 +409,7 @@ function cleanPrefs(p, prev = {}) {
   if (p.nick !== undefined) out.nick = String(p.nick).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 32);
   if (p.color !== undefined) out.color = Number.isInteger(p.color) && p.color >= 0 && p.color < PALETTE_SIZE ? p.color : null;
   if (p.toasts !== undefined) out.toasts = !!p.toasts;
+  if (p.autoScroll !== undefined) out.autoScroll = p.autoScroll === true; // follow new messages even when scrolled up (off by default)
   if (p.theme !== undefined) out.theme = /^[\w-]{0,40}$/.test(String(p.theme)) ? String(p.theme) : ''; // app setting: follows the person to every browser ('' = VibeRoller default)
   if (p.autosave !== undefined) out.autosave = Math.max(0, Math.min(120, Math.round(Number(p.autosave) || 0))); // minutes, 0 = off
   if (p.sound && typeof p.sound === 'object') {
@@ -496,6 +503,7 @@ const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJso
     let n = 0;
     for (const m of messages) if (m.from === user && !m.deleted && convs.includes(m.conv) && Date.parse(m.ts) >= since) {
       for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
+      if (m.files) { files.chat.remove(m.files); delete m.files; } // its attachments go with it
       Object.assign(m, { deleted: true, keys: {}, rev: ++rev }); n++;
     }
     if (n) { saveMessages(); roomChanged(); }
@@ -515,7 +523,7 @@ function gcmSeal(key, data, aad) {
 }
 // Browsers send {"v":2,"t":text,"r":replySeq} (older messages: plain text). The agent only needs the text.
 function payloadText(s) {
-  if (s && s.startsWith('{')) { try { const p = JSON.parse(s); if (p && p.v === 2 && typeof p.t === 'string') return p.a ? (p.t ? p.t + ' ' : '') + '(sent a voice clip)' : p.t; } catch {} }
+  if (s && s.startsWith('{')) { try { const p = JSON.parse(s); if (p && p.v === 2 && typeof p.t === 'string') { const att = Array.isArray(p.f) && p.f.length ? ` (attached: ${p.f.map((f) => String((f && f.n) || 'a file').slice(0, 80)).join(', ')})` : ''; return (p.a ? (p.t ? p.t + ' ' : '') + '(sent a voice clip)' : p.t) + att; } } catch {} }
   return s;
 }
 // Encrypted message bodies: text is small, a voice clip (up to 2 minutes of compressed audio,
@@ -995,7 +1003,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/chat' && req.method === 'POST') {
       if (acct.running) return send(res, 409, { error: 'Claude is already working. Stop it first.' });
       const { message, fresh, context } = await readBody(req);
-      if (!message || typeof message !== 'string') return send(res, 400, { error: 'Empty message.' });
+      if (!message || typeof message !== 'string') return send(res, 400, { error: 'Empty message.' }); // (files only: the marker block is the message)
       const ctx = typeof context === 'string' ? context.slice(0, 20000) : '';
       if (fresh) { delete acct.state.claudeSessionId; delete acct.state.ctx; }
       return runClaude(acct, message, !!fresh, res, ctx);
@@ -1030,7 +1038,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
     if (p === '/api/room/send' && req.method === 'POST') {
-      const { iv, ct, keys, to, v, mid, blob, conv: convIn } = await readBody(req);
+      const { iv, ct, keys, to, v, mid, blob, conv: convIn, files: fileIdsIn } = await readBody(req);
       const mine = chatKeys[acct.username];
       // conv: a channel / group this person is in ('room' or nothing = # Everyone; a private message uses `to`)
       const conv = convIn && convIn !== 'room' ? String(convIn) : '';
@@ -1045,7 +1053,9 @@ const server = http.createServer(async (req, res) => {
       if (to !== undefined && to !== '' && (to === acct.username || !(accounts.has(to) || (to === AGENT && agentEnabled())))) return send(res, 400, { error: 'Unknown recipient.' });
       const slots = cleanSlots(keys, acct.username, to || '', conv);
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
-      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}) };
+      // its files (uploaded encrypted just before, by this sender, not sent yet) now belong to this message
+      let fileIds = []; try { fileIds = files.chat.attach(acct.username, fileIdsIn, seq + 1); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}), ...(fileIds.length ? { files: fileIds } : {}) };
       appendMessage(msg);
       if (!to) guilds.notePost(conv || 'room', acct.username); // slowmode
       agentHear(msg);
@@ -1076,6 +1086,7 @@ const server = http.createServer(async (req, res) => {
       if (!m || (m.from !== acct.username && !(!m.to && guilds.moderates(m.conv || 'room', acct.username) && visibleTo(m, acct.username)))) return send(res, 403, { error: 'You can only delete your own messages.' });
       if (!m.deleted) {
         for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
+        if (m.files) { files.chat.remove(m.files); delete m.files; } // its attachments go with it
         Object.assign(m, { deleted: true, keys: {}, rev: ++rev });
         saveMessages();
       }
@@ -1144,6 +1155,15 @@ const server = http.createServer(async (req, res) => {
       else presence.set(acct.username, { ...(typeof screen === 'string' ? { screen: screen.slice(0, 12) } : {}), ...(idle !== undefined ? { idle: !!idle } : {}) });
       return send(res, 200, { ok: true });
     }
+    // attachments: the uploader sends the ciphertext first, then the message naming it; readers of that message fetch it
+    // (return await: a refused upload's error must reach the catch below, which answers it)
+    if (p === '/api/room/file' && req.method === 'POST') { if (!chatKeys[acct.username]) return send(res, 400, { error: 'Your chat key is not set up yet.' }); return await files.chat.upload(acct, req, res); }
+    if (p.startsWith('/api/room/file/') && req.method === 'GET') {
+      const buf = files.chat.fetch(p.slice('/api/room/file/'.length), acct.username, (n) => { const m = messages.find((x) => x.seq === n); return !!(m && !m.deleted && visibleTo(m, acct.username) && (m.keys || {})[acct.username]); });
+      return buf ? files.serve(res, buf, 'file', 'application/octet-stream') : send(res, 404, { error: 'Not found.' });
+    }
+    if (p === '/api/work/file' && req.method === 'POST') return await files.work.upload(acct, req, res);
+    if (p.startsWith('/api/work/file/') && req.method === 'GET') return files.work.serve(acct, p.slice('/api/work/file/'.length), res);
     if (p === '/api/room/blob' && req.method === 'GET') { // a voice clip's ciphertext, for a reader of that message
       const m = messages.find((x) => x.seq === Number(url.searchParams.get('seq')));
       if (!m || !m.blob || !visibleTo(m, acct.username) || !(m.keys || {})[acct.username]) return send(res, 404, { error: 'Not found.' });
@@ -1209,7 +1229,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true, supervised: SUPERVISED });
       }
       if (p === '/api/admin/room/clear' && req.method === 'POST') {
-        messages = []; fs.writeFileSync(CHAT_FILE, ''); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
+        messages = []; fs.writeFileSync(CHAT_FILE, ''); files.chat.clear(); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
         rev = 0; seen = {}; writeJson(SEEN_FILE, seen); // browsers see latestRev drop below theirs and reload
         roomChanged();
         console.log(`[mills] ${acct.username} cleared the chat history.`);

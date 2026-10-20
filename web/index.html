@@ -403,6 +403,27 @@
   #roomComposer { display: flex; gap: .5rem; padding: .6rem .75rem .75rem; border-top: 1px solid var(--line); }
   #roomComposer textarea { resize: none; height: 3.2rem; }
   #roomComposer .side { display: flex; flex-direction: column; gap: .35rem; }
+  /* attachments (web/attach.js): the + button, the tray of picked files, and how sent ones show */
+  .attPlus { align-self: flex-start; padding: .45rem; }
+  .attTray { display: flex; flex-wrap: wrap; gap: .35rem; padding: .45rem .75rem 0; }
+  .attChip { display: inline-flex; align-items: center; gap: .35rem; max-width: 22rem; padding: .2rem .25rem .2rem .55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: .82rem; }
+  .attChip .attName, .attHead .attName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attChip small, .attHead small { color: var(--muted); white-space: nowrap; }
+  .atts { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .45rem; }
+  .att { display: flex; flex-direction: column; gap: .35rem; max-width: min(26rem, 100%); padding: .45rem; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 85%, transparent); }
+  .attHead { display: flex; align-items: center; gap: .4rem; font-size: .85rem; min-width: 0; }
+  .attHead .attName { flex: 1; min-width: 0; }
+  .attImg { max-width: 100%; max-height: 18rem; border-radius: 8px; cursor: zoom-in; object-fit: contain; background: var(--bg); }
+  .attVideo { max-width: 100%; max-height: 22rem; border-radius: 8px; background: #000; }
+  .attAudio { width: 100%; }
+  .attNote { color: var(--muted); }
+  .attModal { position: fixed; inset: 0; z-index: 70; background: rgba(0, 0, 0, .65); display: flex; align-items: center; justify-content: center; padding: 1.2rem; }
+  .attBox { display: flex; flex-direction: column; max-width: min(1100px, 100%); max-height: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .attBox .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
+  .attView { overflow: auto; padding: .75rem 1rem; min-width: min(46rem, 90vw); }
+  .attBig { max-width: 100%; max-height: calc(100vh - 6rem); object-fit: contain; display: block; margin: auto; }
+  /* "Newest": sticks to the bottom of a conversation that has new content below while you read further up */
+  .jumpNew { position: sticky; bottom: .5rem; align-self: center; z-index: 5; display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .8rem; border-radius: 999px; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); }
   #micBtn { padding: .35rem .6rem; }
   #recBar { display: flex; align-items: center; gap: .6rem; padding: .4rem .75rem; border-top: 1px solid var(--line); font-size: .85rem; }
   #recBar .dotRec { width: .7rem; height: .7rem; border-radius: 50%; background: var(--bad); animation: recPulse 1s infinite; }
@@ -700,6 +721,7 @@
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3.5h7.5l4.5 4.5v12.5h-12z"/><path d="M13.5 3.5V8.5h5M9.5 13h5M9.5 16.5h5"/></symbol>
   <symbol id="i-code" viewBox="0 0 24 24"><path d="M8 7.5L3.5 12 8 16.5M16 7.5l4.5 4.5-4.5 4.5M13.5 5l-3 14"/></symbol>
   <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4.5" y="8" width="15" height="11.5" rx="3.5"/><path d="M12 8V5M9.3 16.3h5.4"/><circle cx="12" cy="3.8" r="1.2"/><circle cx="9.3" cy="12.6" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.7" cy="12.6" r="1.1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6.5 13.5L12 19l5.5-5.5"/></symbol>
   <symbol id="i-dms" viewBox="0 0 24 24"><path d="M3.5 5.5A2 2 0 0 1 5.5 3.5h8a2 2 0 0 1 2 2v4.5a2 2 0 0 1-2 2H9l-3.5 3v-3a2 2 0 0 1-2-2z"/><path d="M15.5 8.5h3a2 2 0 0 1 2 2V15a2 2 0 0 1-2 2v3L15 17h-4.5a2 2 0 0 1-2-2v-1"/><path d="M7 7.75h5"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 5.5h15a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H10l-5.5 4v-4h0a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/></symbol>
   <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4.5" rx="1"/><path d="M5 9v9.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></symbol>
@@ -812,7 +834,10 @@
       <div id="mentionList" hidden></div>
       <div id="recBar" hidden><i class="dotRec"></i><span id="recTime">Recording 0:00 / 2:00</span>
         <button type="button" id="recSend">Send clip</button><button type="button" class="ghost" id="recCancel">Cancel</button></div>
+      <div id="roomTray" class="attTray" hidden></div>
       <form id="roomComposer">
+        <button type="button" class="ghost attPlus" id="roomAttach" title="Attach files, pictures, videos (or drop / paste them here). Encrypted in this browser before they are sent." aria-label="Attach files"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <input type="file" id="roomFiles" multiple hidden>
         <textarea id="roomInput" placeholder="Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)"></textarea>
         <div class="side"><button type="submit">Send</button>
           <button type="button" class="ghost" id="micBtn" title="Record a voice clip (uses your microphone)" aria-label="Record a voice clip"><svg class="ic"><use href="#i-mic"/></svg></button>
@@ -877,6 +902,7 @@
       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
+      <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
       <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
       <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
       <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
@@ -1091,7 +1117,10 @@
       </div>
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
       <div id="slashMenu" hidden></div>
+      <div id="workTray" class="attTray" hidden></div>
       <form id="composer">
+        <button type="button" class="ghost attPlus" id="workAttach" title="Attach files, pictures, videos for Claude (or drop / paste them here)" aria-label="Attach files"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <input type="file" id="workFiles" multiple hidden>
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <div class="sendCol">
           <button type="submit" id="send" title="Send. While Claude is busy: queue it for right after this reply.">Send</button>
@@ -1126,6 +1155,7 @@
 </div>
 
 <script src="md.js"></script>
+<script src="attach.js"></script>
 <script src="board.js"></script>
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
@@ -1335,7 +1365,7 @@ function assistClient() { // the person's own clock and (if shared) place: time 
 }
 function assistAdd(cls, text) {
   const d = document.createElement('div'); d.className = cls; renderText(d, text); $('assistLog').appendChild(d);
-  $('assistLog').scrollTop = $('assistLog').scrollHeight; return d;
+  scrollNew($('assistLog'), /\bme\b/.test(d.className)); return d; // your own line: to the bottom; hers: only if you are there
 }
 function assistSys(text, bad) { const d = assistAdd('sys' + (bad ? ' bad' : ''), text); return d; }
 function assistStatus(st) {
@@ -1383,7 +1413,7 @@ function assistConfirm(p) {
   const answer = async (ok) => { yes.disabled = no.disabled = true; try { const r = await json('/api/assistant/answer', { method: 'POST', body: JSON.stringify({ yes: ok }) }); if (ok && r.browser) { try { await unityPc(r.browser.name, r.browser.args); label.textContent = 'Done on your computer.'; } catch (e) { label.textContent = 'Could not: ' + e.message; } return; }
       label.textContent = ok ? (r.result && r.result.ok ? 'Done.' : 'Could not: ' + ((r.result && r.result.error) || r.error || '')) : 'Cancelled.'; } catch (e) { label.textContent = e.message; } };
   yes.onclick = () => answer(true); no.onclick = () => answer(false);
-  d.append(label, yes, no); $('assistLog').appendChild(d); $('assistLog').scrollTop = $('assistLog').scrollHeight;
+  d.append(label, yes, no); $('assistLog').appendChild(d); scrollNew($('assistLog'));
 }
 $('assistForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1417,7 +1447,7 @@ $('assistForm').addEventListener('submit', async (e) => {
 [[youtube:${v}]]`).join(''));
         else if (ev.type === 'error') { renderText(bubble, ev.text); bubble.className = 'sys bad'; outcome = ev.text === 'Stopped.' ? ['stopped', 'Stopped'] : ['failed', 'Failed: ' + ev.text]; }
       }
-      $('assistLog').scrollTop = $('assistLog').scrollHeight;
+      scrollNew($('assistLog'));
     }
   } catch (err) { renderText(bubble, err.message); bubble.className = 'sys bad'; outcome = ['failed', 'Failed: ' + err.message]; }
   clearInterval(ticku); msgStatus(mineU, ...(outcome || ['stopped', 'Stopped after ' + elapsed(t0u)]));
@@ -1760,15 +1790,57 @@ $('newFile').onclick = async () => {
 $('up').onclick = () => listDir(cwd.split('/').slice(0, -1).join('/'));
 $('refresh').onclick = () => listDir(cwd);
 
+// ---------- auto-scroll (Work, the team chat, Unity) ----------
+// A conversation follows new content only while you are at its bottom, or always when Settings → "Auto-scroll" is on.
+// Scrolling up stops the following and, if the setting was on, switches it off (looking back is never interrupted);
+// a "Newest" button then shows when something new arrived below, and brings you back down. Sending something yourself,
+// or opening a conversation, goes to the bottom.
+const pinnedLogs = new WeakMap();
+const nearBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+function setAutoScroll(on) { if (!me || prefs().autoScroll === on) return; me.prefs = { ...(me.prefs || {}), autoScroll: on }; json('/api/prefs', { method: 'POST', body: JSON.stringify({ autoScroll: on }) }).then((d) => { me.prefs = d.prefs; }).catch(() => {}); if ($('setAutoScroll')) $('setAutoScroll').checked = on; }
+function followScroll(el) {
+  if (pinnedLogs.has(el)) return;
+  pinnedLogs.set(el, true);
+  let last = el.scrollTop;
+  el.addEventListener('scroll', () => {
+    const up = el.scrollTop < last - 2; last = el.scrollTop;
+    if (el._vrAuto) return; // our own scrolling
+    pinnedLogs.set(el, nearBottom(el));
+    if (up && prefs().autoScroll) setAutoScroll(false); // scrolling up switches auto-scroll off
+    if (nearBottom(el)) jumpButton(el, false);
+  }, { passive: true });
+}
+function jumpButton(el, show) {
+  let b = el._vrJump;
+  if (!b && show) { b = el._vrJump = document.createElement('button'); b.type = 'button'; b.className = 'jumpNew'; b.append(ic('down', 'lead'), 'Newest'); b.title = 'New below: go to the newest'; b.onclick = () => scrollNew(el, true); }
+  if (!b) return;
+  if (show) el.append(b); else b.remove(); // sticky at the bottom of the conversation, always its last element
+}
+function scrollNew(el, force) {
+  followScroll(el);
+  if (force || pinnedLogs.get(el) || prefs().autoScroll) {
+    el._vrAuto = true; jumpButton(el, false); el.scrollTop = el.scrollHeight; pinnedLogs.set(el, true);
+    requestAnimationFrame(() => requestAnimationFrame(() => { el._vrAuto = false; }));
+  } else jumpButton(el, true);
+}
+
 // ---------- chat ----------
 const log = $('log');
-const scroll = () => { log.scrollTop = log.scrollHeight; };
+const scroll = (force) => scrollNew(log, force === true);
 function sys(text, bad) { const d = document.createElement('div'); d.className = 'sys' + (bad ? ' bad' : ''); d.textContent = text; log.appendChild(d); scroll(); }
 // tool lines get their gear from CSS (.tool::before); older saved sessions still carry a "⚙ " prefix in the text
 const toolText = (t) => String(t).replace(/^⚙️?\s*/, '');
 function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
 function renderText(el, text) { // full markdown + mermaid (web/md.js); host pictures and YouTube players split out first
+  const att = WORK_FILES.exec(text || ''); // a Work message's attachments (the marker block at its end): shown under the text
+  if (att) {
+    text = text.slice(0, att.index); let list = []; try { list = JSON.parse(att[1]); } catch {}
+    const body = document.createElement('div'); el.textContent = ''; el.append(body);
+    if (text.trim()) renderText(body, text);
+    ATTACH.render(el, (Array.isArray(list) ? list : []).filter((f) => f && /^[a-f0-9]{24}$/.test(f.id)), workFileBytes);
+    return;
+  }
   if (/\[\[(image|youtube):/.test(text)) { el.textContent = ''; return withImages(el, text, (e, t) => MD.render(e, t)); }
   MD.render(el, text);
 }
@@ -1878,12 +1950,34 @@ function updateStopButton() { $('stop').textContent = busy && $('input').value.t
 function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); }
 $('input').addEventListener('input', updateStopButton);
 
-$('composer').addEventListener('submit', (e) => {
+// Attachments in Work: uploaded to this person's own area on the hub first (Claude reads them there); the message
+// carries them as a marker block at its end, so the queue, the saved conversation and Past sessions keep them as text.
+const workTray = ATTACH.wire({ button: $('workAttach'), input: $('workFiles'), area: $('input'), trayBox: $('workTray'), onError: (t) => sys(t, true) });
+const WORK_FILES = /\n*<!--vr-files (\[[\s\S]*?\]) -->\s*$/;
+async function uploadWorkFiles(list) {
+  const out = [];
+  for (const file of list) {
+    const r = await api('/api/work/file', { method: 'POST', headers: { 'Content-Type': ATTACH.mimeOf(file.name, file.type), 'X-File-Name': encodeURIComponent(file.name) }, body: file });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(file.name + ': ' + (d.error || r.statusText));
+    out.push({ id: d.id, n: d.name, m: d.mime, s: d.size });
+  }
+  return out;
+}
+const workFileBytes = async (f) => { const r = await api('/api/work/file/' + f.id); if (!r.ok) throw new Error(r.status === 404 ? 'no longer kept (30 days)' : r.statusText); return r.arrayBuffer(); };
+$('composer').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const message = $('input').value.trim();
-  if (!message) return;
+  let message = $('input').value.trim();
+  const picked = workTray.files.slice();
+  if (!message && !picked.length) return; // text, files, or both
+  if (message.startsWith('/') && !picked.length && runLocalSlash(message)) { $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true; return; } // a VibeRoller command: done here, nothing goes to Claude
+  if (picked.length) {
+    const b = $('send'); b.disabled = true; b.textContent = 'Uploading…';
+    try { message += '\n\n<!--vr-files ' + JSON.stringify(await uploadWorkFiles(picked)) + ' -->'; workTray.clear(); }
+    catch (err) { sys('Not sent: ' + err.message, true); return; }
+    finally { b.disabled = false; setBusy(busy); }
+  }
   $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true;
-  if (message.startsWith('/') && runLocalSlash(message)) return; // a VibeRoller command: done here, nothing goes to Claude
   if (busy) enqueue(message); else send(message);
 });
 // The queue (and a pending "Send now") is kept on the hub (bridge/work-state.js), so a reload, closing the
@@ -1917,7 +2011,7 @@ function showThinking() {
 function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; } }
 let runOutcome = null; // set by handleEvent: { state, text } for the message being worked on
 async function send(message) {
-  const mine = bubble('me'); renderText(mine, message); record('me', message); scroll();
+  const mine = bubble('me'); renderText(mine, message); record('me', message); scroll(true); // you sent it: to the bottom
   const t0 = Date.now(); runOutcome = null;
   msgStatus(mine, 'working', 'Claude is working on this…');
   const tick = setInterval(() => { if (!runOutcome) msgStatus(mine, 'working', 'Claude is working on this… ' + elapsed(t0)); }, 5000);
@@ -2453,7 +2547,7 @@ const snippet = (rec) => (rec.m.deleted ? 'message deleted'
   : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
 function prefs() {
   const p = (me && me.prefs) || {};
-  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5,
+  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
     sound: { on: true, message: 50, mention: 70, reply: 70, ...(p.sound || {}) },
     tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) }, // all = master switch
     clips: { volume: 90, autoplay: false, ...(p.clips || {}) },
@@ -2483,7 +2577,10 @@ function parsePayload(s) {
         const okMime = p.a && /^audio\/[\w.+-]+(;[\w=.,+ -]*)?$/.test(p.a.m || '');
         const a = okMime && typeof p.a.d === 'string' ? { m: p.a.m, d: p.a.d, s: Number(p.a.s) || 0 }
           : okMime && typeof p.a.k === 'string' ? { m: p.a.m, k: p.a.k, s: Number(p.a.s) || 0 } : null;
-        return { t: p.t, r: Number.isInteger(p.r) ? p.r : null, a };
+        // f = attached files { id, n name, m type, s size, k key, i iv }, inside the encryption like the text (web/attach.js)
+        const f = Array.isArray(p.f) ? p.f.slice(0, 20).filter((x) => x && /^[a-f0-9]{24}$/.test(x.id) && typeof x.k === 'string' && typeof x.i === 'string')
+          .map((x) => ({ id: x.id, n: String(x.n || 'file').slice(0, 200), m: String(x.m || 'application/octet-stream').slice(0, 100), s: Number(x.s) || 0, k: x.k, i: x.i })) : null;
+        return { t: p.t, r: Number.isInteger(p.r) ? p.r : null, a, f: f && f.length ? f : null };
       }
     } catch {}
   }
@@ -2593,7 +2690,7 @@ function selectConv(conv) {
     : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
   const log = $('roomLog'); log.innerHTML = '';
   for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
-  log.scrollTop = log.scrollHeight;
+  scrollNew(log, true); // opening a conversation: its newest message
   for (const b of $('roomSide').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
   const sv = GUILDS.serverOf(conv) || (GUILDS.isDmConv(conv) ? GUILDS.DM : ''); // a DM or group DM opens the Direct messages view
   if (GUILDS.isDmConv(conv)) store.set('mills.lastDm.' + me.username, conv);
@@ -2666,7 +2763,7 @@ async function ingest(m, live) {
   const prev = msgs.get(m.seq);
   const p = await decryptMsg(m);
   if (prev && prev.url) URL.revokeObjectURL(prev.url);
-  const rec = { m, text: p.t, r: p.r, audio: p.a || null, url: null, locked: !!p.locked, el: prev ? prev.el : null, fresh: live && !prev };
+  const rec = { m, text: p.t, r: p.r, audio: p.a || null, files: p.f || null, url: null, locked: !!p.locked, el: prev ? prev.el : null, fresh: live && !prev };
   msgs.set(m.seq, rec);
   if (convOfMsg(m) === currentConv) renderMsg(rec);
   for (const other of msgs.values()) if (other.r === m.seq && other.el) renderMsg(other); // refresh quotes of this message
@@ -2755,12 +2852,16 @@ function renderMsg(rec, bulk) {
       el.append(au);
     } else el.append(clipPlayer(rec));
   }
+  if (rec.files && rec.files.length && !m.deleted) { // attachments (web/attach.js): fetched + decrypted only when shown
+    const box = document.createElement('div'); box.onclick = (e) => e.stopPropagation();
+    ATTACH.render(box, rec.files, chatFileBytes); el.append(box);
+  }
   if (mine && !m.deleted) { const s = document.createElement('div'); s.className = 'seenLine'; el.append(s); }
   el.onclick = (e) => openMsgMenu(rec, e);
   if (!rec.el) {
     rec.el = el; log.append(el);
     if (rec.fresh) { el.classList.add('new'); rec.fresh = false; } // slides in once; re-renders (edits, receipts) do not replay it
-    if (!bulk && (atBottom || mine)) log.scrollTo({ top: log.scrollHeight, behavior: bulk ? 'auto' : 'smooth' });
+    if (!bulk) { if (!pinnedLogs.has(log)) pinnedLogs.set(log, atBottom); scrollNew(log, mine); } // follows only at the bottom (or with auto-scroll); your own message always
   }
   updateSeenLine(rec);
 }
@@ -3200,27 +3301,56 @@ async function sealBlob(bytes, mid) {
   const out = new Uint8Array(12 + ct.length); out.set(biv); out.set(ct, 12);
   return { k: toB64(bk), blob: bytesToB64(out) };
 }
+// Attachments in the chat: every file is encrypted here with its own random key before it leaves this browser; only the
+// ciphertext goes to the hub (/api/room/file), and the key travels inside the encrypted message body. Readers fetch the
+// ciphertext and decrypt it here when the file is shown (web/attach.js).
+const FILE_AAD = enc.encode('vr-file-v1');
+async function sealChatFiles(list) {
+  const out = [];
+  for (const file of list) {
+    const fk = crypto.getRandomValues(new Uint8Array(32)), fiv = crypto.getRandomValues(new Uint8Array(12));
+    const k = await crypto.subtle.importKey('raw', fk, 'AES-GCM', false, ['encrypt']);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: fiv, additionalData: FILE_AAD }, k, await file.arrayBuffer());
+    const r = await api('/api/room/file', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: ct });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(file.name + ': ' + (d.error || r.statusText));
+    out.push({ id: d.id, n: file.name, m: ATTACH.mimeOf(file.name, file.type), s: file.size, k: toB64(fk), i: toB64(fiv) });
+  }
+  return out;
+}
+async function chatFileBytes(f) {
+  const r = await api('/api/room/file/' + f.id);
+  if (!r.ok) throw new Error(r.status === 404 ? 'no longer there' : r.statusText);
+  const k = await crypto.subtle.importKey('raw', fromB64(f.k), 'AES-GCM', false, ['decrypt']);
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(f.i), additionalData: FILE_AAD }, k, await r.arrayBuffer());
+}
+const roomTray = ATTACH.wire({ button: $('roomAttach'), input: $('roomFiles'), area: $('roomInput'), trayBox: $('roomTray'), onError: (t) => sysRoom(t) });
 $('roomComposer').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const text = $('roomInput').value.trim();
-  if (!text) return;
+  const text = $('roomInput').value.trim(), picked = editingSeq ? [] : roomTray.files.slice();
+  if (!text && !picked.length) return; // text, files, or both
   if (!chatPriv) return sysRoom('Your chat key is locked in this browser. Sign out and sign in again.');
+  const sendBtn = $('roomComposer').querySelector('button[type="submit"]');
   try {
     if (editingSeq) {
       const rec = msgs.get(editingSeq);
       const eto = rec ? rec.m.to || '' : '', econv = rec ? rec.m.conv || '' : '';
-      // a voice clip keeps its audio: v4 clips keep their key (the clip itself stays on the hub), older ones their data
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}), ...(rec && rec.audio ? { a: rec.audio } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined, undefined, econv);
+      // a voice clip keeps its audio: v4 clips keep their key (the clip itself stays on the hub), older ones their data; attachments stay too
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(rec && rec.r ? { r: rec.r } : {}), ...(rec && rec.audio ? { a: rec.audio } : {}), ...(rec && rec.files ? { f: rec.files } : {}) }), eto, callsAgent(text, eto), rec && rec.m.mid ? rec.m.mid : undefined, undefined, econv);
       await json('/api/room/edit', { method: 'POST', body: JSON.stringify({ seq: editingSeq, ...sealed }) });
     } else {
       const to = convPeer(currentConv), forAgent = callsAgent(text, to), gconv = isGuildConv(currentConv) ? currentConv : '';
       if (forAgent) agentWaitNext = { conv: currentConv, after: Math.max(0, ...msgs.keys()), at: Date.now() };
-      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) }), to, forAgent, undefined, undefined, gconv);
-      await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}), ...(gconv ? { conv: gconv } : {}) }) });
+      if (picked.length) { sendBtn.disabled = true; sendBtn.textContent = 'Encrypting + sending ' + picked.length + ' file' + (picked.length === 1 ? '' : 's') + '…'; }
+      const f = picked.length ? await sealChatFiles(picked) : [];
+      const sealed = await sealFor(JSON.stringify({ v: 2, t: text, ...(f.length ? { f } : {}), ...(replyTo ? { r: replyTo } : {}), ...(forAgent ? { ctx: agentCtx(currentConv) } : {}) }), to, forAgent, undefined, undefined, gconv);
+      await json('/api/room/send', { method: 'POST', body: JSON.stringify({ ...sealed, ...(to ? { to } : {}), ...(gconv ? { conv: gconv } : {}), ...(f.length ? { files: f.map((x) => x.id) } : {}) }) });
+      if (picked.length) roomTray.clear();
     }
     editingSeq = null; $('roomInput').value = ''; cancelCompose();
     await pollRoom();
   } catch (err) { sysRoom('Could not send: ' + err.message); }
+  finally { sendBtn.disabled = false; sendBtn.textContent = 'Send'; }
 });
 // @ autocomplete: type @ and pick a person (Tab / Enter takes the first one).
 function mentionQuery() {
@@ -3328,7 +3458,7 @@ function renderPresence() {
   const txt = who.length === 1 ? who[0] + ' is ' + verb : who.length === 2 ? who.join(' and ') + ' are ' + verb : who.slice(0, 2).join(', ') + ' and ' + (who.length - 2) + ' more are ' + verb;
   const dots = document.createElement('span'); dots.className = 'dots'; dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
   line.append(txt, dots);
-  const log = $('roomLog'); if (log.scrollHeight - log.scrollTop - log.clientHeight < 80) log.scrollTop = log.scrollHeight;
+  const log = $('roomLog'); scrollNew(log);
 }
 $('roomInput').addEventListener('keydown', (e) => {
   const first = !$('mentionList').hidden && $('mentionList').querySelector('button');
@@ -3336,7 +3466,7 @@ $('roomInput').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { cancelCompose(); return; }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('roomComposer').requestSubmit(); }
 });
-function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.append(ic('warn', 'lead'), t); $('roomLog').append(d); $('roomLog').scrollTop = $('roomLog').scrollHeight; }
+function sysRoom(t) { const d = document.createElement('div'); d.className = 'sys bad'; d.append(ic('warn', 'lead'), t); $('roomLog').append(d); scrollNew($('roomLog'), true); } // a problem with what you just did: you see it
 
 // ── Work layout: left bar, resizable / minimizable panes, team chat docked or floating ──
 const PANES = ['files', 'edit', 'chat', 'tasks', 'roomPane'];
@@ -3439,7 +3569,7 @@ function openSettings() {
   sw.querySelectorAll('button').forEach((b) => { b.onclick = () => { pickedColor = b.dataset.idx === '' ? null : Number(b.dataset.idx); mark(); }; });
   mark();
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
-  $('setToasts').checked = P.toasts;
+  $('setToasts').checked = P.toasts; $('setAutoScroll').checked = P.autoScroll;
   $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
   $('ttsRateVal').textContent = (P.tts.rate / 100).toFixed(1) + '×';
@@ -3656,7 +3786,7 @@ document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => play
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
-      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autosave: Number($('setAutosave').value),
+      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
       sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value) },
       tts: { all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
       clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },

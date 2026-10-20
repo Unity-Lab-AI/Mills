@@ -3,7 +3,7 @@
 // that is not this site's own static file: hub answers (/api, /v1, the tunnel address) always go to the
 // network untouched, so nothing stale or private is ever served from a cache.
 const SHELL = 'viberoller-shell-v3';
-const OWN = ['index.html', 'polish.css', 'md.js', 'board.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js', 'manifest.webmanifest', 'icons/mills.svg', 'icons/mills-maskable.svg'];
+const OWN = ['index.html', 'polish.css', 'md.js', 'attach.js', 'board.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js', 'manifest.webmanifest', 'icons/mills.svg', 'icons/mills-maskable.svg'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(SHELL).then((c) => c.addAll(OWN.map((f) => new URL(f, self.registration.scope).href)).catch(() => {}))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== SHELL).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', (e) => {
