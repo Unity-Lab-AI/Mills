@@ -7,6 +7,21 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.15.0 — 2026-10-20
+
+### Changed: the board and team notes run in Rust (board T-131, module 2 of 7)
+- Behind `rustHub`, vr-hub owns the team board (`modules/board.rs`: tasks, claims, revisions, month-end aware repeats,
+  the calendar, the long poll; the same `Board/board.json`), its Forgejo issue mirror (`modules/forgejo.rs`: outbound
+  as the person who made the change, the poll as "Forgejo"; the personal tokens stay in the JavaScript hub, which it
+  reads), and team notes (`modules/notes.rs`: the same `Notes/` folder and `.index.json`). Due dates are read in the
+  machine's local time, as before.
+- Claude's board and notes tools (Work runs) still come in through the JavaScript hub, which checks the run's token and
+  hands them over (`/__front/board/tool`, `/__front/notes/tool`, with the front's secret); a notes change wakes the
+  pages' chat poll there (`/internal/front/room-changed`), and the notes' version rides along on every request.
+- `bridge/run.js` asks vr-hub which modules it answers (`vr-hub --modules`), and the JavaScript hub leaves those alone
+  (its own Forgejo mirror stays off). While moving house (`bridge/.maintenance`) the Rust hub answers changes "moved"
+  exactly as the JavaScript one does; `handoff.js pack` takes the Rust sign-in module's files along.
+
 ## 3.14.0 — 2026-10-20
 
 ### Changed: accounts & authentication run in Rust (board T-131, module 1 of 7)

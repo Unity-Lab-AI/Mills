@@ -37,7 +37,9 @@ let front = null, frontCrashes = [], rust = (() => {
   if (!r || !r.enabled || PROFILE) return null;
   const bin = hubBin();
   if (!bin) { console.log(`${tag} rustHub is on, but no vr-hub binary was found (sh native/build.sh builds it): running without it.`); return null; }
-  return { bin, backPort: Number(r.backPort) || config.port + 2, secret: crypto.randomBytes(24).toString('hex') };
+  // the modules it answers: this hub leaves those alone (their data is the Rust hub's)
+  const mods = (() => { try { return require('child_process').execFileSync(bin, ['--modules'], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim(); } catch { return ''; } })();
+  return { bin, backPort: Number(r.backPort) || config.port + 2, secret: crypto.randomBytes(24).toString('hex'), mods };
 })();
 function startFront() {
   if (!rust || shuttingDown) return;
@@ -76,7 +78,7 @@ function startApp() {
     return;
   }
   app = spawn(process.execPath, [path.join(ROOT, 'server.js'), ...process.argv.slice(2)], {
-    stdio: 'inherit', env: { ...process.env, MILLS_SUPERVISED: '1', ...(rust ? { VR_BACK_PORT: String(rust.backPort), VR_FRONT_SECRET: rust.secret } : {}) }, windowsHide: true,
+    stdio: 'inherit', env: { ...process.env, MILLS_SUPERVISED: '1', ...(rust ? { VR_BACK_PORT: String(rust.backPort), VR_FRONT_SECRET: rust.secret, VR_FRONT_MODULES: rust.mods } : {}) }, windowsHide: true,
   });
   if (rust && !front) startFront();
   app.on('exit', (code) => {

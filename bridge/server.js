@@ -190,6 +190,13 @@ const FRONT_SECRET = process.env.VR_BACK_PORT ? String(process.env.VR_FRONT_SECR
 const FRONT = FRONT_SECRET.length >= 32;
 const sameText = (a, b) => crypto.timingSafeEqual(crypto.createHash('sha256').update(String(a || '')).digest(), crypto.createHash('sha256').update(String(b || '')).digest());
 const fromFront = (req) => FRONT && sameText(req.headers['x-vr-front-secret'], FRONT_SECRET);
+// the modules the Rust hub answers (bridge/run.js asks it): their routes never reach this hub, and what this hub still
+// needs of them it asks there (frontCall); their data is the Rust hub's, so this hub leaves it alone
+const FRONT_MODS = new Set(FRONT ? String(process.env.VR_FRONT_MODULES || '').split(',').filter(Boolean) : []);
+async function frontCall(p, body) {
+  const r = await fetch(`http://127.0.0.1:${config.port}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Front-Secret': FRONT_SECRET }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout(30000) });
+  return r.json();
+}
 function sessionAccount(req) {
   if (FRONT) { const u = String(req.headers['x-vr-user'] || ''); return fromFront(req) && USERNAME_RE.test(u) ? accounts.get(u) || null : null; }
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
@@ -476,7 +483,7 @@ const board = require('./board')({
 
 // Forgejo (bridge/forgejo.js): everyone's own token ("My Forgejo"), and issue mirroring, off until
 // bridge/forgejo.json names a repo.
-const forgejo = require('./forgejo')({ ROOT, board, readJson, writeJson, config });
+const forgejo = require('./forgejo')({ ROOT, board, readJson, writeJson, config, mirror: !FRONT_MODS.has('board') });
 board.setViewExtra(() => ({ mirror: forgejo.status() }));
 
 // ---------- room agent ("claude") ----------
@@ -779,9 +786,11 @@ function accountSummary(a) {
 // host when it offers their computer, else to their browser), the team board, the team chat.
 async function internalTool(tool, req, res, account) {
   const acct = accounts.get(account);
+  if (tool === 'board' && FRONT_MODS.has('board')) { const { name, args } = await readBody(req); return send(res, 200, await frontCall('/__front/board/tool', { name, args, account }).catch((e) => ({ ok: false, error: 'Board unreachable: ' + e.message }))); }
   if (tool === 'board') return board.internal(req, res, account);
   if (!acct) return send(res, 200, { ok: false, error: 'Unknown account.' });
   const { name, args } = await readBody(req);
+  if (tool === 'team' && /^notes_/.test(String(name || '')) && FRONT_MODS.has('notes')) return send(res, 200, await frontCall('/__front/notes/tool', { name, args, account }).catch((e) => ({ ok: false, error: 'Notes unreachable: ' + e.message })));
   if (tool === 'team') return send(res, 200, team.call(name, args, acct));
   // pc-tool: the person's own AI host with direct computer access first (the native app), else the browser's open folder
   const viaHost = aiNodes.pcHostFor(acct.username);
@@ -823,6 +832,8 @@ async function handleRequest(req, res) {
   for (const [k, v] of Object.entries(HARDEN)) res.setHeader(k, v);
   try {
     if (p === '/internal/assistant-tool') return await assistant.internal(req, res);
+    // the Rust hub in front: something its modules keep changed that open pages follow through the chat's long poll (notes)
+    if (p === '/internal/front/room-changed' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); roomChanged(); return send(res, 200, { ok: true }); }
     // the Rust hub in front: a sign-in went through there (what it starts here: the client details, Unity's greeting)
     if (p === '/internal/front/signed-in' && req.method === 'POST') {
       if (!fromFront(req)) return send(res, 403, { ok: false, error: 'forbidden' });
@@ -1180,7 +1191,7 @@ async function handleRequest(req, res) {
         for (const [u, convs] of Object.entries(seen)) {
           for (const [c, v] of Object.entries(convs)) if (c === 'room' || (c.startsWith('dm:') && c.split(/[:|]/).includes(acct.username)) || guilds.isMember(c, acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
         }
-        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer, guildsVer: guilds.version(), notesVer: notes.version(),
+        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer, guildsVer: guilds.version(), notesVer: FRONT_MODS.has('notes') ? Number(req.headers['x-vr-notes-ver']) || 1 : notes.version(),
           online: presence.online(), presence: presence.list(), typing: presence.typingFor(acct.username) });
       };
       if (url.searchParams.get('wait') !== '1') { presence.touch(acct.username); return answer(); }

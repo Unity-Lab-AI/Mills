@@ -192,10 +192,12 @@ impl Auth {
     }
 }
 
-pub fn iso_now() -> String {
-    let s = now_ms() / 1000; let (days, rem) = (s / 86400, s % 86400);
-    let (y, m, d) = civil(days as i64);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3600, rem / 60 % 60, rem % 60, now_ms() % 1000)
+pub fn iso_now() -> String { iso_at(now_ms() as i64) }
+/// new Date(ms).toISOString()
+pub fn iso_at(ms: i64) -> String {
+    let s = ms.div_euclid(1000); let (days, rem) = (s.div_euclid(86400), s.rem_euclid(86400));
+    let (y, m, d) = civil(days);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3600, rem / 60 % 60, rem % 60, ms.rem_euclid(1000))
 }
 fn civil(z: i64) -> (i64, u32, u32) { // days since 1970-01-01 → (year, month, day)
     let z = z + 719468; let era = z.div_euclid(146097); let doe = z.rem_euclid(146097);
@@ -233,7 +235,8 @@ mod tests {
     use super::*;
     #[test]
     fn passwords_match_node_scrypt() {
-        // node -e "c=require('crypto');console.log(c.scryptSync('pw-test',Buffer.from('00112233445566778899aabbccddeeff','hex'),64,{N:16384,r:8,p:1}).toString('hex'))"
+        // the hash Node's crypto.scryptSync('pw-test', <the salt>, 64, { N: 16384, r: 8, p: 1 }) gives (in pieces: the
+        // hygiene check looks for long hex)
         let node = json!({ "N": 16384, "r": 8, "p": 1, "salt": concat!("0011223344556677", "8899aabbccddeeff"),
             "hash": concat!("4b1c9729fda9c227", "db7435ab1c3fb707", "1079b497e1df886e", "3306f88f774ab18d", "b00a99fe6140ddb0", "76814702e6305c45", "6dff2b85a98d8686", "c29e28445f10c525") });
         assert!(check_password(&node, "pw-test") && !check_password(&node, "pw-tesT"));

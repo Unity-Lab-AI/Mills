@@ -21,6 +21,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--selftest") { println!("vr-hub {VERSION} loads"); return; }
     if args.iter().any(|a| a == "--version") { println!("{VERSION}"); return; }
+    // which modules it answers (bridge/run.js tells the JavaScript hub, which then leaves them alone)
+    if args.iter().any(|a| a == "--modules") { println!("{}", modules::native_modules().join(",")); return; }
     let root = PathBuf::from(arg(&args, "--root").unwrap_or_else(|| ".".into()));
     let cfg = modules::Config::load(&root);
     let port: u16 = arg(&args, "--port").and_then(|p| p.parse().ok()).unwrap_or(cfg.port);

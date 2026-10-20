@@ -30,7 +30,8 @@ const { REPO } = require('./worktree');
 
 const BRIDGE = path.join(REPO, 'bridge');
 const MAINT = path.join(BRIDGE, '.maintenance'), HANDOFF = path.join(BRIDGE, '.handoff'), RESTART = path.join(BRIDGE, '.restart');
-const DATA = ['bridge/auth.json', 'bridge/state.json', 'bridge/hub-state.json', 'bridge/usage.json', 'bridge/assistant.json', 'bridge/providers.json', 'bridge/forgejo.json', 'bridge/forgejo-users.json', 'bridge/server-owners.json', 'bridge/ai-hosts.json', 'bridge/profiles', 'bridge/profiles-deleted', 'Chat', 'Archive', 'Board', 'Notes', 'Avatars', 'Images', 'Api'];
+// (front-sessions.json / device-locks.json: the Rust hub's sign-in module keeps them, behind config rustHub)
+const DATA = ['bridge/auth.json', 'bridge/state.json', 'bridge/hub-state.json', 'bridge/front-sessions.json', 'bridge/device-locks.json', 'bridge/usage.json', 'bridge/assistant.json', 'bridge/providers.json', 'bridge/forgejo.json', 'bridge/forgejo-users.json', 'bridge/server-owners.json', 'bridge/ai-hosts.json', 'bridge/profiles', 'bridge/profiles-deleted', 'Chat', 'Archive', 'Board', 'Notes', 'Avatars', 'Images', 'Api'];
 const SKIP = /\.(tmp|log)$/i;
 
 // ---------- a tar writer (ustar), gzipped: the shape deploy/restore-data.sh and plain tar read ----------
