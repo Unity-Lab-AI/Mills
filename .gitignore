@@ -12,6 +12,9 @@
 !/web/
 !/bridge/
 !/.github/
+!/native/
+# Rust build output (cargo) never ships
+native/target/
 
 # Runtime state written by the hub on the host PC
 bridge/state.json

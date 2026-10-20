@@ -22,6 +22,12 @@ logged here in the same commit, newest first (hub law 15).
   upload hang, fixed for every route at once).
 - nginx rate limits: unchanged in the repo (`deploy/nginx-portal.conf` has them); installing them needs root. R162.
 
+### Added
+- **The Rust workspace** (board T-124): `native/` is one Cargo workspace (resolver 2, edition 2021, a small stripped
+  release profile) with the shared `vr-core` library crate, its planned modules named after their JavaScript
+  references; `native/target/` is gitignored and
+  `native/` is published (the whitelist .gitignore). Not compiled yet: the toolchain (T-122) is not installed.
+
 ## 3.9.0 — 2026-10-20
 
 ### Added

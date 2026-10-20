@@ -1,0 +1,13 @@
+[package]
+name = "vr-core"
+description = "VibeRoller's shared core: hub API client, AI host protocol, end-to-end encryption, settings, signed updates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
