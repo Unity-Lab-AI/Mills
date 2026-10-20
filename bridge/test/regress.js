@@ -1137,7 +1137,8 @@ async function run() {
   }
   {
     // R162: sessions kept as hashes; the page's scripts pinned by hash; every route's failure answered
-    const hs = JSON.parse(fs.readFileSync(path.join(SB, 'hub-state.json'), 'utf8')), keys = Object.keys(hs.sessions || {});
+    // (behind the Rust hub its auth module keeps them, in front-sessions.json, the same way)
+    const hs = JSON.parse(fs.readFileSync(path.join(SB, RUST_HUB ? 'front-sessions.json' : 'hub-state.json'), 'utf8')), keys = Object.keys(hs.sessions || {});
     const tokHash = crypto.createHash('sha256').update(U).digest('hex');
     const served = await (await fetch(H + '/')).text();
     const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(served) || [])[1] || '';

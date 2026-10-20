@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.14.0 — 2026-10-20
+
+### Changed: accounts & authentication run in Rust (board T-131, module 1 of 7)
+- Behind `rustHub`, vr-hub's auth module (`native/crates/vr-hub/src/modules/auth.rs`) does sign-in (scrypt, the same
+  auth.json; the per-address limits; the same cost for unknown names), the device lock, the 12-hour sessions (sha256
+  only, `bridge/front-sessions.json`), sign-out, the session gate for every request, and the admin's new password /
+  unlock / sign-out; the admin list gets its locks and sign-ins from it. On its first start it takes over the
+  JavaScript hub's sessions and device locks, so nobody is signed out or loses their lock.
+- The JavaScript hub, behind it, trusts who a request belongs to (`X-VR-User`) only with the front's secret and never
+  reads a token itself; a caller's own `X-VR-User` / `X-VR-Front-*` headers are dropped at the front. A sign-in there is
+  told to the JavaScript hub (`/internal/front/signed-in`: the client details, Unity's greeting).
+- Without `rustHub` nothing changes. The whole suite passes both ways.
+
 ## 3.13.0 — 2026-10-20
 
 ### Added: the Rust hub, in front (board T-130)

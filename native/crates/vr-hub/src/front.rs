@@ -95,9 +95,29 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
     match modules::route(&hub, &r).await {
         modules::Routed::Answer(resp) => return with_front(resp),
         modules::Routed::Pass(h) => extra = h,
+        modules::Routed::SignedIn { token, user, client, ip } => {
+            // the JavaScript hub learns of the sign-in (Unity greets, the person's client details) and the page gets its token
+            let note = serde_json::json!({ "user": user, "client": client, "ip": ip }).to_string();
+            internal(&hub, "/internal/front/signed-in", note).await;
+            return with_front(json(200, &serde_json::json!({ "token": token, "username": user })));
+        }
         modules::Routed::No => {}
     }
-    with_front(proxy(&hub, parts, r.body, extra).await)
+    let resp = proxy(&hub, parts, r.body.clone(), extra).await;
+    if !modules::wants_after(&r) { return with_front(resp); }
+    // a module's part of this answer: the whole answer is read, maybe changed, and handed on
+    let (mut p, b) = resp.into_parts();
+    let bytes = b.collect().await.map(|c| c.to_bytes()).unwrap_or_default();
+    let out = modules::after(&hub, &r, p.status.as_u16(), Some(&bytes)).map(Bytes::from).unwrap_or(bytes);
+    p.headers.remove("content-length");
+    with_front(Response::from_parts(p, full(out)))
+}
+/// A word to the JavaScript hub from the front (its internal API, with the front's secret).
+pub async fn internal(hub: &Hub, path: &str, body: String) -> Option<(u16, Bytes)> {
+    let req = Request::builder().method("POST").uri(format!("http://{}{}", hub.back, path)).header("content-type", "application/json").header("x-vr-front-secret", hub.mods.front_secret.as_str()).body(Full::new(Bytes::from(body))).ok()?;
+    let r = tokio::time::timeout(Duration::from_secs(10), hub.client.request(req)).await.ok()?.ok()?;
+    let s = r.status().as_u16();
+    Some((s, r.into_body().collect().await.ok()?.to_bytes()))
 }
 fn with_front(mut r: Response<Body>) -> Response<Body> { r.headers_mut().insert("x-vr-front", hyper::header::HeaderValue::from_static(crate::VERSION)); r }
 
@@ -107,10 +127,11 @@ async fn proxy(hub: &Hub, parts: hyper::http::request::Parts, body: Bytes, extra
     let started = Instant::now();
     loop {
         let mut b = Request::builder().method(parts.method.clone()).uri(format!("http://{}{}", hub.back, pq));
-        for (k, v) in &parts.headers { if !HOP.contains(&k.as_str()) && !k.as_str().starts_with("x-vr-front-") { b = b.header(k, v); } }
+        // who is signed in is the front's word only: a caller's own x-vr-user / x-vr-front-* never reach the JavaScript hub
+        for (k, v) in &parts.headers { if !HOP.contains(&k.as_str()) && !k.as_str().starts_with("x-vr-front-") && k.as_str() != "x-vr-user" { b = b.header(k, v); } }
         for (k, v) in &extra { b = b.header(k.as_str(), v.as_str()); }
         // the front's own word to the JavaScript hub (who is signed in …) is trusted only with the shared secret
-        if !extra.is_empty() { b = b.header("x-vr-front-secret", hub.mods.front_secret.as_str()); }
+        b = b.header("x-vr-front-secret", hub.mods.front_secret.as_str());
         let req = b.body(Full::new(body.clone())).expect("request");
         match hub.client.request(req).await {
             Ok(resp) => {

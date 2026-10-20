@@ -183,7 +183,15 @@ for (const acct of accounts.values()) { // sessions saved by the old one-bridge-
 }
 function saveSessions() { hubState.sessions = Object.fromEntries(sessions); hubState.sessionsHashed = true; writeJson(HUB_STATE_FILE, hubState); }
 saveSessions();
+// Behind the Rust hub (bridge/run.js, config rustHub): sign-in, the sessions and the device locks are its module
+// (native/crates/vr-hub/src/modules/auth.rs). It tells this hub who a request belongs to (X-VR-User), and that word is
+// trusted only with its secret (X-VR-Front-Secret, given to both at start); this hub then never reads a token itself.
+const FRONT_SECRET = process.env.VR_BACK_PORT ? String(process.env.VR_FRONT_SECRET || '') : '';
+const FRONT = FRONT_SECRET.length >= 32;
+const sameText = (a, b) => crypto.timingSafeEqual(crypto.createHash('sha256').update(String(a || '')).digest(), crypto.createHash('sha256').update(String(b || '')).digest());
+const fromFront = (req) => FRONT && sameText(req.headers['x-vr-front-secret'], FRONT_SECRET);
 function sessionAccount(req) {
+  if (FRONT) { const u = String(req.headers['x-vr-user'] || ''); return fromFront(req) && USERNAME_RE.test(u) ? accounts.get(u) || null : null; }
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
   const k = m && tokenKey(m[1]), s = k && sessions.get(k);
   if (!s || s.exp < Date.now() || !accounts.has(s.user)) { if (s) { sessions.delete(k); saveSessions(); } return null; }
@@ -815,6 +823,13 @@ async function handleRequest(req, res) {
   for (const [k, v] of Object.entries(HARDEN)) res.setHeader(k, v);
   try {
     if (p === '/internal/assistant-tool') return await assistant.internal(req, res);
+    // the Rust hub in front: a sign-in went through there (what it starts here: the client details, Unity's greeting)
+    if (p === '/internal/front/signed-in' && req.method === 'POST') {
+      if (!fromFront(req)) return send(res, 403, { ok: false, error: 'forbidden' });
+      const b = await readBody(req, 65536), a = accounts.get(String(b.user || ''));
+      if (a) assistant.learnClient(a, b.client, String(b.ip || '')).catch(() => {}).then(() => agentGreet(a));
+      return send(res, 200, { ok: !!a });
+    }
     // Internal channel from the MCP relay (same machine, shared secret, names the account).
     if (p === '/internal/pc-tool' || p === '/internal/board' || p === '/internal/team') {
       if (!crypto.timingSafeEqual(crypto.createHash('sha256').update(String(req.headers['x-mills-internal'] || '')).digest(), crypto.createHash('sha256').update(INTERNAL_SECRET).digest())) return send(res, 403, { ok: false, error: 'forbidden' });
