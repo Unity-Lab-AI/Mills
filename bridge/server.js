@@ -704,7 +704,9 @@ function agentHear(msg) {
 // Nobody — no account's Work run and not the room agent — is mid-run.
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 // AI nodes (bridge/ai-nodes.js): machines lending Unity's local engines to this hub when it runs elsewhere
-const aiNodes = require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }) });
+// the native programs' pre-built, signed binaries (native/dist, bridge/native-releases.js): AI host updates + Downloads
+const nativeReleases = require('./native-releases')({ ROOT, MILLS_DIR, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }) });
+const aiNodes = require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }), nativeReleases });
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300), aiNodes });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team notes (bridge/notes.js): markdown files in folders under VibeRoller/Notes, for people (/api/notes*) and Claude (notes_* tools).

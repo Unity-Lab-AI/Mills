@@ -15,6 +15,7 @@
 !/native/
 # Rust build output (cargo) never ships
 native/target/
+native/dist/
 
 # Runtime state written by the hub on the host PC
 bridge/state.json
@@ -70,6 +71,8 @@ bridge/.update-backup/
 bridge/.update-staging/
 # AI hosts (UUID + secret + nickname per host; Settings → My AI hosts) and a host's per-run MCP files
 bridge/ai-hosts.json
+# the release key that signs the native binaries (bridge/native-releases.js): its secret never leaves this machine
+bridge/release-key.json
 bridge/ai-host-sessions.json
 bridge/.mcp-host-*.json
 # the hand-off to the server (bridge/handoff.js): this machine runs the AI host instead of the hub; writes paused during the move

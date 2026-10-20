@@ -235,11 +235,11 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp' }, hostGroup: ['t-user'], linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs' }, hostGroup: ['t-user'], linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -251,6 +251,7 @@ async function setup() {
   fs.mkdirSync(path.join(SCRATCH, 'Chat'), { recursive: true });
   fs.writeFileSync(path.join(SCRATCH, 'Chat', 'guilds.json'), JSON.stringify({ servers: [{ id: 'seedtest', name: 'Seed Test', members: ['t-admin', 't-user'], owner: 't-user', createdBy: 't-user', channels: [{ id: 'general', name: 'general' }] }], groups: [] }));
   fs.writeFileSync(path.join(SB, 'server-owners.json'), JSON.stringify({ servers: { seedtest: { owner: 't-admin', coOwners: ['t-user', 'nobody-here'] }, mills: { owner: 't-admin', coOwners: [] } } }));
+  fs.writeFileSync(path.join(SB, 'release-key.json'), JSON.stringify(TEST_RELEASE_KEY)); // R164: the scratch hub signs native releases with the test key
   fs.writeFileSync(path.join(SB, 'forgejo.json'), JSON.stringify({ url: `http://127.0.0.1:${OLLAMA_PORT}`, token: 'fake-forgejo-token', repo: 'UnityAILab/Mills', board: 'team', pollMinutes: 0.01 }));
   const sp = (args) => spawnSync(process.execPath, [path.join(SB, 'set-password.js'), ...args], { cwd: SB, encoding: 'utf8' });
   sp(['pw-default-0001']);
@@ -280,8 +281,38 @@ function startAiNode() {
       { id: 'codex', kind: 'codex-relay', label: 'Tadmin\'s Codex', models: ['gpt-test'], allowedUsers: ['t-user'], codexHome: cx, baseUrl: base + '/codex' },
       { id: 'local', kind: 'openai', label: 'Host local model', baseUrl: base + '/oai', models: ['tiny-local'], allowedUsers: ['t-user'] }] }));
   const log = fs.openSync(path.join(SCRATCH, 'ai-node.log'), 'a');
-  aiNodeProc = spawn(process.execPath, [path.join(SB, 'ai-node.js'), '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
+  // --rust-host: the native host (native/crates/vr-host) plays the test host, so every host check runs against it
+  aiNodeProc = RUST_HOST ? spawn(RUST_HOST, ['host', '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true })
+    : spawn(process.execPath, [path.join(SB, 'ai-node.js'), '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
 }
+// the native programs, built for this machine when a Rust toolchain is here (native/build.sh): R163 / R164, --rust-host
+// built into their own target folder with a test-only release key (the scratch hub signs with it), so they never mix
+// with the real builds of native/build.sh
+const TEST_RELEASE_KEY = { secret: '4570e54a425b32604b04d14d172976b602af918eb6322d14e929867896b61b50', public: '241fc450dffa7aaf2155ed06404cd10d824f590c7c0c00a70b4ec6fa8e9b5a20' };
+const NATIVE_TARGET = path.join(MILLS, 'native', 'target', 'regress');
+const NATIVE_BIN = (() => {
+  const exe = (n) => path.join(NATIVE_TARGET, 'release', n + (WIN ? '.exe' : ''));
+  return { host: exe('vr-host'), interop: path.join(NATIVE_TARGET, 'release', 'examples', 'interop' + (WIN ? '.exe' : '')) };
+})();
+let nativeBuilt = null;
+function buildNative() { // → '' when built, else why not (once per run)
+  if (nativeBuilt !== null) return nativeBuilt;
+  const home = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+  const env = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET, VR_RELEASE_PUBKEY: TEST_RELEASE_KEY.public, VR_VERSION: (() => { try { return JSON.parse(fs.readFileSync(path.join(MILLS, 'versions.json'), 'utf8')).project; } catch { return ''; } })() };
+  env.PATH = path.join(env.CARGO_HOME, 'bin') + path.delimiter + (env.PATH || '');
+  const r = spawnSync('cargo', ['build', '--release', '-q', '-p', 'vr-host', '-p', 'vr-core', '--examples', '--bins'], { cwd: path.join(MILLS, 'native'), env, encoding: 'utf8', timeout: 1200000 });
+  return (nativeBuilt = buildResult(r));
+}
+function buildResult(r) {
+  if (r.error) return 'no Rust toolchain here (' + r.error.code + ')';
+  return r.status === 0 && fs.existsSync(NATIVE_BIN.host) ? '' : 'cargo build failed: ' + String(r.stderr || '').trim().split('\n').slice(-3).join(' ');
+}
+const RUST_HOST = (() => {
+  if (!process.argv.includes('--rust-host')) return '';
+  const why = buildNative();
+  if (why) { console.error('--rust-host: ' + why); process.exit(2); }
+  return NATIVE_BIN.host;
+})();
 async function startHub() {
   const log = fs.openSync(path.join(SCRATCH, 'hub.log'), 'a');
   hub = spawn(process.execPath, [path.join(SB, 'run.js'), '--no-tunnel'], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
@@ -2695,6 +2726,63 @@ async function run() {
       && /beat: beat\(\)/.test(nodes154) && /r\.status === 428/.test(host154) && /Math\.min\(RECONNECT_MAX_MS, 1000 \* misses\)/.test(host154) && /quiet = \(ms = UPDATE_QUIET_MS\)/.test(host154) && /maxDelaySeconds, 1, 60, 5\)/.test(host154) && /quietMinutes, 1, 60, 3\)/.test(host154) && /aiHosts/.test(team154)
       && /X-VR-Version/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')) && /function pageUpdateAvailable\(build\)/.test(page154) && /hubBuild !== \(me\.build \|\| me\.version\)/.test(page154),
       `old ${oldAfter.remoteKind} new ${!!newAfter.id}; no session: ${askNew.status} / ${askOld.status}; 1.x ${legacyNoHello}; sessions file ${Object.keys(sessFile).join(',')}; ignored ${ign}`);
+  }
+  // R163 / R164: the native (Rust) programs, built here when this machine has a Rust toolchain (else skipped)
+  {
+    const L163 = 'native core (native/crates/vr-core) against the JavaScript side, both ways: the AI host session key id + envelope (Rust seals → Node opens, Node seals → Rust opens) and the update HMAC as bridge/ai-nodes.js makes them; the chat as the page does it with WebCrypto: a page message (format 4) opened by Rust, Rust messages (formats 3 and 4) opened by the page, the uploader\'s own seal and a chat file opened by Rust';
+    const L164 = 'the native AI host (vr-host): without a running host "status" exits 3; "set" checks like the control app (a plain-http hub refused), keeps unknown keys and leaves the config private; "settings" lists every setting; its MCP servers offer exactly the JavaScript servers\' tools; the hub hands out a signed release of the binary (Ed25519 with the release key + the host\'s HMAC; nobody else gets it); "run" supervises it: it connects, writes its status file, updates itself from that release when asked (checked, self-tested, swapped, restarted on it, confirmed once it reached the hub), pauses / resumes, stops when asked';
+    const why = buildNative();
+    if (why) { skip('R163', L163, why); skip('R164', L164, why); }
+    else {
+      const io = await require('./native-interop').run(NATIVE_BIN.interop);
+      check('R163', L163, io.ok, io.ok ? Object.keys(io.parts).join(', ') : io.why);
+      const rdir = path.join(SCRATCH, 'rust-host'); fs.mkdirSync(rdir, { recursive: true });
+      const rexe = path.join(rdir, 'vr-host' + (WIN ? '.exe' : '')), rcfg = path.join(rdir, 'ai-node.json'), rsecret = OLD_NODE_SECRET + '-rs';
+      fs.copyFileSync(NATIVE_BIN.host, rexe); fs.chmodSync(rexe, 0o755);
+      fs.writeFileSync(rcfg, JSON.stringify({ hub: H, id: 'rust-node', token: rsecret, user: 't-admin', providers: [{ id: 'local', kind: 'openai', label: 'Rust host local', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, models: ['tiny-local'] }], engines: {}, keepMe: 'r164' }), { mode: 0o644 });
+      const vh = (...a) => spawnSync(rexe, [...a, '--config', rcfg], { encoding: 'utf8', timeout: 30000 });
+      const rstatus = () => { try { return JSON.parse(fs.readFileSync(path.join(rdir, 'ai-node.status.json'), 'utf8')); } catch { return {}; } };
+      const stNot = vh('status'), setBad = vh('set', 'hub', 'http://evil.example'), setOk = vh('set', 'update.checkMinutes', '7');
+      const cfgAfter = JSON.parse(fs.readFileSync(rcfg, 'utf8')), cfgMode = WIN ? 0o600 : fs.statSync(rcfg).mode & 0o777;
+      const listed = vh('settings').stdout;
+      const tools = (() => { try { return JSON.parse(vh('tools').stdout); } catch { return {}; } })();
+      const jsTools = (f) => (fs.readFileSync(path.join(BRIDGE, f), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1)).sort().join(',');
+      const toolsSame = [['pc', 'pc-tools-mcp.js'], ['board', 'board-mcp.js'], ['team', 'team-mcp.js']].every(([k, f]) => (tools[k] || []).slice().sort().join(',') === jsTools(f));
+      // a newer build in the scratch hub's native/dist: the same program with bytes appended (ELF / PE ignore trailing data)
+      const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target);
+      fs.mkdirSync(dist, { recursive: true });
+      fs.writeFileSync(path.join(dist, path.basename(rexe)), Buffer.concat([fs.readFileSync(NATIVE_BIN.host), Buffer.from('\nr164-newer-build\n')]), { mode: 0o755 });
+      fs.writeFileSync(path.join(dist, 'BUILD.json'), JSON.stringify({ version: '99.0.0', commit: 'c'.repeat(40) }));
+      const rh = { 'X-VR-Host': 'rust-node', 'X-VR-Host-Token': rsecret };
+      const man = await fetch(H + `/node/update/bin?app=vr-host&target=${target}`, { headers: rh }), manJ = await man.json().catch(() => ({}));
+      const manAnon = (await fetch(H + `/node/update/bin?app=vr-host&target=${target}`)).status;
+      const pub = crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(TEST_RELEASE_KEY.public, 'hex')]), format: 'der', type: 'spki' });
+      const sigOk = !!manJ.manifest && crypto.verify(null, Buffer.from(manJ.manifest), pub, Buffer.from(manJ.sig || '', 'hex'));
+      const hmacOk = !!manJ.manifest && manJ.hmac === crypto.createHmac('sha256', rsecret).update(manJ.manifest).digest('hex');
+      const rlog = fs.openSync(path.join(rdir, 'out.log'), 'a');
+      const rproc = spawn(rexe, ['run', '--config', rcfg], { cwd: rdir, stdio: ['ignore', rlog, rlog] });
+      let rExit = null; rproc.on('exit', (c) => { rExit = c; });
+      const hostUp = async () => { for (let i = 0; i < 80; i++) { const h = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === 'rust-node'); if (h && h.online && h.version) return h; await sleep(250); } return null; };
+      const up1 = await hostUp();
+      let st1 = rstatus(); for (let i = 0; i < 20 && st1.connected !== true; i++) { await sleep(250); st1 = rstatus(); } // rewritten within a second
+      const stRun = vh('status');
+      vh('update');
+      let swapped = false; for (let i = 0; i < 160 && !swapped; i++) { await sleep(250); try { swapped = fs.readFileSync(rexe).includes('r164-newer-build'); } catch {} }
+      let confirmed = false; for (let i = 0; i < 120 && !confirmed; i++) { await sleep(250); confirmed = swapped && !fs.existsSync(path.join(rdir, '.update-trial.json')) && /confirmed/.test(rstatus().lastUpdate || ''); }
+      const up2 = await hostUp();
+      vh('pause'); let paused = false; for (let i = 0; i < 40 && !paused; i++) { await sleep(250); paused = rstatus().paused === true; }
+      vh('resume'); let resumed = false; for (let i = 0; i < 40 && !resumed; i++) { await sleep(250); resumed = rstatus().paused === false; }
+      vh('stop', '--now'); for (let i = 0; i < 60 && rExit === null; i++) await sleep(250);
+      if (rExit === null) { try { rproc.kill(); } catch {} }
+      const outLog = (() => { try { return fs.readFileSync(path.join(rdir, 'out.log'), 'utf8'); } catch { return ''; } })();
+      check('R164', L164,
+        stNot.status === 3 && setBad.status === 1 && setOk.status === 0 && cfgAfter.update && cfgAfter.update.checkMinutes === 7 && cfgAfter.keepMe === 'r164' && cfgMode === 0o600
+        && /provider\.local\.max5h/.test(listed) && /security\.engineGuard/.test(listed) && toolsSame
+        && man.status === 200 && manAnon === 401 && sigOk && hmacOk && /"version":"99\.0\.0"/.test(manJ.manifest || '')
+        && !!up1 && st1.connected === true && st1.native === true && stRun.status === 0 && /CONNECTED/.test(stRun.stdout)
+        && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
+        `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
+    }
   }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });

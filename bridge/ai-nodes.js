@@ -49,7 +49,7 @@ const HOST_FILES = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', '
 // onUsage(source, windows) / savedUsage(source): a host provider's 5h / 7d windows are kept by bridge/usage.js (on disk), so
 // they survive a hub restart and show in /api/usage; source = "h:<hostId>/<providerId>".
 // release() = { version, commit } of the code this hub runs (what /node/update hands to hosts).
-module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson, writeJson, accounts = null, log = () => {}, onUsage = () => {}, savedUsage = () => null, release = () => ({ version: '', commit: '' }) }) {
+module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson, writeJson, accounts = null, log = () => {}, onUsage = () => {}, savedUsage = () => null, release = () => ({ version: '', commit: '' }), nativeReleases = null }) {
   const FILE = path.join(ROOT, 'ai-hosts.json');
   const OFFLINE_MS = Math.max(1000, Number(config.aiNodeOfflineMs) || 60000);
   const db = readJson(FILE, { hosts: {} }); if (!db.hosts || typeof db.hosts !== 'object') db.hosts = {};
@@ -357,6 +357,17 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       const name = p.slice('/node/update/file/'.length);
       if (!HOST_FILES.includes(name)) { send(res, 404, { error: 'Not a host file.' }); return true; }
       let buf; try { buf = fs.readFileSync(path.join(ROOT, name)); } catch { send(res, 404, { error: 'Not here.' }); return true; }
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length, 'Cache-Control': 'no-store' }); res.end(buf);
+      return true;
+    }
+    // a native host's binary (vr-host, Rust; "caps": ["update-bin"]): the signed release for its app + target
+    // (bridge/native-releases.js), and the file. 404 while nothing is built for that target.
+    if ((p === '/node/update/bin' || p === '/node/update/bin/file') && req.method === 'GET') {
+      const u = new URL(req.url, 'http://x'), app = String(u.searchParams.get('app') || 'vr-host'), target = String(u.searchParams.get('target') || '');
+      if (!nativeReleases || app !== 'vr-host') { send(res, 404, { error: 'No native releases here.' }); return true; }
+      if (p === '/node/update/bin') { const s = nativeReleases.signed(app, target, r.secret); if (!s) send(res, 404, { error: 'Nothing built for ' + target + '.' }); else send(res, 200, s); return true; }
+      const buf = nativeReleases.file(app, target, String(u.searchParams.get('name') || ''));
+      if (!buf) { send(res, 404, { error: 'Not a file of that release.' }); return true; }
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length, 'Cache-Control': 'no-store' }); res.end(buf);
       return true;
     }

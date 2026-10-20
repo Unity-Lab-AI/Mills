@@ -9,14 +9,14 @@
 # Test:    cargo test
 [workspace]
 resolver = "2"
-members = ["crates/vr-core"]
+members = ["crates/vr-core", "crates/vr-host"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "UNLICENSED"
 publish = false
-rust-version = "1.80"
+rust-version = "1.88"
 
 [workspace.dependencies]
 vr-core = { path = "crates/vr-core" }

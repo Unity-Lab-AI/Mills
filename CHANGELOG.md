@@ -7,6 +7,33 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.11.0 — 2026-10-20
+
+### Added: the native AI host (Rust), pre-built for Linux and Windows (board T-122 … T-127)
+- **Toolchains on the server, all user space** (T-122, T-123): rustup / cargo / rustc 1.99.1 in the hub account, the
+  `x86_64-pc-windows-gnu` target, and llvm-mingw (`~/.local/opt/llvm-mingw`) as the Windows linker, its compiler-rt
+  and libunwind standing in for libgcc. `sh native/build.sh` tests, then builds release binaries for both
+  (`native/dist/<target>/` with `BUILD.json` + `SHA256SUMS`); `check` / `test` for less.
+- **vr-core** (T-125): the AI host protocol + session envelope (HKDF + AES-256-GCM), update signatures (HMAC + Ed25519),
+  the chat's end-to-end encryption exactly as the page does it (formats 3 / 4, files, own seals, voice clips), ai-node.json
+  with the control app's keys, defaults and checks (unknown keys kept), and a hub API client. Checked against Node and
+  WebCrypto both ways (R163).
+- **vr-host** (T-126, T-127): the AI host and its heart & knife control app in one program: the same folder, settings,
+  status file and control requests as the JavaScript host, so it can take that one's place and either control app works
+  with either. Login relays (Claude / Codex) with token refresh, engines with the engine guard, OpenAI-compatible
+  endpoints, streaming back, PC file tools, Work runs (with its own MCP servers for the PC / board / team tools), usage
+  caps, the heartbeat and reconnects, pause, a terminal dashboard (ratatui) with every setting, start at boot (Windows:
+  the VibeRollerAIHost service via the SCM, or sign-in through the window-less `vr-hostw`; Linux: system or user
+  systemd unit), and `vr-host run`, which supervises it (restart on exit 3, back off after crashes, log rotation).
+  The whole regression suite passes with it as the test host (`node bridge/test/regress.js --rust-host`); R164 runs it
+  through set / settings / its MCP tools / status / an update / pause / stop.
+- **Signed native releases from the hub** (`bridge/native-releases.js`): the binaries in `native/dist`, described in a
+  manifest signed with VibeRoller's release key (Ed25519, `bridge/release-key.json`, gitignored, made on first use; its
+  public half is built into every binary) and, for a host, with its own secret too. `GET /node/update/bin` +
+  `/node/update/bin/file` for hosts that say `update-bin`; a host checks, self-tests, swaps in its new binary (the old
+  one kept as `.old`), restarts on it and confirms it once it reached the hub; three starts that never reach it put the
+  old one back.
+
 ## 3.10.0 — 2026-10-20
 
 ### Security (board T-132)

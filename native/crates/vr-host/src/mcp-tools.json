@@ -1,0 +1,544 @@
+{
+ "pc": [
+  {
+   "name": "list",
+   "description": "List files and folders in a directory on {USER}'s PC.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Path relative to the folder {USER} opened. Use \"\" for the folder itself."
+     }
+    }
+   }
+  },
+  {
+   "name": "read",
+   "description": "Read a text file on {USER}'s PC.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Path relative to the folder {USER} opened. Use \"\" for the folder itself."
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  },
+  {
+   "name": "write",
+   "description": "Create or overwrite a text file on {USER}'s PC (parent folders are created).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Path relative to the folder {USER} opened. Use \"\" for the folder itself."
+     },
+     "content": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "content"
+    ]
+   }
+  },
+  {
+   "name": "delete",
+   "description": "Delete a file or folder (recursively) on {USER}'s PC.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Path relative to the folder {USER} opened. Use \"\" for the folder itself."
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  },
+  {
+   "name": "mkdir",
+   "description": "Create a folder on {USER}'s PC.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Path relative to the folder {USER} opened. Use \"\" for the folder itself."
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  }
+ ],
+ "board": [
+  {
+   "name": "board_list",
+   "description": "List the VibeRoller team board's tasks (no descriptions). Filter by board, status (backlog/todo/doing/review/done), or mine=true for tasks assigned to {USER} or claimed by you.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "board": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     },
+     "mine": {
+      "type": "boolean"
+     }
+    }
+   }
+  },
+  {
+   "name": "task_get",
+   "description": "Read one task with its markdown description and recent activity.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "task_create",
+   "description": "Create a task on the team board (a task with a due date is a calendar entry).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "title": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string",
+      "description": "Markdown description"
+     },
+     "status": {
+      "type": "string"
+     },
+     "board": {
+      "type": "string"
+     },
+     "labels": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+     },
+     "due": {
+      "type": "string",
+      "description": "Due date as text: YYYY-MM-DD, today, tomorrow, +3d, next friday"
+     },
+     "assignee": {
+      "type": "string",
+      "description": "username"
+     },
+     "recur": {
+      "type": "string",
+      "description": "daily, weekly, biweekly, monthly, quarterly, half_year, yearly"
+     }
+    },
+    "required": [
+     "title"
+    ]
+   }
+  },
+  {
+   "name": "task_claim",
+   "description": "Claim a task before working on it (time-limited, default 15 minutes, max 240). Moves a to-do task to \"doing\". Refused if someone else holds it.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     },
+     "minutes": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "task_renew",
+   "description": "Extend your claim while still working (same as claiming again).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     },
+     "minutes": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "task_update",
+   "description": "Change a task: status (backlog/todo/doing/review/done), title, body, appendNote (adds a signed progress note to the description), labels, priority 0-5, due (text: YYYY-MM-DD, today, tomorrow, +3d, next friday, none) or dueAt (ms), recur, assignee (username, \"\" to unassign). Refused while someone else holds a claim.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     },
+     "status": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     },
+     "appendNote": {
+      "type": "string"
+     },
+     "labels": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "priority": {
+      "type": "integer"
+     },
+     "due": {
+      "type": "string"
+     },
+     "dueAt": {
+      "type": "number"
+     },
+     "recur": {
+      "type": "string"
+     },
+     "assignee": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "task_complete",
+   "description": "Mark a task done (a repeating task re-arms to its next due date). Releases your claim.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "task_release",
+   "description": "Release your claim without completing (optionally with a note why).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     },
+     "note": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "task_move",
+   "description": "Move a task to a column (backlog/todo/doing/review/done) and position (index from the top, 0 = first). Moving to done completes it.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     },
+     "status": {
+      "type": "string"
+     },
+     "index": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id",
+     "status"
+    ]
+   }
+  },
+  {
+   "name": "task_delete",
+   "description": "Delete a task (leaves a tombstone in the board file; refused while someone else holds it). Prefer completing or moving to backlog unless the person asked to delete.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "board_new",
+   "description": "Make another board (e.g. per project).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ]
+   }
+  },
+  {
+   "name": "board_calendar",
+   "description": "The team calendar: tasks with a due date grouped by day for a range (default today → +14 days), plus everything overdue. Use it to plan: then task_create / task_update with due to put things on days.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "type": "string",
+      "description": "YYYY-MM-DD, today, +Nd …"
+     },
+     "to": {
+      "type": "string"
+     },
+     "board": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ ],
+ "team": [
+  {
+   "name": "team_say",
+   "description": "Post a message into the VibeRoller team chat as \"{USER} · Claude\": to # Everyone (default), privately to one person (to = their username), or into a server channel / group (conv = its id from team_channels, e.g. \"ch:mills/dev\" or \"grp:ab12cd\"). Use it to tell the team what you are doing, what landed, and BEFORE any hub restart. Markdown is rendered.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "description": "The message (markdown)"
+     },
+     "to": {
+      "type": "string",
+      "description": "Username for a private message; leave out for everyone"
+     },
+     "conv": {
+      "type": "string",
+      "description": "A channel or group conversation id (see team_channels)"
+     }
+    },
+    "required": [
+     "text"
+    ]
+   }
+  },
+  {
+   "name": "team_presence",
+   "description": "Who is in VibeRoller right now: every account with online / away / offline, where they are and when they were last seen.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "team_channels",
+   "description": "The servers, channels and groups {USER} is in, with the conversation ids team_say accepts.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "team_channel_create",
+   "description": "Make a text channel in a server {USER} is in (default: the VibeRoller server everyone is in). Returns its conv id for team_say.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "letters, digits, dashes"
+     },
+     "topic": {
+      "type": "string"
+     },
+     "server": {
+      "type": "string",
+      "description": "server id, default \"mills\""
+     }
+    },
+    "required": [
+     "name"
+    ]
+   }
+  },
+  {
+   "name": "team_group_create",
+   "description": "Make a group conversation with the people named ({USER} is included). Returns its conv id for team_say.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "members": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "usernames"
+     },
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "members"
+    ]
+   }
+  },
+  {
+   "name": "hub_status",
+   "description": "The wider picture of VibeRoller right now: who is online / away / offline and where, who is in a call (cam / mic / screen), who is sharing a Work session, and the host account's 5-hour / 7-day Claude usage windows plus this session's context size.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "sessions_search",
+   "description": "Search {USER}'s own saved Claude sessions (Past sessions): every word must match the title or the transcript; snippets say who said it.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "q": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "q"
+    ]
+   }
+  },
+  {
+   "name": "my_providers",
+   "description": "The AIs {USER} may use in VibeRoller (the host's Claude, their own keys / logins / endpoints, the team's shared ones) and which one answers right now.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "notes_list",
+   "description": "List the team notes (paths like \"plans/next-week.md\", who saved them last, when); with q, only notes whose path or text contains every word, with a snippet.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "q": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "name": "notes_read",
+   "description": "Read a team note (markdown).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  },
+  {
+   "name": "notes_write",
+   "description": "Create or replace a team note with the whole text (saved as \"{USER} · Claude\"). Folders are made as needed; names are case-insensitive.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "e.g. \"meetings/2026-10-17.md\""
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "text"
+    ]
+   }
+  },
+  {
+   "name": "notes_delete",
+   "description": "Delete a team note (or an empty folder). Only when the person asked.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  }
+ ]
+}
