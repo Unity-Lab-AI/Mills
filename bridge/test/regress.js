@@ -85,6 +85,7 @@ function listening(port) {
   });
 }
 
+let RUST_BACK = 0;
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null, FAKE_LINUX = ''; // FAKE_LINUX: R159's stand-in Linux accounts (ignored by git: under bridge/profiles)
 // read a zip like an unzipper would (the Download packages): the central directory names every entry and points at its
 // local header; deflated entries are inflated, so the files inside can be checked
@@ -231,6 +232,7 @@ async function setup() {
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
   for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
   PORT = await freePort(7799);
+  if (RUST_HUB) RUST_BACK = await freePort(PORT + 20); // the JavaScript hub behind the Rust one
   H = `http://127.0.0.1:${PORT}`;
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
@@ -239,7 +241,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs' }, hostGroup: ['t-user'], linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs' }, hostGroup: ['t-user'], ...(RUST_HUB ? { rustHub: { enabled: true, backPort: RUST_BACK } } : {}), linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -300,7 +302,7 @@ function buildNative() { // → '' when built, else why not (once per run)
   const home = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
   const env = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET, VR_RELEASE_PUBKEY: TEST_RELEASE_KEY.public, VR_VERSION: (() => { try { return JSON.parse(fs.readFileSync(path.join(MILLS, 'versions.json'), 'utf8')).project; } catch { return ''; } })() };
   env.PATH = path.join(env.CARGO_HOME, 'bin') + path.delimiter + (env.PATH || '');
-  const r = spawnSync('cargo', ['build', '--release', '-q', '-p', 'vr-host', '-p', 'vr-core', '--examples', '--bins'], { cwd: path.join(MILLS, 'native'), env, encoding: 'utf8', timeout: 1200000 });
+  const r = spawnSync('cargo', ['build', '--release', '-q', '-p', 'vr-host', '-p', 'vr-core', '-p', 'vr-hub', '--examples', '--bins'], { cwd: path.join(MILLS, 'native'), env, encoding: 'utf8', timeout: 1200000 });
   return (nativeBuilt = buildResult(r));
 }
 function buildResult(r) {
@@ -317,6 +319,16 @@ function buildDesktop() { // → { bin } or { why }
   const bin = path.join(NATIVE_TARGET, 'release', 'vr-desktop');
   return r.status === 0 && fs.existsSync(bin) ? { bin } : { why: 'cargo build failed: ' + String(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' ') };
 }
+// --rust-hub: the Rust hub (native/crates/vr-hub) in front of the scratch hub, as config "rustHub" runs it on the server:
+// every check below then goes through it (the modules it has, it answers; the rest it passes to the JavaScript hub)
+const RUST_HUB = (() => {
+  if (!process.argv.includes('--rust-hub')) return '';
+  const why = buildNative();
+  if (why) { console.error('--rust-hub: ' + why); process.exit(2); }
+  const bin = path.join(NATIVE_TARGET, 'release', 'vr-hub' + (WIN ? '.exe' : ''));
+  process.env.VR_HUB_BIN = bin;
+  return bin;
+})();
 const RUST_HOST = (() => {
   if (!process.argv.includes('--rust-host')) return '';
   const why = buildNative();
@@ -1115,6 +1127,14 @@ async function run() {
   const hr = await fetch(H + '/api/status');
   check('R93', 'hub answers carry nosniff, no-referrer, frame DENY; API answers are no-store',
     hr.headers.get('x-content-type-options') === 'nosniff' && hr.headers.get('referrer-policy') === 'no-referrer' && hr.headers.get('x-frame-options') === 'DENY' && /no-store/.test(hr.headers.get('cache-control') || ''));
+  if (RUST_HUB) { // R166 (--rust-hub only): the Rust hub is really in front, and the JavaScript one is not reachable around it
+    const fr = await fetch(H + '/__vr-front').then(async (r) => ({ status: r.status, j: await r.json().catch(() => ({})), h: r.headers.get('x-vr-front') })).catch(() => ({}));
+    const st = await fetch(H + '/api/status');
+    const backDirect = await fetch(`http://127.0.0.1:${RUST_BACK}/api/status`).then((r) => r.status).catch(() => 'closed');
+    check('R166', 'the Rust hub (vr-hub) is in front: it answers /__vr-front with its version and native modules, every hub answer passes through it (X-VR-Front), and the JavaScript hub listens behind it on its own port on 127.0.0.1 only',
+      fr.status === 200 && fr.j.front === 'vr-hub' && !!st.headers.get('x-vr-front') && backDirect === 200,
+      `front ${fr.status} ${JSON.stringify(fr.j)}; status via front ${st.headers.get('x-vr-front')}; back ${backDirect}`);
+  }
   {
     // R162: sessions kept as hashes; the page's scripts pinned by hash; every route's failure answered
     const hs = JSON.parse(fs.readFileSync(path.join(SB, 'hub-state.json'), 'utf8')), keys = Object.keys(hs.sessions || {});

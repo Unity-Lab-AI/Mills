@@ -1285,8 +1285,10 @@ async function handleRequest(req, res) {
   }
 }
 
-server.listen(config.port, '127.0.0.1', () => {
-  console.log(`[mills] Hub running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);
+// behind the Rust hub (bridge/run.js, config rustHub): this hub listens on its own port and the Rust one takes config.port
+const LISTEN_PORT = Number(process.env.VR_BACK_PORT) || config.port;
+server.listen(LISTEN_PORT, '127.0.0.1', () => {
+  console.log(`[mills] Hub running at http://localhost:${LISTEN_PORT}${LISTEN_PORT !== config.port ? ` behind the Rust hub on ${config.port}` : ''}  (Claude works in ${MILLS_DIR})`);
   for (const a of accounts.values()) {
     console.log(`[mills]   ${a.username.padEnd(10)} ${a.display}${a.admin ? ' (admin)' : ''} · lock ${a.state.lockedDevice ? 'claimed' : 'unclaimed'} · model ${effectiveModel(a) || 'default'}${fs.existsSync(a.files.AUTH_FILE) ? '' : ' · NO PASSWORD SET'}`);
   }

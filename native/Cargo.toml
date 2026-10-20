@@ -9,7 +9,7 @@
 # Test:    cargo test
 [workspace]
 resolver = "2"
-members = ["crates/vr-core", "crates/vr-desktop", "crates/vr-host"]
+members = ["crates/vr-core", "crates/vr-desktop", "crates/vr-host", "crates/vr-hub"]
 
 [workspace.package]
 version = "0.1.0"

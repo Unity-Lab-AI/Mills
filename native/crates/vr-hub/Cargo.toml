@@ -1,0 +1,19 @@
+[package]
+name = "vr-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bytes = "1.12.1"
+futures-util = "0.3.34"
+http = "1.5.0"
+http-body-util = "0.1.5"
+hyper = { version = "1", features = ["server", "client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio", "server-auto", "client-legacy", "http1"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tokio = { version = "1.54.0", features = ["full"] }
+vr-core = { version = "0.1.0", path = "../vr-core" }

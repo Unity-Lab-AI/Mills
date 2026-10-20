@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.13.0 — 2026-10-20
+
+### Added: the Rust hub, in front (board T-130)
+- **vr-hub** (`native/crates/vr-hub`): the hub in Rust, growing module by module in front of the JavaScript hub. With
+  config `"rustHub": { "enabled": true, "backPort": 7779 }`, `bridge/run.js` starts it on the hub's port (what nginx
+  already sends the portal to, so nginx needs no change) and the JavaScript hub behind it on 127.0.0.1:backPort. It
+  answers the modules it has and passes everything else through, streamed both ways (long polls, streamed answers,
+  uploads up to 32 MB); while the JavaScript hub restarts, requests wait up to 30 s for it instead of failing. If its
+  binary is missing or it fails three times in a minute, the JavaScript hub takes the port back by itself.
+  `/__vr-front` names it and its modules; every answer carries `X-VR-Front`.
+- **The whole regression suite runs through it**: `node bridge/test/regress.js --rust-hub` (all checks pass; R166 checks
+  it is really in front and the JavaScript hub sits behind it). Off by default until the modules have moved (T-131).
+
 ## 3.12.0 — 2026-10-20
 
 ### Added: VibeRoller Desktop, native (Rust + Tauri), Linux and Windows (board T-128, T-129)
