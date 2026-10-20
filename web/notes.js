@@ -108,6 +108,7 @@ const NOTES = (() => {
     show() { wire(); refresh().then(() => { const last = store.get('mills.note.' + (me ? me.username : '')); if (last && !N.open) open(last).catch(() => {}); }); },
     onVersion(v) { if (v && v !== N.ver && !$('notes').hidden) refresh(); },
     stop() { N.open = null; N.dirty = false; N.tree = []; N.ver = 0; },
+    dirty: () => !!N.dirty, // an unsaved note holds back the page's self-update
     state: N,
   };
 })();

@@ -2106,6 +2106,24 @@ async function run() {
       `rail dms ${railSrc.indexOf("'srv dms'")} servers ${railSrc.indexOf('for (const s of G.data.servers)')}; channels groups ${/G\.data\.groups/.test(chanSrc)}`);
   }
 
+  // R156: the web page updates itself: every 5 minutes (and on every answer) it compares builds; it saves the session
+  // and hard-reloads with every cache busted
+  {
+    const served = await (await fetch(H + '/')).text();
+    const ver = await call('/api/version', U), verHdr = (await fetch(H + '/api/version', { headers: { Authorization: 'Bearer ' + U } })).headers.get('x-vr-version');
+    const anonVer = (await fetch(H + '/api/version')).status, ck156 = (await call('/api/check', U)).data;
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), notes156 = fs.readFileSync(path.join(MILLS, 'web', 'notes.js'), 'utf8'), host156 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8');
+    const build = ver.data.build || '';
+    const tagged = [...served.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);
+    check('R156', 'the web page updates itself without anyone doing anything: the hub names its build (version + commit) on every signed-in answer and at /api/version (signed-in only), the page checks every 5 minutes; when the build changed it waits only for a streaming reply, a call or an unsaved file / note, saves the Work conversation + queue (only if Work was opened), the drafts and the screen, empties the service-worker caches, updates the worker and reloads under the new build\'s name, then restores it all; the hub serves every script and stylesheet under the build\'s name (cache busting) and the page itself with no-store; AI hosts look for updates every 5 minutes',
+      ver.status === 200 && /^\d+\.\d+\.\d+(\+[0-9a-f]{7})?$/.test(build) && verHdr === build && ck156.build === build && anonVer === 401
+      && tagged.length >= 5 && tagged.every((s) => s.endsWith('?v=' + encodeURIComponent(build))) && new RegExp('stylesheet" href="polish\\.css\\?v=').test(served)
+      && /setInterval\(\(\) => \{ if \(me && token\) api\('\/api\/version'\)/.test(page) && /5 \* 60e3/.test(page) && /caches\.delete\(k\)/.test(page) && /r\.update\(\)/.test(page) && /searchParams\.set\('v', build\)/.test(page) && /location\.replace\(/.test(page)
+      && /if \(workStarted\) \{ try \{ saveCurrent\(\); saveQueue\(\);/.test(page) && /function restoreAfterUpdate\(\)/.test(page) && /restoreAfterUpdate\(\); \/\/ the page just updated/.test(page) && /editorDirty = true/.test(page) && /dirty: \(\) => !!N\.dirty/.test(notes156)
+      && /checkUpdate\(\); \}, 5 \* 60000\)/.test(host156),
+      `build ${build} hdr ${verHdr} check ${ck156.build} anon ${anonVer}; scripts ${tagged.slice(0, 3).join(' ')}`);
+  }
+
   // R155: every download is its own installer, launcher and updater (Linux paths run for real here; Windows: source)
   {
     const sh = (cmd) => spawnSync('sh', ['-c', cmd], { encoding: 'utf8' });
@@ -2501,7 +2519,7 @@ async function run() {
       pid2 !== pid1 && oldAfter.remoteKind === 'claude-cli-work' && !!newAfter.id && askNew.status === 428 && askOld.status === 401 && legacyNoHello === 'held'
       && !!(sessFile['old-node'] && sessFile['old-node'].hello && /^[0-9a-f]{64}$/.test(sessFile['old-node'].key)) && ign === 0
       && /beat: beat\(\)/.test(nodes154) && /r\.status === 428/.test(host154) && /Math\.min\(5000, 1000 \* misses\)/.test(host154) && /quiet = \(ms = 180000\)/.test(host154) && /aiHosts/.test(team154)
-      && /X-VR-Version/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')) && /function pageUpdateAvailable\(v\)/.test(page154) && /hubVersion !== me\.version/.test(page154),
+      && /X-VR-Version/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')) && /function pageUpdateAvailable\(build\)/.test(page154) && /hubBuild !== \(me\.build \|\| me\.version\)/.test(page154),
       `old ${oldAfter.remoteKind} new ${!!newAfter.id}; no session: ${askNew.status} / ${askOld.status}; 1.x ${legacyNoHello}; sessions file ${Object.keys(sessFile).join(',')}; ignored ${ign}`);
   }
   const ws1 = (await call('/api/work/current', U)).data;

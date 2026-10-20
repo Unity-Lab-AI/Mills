@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.5.0 — 2026-10-20
+
+### Changed
+- **The web page updates itself, with nothing for anyone to do.** It checks the hub's build every 5 minutes
+  (`/api/version`) as well as on every answer (`X-VR-Version` now names the build: version + commit). When the build
+  changed, it no longer waits for you to clear what you are typing:
+  - it waits only for what finishes by itself or cannot be saved for you: a reply still streaming in (Work, Unity), a
+    call, a file or a note with unsaved changes (it says so once);
+  - it saves the session: the Work conversation and its queue on the hub (only when Work was opened in that tab, so an
+    empty one never overwrites the saved one), and in the tab what you were typing in Work / Chat / Unity and the screen
+    you were on;
+  - it hard-reloads with every cache busted: the service worker's caches are emptied and the worker updated, the page
+    is loaded under the new build's name, and the hub now serves every script and stylesheet under the build's name too
+    (the page itself with no-store); then it restores the screen and the drafts and says it updated.
+- AI hosts look for updates every 5 minutes (was 10), besides after every hello and when the hub's heartbeat names a new
+  version. The hub's auto-deploy already checks Forgejo every minute; an installed Desktop checks at every start, and
+  its window is this same page, so it follows every 5 minutes too.
+- Check R156; R154 adjusted.
+- Modules: bridge/server.js 3.3.0, bridge/ai-node.js 3.2.1, web/index.html 1.6.0, web/notes.js 1.0.2.
+
 ## 3.4.0 — 2026-10-20
 
 ### Added
