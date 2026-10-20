@@ -7,6 +7,34 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.7.0 — 2026-10-20
+
+### Added
+- **Attachments, in the team chat and in Work.** A + button on both message boxes (drop and paste work too) attaches one
+  or more files, pictures or videos (up to 24 MB each, 20 per message), with or without text.
+  - **Chat, end-to-end encrypted like the messages:** each file is encrypted in the browser with its own key; only the
+    ciphertext reaches the hub (`POST /api/room/file`), and the file's name, type, size and key travel inside the
+    encrypted message body. The hub only learns which file ids a message has, to let exactly that message's readers
+    fetch them (`GET /api/room/file/<id>`); a file is sent once, never with someone else's upload; deleting the message
+    (or clearing the chat) deletes its files; uploads never sent are removed after a day. Store: Chat/files/ (part of
+    the data snapshots and the data move). Unity, when called, sees the files' names.
+  - **Work:** files go to the person's own upload area on the hub (bridge/profiles/<user>/uploads, kept 30 days); their
+    Claude gets the paths and read access to that folder (`--add-dir`), so it reads pictures, code and documents. The
+    message carries its files as a marker block at its end, so the queue, the saved conversation and Past sessions
+    keep them with no change. `GET /api/work/file/<id>` serves them to their owner only.
+  - **How they show (web/attach.js), by what they are:** pictures inline (click for full size), video and audio with a
+    player loaded on play, text / markdown / code in a viewer (markdown rendered, code highlighted for its language),
+    and anything else (binary, unknown) only its name and size with Download: never opened, shown or played. Text is
+    text only when it really is (no NUL byte, valid UTF-8), whatever its name says. Files are never served with a type a
+    browser would run (octet-stream, nosniff, attachment).
+- **Auto-scroll is a setting** (Settings → App settings), off by default: a conversation (Work, the team chat, Unity)
+  follows new content only while you are at its bottom; with the setting on it always follows, until you scroll up,
+  which switches the setting off by itself. When something new arrives below while you read further up, a "Newest"
+  button sticks to the bottom and takes you there. Your own messages and opening a conversation still go to the bottom.
+- Check R158.
+- Modules: bridge/files.js 1.0.0 (new), bridge/server.js 3.4.0, web/attach.js 1.0.0 (new), web/index.html 1.7.0,
+  web/sw.js 1.0.2.
+
 ## 3.6.0 — 2026-10-20
 
 ### Added
