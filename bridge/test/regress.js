@@ -226,6 +226,7 @@ async function setup() {
   // what the Download panel packs (bridge/downloads.js): the AI node's launchers, example config and host tools
   for (const f of ['ai-node.example.json', 'start-node.bat', 'start-node.sh']) fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
+  fs.cpSync(path.join(BRIDGE, 'desktop'), path.join(SB, 'desktop'), { recursive: true }); // the Desktop packages' setup scripts
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
   for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
   PORT = await freePort(7799);
@@ -2036,7 +2037,7 @@ async function run() {
       anon.status === 401 && dl.status === 200 && items.length === 4 && ['desktop-windows', 'desktop-linux', 'ai-host-windows', 'ai-host-linux'].every((id) => items.some((it) => it.id === id && it.bytes > 1000 && /\.zip$/.test(it.file)))
       && zipRes.status === 200 && zipBuf.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && /attachment; filename="VibeRollerAIHost-windows\.zip"/.test(zipRes.headers.get('content-disposition') || '') && zipRes.headers.get('content-type') === 'application/zip'
       && ['VibeRollerAIHost/ai-node.js', 'VibeRollerAIHost/common.js', 'VibeRollerAIHost/worktree.js', 'VibeRollerAIHost/pc-tools-mcp.js', 'VibeRollerAIHost/board-mcp.js', 'VibeRollerAIHost/team-mcp.js', 'VibeRollerAIHost/ai-node.example.json', 'VibeRollerAIHost/start-node.bat', 'VibeRollerAIHost/host-tools/HostTool.cs', 'VibeRollerAIHost/host-tools/AiHostService.cs', 'VibeRollerAIHost/host-tools/build-host-tools.ps1', 'VibeRollerAIHost/host-tools/build.cmd', 'VibeRollerAIHost/host-tools/install-ai-host-service.cmd', 'VibeRollerAIHost/README.txt'].every((n) => names.includes(n)) && !names.some((n) => n.endsWith('/ai-node.json'))
-      && linuxZip.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && linuxFiles.length === 3 && linuxFiles.every((e) => e.data.toString('utf8').includes(H)) && entries.some((e) => e.name.endsWith('README.txt') && e.data.toString('utf8').includes(H))
+      && linuxZip.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && linuxFiles.length === 3 && linuxFiles.filter((e) => !e.name.endsWith('VERSION.txt')).every((e) => e.data.toString('utf8').includes(H)) && entries.some((e) => e.name.endsWith('README.txt') && e.data.toString('utf8').includes(H))
       && entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js')))) && unknown.status === 404
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
       && /class="menuFoot menuDl"/.test(html) && html.indexOf('data-downloads') < html.indexOf('id="goSettings"') && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
@@ -2103,6 +2104,62 @@ async function run() {
       && /if \(inDms\) return renderDms\(box\)/.test(chanSrc) && !/G\.data\.groups/.test(chanSrc) && /\['convList', 'grpList', 'keyList'\]/.test(chanSrc) && /Group DMs/.test(gj) && /glist\.append\(convButton\(g\.conv/.test(gj)
       && /<div id="convList"><\/div><div id="grpList"><\/div><div id="keyList"><\/div>/.test(page) && /\$\('keyList'\)\.append\(det\)/.test(page) && /GUILDS\.isDmConv\(conv\) \? GUILDS\.DM/.test(page) && /data-server-badge/.test(page) && /const isDmConv = \(c\) => \/\^\(dm\|grp\):\//.test(gj),
       `rail dms ${railSrc.indexOf("'srv dms'")} servers ${railSrc.indexOf('for (const s of G.data.servers)')}; channels groups ${/G\.data\.groups/.test(chanSrc)}`);
+  }
+
+  // R155: every download is its own installer, launcher and updater (Linux paths run for real here; Windows: source)
+  {
+    const sh = (cmd) => spawnSync('sh', ['-c', cmd], { encoding: 'utf8' });
+    const canRun = !sh('true').error && sh('command -v curl').status === 0;
+    const canUnpack = sh('command -v unzip || command -v python3 || command -v bsdtar').status === 0;
+    const pubVers = await fetch(H + '/api/pub/versions').then((r) => r.json()).catch(() => ({}));
+    const pubDesk = await fetch(H + '/api/pub/desktop-linux.zip'), pubDeskBuf = Buffer.from(await pubDesk.arrayBuffer());
+    const pubHost = (await fetch(H + '/api/pub/ai-host-linux.zip')).status, pubOdd = (await fetch(H + '/api/pub/auth.json')).status;
+    const write = (buf, dir) => { for (const e of unzipAll(buf)) { const f = path.join(dir, e.name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, e.data); if (/\.sh$/.test(e.name)) fs.chmodSync(f, 0o755); } };
+    const out = {};
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-setup-home-'));
+    try {
+      if (!canRun) throw new Error('skip');
+      const env = { ...process.env, HOME: home, PATH: '/usr/bin:/bin' + (process.env.PATH ? ':' + path.dirname(process.execPath) : '') };
+      const run = (file, a = []) => spawnSync(file.endsWith('.js') ? process.execPath : 'sh', [file, ...a], { encoding: 'utf8', env, input: '', timeout: 60000 });
+      // ---- Desktop (Linux) ----
+      const pkg = path.join(home, 'Downloads'); write(pubDeskBuf, pkg);
+      const dsh = path.join(pkg, 'VibeRollerDesktop', 'viberoller-desktop.sh'), STDD = path.join(home, '.local', 'share', 'viberoller', 'desktop');
+      out.dStatus = /No other install found/.test(run(dsh, ['--status']).stdout);
+      run(dsh, ['--install', '--yes']);
+      const vOf = (d) => { try { return fs.readFileSync(path.join(d, 'VERSION.txt'), 'utf8').trim(); } catch { return ''; } };
+      out.dInstalled = vOf(STDD) === pubVers['desktop-linux'] && fs.existsSync(path.join(home, '.local', 'share', 'applications', 'viberoller-desktop.desktop')) && fs.existsSync(path.join(home, '.local', 'bin', 'viberoller-desktop'));
+      fs.writeFileSync(path.join(STDD, 'VERSION.txt'), '0.0.1+old\n'); // an older install …
+      const dUpd = run(dsh); // … the downloaded package finds it and updates it
+      out.dUpdated = vOf(STDD) === pubVers['desktop-linux'] && /updated to/.test(dUpd.stdout);
+      if (canUnpack) { // the installed copy updates itself from the hub at its next start
+        fs.writeFileSync(path.join(STDD, 'VERSION.txt'), '0.0.1+old\n');
+        run(path.join(home, '.local', 'bin', 'viberoller-desktop'));
+        out.dSelf = vOf(STDD) === pubVers['desktop-linux'];
+      } else out.dSelf = 'no unzip / python3 here';
+      // ---- AI Host (Linux) ----
+      const hostZip = Buffer.from(await (await fetch(H + '/api/downloads/ai-host-linux.zip', { headers: { Authorization: 'Bearer ' + U } })).arrayBuffer());
+      const hpkg = path.join(home, 'HostDownload'); write(hostZip, hpkg);
+      const setup = path.join(hpkg, 'VibeRollerAIHost', 'vr-setup.js'), STDH = path.join(home, '.local', 'share', 'viberoller', 'ai-host');
+      out.hStatus = /No other install found/.test(run(setup, ['--status']).stdout);
+      const hInst = run(setup, ['--install', '--yes']);
+      out.hInstalled = vOf(STDH) === pubVers['ai-host-linux'] && fs.existsSync(path.join(STDH, 'ai-node.js')) && fs.existsSync(path.join(STDH, '.vr-installed')) && /No ai-node\.json/.test(hInst.stdout);
+      fs.writeFileSync(path.join(STDH, 'VERSION.txt'), '0.0.1+old\n'); fs.writeFileSync(path.join(STDH, 'ai-node.json'), '{"mine":true}\n'); fs.writeFileSync(path.join(STDH, 'ai-node.js'), '// stale-copy-r155\n');
+      const hUpd = run(setup, ['--update']);
+      out.hUpdated = vOf(STDH) === pubVers['ai-host-linux'] && fs.readFileSync(path.join(STDH, 'ai-node.json'), 'utf8') === '{"mine":true}\n' && !/stale-copy-r155/.test(fs.readFileSync(path.join(STDH, 'ai-node.js'), 'utf8')) && /Found an earlier install/.test(hUpd.stdout);
+      // a host that runs from a git checkout is never overwritten
+      fs.rmSync(STDH, { recursive: true, force: true });
+      const gitHost = path.join(home, 'VibeRollerAIHost'); fs.mkdirSync(path.join(gitHost, '.git'), { recursive: true }); fs.writeFileSync(path.join(gitHost, 'ai-node.js'), '// git checkout\n');
+      const hGit = run(setup, ['--yes']);
+      out.hGitKept = /git checkout/.test(hGit.stdout) && fs.readFileSync(path.join(gitHost, 'ai-node.js'), 'utf8') === '// git checkout\n' && !fs.existsSync(STDH);
+    } catch (e) { if (e.message !== 'skip') out.error = e.message; }
+    finally { try { fs.rmSync(home, { recursive: true, force: true }); } catch {} }
+    const ps1 = fs.readFileSync(path.join(BRIDGE, 'desktop', 'vr-desktop.ps1'), 'utf8'), setupSrc = fs.readFileSync(path.join(BRIDGE, 'vr-setup.js'), 'utf8'), dl155 = fs.readFileSync(path.join(BRIDGE, 'downloads.js'), 'utf8');
+    check('R155', 'every download is its own installer, launcher and updater, Windows and Linux: each package carries VERSION.txt (the hub\'s version + a fingerprint of its contents) and /api/pub/versions names them (public, as are the Desktop packages; the AI Host packages are not); the Desktop finds no install → installs (menu entry, ~/.local/bin), finds an older one → updates it, and an installed copy updates itself from the hub at its next start; the AI Host setup installs into the standard folder, updates an older install keeping its ai-node.json, and never overwrites a host that runs from a git checkout; [static] the Windows Desktop (PowerShell) finds earlier installs through its folder and its shortcuts, installs or runs portable, updates itself; the AI Host setup finds the service\'s folder, holds a running launcher back, and starts a host its old launcher let stop',
+      /^\d+\.\d+\.\d+\+[0-9a-f]{8}$/.test(pubVers['desktop-linux'] || '') && /^\d+\.\d+\.\d+\+[0-9a-f]{8}$/.test(pubVers['ai-host-windows'] || '') && pubDesk.status === 200 && pubDeskBuf.slice(0, 2).toString() === 'PK' && pubHost === 404 && pubOdd === 404
+      && (!canRun || (out.dStatus && out.dInstalled && out.dUpdated && out.dSelf !== false && out.hStatus && out.hInstalled && out.hUpdated && out.hGitKept))
+      && /function Find-Installs/.test(ps1) && /function Self-Update/.test(ps1) && /\[switch\]\$Portable/.test(ps1) && /api\/pub\/versions/.test(ps1) && /Expand-Archive/.test(ps1)
+      && /sc', \['qc', 'VibeRollerAIHost'\]/.test(setupSrc) && /held\.push\(r\)/.test(setupSrc) && /followRestart/.test(setupSrc) && /publicRoute/.test(dl155),
+      canRun ? JSON.stringify(out) : 'sh / curl not here: source checks only');
   }
 
   // R149: the server's auto-deploy restarts the hub only for a really new main (production bug 2026-10-19: commits made

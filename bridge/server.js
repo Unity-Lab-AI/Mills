@@ -819,6 +819,8 @@ const server = http.createServer(async (req, res) => {
       return fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
     }
 
+    // the package versions and the Desktop packages: public (an installed Desktop updates itself before anyone signs in)
+    if (p.startsWith('/api/pub/') && downloads.publicRoute(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`)) return;
     if (p === '/api/status' && req.method === 'GET') {
       // The only thing anyone may learn without signing in is that a VibeRoller hub is here (the page needs
       // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
