@@ -7,6 +7,49 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.6.0 — 2026-10-20
+
+### Added
+- **The heart & knife control app** (bridge/vr-host.js; Windows and Linux, in a terminal). One app replaces the separate
+  heart (start) and knife (stop):
+  - a live dashboard: running (process, service, how it starts at boot), connected to the hub (since when, the last
+    heartbeat, the hub's version), in use (answers in flight, Work runs, the last job), updates (automatic or not, the
+    last one), who may use each provider, the engines, a security summary;
+  - [s] start, [x] stop, [r] restart (Shift = at once; otherwise as soon as nothing is in flight), [p] pause / resume
+    (the old knife), [u] update now, [l] the log;
+  - [c] every setting, written to ai-node.json and applied by the host at its next quiet moment: the hub's address
+    (https only), the token (never shown), automatic updates and their timing, the reconnect delay, every provider (on
+    / off, shared with the hub's **team group** and / or **named users**, 5-hour / 7-day caps), Unity's engines on / off,
+    and the security switches (Work on this machine, PC file access, a plain-http hub, the engine guard), plus locking
+    the config file down;
+  - [b] start at boot: the service from boot (Windows: administrator once; Linux: sudo once), at sign-in / a user
+    service (no administrator), or off;
+  - the same as commands for scripts: `node vr-host.js status | start | stop | restart | pause | resume | update | log
+    | boot … | settings | set <setting> <value>`.
+  - Windows: host-tools\build.cmd builds the service and ONE shortcut, "VibeRoller AI Host" (a heart & knife icon), on
+    the Desktop and in the Start menu, and removes the old heart / knife programs and shortcuts. Linux:
+    host-tools/viberoller-host-control.sh; start-viberoller-host.sh / stop-viberoller-host.sh call the app. An
+    installed package (VibeRoller AI Host.cmd / viberoller-ai-host.sh) opens the control app; a fresh install starts the
+    host in the background and opens it.
+- **The host reports and obeys:** ai-node.status.json (running, connected, heartbeat, in flight, paused, last update,
+  last error), and stop / restart requests within 2 s (gently: after what is in flight, unless "now").
+- **Settings the host honours:** `update.quietMinutes` / `update.checkMinutes`, `reconnect.maxDelaySeconds`, a provider's
+  `enabled` and `shareWithGroup`, `enginesOff`, `security.*`. Older ai-node.json files work unchanged (safe defaults).
+- **Sharing with the team group:** a provider shared with "@group" is open to the hub's team group (config hostGroup),
+  whatever names are in it; named users besides. New hosts made in Settings share with the group by default.
+
+### Security
+- The host refuses a hub over plain http on another machine (the token would cross the network in the clear) unless
+  `security.allowInsecureHub` is set; ai-node.json is made readable by its owner only (Linux / macOS; the control app
+  locks it down on Windows).
+- **Engine guard:** the hub may use a host's engines, never manage them: only GET / POST, no model delete / pull / push
+  / create / copy, no `..` or `//` in paths (`security.engineGuard: false` lifts it).
+
+### Changed
+- Check R157; R136, R154, R156 follow.
+- Modules: bridge/ai-node.js 3.3.0, bridge/ai-nodes.js 2.5.0, bridge/downloads.js 1.2.1, bridge/vr-setup.js 1.1.0,
+  bridge/vr-host.js 1.0.0 (new).
+
 ## 3.5.0 — 2026-10-20
 
 ### Changed

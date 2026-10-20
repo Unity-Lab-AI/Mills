@@ -44,7 +44,7 @@ const ANIMAL = ['panda', 'crocodile', 'otter', 'falcon', 'badger', 'walrus', 'ly
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NICK_RE = /^[a-z0-9]+(-[a-z0-9]+){1,3}$/;
 // what a host runs (bridge/ai-node.js and what it loads); launchers (.bat / .sh / the service) are never swapped while running
-const HOST_FILES = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'vr-setup.js']; // vr-setup.js: the package's own installer / updater stays current too
+const HOST_FILES = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'vr-setup.js', 'vr-host.js']; // vr-setup.js / vr-host.js: the package's installer + updater and its control app stay current too
 
 // onUsage(source, windows) / savedUsage(source): a host provider's 5h / 7d windows are kept by bridge/usage.js (on disk), so
 // they survive a hub restart and show in /api/usage; source = "h:<hostId>/<providerId>".
@@ -127,7 +127,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     for (const p of Array.isArray(list) ? list.slice(0, 20) : []) {
       const id = String(p.id || '').trim(), kind = String(p.kind || '');
       if (!/^[a-z0-9-]{1,32}$/.test(id) || !['claude-cli', 'claude-relay', 'codex-relay', 'anthropic', 'openai'].includes(kind) || out.some((x) => x.id === id)) continue;
-      out.push({ id, kind, label: String(p.label || id).trim().slice(0, 60) || id, models: cleanModels(p.models), allowedUsers: cleanUsers(p.allowedUsers), max5h: pct(p.max5h, 90), max7d: pct(p.max7d, 90) });
+      out.push({ id, kind, label: String(p.label || id).trim().slice(0, 60) || id, models: cleanModels(p.models), allowedUsers: [...cleanUsers(p.allowedUsers), ...((Array.isArray(p.allowedUsers) ? p.allowedUsers : []).includes('@group') ? ['@group'] : [])], max5h: pct(p.max5h, 90), max7d: pct(p.max7d, 90) });
     }
     return out;
   }
@@ -135,7 +135,8 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
   const allowed = (r, prov) => (r.share && Array.isArray(r.share[prov.id]) ? r.share[prov.id] : prov.allowedUsers);
   // whose host: the record's owner (hosts made in Settings); a legacy config host (no owner) is whose it says in hello
   const ownerOf = (r) => r.user || (live.get(r.id) && live.get(r.id).hello ? live.get(r.id).hello.user : '') || '';
-  const mayUse = (r, prov, user) => !!user && (user === ownerOf(r) || allowed(r, prov).includes(user));
+  // "@group" in a host's list = the hub's team group (config hostGroup), however it changes; names one by one besides
+  const mayUse = (r, prov, user) => { if (!user) return false; if (user === ownerOf(r)) return true; const a = allowed(r, prov) || []; return a.includes(user) || (a.includes('@group') && cleanUsers(config.hostGroup || []).includes(user)); };
   const usageOf = (n, prov) => { // what this hub saw since it started, else the windows kept on disk (a restart forgets nothing)
     const seen = n.usage[prov.id] || {}, kept = savedUsage(`h:${hostIdOf(n)}/${prov.id}`) || {};
     const pick = (k) => (seen[k] && seen[k].utilization != null ? seen[k] : kept[k] || seen[k] || null);
@@ -221,9 +222,11 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     configFor(user, id, hub) {
       const r = db.hosts[id]; if (!r || r.user !== user) throw new Error('Not your host.');
       return { _: `VibeRoller AI Host "${r.nickname}" of ${user}: made in Settings → My AI hosts. Keep this file private: the token is this host's key to the hub.`, hub, id: r.id, nickname: r.nickname, user, token: r.secret,
-        providers: [{ id: 'claude', kind: 'claude-relay', label: `${user}'s Claude`, models: (config.models || []).map((m) => m.id), max5h: 90, max7d: 90, allowedUsers: cleanUsers(config.hostGroup || []) },
-          { id: 'codex', kind: 'codex-relay', label: `${user}'s ChatGPT / Codex`, models: ['gpt-5.5'], allowedUsers: cleanUsers(config.hostGroup || []) }],
-        engines: { ollama: 'http://127.0.0.1:11434', image: 'http://127.0.0.1:5124', voice: 'http://127.0.0.1:5123', speech: 'http://127.0.0.1:5125' } };
+        // shared with the hub's team group (it follows the group as it changes) + named users the owner adds in the control app
+        providers: [{ id: 'claude', kind: 'claude-relay', label: `${user}'s Claude`, models: (config.models || []).map((m) => m.id), max5h: 90, max7d: 90, shareWithGroup: true, allowedUsers: [] },
+          { id: 'codex', kind: 'codex-relay', label: `${user}'s ChatGPT / Codex`, models: ['gpt-5.5'], shareWithGroup: true, allowedUsers: [] }],
+        engines: { ollama: 'http://127.0.0.1:11434', image: 'http://127.0.0.1:5124', voice: 'http://127.0.0.1:5123', speech: 'http://127.0.0.1:5125' },
+        autoUpdate: true, update: { quietMinutes: 3, checkMinutes: 5 }, reconnect: { maxDelaySeconds: 5 }, security: { engineGuard: true, allowInsecureHub: false } };
     },
   };
 

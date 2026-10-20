@@ -2,8 +2,10 @@
 // Vibe Roller AI Host: installer, launcher and updater in one (Windows and Linux). The downloaded package runs this
 // through "VibeRoller AI Host.cmd" (Windows) or "viberoller-ai-host.sh" (Linux):
 //
-//   (no option)    run from an installed copy → start the host here. Run from a downloaded package → look for an earlier
-//                  install; found → update it to this package and start it; none → ask: install, or run portable here.
+//   (no option)    run from an installed copy → the control app (bridge/vr-host.js: status, start / stop, settings, start
+//                  at boot). Run from a downloaded package → look for an earlier install; found → update it to this
+//                  package and start it; none → ask: install (then it runs in the background and the control app
+//                  opens), or run portable here.
 //   --install      install (or update) into the standard folder and start it there
 //   --portable     run from this folder as it is, installing nothing
 //   --update       update the install that was found to this package (nothing else)
@@ -29,7 +31,9 @@ const args = process.argv.slice(2), has = (f) => args.includes(f);
 const say = (...a) => console.log('[VibeRoller AI Host]', ...a);
 const STD = WIN ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'VibeRoller', 'AIHost') : path.join(os.homedir(), '.local', 'share', 'viberoller', 'ai-host');
 // this machine's own files: never copied over, never deleted
-const OWN = /^(ai-node\.json|ai-node\.log.*|ai-node\.lock|ai-host\.off|\.update-.*|\.vr-installed|Api|host-tools[\\/].*\.exe)$/i;
+const OWN = /^(ai-node\.json|ai-node\.log.*|ai-node\.lock|ai-node\.status\.json|ai-host\.off|\.update-.*|\.stop-now|\.restart-now|\.vr-installed|Api|host-tools[\\/].*\.(exe|ico))$/i;
+// the heart & knife control app of an install (bridge/vr-host.js): what an installed copy opens
+const control = (dir) => spawnSync(process.execPath, [path.join(dir, 'vr-host.js')], { cwd: dir, stdio: 'inherit' }).status || 0;
 const same = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 
 const versionOf = (dir) => { try { return fs.readFileSync(path.join(dir, 'VERSION.txt'), 'utf8').trim(); } catch { return fs.existsSync(path.join(dir, 'ai-node.js')) ? '(older, no VERSION.txt)' : ''; } };
@@ -138,7 +142,9 @@ async function main() {
     for (const i of installs) say(`Install: ${i.dir} · ${i.version || '?'}${i.git ? ' · git checkout (updates itself)' : ''}${i.service ? ' · the service runs it' : ''}${i.running ? ` · running (pid ${i.running})` : ' · not running'}`);
     return 0;
   }
-  if (has('--portable') || (thisIsInstall && !has('--install') && !has('--update'))) return start(HERE);
+  if (has('--portable')) return start(HERE);
+  // an installed copy: the control app (start / stop / restart / settings / start at boot …), the host itself runs in the background
+  if (thisIsInstall && !has('--install') && !has('--update')) return fs.existsSync(path.join(HERE, 'vr-host.js')) && process.stdin.isTTY ? control(HERE) : start(HERE);
   // an earlier install: update it (a git checkout is left to update itself)
   const target = installs.find((i) => !i.git) || null, gitOne = installs.find((i) => i.git);
   if (!target && gitOne && !has('--install')) {
@@ -159,7 +165,13 @@ async function main() {
   if (choice.startsWith('p')) return start(HERE);
   const r = copyInto(STD);
   say(`Installed into ${STD} (${r.n} files, ${mine}).`);
-  say(WIN ? `To start it at boot: run host-tools\\build.cmd in ${STD} once (it offers the service).` : `To start it at boot: sudo sh ${path.join(STD, 'host-tools', 'install-ai-host-service.sh')}`);
-  return start(STD);
+  // in the background from here on; the control app shows it, changes every setting and sets up start at boot ([b])
+  const code = start(STD, { detached: true });
+  if (code || !process.stdin.isTTY || !fs.existsSync(path.join(STD, 'vr-host.js'))) {
+    say(`Open the control app any time: node "${path.join(STD, 'vr-host.js')}" (settings, start / stop, start at boot).`);
+    return code;
+  }
+  say('Opening the control app: [b] makes it start at boot, [c] has every setting.');
+  return control(STD);
 }
 main().then((code) => process.exit(code || 0), (e) => { say('Setup failed:', e.message); process.exit(1); });

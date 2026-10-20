@@ -1,13 +1,13 @@
 {
-  "_": "VibeRoller AI Host config: copy to ai-node.json next to ai-node.js. The easy way: Settings → My AI hosts → New host → Download: the package then has this file filled in. id + token are the host's key to the hub (keep private), user is whose host it is, nickname is what the hub issued.",
-  "hub": "https://portal.git.unityailab.com",
+  "_": "VibeRoller AI Host config: copy to ai-node.json next to ai-node.js. The easy way: Settings → My AI hosts → New host → Download: the package then has this file filled in. id + token are the host's key to the hub (keep private), user is whose host it is, nickname is what the hub issued. Every setting below can be changed in the control app (node vr-host.js → [c]).",
+  "hub": "https://portal.unityailab.com",
   "id": "<the host's UUID, from Settings → My AI hosts>",
   "token": "<the host's secret, from the same place>",
   "user": "gee",
   "nickname": "silly-panda",
   "providers": [
-    { "id": "claude", "kind": "claude-cli", "label": "Gee's Claude", "models": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], "max5h": 90, "max7d": 90, "allowedUsers": ["mills", "sponge", "gee"], "configDir": "" },
-    { "id": "ollama", "kind": "openai", "label": "Local Ollama", "baseUrl": "http://127.0.0.1:11434/v1", "apiKey": "", "models": ["llama3.1"], "allowedUsers": ["mills", "sponge", "gee"] }
+    { "id": "claude", "kind": "claude-cli", "label": "Gee's Claude", "models": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], "max5h": 90, "max7d": 90, "shareWithGroup": true, "allowedUsers": [], "configDir": "" },
+    { "id": "ollama", "kind": "openai", "label": "Local Ollama", "baseUrl": "http://127.0.0.1:11434/v1", "apiKey": "", "models": ["llama3.1"], "shareWithGroup": true, "allowedUsers": [] }
   ],
   "engines": {
     "ollama": "http://127.0.0.1:11434",
@@ -15,6 +15,11 @@
     "voice": "http://127.0.0.1:5123",
     "speech": "http://127.0.0.1:5125"
   },
+  "autoUpdate": true,
+  "update": { "quietMinutes": 3, "checkMinutes": 5 },
+  "reconnect": { "maxDelaySeconds": 5 },
+  "security": { "engineGuard": true, "allowInsecureHub": false },
+  "allowWork": false,
   "pc": { "folder": "" },
   "work": { "hubRepo": "", "projectsRoot": "", "claudeCommand": "claude" }
 }
