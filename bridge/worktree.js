@@ -379,6 +379,25 @@ function commit(username, message, projectName) {
   return `Committed on ${branch} (${git(dir, 'rev-parse', '--short', 'HEAD')}).`;
 }
 
+// The versioning law (LAWS.md): a project with a versions.json moves its version up with every merge into the
+// integration branch. If the branch is not above what is there now (forgot to bump, or someone else merged the same
+// number first), nothing is merged and the message says which numbers would be right.
+const semver = (s) => { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(s || '').trim()); return m ? m.slice(1).map(Number) : null; };
+const semverCmp = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; };
+function projectVersion(repo, ref) {
+  const r = tryGit(repo, 'show', `${ref}:versions.json`);
+  if (!r.ok) return null;
+  try { return semver(JSON.parse(r.out).project); } catch { return null; }
+}
+function versionGate(repo, base, branch) {
+  const there = projectVersion(repo, base), mine = projectVersion(repo, branch);
+  if (!there) return ''; // no versions.json on the integration branch: nothing to enforce
+  if (mine && semverCmp(mine, there) > 0) return '';
+  const [a, b, c] = there;
+  return `Not merged: ${branch} is at ${mine ? mine.join('.') : '(no version)'} but ${base} is already at ${there.join('.')}, and every merge moves the version up (LAWS.md, versioning law). `
+    + `Set versions.json (and the CHANGELOG section) to ${a}.${b}.${c + 1} for fixes and small changes, ${a}.${b + 1}.0 for moderate to large features or anything that could break, or ${a + 1}.0.0 for a rework of half the codebase or more; commit, then merge again.`;
+}
+
 // A throwaway detached checkout of one commit (so nobody's checkout is touched), removed again by done().
 function scratch(p, at) {
   const dir = path.join(p.root, `_merge-${process.pid}-${Date.now()}`);
@@ -401,6 +420,8 @@ function merge(username, projectName) {
   }
   const base = upstreamOf(repo, main);
   if (count(repo, `${base}..${branch}`) === 0) return [...lines, `Nothing to merge: ${branch} has no commits that ${base} lacks.`].join('\n');
+  const vErr = versionGate(repo, base, branch);
+  if (vErr) throw new Error(vErr);
   const s = scratch(p, base);
   let head;
   try {

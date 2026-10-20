@@ -25,8 +25,9 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { spawn, spawnSync, execFileSync } = require('child_process');
 // Run from a Work run, this process carries that person's Forgejo login (FORGEJO_* and a git extraHeader through
-// GIT_CONFIG_*); the throwaway hub and its git calls must never see it (it leaked into R122's runs once).
-for (const k of Object.keys(process.env)) if (/^(FORGEJO_|GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$)/.test(k)) delete process.env[k];
+// GIT_CONFIG_*), and a Work run on an AI host's Claude carries the live hub's login relay (ANTHROPIC_BASE_URL /
+// _AUTH_TOKEN); the throwaway hub and its fake Claude must never see either (they leaked into R122 and R112 once).
+for (const k of Object.keys(process.env)) if (/^(FORGEJO_|GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$|ANTHROPIC_(BASE_URL|AUTH_TOKEN|API_KEY)$)/.test(k)) delete process.env[k];
 
 const BRIDGE = path.join(__dirname, '..');
 const MILLS = path.join(BRIDGE, '..');
@@ -63,6 +64,11 @@ function prodAccountFiles() {
 const prodBefore = Object.fromEntries(prodAccountFiles().map((f) => [f, sha(f)]));
 
 // ---------- scratch hub ----------
+// the versioning law in the scratch repo: a merge needs the project version moved up (patch +1 here)
+function bumpPatch(dir) {
+  const f = path.join(dir, 'versions.json'), v = JSON.parse(fs.readFileSync(f, 'utf8'));
+  v.project = v.project.replace(/\d+$/, (n) => String(Number(n) + 1)); fs.writeFileSync(f, JSON.stringify(v, null, 2) + '\n');
+}
 function freePort(start) {
   return new Promise((resolve) => {
     const tryPort = (p) => {
@@ -231,7 +237,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd' }, aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh' }, aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
@@ -593,21 +599,26 @@ async function run() {
     && samePath(cwdOf(legacyRun.events), wtU) && !samePath(cwdOf(legacyRun.events), SCRATCH) && busyWs.status === 409 && backOwn.status === 200 && samePath(backOwn.data.dir, wtU) && keptWs === 'VibeRoller' && otherWs === 'VibeRoller', `legacy ${legacyShared.status} ${JSON.stringify(legacyShared.data)} cwd ${cwdOf(legacyRun.events)}`);
   const mg = { status: -1, stdout: '', stderr: 'no worktree' };
   let onDevelop = false, again = '', stOut = '', badUser = false;
+  let unbumped = { status: -1, stderr: '' };
   if (fs.existsSync(wtU)) {
     fs.writeFileSync(path.join(wtU, 'regress-note.txt'), 'from t-user\n');
     execFileSync('git', ['add', 'regress-note.txt'], { cwd: wtU }); execFileSync('git', ['commit', '-q', '-m', 'note'], { cwd: wtU });
     const wtJs = path.join(SB, 'worktree.js');
+    unbumped = spawnSync(process.execPath, [wtJs, 'merge', 't-user'], { cwd: SB, encoding: 'utf8' }); // the versioning law: no bump, no merge
+    bumpPatch(wtU); execFileSync('git', ['commit', '-qam', 'bump'], { cwd: wtU });
     Object.assign(mg, spawnSync(process.execPath, [wtJs, 'merge', 't-user'], { cwd: SB, encoding: 'utf8' }));
     onDevelop = spawnSync('git', ['show', 'develop:regress-note.txt'], { cwd: SCRATCH, encoding: 'utf8' }).stdout.includes('from t-user');
     again = spawnSync(process.execPath, [wtJs, 'merge', 't-user'], { cwd: SB, encoding: 'utf8' }).stdout;
     stOut = spawnSync(process.execPath, [wtJs, 'status'], { cwd: SB, encoding: 'utf8' }).stdout;
     badUser = spawnSync(process.execPath, [wtJs, 'ensure', '../evil'], { cwd: SB, encoding: 'utf8' }).status !== 0;
   }
-  check('R41', 'worktree.js: merge brings work/<user> into develop; nothing-to-merge; status; bad username refused', mg.status === 0 && onDevelop && /Nothing to merge/.test(again) && /work\/t-user/.test(stOut) && badUser, String(mg.stdout || mg.stderr).trim().split('\n')[0]);
+  check('R41', 'worktree.js: merge brings work/<user> into develop; nothing-to-merge; status; bad username refused; the versioning law: a branch whose version is not above develop\'s is not merged, and the message offers the right next numbers', mg.status === 0 && onDevelop && /Nothing to merge/.test(again) && /work\/t-user/.test(stOut) && badUser
+    && unbumped.status !== 0 && /every merge moves the version up/.test(unbumped.stderr) && /\d+\.\d+\.\d+ for fixes/.test(unbumped.stderr), String(mg.stdout || mg.stderr).trim().split('\n')[0] + ' | unbumped: ' + String(unbumped.stderr).trim().slice(0, 160));
   let cm = { stdout: '', stderr: 'no worktree' }, cmMerged = false, cmClean = '';
   if (fs.existsSync(wtU)) {
     const wtJs = path.join(SB, 'worktree.js');
     fs.writeFileSync(path.join(wtU, 'regress-uncommitted.txt'), 'left uncommitted\n');
+    bumpPatch(wtU);
     cm = spawnSync(process.execPath, [wtJs, 'commit', 't-user', 'regress commit'], { cwd: wtU, encoding: 'utf8' });
     spawnSync(process.execPath, [wtJs, 'merge', 't-user'], { cwd: SB, encoding: 'utf8' });
     cmMerged = spawnSync('git', ['show', 'develop:regress-uncommitted.txt'], { cwd: SCRATCH, encoding: 'utf8' }).stdout.includes('left uncommitted');
@@ -791,14 +802,15 @@ async function run() {
   const ck7b = (await call('/api/check', U)).data;
   await call('/api/providers/remove', U, { id: oai.provider.id }); await call('/api/apikey/revoke', U, {}); await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' });
   check('R112', 'AI providers: the host Claude is always listed; a person adds a Claude Code login (own folder) and an OpenAI endpoint (private or shared; bad kind / key refused; secrets never listed); a private one is invisible to others; picking the login runs Work with CLAUDE_CONFIG_DIR set and that model; an OpenAI provider is refused for Work; the API key answers through the endpoint provider (plain + streaming, system passed); only the owner shares / removes; removal clears the person\'s choice',
-    prov0.providers.length === 1 && prov0.providers[0].id === 'host' && badKind.status === 400 && badAnth.status === 400 && cli.provider && oai.provider && !secretLeak
+    // (the test AI host's own providers, "h:…", are listed too: they survive the early hub restart since 3.3.0)
+    prov0.providers.filter((p) => !String(p.id).startsWith('h:')).length === 1 && prov0.providers[0].id === 'host' && badKind.status === 400 && badAnth.status === 400 && cli.provider && oai.provider && !secretLeak
     && !seenByA.includes(cli.provider.id) && seenByA.includes(oai.provider.id)
     && pickCli.status === 200 && pickCli.data.provider === cli.provider.id && new RegExp('cfg=' + cfgDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(texts(cliRun.events)) && /model=claude-sonnet-5-5/.test(texts(cliRun.events)) && ck7.provider === cli.provider.id && (ck7.providers || []).some((p) => p.id === cli.provider.id)
     && pickOai.status === 400 && setOai.status === 200 && setOai.data.provider === oai.provider.id && oaiModels.status === 200 && /fake-mini/.test(oaiModels.text)
     && oaiChat.status === 200 && /^oai says: through-r112 \[sys 3\]/.test(oaiText) && /flow-r112/.test(oaiStreamed)
     && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByA.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
     && /id="provBox"/.test(html) && /\/api\/providers\/add/.test(html) && /o\.value = p\.id \+ '\|' \+ m/.test(html),
-    `cli ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
+    `providers at start ${prov0.providers.map((p) => p.id).join(',')}; cli ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
 
   // Chat v2: settings, private messages, edit / delete, receipts, agent privacy
   const seal = async (tok, priv, plain, to) => { // like the page's sealFor: everyone, or only sender + recipient
@@ -2412,6 +2424,26 @@ async function run() {
   const after = await call('/api/check', U);
   check('R9', 'graceful restart: new pid, token kept, lock + model kept, flag consumed', pid2 && pid2 !== pid1 && after.status === 200 && after.data.model === 'claude-opus-5-5'
     && (await login('t-user', 'pw-t-user-0001', devA)).status === 403 && !fs.existsSync(path.join(SB, '.restart')));
+  // R154: a hub restart keeps every AI host's session: an older host that never says hello again (the "old-node" played
+  // in R152, a 2.x host) still offers its Claude right after the restart, the way it did before it; a host the hub has
+  // no session for is asked to say hello again (428 for hosts that send their version, 401 for older ones: they re-hello
+  // on it); every poll answer carries the hub's heartbeat
+  {
+    const provs = ((await call('/api/check', U)).data.providers || []);
+    const oldAfter = provs.find((p) => p.id === 'h:old-node/claude') || {}, newAfter = provs.find((p) => p.id === 'h:test-node/claude') || {};
+    const nh = { 'X-VR-Host': 'nohello-node', 'X-VR-Host-Token': OLD_NODE_SECRET + '-nh' };
+    const askNew = await fetch(H + '/node/poll', { headers: { ...nh, 'X-VR-Host-Version': '3.2.0' } }), askOld = await fetch(H + '/node/poll', { headers: nh });
+    const legacyNoHello = await fetch(H + '/node/poll', { headers: { 'X-VR-Node': 'nohello-node', 'X-VR-Node-Token': OLD_NODE_SECRET + '-nh' }, signal: AbortSignal.timeout(1500) }).then((r) => r.status).catch(() => 'held'); // a 1.x host: keeps long-polling
+    const sessFile = (() => { try { return JSON.parse(fs.readFileSync(path.join(SB, 'ai-host-sessions.json'), 'utf8')); } catch { return {}; } })();
+    const ign = spawnSync('git', ['check-ignore', '-q', 'bridge/ai-host-sessions.json'], { cwd: MILLS }).status;
+    const nodes154 = fs.readFileSync(path.join(BRIDGE, 'ai-nodes.js'), 'utf8'), host154 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), team154 = fs.readFileSync(path.join(BRIDGE, 'team.js'), 'utf8'), page154 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R154', 'going live never cuts a host off: after a hub restart an older host that does not say hello again still offers its Claude (session kept in the gitignored ai-host-sessions.json, the 2.x routing too), a current one too; a host without a session is asked to hello again (428 with its version, 401 without), a 1.x host (no hello ever) keeps polling; the poll answer is the hub\'s heartbeat (time, version, commit) and the host reconnects in 1-5 s, re-hellos on 428, follows a new hub version, and only restarts / updates after 3 quiet minutes; hub_status lists the AI hosts up / down; [static] the page reloads itself onto a new hub version when nothing is in progress',
+      pid2 !== pid1 && oldAfter.remoteKind === 'claude-cli-work' && !!newAfter.id && askNew.status === 428 && askOld.status === 401 && legacyNoHello === 'held'
+      && !!(sessFile['old-node'] && sessFile['old-node'].hello && /^[0-9a-f]{64}$/.test(sessFile['old-node'].key)) && ign === 0
+      && /beat: beat\(\)/.test(nodes154) && /r\.status === 428/.test(host154) && /Math\.min\(5000, 1000 \* misses\)/.test(host154) && /quiet = \(ms = 180000\)/.test(host154) && /aiHosts/.test(team154)
+      && /X-VR-Version/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')) && /function pageUpdateAvailable\(v\)/.test(page154) && /hubVersion !== me\.version/.test(page154),
+      `old ${oldAfter.remoteKind} new ${!!newAfter.id}; no session: ${askNew.status} / ${askOld.status}; 1.x ${legacyNoHello}; sessions file ${Object.keys(sessFile).join(',')}; ignored ${ign}`);
+  }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });
   check('R135', 'Work state survives restarts: the conversation on screen (me / claude / tool entries, its saved-session id + title) and the queue + a pending "Send now" are kept per person on the hub (their profile folder), come back unchanged after a hub restart, and are nobody else\'s; bad input refused, empty messages dropped; [static] every queue change is saved, opening Work restores the conversation and the queue and starts the queue running, New chat clears it',

@@ -71,8 +71,31 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
 
   // ---------- live state per host ----------
   const live = new Map(); // id -> { seen, queue: [], waiters: Set, cancel: Set, hello: {...}|null, key: Buffer|null, kid: '' , usage: {} }
-  const state = (id) => { let n = live.get(id); if (!n) { n = { seen: 0, queue: [], waiters: new Set(), cancel: new Set(), hello: null, key: null, kid: '', usage: {} }; live.set(id, n); } return n; };
+  const state = (id) => { let n = live.get(id); if (!n) { n = { seen: 0, queue: [], waiters: new Set(), cancel: new Set(), hello: null, key: null, kid: '', usage: {}, relayOk: {} }; live.set(id, n); } return n; };
   const online = (id) => { const n = live.get(id); return !!n && (n.waiters.size > 0 || Date.now() - n.seen < OFFLINE_MS); };
+  // A host's session (its hello and the session key) survives a hub restart: kept in bridge/ai-host-sessions.json
+  // (gitignored; the key is derived from the host's secret, which ai-hosts.json holds anyway). Without this every
+  // restart or deploy made the hub forget what each host offers, while the host, still holding its key, kept polling
+  // without ever saying hello again: its Claude vanished for everyone until someone restarted the host by hand.
+  const SESSIONS = path.join(ROOT, 'ai-host-sessions.json');
+  function restoreSessions() { // at start, once the key helpers below exist
+    for (const [id, s] of Object.entries(readJson(SESSIONS, {}) || {})) {
+      if (!record(id) || !s || !s.hello || !/^[0-9a-f]{64}$/.test(String(s.key || ''))) continue;
+      const n = state(id); n.hello = s.hello; n.key = Buffer.from(s.key, 'hex'); n.kid = keyId(n.key); n.relayOk = s.relayOk || {}; n.seen = Date.now(); // counts as online for a minute: it is polling again by then
+    }
+  }
+  let sessionsTimer = null;
+  const saveSessions = () => { clearTimeout(sessionsTimer); sessionsTimer = setTimeout(() => { const o = {}; for (const [id, n] of live) if (n.hello && n.key && record(id)) o[id] = { hello: n.hello, key: n.key.toString('hex'), relayOk: n.relayOk || {} }; writeJson(SESSIONS, o); }, 500); };
+  // up / down, both ways: a host is up while it keeps polling (every POLL_MS); the hub logs each change with how long it
+  // lasted, and every poll answer carries the hub's heartbeat (time, version, commit) so a host sees the hub the same way
+  const wasUp = new Map(); // id -> { up, since }
+  setInterval(() => {
+    for (const r of allRecords()) {
+      const up = online(r.id), prev = wasUp.get(r.id);
+      if (!prev) { if (live.has(r.id)) wasUp.set(r.id, { up, since: Date.now() }); continue; }
+      if (prev.up !== up) { log(`[ai-host] ${r.nickname} is ${up ? 'back' : 'OFFLINE'} (${up ? 'away' : 'up'} for ${Math.round((Date.now() - prev.since) / 1000)} s)`); wasUp.set(r.id, { up, since: Date.now() }); }
+    }
+  }, 5000).unref();
   const pending = new Map(); // job id -> { kind, host, resolve, reject, timer, pickup, idle, token, account, onEvent, onDone }
 
   // ---------- e2e: a session key per hello, derived by both sides from the secret and the two nonces ----------
@@ -85,6 +108,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     const d = crypto.createDecipheriv('aes-256-gcm', key, iv); d.setAuthTag(ct.subarray(ct.length - 16));
     return JSON.parse(Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]).toString('utf8'));
   }
+  restoreSessions();
 
   // ---------- who is calling ----------
   function who(req) {
@@ -147,7 +171,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       try {
         const res = await relay(id, { engine: 'relay:' + p.id, path: '/v1/__viberoller_probe' }, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }, 'provider', true);
         const text = await res.text().catch(() => '');
-        n.relayOk[p.id] = !(res.status === 404 && /does not lend/i.test(text));
+        n.relayOk[p.id] = !(res.status === 404 && /does not lend/i.test(text)); saveSessions();
         if (!n.relayOk[p.id]) log(`[ai-host] ${(record(id) || {}).nickname || id} is an older host (no login relay): its Claude runs Work on that machine, as it did before`);
       } catch {} // offline or slow: asked again at its next hello
     }
@@ -313,7 +337,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       n.key = derive(r.secret, hostNonce, serverNonce); n.kid = keyId(n.key);
       const caps = (Array.isArray(b.caps) ? b.caps : []).map(String).filter((c) => /^[a-z-]{1,20}$/.test(c)).slice(0, 20);
       n.hello = { at: Date.now(), nickname: r.nickname, user: r.user || String(b.user || ''), providers: cleanProviders(b.providers), engines: (Array.isArray(b.engines) ? b.engines : Object.keys(b.engines || {})).filter((e) => ENGINES.includes(e)), version: String(b.version || '').slice(0, 20), os: String(b.os || '').slice(0, 20), pc: b.pc === true && !!(r.user || /^[a-z0-9-]{1,32}$/.test(String(b.user || ''))), caps };
-      n.relayOk = {};
+      n.relayOk = {}; saveSessions();
       log(`[ai-host] ${r.nickname} (${n.hello.user || 'no owner'}) connected: ${n.hello.providers.length} provider(s), engines ${n.hello.engines.join(', ') || 'none'}, key ${n.kid}${caps.length ? ', can ' + caps.join(' ') : ', an older host'}`);
       // extra fields are safe: every host so far reads only the ones it knows
       send(res, 200, { id: r.id, nickname: r.nickname, user: r.user, serverNonce, kid: n.kid, pollMs: POLL_MS, offlineMs: OFFLINE_MS, group: cleanUsers(config.hostGroup || []), update: updateInfo() });
@@ -334,7 +358,12 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       return true;
     }
     if (p === '/node/poll' && req.method === 'GET') {
-      const answer = () => { const jobs = n.queue.splice(0, 8); for (const j of jobs) { const pj = pending.get(j.id); if (pj) clearTimeout(pj.pickup); } send(res, 200, { jobs, cancel: [...n.cancel] }); n.cancel.clear(); };
+      // a host polling without a session here (its session could not be restored): ask it to say hello again. Hosts
+      // from 3.3 on (they send X-VR-Host-Version) re-hello at once on 428; older ones do it on 401, 30 s later.
+      // (1.x hosts never say hello and send only X-VR-Node headers: they keep polling for engine jobs as before)
+      if (!n.hello && req.headers['x-vr-host']) { send(res, req.headers['x-vr-host-version'] ? 428 : 401, { error: 'Say hello again: this hub does not know what you offer yet.', rehello: true }); return true; }
+      const beat = () => { const rel = release(); return { t: Date.now(), version: String(rel.version || ''), commit: String(rel.commit || '') }; };
+      const answer = () => { const jobs = n.queue.splice(0, 8); for (const j of jobs) { const pj = pending.get(j.id); if (pj) clearTimeout(pj.pickup); } send(res, 200, { jobs, cancel: [...n.cancel], beat: beat() }); n.cancel.clear(); };
       if (n.queue.length || n.cancel.size) { answer(); return true; }
       let finished = false;
       const fin = () => { if (finished) return; finished = true; clearTimeout(t); n.waiters.delete(fin); n.seen = Date.now(); answer(); };
@@ -377,7 +406,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
     }
     send(res, 404, { error: 'Not found' }); return true;
   }
-  const status = () => allRecords().map((r) => { const n = live.get(r.id); return { id: r.id, name: r.nickname, nickname: r.nickname, user: r.user, online: online(r.id), polling: !!n && n.waiters.size > 0, seen: n && n.seen ? new Date(n.seen).toISOString() : null, queued: n ? n.queue.length : 0, engines: n && n.hello ? n.hello.engines : [], providers: n && n.hello ? n.hello.providers.map((p) => p.id) : [], kid: n ? n.kid : '' }; });
+  const status = () => allRecords().map((r) => { const n = live.get(r.id); return { id: r.id, name: r.nickname, nickname: r.nickname, user: r.user, online: online(r.id), polling: !!n && n.waiters.size > 0, seen: n && n.seen ? new Date(n.seen).toISOString() : null, queued: n ? n.queue.length : 0, engines: n && n.hello ? n.hello.engines : [], providers: n && n.hello ? n.hello.providers.map((p) => p.id) : [], kid: n ? n.kid : '', version: n && n.hello ? n.hello.version : '', since: (wasUp.get(r.id) || {}).since ? new Date(wasUp.get(r.id).since).toISOString() : null }; });
   const pubHostFlags = (r) => { const n = live.get(r.id); return n && n.hello ? { pc: !!n.hello.pc } : { pc: false }; };
   return { route, engineFetch, providerFetch, loginFetch, runWork, jobFor, pcHostFor, pcTool, status, reason, online: () => !!pickEngineHost('ollama'), hostOnline: online, providersFor, provider, hosts, hostFlags: pubHostFlags, ENGINES, enabled: allRecords().length > 0, FILE };
 };

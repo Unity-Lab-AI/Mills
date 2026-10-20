@@ -1264,6 +1264,8 @@ async function api(path, opts = {}) {
     try { res = await fetch(base + path, init); } catch {}
     if (res && ![502, 503, 504, 530].includes(res.status)) {
       if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
+      const hubVersion = res.headers.get('x-vr-version');
+      if (hubVersion && me && me.version && hubVersion !== me.version) pageUpdateAvailable(hubVersion);
       if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
       return res;
     }
@@ -1274,6 +1276,21 @@ async function api(path, opts = {}) {
     await sleep(3000);
     if (attempt % 4 === 0) { try { base = await findBridge(true); } catch {} }
   }
+}
+// The page follows the hub: every signed-in answer names the hub's version (X-VR-Version). When it differs from the
+// version this page was loaded with, the page reloads itself as soon as nothing would be lost: no reply streaming in
+// Work or Unity, no call, no unsent text, no open file or note editor. Until then it says so once and keeps checking.
+let pageUpdate = null;
+function pageUpdateAvailable(v) {
+  if (pageUpdate) { pageUpdate.v = v; return; }
+  pageUpdate = { v };
+  const drafts = ['input', 'roomInput', 'assistInput'].some((id) => $(id) && $(id).value.trim());
+  const editing = () => ['editor', 'ntEditor'].some((id) => $(id) && $(id).offsetParent !== null);
+  const idle = () => !busy && !assistBusy && !(typeof call !== 'undefined' && call.conv) && !editing() && !['input', 'roomInput', 'assistInput'].some((id) => $(id) && $(id).value.trim());
+  const go = () => { if (!idle()) return false; clearInterval(pageUpdate.timer); location.reload(); return true; };
+  if (go()) return;
+  sys(`VibeRoller was updated to ${v}. This page reloads by itself once nothing is in progress${drafts ? ' (send or clear what you are typing)' : ''}; or reload it now.`);
+  pageUpdate.timer = setInterval(go, 15000);
 }
 async function json(path, opts) {
   const res = await api(path, opts);
