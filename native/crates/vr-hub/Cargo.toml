@@ -20,6 +20,10 @@ reqwest = { version = "0.13.3", default-features = false, features = ["rustls-no
 scrypt = { version = "0.11", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha1 = "0.10"
 subtle = "2.6.1"
 tokio = { version = "1.54.0", features = ["full"] }
 vr-core = { version = "0.1.0", path = "../vr-core" }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"

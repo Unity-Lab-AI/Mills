@@ -11,6 +11,7 @@ use crate::front::{json as jresp, Body, Hub, Req};
 
 pub mod auth;
 pub mod board;
+pub mod files;
 pub mod forgejo;
 pub mod notes;
 
@@ -47,13 +48,18 @@ pub struct Modules {
     pub board: Arc<board::Board>,
     pub mirror: Arc<forgejo::Mirror>,
     pub notes: notes::Notes,
+    pub files: files::Files,
+    mills: std::path::PathBuf,
 }
 impl Modules {
     pub fn new(root: &Path, cfg: &Config) -> Result<Modules, String> {
         let front_secret = std::env::var("VR_FRONT_SECRET").ok().filter(|s| s.len() >= 32).unwrap_or_else(|| vr_core::crypto::random_hex(24));
         let mills = root.join("..");
-        Ok(Modules { front_secret, auth: auth::Auth::new(root, cfg), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")) })
+        Ok(Modules { front_secret, auth: auth::Auth::new(root, cfg), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
+            files: files::Files::new(&mills, root, cfg), mills })
     }
+    /// Whether someone has set up their chat key (Chat/keys.json, the chat's: still the JavaScript hub's).
+    fn has_chat_key(&self, u: &str) -> bool { std::fs::read_to_string(self.mills.join("Chat").join("keys.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| !v[u].is_null()).unwrap_or(false) }
     /// How a person is named on the board and in notes: their nickname, else their display name (bridge/server.js nameOf).
     pub fn name_of(&self, u: &str) -> String {
         let Some(a) = self.auth.account(u) else { return u.to_string() };
@@ -81,6 +87,9 @@ pub fn start_background(hub: &Arc<Hub>) {
             }
         });
     }
+    // files: the hourly sweep (chat uploads never sent, the old Work layout)
+    let hf = hub.clone();
+    tokio::spawn(async move { loop { tokio::time::sleep(std::time::Duration::from_secs(3600)).await; let accts = hf.mods.auth.accounts(); hf.mods.files.chat_sweep(&|u| hf.mods.auth.account(u)); hf.mods.files.work_sweep(&accts); } });
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     let h = hub.clone();
     tokio::spawn(async move {
@@ -114,6 +123,20 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 answer(200, if out.status == 200 { json!({ "ok": true, "result": out.body }) } else { json!({ "ok": false, "error": out.body["error"] }) })
             }
             "notes/tool" => answer(200, hub.mods.notes.tool(b["name"].as_str().unwrap_or(""), &b["args"], &hub.mods.name_of(&account))),
+            // the chat (the JavaScript hub's) about its messages' files
+            "files/attach" => {
+                let user = b["user"].as_str().unwrap_or("");
+                match hub.mods.files.attach(hub.mods.auth.account(user).as_ref(), user, &b["ids"], b["seq"].as_i64().unwrap_or(0), b["conv"].as_str().unwrap_or("")) {
+                    Ok(ids) => answer(200, json!({ "ok": true, "ids": ids })),
+                    Err(f) => answer(200, json!({ "ok": false, "status": f.status, "error": f.msg })),
+                }
+            }
+            "files/gone" => { let ids: Vec<String> = b["ids"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(); hub.mods.files.message_gone(&ids, &|u| hub.mods.auth.account(u)); answer(200, json!({ "ok": true })) }
+            "files/all-gone" => { hub.mods.files.all_gone(&|u| hub.mods.auth.account(u)); answer(200, json!({ "ok": true })) }
+            "files/work-message" => match hub.mods.auth.account(&account) {
+                Some(a) => answer(200, hub.mods.files.work_message(&a, b["message"].as_str().unwrap_or(""), b["where"].clone())),
+                None => answer(200, json!({ "text": b["message"], "files": [], "dirs": [] })),
+            },
             _ => answer(404, json!({ "ok": false, "error": "unknown" })),
         };
     }
@@ -135,6 +158,11 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         if p.starts_with("/api/board") { return board_http(hub, r, &u).await; }
         return notes_http(hub, r, &u);
+    }
+    // ----- files: the chat's attachments (ciphertext), Work uploads, the Files library -----
+    if p == "/api/room/file" || p.starts_with("/api/room/file/") || p == "/api/work/file" || p.starts_with("/api/work/file/") || p == "/api/library" || p.starts_with("/api/library/") {
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        return files_http(hub, r, &u).await;
     }
     // the admin's account switches that are this module's (the JavaScript hub keeps making / deleting accounts)
     if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/signout") {
@@ -198,6 +226,41 @@ fn notes_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
     }
 }
 
+/// A file handed back: never as a type a browser would run (octet-stream + nosniff + attachment; the page shows
+/// pictures / video from a blob of the type it knows, named in X-VR-File-Type).
+fn serve_file(buf: Vec<u8>, name: &str, mime: &str) -> Routed {
+    let resp = hyper::Response::builder().status(200).header("content-type", "application/octet-stream").header("content-length", buf.len())
+        .header("content-disposition", format!("attachment; filename=\"{}\"", vr_core::hub::urlencode(name))).header("x-vr-file-type", mime).header("cache-control", "private, no-store").header("x-content-type-options", "nosniff")
+        .body(crate::front::full(buf)).expect("response");
+    Routed::Answer(resp)
+}
+async fn files_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
+    let m = &hub.mods;
+    let Some(a) = m.auth.account(u) else { return answer(401, json!({ "error": "Not signed in." })) };
+    let fail = |f: files::Fail| answer(f.status, json!({ "error": f.msg }));
+    let get = r.method == hyper::Method::GET; let post = r.method == hyper::Method::POST;
+    match r.path.as_str() {
+        "/api/room/file" if post => {
+            if !m.has_chat_key(u) { return answer(400, json!({ "error": "Your chat key is not set up yet." })); }
+            match m.files.chat_upload(&a, &r.body, r.header("x-vr-own-seal").unwrap_or("")) { Ok(v) => answer(200, v), Err(f) => fail(f) }
+        }
+        p if get && p.starts_with("/api/room/file/") => {
+            let id = &p["/api/room/file/".len()..];
+            let Some((by, seq)) = m.files.owner_seq(id) else { return answer(404, json!({ "error": "Not found." })) };
+            // its uploader always; anyone else while they may read its message: the chat (the JavaScript hub) knows
+            let allowed = by == u || (seq > 0 && crate::front::internal(hub, "/internal/front/may-read", json!({ "user": u, "seq": seq }).to_string()).await.and_then(|(_, b)| serde_json::from_slice::<Value>(&b).ok()).map(|v| v["ok"] == json!(true)).unwrap_or(false));
+            match m.files.fetch(id, m.auth.account(&by), allowed) { Some(buf) => serve_file(buf, "file", "application/octet-stream"), None => answer(404, json!({ "error": "Not found." })) }
+        }
+        "/api/work/file" if post => match m.files.work_upload(&a, &r.body, r.header("x-file-name").unwrap_or(""), r.header("content-type").unwrap_or("")) { Ok(v) => answer(200, v), Err(f) => fail(f) },
+        p if get && p.starts_with("/api/work/file/") => match m.files.work_serve(&a, &p["/api/work/file/".len()..]) { Some((buf, name, mime)) => serve_file(buf, &name, &mime), None => answer(404, json!({ "error": "That file is no longer kept." })) },
+        "/api/library" if get => answer(200, json!({ "linux": m.files.linux.status(u, &files::Files::fallback_dir(&a)), "entries": m.files.list(&a) })),
+        "/api/library/delete" if post => if m.files.remove(&a, r.json()["id"].as_str().unwrap_or("")) { answer(200, json!({ "ok": true })) } else { answer(404, json!({ "error": "Not found." })) },
+        "/api/library/save" if post => match m.files.save(&a, &r.param("id").unwrap_or_default(), &r.body) { Ok(v) => answer(200, v), Err(f) => fail(f) },
+        "/api/library/exec" if post => { let b = r.json(); match m.files.set_exec(&a, b["id"].as_str().unwrap_or(""), b["on"].as_bool().unwrap_or(false)) { Ok(v) => answer(200, v), Err(f) => fail(f) } }
+        _ => answer(404, json!({ "error": "Unknown endpoint" })),
+    }
+}
+
 /// After the JavaScript hub answered: the module's part of a few answers (sign-out drops the session; the admin list
 /// gets the locks and sign-ins this module keeps; a deleted account loses its sessions and lock).
 pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec<u8>> {
@@ -226,4 +289,4 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
 pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts") }
 
 /// The modules this front answers itself.
-pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes"] }
+pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files"] }

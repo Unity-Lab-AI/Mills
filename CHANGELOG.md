@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.16.0 — 2026-10-20
+
+### Changed: files run in Rust (board T-131, module 3 of 7)
+- Behind `rustHub`, vr-hub's files module (`modules/files.rs`) answers the chat's attachments (ciphertext only, the
+  uploader's own seal), Work uploads (into the linked Linux account's `~/uploaded_files/<date>/`, else the hub's area),
+  and the Files library (list with files put there by hand, delete, edit in place, executable on / off), plus the link
+  status of the Linux account; the same files as before (`Chat/files`, `uploads-index.json`, the uploads).
+- The chat (still in the JavaScript hub) asks it to attach a message's files (the message number is taken first, so a
+  message sent meanwhile cannot take it), tells it when messages are gone or the chat is cleared, and answers whether
+  someone may read a message before one of its files is handed out (`/internal/front/may-read`). A Work run's attached
+  files get their paths from it. The Rust front also checks a page's origin and adds the hardening headers itself.
+
 ## 3.15.0 — 2026-10-20
 
 ### Changed: the board and team notes run in Rust (board T-131, module 2 of 7)

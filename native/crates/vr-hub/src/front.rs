@@ -90,16 +90,25 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
         Err(_) => return with_front(json(413, &serde_json::json!({ "error": "That is too large." }))),
     };
     let r = Req { method: parts.method.clone(), path: parts.uri.path().to_string(), query: parts.uri.query().unwrap_or("").to_string(), headers: parts.headers.clone(), body, peer };
+    // the page's own origins only (bridge/server.js does the same for what it answers): another site's page gets 403;
+    // the APIs with their own keys (/v1, /node, /llm) and the internal ones are not for pages
+    let cors = if ["/internal/", "/node/", "/v1", "/llm/", "/__front/"].iter().any(|x| r.path.starts_with(x)) { None } else { r.header("origin").map(String::from) };
+    if let Some(o) = &cors {
+        if !hub.allowed_origin(o) { return with_front(json(403, &serde_json::json!({ "error": "Origin not allowed" }))); }
+        if r.method == hyper::Method::OPTIONS { let mut resp = Response::builder().status(204).body(full("")).expect("response"); add_cors(&mut resp, o); return with_front(resp); }
+    }
     // a native module answers, or lets the request through (possibly with headers of its own, e.g. who is signed in)
     let mut extra: Vec<(String, String)> = vec![];
     match modules::route(&hub, &r).await {
-        modules::Routed::Answer(resp) => return with_front(resp),
+        modules::Routed::Answer(mut resp) => { if let Some(o) = &cors { add_cors(&mut resp, o); } return with_front(resp); }
         modules::Routed::Pass(h) => extra = h,
         modules::Routed::SignedIn { token, user, client, ip } => {
             // the JavaScript hub learns of the sign-in (Unity greets, the person's client details) and the page gets its token
             let note = serde_json::json!({ "user": user, "client": client, "ip": ip }).to_string();
             internal(&hub, "/internal/front/signed-in", note).await;
-            return with_front(json(200, &serde_json::json!({ "token": token, "username": user })));
+            let mut resp = json(200, &serde_json::json!({ "token": token, "username": user }));
+            if let Some(o) = &cors { add_cors(&mut resp, o); }
+            return with_front(resp);
         }
         modules::Routed::No => {}
     }
@@ -119,7 +128,29 @@ pub async fn internal(hub: &Hub, path: &str, body: String) -> Option<(u16, Bytes
     let s = r.status().as_u16();
     Some((s, r.into_body().collect().await.ok()?.to_bytes()))
 }
-fn with_front(mut r: Response<Body>) -> Response<Body> { r.headers_mut().insert("x-vr-front", hyper::header::HeaderValue::from_static(crate::VERSION)); r }
+/// Every answer: who answered, and the hardening the JavaScript hub puts on its own (no sniffing, no referrer, never framed).
+fn with_front(mut r: Response<Body>) -> Response<Body> {
+    let h = r.headers_mut();
+    h.insert("x-vr-front", hyper::header::HeaderValue::from_static(crate::VERSION));
+    for (k, v) in [("x-content-type-options", "nosniff"), ("referrer-policy", "no-referrer"), ("x-frame-options", "DENY")] { if !h.contains_key(k) { h.insert(k, hyper::header::HeaderValue::from_static(v)); } }
+    r
+}
+fn add_cors(r: &mut Response<Body>, origin: &str) {
+    let h = r.headers_mut();
+    if let Ok(v) = hyper::header::HeaderValue::from_str(origin) { h.insert("access-control-allow-origin", v); }
+    h.insert("vary", hyper::header::HeaderValue::from_static("Origin"));
+    h.insert("access-control-allow-headers", hyper::header::HeaderValue::from_static("Content-Type, Authorization"));
+    h.insert("access-control-allow-methods", hyper::header::HeaderValue::from_static("GET, POST, OPTIONS"));
+}
+impl Hub {
+    /// config allowedOrigins, this machine's own addresses, and config publicUrl (bridge/server.js).
+    pub fn allowed_origin(&self, o: &str) -> bool {
+        let list = self.cfg.get("allowedOrigins").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_else(|| vec!["https://unity-lab-ai.github.io".into()]);
+        let port = self.cfg.port;
+        let public = self.cfg.get("publicUrl").and_then(|v| v.as_str()).map(|s| s.trim_end_matches('/').to_lowercase()).filter(|s| s.starts_with("https://")).unwrap_or_default();
+        list.iter().any(|x| x == o) || o == format!("http://localhost:{port}") || o == format!("http://127.0.0.1:{port}") || (!public.is_empty() && o.to_lowercase() == public)
+    }
+}
 
 /// To the JavaScript hub, streamed back. While it is down (a restart), the request waits up to 30 s for it.
 async fn proxy(hub: &Hub, parts: hyper::http::request::Parts, body: Bytes, extra: Vec<(String, String)>) -> Response<Body> {

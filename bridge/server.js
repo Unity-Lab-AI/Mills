@@ -215,7 +215,7 @@ setInterval(() => { const old = Date.now() - 30 * 60e3; for (const [k, f] of fai
 
 // ---------- claude runner + pc tool relay (one per account) ----------
 function emit(acct, ev) { if (acct.stream) acct.stream.write(JSON.stringify(ev) + '\n'); }
-function runClaude(acct, message, fresh, res, context) {
+function runClaude(acct, message, fresh, res, context, preWm = null) {
   shares.mirror(acct, 'user', message);
   let wd;
   try { wd = workDir(acct); } catch (e) {
@@ -249,7 +249,7 @@ function runClaude(acct, message, fresh, res, context) {
   if (!fresh && acct.state.claudeSessionId && (acct.state.claudeSessionWhere || 'hub') === where) args.push('--resume', acct.state.claudeSessionId);
   acct.state.claudeSessionWhere = where;
   // attached files (the marker block at the end of the message): Claude gets their paths and may read that folder
-  const wm = files.workMessage(acct, message, { project: wd.project });
+  const wm = preWm && typeof preWm.text === 'string' && Array.isArray(preWm.dirs) ? preWm : files.workMessage(acct, message, { project: wd.project });
   for (const d of wm.dirs) args.push('--add-dir', d);
   const input = context ? `${wm.text}\n\n---\n${context}` : wm.text; // context = automatic summaries of the shared Work sessions this person is watching (added by their browser)
   acct.runProvider = prov.kind !== 'host' ? prov.id : '';
@@ -381,7 +381,17 @@ const b64 = (s, max) => typeof s === 'string' && s.length <= max && /^[A-Za-z0-9
 // linked ~/uploaded_files; everyone's library (Files) lists what they uploaded, where it went, when it was last used
 const linux = require('./linux-accounts')({ config, ROOT });
 const files = require('./files')({ CHAT_DIR, send: (...a) => send(...a), accountOf: (u) => accounts.get(u), linux });
-setInterval(() => { try { files.chat.sweep(); files.work.sweep([...accounts.values()]); } catch (e) { console.error('[mills] file sweep: ' + e.message); } }, 3600e3).unref();
+// behind the Rust hub with its files module, the chat tells it about its messages' files instead (and it sweeps)
+const FILES_MOVED = FRONT_MODS.has('files');
+const filesGone = (ids) => { if (FILES_MOVED) frontCall('/__front/files/gone', { ids }).catch((e) => console.error('[mills] files gone: ' + e.message)); else files.chat.messageGone(ids); };
+const filesAllGone = () => { if (FILES_MOVED) frontCall('/__front/files/all-gone', {}).catch(() => {}); else files.chat.allGone(); };
+async function filesAttach(user, ids, seq, conv) {
+  if (!FILES_MOVED) return files.chat.attach(user, ids, seq, conv);
+  const r = await frontCall('/__front/files/attach', { user, ids, seq, conv });
+  if (!r.ok) throw Object.assign(new Error(r.error || 'Could not attach the files.'), { status: r.status || 400 });
+  return r.ids;
+}
+if (!FILES_MOVED) setInterval(() => { try { files.chat.sweep(); files.work.sweep([...accounts.values()]); } catch (e) { console.error('[mills] file sweep: ' + e.message); } }, 3600e3).unref();
 const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv === 'P-256' && b64(k.x, 64) && b64(k.y, 64) && !k.d;
 // Long-poll for the room: browsers wait on /api/room/messages?wait=1&ver=N and are answered the moment
 // anything they show changes (a message, edit, delete, receipt, share, member key) instead of polling.
@@ -524,7 +534,7 @@ const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJso
     let n = 0;
     for (const m of messages) if (m.from === user && !m.deleted && convs.includes(m.conv) && Date.parse(m.ts) >= since) {
       for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
-      if (m.files) { files.chat.messageGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
+      if (m.files) { filesGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
       Object.assign(m, { deleted: true, keys: {}, rev: ++rev }); n++;
     }
     if (n) { saveMessages(); roomChanged(); }
@@ -832,6 +842,12 @@ async function handleRequest(req, res) {
   for (const [k, v] of Object.entries(HARDEN)) res.setHeader(k, v);
   try {
     if (p === '/internal/assistant-tool') return await assistant.internal(req, res);
+    // the Rust hub in front (its files module): may this person read that message (and so its files)?
+    if (p === '/internal/front/may-read' && req.method === 'POST') {
+      if (!fromFront(req)) return send(res, 403, { ok: false });
+      const b = await readBody(req, 4096), u = String(b.user || ''), m = messages.find((x) => x.seq === Number(b.seq));
+      return send(res, 200, { ok: !!(m && !m.deleted && visibleTo(m, u) && (m.keys || {})[u]) });
+    }
     // the Rust hub in front: something its modules keep changed that open pages follow through the chat's long poll (notes)
     if (p === '/internal/front/room-changed' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); roomChanged(); return send(res, 200, { ok: true }); }
     // the Rust hub in front: a sign-in went through there (what it starts here: the client details, Unity's greeting)
@@ -1063,7 +1079,13 @@ async function handleRequest(req, res) {
       if (!message || typeof message !== 'string') return send(res, 400, { error: 'Empty message.' }); // (files only: the marker block is the message)
       const ctx = typeof context === 'string' ? context.slice(0, 20000) : '';
       if (fresh) { delete acct.state.claudeSessionId; delete acct.state.ctx; }
-      return runClaude(acct, message, !!fresh, res, ctx);
+      // its attached files: their paths come from the Rust hub's files module when it has them
+      let wm = null;
+      if (FILES_MOVED && message.includes('<!--vr-files ')) {
+        wm = await frontCall('/__front/files/work-message', { account: acct.username, message, where: { project: projectOf(acct) } }).catch(() => null);
+        if (acct.running) return send(res, 409, { error: 'Claude is already working. Stop it first.' });
+      }
+      return runClaude(acct, message, !!fresh, res, ctx, wm);
     }
     if (p === '/api/pc-result' && req.method === 'POST') {
       const { id, ok, result, error } = await readBody(req);
@@ -1111,8 +1133,13 @@ async function handleRequest(req, res) {
       const slots = cleanSlots(keys, acct.username, to || '', conv);
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
       // its files (uploaded encrypted just before, by this sender, not sent yet) now belong to this message
-      let fileIds = []; try { fileIds = files.chat.attach(acct.username, fileIdsIn, seq + 1, to ? 'dm:' + [acct.username, to].sort().join('|') : conv || 'room'); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
-      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}), ...(fileIds.length ? { files: fileIds } : {}) };
+      // (asking the Rust hub's files module takes a moment: the message's number is taken first, so no other message
+      // sent meanwhile can get it; a refused attach leaves that number unused)
+      const fileConv = to ? 'dm:' + [acct.username, to].sort().join('|') : conv || 'room';
+      let fileIds = [], msgSeq;
+      if (FILES_MOVED && fileIdsIn !== undefined) { msgSeq = ++seq; try { fileIds = await filesAttach(acct.username, fileIdsIn, msgSeq, fileConv); } catch (e) { return send(res, e.status || 400, { error: e.message }); } }
+      else { try { fileIds = files.chat.attach(acct.username, fileIdsIn, seq + 1, fileConv); } catch (e) { return send(res, e.status || 400, { error: e.message }); } msgSeq = ++seq; }
+      const msg = { seq: msgSeq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}), ...(fileIds.length ? { files: fileIds } : {}) };
       appendMessage(msg);
       if (!to) guilds.notePost(conv || 'room', acct.username); // slowmode
       agentHear(msg);
@@ -1143,7 +1170,7 @@ async function handleRequest(req, res) {
       if (!m || (m.from !== acct.username && !(!m.to && guilds.moderates(m.conv || 'room', acct.username) && visibleTo(m, acct.username)))) return send(res, 403, { error: 'You can only delete your own messages.' });
       if (!m.deleted) {
         for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
-        if (m.files) { files.chat.messageGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
+        if (m.files) { filesGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
         Object.assign(m, { deleted: true, keys: {}, rev: ++rev });
         saveMessages();
       }
@@ -1296,7 +1323,7 @@ async function handleRequest(req, res) {
         return send(res, 200, { ok: true, supervised: SUPERVISED });
       }
       if (p === '/api/admin/room/clear' && req.method === 'POST') {
-        messages = []; fs.writeFileSync(CHAT_FILE, ''); files.chat.allGone(); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
+        messages = []; fs.writeFileSync(CHAT_FILE, ''); filesAllGone(); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
         rev = 0; seen = {}; writeJson(SEEN_FILE, seen); // browsers see latestRev drop below theirs and reload
         roomChanged();
         console.log(`[mills] ${acct.username} cleared the chat history.`);
