@@ -46,21 +46,28 @@ if command -v node >/dev/null; then
   export VR_RELEASE_PUBKEY=${VR_RELEASE_PUBKEY:-$(cd "$ROOT" && node -e "console.log(require('./bridge/native-releases')({ ROOT: process.env.VR_RELEASE_KEY_DIR || '$ROOT/bridge', MILLS_DIR: '$ROOT' }).publicKey())" 2>/dev/null)}
 fi
 export VR_COMMIT=${VR_COMMIT:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)}
+# the desktop app (Tauri) on Linux needs WebKitGTK's development files: a user-space sysroot (native/tauri-env.sh);
+# without it the Linux build leaves the desktop app out (the Windows one needs nothing more)
+export OWNER_HOME
+. "$HERE/tauri-env.sh"
+LINUX_SKIP=""; [ "$HAVE_TAURI_LINUX" = 1 ] || { LINUX_SKIP="--exclude vr-desktop"; echo "no WebKitGTK sysroot (sh native/tauri-env.sh setup): the Linux desktop app is skipped" >&2; }
 cd "$HERE"
 case "${1:-all}" in
-  test) cargo test --workspace ;;
-  check) cargo check --workspace --target "$LINUX"; [ "$HAVE_WIN" = 1 ] && cargo check --workspace --target "$WIN" ;;
+  test) cargo test --workspace $LINUX_SKIP ;;
+  check) cargo check --workspace $LINUX_SKIP --target "$LINUX"; [ "$HAVE_WIN" = 1 ] && cargo check --workspace --target "$WIN" ;;
   all)
-    cargo test --workspace
-    cargo build --workspace --release --target "$LINUX"
+    cargo test --workspace $LINUX_SKIP
+    cargo build --workspace $LINUX_SKIP --release --target "$LINUX"
     [ "$HAVE_WIN" = 1 ] && cargo build --workspace --release --target "$WIN"
-    # every binary of the workspace, per target, next to a SHA256SUMS the hub's Downloads can serve and check
+    # every binary of the workspace, per target, next to a SHA256SUMS the hub's Downloads can serve and check; made
+    # beside the old set and swapped in at once, so the hub never hands out half a release
     for T in "$LINUX" "$WIN"; do
       [ -d "target/$T/release" ] || continue
-      mkdir -p "dist/$T"
-      find "target/$T/release" -maxdepth 1 -type f \( -perm -u+x -o -name '*.exe' \) ! -name '*.d' ! -name '*.so' ! -name '*.dll' ! -name '*.rlib' -exec cp {} "dist/$T/" \;
-      printf '{"version":"%s","commit":"%s","target":"%s","builtAt":"%s"}\n' "${VR_VERSION:-}" "${VR_COMMIT:-}" "$T" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "dist/$T/BUILD.json"
-      (cd "dist/$T" && rm -f SHA256SUMS && for f in *; do case "$f" in SHA256SUMS|BUILD.json|'*') ;; *) sha256sum "$f";; esac; done > SHA256SUMS)
+      rm -rf "dist/.next-$T"; mkdir -p "dist/.next-$T"
+      for b in vr-host vr-hostw vr-desktop; do for f in "target/$T/release/$b" "target/$T/release/$b.exe"; do [ -f "$f" ] && cp "$f" "dist/.next-$T/"; done; done
+      printf '{"version":"%s","commit":"%s","target":"%s","builtAt":"%s"}\n' "${VR_VERSION:-}" "${VR_COMMIT:-}" "$T" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "dist/.next-$T/BUILD.json"
+      (cd "dist/.next-$T" && for f in *; do case "$f" in SHA256SUMS|BUILD.json|'*') ;; *) sha256sum "$f";; esac; done > SHA256SUMS)
+      rm -rf "dist/.old-$T"; [ -d "dist/$T" ] && mv "dist/$T" "dist/.old-$T"; mv "dist/.next-$T" "dist/$T"; rm -rf "dist/.old-$T"
       echo "dist/$T: $(ls "dist/$T" | grep -vcE '^(SHA256SUMS|BUILD.json)$') binaries"
     done ;;
   *) echo "usage: sh native/build.sh [all|test|check]" >&2; exit 2 ;;

@@ -210,12 +210,23 @@ function list(hub) {
 }
 // Public, before any sign-in: the package versions (an installed Desktop asks at every start) and the Desktop packages
 // themselves (they hold nothing but this hub's public address). The AI Host packages stay signed-in only.
-function publicRoute(p, req, res, hub) {
+// native = bridge/native-releases.js: the pre-built, signed native binaries (the Desktop app updates itself from them)
+function publicRoute(p, req, res, hub, native = null) {
   if (req.method !== 'GET' || !p.startsWith('/api/pub/')) return false;
   try {
     if (p === '/api/pub/versions') {
       const body = { version: projectVersion() }; for (const id of Object.keys(packages)) body[id] = built(id, hub).version;
+      if (native) body.native = native.list();
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); return true;
+    }
+    // GET /api/pub/native?app=&target= → { manifest, sig } (Ed25519 with the release key); /api/pub/native/file?…&name=
+    if (native && (p === '/api/pub/native' || p === '/api/pub/native/file')) {
+      const u = new URL(req.url, 'http://x'), app = String(u.searchParams.get('app') || ''), target = String(u.searchParams.get('target') || '');
+      if (p === '/api/pub/native') { const s = native.signed(app, target); res.writeHead(s ? 200 : 404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(s || { error: 'Nothing built for that app and target.' })); return true; }
+      const buf = native.file(app, target, String(u.searchParams.get('name') || ''));
+      if (!buf) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"Not a file of that release."}'); return true; }
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length, 'Content-Disposition': `attachment; filename="${u.searchParams.get('name')}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(buf);
+      return true;
     }
     const m = /^\/api\/pub\/(desktop-(?:windows|linux))\.zip$/.exec(p);
     if (!m) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"Not found"}'); return true; }

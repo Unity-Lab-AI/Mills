@@ -50,6 +50,12 @@ fn main() {
 fn command(f: &Folder, w: &[&str], now: bool) -> i32 {
     let out = |s: String| println!("{s}");
     match w[0] {
+        "status" if std::env::args().any(|a| a == "--json") => { // for the desktop app's AI host switch
+            let s = control::snapshot(f);
+            out(serde_json::json!({ "running": s.pid.is_some(), "pid": s.pid, "connected": s.connected, "paused": s.paused, "boot": s.boot, "configured": s.cfg.is_some(),
+                "nickname": s.st["nickname"], "hub": s.cfg.as_ref().map(|c| c.hub()), "version": s.version, "lastError": s.st["lastError"], "active": s.st["active"], "lastOkAt": s.st["lastOkAt"] }).to_string());
+            if s.pid.is_some() { 0 } else { 3 }
+        }
         "status" => { let s = control::snapshot(f); out(format!("VibeRoller AI Host (native) {} · {}", s.version, f.dir.display())); for (l, t, _) in control::rows(&s, f) { out(format!("{l:<10} {t}")); } if s.pid.is_some() { 0 } else { 3 } }
         "start" => { out(control::start(f)); 0 }
         "stop" => { out(control::stop(f, now)); 0 }

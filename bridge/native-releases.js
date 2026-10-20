@@ -19,7 +19,8 @@ const path = require('path');
 
 const TARGETS = ['x86_64-unknown-linux-gnu', 'x86_64-pc-windows-gnu'];
 const APPS = { 'vr-host': ['vr-host', 'vr-host.exe', 'vr-hostw.exe'], 'vr-desktop': ['vr-desktop', 'vr-desktop.exe'] };
-const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex'); // Ed25519 PKCS#8 DER before the 32-byte seed
+// Ed25519 PKCS#8 DER before the 32-byte seed: SEQUENCE, version 0, the Ed25519 OID (1.3.101.112), OCTET STRING of 32
+const PKCS8_PREFIX = Buffer.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
 
 module.exports = function createNativeReleases({ ROOT, MILLS_DIR, release = () => ({ version: '', commit: '' }) }) {
   const DIST = path.join(MILLS_DIR, 'native', 'dist');

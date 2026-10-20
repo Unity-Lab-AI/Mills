@@ -9,7 +9,7 @@
      are fetched without a referrer. The page script is inline: the hub serves this page with 'unsafe-inline'
      replaced by that script's own sha256 (bridge/server.js pinScripts), so no other inline script or
      inline event handler can run; only a static copy of the file (no hub in front) still says 'unsafe-inline'. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com ipc: http://ipc.localhost __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>VibeRoller</title>
 <!-- VibeRoller Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -811,6 +811,7 @@
     <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
     <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
     <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
+    <button id="goTools" class="tile" hidden><svg class="ic lead"><use href="#i-plug"/></svg>Tools<small>This computer: your projects, a terminal, builds, git, the AI host</small></button>
     <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
     <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
   </div>
@@ -1319,6 +1320,10 @@ async function connect() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The native desktop app (native/crates/vr-desktop): window.__TAURI__ is there only inside it. The hub's page may ask it
+// for harmless things only: desktop notifications, the unread count on its tray / taskbar, its Tools window and the AI
+// host switch; everything that touches the computer lives in the Tools window, the app's own page.
+const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
 let reconnecting = false;
 async function api(path, opts = {}) {
   if (!base) throw new Error('VibeRoller is offline — ask the admin to start it.');
@@ -1685,6 +1690,8 @@ $('goBoard').onclick = () => showScreen('board');
 $('goCal').onclick = () => showScreen('cal');
 $('goNotes').onclick = () => showScreen('notes');
 $('goFiles').onclick = () => showScreen('library');
+// the desktop app's Tools window (its own page, which may use this computer; the hub's page never can)
+if (NATIVE) { $('goTools').hidden = false; $('goTools').onclick = () => NATIVE.call('open_tools').catch((e) => sys(String(e), true)); document.body.classList.add('native'); }
 $('goAdmin').onclick = () => showScreen('admin');
 $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
@@ -2955,6 +2962,7 @@ function updateUnread() {
     setBadge(b, n);
   }
   document.title = (total ? `(${total}) ` : '') + 'VibeRoller · ' + me.display;
+  if (NATIVE && total !== updateUnread.native) { updateUnread.native = total; NATIVE.call('set_badge', { count: total }).catch(() => {}); } // the tray / taskbar count
 }
 function roomVisible() {
   if (!me || document.visibilityState !== 'visible') return false;
@@ -3232,6 +3240,8 @@ $('micBtn').onclick = startClip;
 $('recSend').onclick = () => stopClip(false);
 $('recCancel').onclick = () => stopClip(true);
 function toast(rec, kind) {
+  // in the desktop app with its window hidden or in the background: a desktop notification as well
+  if (NATIVE && (document.visibilityState !== 'visible' || !document.hasFocus())) NATIVE.call('notify', { title: authorOf(rec.m) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : ''), body: snippet(rec) }).catch(() => {});
   const t = document.createElement('div'); t.className = 'toast ' + kind; t.style.borderLeftColor = authorColor(rec.m);
   const b = document.createElement('b'); b.style.color = authorColor(rec.m);
   b.textContent = authorOf(rec.m) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : '') + ': ';
@@ -3812,7 +3822,11 @@ async function renderHosts() {
     ren.onclick = () => { const n = prompt('New nickname (two to four lowercase words joined by dashes):', h.nickname); if (!n) return; json('/api/hosts/rename', { method: 'POST', body: JSON.stringify({ id: h.id, nickname: n }) }).then(renderHosts).catch((e) => sysSettings(e.message)); };
     const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
     rm.onclick = () => { if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; return; } json('/api/hosts/remove', { method: 'POST', body: JSON.stringify({ id: h.id }) }).then(() => { renderHosts(); refreshProviders(); }).catch((e) => sysSettings(e.message)); };
-    it.append(line(dl(h, 'Windows'), dl(h, 'Linux'), ren, rm));
+    // in the desktop app: this computer becomes that host (its settings go to the app's own AI host, which starts)
+    const here = document.createElement('button'); here.type = 'button'; here.append(ic('plug', 'lead'), document.createTextNode('Run on this PC')); here.hidden = !NATIVE;
+    here.title = 'The VibeRoller desktop app runs this host here, in the background (Tools → AI host to pause, stop or start it at boot)';
+    here.onclick = async () => { here.disabled = true; try { const r = await json('/api/hosts/config', { method: 'POST', body: JSON.stringify({ id: h.id }) }); sysSettings(await NATIVE.call('host_setup', { config: r.config })); setTimeout(renderHosts, 4000); } catch (e) { sysSettings(String(e.message || e)); } here.disabled = false; };
+    it.append(line(here, dl(h, 'Windows'), dl(h, 'Linux'), ren, rm));
     box.append(it);
   }
   const add = document.createElement('button'); add.type = 'button'; add.textContent = 'New host (this computer, or another of yours)';

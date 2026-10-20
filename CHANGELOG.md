@@ -7,6 +7,31 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.12.0 — 2026-10-20
+
+### Added: VibeRoller Desktop, native (Rust + Tauri), Linux and Windows (board T-128, T-129)
+- **Two windows, two levels of trust** (`native/crates/vr-desktop`): the main window shows the hub's own page (always
+  current; it updates itself as in the browser) and may ask the app only harmless things: its version, desktop
+  notifications, the unread count on the tray / taskbar, the Tools window, links in the browser, the AI host switch.
+  The **Tools** window is the app's own page (built in, never loaded from the network) and is the only one allowed to
+  touch the computer, so a script injected into a hub page could not.
+- **Tools**: the local projects folder (browse, edit, create, delete; no browser permission prompts), an integrated
+  terminal (a real pseudo-terminal: bash / pwsh / cmd), build & run with saved buttons per project, git with Forgejo
+  sign-in (the token goes along per call, never into the repo), the local API proxy (`http://127.0.0.1:<port>/v1` →
+  the hub's OpenAI- and Anthropic-compatible API with the person's key; this computer only; web pages refused), the AI
+  host switch (start / pause / resume / stop / update / start at boot) and the app's updates.
+- **Hosting this PC's AI from the app**: Settings → My AI hosts → **Run on this PC** (shown in the desktop app) fetches
+  that host's settings (`POST /api/hosts/config`, the owner only) and the app's own native AI host runs it.
+- **Tray** (show, Tools, AI host on / pause, updates, quit), close to tray, one instance at a time, native
+  notifications for chat messages while the window is in the background.
+- **Updates** signed with VibeRoller's release key: `/api/pub/native` + `/api/pub/native/file` (public: the binaries hold
+  nothing private and are signed); checked at start and every 6 hours, applied when no terminal or run is open.
+- **Built without root**: WebKitGTK / GTK development files from Debian's own packages in a user-space sysroot
+  (`native/tauri-env.sh setup`); Windows needs nothing more. `native/smoke-desktop.sh` starts the Linux app headless
+  (Xvfb in a user namespace) and checks both windows; R165 runs it against the test hub.
+- The page: `NATIVE` (window.__TAURI__ inside the app), the Tools tile, Run on this PC, the badge and notifications;
+  its CSP lets the app's IPC through (`ipc:` / `http://ipc.localhost`, which no browser has).
+
 ## 3.11.0 — 2026-10-20
 
 ### Added: the native AI host (Rust), pre-built for Linux and Windows (board T-122 … T-127)

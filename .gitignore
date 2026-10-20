@@ -16,6 +16,7 @@
 # Rust build output (cargo) never ships
 native/target/
 native/dist/
+native/crates/vr-desktop/gen/
 
 # Runtime state written by the hub on the host PC
 bridge/state.json

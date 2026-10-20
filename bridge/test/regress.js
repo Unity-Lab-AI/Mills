@@ -307,6 +307,16 @@ function buildResult(r) {
   if (r.error) return 'no Rust toolchain here (' + r.error.code + ')';
   return r.status === 0 && fs.existsSync(NATIVE_BIN.host) ? '' : 'cargo build failed: ' + String(r.stderr || '').trim().split('\n').slice(-3).join(' ');
 }
+// the desktop app (Tauri) for this machine: built with native/tauri-env.sh's sysroot (Linux), into the same test target
+function buildDesktop() { // → { bin } or { why }
+  if (WIN) return { why: 'the desktop smoke check runs on Linux (Xvfb)' };
+  const home = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+  const sh = `export RUSTUP_HOME="${home}/.rustup" CARGO_HOME="${home}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}" VR_RELEASE_PUBKEY=${TEST_RELEASE_KEY.public} OWNER_HOME="${home}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; [ "$HAVE_TAURI_LINUX" = 1 ] || { echo NO-SYSROOT; exit 3; }; cargo build --release -q -p vr-desktop`;
+  const r = spawnSync('sh', ['-c', sh], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+  if (r.status === 3) return { why: 'no WebKitGTK sysroot here (sh native/tauri-env.sh setup)' };
+  const bin = path.join(NATIVE_TARGET, 'release', 'vr-desktop');
+  return r.status === 0 && fs.existsSync(bin) ? { bin } : { why: 'cargo build failed: ' + String(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' ') };
+}
 const RUST_HOST = (() => {
   if (!process.argv.includes('--rust-host')) return '';
   const why = buildNative();
@@ -1129,7 +1139,7 @@ async function run() {
 
   const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html) || [])[1] || '';
   const missing66 = [
-    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
+    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com ipc: http:\/\/ipc\.localhost __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
     [/: \/\^https:\\\/\\\/\[a-z0-9-\]\+\\\.trycloudflare\\\.com\$\/;/.test(html) && /store\.set\('mills\.hub'/.test(html) && /const HUB_HOST = /.test(html), 'hub address pinned + cached (quick tunnel, or the named tunnel host injected at deploy)'],
     [/function trustedPub\(/.test(html) && /changedKeys\.has\(m\.username\)\) continue; \/\/ never encrypt to an unverified key/.test(html) && /Trust new key/.test(html), 'key pinning'],
     [/streams: \[call\.local\]/.test(html) && /sender\.setStreams\(isScreenTransceiver\(peer\.pc, t\) \? call\.screenStream : call\.local\)/.test(html) && /e\.streams && e\.streams\[0\]/.test(html), 'call lip-sync streams'],
@@ -2783,6 +2793,23 @@ async function run() {
         && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
         `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
     }
+    // R165: the desktop app (Tauri) starts on Linux, headless, against this hub
+    const L165 = 'the desktop app (vr-desktop, Tauri) starts on Linux (headless, Xvfb): its Tools window (its own page) loads, runs and reaches the app with the Tools permissions; its main window shows this hub\'s page, which sees the app (window.__TAURI__ → NATIVE) and is allowed the hub capability (app_info, notify) and shows the Tools tile; [static] the hub\'s page is never given the commands that touch the computer (files, terminal, runs, git, proxy, settings), and the Tools window\'s page is the app\'s own';
+    const dsk = why ? { why } : buildDesktop();
+    if (dsk.why) skip('R165', L165, dsk.why);
+    else {
+      const sm = spawnSync('sh', [path.join(MILLS, 'native', 'smoke-desktop.sh'), dsk.bin, H], { encoding: 'utf8', timeout: 180000 });
+      const mainSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'src', 'main.rs'), 'utf8');
+      const hubCap = (/CapabilityBuilder::new\("hub"\)[\s\S]*?\)\)\?;/.exec(mainSrc) || [''])[0];
+      const toolsCap = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'capabilities', 'tools.json'), 'utf8'));
+      const forbidden = ['fs-', 'term-', 'run-', 'allow-git', 'proxy-', 'settings-', 'pick-folder', 'update-'];
+      if (sm.status === 77) skip('R165', L165, sm.stdout.trim());
+      else check('R165', L165,
+        sm.status === 0 && /SMOKE smoke-ok/.test(sm.stdout) && new RegExp('SMOKE smoke-main 127\\.0\\.0\\.1:' + PORT + ' \\S+ tools-tile true').test(sm.stdout)
+        && !!hubCap && !forbidden.some((f) => hubCap.includes(f)) && /window\("main"\)/.test(hubCap) && toolsCap.windows.join() === 'tools' && !toolsCap.remote
+        && /WebviewUrl::App\("tools\.html/.test(mainSrc),
+        `smoke ${sm.status} "${(sm.stdout + sm.stderr).replace(/\s+/g, ' ').slice(0, 400)}"; hub capability clean ${!!hubCap && !forbidden.some((f) => hubCap.includes(f))}`);
+    }
   }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });
@@ -2816,7 +2843,7 @@ async function run() {
   const generic = ['[0-9a-f]{32}', '"hash"\\s*:\\s*"[0-9a-f]', 'C:\\\\\\\\Users\\\\\\\\', 'trycloudflare\\.com/', 'password\\s*[:=]\\s*"[^"]{6,}'];
   const pattern = [...generic, ...terms.map((t) => '\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b')].join('|');
   // web/vendor holds third-party libraries (checked by R102 against their published hashes), not our text
-  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor'], { cwd: MILLS, encoding: 'utf8' });
+  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor', ':!native/Cargo.lock'], { cwd: MILLS, encoding: 'utf8' }); // Cargo.lock: the crates' published checksums
   check('R31', `no names / passwords / ids / hashes / local paths in tracked files (${terms.length} local terms)`, gg.status === 1, (gg.stdout || '').split('\n').slice(0, 3).join(' | '));
   const junk = [];
   (function walk(d) {

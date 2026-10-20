@@ -862,7 +862,7 @@ async function handleRequest(req, res) {
     }
 
     // the package versions and the Desktop packages: public (an installed Desktop updates itself before anyone signs in)
-    if (p.startsWith('/api/pub/') && downloads.publicRoute(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`)) return;
+    if (p.startsWith('/api/pub/') && downloads.publicRoute(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`, nativeReleases)) return;
     if (p === '/api/status' && req.method === 'GET') {
       // The only thing anyone may learn without signing in is that a VibeRoller hub is here (the page needs
       // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
@@ -1002,6 +1002,8 @@ async function handleRequest(req, res) {
     }
     // ----- AI hosts: machines lending their AI to this hub (Settings → My AI hosts) -----
     if (p === '/api/hosts' && req.method === 'GET') return send(res, 200, { mine: aiNodes.hosts.mine(acct.username), all: aiNodes.hosts.all().map((h) => ({ id: h.id, nickname: h.nickname, user: h.user, online: h.online, providers: h.providers.filter((x) => x.allowedUsers.includes(acct.username) || h.user === acct.username).map((x) => ({ id: x.id, kind: x.kind, label: x.label, models: x.models, capped: x.capped })) })), defaultProvider: (providers.defaultFor(acct.username) || {}).id || '', group: config.hostGroup || [] });
+    // one of this person's hosts, as its ai-node.json (the desktop app's "Run on this PC" sets itself up with it)
+    if (p === '/api/hosts/config' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { config: aiNodes.hosts.configFor(acct.username, String(b.id || ''), PUBLIC_URL || `http://127.0.0.1:${config.port}`) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/hosts/new' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { host: aiNodes.hosts.create(acct.username, b.nickname ? String(b.nickname) : ''), mine: aiNodes.hosts.mine(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/hosts/rename' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { host: aiNodes.hosts.rename(acct.username, String(b.id || ''), String(b.nickname || '')) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/hosts/remove' && req.method === 'POST') { const b = await readBody(req); try { aiNodes.hosts.remove(acct.username, String(b.id || '')); return send(res, 200, { mine: aiNodes.hosts.mine(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
