@@ -7,6 +7,21 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.10.0 — 2026-10-20
+
+### Security (board T-132)
+- **Sign-in sessions are stored as hashes**: `hub-state.json` keeps the sha256 of each session token, never the token,
+  so a copy of the file (a backup, a data snapshot) signs nobody in. Sessions an older hub saved in the clear are hashed
+  on the first start, so nobody is signed out by the update (a rollback to an older hub would sign people out once).
+- **No inline script runs but the page's own**: the hub serves the page with its CSP's `'unsafe-inline'` for scripts
+  replaced by the sha256 of each of the page's own inline scripts, so injected script and inline event handlers are
+  refused by the browser. `worker-src blob:` lets the code sandbox (run_code) start its workers, which the old policy
+  silently blocked. A static copy of the file with no hub in front still says `'unsafe-inline'`.
+- **No more hanging requests**: every request runs through `handleRequest(...).catch(...)`, so a route that hands back a
+  promise without awaiting it is answered when that promise fails, instead of leaving the connection open (the 3.8.0
+  upload hang, fixed for every route at once).
+- nginx rate limits: unchanged in the repo (`deploy/nginx-portal.conf` has them); installing them needs root. R162.
+
 ## 3.9.0 — 2026-10-20
 
 ### Added

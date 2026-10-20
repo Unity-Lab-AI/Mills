@@ -1074,6 +1074,21 @@ async function run() {
   const hr = await fetch(H + '/api/status');
   check('R93', 'hub answers carry nosniff, no-referrer, frame DENY; API answers are no-store',
     hr.headers.get('x-content-type-options') === 'nosniff' && hr.headers.get('referrer-policy') === 'no-referrer' && hr.headers.get('x-frame-options') === 'DENY' && /no-store/.test(hr.headers.get('cache-control') || ''));
+  {
+    // R162: sessions kept as hashes; the page's scripts pinned by hash; every route's failure answered
+    const hs = JSON.parse(fs.readFileSync(path.join(SB, 'hub-state.json'), 'utf8')), keys = Object.keys(hs.sessions || {});
+    const tokHash = crypto.createHash('sha256').update(U).digest('hex');
+    const served = await (await fetch(H + '/')).text();
+    const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(served) || [])[1] || '';
+    const scriptSrc = (/script-src ([^;]*)/.exec(csp) || [])[1] || '';
+    const inline = [...served.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${crypto.createHash('sha256').update(m[1], 'utf8').digest('base64')}'`);
+    const srv162 = fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8');
+    check('R162', 'security: sign-in sessions are stored as sha256 hashes (hub-state.json holds no usable token, and the signed-in token still works); the page as the hub serves it allows no inline script but its own (script-src \'self\' + the sha256 of each of its inline scripts, no \'unsafe-inline\'; worker-src blob: for the code sandbox); every request runs through handleRequest(...).catch, so a route\'s unawaited promise that fails is answered instead of hanging',
+      hs.sessionsHashed === true && keys.length > 0 && !keys.includes(U) && keys.includes(tokHash) && !JSON.stringify(hs).includes(U)
+      && inline.length >= 1 && !/unsafe-inline/.test(scriptSrc) && inline.every((h) => scriptSrc.includes(h)) && /worker-src blob:/.test(csp) && /'unsafe-inline'/.test(indexHtml)
+      && /handleRequest\(req, res\)\.catch\(/.test(srv162) && /async function handleRequest\(req, res\)/.test(srv162),
+      `hashed ${hs.sessionsHashed} keys ${keys.length} raw ${keys.includes(U)} mine ${keys.includes(tokHash)}; script-src "${scriptSrc.slice(0, 120)}" inline ${inline.length}`);
+  }
 
   // Sign-in hashing is async now: parallel wrong guesses must still hit the 5-attempt limit.
   const burst = await Promise.all(Array.from({ length: 12 }, () => call('/api/login', null, { username: 'ghost-r65', password: 'wrong', deviceId: 'x'.repeat(32) })));

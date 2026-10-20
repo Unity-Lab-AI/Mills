@@ -171,19 +171,22 @@ async function checkPassword(acct, password) {
 loadAccounts();
 
 // ---------- sessions (persisted: a restart signs nobody out) ----------
+// Kept by the sha256 of the token, never the token itself (3.9.0): someone who reads hub-state.json (a backup, a data
+// snapshot) cannot sign in with what is in it. Sessions saved in the clear by an older hub are hashed on the first start.
+const tokenKey = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const hubState = readJson(HUB_STATE_FILE, {});
-const sessions = new Map(Object.entries(hubState.sessions || {}).filter(([, s]) => s && s.exp > Date.now() && accounts.has(s.user)));
+const sessions = new Map(Object.entries(hubState.sessions || {}).filter(([, s]) => s && s.exp > Date.now() && accounts.has(s.user)).map(([t, s]) => [hubState.sessionsHashed ? t : tokenKey(t), s]));
 for (const acct of accounts.values()) { // sessions saved by the old one-bridge-per-person layout
   if (!acct.state.sessions) continue;
-  for (const [t, exp] of Object.entries(acct.state.sessions)) if (exp > Date.now()) sessions.set(t, { user: acct.username, exp });
+  for (const [t, exp] of Object.entries(acct.state.sessions)) if (exp > Date.now()) sessions.set(tokenKey(t), { user: acct.username, exp });
   delete acct.state.sessions; saveState(acct);
 }
-function saveSessions() { hubState.sessions = Object.fromEntries(sessions); writeJson(HUB_STATE_FILE, hubState); }
+function saveSessions() { hubState.sessions = Object.fromEntries(sessions); hubState.sessionsHashed = true; writeJson(HUB_STATE_FILE, hubState); }
 saveSessions();
 function sessionAccount(req) {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-  const s = m && sessions.get(m[1]);
-  if (!s || s.exp < Date.now() || !accounts.has(s.user)) { if (s) { sessions.delete(m[1]); saveSessions(); } return null; }
+  const k = m && tokenKey(m[1]), s = k && sessions.get(k);
+  if (!s || s.exp < Date.now() || !accounts.has(s.user)) { if (s) { sessions.delete(k); saveSessions(); } return null; }
   return accounts.get(s.user);
 }
 function dropSessions(username) {
@@ -783,7 +786,28 @@ async function internalTool(tool, req, res, account) {
   return emit(acct, { type: 'pc_tool', id, name, args });
 }
 
-const server = http.createServer(async (req, res) => {
+// No inline script runs but the page's own (3.9.0): the page as served has its CSP's 'unsafe-inline' for scripts replaced
+// by the sha256 of each of its own inline scripts, taken after the hub filled in its values. Anything injected into the
+// page (a message, a name, a file someone managed to slip HTML into) cannot run, nor can inline event handlers.
+// worker-src blob: lets the code sandbox (run_code: Web Workers made from the page's own text) start.
+function pinScripts(html) {
+  const hashes = [];
+  html.replace(/<script>([\s\S]*?)<\/script>/g, (m, body) => { hashes.push(`'sha256-${crypto.createHash('sha256').update(body, 'utf8').digest('base64')}'`); return m; });
+  return html.replace(/(<meta http-equiv="Content-Security-Policy" content="[^"]*?script-src 'self') 'unsafe-inline';/, (m, a) => `${a} ${hashes.join(' ')}; worker-src blob:;`);
+}
+// A route that hands back a promise without awaiting it (`return x.route(...)`) leaves the try below before that promise
+// settles, so its rejection would skip the catch, and the request would hang with nobody answering it. Every request
+// therefore goes through handleRequest(...).catch(...): whatever fails, awaited or not, is answered (3.9.0).
+function answerError(e, res, p) {
+  // our own messages (and the 413 / bad JSON of readBody) go back as they are; anything from the system (a file error
+  // with a path in it, a stack) is logged here and answered plainly
+  if (res.headersSent) { try { res.end(); } catch {} return; }
+  if (e && e.status === 413) res.setHeader('Connection', 'close');
+  if (e && e.code && /^E[A-Z]+$/.test(e.code)) { console.error('[mills] request failed:', p, e); return send(res, 500, { error: 'Something went wrong on the hub; it is logged. Try again.' }); }
+  return send(res, (e && e.status) || 400, { error: String((e && e.message) || e).replace(/(?:\/srv|\/home|\/tmp|[A-Z]:\\)[^\s'"]*/g, '<path>') });
+}
+const server = http.createServer((req, res) => { handleRequest(req, res).catch((e) => { try { answerError(e, res, String(req.url || '').split('?')[0]); } catch {} }); });
+async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   for (const [k, v] of Object.entries(HARDEN)) res.setHeader(k, v);
@@ -829,7 +853,7 @@ const server = http.createServer(async (req, res) => {
         // cache busting: every script and stylesheet of the page is asked for under this build's name, so after an update no
         // browser (or cache in between) can hand back an older copy
         html = html.replace(/(<script src|<link rel="stylesheet" href)="([\w./-]+\.(?:js|css))"/g, (m, a, f) => `${a}="${f}?v=${encodeURIComponent(BUILD)}"`);
-        return res.end(html);
+        return res.end(pinScripts(html));
       }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
       return fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
@@ -887,7 +911,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 403, { error: 'This account is locked to another device. Ask an admin to reset it.' });
       }
       const token = crypto.randomBytes(32).toString('hex');
-      sessions.set(token, { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
+      sessions.set(tokenKey(token), { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
       assistant.learnClient(acct, client, outsideIp(req)).catch(() => {}).then(() => agentGreet(acct));
       return send(res, 200, { token, username: acct.username });
     }
@@ -953,7 +977,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/logout' && req.method === 'POST') {
       calls.leave(acct.username); shares.stop(acct.username); presence.typing(acct.username, '', false);
       presence.gone(acct.username); // offline right away
-      sessions.delete((req.headers.authorization || '').slice(7)); saveSessions();
+      sessions.delete(tokenKey((req.headers.authorization || '').slice(7))); saveSessions();
       return send(res, 200, { ok: true });
     }
 
@@ -1253,14 +1277,9 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 404, { error: 'Unknown endpoint' });
   } catch (e) {
-    // our own messages (and the 413 / bad JSON of readBody) go back as they are; anything from the system (a file error
-    // with a path in it, a stack) is logged here and answered plainly
-    if (res.headersSent) { try { res.end(); } catch {} return; }
-    if (e && e.status === 413) res.setHeader('Connection', 'close');
-    if (e && e.code && /^E[A-Z]+$/.test(e.code)) { console.error('[mills] request failed:', p, e); return send(res, 500, { error: 'Something went wrong on the hub; it is logged. Try again.' }); }
-    return send(res, (e && e.status) || 400, { error: String((e && e.message) || e).replace(/(?:\/srv|\/home|\/tmp|[A-Z]:\\)[^\s'"]*/g, '<path>') });
+    return answerError(e, res, p);
   }
-});
+}
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`[mills] Hub running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);

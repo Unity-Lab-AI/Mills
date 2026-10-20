@@ -6,7 +6,9 @@
 <!-- Network reach of this page: itself, the hub (a Cloudflare tunnel) and the GitHub API that publishes
      the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
      anything except by loading an image; markdown images (https) are allowed for that reason only and
-     are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
+     are fetched without a referrer. The page script is inline: the hub serves this page with 'unsafe-inline'
+     replaced by that script's own sha256 (bridge/server.js pinScripts), so no other inline script or
+     inline event handler can run; only a static copy of the file (no hub in front) still says 'unsafe-inline'. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>VibeRoller</title>
 <!-- VibeRoller Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
