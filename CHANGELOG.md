@@ -7,6 +7,29 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.8.0 — 2026-10-20
+
+### Added
+- **VibeRoller accounts linked to the server's Linux accounts** (bridge/linux-accounts.js): sponge → sponge, gee → gee,
+  mills → mills (config `linuxUsers` overrides; same name by default). Each person links once, as themselves, with no
+  root: `sh /srv/apps/VibeRoller/app/deploy/link-linux-account.sh` (over SSH or by their AI agent there). It makes
+  `~/uploaded_files` and lets the hub's Linux account read and write that folder only (ACLs; passing through the home
+  folder, never listing or reading it); `… unlink` takes it back. Linked, their Work uploads land in
+  `~/uploaded_files/<date>/<name>`: theirs to work on, edit and run in their own account (the shared projects stay in
+  /srv/apps/sharedwork, which everyone's group reaches). Not linked: VibeRoller's own area, as before.
+- **Files** (a menu tile; web/library.js, on the web and in the Desktop app): everything you uploaded, with its name,
+  type and size, when, where it went (Work · project, or the chat conversation, and whether that message was deleted
+  since), and when it was last opened or used; search, Work / Chat filter; Open (pictures, players, the text / code
+  viewer), Download, Delete (for good), and for a chat file "Copy to my uploaded_files" (decrypted in the browser and
+  uploaded as a normal file). The top says whether your server account is linked, and how to link it.
+- **Chat files stay end-to-end encrypted, and stay yours:** the uploader's browser hands over the file's name, type and
+  key sealed to the uploader alone (only their chat key opens it), so when a message is deleted its readers lose its
+  files while the uploader keeps them in Files (marked "message deleted") until they delete them there. Clearing the
+  chat works the same way. Files from older pages (no seal) still go with their message.
+- Check R159; R158 follows (uploads in uploaded_files when linked).
+- Modules: bridge/files.js 1.1.0, bridge/linux-accounts.js 1.0.0 (new), bridge/server.js 3.5.0, web/attach.js 1.1.0,
+  web/index.html 1.8.0, web/library.js 1.0.0 (new), web/sw.js 1.0.3.
+
 ## 3.7.0 — 2026-10-20
 
 ### Added

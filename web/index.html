@@ -422,6 +422,18 @@
   .attBox .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
   .attView { overflow: auto; padding: .75rem 1rem; min-width: min(46rem, 90vw); }
   .attBig { max-width: 100%; max-height: calc(100vh - 6rem); object-fit: contain; display: block; margin: auto; }
+  /* Files (web/library.js) */
+  #library { display: flex; flex-direction: column; }
+  #library header input[type="search"] { max-width: 18rem; }
+  .libLink { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; margin: .75rem 1rem 0; padding: .55rem .75rem; border: 1px solid var(--line); border-radius: 10px; font-size: .88rem; }
+  .libLink code { user-select: all; }
+  #libList { flex: 1; overflow: auto; padding: .75rem 1rem 1.5rem; display: flex; flex-direction: column; gap: .5rem; }
+  .libRow { display: grid; grid-template-columns: minmax(12rem, 1.2fr) 2fr auto; gap: .5rem 1rem; align-items: center; padding: .6rem .75rem; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 85%, transparent); }
+  .libRow.gone { opacity: .6; }
+  .libName { display: flex; align-items: center; gap: .4rem; min-width: 0; } .libName b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .libName small { color: var(--muted); white-space: nowrap; }
+  .libMeta { display: flex; flex-wrap: wrap; gap: .2rem .9rem; font-size: .82rem; color: var(--muted); } .libMeta .libPath { font-family: ui-monospace, monospace; }
+  .libActs { display: flex; flex-wrap: wrap; gap: .3rem; justify-content: flex-end; }
+  @media (max-width: 820px) { .libRow { grid-template-columns: 1fr; } .libActs { justify-content: flex-start; } }
   /* "Newest": sticks to the bottom of a conversation that has new content below while you read further up */
   .jumpNew { position: sticky; bottom: .5rem; align-self: center; z-index: 5; display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .8rem; border-radius: 999px; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); }
   #micBtn { padding: .35rem .6rem; }
@@ -792,6 +804,7 @@
     <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
     <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
     <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
+    <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
     <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
     <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
   </div>
@@ -1016,6 +1029,20 @@
     </section>
     <div id="ntEmpty">Pick a note on the left, or make one with <b>Note</b>.</div>
   </div>
+</div>
+
+<!-- Files: everything you uploaded (web/library.js) -->
+<div id="library" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Files</b>
+    <span class="folder" id="libCount"></span>
+    <input id="libSearch" type="search" placeholder="Search names and places…" spellcheck="false" autocomplete="off">
+    <select id="libKind"><option value="">Everything</option><option value="work">Work uploads</option><option value="chat">Chat uploads</option></select>
+    <button class="ghost" id="libRefresh" title="Reload the list"><svg class="ic lead"><use href="#i-refresh"/></svg>Refresh</button>
+  </header>
+  <div id="libLink" class="libLink"></div>
+  <div id="libList"></div>
 </div>
 
 <div id="assist" class="screen" hidden>
@@ -1633,10 +1660,11 @@ async function enter() {
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
   if (name === 'notes') NOTES.show(); // web/notes.js
+  if (name === 'library') LIBRARY.show(); // web/library.js
   presenceTick(); // tell the others where you are now
   if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); restoreWork(); } // the previous conversation + queue come back
   if (name === 'shell') refreshUsage();
@@ -1650,6 +1678,7 @@ $('goChat').onclick = () => showScreen('room');
 $('goBoard').onclick = () => showScreen('board');
 $('goCal').onclick = () => showScreen('cal');
 $('goNotes').onclick = () => showScreen('notes');
+$('goFiles').onclick = () => showScreen('library');
 $('goAdmin').onclick = () => showScreen('admin');
 $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
@@ -3304,17 +3333,30 @@ async function sealBlob(bytes, mid) {
 // Attachments in the chat: every file is encrypted here with its own random key before it leaves this browser; only the
 // ciphertext goes to the hub (/api/room/file), and the key travels inside the encrypted message body. Readers fetch the
 // ciphertext and decrypt it here when the file is shown (web/attach.js).
-const FILE_AAD = enc.encode('vr-file-v1');
+const FILE_AAD = enc.encode('vr-file-v1'), OWN_AAD = enc.encode('vr-own-seal-v1');
+// The uploader's own copy of a file's name, type, size and key, for their Files library (which still opens it after
+// the message is gone): sealed with a key only their own chat key pair derives (ECDH with themselves). The hub stores it
+// and can never open it.
+async function sealOwn(info) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: OWN_AAD }, await sharedWith(chatPubJwk), enc.encode(JSON.stringify(info)));
+  return toB64(iv) + '.' + toB64(new Uint8Array(ct));
+}
+async function openOwn(seal) {
+  const [iv, ct] = String(seal || '').split('.');
+  return JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(iv), additionalData: OWN_AAD }, await sharedWith(chatPubJwk), fromB64(ct))));
+}
 async function sealChatFiles(list) {
   const out = [];
   for (const file of list) {
     const fk = crypto.getRandomValues(new Uint8Array(32)), fiv = crypto.getRandomValues(new Uint8Array(12));
     const k = await crypto.subtle.importKey('raw', fk, 'AES-GCM', false, ['encrypt']);
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: fiv, additionalData: FILE_AAD }, k, await file.arrayBuffer());
-    const r = await api('/api/room/file', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: ct });
+    const info = { n: file.name, m: ATTACH.mimeOf(file.name, file.type), s: file.size, k: toB64(fk), i: toB64(fiv) };
+    const r = await api('/api/room/file', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-VR-Own-Seal': await sealOwn(info) }, body: ct });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(file.name + ': ' + (d.error || r.statusText));
-    out.push({ id: d.id, n: file.name, m: ATTACH.mimeOf(file.name, file.type), s: file.size, k: toB64(fk), i: toB64(fiv) });
+    out.push({ id: d.id, ...info });
   }
   return out;
 }
@@ -4067,6 +4109,7 @@ connect().then((ok) => { if (ok && token) enter().catch(() => signOut()); });
 <!-- profiles: Settings tabs (Profile / App settings / Connections), the profile editor and profile cards: web/profile.js -->
 <script src="profile.js"></script>
 <script src="notes.js"></script>
+<script src="library.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

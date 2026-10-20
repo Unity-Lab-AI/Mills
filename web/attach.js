@@ -118,5 +118,7 @@ const ATTACH = (() => {
     }
     host.append(wrap);
   }
-  return { MAX, tray, wire, render, kind, mimeOf, size, asText };
+  // one file in its own window (Files): its picture / player / viewer button, as in a conversation
+  function open(f, get) { const body = el('div', 'attView'); render(body, [f], get); modal(f.n || 'file', body); }
+  return { MAX, tray, wire, render, open, download, kind, mimeOf, size, asText };
 })();

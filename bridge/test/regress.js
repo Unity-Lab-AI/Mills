@@ -85,7 +85,7 @@ function listening(port) {
   });
 }
 
-let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null;
+let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null, FAKE_LINUX = ''; // FAKE_LINUX: R159's stand-in Linux accounts (ignored by git: under bridge/profiles)
 // read a zip like an unzipper would (the Download packages): the central directory names every entry and points at its
 // local header; deflated entries are inflated, so the files inside can be checked
 function unzipAll(buf) {
@@ -218,6 +218,7 @@ function startFakeOllama() {
 async function setup() {
   SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'mills-test-'));
   SB = path.join(SCRATCH, 'bridge');
+  FAKE_LINUX = path.join(SB, 'profiles', '_linux');
   fs.mkdirSync(path.join(SB, 'test'), { recursive: true });
   for (const f of fs.readdirSync(BRIDGE)) {
     if ((f.endsWith('.js') && f !== 'master-logins.js') || f === 'cloudflared-quick.yml') fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
@@ -238,8 +239,12 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp' }, hostGroup: ['t-user'], aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp' }, hostGroup: ['t-user'], linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
+  // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
+  // hub may write it); t-admin has none
+  fs.mkdirSync(path.join(FAKE_LINUX, 'home', 't-user', 'uploaded_files'), { recursive: true });
+  fs.writeFileSync(path.join(FAKE_LINUX, 'passwd'), `root:x:0:0:root:/root:/bin/bash\nt-user:x:1500:1500::${path.join(FAKE_LINUX, 'home', 't-user')}:/bin/bash\n`);
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
   // a co-owner; the Mills server gets a named owner (t-admin, a hub admin already, so nothing else changes)
@@ -367,7 +372,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['attach.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['attach.js', 'library.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -1480,11 +1485,40 @@ async function run() {
       up.status === 200 && /^[a-f0-9]{24}$/.test(upId) && beforeSendOther === 404 && sentF.status === 200 && getU.status === 200 && getUBuf.equals(ct) && getD === 404
       && again.status === 400 && stolen.status === 400 && afterDelete === 404 && !onDisk && tooBig === 413
       && wUp.status === 200 && wMeta.name === 'evil name.md' && wMeta.mime === 'text/markdown' && wGet.status === 200 && wGet.headers.get('content-type') === 'application/octet-stream' && wGet.headers.get('x-vr-file-type') === 'text/markdown' && /hello r158/.test(wGetText) && wOther === 404
-      && /Attached by the user: 1 file/.test(wRun) && new RegExp('uploads[\\\\/]' + wMeta.id + '[\\\\/]evil name\\.md').test(wRun) && /look at my notes r158/.test(wRun) && /adddir=\S*uploads/.test(wRun) && /no text: see the attached files/.test(wOnly)
+      && /Attached by the user: 1 file/.test(wRun) && /uploaded_files[\\/]\d{4}-\d\d-\d\d[\\/]evil name\.md/.test(wRun) && /look at my notes r158/.test(wRun) && /adddir=\S*uploaded_files/.test(wRun) && /no text: see the attached files/.test(wOnly)
       && prefOn.data.prefs.autoScroll === true && prefOff.data.prefs.autoScroll === false
       && /if \(b\.includes\(0\)\) return null/.test(att) && /fatal: true/.test(att) && /return 'binary'/.test(att) && /MD\.render\(body, fence \+ lang/.test(att) && /Not a picture, video or text/.test(att)
       && /id="roomAttach"/.test(page158) && /id="workAttach"/.test(page158) && /sealChatFiles/.test(page158) && /additionalData: FILE_AAD/.test(page158) && /<!--vr-files /.test(page158) && /id="setAutoScroll"/.test(page158) && /if \(up && prefs\(\)\.autoScroll\) setAutoScroll\(false\)/.test(page158) && /className = 'jumpNew'/.test(page158),
       `chat up ${up.status} pre ${beforeSendOther} send ${sentF.status} U ${getU.status} same ${getUBuf.equals(ct)} D ${getD} again ${again.status} stolen ${stolen.status} deleted ${afterDelete} disk ${onDisk} big ${tooBig}; work up ${wUp.status} ${JSON.stringify(wMeta)} get ${wGet.status} ${wGet.headers.get('x-vr-file-type')} other ${wOther}; run "${wRun.slice(0, 160)}"`);
+
+    // R159: Files (everyone's library) and the link to their Linux account on the server
+    const libU = (await call('/api/library', U)).data, libA = (await call('/api/library', A)).data;
+    const wEntry = (libU.entries || []).find((e) => e.id === wMeta.id) || {};
+    const onLinkedDisk = fs.readdirSync(path.join(FAKE_LINUX, 'home', 't-user', 'uploaded_files'), { recursive: true }).some((f) => String(f).endsWith('evil name.md'));
+    // a chat file with its uploader's own seal: the message goes, the uploader keeps it (others lose it)
+    const seal = 'aaaaaaaaaaaaaaaa.' + 'b'.repeat(40);
+    const upS = await raw(A, '/api/room/file', crypto.randomBytes(500), { 'Content-Type': 'application/octet-stream', 'X-VR-Own-Seal': seal }), sId = (await upS.json().catch(() => ({}))).id;
+    const sSent = await call('/api/room/send', A, { ...(await sealConv(A, privA, 't-admin', 'kept r159', grpConv)), files: [sId] });
+    const sByU1 = (await raw(U, '/api/room/file/' + sId)).status;
+    await call('/api/room/delete', A, { seq: sSent.data.seq });
+    const sByU2 = (await raw(U, '/api/room/file/' + sId)).status, sByA = (await raw(A, '/api/room/file/' + sId)).status;
+    const sEntry = ((await call('/api/library', A)).data.entries || []).find((e) => e.id === sId) || {};
+    const sDel = await call('/api/library/delete', A, { id: sId }), sAfter = (await raw(A, '/api/room/file/' + sId)).status;
+    const notMine = await call('/api/library/delete', A, { id: wMeta.id }); // someone else's file: not in their library
+    const wDel = await call('/api/library/delete', U, { id: wMeta.id });
+    const wGone = !fs.readdirSync(path.join(FAKE_LINUX, 'home', 't-user', 'uploaded_files'), { recursive: true }).some((f) => String(f).endsWith('evil name.md')), wServe = (await raw(U, '/api/work/file/' + wMeta.id)).status;
+    const linkSh = fs.readFileSync(path.join(MILLS, 'deploy', 'link-linux-account.sh'), 'utf8'), lib159 = fs.readFileSync(path.join(MILLS, 'web', 'library.js'), 'utf8'), page159 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R159', 'Files: everyone\'s uploads in one library: a person linked to their Linux account on the server gets their Work uploads in ~/uploaded_files/<date>/ (theirs to work on), the library lists each with when, name / type / size, where it went (Work · project) and when it was last used; someone without a linked account keeps them in VibeRoller\'s area; a chat file carries its uploader\'s own seal (only their chat key opens its name and key), so when its message is deleted its readers lose it and the uploader still has it (marked "message deleted"), until they delete it from the library, for good; nobody deletes someone else\'s; [static] the link script needs no root and grants the hub that one folder only (ACLs), unlink takes it back; the Files screen opens, downloads, deletes, copies a chat file into uploaded_files, and shows the link status',
+      libU.linux && libU.linux.linked === true && libU.linux.linuxUser === 't-user' && /uploaded_files$/.test(libU.linux.folder) && libA.linux && libA.linux.linked === false && onLinkedDisk
+      && wEntry.kind === 'work' && wEntry.name === 'evil name.md' && wEntry.size > 0 && wEntry.at > 0 && wEntry.lastAccess > 0 && (wEntry.uses || []).some((x) => x.where === 'work' && x.project === 'VibeRoller') && /uploaded_files[\\/]\d{4}-\d\d-\d\d$/.test(wEntry.folder || '') && !wEntry.path
+      && upS.status === 200 && sSent.status === 200 && sByU1 === 200 && sByU2 === 404 && sByA === 200 && sEntry.seal === seal && sEntry.where && sEntry.where.deleted > 0 && sEntry.where.conv === grpConv
+      && sDel.status === 200 && sAfter === 404 && notMine.status === 404 && wDel.status === 200 && wGone && wServe === 404
+      && /setfacl -m "u:\$HUB:x" "\$HOME"/.test(linkSh) && /setfacl -R -d -m/.test(linkSh) && /unlink/.test(linkSh) && !/sudo/.test(linkSh)
+      && /function openOwn/.test(page159) && /'X-VR-Own-Seal': await sealOwn\(info\)/.test(page159) && /id="goFiles"/.test(page159) && /LIBRARY\.show\(\)/.test(page159)
+      && /Copy to my uploaded_files/.test(lib159) && /\/api\/library\/delete/.test(lib159) && /ATTACH\.open\(it/.test(lib159)
+      // the hub's own data never shows as a change in the live checkout (the auto-deploy refuses a checkout with changes)
+      && ['bridge/uploads-index.json', 'bridge/uploads/x', 'bridge/ai-host-sessions.json', 'bridge/ai-node.status.json', 'Chat/files/x'].every((f) => spawnSync('git', ['check-ignore', '-q', f], { cwd: MILLS }).status === 0),
+      `U linux ${JSON.stringify(libU.linux)}; A linked ${libA.linux && libA.linux.linked}; on disk ${onLinkedDisk}; work entry ${JSON.stringify({ k: wEntry.kind, n: wEntry.name, la: !!wEntry.lastAccess, uses: (wEntry.uses || []).length, f: wEntry.folder })}; chat U ${sByU1}/${sByU2} A ${sByA} entry ${JSON.stringify(sEntry.where || {})} del ${sDel.status} after ${sAfter}; notMine ${notMine.status}; work del ${wDel.status} gone ${wGone} serve ${wServe}`);
   }
   const grpText = grpForU ? await read4(restored, grpForU).catch(() => null) : null;
   const addedInv = await call('/api/guilds/server/add', U, { server: gSid, add: ['t-admin'] }); // an invitation now…

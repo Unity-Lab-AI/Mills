@@ -231,8 +231,8 @@ function runClaude(acct, message, fresh, res, context) {
   if (!fresh && acct.state.claudeSessionId && (acct.state.claudeSessionWhere || 'hub') === where) args.push('--resume', acct.state.claudeSessionId);
   acct.state.claudeSessionWhere = where;
   // attached files (the marker block at the end of the message): Claude gets their paths and may read that folder
-  const wm = files.workMessage(acct, message);
-  if (wm.files.length) args.push('--add-dir', files.work.dirOf(acct));
+  const wm = files.workMessage(acct, message, { project: wd.project });
+  for (const d of wm.dirs) args.push('--add-dir', d);
   const input = context ? `${wm.text}\n\n---\n${context}` : wm.text; // context = automatic summaries of the shared Work sessions this person is watching (added by their browser)
   acct.runProvider = prov.kind !== 'host' ? prov.id : '';
   if (source) noteActivity(source);
@@ -359,7 +359,10 @@ let seq = messages.reduce((m, x) => Math.max(m, x.seq || 0), 0);
 let rev = messages.reduce((m, x) => Math.max(m, x.rev || x.seq || 0), 0);
 const b64 = (s, max) => typeof s === 'string' && s.length <= max && /^[A-Za-z0-9+/=_-]*$/.test(s);
 // Attachments (bridge/files.js): the chat's files are ciphertext like the messages; Work's are the person's own uploads
-const files = require('./files')({ CHAT_DIR, send: (...a) => send(...a) });
+// VibeRoller accounts ↔ the server's Linux accounts (bridge/linux-accounts.js): each person's uploads go to their own
+// linked ~/uploaded_files; everyone's library (Files) lists what they uploaded, where it went, when it was last used
+const linux = require('./linux-accounts')({ config, ROOT });
+const files = require('./files')({ CHAT_DIR, send: (...a) => send(...a), accountOf: (u) => accounts.get(u), linux });
 setInterval(() => { try { files.chat.sweep(); files.work.sweep([...accounts.values()]); } catch (e) { console.error('[mills] file sweep: ' + e.message); } }, 3600e3).unref();
 const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv === 'P-256' && b64(k.x, 64) && b64(k.y, 64) && !k.d;
 // Long-poll for the room: browsers wait on /api/room/messages?wait=1&ver=N and are answered the moment
@@ -503,7 +506,7 @@ const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJso
     let n = 0;
     for (const m of messages) if (m.from === user && !m.deleted && convs.includes(m.conv) && Date.parse(m.ts) >= since) {
       for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
-      if (m.files) { files.chat.remove(m.files); delete m.files; } // its attachments go with it
+      if (m.files) { files.chat.messageGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
       Object.assign(m, { deleted: true, keys: {}, rev: ++rev }); n++;
     }
     if (n) { saveMessages(); roomChanged(); }
@@ -1054,7 +1057,7 @@ const server = http.createServer(async (req, res) => {
       const slots = cleanSlots(keys, acct.username, to || '', conv);
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
       // its files (uploaded encrypted just before, by this sender, not sent yet) now belong to this message
-      let fileIds = []; try { fileIds = files.chat.attach(acct.username, fileIdsIn, seq + 1); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+      let fileIds = []; try { fileIds = files.chat.attach(acct.username, fileIdsIn, seq + 1, to ? 'dm:' + [acct.username, to].sort().join('|') : conv || 'room'); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
       const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}), ...(fileIds.length ? { files: fileIds } : {}) };
       appendMessage(msg);
       if (!to) guilds.notePost(conv || 'room', acct.username); // slowmode
@@ -1086,7 +1089,7 @@ const server = http.createServer(async (req, res) => {
       if (!m || (m.from !== acct.username && !(!m.to && guilds.moderates(m.conv || 'room', acct.username) && visibleTo(m, acct.username)))) return send(res, 403, { error: 'You can only delete your own messages.' });
       if (!m.deleted) {
         for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
-        if (m.files) { files.chat.remove(m.files); delete m.files; } // its attachments go with it
+        if (m.files) { files.chat.messageGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
         Object.assign(m, { deleted: true, keys: {}, rev: ++rev });
         saveMessages();
       }
@@ -1163,6 +1166,9 @@ const server = http.createServer(async (req, res) => {
       return buf ? files.serve(res, buf, 'file', 'application/octet-stream') : send(res, 404, { error: 'Not found.' });
     }
     if (p === '/api/work/file' && req.method === 'POST') return await files.work.upload(acct, req, res);
+    // Files: everything this person uploaded, where it went, when it was last used; and their Linux account's link
+    if (p === '/api/library' && req.method === 'GET') return send(res, 200, { linux: linux.status(acct.username, files.work.fallbackDir(acct)), entries: files.library.list(acct) });
+    if (p === '/api/library/delete' && req.method === 'POST') { const { id } = await readBody(req); return files.library.remove(acct, String(id || '')) ? send(res, 200, { ok: true }) : send(res, 404, { error: 'Not found.' }); }
     if (p.startsWith('/api/work/file/') && req.method === 'GET') return files.work.serve(acct, p.slice('/api/work/file/'.length), res);
     if (p === '/api/room/blob' && req.method === 'GET') { // a voice clip's ciphertext, for a reader of that message
       const m = messages.find((x) => x.seq === Number(url.searchParams.get('seq')));
@@ -1229,7 +1235,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true, supervised: SUPERVISED });
       }
       if (p === '/api/admin/room/clear' && req.method === 'POST') {
-        messages = []; fs.writeFileSync(CHAT_FILE, ''); files.chat.clear(); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
+        messages = []; fs.writeFileSync(CHAT_FILE, ''); files.chat.allGone(); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
         rev = 0; seen = {}; writeJson(SEEN_FILE, seen); // browsers see latestRev drop below theirs and reload
         roomChanged();
         console.log(`[mills] ${acct.username} cleared the chat history.`);
