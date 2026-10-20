@@ -57,6 +57,8 @@ function projectList() { // listing walks the projects root and asks git; keep i
 // the commit this process started from: the auto-deploy's health check compares it with what it deployed
 const RUNNING_COMMIT = (() => { try { return require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], { cwd: MILLS_DIR, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 }).trim(); } catch { return ''; } })();
 const VERSIONS = (() => { try { const v = JSON.parse(fs.readFileSync(path.join(MILLS_DIR, 'versions.json'), 'utf8')); return { project: String(v.project || '0.0.0'), modules: v.modules || {} }; } catch { return { project: '0.0.0', modules: {} }; } })();
+// this build: the version + the commit (a page compares it with the build it was loaded from)
+const BUILD = VERSIONS.project + (RUNNING_COMMIT ? '+' + RUNNING_COMMIT.slice(0, 7) : '');
 // The host's AI on/off switch (the black-heart / knife host tools, bridge/host-tools/): while bridge/ai-host.off exists,
 // the AI that runs on this machine pauses (Work runs and API answers on the host's Claude login or another Claude
 // Code login here, Unity's assistant brains, Unity in the chat). Everything else keeps running: chat, board, calls,
@@ -810,9 +812,12 @@ const server = http.createServer(async (req, res) => {
       const file = path.join(WEB_DIR, p === '/' ? 'index.html' : path.normalize(p));
       if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, { error: 'Not found' });
       if (path.basename(file) === 'index.html') { // the page learns that the hub itself serves it (so it talks to this very origin, whatever name reached it) and, in server mode, the hub's fixed address
-        res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' });
+        res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
         let html = fs.readFileSync(file, 'utf8').split('__MILLS_SERVED__').join('hub');
         if (PUBLIC_URL) html = html.split('__MILLS_HUB_HOST__').join(PUBLIC_URL);
+        // cache busting: every script and stylesheet of the page is asked for under this build's name, so after an update no
+        // browser (or cache in between) can hand back an older copy
+        html = html.replace(/(<script src|<link rel="stylesheet" href)="([\w./-]+\.(?:js|css))"/g, (m, a, f) => `${a}="${f}?v=${encodeURIComponent(BUILD)}"`);
         return res.end(html);
       }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
@@ -878,7 +883,8 @@ const server = http.createServer(async (req, res) => {
 
     const acct = sessionAccount(req);
     if (!acct) return send(res, 401, { error: 'Not signed in.' });
-    res.setHeader('X-VR-Version', VERSIONS.project); // signed-in pages notice a new version on their next call and update themselves
+    res.setHeader('X-VR-Version', BUILD); // signed-in pages notice a new build on their next call (and every 5 minutes) and update themselves
+    if (p === '/api/version' && req.method === 'GET') return send(res, 200, { version: VERSIONS.project, build: BUILD });
     // A requested restart wins the gap between two replies: while it is pending (supervised hub) no
     // NEW run starts; the page retries a 503 by itself and its message goes through on the new code.
     // Without this, queued messages that start the next run within milliseconds could hold the
@@ -895,7 +901,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, username: acct.username, display: acct.display, admin: acct.admin,
         models: config.models, model: acct.state.model || '', defaultModel: acct.defaultModel, project: projectOf(acct), projects: projectList(), prefs: acct.state.prefs || {}, share: shares.convOf(acct.username),
         provider: acct.state.provider || 'host', effectiveProvider: (providers.effective(acct.username, acct.state.provider || '') || {}).id || '', defaultProvider: (providers.defaultFor(acct.username) || {}).id || '', hubClaude: providers.HUB_CLAUDE,
-        providers: providers.list(acct.username), version: VERSIONS.project, versions: VERSIONS.modules, aiHost: aiHostOn(), aiNodes: aiNodes.status(), pcHost: aiNodes.pcHostFor(acct.username) });
+        providers: providers.list(acct.username), version: VERSIONS.project, build: BUILD, versions: VERSIONS.modules, aiHost: aiHostOn(), aiNodes: aiNodes.status(), pcHost: aiNodes.pcHostFor(acct.username) });
     }
     if (p.startsWith('/api/downloads') && downloads.route(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`, (hostId) => aiNodes.hosts.configFor(acct.username, hostId, PUBLIC_URL || `http://127.0.0.1:${config.port}`))) return; // the Download panel's packages (+ this person's own AI host config)
     // ----- AI providers: everyone manages their own; the host's Claude is always there -----

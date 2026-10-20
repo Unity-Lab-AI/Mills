@@ -1265,8 +1265,8 @@ async function api(path, opts = {}) {
     try { res = await fetch(base + path, init); } catch {}
     if (res && ![502, 503, 504, 530].includes(res.status)) {
       if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
-      const hubVersion = res.headers.get('x-vr-version');
-      if (hubVersion && me && me.version && hubVersion !== me.version) pageUpdateAvailable(hubVersion);
+      const hubBuild = res.headers.get('x-vr-version');
+      if (hubBuild && me && (me.build || me.version) && hubBuild !== (me.build || me.version)) pageUpdateAvailable(hubBuild);
       if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
       return res;
     }
@@ -1278,20 +1278,45 @@ async function api(path, opts = {}) {
     if (attempt % 4 === 0) { try { base = await findBridge(true); } catch {} }
   }
 }
-// The page follows the hub: every signed-in answer names the hub's version (X-VR-Version). When it differs from the
-// version this page was loaded with, the page reloads itself as soon as nothing would be lost: no reply streaming in
-// Work or Unity, no call, no unsent text, no open file or note editor. Until then it says so once and keeps checking.
-let pageUpdate = null;
-function pageUpdateAvailable(v) {
-  if (pageUpdate) { pageUpdate.v = v; return; }
-  pageUpdate = { v };
-  const drafts = ['input', 'roomInput', 'assistInput'].some((id) => $(id) && $(id).value.trim());
-  const editing = () => ['editor', 'ntEditor'].some((id) => $(id) && $(id).offsetParent !== null);
-  const idle = () => !busy && !assistBusy && !(typeof call !== 'undefined' && call.conv) && !editing() && !['input', 'roomInput', 'assistInput'].some((id) => $(id) && $(id).value.trim());
-  const go = () => { if (!idle()) return false; clearInterval(pageUpdate.timer); location.reload(); return true; };
-  if (go()) return;
-  sys(`VibeRoller was updated to ${v}. This page reloads by itself once nothing is in progress${drafts ? ' (send or clear what you are typing)' : ''}; or reload it now.`);
-  pageUpdate.timer = setInterval(go, 15000);
+// The page follows the hub by itself; nobody has to do anything. Every signed-in answer names the hub's build
+// (X-VR-Version: version + commit), and the page asks every 5 minutes as well. When the build differs from the one this
+// page was loaded from, the page saves the session and hard-reloads onto the new one:
+//   - it waits only for what finishes by itself or cannot be saved for you: a reply streaming in (Work, Unity), a call,
+//     a file or a note with unsaved changes (it says so once; nothing else to do)
+//   - it saves: the Work conversation and its queue (on the hub), what you were typing in Work / Chat / Unity and the
+//     screen you were on (this tab); the open conversation is remembered anyway. After the reload all of it comes back.
+//   - the reload busts every cache: the service worker's caches are emptied and the worker updated, the page is asked
+//     for under the new build's name, and the hub names every script and stylesheet with the build too.
+let pageUpdate = null, editorDirty = false;
+const UPDATE_STATE = 'vr.update.state';
+setInterval(() => { if (me && token) api('/api/version').catch(() => {}); }, 5 * 60e3);
+function pageUpdateAvailable(build) {
+  if (pageUpdate) { pageUpdate.build = build; return; }
+  pageUpdate = { build, told: false };
+  const go = () => {
+    const wait = [busy && 'the Work reply has finished', assistBusy && 'Unity has answered', (typeof call !== 'undefined' && call.conv) && 'your call has ended',
+      editorDirty && 'the open file is saved', (typeof NOTES !== 'undefined' && NOTES.dirty && NOTES.dirty()) && 'the open note is saved'].filter(Boolean);
+    if (wait.length) { if (!pageUpdate.told) { pageUpdate.told = true; sys(`VibeRoller ${pageUpdate.build} is ready. This page switches to it by itself as soon as ${wait.join(' and ')}.`); } return; }
+    clearInterval(pageUpdate.timer); hardReload(pageUpdate.build);
+  };
+  pageUpdate.timer = setInterval(go, 5000); go();
+}
+async function hardReload(build) {
+  if (workStarted) { try { saveCurrent(); saveQueue(); } catch {} } // (only once Work was opened here: never overwrite the hub's copy with an empty one)
+  const screen = ['shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes'].find((id) => $(id) && !$(id).hidden) || '';
+  const drafts = {}; for (const id of ['input', 'roomInput', 'assistInput']) if ($(id) && $(id).value) drafts[id] = $(id).value;
+  try { sessionStorage.setItem(UPDATE_STATE, JSON.stringify({ screen, drafts, from: me && (me.build || me.version), at: Date.now() })); } catch {}
+  try { if ('caches' in window) await Promise.all((await caches.keys()).map((k) => caches.delete(k))); } catch {}
+  try { if (navigator.serviceWorker) for (const r of await navigator.serviceWorker.getRegistrations()) await r.update(); } catch {}
+  await sleep(500); // the saves are out
+  const u = new URL(location.href); u.searchParams.set('v', build); location.replace(u.toString());
+}
+function restoreAfterUpdate() { // the end of enter(): back where you were, with what you were typing
+  let s = null; try { s = JSON.parse(sessionStorage.getItem(UPDATE_STATE) || 'null'); sessionStorage.removeItem(UPDATE_STATE); } catch {}
+  if (!s || Date.now() - s.at > 10 * 60e3) return;
+  if (s.screen && $(s.screen) && !(s.screen === 'admin' && !me.admin) && !(APP_MODE && s.screen !== 'room')) showScreen(s.screen);
+  for (const [id, v] of Object.entries(s.drafts || {})) if ($(id) && !$(id).value) $(id).value = v;
+  sys(`VibeRoller updated itself to ${me.version}. Everything you had open is back.`);
 }
 async function json(path, opts) {
   const res = await api(path, opts);
@@ -1573,6 +1598,7 @@ async function enter() {
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
+  restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
 }
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
@@ -1704,12 +1730,12 @@ async function listDir(dir) {
 }
 async function openFile(p) {
   try {
-    $('editor').value = await fsOps.read({ path: p });
+    $('editor').value = await fsOps.read({ path: p }); editorDirty = false;
     openPath = p; $('openName').textContent = p; $('save').disabled = $('del').disabled = false;
   } catch (err) { sys(err.message, true); }
 }
 $('save').onclick = async () => {
-  try { await fsOps.write({ path: openPath, content: $('editor').value });
+  try { await fsOps.write({ path: openPath, content: $('editor').value }); editorDirty = false;
     $('openName').textContent = openPath + '  '; $('openName').append(ic('check', 'lead'), 'saved'); setTimeout(() => $('openName').textContent = openPath, 1500);
   } catch (err) { sys(err.message, true); }
 };
@@ -1717,10 +1743,11 @@ $('del').onclick = async () => {
   const b = $('del');
   if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Confirm delete'; setTimeout(() => { b.dataset.armed = ''; b.textContent = 'Delete'; }, 3000); return; }
   try { await fsOps.delete({ path: openPath });
-    openPath = null; $('editor').value = ''; $('openName').textContent = 'No file open'; $('save').disabled = b.disabled = true;
+    openPath = null; $('editor').value = ''; editorDirty = false; $('openName').textContent = 'No file open'; $('save').disabled = b.disabled = true;
     b.dataset.armed = ''; b.textContent = 'Delete'; listDir(cwd);
   } catch (err) { sys(err.message, true); }
 };
+$('editor').addEventListener('input', () => { if (openPath) editorDirty = true; }); // an unsaved file holds back a self-update (pageUpdateAvailable)
 $('editor').addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (openPath) $('save').click(); }
 });

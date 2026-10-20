@@ -299,7 +299,7 @@ setInterval(() => {
 
 // ---------- updates from the hub (on by default; "autoUpdate": false in ai-node.json switches them off) ----------
 // The hub hands out the files a host runs, as it runs them itself, in a manifest signed with THIS host's secret (HMAC),
-// so only the hub that knows our token can give us code. Checked after every hello and every 10 minutes, and acted on
+// so only the hub that knows our token can give us code. Checked after every hello and every 5 minutes, and acted on
 // only between answers: the changed files are downloaded and checked against the manifest's sha256, the new version is
 // started once on its own (--selftest: it must load), then swapped in with the old files kept in .update-backup, and we
 // restart on it. A host that runs from a git checkout (a hub folder handed off to hosting, like Gee's PC) fast-forwards
@@ -393,7 +393,7 @@ function gitUpdate(m, files) {
   log(`updated this checkout to the hub's ${m.version} (${m.commit.slice(0, 7)}): restarting on it`);
   process.exit(3);
 }
-setInterval(() => { checkUpdate(); }, 10 * 60000).unref();
+setInterval(() => { checkUpdate(); }, 5 * 60000).unref(); // every 5 minutes (and after every hello, and when the hub's beat names a new version)
 if (SELFTEST) { console.log('[ai-host] selftest: ' + VERSION + ' loads'); process.exit(0); }
 
 // ---------- the loop ----------
