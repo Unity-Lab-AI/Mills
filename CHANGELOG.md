@@ -7,6 +7,28 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.4.0 — 2026-10-20
+
+### Added
+- **Every download is its own installer, launcher and updater** (Windows and Linux), installed or portable:
+  - **Vibe Roller AI Host**: run `VibeRoller AI Host.cmd` / `viberoller-ai-host.sh` (bridge/vr-setup.js). It finds earlier
+    installs (the standard folder, the VibeRollerAIHost service's folder, C:\VibeRollerAIHost / ~/VibeRollerAIHost, a
+    running host's lock) and updates them, keeping that machine's ai-node.json, logs and settings; a running host
+    switches at its next quiet moment, and if an older launcher lets it stop, the setup starts it again. A launcher that
+    is running is swapped at its next start, never under it. A host that runs from a git checkout (Gee's PC) is never
+    overwritten: it updates itself. Nothing installed → Install (standard folder) or Portable. `--install`,
+    `--portable`, `--update`, `--status`, `--yes`. The hub's host updates now include vr-setup.js too.
+  - **Vibe Roller Desktop**: run `VibeRoller Desktop.cmd` (PowerShell, bridge/desktop/vr-desktop.ps1) or
+    `viberoller-desktop.sh` (bridge/desktop/). It finds earlier installs (its folder, its shortcuts / the launcher older
+    packages put in ~/.local/bin) and updates them; nothing → Install (with Start-menu / Desktop shortcuts or an
+    application-menu entry) or Portable. Installed, it checks the hub at every start and updates itself when its
+    package changed.
+  - Every package carries **VERSION.txt**: the hub's version + a fingerprint of the package's contents, so installs
+    update only when something in them changed. `GET /api/pub/versions` names them, public, as are the Desktop packages
+    (`/api/pub/desktop-<os>.zip`: nothing in them but this hub's address); the AI Host packages stay signed-in only.
+  - Check R155 (runs the Linux installers end to end; the Windows ones are checked in source). R142 adjusted.
+- Modules: bridge/downloads.js 1.2.0, bridge/vr-setup.js 1.0.0 (new), bridge/ai-nodes.js 2.4.1, bridge/server.js 3.2.1.
+
 ## 3.3.1 — 2026-10-20
 
 ### Changed

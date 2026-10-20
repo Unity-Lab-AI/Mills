@@ -4,17 +4,27 @@
 // No build step and no dependencies: the zip writer below is the whole packaging. Every package carries the hub's own
 // address, so what people download from this hub points back at this hub.
 //
-//   GET /api/downloads            the four packages (id, title, os, file name, size)
-//   GET /api/downloads/<id>.zip   one package
+//   GET /api/downloads            the four packages (id, title, os, file name, size, version)   signed-in
+//   GET /api/downloads/<id>.zip   one package                                                    signed-in
+//   GET /api/pub/versions         every package's version (no secrets in it)                     public
+//   GET /api/pub/desktop-<os>.zip the Desktop package (it holds nothing but this hub's address)  public
+//
+// Each package is its own installer, launcher and updater, for Windows and Linux: run it and it finds an earlier install
+// (and updates it, keeping that machine's own files), or asks: install, or run portable. Every package carries
+// VERSION.txt: the hub's version + a fingerprint of the package's contents, so an install updates only when something in
+// it really changed. An installed Desktop checks /api/pub/versions at every start and updates itself; an AI host updates
+// its code from the hub by itself (bridge/ai-node.js), and a newer package run on that machine updates the rest.
 //
 // Vibe Roller Desktop   = VibeRoller Chat in its own window (the same app the browser installs; see web/app.js): a launcher
-//                         for Chrome / Edge / Brave with a Start-menu / application-menu entry.
-// Vibe Roller AI Host   = this machine's AI node (bridge/ai-node.js) that lends Unity's engines to the hub, with the
+//                         for Chrome / Edge / Brave with a Start-menu / application-menu entry (bridge/desktop/).
+// Vibe Roller AI Host   = this machine's AI host (bridge/ai-node.js), with its setup (bridge/vr-setup.js), the
 //                         VibeRollerAIHost service that starts it at boot and the heart / knife tools.
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
 const { ROOT } = require('./common');
+const projectVersion = () => { try { return String(JSON.parse(fs.readFileSync(path.join(ROOT, '..', 'versions.json'), 'utf8')).project || ''); } catch { return ''; } };
 
 // ---------- a small zip writer (deflate where it helps, one central directory, unix modes for the .sh files) ----------
 const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
@@ -50,155 +60,160 @@ function aiHostExample(hub) {
   ex.hub = hub;
   return JSON.stringify(ex, null, 2) + '\n';
 }
+const withHub = (rel, hub) => src(rel).toString('utf8').split('__HUB__').join(hub);
+const HOST_CODE = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'vr-setup.js'];
 const packages = {
   'desktop-windows': { group: 'desktop', os: 'Windows', title: 'Vibe Roller Desktop', file: 'VibeRollerDesktop-windows.zip',
     build: (hub) => [
       { name: 'VibeRollerDesktop/VibeRoller Desktop.cmd', data: crlf(`@echo off
-rem Vibe Roller Desktop: opens VibeRoller Chat in its own window (app mode) with Chrome, Edge or Brave, whichever is here.
-rem Address of your VibeRoller: ${hub}
-set "URL=${hub}/index.html?app=1"
-for %%b in ("%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe" "%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe" "%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome.exe" "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe" "%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe" "%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe" "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe") do if exist %%b (start "" %%b --app=%URL% --window-size=1280,860 & exit /b)
-start "" "%URL%"
+rem Vibe Roller Desktop: VibeRoller Chat in its own window, and its own installer + updater (README.txt).
+rem Double-click: finds an earlier install and updates it, or asks: install or portable. Options: -Install -Portable -Update -Status
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0vr-desktop.ps1" %*
+if errorlevel 1 pause
 `) },
-      { name: 'VibeRollerDesktop/Install VibeRoller Desktop.cmd', data: crlf(`@echo off
-rem Puts "VibeRoller Desktop" into the Start menu and on the Desktop (shortcuts to VibeRoller Desktop.cmd next to this file).
-rem Run again after moving this folder. Remove: delete the two shortcuts.
-setlocal
-set "HERE=%~dp0"
-powershell -NoProfile -Command "$s = New-Object -ComObject WScript.Shell; foreach ($d in @([Environment]::GetFolderPath('Desktop'), (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'))) { $l = $s.CreateShortcut((Join-Path $d 'VibeRoller Desktop.lnk')); $l.TargetPath = '%HERE%VibeRoller Desktop.cmd'; $l.WorkingDirectory = '%HERE%'; $l.Description = 'VibeRoller Chat in its own window'; $l.IconLocation = '%%SystemRoot%%\\System32\\shell32.dll,43'; $l.Save() }"
-echo VibeRoller Desktop is in your Start menu and on your Desktop.
-pause
-`) },
+      { name: 'VibeRollerDesktop/vr-desktop.ps1', data: crlf(withHub('desktop/vr-desktop.ps1', hub)) },
       { name: 'VibeRollerDesktop/README.txt', data: crlf(`Vibe Roller Desktop (Windows)
 =============================
 VibeRoller Chat in its own window: servers, channels, groups, private messages, calls and Unity, signed in with your
 VibeRoller account. Your VibeRoller: ${hub}
 
-Best install (own icon, Start-menu entry, runs like any app): open ${hub}/index.html?app=1 in Chrome, Edge or
-Brave and use the install icon at the right of the address bar (or the browser menu > "Install VibeRoller Chat").
+This folder is the installer, the app and the updater in one:
+  - Double-click "VibeRoller Desktop.cmd". If VibeRoller Desktop is already installed (any earlier version, wherever
+    it was), it is updated to this one and opens. If not, it asks: Install (into %LOCALAPPDATA%\\VibeRoller\\Desktop,
+    with Start-menu and Desktop shortcuts) or Portable (runs from this folder, installs nothing).
+  - Installed, it keeps itself up to date: at every start it asks ${hub} for the current package and updates itself
+    when something changed. The window itself always shows the current VibeRoller (it is the hub's own page).
+  - Options (from a command prompt): -Install, -Portable, -Update, -Status.
+Needs Chrome, Edge or Brave (one of them is almost always there).
 
-This folder is the alternative when the browser cannot install it:
-  1. Unzip this folder anywhere (e.g. Documents\\VibeRollerDesktop).
-  2. Double-click "Install VibeRoller Desktop.cmd" once: it puts "VibeRoller Desktop" in your Start menu and on your Desktop.
-  3. "VibeRoller Desktop" opens VibeRoller Chat in its own window with Chrome, Edge or Brave.
-Needs one of those browsers. If VibeRoller is only reachable from inside the server (the portal), connect your tunnel first.
+Also possible: open ${hub}/index.html?app=1 in Chrome, Edge or Brave and use the install icon in the address bar.
 `) },
     ] },
   'desktop-linux': { group: 'desktop', os: 'Linux', title: 'Vibe Roller Desktop', file: 'VibeRollerDesktop-linux.zip',
     build: (hub) => [
-      { name: 'VibeRollerDesktop/viberoller-desktop.sh', exec: true, data: `#!/usr/bin/env sh
-# Vibe Roller Desktop: opens VibeRoller Chat in its own window (app mode) with Chrome, Chromium, Brave or Edge, whichever is here.
-URL="${hub}/index.html?app=1"
-for b in google-chrome google-chrome-stable chromium chromium-browser brave-browser brave microsoft-edge microsoft-edge-stable; do
-  command -v "$b" >/dev/null 2>&1 && exec "$b" --app="$URL" --window-size=1280,860
-done
-exec xdg-open "$URL"
-` },
-      { name: 'VibeRollerDesktop/install-viberoller-desktop.sh', exec: true, data: `#!/usr/bin/env sh
-# Puts "VibeRoller Desktop" into your application menu (a .desktop entry with VibeRoller's icon), for this user only.
-# Run again after moving this folder. Remove: rm ~/.local/share/applications/viberoller-desktop.desktop ~/.local/bin/viberoller-desktop
-set -eu
-HERE=$(cd "$(dirname "$0")" && pwd)
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/scalable/apps"
-cp "$HERE/viberoller-desktop.sh" "$HOME/.local/bin/viberoller-desktop"; chmod +x "$HOME/.local/bin/viberoller-desktop"
-curl -fsSL -m 10 "${hub}/icons/mills.svg" -o "$HOME/.local/share/icons/hicolor/scalable/apps/viberoller.svg" 2>/dev/null || echo "(icon not fetched; the menu entry works without it)"
-cat > "$HOME/.local/share/applications/viberoller-desktop.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=VibeRoller Desktop
-Comment=VibeRoller Chat in its own window
-Exec=$HOME/.local/bin/viberoller-desktop
-Icon=viberoller
-Terminal=false
-Categories=Network;Chat;
-StartupWMClass=${hub.replace(/^https?:\/\//, '').replace(/[/:].*$/, '')}__index.html
-EOF
-command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
-echo "VibeRoller Desktop is in your application menu."
-` },
+      { name: 'VibeRollerDesktop/viberoller-desktop.sh', exec: true, data: withHub('desktop/viberoller-desktop.sh', hub) },
       { name: 'VibeRollerDesktop/README.txt', data: `Vibe Roller Desktop (Linux)
 ===========================
 VibeRoller Chat in its own window: servers, channels, groups, private messages, calls and Unity, signed in with your
 VibeRoller account. Your VibeRoller: ${hub}
 
-Best install (own icon, application-menu entry, runs like any app): open ${hub}/index.html?app=1 in Chrome, Chromium,
-Brave or Edge and use the install icon at the right of the address bar (or the browser menu > "Install VibeRoller Chat").
+This folder is the installer, the app and the updater in one:
+  - sh viberoller-desktop.sh   If VibeRoller Desktop is already installed (any earlier version), it is updated to this
+    one and opens. If not, it asks: Install (into ~/.local/share/viberoller/desktop, with an application-menu entry and
+    ~/.local/bin/viberoller-desktop) or Portable (runs from this folder, installs nothing).
+  - Installed, it keeps itself up to date: at every start it asks ${hub} for the current package and updates itself
+    when something changed. The window itself always shows the current VibeRoller (it is the hub's own page).
+  - Options: --install, --portable, --update, --status.
+Needs Chrome, Chromium, Brave or Edge, and curl (for updates).
 
-This folder is the alternative when the browser cannot install it:
-  1. Unzip it anywhere, e.g. ~/VibeRollerDesktop.
-  2. sh install-viberoller-desktop.sh   (once: adds "VibeRoller Desktop" to your application menu, with the icon)
-  3. "VibeRoller Desktop" opens VibeRoller Chat in its own window; viberoller-desktop.sh does the same from a shell.
-Needs Chrome, Chromium, Brave or Edge. If VibeRoller is only reachable from inside the server (the portal), connect your tunnel first.
+Also possible: open ${hub}/index.html?app=1 in Chrome, Chromium, Brave or Edge and use the install icon in the address bar.
 ` },
     ] },
   'ai-host-windows': { group: 'ai-host', os: 'Windows', title: 'Vibe Roller AI Host', file: 'VibeRollerAIHost-windows.zip',
     build: (hub, cfg) => [
-      ...take('VibeRollerAIHost', ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'start-node.bat', 'host-tools/HostTool.cs', 'host-tools/AiHostService.cs', 'host-tools/build-host-tools.ps1', 'host-tools/build.cmd', 'host-tools/install-ai-host-service.cmd']),
+      { name: 'VibeRollerAIHost/VibeRoller AI Host.cmd', data: crlf(`@echo off
+rem Vibe Roller AI Host: installs, runs and updates this PC's AI host (README.txt). Options: --install --portable --update --status --yes
+where node >nul 2>nul || (echo Node.js is required: https://nodejs.org & pause & exit /b 1)
+node "%~dp0vr-setup.js" %*
+if errorlevel 1 pause
+`) },
+      ...take('VibeRollerAIHost', [...HOST_CODE, 'start-node.bat', 'host-tools/HostTool.cs', 'host-tools/AiHostService.cs', 'host-tools/build-host-tools.ps1', 'host-tools/build.cmd', 'host-tools/install-ai-host-service.cmd']),
       { name: 'VibeRollerAIHost/ai-node.example.json', data: aiHostExample(hub) },
       ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []),
       { name: 'VibeRollerAIHost/README.txt', data: crlf(`Vibe Roller AI Host (Windows)
 =============================
-Makes this PC an AI host for VibeRoller: it lends the AI engines running here (Unity's Ollama brain, and the image, voice
-and speech engines) to the VibeRoller server at ${hub}. It connects OUT to the server; no port opens here.
-The VibeRollerAIHost service starts it at boot, before anyone signs in. Two Desktop tools start and stop it:
-the black heart (start-viberoller-ai-host.exe) and the knife (stop-viberoller-ai-host.exe). Stopping affects only
-this PC's AI hosting: VibeRoller keeps running for everyone, Unity says her AI host is offline until it is back.
+Makes this PC an AI host for VibeRoller at ${hub}: it lends its AI (its Claude / ChatGPT login, local models, Unity's
+engines) without sharing the computer itself. It connects OUT to the server; no port opens here.
 
-Needs: Node.js (https://nodejs.org), and the engines themselves (Ollama etc.) running on this PC.
-
-  1. Unzip this folder somewhere permanent, e.g. C:\\VibeRollerAIHost (not Downloads).
-  2. Copy ai-node.example.json to ai-node.json and fill in: hub (already ${hub}), name (this PC's node name) and token.
-     The VibeRoller admin gives you name + token: they are what the hub has under aiNodes in bridge\\config.local.json.
-  3. Double-click host-tools\\build.cmd once. It builds the heart, the knife and the service with the C# compiler that
-     comes with Windows, puts "Start VibeRoller AI Host" and "Stop VibeRoller AI Host" on your Desktop, and offers to
-     install the service (asks for administrator rights once). Say Y: the service starts now and at every boot.
-  4. Check: ai-node.log next to ai-node.js says it is lending its engines; in VibeRoller, Unity answers again.
-
-Later: install-ai-host-service.cmd again after moving the folder; install-ai-host-service.cmd remove to take it out.
-Without the service (no administrator rights), start-node.bat runs the node in a window, and the heart / knife pause and
-resume it.
+This folder is the installer, the host and the updater in one. Needs Node.js (https://nodejs.org).
+  - Double-click "VibeRoller AI Host.cmd".
+      An AI host is already installed here (any earlier version: the standard folder, the VibeRollerAIHost service's
+      folder, C:\\VibeRollerAIHost …) → it is updated to this package; its ai-node.json, logs and settings stay, and the
+      running host switches to the new version at its next quiet moment (it never cuts off an answer).
+      A host that runs from a VibeRoller git checkout is left alone: it updates itself.
+      Nothing installed → it asks: Install (into %LOCALAPPDATA%\\VibeRoller\\AIHost) or Portable (runs from this folder).
+  - Your own host's package (VibeRoller → Settings → Connections → My AI hosts → download) has its ai-node.json inside.
+    This general one has ai-node.example.json: copy it to ai-node.json and fill in hub, id and token.
+  - To start at boot: run host-tools\\build.cmd in the install folder once. It builds the heart, the knife and the
+    service with the C# compiler that comes with Windows, puts "Start / Stop VibeRoller AI Host" on your Desktop and
+    offers to install the service (administrator rights once).
+  - Updates: the host updates its code from the hub by itself, between answers. By hand: "VibeRoller AI Host.cmd"
+    from a newer download, or node ai-node.js --update in the install folder.
+  - Options (from a command prompt): --install, --portable, --update, --status, --yes.
 `) },
     ] },
   'ai-host-linux': { group: 'ai-host', os: 'Linux', title: 'Vibe Roller AI Host', file: 'VibeRollerAIHost-linux.zip',
     build: (hub, cfg) => [
-      ...take('VibeRollerAIHost', ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'host-tools/viberoller-ai-host.service']),
+      { name: 'VibeRollerAIHost/viberoller-ai-host.sh', exec: true, data: `#!/usr/bin/env sh
+# Vibe Roller AI Host: installs, runs and updates this machine's AI host (README.txt). Options: --install --portable --update --status --yes
+command -v node >/dev/null 2>&1 || { echo "Node.js is required: https://nodejs.org"; exit 1; }
+exec node "$(cd "$(dirname "$0")" && pwd)/vr-setup.js" "$@"
+` },
+      ...take('VibeRollerAIHost', [...HOST_CODE, 'host-tools/viberoller-ai-host.service']),
       ...take('VibeRollerAIHost', ['start-node.sh', 'host-tools/install-ai-host-service.sh', 'host-tools/start-viberoller-host.sh', 'host-tools/stop-viberoller-host.sh'], true),
       { name: 'VibeRollerAIHost/ai-node.example.json', data: aiHostExample(hub) },
       ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []),
       { name: 'VibeRollerAIHost/README.txt', data: `Vibe Roller AI Host (Linux)
 ===========================
-Makes this machine an AI host for VibeRoller: it lends the AI engines running here (Unity's Ollama brain, and the image,
-voice and speech engines) to the VibeRoller server at ${hub}. It connects OUT to the server; no port opens here.
-The viberoller-ai-host systemd service starts it at boot, before anyone signs in. Two tools start and stop it:
-the heart (host-tools/start-viberoller-host.sh) and the knife (host-tools/stop-viberoller-host.sh). Stopping affects only
-this machine's AI hosting: VibeRoller keeps running for everyone, Unity says her AI host is offline until it is back.
+Makes this machine an AI host for VibeRoller at ${hub}: it lends its AI (its Claude / ChatGPT login, local models,
+Unity's engines) without sharing the computer itself. It connects OUT to the server; no port opens here.
 
-Needs: Node.js, and the engines themselves (Ollama etc.) running on this machine.
-
-  1. Unzip this folder somewhere permanent, e.g. ~/VibeRollerAIHost.
-  2. cp ai-node.example.json ai-node.json and fill in: hub (already ${hub}), name (this machine's node name) and token.
-     The VibeRoller admin gives you name + token: they are what the hub has under aiNodes in bridge/config.local.json.
-  3. sudo sh host-tools/install-ai-host-service.sh    (once: installs + starts the service, at every boot from now on;
-     your user may start / stop it without a password)
-  4. Check: journalctl -u viberoller-ai-host -f says it is lending its engines; in VibeRoller, Unity answers again.
-
-Later: run the install again after moving the folder; sudo sh host-tools/install-ai-host-service.sh remove takes it out.
-Without the service (no sudo), sh start-node.sh runs the node in a terminal, and the heart / knife pause and resume it.
+This folder is the installer, the host and the updater in one. Needs Node.js.
+  - sh viberoller-ai-host.sh
+      An AI host is already installed here (any earlier version: the standard folder, the viberoller-ai-host service's
+      folder, ~/VibeRollerAIHost …) → it is updated to this package; its ai-node.json, logs and settings stay, and the
+      running host switches to the new version at its next quiet moment (it never cuts off an answer).
+      A host that runs from a VibeRoller git checkout is left alone: it updates itself.
+      Nothing installed → it asks: Install (into ~/.local/share/viberoller/ai-host) or Portable (runs from this folder).
+  - Your own host's package (VibeRoller → Settings → Connections → My AI hosts → download) has its ai-node.json inside.
+    This general one has ai-node.example.json: cp it to ai-node.json and fill in hub, id and token.
+  - To start at boot: sudo sh host-tools/install-ai-host-service.sh in the install folder (once).
+  - Updates: the host updates its code from the hub by itself, between answers. By hand: viberoller-ai-host.sh from a
+    newer download, or node ai-node.js --update in the install folder.
+  - Options: --install, --portable, --update, --status, --yes.
 ` },
     ] },
 };
-
-const cache = new Map(); // id → { hub, data }  (the plain packages; one with a host's config inside is built fresh and never cached)
-function build(id, hub, cfg) {
-  if (cfg) return zip(packages[id].build(hub, cfg));
-  const c = cache.get(id);
-  if (c && c.hub === hub) return c.data;
-  const data = zip(packages[id].build(hub));
-  cache.set(id, { hub, data });
-  return data;
+// The package's version: the hub's version + a fingerprint of everything in it but a personal ai-node.json (and the
+// hub address, which is the same for everyone here), so an install updates only when something in it changed.
+function withVersion(id, entries) {
+  const h = crypto.createHash('sha256');
+  for (const e of entries) if (!/\/ai-node\.json$/.test(e.name)) h.update(e.name + '\0').update(Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data, 'utf8'));
+  const version = `${projectVersion()}+${h.digest('hex').slice(0, 8)}`;
+  const folder = entries[0].name.split('/')[0];
+  return { version, entries: [...entries, { name: folder + '/VERSION.txt', data: version + '\n' }] };
 }
+
+const cache = new Map(); // id → { hub, data, version }  (the plain packages; one with a host's config inside is built fresh and never cached)
+function built(id, hub, cfg) {
+  if (cfg) { const v = withVersion(id, packages[id].build(hub, cfg)); return { data: zip(v.entries), version: v.version }; }
+  const c = cache.get(id);
+  if (c && c.hub === hub) return c;
+  const v = withVersion(id, packages[id].build(hub));
+  const out = { hub, data: zip(v.entries), version: v.version };
+  cache.set(id, out);
+  return out;
+}
+const build = (id, hub, cfg) => built(id, hub, cfg).data;
 function list(hub) {
-  return Object.entries(packages).map(([id, p]) => ({ id, group: p.group, os: p.os, title: p.title, file: p.file, bytes: build(id, hub).length }));
+  return Object.entries(packages).map(([id, p]) => { const b = built(id, hub); return { id, group: p.group, os: p.os, title: p.title, file: p.file, bytes: b.data.length, version: b.version }; });
+}
+// Public, before any sign-in: the package versions (an installed Desktop asks at every start) and the Desktop packages
+// themselves (they hold nothing but this hub's public address). The AI Host packages stay signed-in only.
+function publicRoute(p, req, res, hub) {
+  if (req.method !== 'GET' || !p.startsWith('/api/pub/')) return false;
+  try {
+    if (p === '/api/pub/versions') {
+      const body = { version: projectVersion() }; for (const id of Object.keys(packages)) body[id] = built(id, hub).version;
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); return true;
+    }
+    const m = /^\/api\/pub\/(desktop-(?:windows|linux))\.zip$/.exec(p);
+    if (!m) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"Not found"}'); return true; }
+    const b = built(m[1], hub);
+    res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': b.data.length, 'Content-Disposition': `attachment; filename="${packages[m[1]].file}"`, 'Cache-Control': 'no-store' });
+    res.end(b.data);
+  } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Could not build the package.' })); }
+  return true;
 }
 // Signed-in people only (the hub routes here after its session check). hub = this hub's address for the packages.
 // ?host=<id> puts that person's own AI host config (Settings → My AI hosts) into the AI Host package: unzip and run.
@@ -221,4 +236,4 @@ function route(p, req, res, hub, hostConfig = null) {
   return true;
 }
 
-module.exports = { route, list, zip, packages };
+module.exports = { route, publicRoute, list, zip, packages };

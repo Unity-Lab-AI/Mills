@@ -44,7 +44,7 @@ const ANIMAL = ['panda', 'crocodile', 'otter', 'falcon', 'badger', 'walrus', 'ly
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NICK_RE = /^[a-z0-9]+(-[a-z0-9]+){1,3}$/;
 // what a host runs (bridge/ai-node.js and what it loads); launchers (.bat / .sh / the service) are never swapped while running
-const HOST_FILES = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js'];
+const HOST_FILES = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'vr-setup.js']; // vr-setup.js: the package's own installer / updater stays current too
 
 // onUsage(source, windows) / savedUsage(source): a host provider's 5h / 7d windows are kept by bridge/usage.js (on disk), so
 // they survive a hub restart and show in /api/usage; source = "h:<hostId>/<providerId>".
