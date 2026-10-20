@@ -23,7 +23,7 @@ function appOs() {
   return 'your computer';
 }
 const appUrl = () => location.origin + location.pathname.replace(/[^/]*$/, '') + 'index.html?app=1';
-function renderAppCard(target) { // Settings → "VibeRoller Chat app", and the Download panel's Vibe Roller Desktop card
+function renderAppCard(target) { // Settings → Downloads → "VibeRoller Chat app from the browser"
   const box = target || $('appBox'); if (!box) return;
   box.textContent = '';
   const os = appOs(), chromium = /chrome|edg|chromium|brave/i.test(navigator.userAgent) && !/firefox/i.test(navigator.userAgent);

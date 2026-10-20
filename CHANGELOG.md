@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.3.1 — 2026-10-20
+
+### Changed
+- **Downloads have their own place.** Settings has a fourth tab, **Downloads**: Vibe Roller Desktop and Vibe Roller AI
+  Host for Windows and Linux, how each one stays up to date (the page and the Desktop app follow the hub by themselves;
+  an AI Host updates itself between answers, or by hand with `node ai-node.js --update`), the version the downloads
+  contain, and installing the chat app from the browser (moved here from Connections). Work's side bar has a
+  **Download** button right above Settings, like the menu; every Download button opens Settings on that tab (the
+  separate Download pop-up is gone). The AI Host's description now says what it shares (its logins, local models,
+  Unity's engines, never the computer). Check R142 (extended).
+- Modules: web/index.html 1.5.1, web/app.js 1.1.1.
+
 ## 3.3.0 — 2026-10-20
 
 ### Fixed

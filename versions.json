@@ -1,5 +1,5 @@
 {
-  "project": "3.3.0",
+  "project": "3.3.1",
   "modules": {
     "bridge/ai-node.js": "3.2.0",
     "bridge/ai-nodes.js": "2.4.0",
@@ -34,12 +34,12 @@
     "bridge/vendor.js": "1.0.0",
     "bridge/work-state.js": "1.0.0",
     "bridge/worktree.js": "2.2.0",
-    "web/app.js": "1.1.0",
+    "web/app.js": "1.1.1",
     "web/board.js": "1.0.1",
     "web/calls.js": "1.0.1",
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.1.0",
-    "web/index.html": "1.5.0",
+    "web/index.html": "1.5.1",
     "web/md.js": "1.0.1",
     "web/notes.js": "1.0.1",
     "web/polish.css": "1.0.2",
