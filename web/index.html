@@ -855,19 +855,14 @@
 
 <div id="toasts"></div>
 
-<div id="downloads" class="modal" hidden>
-  <div class="box">
-    <div class="bar"><span>Download</span><button class="ghost" id="closeDownloads">Close</button></div>
-    <!-- the two applications, each for Windows and Linux, built by the hub from its own code (bridge/downloads.js) -->
-    <div class="setBody" id="dlBody"></div>
-  </div>
-</div>
 <div id="settings" class="modal" hidden>
   <div class="box">
     <div class="bar"><span>Settings</span><button class="ghost" id="closeSettings">Close</button></div>
-    <!-- three tabs (web/profile.js): Profile = what others see (user settings); App = how VibeRoller behaves for you
-         (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons -->
-    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App settings</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button></div>
+    <!-- four tabs (web/profile.js): Profile = what others see (user settings); App = how VibeRoller behaves for you
+         (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons;
+         Downloads = the native applications (Vibe Roller Desktop, Vibe Roller AI Host) for Windows and Linux, and how
+         each one stays up to date -->
+    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App settings</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button><button type="button" class="ghost" data-settab="downloads"><svg class="ic lead"><use href="#i-download"/></svg>Downloads</button></div>
     <div class="setBody">
      <div data-setpane="profile">
       <div id="profilePreview"></div>
@@ -908,8 +903,6 @@
      <div data-setpane="connections" hidden>
       <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
         <div id="apiBox" class="apiBox"></div></div>
-      <div class="setSection"><b>VibeRoller Chat app</b> — the chat side of VibeRoller as its own installed app on Windows or Linux (servers, channels, groups, private messages, calls, Unity).
-        <div id="appBox" class="apiBox"></div></div>
       <div class="setSection"><b>AI source</b> — whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).
         <div id="srcBox" class="apiBox"></div></div>
       <div class="setSection"><b>My AI hosts</b> — your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.
@@ -918,6 +911,13 @@
         <div id="provBox" class="provBox"></div></div>
       <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
         <div id="fjBox" class="apiBox"></div></div>
+     </div>
+     <!-- the packages are built by the hub from its own code (bridge/downloads.js) -->
+     <div data-setpane="downloads" hidden>
+      <div class="setSection"><b>Staying up to date</b> — this page and the Desktop app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>node ai-node.js --update</code> in its folder (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</div>
+      <div id="dlBody"></div>
+      <div class="setSection"><b>VibeRoller Chat app from the browser</b> — the chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).
+        <div id="appBox" class="apiBox"></div></div>
      </div>
     </div>
   </div>
@@ -1064,6 +1064,7 @@
       <button type="button" data-pane="tasks" title="Show / minimize your board tasks"><i><svg class="ic"><use href="#i-tasks"/></svg></i><span class="lbl">Tasks</span></button>
       <button type="button" data-pane="roomPane" title="Show / minimize the team chat"><i><svg class="ic"><use href="#i-chat"/></svg></i><span class="lbl">Team chat</span><span class="badge" id="railRoomBadge" hidden></span></button>
       <span class="grow"></span>
+      <button type="button" data-downloads title="Download: Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux"><i><svg class="ic"><use href="#i-download"/></svg></i><span class="lbl">Download</span></button>
       <button type="button" data-settings title="Settings"><i><svg class="ic"><use href="#i-gear"/></svg></i><span class="lbl">Settings</span></button>
     </nav>
     <div id="panes">
@@ -3650,9 +3651,18 @@ $('saveSettings').onclick = async () => {
 $('closeSettings').onclick = () => { $('settings').hidden = true; };
 $('settings').onclick = (e) => { if (e.target.id === 'settings') $('settings').hidden = true; };
 document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = openSettings; });
-// ── Download: Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux (packages built by the hub) ──
-async function openDownloads() {
-  const box = $('dlBody'); box.textContent = 'Loading…'; $('downloads').hidden = false;
+// ── Downloads (Settings → Downloads): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by the
+// hub from the code it runs. Every Download button (menu, Work's bar, the chat app) opens Settings on this tab. ──
+function openDownloads() {
+  openSettings();
+  if (typeof PROFILE !== 'undefined') PROFILE.tab('downloads');
+  renderDownloads();
+}
+async function renderDownloads() {
+  const box = $('dlBody'); if (!box) return;
+  box.textContent = 'Loading…';
+  $('dlVersion').textContent = 'VibeRoller ' + ((me && me.version) || '');
+  if (typeof renderAppCard === 'function') renderAppCard();
   let d; try { d = await json('/api/downloads'); } catch (e) { box.textContent = e.message; return; }
   box.textContent = '';
   const os = typeof appOs === 'function' ? appOs() : '';
@@ -3671,8 +3681,8 @@ async function openDownloads() {
     const h = document.createElement('b'); h.textContent = group === 'desktop' ? 'Vibe Roller Desktop' : 'Vibe Roller AI Host'; sec.append(h);
     const p = document.createElement('div'); p.className = 'status';
     p.textContent = group === 'desktop'
-      ? 'VibeRoller Chat in its own window: servers, channels, groups, private messages, calls and Unity, signed in with your account. The best install is from the browser itself (below); the download is a launcher for Chrome, Edge or Brave with a Start-menu / application-menu entry.'
-      : 'Makes a computer an AI host: it lends the AI engines running there (Unity\'s brain, image, voice, speech) to this VibeRoller. Starts at boot as the VibeRollerAIHost service; the heart and the knife start and stop it. Needs Node.js, and a node name + token from an admin.';
+      ? 'VibeRoller Chat in its own window: servers, channels, groups, private messages, calls and Unity, signed in with your account. A launcher for Chrome, Edge or Brave with a Start-menu / application-menu entry; it opens this hub\'s page, so it is always the current version. (Installing from the browser, at the bottom, works too.)'
+      : 'Makes a computer an AI host: it lends its AI to this VibeRoller (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. Starts at boot as the VibeRollerAIHost service; the heart and the knife start and stop it. Updates itself from this hub. Needs Node.js. For your own host with its config inside, use Settings → Connections → My AI hosts.';
     sec.append(p);
     const row = document.createElement('div'); row.className = 'row';
     for (const it of d.items.filter((i) => i.group === group)) {
@@ -3682,12 +3692,11 @@ async function openDownloads() {
       row.append(b);
     }
     sec.append(row);
-    if (group === 'desktop' && typeof renderAppCard === 'function') { const inst = document.createElement('div'); inst.className = 'apiBox'; sec.append(inst); renderAppCard(inst); }
     box.append(sec);
   }
 }
 document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = openDownloads; });
-$('closeDownloads').onclick = () => { $('downloads').hidden = true; };
+document.querySelector('[data-settab="downloads"]').addEventListener('click', renderDownloads);
 window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) applyLayout(); });
 
 // ── Shared Work sessions: share yours (watch-only for others), watch theirs in their own windows ──
