@@ -26,7 +26,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
-const VERSION = '3.2.0'; // this file's module version (versions.json); the hub shows it under My AI hosts
+const VERSION = '3.3.0'; // this file's module version (versions.json); the hub shows it under My AI hosts
 const CAPS = ['relay', 'update']; // told to the hub in hello: login relays, self-update (older hosts send none)
 const SELFTEST = process.argv.includes('--selftest'); // load everything, then exit 0: an update is tried this way first
 const CFG_FILE = process.argv.includes('--config') ? process.argv[process.argv.indexOf('--config') + 1] : path.join(__dirname, 'ai-node.json');
@@ -36,10 +36,23 @@ const cfg = (() => { try { return JSON.parse(fs.readFileSync(CFG_FILE, 'utf8'));
 const HUB = String(cfg.hub || '').replace(/\/+$/, '');
 const ID = String(cfg.id || cfg.name || ''), TOKEN = String(cfg.token || ''), USER = String(cfg.user || '');
 const ENGINES = cfg.engines && typeof cfg.engines === 'object' ? cfg.engines : {};
-const PROVIDERS = Array.isArray(cfg.providers) ? cfg.providers.filter((p) => p && p.id) : [];
+// a provider switched off in the control app ("enabled": false) is not offered at all
+const PROVIDERS = Array.isArray(cfg.providers) ? cfg.providers.filter((p) => p && p.id && p.enabled !== false) : [];
 const PC_FOLDER = cfg.pc && cfg.pc.folder ? path.resolve(String(cfg.pc.folder)) : '';
 const WORK = cfg.work && typeof cfg.work === 'object' ? cfg.work : {};
+// Settings the control app (bridge/vr-host.js) edits; every one has a safe default, so an older ai-node.json just works
+const SEC = cfg.security && typeof cfg.security === 'object' ? cfg.security : {};
+const num = (v, lo, hi, d) => { const n = Number(v); return Number.isFinite(n) && n >= lo && n <= hi ? n : d; };
+const RECONNECT_MAX_MS = num(cfg.reconnect && cfg.reconnect.maxDelaySeconds, 1, 60, 5) * 1000; // after the hub went away: 1 s, 2 s … this
+const UPDATE_QUIET_MS = num(cfg.update && cfg.update.quietMinutes, 1, 60, 3) * 60000; // an update waits for this long with nothing in flight
+const UPDATE_CHECK_MS = num(cfg.update && cfg.update.checkMinutes, 1, 60, 5) * 60000; // how often to ask the hub for an update
 if (!/^https?:\/\//.test(HUB) || !ID || !TOKEN) { console.error('[ai-host] ai-node.json needs hub, id (or name) and token.'); process.exit(1); }
+// the token and everything this host lends travel to the hub: never over plain http to another machine
+if (!/^https:\/\//.test(HUB) && !/^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(HUB) && SEC.allowInsecureHub !== true) {
+  console.error(`[ai-host] ${HUB} is not https: the token would cross the network in the clear. Use the hub's https address (or set security.allowInsecureHub in the control app, on a network you trust).`); process.exit(1);
+}
+// the config holds the token: only its owner may read it (Linux / macOS; on Windows the control app locks it down)
+if (process.platform !== 'win32') { try { if (fs.statSync(CFG_FILE).mode & 0o077) { fs.chmodSync(CFG_FILE, 0o600); console.log('[ai-host] made ai-node.json readable by its owner only (it holds the token)'); } } catch {} }
 if (WORK.hubRepo) process.env.VIBEROLLER_HUB_REPO = path.resolve(String(WORK.hubRepo));
 const headers = { 'X-VR-Host': ID, 'X-VR-Host-Token': TOKEN, 'X-VR-Node': ID, 'X-VR-Node-Token': TOKEN, 'X-VR-Host-Version': VERSION };
 const UPDATE_NOW = path.join(__dirname, '.update-now'); // "node ai-node.js --update": the running host updates at its next quiet moment
@@ -75,7 +88,8 @@ function open(enc) {
 // ---------- hello: what this host offers; the hub answers with the nickname and its nonce ----------
 async function hello() {
   const nonce = crypto.randomBytes(16).toString('hex');
-  const providers = PROVIDERS.map((p) => ({ id: p.id, kind: relayKind(p), label: p.label, models: p.models, allowedUsers: p.allowedUsers, max5h: p.max5h, max7d: p.max7d }));
+  // shared with "the group" = the hub's team group ("@group", expanded by the hub), plus any users named one by one
+  const providers = PROVIDERS.map((p) => ({ id: p.id, kind: relayKind(p), label: p.label, models: p.models, allowedUsers: [...(Array.isArray(p.allowedUsers) ? p.allowedUsers : []), ...(p.shareWithGroup ? ['@group'] : [])], max5h: p.max5h, max7d: p.max7d }));
   const r = await fetch(HUB + '/node/hello', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ nonce, user: USER, providers, engines: Object.keys(ENGINES), pc: !!PC_FOLDER, version: VERSION, os: process.platform, caps: CAPS }), signal: AbortSignal.timeout(20000) });
   if (r.status === 401) throw Object.assign(new Error('the hub does not know this host (id / token): check ai-node.json, or make the host again in Settings → My AI hosts'), { auth: true });
   if (!r.ok) throw new Error('hello answered ' + r.status);
@@ -85,6 +99,7 @@ async function hello() {
   nickname = j.nickname || nickname; pollMs = Number(j.pollMs) || pollMs;
   if (cfg.nickname !== nickname) { try { cfg.nickname = nickname; fs.writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2) + '\n'); if (typeof ownWrite === 'function') ownWrite(); } catch {} }
   log(`connected to ${HUB} as "${nickname}"${USER ? ' (' + USER + ')' : ''}: ${providers.length} provider(s) [${providers.map((p) => p.id).join(', ')}], engines ${Object.keys(ENGINES).join(', ') || 'none'}${PC_FOLDER ? ', computer access to ' + PC_FOLDER : ''}, key ${kid}`);
+  setStatus({ connected: true, connectedAt: Date.now(), lastOkAt: Date.now(), nickname, kid, owner: USER, group: Array.isArray(j.group) ? j.group : [], hubVersion: (j.update && j.update.version) || '', lastError: '' });
   if (typeof updateConfirmed === 'function') updateConfirmed(); // reaching the hub is what makes an update good
   if (j.update && j.update.commit && typeof checkUpdate === 'function') setTimeout(checkUpdate, 5000);
 }
@@ -142,8 +157,11 @@ async function relayJob(job) {
     } else {
       base = ENGINES[job.engine];
       if (!base) throw Object.assign(new Error('This host does not lend the ' + job.engine + ' engine.'), { status: 404 });
+      // the hub may ask the engines for answers, never manage them: no model deletes / pulls / pushes / creates through
+      // VibeRoller, only GET and POST (security.engineGuard: false lifts this, for an engine that needs more)
+      if (SEC.engineGuard !== false && (!/^(GET|POST)$/i.test(job.method || 'GET') || /^\/api\/(delete|pull|push|create|copy|blobs)\b/i.test(String(job.path || '')))) throw Object.assign(new Error('This host does not let VibeRoller manage its engines (only use them).'), { status: 403 });
     }
-    if (!/^\/[^\s]*$/.test(String(job.path || ''))) throw Object.assign(new Error('bad path'), { status: 400 });
+    if (!/^\/[^\s]*$/.test(String(job.path || '')) || /(^|\/)\.\.(\/|$)|\/\//.test(String(job.path || '').split('?')[0])) throw Object.assign(new Error('bad path'), { status: 400 });
     const r = await fetch(String(base).replace(/\/+$/, '') + job.path, { method: job.method || 'GET', headers: { ...(job.headers && job.headers['content-type'] ? { 'content-type': job.headers['content-type'] } : {}), ...extra }, body: job.body ? Buffer.from(job.body, 'base64') : undefined, signal: AbortSignal.timeout(290000) });
     const ct = r.headers.get('content-type') || '';
     // a streamed answer (SSE, NDJSON) goes back piece by piece as the engine produces it, so words show up as they are made
@@ -199,7 +217,31 @@ const runs = new Map(); // job id -> { child, stopped }
 // is waiting for (the moment a host restarts is usually the moment its owner is leaving)
 let active = 0, lastJobAt = 0;
 function track(p) { active++; lastJobAt = Date.now(); return Promise.resolve(p).finally(() => { active--; lastJobAt = Date.now(); }); }
-const quiet = (ms = 180000) => !runs.size && !active && Date.now() - lastJobAt >= ms;
+const quiet = (ms = UPDATE_QUIET_MS) => !runs.size && !active && Date.now() - lastJobAt >= ms;
+
+// ---------- status + control: what the heart & knife control app (bridge/vr-host.js) reads and asks ----------
+// ai-node.status.json (next to this file, rewritten within a second of every change): running since, connected to which
+// hub since when, its last heartbeat, what is in flight, paused, the last update. Requests from the control app are
+// files it drops here, picked up within 2 s: .stop-now / .restart-now ("now" = at once, else as soon as nothing is in
+// flight), .update-now (asks the hub for an update at once), ai-host.off (paused: the knife).
+const STATUS_FILE = path.join(__dirname, 'ai-node.status.json');
+const status = { pid: process.pid, version: VERSION, hub: HUB, id: ID, startedAt: Date.now(), connected: false, connectedAt: 0, lastOkAt: 0, downSince: 0, lastError: '', active: 0, runs: 0, lastJobAt: 0, paused: false, lastUpdate: '', lastUpdateAt: 0 };
+let statusTimer = null;
+function writeStatusNow() { clearTimeout(statusTimer); statusTimer = null; if (SELFTEST) return; try { fs.writeFileSync(STATUS_FILE + '.tmp', JSON.stringify(status, null, 2)); fs.renameSync(STATUS_FILE + '.tmp', STATUS_FILE); } catch {} }
+function setStatus(patch) { Object.assign(status, patch, { at: Date.now() }); if (!statusTimer) statusTimer = setTimeout(writeStatusNow, 500); }
+const noteUpdate = (text) => { log(text); setStatus({ lastUpdate: text, lastUpdateAt: Date.now() }); };
+setInterval(() => setStatus({ active, runs: runs.size, lastJobAt, paused: fs.existsSync(PAUSE_FILE) }), 5000).unref();
+const CTL_STOP = path.join(__dirname, '.stop-now'), CTL_RESTART = path.join(__dirname, '.restart-now');
+setInterval(() => {
+  for (const [file, code, what] of [[CTL_STOP, 0, 'stopping'], [CTL_RESTART, 3, 'restarting']]) {
+    if (!fs.existsSync(file)) continue;
+    let how = ''; try { how = fs.readFileSync(file, 'utf8').trim(); } catch {}
+    if (how !== 'now' && (runs.size || active)) { setStatus({ pending: what + ' once nothing is in flight' }); continue; }
+    fs.rmSync(file, { force: true });
+    log(`${what}, as asked by the control app`); setStatus({ connected: false, pending: what }); writeStatusNow();
+    process.exit(code);
+  }
+}, 2000).unref();
 function stopRun(id, why) { const r = runs.get(id); if (!r || r.stopped) return; r.stopped = true; log(`stopping run ${id} (${why})`); kill(r.child); }
 async function postEvents(jobId, batch) {
   try {
@@ -315,7 +357,8 @@ const IN_GIT = (() => { try { return gitHere('rev-parse', '--is-inside-work-tree
   let t; try { t = JSON.parse(fs.readFileSync(UPD.trial, 'utf8')); } catch { return; }
   t.starts = (t.starts || 0) + 1;
   if (t.starts <= 3) { fs.writeFileSync(UPD.trial, JSON.stringify(t)); return; }
-  log(`the update to ${t.to} has not reached the hub in 3 starts: going back to ${t.from}`);
+  console.log(`[ai-host] the update to ${t.to} has not reached the hub in 3 starts: going back to ${t.from}`);
+  try { fs.writeFileSync(path.join(__dirname, 'ai-node.status.json'), JSON.stringify({ pid: process.pid, lastUpdate: `update to ${t.to} put back (it never reached the hub)`, lastUpdateAt: Date.now() })); } catch {}
   try {
     if (t.git) gitHere('reset', '-q', '--hard', t.from);
     else for (const f of fs.readdirSync(UPD.backup)) fs.copyFileSync(path.join(UPD.backup, f), path.join(__dirname, f));
@@ -328,7 +371,7 @@ function updateConfirmed() {
   if (!fs.existsSync(UPD.trial)) return;
   let t = {}; try { t = JSON.parse(fs.readFileSync(UPD.trial, 'utf8')); } catch {}
   fs.rmSync(UPD.trial, { force: true }); fs.rmSync(UPD.backup, { recursive: true, force: true });
-  log(`update to ${t.to || 'the new version'} confirmed: it reached the hub`);
+  noteUpdate(`update to ${t.to || 'the new version'} confirmed: it reached the hub`);
 }
 // the new version must at least load (every file it requires, its config): run it once with --selftest
 function selftest(dir) {
@@ -367,9 +410,9 @@ async function checkUpdate({ now = false } = {}) {
     for (const f of changed) { try { fs.copyFileSync(path.join(__dirname, f.name), path.join(UPD.backup, f.name)); } catch {} }
     fs.writeFileSync(UPD.trial, JSON.stringify({ from: VERSION, to: m.version || m.commit.slice(0, 7), starts: 0 }));
     for (const f of changed) fs.copyFileSync(path.join(UPD.stage, f.name), path.join(__dirname, f.name));
-    log(`updated from the hub to ${m.version} (${changed.map((f) => f.name).join(', ')}): restarting on it`);
+    noteUpdate(`updated from the hub to ${m.version} (${changed.map((f) => f.name).join(', ')}): restarting on it`); writeStatusNow();
     process.exit(3);
-  } catch (e) { log('update skipped:', e.message); }
+  } catch (e) { noteUpdate('update skipped: ' + e.message); }
   finally { updating = false; try { fs.rmSync(UPD.stage, { recursive: true, force: true }); } catch {} }
 }
 // a host running from a git checkout: fast-forward it to the hub's commit (fetching first), only when it is clean
@@ -390,10 +433,10 @@ function gitUpdate(m, files) {
   if (runs.size) return;
   fs.writeFileSync(UPD.trial, JSON.stringify({ git: true, from, to: m.commit, starts: 0 }));
   gitHere('merge', '--ff-only', '-q', m.commit);
-  log(`updated this checkout to the hub's ${m.version} (${m.commit.slice(0, 7)}): restarting on it`);
+  noteUpdate(`updated this checkout to the hub's ${m.version} (${m.commit.slice(0, 7)}): restarting on it`); writeStatusNow();
   process.exit(3);
 }
-setInterval(() => { checkUpdate(); }, 5 * 60000).unref(); // every 5 minutes (and after every hello, and when the hub's beat names a new version)
+setInterval(() => { checkUpdate(); }, UPDATE_CHECK_MS).unref(); // every 5 minutes by default (and after every hello, and when the hub's beat names a new version)
 if (SELFTEST) { console.log('[ai-host] selftest: ' + VERSION + ' loads'); process.exit(0); }
 
 // ---------- the loop ----------
@@ -404,17 +447,18 @@ if (SELFTEST) { console.log('[ai-host] selftest: ' + VERSION + ' loads'); proces
 (async function loop() {
   let paused = false, misses = 0, downSince = 0, hubCommit = '';
   for (;;) {
-    if (fs.existsSync(PAUSE_FILE)) { if (!paused) { paused = true; log('paused by this machine\'s host (ai-host.off)'); } await sleep(3000); continue; }
-    if (paused) { paused = false; log('back on'); }
+    if (fs.existsSync(PAUSE_FILE)) { if (!paused) { paused = true; log('paused by this machine\'s host (ai-host.off)'); setStatus({ paused: true, connected: false }); } await sleep(3000); continue; }
+    if (paused) { paused = false; log('back on'); setStatus({ paused: false }); }
     try {
       if (!key) await hello();
       const r = await fetch(HUB + '/node/poll', { headers, signal: AbortSignal.timeout(pollMs + 15000) });
       if (r.status === 428) { log('the hub asks for a hello again (it restarted without our session)'); key = null; continue; }
-      if (r.status === 401) { log('the hub does not know this host (id / token): check ai-node.json'); key = null; await sleep(30000); continue; }
+      if (r.status === 401) { log('the hub does not know this host (id / token): check ai-node.json'); setStatus({ connected: false, lastError: 'the hub does not know this host: check its id and token' }); key = null; await sleep(30000); continue; }
       if (!r.ok) throw new Error('hub answered ' + r.status);
       const { jobs = [], cancel = [], beat = null } = await r.json();
-      if (downSince) { log(`hub back after ${Math.round((Date.now() - downSince) / 1000)} s`); downSince = 0; }
+      if (downSince) { log(`hub back after ${Math.round((Date.now() - downSince) / 1000)} s`); downSince = 0; setStatus({ connected: true, connectedAt: Date.now() }); }
       misses = 0;
+      setStatus({ connected: true, lastOkAt: Date.now(), downSince: 0, lastError: '', ...(beat ? { hubVersion: beat.version || status.hubVersion, hubCommit: beat.commit || '' } : {}) });
       if (beat && beat.commit && beat.commit !== hubCommit) { if (hubCommit) { log(`the hub is now on ${beat.version || beat.commit.slice(0, 7)}`); setTimeout(checkUpdate, 15000); } hubCommit = beat.commit; }
       for (const id of cancel) stopRun(id, 'stopped by its person');
       for (const job of jobs) { // in parallel; the next poll starts right away
@@ -423,10 +467,11 @@ if (SELFTEST) { console.log('[ai-host] selftest: ' + VERSION + ' loads'); proces
         else track(relayJob(job));
       }
     } catch (e) {
-      if (e.auth) { log(e.message); await sleep(60000); continue; }
+      if (e.auth) { log(e.message); setStatus({ connected: false, lastError: e.message }); await sleep(60000); continue; }
       if (!downSince) downSince = Date.now();
+      setStatus({ connected: false, downSince, lastError: String(e.message || e).slice(0, 200) });
       if (misses++ % 30 === 0) log(`hub not reachable (${e.message}); reconnecting`);
-      await sleep(Math.min(5000, 1000 * misses)); // 1 s, 2 s … 5 s: back within seconds of the hub
+      await sleep(Math.min(RECONNECT_MAX_MS, 1000 * misses)); // 1 s, 2 s … 5 s (the setting): back within seconds of the hub
     }
   }
 })();

@@ -50,6 +50,17 @@ bridge/forgejo.json
 bridge/config.local.json
 bridge/ai-node.json
 bridge/ai-node.lock
+# an AI host's own state: its live status for the control app, requests from it, its updates in progress
+bridge/ai-node.status.json
+bridge/ai-node.status.json.tmp
+bridge/ai-node.log
+bridge/.stop-now
+bridge/.restart-now
+bridge/.update-now
+bridge/.update-trial.json
+bridge/.update-bad
+bridge/.update-backup/
+bridge/.update-staging/
 # AI hosts (UUID + secret + nickname per host; Settings → My AI hosts) and a host's per-run MCP files
 bridge/ai-hosts.json
 bridge/ai-host-sessions.json

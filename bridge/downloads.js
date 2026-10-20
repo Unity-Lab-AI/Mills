@@ -61,7 +61,7 @@ function aiHostExample(hub) {
   return JSON.stringify(ex, null, 2) + '\n';
 }
 const withHub = (rel, hub) => src(rel).toString('utf8').split('__HUB__').join(hub);
-const HOST_CODE = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'vr-setup.js'];
+const HOST_CODE = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'vr-setup.js', 'vr-host.js'];
 const packages = {
   'desktop-windows': { group: 'desktop', os: 'Windows', title: 'Vibe Roller Desktop', file: 'VibeRollerDesktop-windows.zip',
     build: (hub) => [
@@ -134,11 +134,16 @@ This folder is the installer, the host and the updater in one. Needs Node.js (ht
       Nothing installed → it asks: Install (into %LOCALAPPDATA%\\VibeRoller\\AIHost) or Portable (runs from this folder).
   - Your own host's package (VibeRoller → Settings → Connections → My AI hosts → download) has its ai-node.json inside.
     This general one has ai-node.example.json: copy it to ai-node.json and fill in hub, id and token.
-  - To start at boot: run host-tools\\build.cmd in the install folder once. It builds the heart, the knife and the
-    service with the C# compiler that comes with Windows, puts "Start / Stop VibeRoller AI Host" on your Desktop and
-    offers to install the service (administrator rights once).
-  - Updates: the host updates its code from the hub by itself, between answers. By hand: "VibeRoller AI Host.cmd"
-    from a newer download, or node ai-node.js --update in the install folder.
+  - The control app, "heart & knife" (it replaces the separate heart and knife): after installing it opens by itself;
+    later "VibeRoller AI Host.cmd" in the install folder, or the "VibeRoller AI Host" shortcut. It shows whether the
+    host runs, is connected, is in use and is up to date; [s] start, [x] stop, [r] restart, [p] pause / resume,
+    [u] update now, [l] log, [c] every setting (hub, token, updates, reconnect, who may use each provider: the team
+    group and / or named users, usage caps, engines, the security switches), [b] start at boot: the service (from
+    boot, administrator once), at sign-in, or off. For scripts: node vr-host.js status | start | stop | set … .
+  - The service and the shortcut: host-tools\\build.cmd builds them with the C# compiler that comes with Windows
+    ([b] in the control app does it for you).
+  - Updates: the host updates its code from the hub by itself, between answers. By hand: [u] in the control app,
+    "VibeRoller AI Host.cmd" from a newer download, or node ai-node.js --update in the install folder.
   - Options (from a command prompt): --install, --portable, --update, --status, --yes.
 `) },
     ] },
@@ -150,7 +155,7 @@ command -v node >/dev/null 2>&1 || { echo "Node.js is required: https://nodejs.o
 exec node "$(cd "$(dirname "$0")" && pwd)/vr-setup.js" "$@"
 ` },
       ...take('VibeRollerAIHost', [...HOST_CODE, 'host-tools/viberoller-ai-host.service']),
-      ...take('VibeRollerAIHost', ['start-node.sh', 'host-tools/install-ai-host-service.sh', 'host-tools/start-viberoller-host.sh', 'host-tools/stop-viberoller-host.sh'], true),
+      ...take('VibeRollerAIHost', ['start-node.sh', 'host-tools/install-ai-host-service.sh', 'host-tools/viberoller-host-control.sh', 'host-tools/start-viberoller-host.sh', 'host-tools/stop-viberoller-host.sh'], true),
       { name: 'VibeRollerAIHost/ai-node.example.json', data: aiHostExample(hub) },
       ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []),
       { name: 'VibeRollerAIHost/README.txt', data: `Vibe Roller AI Host (Linux)
@@ -167,9 +172,14 @@ This folder is the installer, the host and the updater in one. Needs Node.js.
       Nothing installed → it asks: Install (into ~/.local/share/viberoller/ai-host) or Portable (runs from this folder).
   - Your own host's package (VibeRoller → Settings → Connections → My AI hosts → download) has its ai-node.json inside.
     This general one has ai-node.example.json: cp it to ai-node.json and fill in hub, id and token.
-  - To start at boot: sudo sh host-tools/install-ai-host-service.sh in the install folder (once).
-  - Updates: the host updates its code from the hub by itself, between answers. By hand: viberoller-ai-host.sh from a
-    newer download, or node ai-node.js --update in the install folder.
+  - The control app, "heart & knife": after installing it opens by itself; later viberoller-ai-host.sh in the install
+    folder (or sh host-tools/viberoller-host-control.sh). It shows whether the host runs, is connected, is in use and
+    is up to date; [s] start, [x] stop, [r] restart, [p] pause / resume, [u] update now, [l] log, [c] every setting
+    (hub, token, updates, reconnect, who may use each provider: the team group and / or named users, usage caps,
+    engines, the security switches), [b] start at boot: the system service (sudo once), a user service, or off.
+    For scripts: node vr-host.js status | start | stop | set … .
+  - Updates: the host updates its code from the hub by itself, between answers. By hand: [u] in the control app,
+    viberoller-ai-host.sh from a newer download, or node ai-node.js --update in the install folder.
   - Options: --install, --portable, --update, --status, --yes.
 ` },
     ] },

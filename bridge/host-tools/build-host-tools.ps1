@@ -1,9 +1,10 @@
 # Builds the VibeRoller AI host tools on Windows, once:  right-click > Run with PowerShell, or run build.cmd.
-#   start-viberoller-ai-host.exe  (black heart icon)  start this PC's AI host (the VibeRollerAIHost service, or the node / hub)
-#   stop-viberoller-ai-host.exe   (knife icon)        stop it; VibeRoller on the server keeps running for everyone
-#   VibeRollerAIHost.exe          (heart icon)        the Windows service itself (install-ai-host-service.cmd registers it to start at boot)
+#   VibeRollerAIHost.exe   (heart icon)          the Windows service (install-ai-host-service.cmd registers it to start at boot)
+#   "VibeRoller AI Host"   (heart & knife icon)  ONE shortcut, on the Desktop and in the Start menu, to the control app
+#                                                (vr-host.js: status, start / stop / restart / pause, update, every setting,
+#                                                start at boot). It replaces the separate heart and knife tools.
 # Uses only what Windows already has: .NET Framework's C# compiler (csc.exe) and System.Drawing for the icons.
-# Output lands next to this script; it also puts shortcuts on the Desktop. Re-run any time (it overwrites).
+# Output lands next to this script. Re-run any time (it overwrites). build.cmd quiet = no questions.
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Add-Type -AssemblyName System.Drawing
@@ -54,28 +55,38 @@ $g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255
 foreach ($x in 178, 206) { $g.FillEllipse((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 210, 214, 224))), $x, 120, 12, 12) }
 $g.Dispose(); Save-Ico $b (Join-Path $here 'knife.ico'); $b.Dispose()
 
-# ── compile the tools with the C# compiler that ships with Windows ──
+# ── heart & knife: the black heart with the knife through it, the control app's icon ──
+$b, $g = New-Canvas
+$g.FillPath($fill, $heart); $g.DrawPath($rim, $heart); $g.FillEllipse($shine, 52, 52, 54, 34)
+$g.TranslateTransform(128, 128); $g.RotateTransform(-45); $g.TranslateTransform(-128, -128)
+$g.FillPath($steel, $blade); $g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255, 70, 74, 86)), 3), $blade)
+$g.FillRectangle((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 150, 154, 166))), 148, 100, 12, 54)
+$g.FillPath((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 20, 18, 24))), $handle)
+$g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255, 170, 12, 40)), 4), $handle)
+$g.Dispose(); Save-Ico $b (Join-Path $here 'heart-and-knife.ico'); $b.Dispose()
+
+# ── compile the service with the C# compiler that ships with Windows ──
 $csc = Get-ChildItem "$env:WINDIR\Microsoft.NET\Framework64\v4*\csc.exe", "$env:WINDIR\Microsoft.NET\Framework\v4*\csc.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
 if (-not $csc) { throw 'The .NET Framework 4 C# compiler (csc.exe) was not found under Windows\Microsoft.NET.' }
-$src = Join-Path $here 'HostTool.cs'
-$refs = '/reference:System.Windows.Forms.dll', '/reference:System.ServiceProcess.dll'
-& $csc.FullName /nologo /target:winexe /optimize+ /define:START /win32icon:"$here\heart.ico" @refs /out:"$here\start-viberoller-ai-host.exe" $src
-if ($LASTEXITCODE) { throw 'Building start-viberoller-ai-host.exe failed.' }
-& $csc.FullName /nologo /target:winexe /optimize+ /define:STOP /win32icon:"$here\knife.ico" @refs /out:"$here\stop-viberoller-ai-host.exe" $src
-if ($LASTEXITCODE) { throw 'Building stop-viberoller-ai-host.exe failed.' }
 # the service: a console-subsystem exe (services must not be winexe), with the heart as its icon
 & $csc.FullName /nologo /target:exe /optimize+ /win32icon:"$here\heart.ico" /reference:System.ServiceProcess.dll /out:"$here\VibeRollerAIHost.exe" (Join-Path $here 'AiHostService.cs')
 if ($LASTEXITCODE) { throw 'Building VibeRollerAIHost.exe failed.' }
-# older names from before the service existed: remove them so there is one heart and one knife
-foreach ($old in 'start-viberoller-host.exe', 'stop-viberoller-host.exe') { Remove-Item (Join-Path $here $old) -ErrorAction SilentlyContinue }
-$desk = [Environment]::GetFolderPath('Desktop')
-foreach ($old in 'Start VibeRoller AI host.lnk', 'Stop VibeRoller AI host.lnk') { Remove-Item (Join-Path $desk $old) -ErrorAction SilentlyContinue }
 
-# ── Desktop shortcuts (they keep the icons) ──
+# ── the separate heart and knife are replaced by the control app: remove their programs and shortcuts ──
+foreach ($old in 'start-viberoller-ai-host.exe', 'stop-viberoller-ai-host.exe', 'start-viberoller-host.exe', 'stop-viberoller-host.exe') { Remove-Item (Join-Path $here $old) -ErrorAction SilentlyContinue }
+$desk = [Environment]::GetFolderPath('Desktop'); $menu = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'
+foreach ($old in 'Start VibeRoller AI host.lnk', 'Stop VibeRoller AI host.lnk', 'Start VibeRoller AI Host.lnk', 'Stop VibeRoller AI Host.lnk') { Remove-Item (Join-Path $desk $old) -ErrorAction SilentlyContinue }
+
+# ── ONE shortcut, Desktop + Start menu: the heart & knife control app (a console window) ──
+$bridge = Split-Path -Parent $here
+$node = (Get-Command node -ErrorAction SilentlyContinue).Source; if (-not $node) { $node = 'node' }
 $shell = New-Object -ComObject WScript.Shell
-foreach ($t in @(@('start-viberoller-ai-host', 'Start VibeRoller AI Host'), @('stop-viberoller-ai-host', 'Stop VibeRoller AI Host'))) {
-  $lnk = $shell.CreateShortcut((Join-Path $desk ($t[1] + '.lnk')))
-  $lnk.TargetPath = Join-Path $here ($t[0] + '.exe'); $lnk.WorkingDirectory = $here; $lnk.Description = $t[1]; $lnk.Save()
+foreach ($d in $desk, $menu) {
+  $lnk = $shell.CreateShortcut((Join-Path $d 'VibeRoller AI Host.lnk'))
+  $lnk.TargetPath = $env:ComSpec
+  $lnk.Arguments = "/c title VibeRoller AI Host & `"$node`" `"$(Join-Path $bridge 'vr-host.js')`""
+  $lnk.WorkingDirectory = $bridge; $lnk.Description = 'VibeRoller AI Host: status, start / stop, settings, start at boot'
+  $lnk.IconLocation = (Join-Path $here 'heart-and-knife.ico'); $lnk.Save()
 }
-Write-Host 'Built start-viberoller-ai-host.exe (heart), stop-viberoller-ai-host.exe (knife) and VibeRollerAIHost.exe (the service), with shortcuts on the Desktop.'
-Write-Host 'Next: install-ai-host-service.cmd registers the service to start at boot (it asks for administrator rights once).'
+Write-Host 'Built VibeRollerAIHost.exe (the service) and put "VibeRoller AI Host" (the heart & knife control app) on the Desktop and in the Start menu.'
+Write-Host 'In the control app: [b] start at boot (the service asks for administrator rights once), [c] every setting.'

@@ -17,8 +17,8 @@ if errorlevel 1 (
 if /i "%~1"=="remove" (
   sc stop %NAME% >nul 2>nul
   sc delete %NAME%
-  echo The %NAME% service is removed. The heart / knife now start and stop the node the old way ^(start-node.bat / the pause switch^).
-  pause
+  echo The %NAME% service is removed. "VibeRoller AI Host" ^(the control app^) starts and stops the host without it.
+  if /i not "%~2"=="quiet" pause
   exit /b
 )
 if not exist "%EXE%" (echo %EXE% is missing: run build.cmd first. & pause & exit /b 1)
@@ -29,7 +29,7 @@ if not defined NODE (echo Node.js was not found on the PATH: install it from htt
 sc query %NAME% >nul 2>nul && (sc stop %NAME% >nul 2>nul & timeout /t 3 /nobreak >nul & sc delete %NAME% >nul 2>nul & timeout /t 2 /nobreak >nul)
 sc create %NAME% binPath= "\"%EXE%\" \"%NODE%\"" start= auto DisplayName= "VibeRoller AI Host" obj= LocalSystem
 if errorlevel 1 (echo Could not create the service. & pause & exit /b 1)
-sc description %NAME% "Lends this PC's AI engines (Unity's brain, image, voice, speech) to the VibeRoller server. Starts at boot. The heart / knife on the Desktop start and stop it."
+sc description %NAME% "Lends this PC's AI (its Claude / ChatGPT login, local models, Unity's engines) to the VibeRoller server, never the computer itself. Starts at boot. The VibeRoller AI Host control app starts, stops and configures it."
 sc failure %NAME% reset= 86400 actions= restart/5000/restart/10000/restart/30000 >nul
 rem Signed-in users (not only administrators) may start and stop it: that is what the heart and the knife do.
 sc sdset %NAME% "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPWPDTLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)" >nul
@@ -39,5 +39,5 @@ if not exist "%HERE%..\ai-node.json" echo NOTE: ..\ai-node.json is missing. Copy
 sc start %NAME% >nul 2>nul
 timeout /t 3 /nobreak >nul
 sc query %NAME% | find "RUNNING" >nul && (echo The %NAME% service is installed, running, and starts at every boot. Log: ..\ai-node.log) || (echo The service is installed but not running yet. See ..\ai-node.log, or: sc query %NAME%)
-echo The heart ^(start-viberoller-ai-host^) starts it, the knife ^(stop-viberoller-ai-host^) stops it, without administrator rights.
+echo "VibeRoller AI Host" ^(the control app on the Desktop^) starts, stops and configures it, without administrator rights.
 pause

@@ -238,7 +238,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh' }, aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp' }, hostGroup: ['t-user'], aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
@@ -1769,15 +1769,16 @@ async function run() {
   const onWork = texts((await chat(U, 'back on r136', { fresh: true })).events);
   await call('/api/apikey/revoke', U, {});
   const ht = (f) => fs.readFileSync(path.join(BRIDGE, 'host-tools', f), 'utf8');
-  check('R136', 'the host\'s AI switch: with bridge/ai-host.off the AI hosted on this machine pauses (Work runs on the host\'s Claude, the API → 503, the Unity section → 503, Unity in the chat says it is paused) while chat and the board keep working and /api/check reports it; removing the file brings the AI back at once; [static] the heart / knife host tools (start-viberoller-ai-host / stop-viberoller-ai-host from one C# file, icons drawn by the build script, Desktop shortcuts, Linux twins) start / stop the VibeRollerAIHost service when it is installed and otherwise only touch that switch and start the node or hub; the service (AiHostService.cs) runs node ai-node.js from boot, restarts it, logs to ai-node.log; the installer registers it with start= auto and lets signed-in users start / stop it; the Linux unit + installer do the same; the build output is gitignored',
+  check('R136', 'the host\'s AI switch: with bridge/ai-host.off the AI hosted on this machine pauses (Work runs on the host\'s Claude, the API → 503, the Unity section → 503, Unity in the chat says it is paused) while chat and the board keep working and /api/check reports it; removing the file brings the AI back at once; [static] the heart & knife control app (vr-host.js, one shortcut with its own icon drawn by the build script on Windows, a launcher on Linux; the old heart / knife programs are removed, the Linux start / stop scripts call it) starts / stops the service when it is installed and otherwise starts the host or touches that switch; the service (AiHostService.cs) runs node ai-node.js from boot, restarts it, logs to ai-node.log; the installer registers it with start= auto and lets signed-in users start / stop it; the Linux unit + installer do the same; the build output is gitignored',
     offCheck.aiHost === false && /switched off right now/.test(offWork) && offV1.status === 503 && offAssist.status === 503 && !!offUnity && offChatOk === 200 && offBoardOk === 200
     && onCheck.aiHost === true && /echo: back on r136/.test(onWork)
-    && /#if START/.test(ht('HostTool.cs')) && /ai-host\.off/.test(ht('HostTool.cs')) && /start\.bat/.test(ht('HostTool.cs')) && /ServiceController/.test(ht('HostTool.cs')) && /svc\.Start\(\)/.test(ht('HostTool.cs')) && /svc\.Stop\(\)/.test(ht('HostTool.cs')) && /heart\.ico/.test(ht('build-host-tools.ps1')) && /knife\.ico/.test(ht('build-host-tools.ps1'))
-    && /start-viberoller-ai-host\.exe/.test(ht('build-host-tools.ps1')) && /stop-viberoller-ai-host\.exe/.test(ht('build-host-tools.ps1')) && /VibeRollerAIHost\.exe/.test(ht('build-host-tools.ps1')) && /System\.ServiceProcess\.dll/.test(ht('build-host-tools.ps1'))
+    // since 3.6.0 the heart and the knife are one control app (vr-host.js): one shortcut with the heart & knife icon, the old programs removed
+    && /heart-and-knife\.ico/.test(ht('build-host-tools.ps1')) && /VibeRoller AI Host\.lnk/.test(ht('build-host-tools.ps1')) && /vr-host\.js/.test(ht('build-host-tools.ps1')) && /'start-viberoller-ai-host\.exe', 'stop-viberoller-ai-host\.exe'/.test(ht('build-host-tools.ps1'))
+    && /VibeRollerAIHost\.exe/.test(ht('build-host-tools.ps1')) && /System\.ServiceProcess\.dll/.test(ht('build-host-tools.ps1'))
     && /ServiceBase\.Run/.test(ht('AiHostService.cs')) && /ai-node\.js/.test(ht('AiHostService.cs')) && /ai-node\.log/.test(ht('AiHostService.cs')) && /OnStop/.test(ht('AiHostService.cs'))
     && /sc create %NAME% binPath=/.test(ht('install-ai-host-service.cmd')) && /start= auto/.test(ht('install-ai-host-service.cmd')) && /sc sdset/.test(ht('install-ai-host-service.cmd')) && /;;;IU\)/.test(ht('install-ai-host-service.cmd')) && /-Verb RunAs/.test(ht('install-ai-host-service.cmd'))
     && /WantedBy=multi-user\.target/.test(ht('viberoller-ai-host.service')) && /ExecStart=\/usr\/bin\/env node ai-node\.js/.test(ht('viberoller-ai-host.service')) && /systemctl enable/.test(ht('install-ai-host-service.sh')) && /polkit/.test(ht('install-ai-host-service.sh'))
-    && /rm -f ai-host\.off/.test(ht('start-viberoller-host.sh')) && /systemctl start viberoller-ai-host/.test(ht('start-viberoller-host.sh')) && /> ai-host\.off/.test(ht('stop-viberoller-host.sh')) && /systemctl stop viberoller-ai-host/.test(ht('stop-viberoller-host.sh'))
+    && /exec node vr-host\.js start/.test(ht('start-viberoller-host.sh')) && /exec node vr-host\.js stop/.test(ht('stop-viberoller-host.sh')) && /exec node vr-host\.js "\$@"/.test(ht('viberoller-host-control.sh'))
     && /^bridge\/ai-host\.off$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /^bridge\/host-tools\/\*\.exe$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     `off: check ${offCheck.aiHost} work "${offWork.slice(0, 60)}" v1 ${offV1.status} assistant ${offAssist.status} unity ${offUnity ? 'said paused' : 'no reply'} chat ${offChatOk} board ${offBoardOk}; on: check ${onCheck.aiHost} work "${onWork.slice(0, 40)}"`);
 
@@ -1977,6 +1978,43 @@ async function run() {
       && /if errorlevel 3 goto run/.test(bat) && /if errorlevel 4 goto crashed/.test(bat) && /3\) ;;/.test(nsh) && /sleep 10/.test(nsh),
       `old hello ${oldHello.status} probed "${probed}" old ${oldProv.remoteKind} new ${newProv.remoteKind}; manifest ${manR.status} sig ${sigOk} files ${(man.files || []).map((f) => f.name).join(',')}; file ${fileR.status} ok ${fileOk}; other ${notHost}/${sneaky} anon ${anon}; selftest ${selfT.status} "${String(selfT.stdout || selfT.stderr).trim().slice(0, 120)}"; self-update ${JSON.stringify(upd)}`);
 
+    // R157: the heart & knife control app (bridge/vr-host.js) and what the host does for it
+    {
+      const vh = (dir, ...a) => spawnSync(process.execPath, [path.join(dir, 'vr-host.js'), ...a], { cwd: dir, encoding: 'utf8', timeout: 30000 });
+      const stFile = (() => { try { return JSON.parse(fs.readFileSync(path.join(SB, 'ai-node.status.json'), 'utf8')); } catch { return {}; } })();
+      const stOut = vh(SB, 'status').stdout;
+      // settings on a copy (a change to the live config would make the test host restart itself on it)
+      const cdir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-host-'));
+      fs.copyFileSync(path.join(SB, 'vr-host.js'), path.join(cdir, 'vr-host.js')); fs.copyFileSync(path.join(SB, 'ai-node.json'), path.join(cdir, 'ai-node.json'));
+      const sets = [vh(cdir, 'set', 'update.quietMinutes', '7'), vh(cdir, 'set', 'provider.claude.shareWithGroup', 'yes'), vh(cdir, 'set', 'provider.claude.allowedUsers', 'mills, sponge'), vh(cdir, 'set', 'engine.image.enabled', 'off'), vh(cdir, 'set', 'allowWork', 'off')];
+      const badN = vh(cdir, 'set', 'update.quietMinutes', '999').status, badHub = vh(cdir, 'set', 'hub', 'http://evil.example').status, badKey = vh(cdir, 'set', 'nope', '1').status;
+      const ccfg = JSON.parse(fs.readFileSync(path.join(cdir, 'ai-node.json'), 'utf8')), mode = fs.statSync(path.join(cdir, 'ai-node.json')).mode & 0o777;
+      const listOut = vh(cdir, 'settings').stdout;
+      fs.rmSync(cdir, { recursive: true, force: true });
+      // pause / resume through the app
+      vh(SB, 'pause'); const pausedFile = fs.existsSync(path.join(SB, 'ai-host.off')); vh(SB, 'resume'); const resumed = !fs.existsSync(path.join(SB, 'ai-host.off'));
+      // restart and stop requests: the host leaves with 3 / 0 (its launcher or service starts it again after a restart)
+      const waitExit = async () => { for (let i = 0; i < 40; i++) { if (aiNodeProc && aiNodeProc.exitCode !== null) return aiNodeProc.exitCode; await sleep(250); } return 'still running'; };
+      const backOnline = async () => { stopAiNode(); startAiNode(); for (let i = 0; i < 60; i++) { if (((await call('/api/check', A)).data.aiNodes || []).some((h) => h.id === 'test-node' && h.online)) return true; await sleep(250); } return false; };
+      vh(SB, 'restart', '--now'); const restartCode = await waitExit(); const back1 = await backOnline();
+      vh(SB, 'stop', '--now'); const stopCode = await waitExit(); const back2 = await backOnline();
+      // a hub over plain http on another machine: the host refuses to start
+      const insecure = path.join(SCRATCH, 'insecure-node.json'); fs.writeFileSync(insecure, JSON.stringify({ hub: 'http://example.com', id: 'x', token: 'y'.repeat(30) }));
+      const refused = spawnSync(process.execPath, [path.join(SB, 'ai-node.js'), '--config', insecure], { encoding: 'utf8', timeout: 10000 });
+      // "@group": shared with the hub's team group (config hostGroup, here t-user), whatever names are in it
+      const gh = { 'X-VR-Host': 'group-node', 'X-VR-Host-Token': OLD_NODE_SECRET + '-grp', 'Content-Type': 'application/json' };
+      await fetch(H + '/node/hello', { method: 'POST', headers: { ...gh, 'X-VR-Host-Version': '3.6.0' }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex'), providers: [{ id: 'grp', kind: 'claude-relay', label: 'Group Claude', models: ['m'], allowedUsers: ['@group'] }], engines: [], caps: ['relay', 'update'] }) });
+      const seesU = ((await call('/api/check', U)).data.providers || []).some((p) => p.id === 'h:group-node/grp'), seesA = ((await call('/api/check', A)).data.providers || []).some((p) => p.id === 'h:group-node/grp');
+      const host157 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), app157 = fs.readFileSync(path.join(BRIDGE, 'vr-host.js'), 'utf8'), setup157 = fs.readFileSync(path.join(BRIDGE, 'vr-setup.js'), 'utf8');
+      check('R157', 'the heart & knife control app: it reads the host\'s live status (running, connected to the hub, heartbeat, in use, updates) and changes every setting in ai-node.json (validated: a bad number, a plain-http hub, an unknown setting are refused; the file stays private), pauses / resumes, and asks the host to restart (exit 3) or stop (exit 0), which it does within seconds; the host refuses a plain-http hub on another machine, offers a provider to the hub\'s team group with "@group" (the hub expands it), and guards its engines (use, never manage); [static] start at boot: service / sign-in / off on Windows, system / user service / off on Linux; an installed package opens the control app',
+        stFile.connected === true && stFile.pid > 0 && /Running\s+YES/.test(stOut) && /CONNECTED/.test(stOut)
+        && sets.every((r) => r.status === 0) && ccfg.update.quietMinutes === 7 && ccfg.providers.find((p) => p.id === 'claude').shareWithGroup === true && ccfg.providers.find((p) => p.id === 'claude').allowedUsers.join(',') === 'mills,sponge'
+        && !ccfg.engines.image && ccfg.enginesOff && !!ccfg.enginesOff.image && ccfg.allowWork === false && badN !== 0 && badHub !== 0 && badKey !== 0 && mode === 0o600 && /provider\.claude\.max5h/.test(listOut)
+        && pausedFile && resumed && restartCode === 3 && back1 && stopCode === 0 && back2 && refused.status === 1 && /not https/.test(refused.stderr) && seesU && !seesA
+        && /SEC\.engineGuard !== false/.test(host157) && /\/api\\\/\(delete\|pull\|push\|create\|copy\|blobs\)/.test(host157) && /\['service', 'sign-in', 'off'\]/.test(app157) && /\['service', 'user', 'off'\]/.test(app157) && /control\(HERE\)/.test(setup157),
+        `status ${JSON.stringify({ c: stFile.connected, pid: stFile.pid })} out "${stOut.split('\n').slice(2, 6).join(' | ').slice(0, 200)}"; sets ${sets.map((r) => r.status).join('')} bad ${badN}/${badHub}/${badKey} mode ${mode.toString(8)}; pause ${pausedFile}/${resumed}; restart ${restartCode} back ${back1}; stop ${stopCode} back ${back2}; insecure ${refused.status}; group u ${seesU} a ${seesA}`);
+    }
+
     // local models and the host's Claude through the API (bridge/openai.js → providers → the host)
     const keyR = await call('/api/apikey/rotate', A, {});
     const setLocal = await call('/api/apikey/settings', A, { provider: 'h:test-node/local', model: 'tiny-local' });
@@ -2120,7 +2158,7 @@ async function run() {
       && tagged.length >= 5 && tagged.every((s) => s.endsWith('?v=' + encodeURIComponent(build))) && new RegExp('stylesheet" href="polish\\.css\\?v=').test(served)
       && /setInterval\(\(\) => \{ if \(me && token\) api\('\/api\/version'\)/.test(page) && /5 \* 60e3/.test(page) && /caches\.delete\(k\)/.test(page) && /r\.update\(\)/.test(page) && /searchParams\.set\('v', build\)/.test(page) && /location\.replace\(/.test(page)
       && /if \(workStarted\) \{ try \{ saveCurrent\(\); saveQueue\(\);/.test(page) && /function restoreAfterUpdate\(\)/.test(page) && /restoreAfterUpdate\(\); \/\/ the page just updated/.test(page) && /editorDirty = true/.test(page) && /dirty: \(\) => !!N\.dirty/.test(notes156)
-      && /checkUpdate\(\); \}, 5 \* 60000\)/.test(host156),
+      && /checkUpdate\(\); \}, UPDATE_CHECK_MS\)/.test(host156) && /checkMinutes, 1, 60, 5\)/.test(host156),
       `build ${build} hdr ${verHdr} check ${ck156.build} anon ${anonVer}; scripts ${tagged.slice(0, 3).join(' ')}`);
   }
 
@@ -2518,7 +2556,7 @@ async function run() {
     check('R154', 'going live never cuts a host off: after a hub restart an older host that does not say hello again still offers its Claude (session kept in the gitignored ai-host-sessions.json, the 2.x routing too), a current one too; a host without a session is asked to hello again (428 with its version, 401 without), a 1.x host (no hello ever) keeps polling; the poll answer is the hub\'s heartbeat (time, version, commit) and the host reconnects in 1-5 s, re-hellos on 428, follows a new hub version, and only restarts / updates after 3 quiet minutes; hub_status lists the AI hosts up / down; [static] the page reloads itself onto a new hub version when nothing is in progress',
       pid2 !== pid1 && oldAfter.remoteKind === 'claude-cli-work' && !!newAfter.id && askNew.status === 428 && askOld.status === 401 && legacyNoHello === 'held'
       && !!(sessFile['old-node'] && sessFile['old-node'].hello && /^[0-9a-f]{64}$/.test(sessFile['old-node'].key)) && ign === 0
-      && /beat: beat\(\)/.test(nodes154) && /r\.status === 428/.test(host154) && /Math\.min\(5000, 1000 \* misses\)/.test(host154) && /quiet = \(ms = 180000\)/.test(host154) && /aiHosts/.test(team154)
+      && /beat: beat\(\)/.test(nodes154) && /r\.status === 428/.test(host154) && /Math\.min\(RECONNECT_MAX_MS, 1000 \* misses\)/.test(host154) && /quiet = \(ms = UPDATE_QUIET_MS\)/.test(host154) && /maxDelaySeconds, 1, 60, 5\)/.test(host154) && /quietMinutes, 1, 60, 3\)/.test(host154) && /aiHosts/.test(team154)
       && /X-VR-Version/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')) && /function pageUpdateAvailable\(build\)/.test(page154) && /hubBuild !== \(me\.build \|\| me\.version\)/.test(page154),
       `old ${oldAfter.remoteKind} new ${!!newAfter.id}; no session: ${askNew.status} / ${askOld.status}; 1.x ${legacyNoHello}; sessions file ${Object.keys(sessFile).join(',')}; ignored ${ign}`);
   }
