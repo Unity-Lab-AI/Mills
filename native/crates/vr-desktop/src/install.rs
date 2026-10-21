@@ -45,6 +45,10 @@ fn shortcuts(exe: &Path) -> Result<(), String> {
         let ok = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &ps]).creation_flags(0x0800_0000).status().map(|s| s.success()).unwrap_or(false);
         if !ok { return Err(format!("could not make the shortcut {}", lnk.display())); }
     }
+    // the earlier JavaScript AI host's separate start / stop shortcuts: the app's AI host replaces them
+    for dir in [PathBuf::from(format!("{appdata}\\Microsoft\\Windows\\Start Menu\\Programs")), home().join("Desktop")] {
+        for name in ["Start VibeRoller AI host.lnk", "Stop VibeRoller AI host.lnk", "Start VibeRoller AI Host.lnk", "Stop VibeRoller AI Host.lnk"] { let _ = std::fs::remove_file(dir.join(name)); }
+    }
     Ok(())
 }
 #[cfg(not(windows))]

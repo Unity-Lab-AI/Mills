@@ -41,6 +41,19 @@ pub fn exe_name() -> &'static str { if cfg!(windows) { "vr-host.exe" } else { "v
 /// A JavaScript host that runs from a VibeRoller git checkout (its bridge/ folder): it updates itself through git.
 fn in_git(d: &Path) -> bool { d.join("ai-node.js").exists() && d.ancestors().any(|a| a.join(".git").exists()) }
 
+/// Windows: the earlier JavaScript host's separate "Start / Stop VibeRoller AI Host" shortcuts (Desktop, Start menu)
+/// point at programs that are gone once this one takes over: they go (the same list its own build script removes).
+fn old_shortcuts() -> usize {
+    if !cfg!(windows) { return 0; }
+    let menu = std::env::var_os("APPDATA").map(PathBuf::from).map(|a| a.join("Microsoft").join("Windows").join("Start Menu").join("Programs"));
+    let mut n = 0;
+    for dir in [Some(home().join("Desktop")), menu].into_iter().flatten() {
+        for name in ["Start VibeRoller AI host.lnk", "Stop VibeRoller AI host.lnk", "Start VibeRoller AI Host.lnk", "Stop VibeRoller AI Host.lnk"] {
+            if std::fs::remove_file(dir.join(name)).is_ok() { n += 1; }
+        }
+    }
+    n
+}
 pub fn install(args: &[&str]) -> i32 {
     let me = std::env::current_exe().unwrap_or_default();
     let here = me.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -67,6 +80,8 @@ pub fn install(args: &[&str]) -> i32 {
     let cfg_src = here.join("ai-node.json");
     if cfg_src.exists() && !target.join("ai-node.json").exists() { let _ = std::fs::copy(&cfg_src, target.join("ai-node.json")); vr_core::settings::private(&target.join("ai-node.json")); }
     let fresh = !f.config.exists();
+    let gone = old_shortcuts();
+    if gone > 0 { println!("Removed {gone} shortcut(s) of the earlier JavaScript host's separate start / stop programs."); }
     log(format!("installed VibeRoller AI Host (native) {} into {}", crate::runner::VERSION, target.display()));
     println!("Installed into {}{}.", target.display(), if fresh { " (no ai-node.json yet: VibeRoller → Settings → My AI hosts makes one; or `vr-host set hub …`)" } else { "" });
     // start at boot, when asked (--boot service | sign-in | user | off)

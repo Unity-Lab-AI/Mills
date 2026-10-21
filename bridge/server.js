@@ -811,7 +811,7 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 function accountSummary(a) {
   return {
     username: a.username, display: a.display, admin: a.admin,
-    locked: !!a.state.lockedDevice, lockedAt: a.state.lockedAt || null,
+    locked: !!a.state.lockedDevice, lockedAt: a.state.lockedAt || null, devices: a.state.lockedDevice ? 1 + (a.state.lockedDevices || []).length : 0, allowNext: !!a.state.allowNextDevice,
     signedIn: [...sessions.values()].filter((s) => s.user === a.username && s.exp > Date.now()).length,
     busy: !!a.running, model: effectiveModel(a) || '', chatKey: !!chatKeys[a.username],
     hasPassword: fs.existsSync(a.files.AUTH_FILE),
@@ -1003,9 +1003,15 @@ async function handleRequest(req, res) {
       if (!acct.state.lockedDevice) {
         acct.state.lockedDevice = deviceHash; acct.state.lockedAt = new Date().toISOString(); saveState(acct);
         console.log(`[mills] ${acct.username}: claimed by first sign-in at ${acct.state.lockedAt}.`);
-      } else if (acct.state.lockedDevice !== deviceHash) {
-        console.log(`[mills] ${acct.username}: refused a sign-in from another device.`);
-        return send(res, 403, { error: 'This account is locked to another device. Ask an admin to reset it.' });
+      } else if (acct.state.lockedDevice !== deviceHash && !(acct.state.lockedDevices || []).includes(deviceHash)) {
+        // the admin allowed one more device (the browser and the app on one PC are two devices): this one joins
+        if (acct.state.allowNextDevice) {
+          acct.state.lockedDevices = [...(acct.state.lockedDevices || []), deviceHash]; delete acct.state.allowNextDevice; saveState(acct);
+          console.log(`[mills] ${acct.username}: another device joined (allowed by an admin).`);
+        } else {
+          console.log(`[mills] ${acct.username}: refused a sign-in from another device.`);
+          return send(res, 403, { error: 'This account is locked to its own devices. Ask an admin to allow one more device (or to reset the lock).' });
+        }
       }
       const token = crypto.randomBytes(32).toString('hex');
       sessions.set(tokenKey(token), { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
@@ -1355,8 +1361,16 @@ async function handleRequest(req, res) {
         return send(res, 200, { username: t.username, password });
       }
       if (p === '/api/admin/unlock' && req.method === 'POST') {
-        const t = needTarget(); delete t.state.lockedDevice; delete t.state.lockedAt; saveState(t);
+        const t = needTarget(); delete t.state.lockedDevice; delete t.state.lockedAt; delete t.state.lockedDevices; delete t.state.allowNextDevice; saveState(t);
         return send(res, 200, { ok: true });
+      }
+      if (p === '/api/admin/allow-device' && req.method === 'POST') { // the next new device joins this account's devices (up to 5)
+        const t = needTarget();
+        if (!t.state.lockedDevice) return send(res, 400, { error: 'No device has claimed this account yet: its next sign-in does.' });
+        const n = 1 + (t.state.lockedDevices || []).length;
+        if (n >= 5) return send(res, 400, { error: 'This account already has 5 devices: reset its lock first.' });
+        t.state.allowNextDevice = true; saveState(t);
+        return send(res, 200, { ok: true, username: t.username, devices: n });
       }
       if (p === '/api/admin/signout' && req.method === 'POST') { const t = needTarget(); if (t !== acct) dropSessions(t.username); return send(res, 200, { ok: true }); }
       if (p === '/api/admin/stop' && req.method === 'POST') { const t = needTarget(); stopClaude(t); assistant.stop(t); openai.stop(t); return send(res, 200, { ok: true }); }
