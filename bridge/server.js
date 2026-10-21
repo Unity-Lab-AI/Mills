@@ -19,7 +19,6 @@ const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
 const { ROOT, MILLS_DIR, readJson, writeJson, loadProfile, allProfiles, hashPassword } = require('./common');
 const worktree = require('./worktree');
-const downloads = require('./downloads'); // the Download panel: Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux
 
 const WEB_DIR = path.join(MILLS_DIR, 'web');
 const HUB = loadProfile('');          // hub-wide config: port, origins, tools, models, tunnel
@@ -775,6 +774,8 @@ let frontShares = [], frontBusy = false; // (from the Rust hub: its shared sessi
 const shares = WORK_MOVED ? { mirror() {}, mirrorEvent() {}, stop() {}, route: async () => false, convOf: (u) => (frontShares.find((s) => s.user === u) || {}).conv || '', listFor: (u) => frontShares.filter((s) => s.user !== u && convMember(s.conv, u)) }
   : require('./shares')({ accounts, convMember, roomChanged: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
 function maybeRestart() {
+  // behind the Rust hub (4.0.0) the restart is its: it ends with 75 when nobody is busy and run.js starts both again
+  if (FRONT_MODS.size) return;
   if (anyBusy() || !fs.existsSync(RESTART_FLAG)) return;
   try { fs.unlinkSync(RESTART_FLAG); } catch {}
   if (!SUPERVISED) return console.log('[mills] Restart requested, but this hub was started without run.js (start.bat / start.sh) — restart it by hand.');
@@ -951,8 +952,8 @@ async function handleRequest(req, res) {
       return fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
     }
 
-    // the package versions and the Desktop packages: public (an installed Desktop updates itself before anyone signs in)
-    if (p.startsWith('/api/pub/') && downloads.publicRoute(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`, nativeReleases)) return;
+    // the downloads are the Rust hub's alone (4.0.0), for people with an account; the public routes are gone
+    if (p.startsWith('/api/pub/')) return send(res, 410, { error: 'Downloads and updates need a VibeRoller account now: sign in and use the Download panel.' });
     if (p === '/api/status' && req.method === 'GET') {
       // The only thing anyone may learn without signing in is that a VibeRoller hub is here (the page needs
       // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
@@ -1030,7 +1031,8 @@ async function handleRequest(req, res) {
         provider: acct.state.provider || 'host', effectiveProvider: (providers.effective(acct.username, acct.state.provider || '') || {}).id || '', defaultProvider: (providers.defaultFor(acct.username) || {}).id || '', hubClaude: providers.HUB_CLAUDE,
         providers: providers.list(acct.username), version: VERSIONS.project, build: BUILD, versions: VERSIONS.modules, aiHost: aiHostOn(), aiNodes: aiNodes.status(), pcHost: aiNodes.pcHostFor(acct.username) });
     }
-    if (p.startsWith('/api/downloads') && downloads.route(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`, (hostId) => aiNodes.hosts.configFor(acct.username, hostId, PUBLIC_URL || `http://127.0.0.1:${config.port}`))) return; // the Download panel's packages (+ this person's own AI host config)
+    // the Download panel is the Rust hub's (4.0.0): this hub runs without it only as the fallback
+    if (p.startsWith('/api/downloads') || p === '/api/native' || p === '/api/native/file') return send(res, 503, { error: 'Downloads come from the Rust hub (vr-hub), and this hub is running without it right now. Ask the admin.' });
     // ----- AI providers: everyone manages their own; the host's Claude is always there -----
     if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });
     if (p === '/api/providers/add' && req.method === 'POST') { try { return send(res, 200, { provider: providers.add(acct.username, await readBody(req)), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }

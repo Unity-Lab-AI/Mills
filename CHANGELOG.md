@@ -7,6 +7,57 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 4.0.0 — 2026-10-21
+
+**MAJOR: the Rust hub is the hub** (board T-134, item 4). Every request is answered by `vr-hub` now; the JavaScript
+hub (`bridge/server.js`) answers nothing while it runs and stays behind it only as the **fallback**: `run.js` starts it
+alone when there is no `vr-hub` binary, when the Rust hub keeps failing, or with config `rustHub: false`. The pieces
+that changed on purpose, and stop working the old way:
+
+### Changed: the last routes and restarts move to the Rust hub
+- **`/api/status` and `/api/version`** are answered by the Rust hub. From this machine `/api/status` names the Rust
+  hub's own process (`pid`), whether anyone's AI is busy (Work, the API, Unity, Unity in the chat), `supervised`,
+  version and commit; from outside (the tunnel, or nginx with `behindProxy`) still only `{ ok, hub }`.
+- **Restarts are the Rust hub's.** It watches `bridge/.restart` (`node bridge/restart.js`, the admin's restart): as
+  soon as nobody is busy it ends with 75, and `run.js` starts **both** hubs again on the new code (the JavaScript one
+  first, then the Rust one, which reads the new module list). Before, only the JavaScript hub restarted, so a new
+  `vr-hub` build waited for a full stop. Behind the Rust hub the JavaScript hub no longer acts on the flag.
+
+### Changed: Downloads are the Rust hub's, native only, and need an account
+- **The Download panel hands out only the native programs:** the VibeRoller app and the native AI host (Windows +
+  Linux, with your own host's config when asked). The earlier script packages are gone: the browser launcher
+  (`bridge/desktop/`) and the Node.js AI host zip. `bridge/downloads.js` is removed; the JavaScript hub on its own says
+  downloads come from the Rust hub (503).
+- **Nothing is public any more.** `/api/pub/versions`, `/api/pub/native[/file]` and `/api/pub/*.zip` answer 410 to
+  everyone (signed in or not) with what to do instead; the list, the zips and the app's release need a session (401
+  without one).
+- **The desktop app updates itself with an account:** the hub's page hands the app its session when you sign in
+  (`set_session`, new and allowed for the hub's page) and clears it when you sign out. The app keeps it in its private
+  `desktop.json`, sends it only to its own hub (changing the hub address drops it), asks the new
+  `/api/native?app=vr-desktop&target=` with it, and its background update waits until someone is signed in. Against a
+  hub before 4.0.0 it still uses the old public route. **An app installed before 4.0.0 cannot update itself from a
+  4.0.0 hub** (it only knows the public route): download it once more from the Download panel.
+- AI hosts are unchanged: they update over their own authenticated link (`/node/update*`).
+- The Download panel says so when nothing is built on the hub yet.
+
+### Changed: Unity in the chat queues like an agent, one conversation at a time
+- **Every call is answered in its own conversation's turn.** Before, a call that came while she was busy took the one
+  waiting slot (a second call replaced the first, so one was never answered), and her next turn read **every** unseen
+  call across all conversations and answered them all in one place, so a private message to her could be answered in a
+  channel or to someone else.
+- Now, like a standard agent's message queue: calls that come while she is busy wait in order; more calls in a
+  conversation that is already waiting merge into that conversation's next turn; each turn sees only its own
+  conversation's messages (# Everyone, one channel / group, or one person's private messages). What she has answered is
+  kept per message in `Chat/agent-seen.json` (`lastSeq` + `handled`; an older file is read as before).
+- **On a Claude brain each conversation has its own session** (`Chat/agent-state.json` `threads`; # Everyone keeps
+  `sessionId`), so nothing said in one conversation is remembered in another. Sign-in greetings go to # Everyone's turn
+  only.
+- No per-person quotas (decided 2026-10-21).
+
+### Tests
+- R142 (the Download panel), R143 (a host's config, now from `/api/hosts/config`), R155 (updates need an account; it
+  replaces the script packages' installer checks) and R167 (the native downloads, `--rust-hub` only) follow.
+
 ## 3.25.0 — 2026-10-21
 
 ### Changed: Downloads and new projects in Rust behind the Rust hub (board T-134, toward 4.0.0)

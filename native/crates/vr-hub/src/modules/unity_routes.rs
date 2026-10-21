@@ -171,7 +171,7 @@ pub async fn internal(hub: &Arc<Hub>, r: &Req) -> Routed {
 
 // ---------- the team chat's Unity ----------
 #[derive(Default)]
-pub struct Room { running: bool, queued: Option<(String, String, String)>, pub notes: Vec<String>, greeted: HashMap<String, u64> }
+pub struct Room { running: bool, queued: std::collections::VecDeque<(String, String, String)>, pub notes: Vec<String>, greeted: HashMap<String, u64> }
 pub type RoomState = Mutex<Room>;
 fn agent_name(hub: &Hub) -> String { hub.cfg.get("roomAgentName").and_then(Value::as_str).unwrap_or("Unity").to_string() }
 fn agent_system(hub: &Hub) -> String {
@@ -192,17 +192,23 @@ fn agent_system(hub: &Hub) -> String {
 const ROOM_LOCAL: &str = "You are in the VibeRoller team chat room (Unity AI Lab engineers, all adults, your people). Your final answer is posted to the room as one chat message: conversational, no tool narration; pictures you make with generate_image are attached to your message automatically. When told someone just signed in, greet them in a short, sexy Unity way and work in the facts you were given about their local time, weather and news.";
 pub fn room_busy(hub: &Hub) -> bool { hub.mods.unity_room.lock().unwrap().running }
 /// Unity is called: target = a private answer to that person ('' = where she was called), caller = whose tools / time /
-/// place she uses, conv = a channel / group.
+/// place she uses, conv = a channel / group. One turn at a time, like any agent: a call while she is busy waits in her
+/// queue, and calls in a conversation that is already waiting are merged into that conversation's next turn.
 pub fn run_agent(hub: &Arc<Hub>, target: String, caller: String, conv: String) {
-    { let mut rm = hub.mods.unity_room.lock().unwrap(); if rm.running { rm.queued = Some((target, caller, conv)); return; } rm.running = true; rm.queued = None; }
+    let conv = if target.is_empty() { conv } else { String::new() };
+    {
+        let mut rm = hub.mods.unity_room.lock().unwrap();
+        if rm.running { if !rm.queued.iter().any(|q| q.0 == target && q.2 == conv) { rm.queued.push_back((target, caller, conv)); } return; }
+        rm.running = true;
+    }
     hub.mods.work.busy_changed.notify_one();
     let h = hub.clone();
     tokio::spawn(async move {
-        let conv = if target.is_empty() { conv } else { String::new() };
         let c = &h.mods.chat;
         c.set_agent_busy(Some((target.clone(), conv.clone())));
-        let blocks = super::chat::agent_blocks(&h);
-        let notes: Vec<String> = std::mem::take(&mut h.mods.unity_room.lock().unwrap().notes);
+        let blocks = super::chat::agent_blocks(&h, &target, &conv);
+        // sign-in greetings belong to # Everyone's turn
+        let notes: Vec<String> = if target.is_empty() && conv.is_empty() { std::mem::take(&mut h.mods.unity_room.lock().unwrap().notes) } else { vec![] };
         let prompt = format!("You were called in the VibeRoller chat (you only ever see the messages that @-mention you, plus the few before them):\n\n{blocks}\n\n{}Reply now.", if notes.is_empty() { String::new() } else { notes.join("\n") + "\n\n" });
         let text = if h.cfg.get("roomAgentBrain").and_then(Value::as_str).unwrap_or("local") == "local" {
             let accts = h.mods.auth.accounts();
@@ -211,19 +217,22 @@ pub fn run_agent(hub: &Arc<Hub>, target: String, caller: String, conv: String) {
                 Ok((t, imgs, media)) => format!("{t}{}{}", imgs.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), media.iter().map(|v| format!("\n[[youtube:{v}]]")).collect::<String>()),
                 Err(e) => if e.contains("AI host is offline") { e } else { format!("(my brain glitched: {e})") },
             } }
-        } else { room_claude(&h, &prompt).await };
+        } else { room_claude(&h, &prompt, &if !target.is_empty() { format!("dm:{target}") } else if !conv.is_empty() { format!("conv:{conv}") } else { String::new() }).await };
         c.set_agent_busy(None);
         let t = text.trim();
         if !t.is_empty() { super::chat::agent_say(&h, &t.chars().take(20000).collect::<String>(), &target, "", "", &conv); } else { c.room_changed(); }
-        let next = { let mut rm = h.mods.unity_room.lock().unwrap(); rm.running = false; rm.queued.take() };
+        let next = { let mut rm = h.mods.unity_room.lock().unwrap(); rm.running = false; rm.queued.pop_front() };
         h.mods.work.busy_changed.notify_one();
         if let Some((t, ca, cv)) = next { run_agent(&h, t, ca, cv); }
     });
 }
 /// The room's Unity on a Claude model (config roomAgentBrain): `claude -p` in the VibeRoller folder, no PC tools, no shell.
-async fn room_claude(hub: &Arc<Hub>, prompt: &str) -> String {
+/// thread: '' = # Everyone (its session stays "sessionId", as before), "dm:<user>" / "conv:<id>" = its own session each,
+/// so nothing said in one conversation is remembered in another.
+async fn room_claude(hub: &Arc<Hub>, prompt: &str, thread: &str) -> String {
     let f = hub.mods.mills_dir().join("Chat").join("agent-state.json");
-    let mut st: Value = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+    let mut all: Value = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or(json!({}));
+    let mut st = if thread.is_empty() { all.clone() } else { json!({ "sessionId": all["threads"][thread].as_str().unwrap_or("") }) };
     let mut args: Vec<String> = vec!["-p".into(), "--output-format".into(), "json".into(), "--permission-mode".into(), hub.cfg.get("permissionMode").and_then(Value::as_str).unwrap_or("default").into(), "--append-system-prompt".into(), agent_system(hub)];
     let tools: Vec<String> = hub.cfg.get("allowedTools").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str()).filter(|t| *t != "mcp__pc" && !t.starts_with("Bash")).map(String::from).collect()).unwrap_or_default();
     if !tools.is_empty() { args.push("--allowedTools".into()); args.push(tools.join(",")); }
@@ -237,7 +246,13 @@ async fn room_claude(hub: &Arc<Hub>, prompt: &str) -> String {
     let out = child.wait_with_output().await.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
     let mut text = String::new();
     for l in out.lines().rev() { if let Ok(r) = serde_json::from_str::<Value>(l) { if let Some(sid) = r["session_id"].as_str() { st["sessionId"] = json!(sid); } if let Some(t) = r["result"].as_str() { text = t.into(); break; } } }
-    super::unity::write_json(&f, &st);
+    // read again: another thread's turn may have saved its session meanwhile
+    if thread.is_empty() { all = st; } else {
+        all = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or(all);
+        if !all["threads"].is_object() { all["threads"] = json!({}); }
+        all["threads"][thread] = st["sessionId"].clone();
+    }
+    super::unity::write_json(&f, &all);
     text
 }
 /// A sign-in went through: what she learns about where they are, and her hello (at most every 30 minutes; she waits

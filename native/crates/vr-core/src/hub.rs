@@ -73,7 +73,8 @@ impl HubClient {
     }
     pub async fn board(&self) -> Result<Value> { self.get("/api/board").await }
     /// The published package versions (anonymous): what the Desktop and AI Host updaters compare with.
-    pub async fn pub_versions(&self) -> Result<Value> { self.get("/api/pub/versions").await }
+    /// What the Download panel has (signed in; the public /api/pub/versions is gone since 4.0.0).
+    pub async fn downloads(&self) -> Result<Value> { self.get("/api/downloads").await }
 }
 
 /// encodeURIComponent

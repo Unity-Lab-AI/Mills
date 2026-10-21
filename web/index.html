@@ -958,9 +958,9 @@
       <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
         <div id="fjBox" class="apiBox"></div></div>
      </div>
-     <!-- the packages are built by the hub from its own code (bridge/downloads.js) -->
+     <!-- the native programs, pre-built, handed out by the Rust hub to people with an account (vr-hub downloads.rs) -->
      <div data-setpane="downloads" hidden>
-      <div class="setSection"><b>Staying up to date</b> — this page and the Desktop app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>node ai-node.js --update</code> in its folder (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</div>
+      <div class="setSection"><b>Staying up to date</b> — this page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</div>
       <div id="dlBody"></div>
       <div class="setSection"><b>VibeRoller Chat app from the browser</b> — the chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).
         <div id="appBox" class="apiBox"></div></div>
@@ -1646,6 +1646,8 @@ $('login').addEventListener('submit', async (e) => {
 });
 async function enter() {
   me = await json('/api/check');
+  // the desktop app updates itself with this session (updates need an account); an older app has no such command
+  if (NATIVE && token) NATIVE.call('set_session', { token }).catch(() => {});
   // app settings follow the account: its saved theme wins over this browser's; an account without one adopts the browser's
   if (me.prefs && typeof me.prefs.theme === 'string') { if (me.prefs.theme !== (store.get('mills.theme') || '')) { const m = me; me = null; applyTheme(m.prefs.theme); me = m; } } // (no chat re-render yet: it is drawn next)
   else if (store.get('mills.theme')) saveThemeChoice(store.get('mills.theme'));
@@ -1696,6 +1698,7 @@ $('goAdmin').onclick = () => showScreen('admin');
 $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
+  if (NATIVE && token) NATIVE.call('set_session', { token: '' }).catch(() => {});
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes']) $(id).hidden = true;
@@ -3910,12 +3913,11 @@ async function renderDownloads() {
     } catch (e) { note.textContent = e.message; }
     b.disabled = false;
   };
-  // the native programs first (pre-built, nothing to install first); the earlier script packages after them
+  // the native programs (pre-built, nothing to install first)
+  if (!d.items.length) note.textContent = 'Nothing is built on this hub yet (the admin runs sh native/build.sh).';
   const GROUPS = {
     native: ['VibeRoller: the native app', 'VibeRoller in its own window, plus what only an app on your computer can do: the Tools window (your projects folder, a real terminal, build & run, git with your Forgejo token, a local API proxy for tools on your computer) and the switch to share this computer\'s AI. Pre-built for Windows and Linux; runs from its folder or installs itself, and updates itself (signed releases).'],
     'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too), "vr-host" is the heart & knife control app, start at boot is one setting. Updates itself from this hub. For your own host with its config inside: Settings → My AI hosts.'],
-    desktop: ['Browser launcher (earlier)', 'VibeRoller Chat in a Chrome, Edge or Brave window with a Start-menu / application-menu entry (scripts, no native features). (Installing from the browser, at the bottom, works too.)'],
-    'ai-host': ['AI Host on Node.js (earlier)', 'The JavaScript AI host, for machines that run it already (it keeps updating itself). Needs Node.js. The native AI host above replaces it.'],
   };
   for (const group of Object.keys(GROUPS)) {
     if (!d.items.some((i) => i.group === group)) continue;

@@ -225,10 +225,9 @@ async function setup() {
     if ((f.endsWith('.js') && f !== 'master-logins.js') || f === 'cloudflared-quick.yml') fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   }
   fs.copyFileSync(path.join(__dirname, 'fake-claude.js'), path.join(SB, 'test', 'fake-claude.js'));
-  // what the Download panel packs (bridge/downloads.js): the AI node's launchers, example config and host tools
+  // the JavaScript AI host's launchers, example config and host tools
   for (const f of ['ai-node.example.json', 'start-node.bat', 'start-node.sh']) fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
-  fs.cpSync(path.join(BRIDGE, 'desktop'), path.join(SB, 'desktop'), { recursive: true }); // the Desktop packages' setup scripts
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
   for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
   PORT = await freePort(7799);
@@ -2038,12 +2037,10 @@ async function run() {
     const badNick = await call('/api/hosts/rename', A, { id: newId, nickname: 'Bad Name!' });
     const notMine = await call('/api/hosts/rename', U, { id: newId, nickname: 'stolen-yak' });
     const mine1 = await call('/api/hosts', A);
-    // the package with this host's config inside, for its owner only
-    const cfgZip = await fetch(H + '/api/downloads/ai-host-linux.zip?host=' + newId, { headers: { Authorization: 'Bearer ' + A } });
-    const cfgZipBuf = Buffer.from(await cfgZip.arrayBuffer());
-    const cfgEntry = cfgZip.status === 200 ? unzipAll(cfgZipBuf).find((e) => e.name.endsWith('/ai-node.json')) : null;
-    const cfgJson = cfgEntry ? JSON.parse(cfgEntry.data.toString('utf8')) : {};
-    const cfgZipOther = await fetch(H + '/api/downloads/ai-host-linux.zip?host=' + newId, { headers: { Authorization: 'Bearer ' + U } });
+    // this host's config (what "Run on this PC" and the native AI host's download carry), for its owner only
+    const cfgZip = await call('/api/hosts/config', A, { id: newId });
+    const cfgJson = cfgZip.data.config || {};
+    const cfgZipOther = await call('/api/hosts/config', U, { id: newId });
     // a hub-made host (UUID + secret from Settings) really connects: a second host program with that config
     const host2Dir = path.join(SB, 'host2'); fs.mkdirSync(host2Dir, { recursive: true }); for (const f of ['ai-node.js', 'host-relay.js']) fs.copyFileSync(path.join(SB, f), path.join(host2Dir, f));
     fs.writeFileSync(path.join(host2Dir, 'ai-node.json'), JSON.stringify({ ...cfgJson, providers: [], engines: {} }));
@@ -2054,14 +2051,14 @@ async function run() {
     const host2Text = fs.readFileSync(path.join(SCRATCH, 'host2.log'), 'utf8');
     const removed = await call('/api/hosts/remove', A, { id: newId });
     const hubNodeSrc2 = fs.readFileSync(path.join(BRIDGE, 'ai-nodes.js'), 'utf8'), nodeSrc2 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), html2 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    check('R143', 'AI hosts: a host is a UUID + secret + nickname (adjective-animal); hello with the wrong secret → 401, without a nonce → 400; the handshake gives both sides the same e2e key (vr-… id) and the host tells the hub its user, providers (models, caps, allowed users) and engines; Settings → My AI hosts: new host (uuid, nickname), rename (bad nickname refused, only the owner), remove; the AI Host download with ?host= carries that host\'s config (owner only), and a host run from it connects and shows online; [static] HKDF + AES-256-GCM on both sides, randomUUID ids, ai-hosts.json gitignored, the Settings panels exist',
+    check('R143', 'AI hosts: a host is a UUID + secret + nickname (adjective-animal); hello with the wrong secret → 401, without a nonce → 400; the handshake gives both sides the same e2e key (vr-… id) and the host tells the hub its user, providers (models, caps, allowed users) and engines; Settings → My AI hosts: new host (uuid, nickname), rename (bad nickname refused, only the owner), remove; that host\'s config (owner only), and a host run with it connects and shows online; [static] HKDF + AES-256-GCM on both sides, randomUUID ids, ai-hosts.json gitignored, the Settings panels exist',
       testHost.online === true && testHost.nickname === 'test-node' && /^vr-[0-9a-f]{24}$/.test(testHost.kid || '') && testHost.user === '' && (testHost.providers || []).join(',') === 'claude,codex,local' && (testHost.engines || []).length === 4
       && helloBad.status === 401 && helloNoNonce.status === 400 && mine0.status === 200 && mine0.data.mine.length === 0 && made.status === 200 && /^[0-9a-f-]{36}$/.test(newId) && /^[a-z]+-[a-z]+(-\d+)?$/.test(made.data.host.nickname) && made.data.host.user === 't-admin'
       && renamed.status === 200 && renamed.data.host.nickname === 'brave-walrus-test' && badNick.status === 400 && notMine.status === 400 && mine1.data.mine.length === 1
-      && cfgZip.status === 200 && cfgJson.id === newId && cfgJson.token && cfgJson.token.length >= 24 && cfgJson.user === 't-admin' && cfgJson.hub === H && Array.isArray(cfgJson.providers) && cfgZipOther.status === 500
+      && cfgZip.status === 200 && cfgJson.id === newId && cfgJson.token && cfgJson.token.length >= 24 && cfgJson.user === 't-admin' && cfgJson.hub === H && Array.isArray(cfgJson.providers) && cfgZipOther.status >= 400
       && !!h2 && h2.online === true && /^vr-[0-9a-f]{24}$/.test(h2.kid || '') && /connected to .* as "brave-walrus-test" \(t-admin\)/.test(host2Text) && removed.status === 200 && removed.data.mine.length === 0
       && /hkdfSync/.test(hubNodeSrc2) && /aes-256-gcm/.test(hubNodeSrc2) && /randomUUID/.test(hubNodeSrc2) && /hkdfSync/.test(nodeSrc2) && /aes-256-gcm/.test(nodeSrc2) && /^bridge\/ai-hosts\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /id="hostBox"/.test(html2) && /id="srcBox"/.test(html2),
-      `host ${JSON.stringify(testHost).slice(0, 160)}; hello bad ${helloBad.status} nonce ${helloNoNonce.status}; new ${made.status} ${JSON.stringify(made.data).slice(0, 120)}; rename ${renamed.status} bad ${badNick.status} other ${notMine.status}; zip ${cfgZip.status} cfg id ok ${cfgJson.id === newId} other ${cfgZipOther.status}; host2 ${JSON.stringify(h2 || {}).slice(0, 80)} log "${host2Text.split('\n')[0].slice(0, 100)}"`);
+      `host ${JSON.stringify(testHost).slice(0, 160)}; hello bad ${helloBad.status} nonce ${helloNoNonce.status}; new ${made.status} ${JSON.stringify(made.data).slice(0, 120)}; rename ${renamed.status} bad ${badNick.status} other ${notMine.status}; config ${cfgZip.status} cfg id ok ${cfgJson.id === newId} other ${cfgZipOther.status}; host2 ${JSON.stringify(h2 || {}).slice(0, 80)} log "${host2Text.split('\n')[0].slice(0, 100)}"`);
 
     // Work with a host's Claude: the run happens HERE (this hub's worktree), only its model calls go to the host, which adds its login
     const remoteId = 'h:test-node/claude';
@@ -2259,31 +2256,27 @@ async function run() {
     'see the check text');
   }
 
-  // The Download panel (Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux), and the page served by the hub itself.
+  // The Download panel (the native programs only, for people with an account; the Rust hub's alone since 4.0.0), and the
+  // page served by the hub itself.
   {
-    const anon = await call('/api/downloads');
+    const anon = await call('/api/downloads'), anonNative = await call('/api/native?app=vr-desktop&target=x86_64-unknown-linux-gnu');
     const dl = await call('/api/downloads', U);
     const items = dl.data.items || [];
-    const zipRes = await fetch(H + '/api/downloads/ai-host-windows.zip', { headers: { Authorization: 'Bearer ' + U } });
-    const zipBuf = Buffer.from(await zipRes.arrayBuffer());
-    const unknown = await fetch(H + '/api/downloads/nope.zip', { headers: { Authorization: 'Bearer ' + U } });
-    const entries = unzipAll(zipBuf), names = entries.map((e) => e.name);
-    const linuxZip = Buffer.from(await (await fetch(H + '/api/downloads/desktop-linux.zip', { headers: { Authorization: 'Bearer ' + U } })).arrayBuffer());
-    const linuxFiles = unzipAll(linuxZip);
+    const unknown = await fetch(H + '/api/downloads/ai-host-windows.zip', { headers: { Authorization: 'Bearer ' + U } });
+    const pubGone = await Promise.all(['/api/pub/versions', '/api/pub/desktop-linux.zip', '/api/pub/native?app=vr-desktop&target=x86_64-unknown-linux-gnu'].map((p) => fetch(H + p).then((r) => r.status)));
+    const pubSigned = (await fetch(H + '/api/pub/versions', { headers: { Authorization: 'Bearer ' + U } })).status;
     const page = await (await fetch(H + '/')).text();
     const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), appJs = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
-    check('R142', 'Download: signed-in people get the four packages (Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux) listed with sizes and as real zip files (PK header, attachment, every file of the AI host inside, the hub\'s own address in them); anonymous → 401; unknown → 404; the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download button sits above Settings in the menu and in the app\'s user panel',
-      anon.status === 401 && dl.status === 200 && items.length === 4 && ['desktop-windows', 'desktop-linux', 'ai-host-windows', 'ai-host-linux'].every((id) => items.some((it) => it.id === id && it.bytes > 1000 && /\.zip$/.test(it.file)))
-      && zipRes.status === 200 && zipBuf.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && /attachment; filename="VibeRollerAIHost-windows\.zip"/.test(zipRes.headers.get('content-disposition') || '') && zipRes.headers.get('content-type') === 'application/zip'
-      && ['VibeRollerAIHost/ai-node.js', 'VibeRollerAIHost/common.js', 'VibeRollerAIHost/worktree.js', 'VibeRollerAIHost/pc-tools-mcp.js', 'VibeRollerAIHost/board-mcp.js', 'VibeRollerAIHost/team-mcp.js', 'VibeRollerAIHost/ai-node.example.json', 'VibeRollerAIHost/start-node.bat', 'VibeRollerAIHost/host-tools/HostTool.cs', 'VibeRollerAIHost/host-tools/AiHostService.cs', 'VibeRollerAIHost/host-tools/build-host-tools.ps1', 'VibeRollerAIHost/host-tools/build.cmd', 'VibeRollerAIHost/host-tools/install-ai-host-service.cmd', 'VibeRollerAIHost/README.txt'].every((n) => names.includes(n)) && !names.some((n) => n.endsWith('/ai-node.json'))
-      && linuxZip.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && linuxFiles.length === 3 && linuxFiles.filter((e) => !e.name.endsWith('VERSION.txt')).every((e) => e.data.toString('utf8').includes(H)) && entries.some((e) => e.name.endsWith('README.txt') && e.data.toString('utf8').includes(H))
-      && entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js')))) && unknown.status === 404
+    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download button sits above Settings in the menu and in the app\'s user panel',
+      anon.status === 401 && anonNative.status === 401 && pubGone.every((s) => s === 410) && pubSigned === 410
+      && (RUST_HUB ? dl.status === 200 && Array.isArray(items) && items.every((it) => it.native === true && /^(app|host)-/.test(it.id)) && unknown.status === 404 : dl.status === 503 && unknown.status === 503)
+      && !fs.existsSync(path.join(BRIDGE, 'downloads.js')) && !fs.existsSync(path.join(BRIDGE, 'desktop'))
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
       && /class="menuFoot menuDl"/.test(html) && html.indexOf('data-downloads') < html.indexOf('id="goSettings"') && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
       // Work's bar: Download right above Settings; Settings has its own Downloads tab, which every Download button opens
       && (() => { const rail = (html.match(/<nav id="rail">[\s\S]*?<\/nav>/) || [''])[0]; return rail.indexOf('data-downloads') > -1 && rail.indexOf('data-downloads') < rail.indexOf('data-settings'); })()
       && /data-settab="downloads"/.test(html) && /<div data-setpane="downloads" hidden>[\s\S]*id="dlBody"[\s\S]*id="appBox"/.test(html) && /PROFILE\.tab\('downloads'\)/.test(html) && !/id="downloads" class="modal"/.test(html),
-      `anon ${anon.status} list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')} zip ${zipRes.status} ${names.length} entries (${names.join(' ')}); ai-node same ${entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js'))))}; linux ${linuxFiles.length} files, hub named ${linuxFiles.filter((e) => e.data.toString('utf8').includes(H)).length}; unknown ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
+      `anon ${anon.status} native ${anonNative.status} pub ${pubGone.join(',')} signed ${pubSigned}; list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')}; old package ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
   }
 
   { // The hand-off (bridge/handoff.js): the running hub packs its own data, pauses writes, and can turn this machine into an AI host.
@@ -2363,60 +2356,21 @@ async function run() {
       `build ${build} hdr ${verHdr} check ${ck156.build} anon ${anonVer}; scripts ${tagged.slice(0, 3).join(' ')}`);
   }
 
-  // R155: every download is its own installer, launcher and updater (Linux paths run for real here; Windows: source)
+  // R155: updates need an account too (4.0.0): the desktop app updates itself with the session its hub page hands it
   {
-    const sh = (cmd) => spawnSync('sh', ['-c', cmd], { encoding: 'utf8' });
-    const canRun = !sh('true').error && sh('command -v curl').status === 0;
-    const canUnpack = sh('command -v unzip || command -v python3 || command -v bsdtar').status === 0;
-    const pubVers = await fetch(H + '/api/pub/versions').then((r) => r.json()).catch(() => ({}));
-    const pubDesk = await fetch(H + '/api/pub/desktop-linux.zip'), pubDeskBuf = Buffer.from(await pubDesk.arrayBuffer());
-    const pubHost = (await fetch(H + '/api/pub/ai-host-linux.zip')).status, pubOdd = (await fetch(H + '/api/pub/auth.json')).status;
-    const write = (buf, dir) => { for (const e of unzipAll(buf)) { const f = path.join(dir, e.name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, e.data); if (/\.sh$/.test(e.name)) fs.chmodSync(f, 0o755); } };
-    const out = {};
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-setup-home-'));
-    try {
-      if (!canRun) throw new Error('skip');
-      const env = { ...process.env, HOME: home, PATH: '/usr/bin:/bin' + (process.env.PATH ? ':' + path.dirname(process.execPath) : '') };
-      const run = (file, a = []) => spawnSync(file.endsWith('.js') ? process.execPath : 'sh', [file, ...a], { encoding: 'utf8', env, input: '', timeout: 60000 });
-      // ---- Desktop (Linux) ----
-      const pkg = path.join(home, 'Downloads'); write(pubDeskBuf, pkg);
-      const dsh = path.join(pkg, 'VibeRollerDesktop', 'viberoller-desktop.sh'), STDD = path.join(home, '.local', 'share', 'viberoller', 'desktop');
-      out.dStatus = /No other install found/.test(run(dsh, ['--status']).stdout);
-      run(dsh, ['--install', '--yes']);
-      const vOf = (d) => { try { return fs.readFileSync(path.join(d, 'VERSION.txt'), 'utf8').trim(); } catch { return ''; } };
-      out.dInstalled = vOf(STDD) === pubVers['desktop-linux'] && fs.existsSync(path.join(home, '.local', 'share', 'applications', 'viberoller-desktop.desktop')) && fs.existsSync(path.join(home, '.local', 'bin', 'viberoller-desktop'));
-      fs.writeFileSync(path.join(STDD, 'VERSION.txt'), '0.0.1+old\n'); // an older install …
-      const dUpd = run(dsh); // … the downloaded package finds it and updates it
-      out.dUpdated = vOf(STDD) === pubVers['desktop-linux'] && /updated to/.test(dUpd.stdout);
-      if (canUnpack) { // the installed copy updates itself from the hub at its next start
-        fs.writeFileSync(path.join(STDD, 'VERSION.txt'), '0.0.1+old\n');
-        run(path.join(home, '.local', 'bin', 'viberoller-desktop'));
-        out.dSelf = vOf(STDD) === pubVers['desktop-linux'];
-      } else out.dSelf = 'no unzip / python3 here';
-      // ---- AI Host (Linux) ----
-      const hostZip = Buffer.from(await (await fetch(H + '/api/downloads/ai-host-linux.zip', { headers: { Authorization: 'Bearer ' + U } })).arrayBuffer());
-      const hpkg = path.join(home, 'HostDownload'); write(hostZip, hpkg);
-      const setup = path.join(hpkg, 'VibeRollerAIHost', 'vr-setup.js'), STDH = path.join(home, '.local', 'share', 'viberoller', 'ai-host');
-      out.hStatus = /No other install found/.test(run(setup, ['--status']).stdout);
-      const hInst = run(setup, ['--install', '--yes']);
-      out.hInstalled = vOf(STDH) === pubVers['ai-host-linux'] && fs.existsSync(path.join(STDH, 'ai-node.js')) && fs.existsSync(path.join(STDH, '.vr-installed')) && /No ai-node\.json/.test(hInst.stdout);
-      fs.writeFileSync(path.join(STDH, 'VERSION.txt'), '0.0.1+old\n'); fs.writeFileSync(path.join(STDH, 'ai-node.json'), '{"mine":true}\n'); fs.writeFileSync(path.join(STDH, 'ai-node.js'), '// stale-copy-r155\n');
-      const hUpd = run(setup, ['--update']);
-      out.hUpdated = vOf(STDH) === pubVers['ai-host-linux'] && fs.readFileSync(path.join(STDH, 'ai-node.json'), 'utf8') === '{"mine":true}\n' && !/stale-copy-r155/.test(fs.readFileSync(path.join(STDH, 'ai-node.js'), 'utf8')) && /Found an earlier install/.test(hUpd.stdout);
-      // a host that runs from a git checkout is never overwritten
-      fs.rmSync(STDH, { recursive: true, force: true });
-      const gitHost = path.join(home, 'VibeRollerAIHost'); fs.mkdirSync(path.join(gitHost, '.git'), { recursive: true }); fs.writeFileSync(path.join(gitHost, 'ai-node.js'), '// git checkout\n');
-      const hGit = run(setup, ['--yes']);
-      out.hGitKept = /git checkout/.test(hGit.stdout) && fs.readFileSync(path.join(gitHost, 'ai-node.js'), 'utf8') === '// git checkout\n' && !fs.existsSync(STDH);
-    } catch (e) { if (e.message !== 'skip') out.error = e.message; }
-    finally { try { fs.rmSync(home, { recursive: true, force: true }); } catch {} }
-    const ps1 = fs.readFileSync(path.join(BRIDGE, 'desktop', 'vr-desktop.ps1'), 'utf8'), setupSrc = fs.readFileSync(path.join(BRIDGE, 'vr-setup.js'), 'utf8'), dl155 = fs.readFileSync(path.join(BRIDGE, 'downloads.js'), 'utf8');
-    check('R155', 'every download is its own installer, launcher and updater, Windows and Linux: each package carries VERSION.txt (the hub\'s version + a fingerprint of its contents) and /api/pub/versions names them (public, as are the Desktop packages; the AI Host packages are not); the Desktop finds no install → installs (menu entry, ~/.local/bin), finds an older one → updates it, and an installed copy updates itself from the hub at its next start; the AI Host setup installs into the standard folder, updates an older install keeping its ai-node.json, and never overwrites a host that runs from a git checkout; [static] the Windows Desktop (PowerShell) finds earlier installs through its folder and its shortcuts, installs or runs portable, updates itself; the AI Host setup finds the service\'s folder, holds a running launcher back, and starts a host its old launcher let stop',
-      /^\d+\.\d+\.\d+\+[0-9a-f]{8}$/.test(pubVers['desktop-linux'] || '') && /^\d+\.\d+\.\d+\+[0-9a-f]{8}$/.test(pubVers['ai-host-windows'] || '') && pubDesk.status === 200 && pubDeskBuf.slice(0, 2).toString() === 'PK' && pubHost === 404 && pubOdd === 404
-      && (!canRun || (out.dStatus && out.dInstalled && out.dUpdated && out.dSelf !== false && out.hStatus && out.hInstalled && out.hUpdated && out.hGitKept))
-      && /function Find-Installs/.test(ps1) && /function Self-Update/.test(ps1) && /\[switch\]\$Portable/.test(ps1) && /api\/pub\/versions/.test(ps1) && /Expand-Archive/.test(ps1)
-      && /sc', \['qc', 'VibeRollerAIHost'\]/.test(setupSrc) && /held\.push\(r\)/.test(setupSrc) && /followRestart/.test(setupSrc) && /publicRoute/.test(dl155),
-      canRun ? JSON.stringify(out) : 'sh / curl not here: source checks only');
+    const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu';
+    const anonRel = (await fetch(H + `/api/native?app=vr-desktop&target=${target}`)).status, anonFile = (await fetch(H + `/api/native/file?app=vr-desktop&target=${target}&name=vr-desktop`)).status;
+    const signedRel = (await fetch(H + `/api/native?app=vr-desktop&target=${target}`, { headers: { Authorization: 'Bearer ' + U } })).status;
+    const nd = path.join(MILLS, 'native', 'crates', 'vr-desktop');
+    const upd = fs.readFileSync(path.join(nd, 'src', 'update.rs'), 'utf8'), dmain = fs.readFileSync(path.join(nd, 'src', 'main.rs'), 'utf8'), dset = fs.readFileSync(path.join(nd, 'src', 'settings.rs'), 'utf8'), dbuild = fs.readFileSync(path.join(nd, 'build.rs'), 'utf8');
+    const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R155', 'updates need an account: the desktop app\'s release and its files answer 401 without a session (signed in: the Rust hub has it, 404 while nothing is built; the JavaScript hub alone: 503); [static] the hub\'s page hands the app its session on sign-in and clears it on sign-out (set_session, allowed for the hub\'s page), the app keeps it private and only for its own hub, asks /api/native with it (the public route only for a hub before 4.0.0), and its background update waits for someone to be signed in',
+      anonRel === 401 && anonFile === 401 && signedRel === (RUST_HUB ? 404 : 503)
+      && /\/api\/native\{q\}/.test(upd) && /with_token\(hub, session\)/.test(upd) && /\/api\/pub\/native\{q\}/.test(upd)
+      && /fn set_session\(/.test(dmain) && /allow-set-session/.test(dmain) && /"set_session"/.test(dbuild) && /hub_session\.is_empty\(\) \{ continue; \}/.test(dmain)
+      && /pub hub_session: String/.test(dset) && /if next\.hub != s\.hub \{ next\.hub_session\.clear\(\); \}/.test(dset) && /hub_session: String::new\(\), \.\.s/.test(dset)
+      && /NATIVE\.call\('set_session', \{ token \}\)/.test(html) && /NATIVE\.call\('set_session', \{ token: '' \}\)/.test(html),
+      `anon release ${anonRel} file ${anonFile}; signed ${signedRel}`);
   }
 
   // R149: the server's auto-deploy restarts the hub only for a really new main (production bug 2026-10-19: commits made
@@ -2817,8 +2771,8 @@ async function run() {
         && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
         `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
     }
-    // R167: the Downloads hand out the native programs (pre-built), and they install themselves
-    if (!why) {
+    // R167: the Downloads hand out the native programs (pre-built), and they install themselves (the Rust hub's alone)
+    if (!why && RUST_HUB) {
       const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target), ext = WIN ? '.exe' : '';
       fs.mkdirSync(dist, { recursive: true });
       fs.copyFileSync(NATIVE_BIN.host, path.join(dist, 'vr-host' + ext)); // (R164 left a "newer" one here: the real build again)
@@ -2826,13 +2780,14 @@ async function run() {
       fs.writeFileSync(path.join(dist, 'BUILD.json'), JSON.stringify({ version: '3.99.0', commit: 'd'.repeat(40) }));
       const osName = WIN ? 'windows' : 'linux';
       const raw = (tok, p) => fetch(H + p, { headers: { Authorization: 'Bearer ' + tok } });
-      const dl = (await call('/api/downloads', A)).data.items || [];
+      const dlAll = (await call('/api/downloads', A)).data || {}, dl = dlAll.items || [];
       const appZip = await raw(A, `/api/downloads/app-${osName}.zip`), appEntries = appZip.status === 200 ? unzipAll(Buffer.from(await appZip.arrayBuffer())) : [];
       const hostsNow = (await call('/api/hosts', A)).data.mine || [];
       const myHost = hostsNow[0] || (await call('/api/hosts/new', A, {})).data.host;
       const hostZip = await raw(A, `/api/downloads/host-${osName}.zip?host=${encodeURIComponent(myHost.id)}`), hostEntries = hostZip.status === 200 ? unzipAll(Buffer.from(await hostZip.arrayBuffer())) : [];
-      const pubApp = (await fetch(H + `/api/pub/app-${osName}.zip`)).status, pubHost = (await fetch(H + `/api/pub/host-${osName}.zip`)).status;
-      const vers = await fetch(H + '/api/pub/versions').then((r) => r.json()).catch(() => ({}));
+      const pubApp = (await fetch(H + `/api/pub/app-${osName}.zip`)).status, anonApp = (await fetch(H + `/api/downloads/app-${osName}.zip`)).status;
+      // the desktop app's own release, signed in (what it updates itself from)
+      const rel = await raw(A, `/api/native?app=vr-desktop&target=${target}`), relJson = rel.status === 200 ? await rel.json() : {};
       // the downloaded AI host installs itself (a scratch home), its config with it, private
       const unz = path.join(SCRATCH, 'r167-download'); fs.mkdirSync(unz, { recursive: true });
       for (const e of hostEntries) { const f = path.join(unz, e.name.split('/').slice(1).join('/')); fs.writeFileSync(f, e.data); if (/vr-host/.test(e.name)) fs.chmodSync(f, 0o755); }
@@ -2842,14 +2797,14 @@ async function run() {
       const instCfg = (() => { try { return JSON.parse(fs.readFileSync(path.join(instDir, 'ai-node.json'), 'utf8')); } catch { return {}; } })();
       const instMode = WIN ? 0o600 : (() => { try { return fs.statSync(path.join(instDir, 'ai-node.json')).mode & 0o777; } catch { return 0; } })();
       const again = spawnSync(path.join(instDir, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
-      check('R167', 'the Downloads hand out the native programs, pre-built: the native app (vr-desktop + the AI host) and the native AI host (with that person\'s own host config inside when asked) for this machine\'s system, the app also without signing in, never the host; /api/pub/versions names them; the downloaded AI host installs itself ("vr-host install": the standard folder, its config kept and private) and an installed copy knows it is the installed one',
+      check('R167', 'the Downloads hand out the native programs, pre-built: the native app (vr-desktop + the AI host) and the native AI host (with that person\'s own host config inside when asked) for this machine\'s system, to people with an account only (anonymous → 401, the old public route → 410); the list names the native releases, and the desktop app\'s signed release is there for a signed-in app; the downloaded AI host installs itself ("vr-host install": the standard folder, its config kept and private) and an installed copy knows it is the installed one',
         dl.some((i) => i.id === `app-${osName}` && i.native && i.group === 'native') && dl.some((i) => i.id === `host-${osName}` && i.group === 'native-host')
         && appEntries.some((e) => e.name === 'VibeRoller/vr-desktop' + ext) && appEntries.some((e) => e.name === 'VibeRoller/vr-host' + ext) && appEntries.some((e) => /VibeRoller\/README\.txt$/.test(e.name))
         && hostEntries.some((e) => e.name === 'VibeRollerAIHost/vr-host' + ext) && hostEntries.some((e) => e.name === 'VibeRollerAIHost/ai-node.json' && JSON.parse(e.data.toString()).id === myHost.id)
-        && pubApp === 200 && pubHost === 404 && !!vers[`app-${osName}`] && Array.isArray(vers.native)
+        && pubApp === 410 && anonApp === 401 && Array.isArray(dlAll.native) && rel.status === 200 && typeof relJson.sig === 'string'
         && inst.status === 0 && fs.existsSync(path.join(instDir, 'vr-host' + ext)) && instCfg.id === myHost.id && instMode === 0o600 && /installed AI host/.test(again.stdout),
-        `items ${dl.map((i) => i.id).join(',')}; app ${appZip.status} ${appEntries.map((e) => e.name).join(',')}; host ${hostZip.status} ${hostEntries.map((e) => e.name).join(',')}; pub ${pubApp}/${pubHost}; versions native ${Array.isArray(vers.native)}; install ${inst.status} "${String((inst.stdout || '') + (inst.stderr || '') + (inst.error || '')).trim().slice(0, 200)}" cfg ${instCfg.id === myHost.id} mode ${instMode.toString(8)}; again "${String(again.stdout || again.error || '').trim().slice(0, 100)}"`);
-    } else skip('R167', 'the Downloads hand out the native programs, pre-built, and they install themselves', why);
+        `items ${dl.map((i) => i.id).join(',')}; app ${appZip.status} ${appEntries.map((e) => e.name).join(',')}; host ${hostZip.status} ${hostEntries.map((e) => e.name).join(',')}; pub ${pubApp} anon ${anonApp}; native ${Array.isArray(dlAll.native)} release ${rel.status} ${Object.keys(relJson).join(',')}; install ${inst.status} "${String((inst.stdout || '') + (inst.stderr || '') + (inst.error || '')).trim().slice(0, 200)}" cfg ${instCfg.id === myHost.id} mode ${instMode.toString(8)}; again "${String(again.stdout || again.error || '').trim().slice(0, 100)}"`);
+    } else skip('R167', 'the Downloads hand out the native programs, pre-built, and they install themselves', why || 'the Rust hub\'s alone: --rust-hub runs it');
     // R165: the desktop app (Tauri) starts on Linux, headless, against this hub
     const L165 = 'the desktop app (vr-desktop, Tauri) starts on Linux (headless, Xvfb): its Tools window (its own page) loads, runs and reaches the app with the Tools permissions; its main window shows this hub\'s page, which sees the app (window.__TAURI__ → NATIVE) and is allowed the hub capability (app_info, notify) and shows the Tools tile; [static] the hub\'s page is never given the commands that touch the computer (files, terminal, runs, git, proxy, settings), and the Tools window\'s page is the app\'s own';
     const dsk = why ? { why } : buildDesktop();

@@ -46,7 +46,8 @@ pub struct Chat {
     typing: Mutex<HashMap<String, (String, u64)>>,
     agent_key: ChatKey,
     agent_pub: Value,
-    agent_seen: Mutex<i64>,
+    /// Unity's queue: every message up to .0 is answered, and these above it too (answered in their own conversation's turn)
+    agent_seen: Mutex<(i64, std::collections::BTreeSet<i64>)>,
     /// Unity composing: (target, conv) while her brain is answering
     agent_busy: Mutex<Option<(String, String)>>,
     calls: Mutex<Calls>,
@@ -93,7 +94,9 @@ impl Chat {
             Some(x) => x,
             None => { let key = ChatKey::generate(); let p = key.public_jwk(); let pubv = json!({ "kty": "EC", "crv": "P-256", "x": p.x, "y": p.y }); let privv: Value = serde_json::from_str(&key.to_jwk()).unwrap_or(json!({})); write_json(&kf, &json!({ "priv": privv, "pub": pubv })); (key, pubv) }
         };
-        let agent_seen = read_json(&dir.join("agent-seen.json")).and_then(|v| v["lastSeq"].as_i64()).or_else(|| read_json(&dir.join("agent-state.json")).and_then(|v| v["lastSeq"].as_i64())).unwrap_or(0);
+        let sv = read_json(&dir.join("agent-seen.json"));
+        let agent_seen = (sv.as_ref().and_then(|v| v["lastSeq"].as_i64()).or_else(|| read_json(&dir.join("agent-state.json")).and_then(|v| v["lastSeq"].as_i64())).unwrap_or(0),
+            sv.and_then(|v| v["handled"].as_array().map(|a| a.iter().filter_map(Value::as_i64).collect())).unwrap_or_default());
         let agent_name = cfg.get("roomAgentName").and_then(Value::as_str).unwrap_or("Unity").to_string();
         let handle: String = agent_name.to_lowercase().split_whitespace().collect();
         let agent_on = !users.iter().any(|u| u.0 == AGENT) && cfg.get("roomAgent") != Some(&json!(false));
@@ -293,17 +296,27 @@ async fn agent_hear(hub: &Arc<Hub>, msg: &Value) {
     let called = low.match_indices(&h).any(|(i, _)| { let after = low[i + h.len()..].chars().next(); !after.map(|ch| ch.is_alphanumeric() || ch == '_').unwrap_or(false) });
     if called { if off { return off_note("", msg["conv"].as_str().unwrap_or("")); } call(String::new(), from, s(msg, "conv")); }
 }
-/// What Unity was sent since she last spoke (with the few messages before each call): her brain's prompt.
-pub fn agent_blocks(hub: &Hub) -> String {
+/// Where an answer to this message of hers goes: (private answer to, channel / group); ("", "") = # Everyone.
+pub fn agent_dest(m: &Value) -> (String, String) { if m["to"] == json!(AGENT) { (s(m, "from"), String::new()) } else { (String::new(), s(m, "conv")) } }
+/// What Unity was sent in one conversation since she last answered there (with the few messages before each call):
+/// her brain's prompt. Like any agent's queue: every call in that conversation that came while she was busy is in this
+/// one turn; other conversations' calls stay for their own turn and never show up here.
+pub fn agent_blocks(hub: &Hub, target: &str, conv: &str) -> String {
     let c = &hub.mods.chat;
-    let since = *c.agent_seen.lock().unwrap();
-    let (list, seq): (Vec<Value>, i64) = { let st = c.store.lock().unwrap(); let l: Vec<Value> = st.messages.iter().filter(|m| m["seq"].as_i64().unwrap_or(0) > since && m["from"] != json!(AGENT)).cloned().collect(); (l, st.seq) };
-    let blocks: Vec<String> = list.iter().skip(list.len().saturating_sub(6)).filter_map(|m| {
-        let t = c.agent_read(m)?;
+    let mut seen = c.agent_seen.lock().unwrap();
+    let st = c.store.lock().unwrap();
+    let open: Vec<(i64, String, &Value)> = st.messages.iter().filter(|m| { let q = m["seq"].as_i64().unwrap_or(0); q > seen.0 && !seen.1.contains(&q) && m["from"] != json!(AGENT) })
+        .filter_map(|m| c.agent_read(m).map(|t| (m["seq"].as_i64().unwrap_or(0), t, m))).collect();
+    let mine: Vec<&(i64, String, &Value)> = open.iter().filter(|(_, _, m)| { let (t, cv) = agent_dest(m); t == target && (!t.is_empty() || cv == conv) }).collect();
+    let blocks: Vec<String> = mine.iter().skip(mine.len().saturating_sub(6)).map(|(_, t, m)| {
         let ctx: Vec<String> = c.agent_context(m).into_iter().map(|(n, t)| format!("  {n}: {t}")).collect();
-        Some(format!("{}[{}] {}{}: {t}", if ctx.is_empty() { String::new() } else { format!("Earlier in that conversation:\n{}\n", ctx.join("\n")) }, s(m, "ts"), if m["to"] == json!(AGENT) { "(private message to you) " } else { "" }, hub.mods.name_of(&s(m, "from"))))
+        format!("{}[{}] {}{}: {}", if ctx.is_empty() { String::new() } else { format!("Earlier in that conversation:\n{}\n", ctx.join("\n")) }, s(m, "ts"), if m["to"] == json!(AGENT) { "(private message to you) " } else { "" }, hub.mods.name_of(&s(m, "from")), t)
     }).collect();
-    *c.agent_seen.lock().unwrap() = seq; write_json(&c.dir.join("agent-seen.json"), &json!({ "lastSeq": seq }));
+    for (q, _, _) in &mine { seen.1.insert(*q); }
+    // everything up to the first call still waiting for its turn is done
+    let low = open.iter().map(|x| x.0).filter(|q| !seen.1.contains(q)).min().map(|q| q - 1).unwrap_or(st.seq);
+    seen.0 = low.max(seen.0); let floor = seen.0; seen.1.retain(|q| *q > floor);
+    write_json(&c.dir.join("agent-seen.json"), &json!({ "lastSeq": seen.0, "handled": seen.1.iter().collect::<Vec<_>>() }));
     if blocks.is_empty() { "(none)".into() } else { blocks.join("\n\n") }
 }
 
@@ -531,7 +544,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
             if !a.admin { return Some(answer(403, json!({ "error": "Admins only." }))); }
             { let mut st = c.store.lock().unwrap(); st.messages.clear(); st.rev = 0; let _ = std::fs::write(c.dir.join("messages.jsonl"), ""); }
             hub.mods.files.all_gone(&|x| hub.mods.auth.account(x));
-            *c.agent_seen.lock().unwrap() = 0; write_json(&c.dir.join("agent-seen.json"), &json!({ "lastSeq": 0 }));
+            *c.agent_seen.lock().unwrap() = (0, Default::default()); write_json(&c.dir.join("agent-seen.json"), &json!({ "lastSeq": 0 }));
             c.seen.lock().unwrap().clear(); write_json(&c.dir.join("seen.json"), &json!({}));
             c.room_changed();
             println!("[vr-hub] {u} cleared the chat history.");
@@ -634,7 +647,7 @@ pub fn front(hub: &Arc<Hub>, what: &str, b: &Value) -> Value {
     let c = &hub.mods.chat;
     match what {
         "say" => json!({ "seq": agent_say(hub, &s(b, "text"), &s(b, "to"), &s(b, "as"), &s(b, "via"), &s(b, "conv")) }),
-        "agent-prompt" => json!({ "blocks": agent_blocks(hub) }),
+        "agent-prompt" => json!({ "blocks": agent_blocks(hub, &s(b, "target"), &s(b, "conv")) }),
         "agent-typing" => { *c.agent_busy.lock().unwrap() = if b["on"] == json!(true) { Some((s(b, "target"), s(b, "conv"))) } else { None }; c.room_changed(); json!({ "ok": true }) }
         "has-key" => json!({ "ok": c.has_key(&s(b, "user")) }),
         "changed" => { if b["keys"] == json!(true) { c.keys_changed(); } else { c.room_changed(); } json!({ "ok": true }) }

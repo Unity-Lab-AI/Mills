@@ -3,7 +3,7 @@
 //! Two windows, two levels of trust:
 //! - "main" shows the hub itself (its page, always the current version: it updates itself as in the browser). The hub's
 //!   page may ask this app only for harmless things: its version, a desktop notification, the unread count on the tray,
-//!   opening the Tools window, opening a link in the browser, and the AI host switch (status / start / pause / resume /
+//!   who is signed in (its session: the app's updates need an account), opening the Tools window, opening a link in the browser, and the AI host switch (status / start / pause / resume /
 //!   stop / set up one of the person's own hosts). Nothing that reads, writes or runs anything on this computer.
 //! - "tools" is this app's own page (ui/, built into the program; never loaded from the network): the local projects
 //!   folder without browser permission prompts, an integrated terminal, a build / run runner, git with Forgejo sign-in,
@@ -56,6 +56,10 @@ fn set_badge(app: AppHandle, count: u32) {
     if let Some(w) = app.get_webview_window("main") { let _ = w.set_title(&title); let _ = w.set_badge_count(if count > 0 { Some(count as i64) } else { None }); }
     if let Some(t) = app.tray_by_id("main") { let _ = t.set_tooltip(Some(if count > 0 { format!("VibeRoller: {count} unread") } else { "VibeRoller".into() })); }
 }
+/// The hub's page: who is signed in ('' = signed out). Updates need an account (4.0.0); the session only ever goes to
+/// this app's hub, and the releases stay checked against the release key built into this program whoever's session it is.
+#[tauri::command]
+fn set_session(st: S, token: String) -> R<()> { st.store.set_session(&token) }
 #[tauri::command]
 fn open_tools(app: AppHandle) -> R<()> { show_tools(&app).map_err(|e| e.to_string()) }
 #[tauri::command]
@@ -111,11 +115,11 @@ fn proxy_stop(st: S) -> Value { st.proxy.stop(); let _ = st.store.patch(json!({ 
 #[tauri::command]
 fn proxy_status(st: S) -> Value { let p = *st.proxy.port.lock().unwrap(); json!({ "running": st.proxy.running(), "port": p, "url": if p > 0 { format!("http://127.0.0.1:{p}/v1") } else { String::new() } }) }
 #[tauri::command]
-async fn update_check(st: S<'_>) -> R<Value> { let mut v = update::check(&st.store.get().hub).await?; v["installed"] = json!(install::installed_here()); Ok(v) }
+async fn update_check(st: S<'_>) -> R<Value> { let s = st.store.get(); let mut v = update::check(&s.hub, &s.hub_session).await?; v["installed"] = json!(install::installed_here()); Ok(v) }
 #[tauri::command]
 fn install_here() -> R<String> { install::install() }
 #[tauri::command]
-async fn update_apply(app: AppHandle, st: S<'_>) -> R<bool> { let r = update::apply(&st.store.get().hub).await?; if r { app.restart(); } Ok(r) }
+async fn update_apply(app: AppHandle, st: S<'_>) -> R<bool> { let s = st.store.get(); let r = update::apply(&s.hub, &s.hub_session).await?; if r { app.restart(); } Ok(r) }
 
 fn show_main(app: &AppHandle) { if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus(); } }
 fn show_tools(app: &AppHandle) -> tauri::Result<()> {
@@ -134,7 +138,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, open_tools, open_external, host_status, host_act, host_setup, settings_get, settings_set, pick_folder,
+        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, host_act, host_setup, settings_get, settings_set, pick_folder,
             fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
@@ -147,7 +151,7 @@ fn main() {
             let hub = s.hub.trim_end_matches('/').to_string();
             // the hub's page: only the harmless commands (see the top of this file)
             app.add_capability(tauri::ipc::CapabilityBuilder::new("hub").remote(format!("{hub}/*")).window("main")
-                .permission("core:event:default").permission("allow-app-info").permission("allow-notify").permission("allow-set-badge").permission("allow-open-tools")
+                .permission("core:event:default").permission("allow-app-info").permission("allow-notify").permission("allow-set-badge").permission("allow-set-session").permission("allow-open-tools")
                 .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup"))?;
             let url: tauri::Url = hub.parse().map_err(|e| format!("bad hub address {hub}: {e}"))?;
             let host = url.host_str().unwrap_or("").to_string();
@@ -192,14 +196,17 @@ fn main() {
             }
             // the local API proxy comes back on by itself when it was on
             if s.proxy_on { let h2 = app.handle().clone(); tauri::async_runtime::spawn(async move { let st = h2.state::<App>(); let s = st.store.get(); let _ = st.proxy.start(s.proxy_port, s.hub, s.proxy_key).await; }); }
-            // updates: at start and every 6 hours, applied when nothing local is running
+            // updates: at start (once someone is signed in on the hub's page) and every 6 hours, applied when nothing
+            // local is running
             if s.auto_update {
                 let h3 = app.handle().clone();
                 tauri::async_runtime::spawn(async move { loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     let st = h3.state::<App>();
+                    let s = st.store.get();
+                    if s.hub_session.is_empty() { continue; } // updates need an account: look again in a minute
                     let idle = st.terms.map.lock().unwrap().is_empty() && st.runs.map.lock().unwrap().is_empty();
-                    if idle { if let Ok(true) = update::apply(&st.store.get().hub).await { h3.restart(); } }
+                    if idle { if let Ok(true) = update::apply(&s.hub, &s.hub_session).await { h3.restart(); } }
                     tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
                 } });
             }

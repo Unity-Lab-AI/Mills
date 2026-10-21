@@ -7,6 +7,8 @@
 //   - app exits 0/2 → clean stop / "already running in another window": everything shuts down.
 //   - anything else → crash: retried after 5 s, up to 5 times in two minutes.
 // Running server.js directly still works for local use, but gives no tunnel and no self-restart.
+// Since 4.0.0 the Rust hub (vr-hub) is the hub and the JavaScript one runs behind it as its fallback; the Rust hub
+// exiting 75 restarts both (it owns bridge/.restart then).
 'use strict';
 
 const fs = require('fs');
@@ -38,10 +40,10 @@ let front = null, frontCrashes = [], rust = (() => {
   if (!r || r.enabled === false || PROFILE) return null;
   const bin = hubBin();
   if (!bin) { console.log(`${tag} No vr-hub binary here (sh native/build.sh builds it; the auto-deploy does on the server): the JavaScript hub runs alone.`); return null; }
-  // the modules it answers: this hub leaves those alone (their data is the Rust hub's)
-  const mods = (() => { try { return require('child_process').execFileSync(bin, ['--modules'], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim(); } catch { return ''; } })();
-  return { bin, backPort: Number(r.backPort) || config.port + 2, secret: crypto.randomBytes(24).toString('hex'), mods };
+  return { bin, backPort: Number(r.backPort) || config.port + 2, secret: crypto.randomBytes(24).toString('hex'), mods: rustModules(bin) };
 })();
+// the modules it answers: the JavaScript hub leaves those alone (their data is the Rust hub's)
+function rustModules(bin) { try { return require('child_process').execFileSync(bin, ['--modules'], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim(); } catch { return ''; } }
 function startFront() {
   if (!rust || shuttingDown) return;
   front = spawn(rust.bin, ['--port', String(config.port), '--back', String(rust.backPort), '--root', ROOT], { stdio: 'inherit', windowsHide: true, env: { ...process.env, VR_FRONT_SECRET: rust.secret, VR_NODE: process.execPath, MILLS_SUPERVISED: '1' } }); // VR_NODE: the Node.js its Work runs' tools (bridge/*-mcp.js) and bridge/worktree.js run on
@@ -49,6 +51,14 @@ function startFront() {
     front = null;
     if (shuttingDown) return;
     if (code === 0) return shutdown(0);
+    // 75: a restart was asked for and nobody is busy (4.0.0: the Rust hub owns bridge/.restart): both hubs start again
+    // on the new code, the JavaScript one behind it first
+    if (code === 75) {
+      console.log(`${tag} Restarting both hubs with the new code…`);
+      rust.mods = rustModules(rust.bin); // a new build may answer more
+      if (app) { app.removeAllListeners('exit'); app.on('exit', () => { app = null; startApp(); }); app.kill('SIGTERM'); } else startApp();
+      return;
+    }
     const now = Date.now(); frontCrashes = frontCrashes.filter((t) => now - t < 60000); frontCrashes.push(now);
     if (frontCrashes.length >= 3 || code === 2) { // keeps failing (or its port is taken): this hub takes the port back
       console.log(`${tag} The Rust hub stopped ${frontCrashes.length} time(s) (last code ${code}): the JavaScript hub takes port ${config.port} back by itself.`);

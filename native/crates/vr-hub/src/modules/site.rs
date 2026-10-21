@@ -10,17 +10,45 @@ use super::Routed;
 use crate::front::Hub;
 
 /// version + "+" + the commit's first 7, read once at start (a restart picks up a new one, as the pages expect).
-pub struct Build { at: Mutex<(u64, String, Value)> }
-impl Default for Build { fn default() -> Self { Build { at: Mutex::new((0, String::new(), json!({}))) } } }
+pub struct Build { at: Mutex<(u64, String, Value, String)> }
+impl Default for Build { fn default() -> Self { Build { at: Mutex::new((0, String::new(), json!({}), String::new())) } } }
 impl Build {
-    pub fn get(&self, hub: &Hub) -> (String, Value) {
+    fn load(&self, hub: &Hub) -> std::sync::MutexGuard<'_, (u64, String, Value, String)> {
         let mut b = self.at.lock().unwrap();
         if b.0 == 0 {
             let (v, c) = super::ai_hosts::release_now(&hub.root);
             let mods = std::fs::read_to_string(hub.root.join("..").join("versions.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| v["modules"].clone()).unwrap_or(json!({}));
-            *b = (vr_core::now_ms(), if c.is_empty() { v } else { format!("{v}+{}", &c[..7.min(c.len())]) }, mods);
+            *b = (vr_core::now_ms(), if c.is_empty() { v } else { format!("{v}+{}", &c[..7.min(c.len())]) }, mods, c);
         }
-        (b.1.clone(), b.2.clone())
+        b
+    }
+    pub fn get(&self, hub: &Hub) -> (String, Value) { let b = self.load(hub); (b.1.clone(), b.2.clone()) }
+    /// The commit this hub started from (the auto-deploy's health check compares it with what it deployed).
+    pub fn commit(&self, hub: &Hub) -> String { self.load(hub).3.clone() }
+}
+/// Is anyone's AI busy here (Work, the API, Unity, Unity in the chat)? A restart waits for nobody being busy.
+pub fn busy(hub: &Hub) -> bool { hub.mods.work.any_busy() || hub.mods.api.busy() || hub.mods.unity.busy() || super::unity_routes::room_busy(hub) }
+/// /api/status: from outside (the tunnel, or nginx in server mode) only that a hub is here; from this machine also
+/// its process, whether run.js supervises it, whether anyone is busy, and its version + commit.
+pub fn status(hub: &Hub, r: &crate::front::Req) -> Value {
+    let behind = hub.cfg.get("behindProxy") == Some(&json!(true));
+    let outside = r.header("cf-connecting-ip").is_some() || (behind && (r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some()));
+    if outside { return json!({ "ok": true, "hub": true }); }
+    let (build, _) = hub.mods.build.get(hub);
+    json!({ "ok": true, "hub": true, "pid": std::process::id(), "supervised": std::env::var("MILLS_SUPERVISED").is_ok(), "busy": busy(hub), "version": build.split('+').next().unwrap_or(""), "commit": hub.mods.build.commit(hub) })
+}
+/// `node bridge/restart.js` (or the admin's restart) drops bridge/.restart. As soon as nobody is busy this hub ends
+/// with 75, and run.js starts it and the JavaScript hub behind it again on the new code (meanwhile no new run starts:
+/// those answer 503 and the page retries). Without run.js it says to restart it by hand.
+pub async fn restart_when_asked(hub: Arc<Hub>) {
+    let flag = hub.root.join(".restart");
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if !flag.exists() || busy(&hub) { continue; }
+        let _ = std::fs::remove_file(&flag);
+        if std::env::var("MILLS_SUPERVISED").is_err() { println!("[vr-hub] Restart requested, but this hub was started without run.js (start.bat / start.sh): restart it by hand."); continue; }
+        println!("[vr-hub] Restart requested: picking up the new code / config now.");
+        return;
     }
 }
 fn mime(ext: &str) -> &'static str { match ext { "html" => "text/html", "js" => "text/javascript", "css" => "text/css", "svg" => "image/svg+xml", "png" => "image/png", "webmanifest" => "application/manifest+json", "json" => "application/json", _ => "application/octet-stream" } }

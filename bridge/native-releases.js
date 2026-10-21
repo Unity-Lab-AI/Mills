@@ -10,8 +10,9 @@
 //          takes code only from the hub that knows its token.
 // Apps: vr-host (the AI host + its control app; vr-hostw on Windows: its window-less starter) and vr-desktop.
 // Routes: AI hosts GET /node/update/bin?app=&target= and /node/update/bin/file?app=&target=&name= (bridge/ai-nodes.js);
-// the Desktop GET /api/pub/native?app=vr-desktop&target= and /api/pub/native/file?… (public: the binaries hold nothing
-// private and are signed; bridge/downloads.js). /api/pub/versions lists what is there.
+// the Desktop GET /api/native?app=vr-desktop&target= and /api/native/file?… (signed in), from the Rust hub only (4.0.0:
+// before, these were public as /api/pub/native). This file stays for the AI hosts' updates when the JavaScript hub
+// runs alone, and for native/build.sh's release key.
 'use strict';
 const crypto = require('crypto');
 const fs = require('fs');

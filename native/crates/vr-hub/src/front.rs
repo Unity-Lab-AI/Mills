@@ -59,9 +59,13 @@ pub async fn serve(hub: Arc<Hub>, addr: SocketAddr) -> i32 {
     modules::start_background(&hub);
     let stop = shutdown();
     tokio::pin!(stop);
+    let restart = modules::site::restart_when_asked(hub.clone());
+    tokio::pin!(restart);
     loop {
         tokio::select! {
             _ = &mut stop => { println!("[vr-hub] stopping"); return 0; }
+            _ = &mut restart => { return 75; } // run.js starts both hubs again on the new code
+
             a = listener.accept() => {
                 let Ok((stream, peer)) = a else { continue };
                 let hub = hub.clone();

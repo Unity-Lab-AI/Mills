@@ -26,11 +26,14 @@ pub struct Settings {
     /// close the window to the tray instead of quitting
     pub close_to_tray: bool,
     pub auto_update: bool,
+    /// the session of whoever is signed in on the hub's page (set by the page; updates need an account since 4.0.0);
+    /// only ever sent to `hub`, and dropped when the hub address changes
+    pub hub_session: String,
 }
 impl Default for Settings {
     fn default() -> Self {
         Settings { hub: DEFAULT_HUB.into(), projects: String::new(), builds: Default::default(), forgejo_url: "https://git.unityailab.com".into(), forgejo_token: String::new(),
-            proxy_port: 8789, proxy_key: String::new(), proxy_on: false, host_dir: String::new(), close_to_tray: true, auto_update: true }
+            proxy_port: 8789, proxy_key: String::new(), proxy_on: false, host_dir: String::new(), close_to_tray: true, auto_update: true, hub_session: String::new() }
     }
 }
 /// What the Tools window sees: everything but the secrets (shown as set / not set).
@@ -47,7 +50,12 @@ impl Store {
         Store { path, s: Mutex::new(s) }
     }
     pub fn get(&self) -> Settings { self.s.lock().unwrap().clone() }
-    pub fn public(&self) -> Public { let s = self.get(); Public { has_forgejo_token: !s.forgejo_token.is_empty(), has_proxy_key: !s.proxy_key.is_empty(), s: Settings { forgejo_token: String::new(), proxy_key: String::new(), ..s } } }
+    pub fn public(&self) -> Public { let s = self.get(); Public { has_forgejo_token: !s.forgejo_token.is_empty(), has_proxy_key: !s.proxy_key.is_empty(), s: Settings { forgejo_token: String::new(), proxy_key: String::new(), hub_session: String::new(), ..s } } }
+    /// The hub's page says who is signed in ('' = signed out).
+    pub fn set_session(&self, token: &str) -> Result<(), String> {
+        { let mut s = self.s.lock().unwrap(); if s.hub_session == token { return Ok(()); } s.hub_session = token.chars().take(200).collect(); }
+        self.save()
+    }
     pub fn save(&self) -> Result<(), String> {
         let text = serde_json::to_string_pretty(&*self.s.lock().unwrap()).map_err(|e| e.to_string())?;
         let tmp = self.path.with_extension("json.tmp");
@@ -66,10 +74,12 @@ impl Store {
             if let (Some(c), Some(p)) = (cur.as_object_mut(), v.as_object()) {
                 for (k, val) in p {
                     if (k == "forgejoToken" || k == "proxyKey") && val.as_str().map(str::is_empty).unwrap_or(false) { continue; }
+                    if k == "hubSession" { continue; } // only the hub's page sets it (set_session)
                     c.insert(k.clone(), val.clone());
                 }
             }
-            let next: Settings = serde_json::from_value(cur).map_err(|e| format!("bad setting: {e}"))?;
+            let mut next: Settings = serde_json::from_value(cur).map_err(|e| format!("bad setting: {e}"))?;
+            if next.hub != s.hub { next.hub_session.clear(); } // a session belongs to its own hub
             if !(next.hub.starts_with("https://") || next.hub.starts_with("http://127.0.0.1") || next.hub.starts_with("http://localhost")) { return Err("The hub address must be https:// (or this machine).".into()); }
             if !next.projects.is_empty() && !std::path::Path::new(&next.projects).is_dir() { return Err("That projects folder does not exist.".into()); }
             *s = next;

@@ -235,6 +235,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     // (the proxy strips any x-vr-front-* / x-vr-user header a caller sent)
     // the page and its files
     if !p.starts_with("/api/") { return if r.method == hyper::Method::GET && !p.starts_with("/internal/") { site::page(hub, p) } else { Routed::Pass(vec![]) }; }
+    // that a hub is here (and, from this machine, its process, whether it is busy, its version): this hub's own (4.0.0)
+    if p == "/api/status" && r.method == hyper::Method::GET { return answer(200, site::status(hub, r)); }
     // moving house (bridge/handoff.js pack writes bridge/.maintenance): every change answers "moved", reading and the
     // Work run doing the move go on (the JavaScript hub's rule, for everything answered here and there)
     if r.method == hyper::Method::POST && !matches!(p, "/api/chat" | "/api/stop" | "/api/pc-result") && p != "/api/status" {
@@ -242,9 +244,10 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     let a = &hub.mods.auth;
     if p == "/api/login" && r.method == hyper::Method::POST { return a.login(r, maintenance(hub)).await; }
-    // the package versions, the native releases and the Desktop packages: public (an installed Desktop updates itself before anyone signs in)
-    if let Some(x) = downloads::public(hub, r) { return x; }
+    // the public download routes are gone (4.0.0): downloads and updates need an account
+    if let Some(x) = downloads::gone(r) { return x; }
     let user = a.session_user(r);
+    if user.is_none() && (p == "/api/native" || p == "/api/native/file" || p == "/api/downloads" || p.starts_with("/api/downloads/")) { return answer(401, json!({ "error": "Not signed in." })); }
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
     let me = || { let mut h = vec![("x-vr-notes-ver".to_string(), hub.mods.notes.version().to_string())]; if let Some(u) = &user { h.push(("x-vr-user".to_string(), u.clone())); } h };
     // ----- the board and the notes: this hub's own now -----
@@ -266,6 +269,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence
             if let Some(x) = unity_routes::route(hub, r, &acc).await { return x; } // Unity's section
             if p == "/api/check" && r.method == hyper::Method::GET { return answer(200, site::check(hub, &acc)); }
+            if p == "/api/version" && r.method == hyper::Method::GET { let b = hub.mods.build.get(hub).0; return answer(200, json!({ "version": b.split('+').next().unwrap_or(""), "build": b })); }
             if let Some(x) = profile::route(hub, r, &acc) { return x; } // profiles, prefs, pictures
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
             if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
@@ -517,18 +521,12 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
             v["hubClaude"] = json!(hub.cfg.get("hubClaude") != Some(&json!(false)));
             Some(v.to_string().into_bytes())
         }
-        // busy counts this hub's Work runs too (restart.js and the regression runner wait for nobody being busy)
-        "/api/status" if status == 200 => {
-            let mut v: Value = serde_json::from_slice(body?).ok()?;
-            if v.get("busy").is_some() && (w.any_busy() || hub.mods.api.busy() || hub.mods.unity.busy() || unity_routes::room_busy(hub)) { v["busy"] = json!(true); return Some(v.to_string().into_bytes()); }
-            None
-        }
         _ => None,
     }
 }
 fn s_of(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() }
 /// Which answers `after` needs to see whole (the rest stream through untouched).
-pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check" | "/api/status") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
+pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
 
 /// The modules this front answers itself.
 pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api", "chat", "unity"] }
