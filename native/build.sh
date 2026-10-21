@@ -41,6 +41,8 @@ fi
 # hub signs their updates with (bridge/release-key.json, made by the hub's native-releases.js on first use; made here
 # the same way when the hub has not yet)
 ROOT=$(cd "$HERE/.." && pwd)
+# the server's own Node.js (deploy/setup-server.sh puts it next to the app) when none is on the PATH (a systemd unit)
+command -v node >/dev/null || { [ -x "$ROOT/../node/current/bin/node" ] && PATH=$PATH:$ROOT/../node/current/bin && export PATH; }
 if command -v node >/dev/null; then
   export VR_VERSION=${VR_VERSION:-$(node -e "console.log(require('$ROOT/versions.json').project)" 2>/dev/null)}
   export VR_RELEASE_PUBKEY=${VR_RELEASE_PUBKEY:-$(cd "$ROOT" && node -e "console.log(require('./bridge/native-releases')({ ROOT: process.env.VR_RELEASE_KEY_DIR || '$ROOT/bridge', MILLS_DIR: '$ROOT' }).publicKey())" 2>/dev/null)}

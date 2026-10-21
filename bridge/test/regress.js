@@ -564,8 +564,9 @@ async function run() {
   const ct = await subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode('regression secret text'));
   const keys = {};
   for (const m of members) if (m.pub) { const kiv = rand(12); keys[m.username] = { iv: toB64(kiv), wk: toB64(await subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await shared(pairs['t-admin'].priv, m.pub), raw)) }; }
-  await call('/api/room/send', A, { iv: toB64(iv), ct: toB64(ct), keys });
-  const got = ((await call('/api/room/messages?since=0', U)).data.messages || []).at(-1);
+  const sent23 = (await call('/api/room/send', A, { iv: toB64(iv), ct: toB64(ct), keys })).data || {};
+  // (its own message by number: Unity's sign-in greeting can land after it)
+  const got = ((await call('/api/room/messages?since=0', U)).data.messages || []).find((m) => m.seq === sent23.seq);
   let text = '';
   try {
     const mk = await subtle.decrypt({ name: 'AES-GCM', iv: fromB64(got.key.iv) }, await shared(restored, got.fromPub), fromB64(got.key.wk));
@@ -2814,6 +2815,39 @@ async function run() {
         && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
         `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
     }
+    // R167: the Downloads hand out the native programs (pre-built), and they install themselves
+    if (!why) {
+      const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target), ext = WIN ? '.exe' : '';
+      fs.mkdirSync(dist, { recursive: true });
+      fs.copyFileSync(NATIVE_BIN.host, path.join(dist, 'vr-host' + ext)); // (R164 left a "newer" one here: the real build again)
+      fs.writeFileSync(path.join(dist, 'vr-desktop' + ext), 'fake desktop r167'); fs.writeFileSync(path.join(dist, 'vr-hostw' + ext), 'fake hostw r167');
+      fs.writeFileSync(path.join(dist, 'BUILD.json'), JSON.stringify({ version: '3.99.0', commit: 'd'.repeat(40) }));
+      const osName = WIN ? 'windows' : 'linux';
+      const raw = (tok, p) => fetch(H + p, { headers: { Authorization: 'Bearer ' + tok } });
+      const dl = (await call('/api/downloads', A)).data.items || [];
+      const appZip = await raw(A, `/api/downloads/app-${osName}.zip`), appEntries = appZip.status === 200 ? unzipAll(Buffer.from(await appZip.arrayBuffer())) : [];
+      const hostsNow = (await call('/api/hosts', A)).data.mine || [];
+      const myHost = hostsNow[0] || (await call('/api/hosts/new', A, {})).data.host;
+      const hostZip = await raw(A, `/api/downloads/host-${osName}.zip?host=${encodeURIComponent(myHost.id)}`), hostEntries = hostZip.status === 200 ? unzipAll(Buffer.from(await hostZip.arrayBuffer())) : [];
+      const pubApp = (await fetch(H + `/api/pub/app-${osName}.zip`)).status, pubHost = (await fetch(H + `/api/pub/host-${osName}.zip`)).status;
+      const vers = await fetch(H + '/api/pub/versions').then((r) => r.json()).catch(() => ({}));
+      // the downloaded AI host installs itself (a scratch home), its config with it, private
+      const unz = path.join(SCRATCH, 'r167-download'); fs.mkdirSync(unz, { recursive: true });
+      for (const e of hostEntries) { const f = path.join(unz, e.name.split('/').slice(1).join('/')); fs.writeFileSync(f, e.data); if (/vr-host/.test(e.name)) fs.chmodSync(f, 0o755); }
+      const home167 = path.join(SCRATCH, 'r167-home'); fs.mkdirSync(home167, { recursive: true });
+      const inst = spawnSync(path.join(unz, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
+      const instDir = WIN ? path.join(home167, 'AppData', 'Local', 'VibeRoller', 'AIHost') : path.join(home167, '.local', 'share', 'viberoller', 'ai-host');
+      const instCfg = (() => { try { return JSON.parse(fs.readFileSync(path.join(instDir, 'ai-node.json'), 'utf8')); } catch { return {}; } })();
+      const instMode = WIN ? 0o600 : (() => { try { return fs.statSync(path.join(instDir, 'ai-node.json')).mode & 0o777; } catch { return 0; } })();
+      const again = spawnSync(path.join(instDir, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
+      check('R167', 'the Downloads hand out the native programs, pre-built: the native app (vr-desktop + the AI host) and the native AI host (with that person\'s own host config inside when asked) for this machine\'s system, the app also without signing in, never the host; /api/pub/versions names them; the downloaded AI host installs itself ("vr-host install": the standard folder, its config kept and private) and an installed copy knows it is the installed one',
+        dl.some((i) => i.id === `app-${osName}` && i.native && i.group === 'native') && dl.some((i) => i.id === `host-${osName}` && i.group === 'native-host')
+        && appEntries.some((e) => e.name === 'VibeRoller/vr-desktop' + ext) && appEntries.some((e) => e.name === 'VibeRoller/vr-host' + ext) && appEntries.some((e) => /VibeRoller\/README\.txt$/.test(e.name))
+        && hostEntries.some((e) => e.name === 'VibeRollerAIHost/vr-host' + ext) && hostEntries.some((e) => e.name === 'VibeRollerAIHost/ai-node.json' && JSON.parse(e.data.toString()).id === myHost.id)
+        && pubApp === 200 && pubHost === 404 && !!vers[`app-${osName}`] && Array.isArray(vers.native)
+        && inst.status === 0 && fs.existsSync(path.join(instDir, 'vr-host' + ext)) && instCfg.id === myHost.id && instMode === 0o600 && /installed AI host/.test(again.stdout),
+        `items ${dl.map((i) => i.id).join(',')}; app ${appZip.status} ${appEntries.map((e) => e.name).join(',')}; host ${hostZip.status} ${hostEntries.map((e) => e.name).join(',')}; pub ${pubApp}/${pubHost}; versions native ${Array.isArray(vers.native)}; install ${inst.status} "${String((inst.stdout || '') + (inst.stderr || '') + (inst.error || '')).trim().slice(0, 200)}" cfg ${instCfg.id === myHost.id} mode ${instMode.toString(8)}; again "${String(again.stdout || again.error || '').trim().slice(0, 100)}"`);
+    } else skip('R167', 'the Downloads hand out the native programs, pre-built, and they install themselves', why);
     // R165: the desktop app (Tauri) starts on Linux, headless, against this hub
     const L165 = 'the desktop app (vr-desktop, Tauri) starts on Linux (headless, Xvfb): its Tools window (its own page) loads, runs and reaches the app with the Tools permissions; its main window shows this hub\'s page, which sees the app (window.__TAURI__ → NATIVE) and is allowed the hub capability (app_info, notify) and shows the Tools tile; [static] the hub\'s page is never given the commands that touch the computer (files, terminal, runs, git, proxy, settings), and the Tools window\'s page is the app\'s own';
     const dsk = why ? { why } : buildDesktop();

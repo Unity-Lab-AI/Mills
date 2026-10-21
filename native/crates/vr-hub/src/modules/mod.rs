@@ -39,6 +39,7 @@ pub enum Routed {
     /// a sign-in went through: the answer is made by the front (it tells the JavaScript hub first)
     SignedIn { token: String, user: String, client: Value, ip: String },
     /// not a module's: on to the JavaScript hub as it is
+    #[allow(dead_code)]
     No,
 }
 

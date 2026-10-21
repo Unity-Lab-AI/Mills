@@ -3803,7 +3803,8 @@ async function renderHosts() {
   box.textContent = '';
   const line = (...kids) => { const r = document.createElement('div'); r.className = 'row'; r.append(...kids); return r; };
   const dl = (h, os) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.append(ic('download', 'lead'), document.createTextNode(os)); b.title = 'The AI Host package for ' + os + ' with this host\'s config inside (keep it private)';
-    b.onclick = async () => { b.disabled = true; try { const r = await api('/api/downloads/ai-host-' + os.toLowerCase() + '.zip?host=' + encodeURIComponent(h.id)); if (!r.ok) throw new Error('Download failed (' + r.status + ')'); const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'VibeRollerAIHost-' + os.toLowerCase() + '-' + h.nickname + '.zip'; document.body.append(a); a.click(); a.remove(); } catch (e) { sysSettings(e.message); } b.disabled = false; }; return b; };
+    // the native host's package when this hub has one built, else the Node.js one
+    b.onclick = async () => { b.disabled = true; try { const q = '.zip?host=' + encodeURIComponent(h.id); let r = await api('/api/downloads/host-' + os.toLowerCase() + q), native = r.ok; if (!r.ok) r = await api('/api/downloads/ai-host-' + os.toLowerCase() + q); if (!r.ok) throw new Error('Download failed (' + r.status + ')'); const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'VibeRollerAIHost-' + (native ? 'native-' : '') + os.toLowerCase() + '-' + h.nickname + '.zip'; document.body.append(a); a.click(); a.remove(); } catch (e) { sysSettings(e.message); } b.disabled = false; }; return b; };
   for (const h of d.mine || []) {
     const it = document.createElement('div'); it.className = 'provItem';
     const b = document.createElement('b'); b.textContent = h.nickname; const dot = document.createElement('span'); dot.textContent = h.online ? ' · online' : h.seen ? ' · offline (last seen ' + new Date(h.seen).toLocaleString() + ')' : ' · never connected yet'; dot.style.color = h.online ? 'var(--ok, #3ddc84)' : 'var(--muted)'; b.append(dot); it.append(b);
@@ -3909,18 +3910,24 @@ async function renderDownloads() {
     } catch (e) { note.textContent = e.message; }
     b.disabled = false;
   };
-  for (const group of ['desktop', 'ai-host']) {
+  // the native programs first (pre-built, nothing to install first); the earlier script packages after them
+  const GROUPS = {
+    native: ['VibeRoller: the native app', 'VibeRoller in its own window, plus what only an app on your computer can do: the Tools window (your projects folder, a real terminal, build & run, git with your Forgejo token, a local API proxy for tools on your computer) and the switch to share this computer\'s AI. Pre-built for Windows and Linux; runs from its folder or installs itself, and updates itself (signed releases).'],
+    'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too), "vr-host" is the heart & knife control app, start at boot is one setting. Updates itself from this hub. For your own host with its config inside: Settings → My AI hosts.'],
+    desktop: ['Browser launcher (earlier)', 'VibeRoller Chat in a Chrome, Edge or Brave window with a Start-menu / application-menu entry (scripts, no native features). (Installing from the browser, at the bottom, works too.)'],
+    'ai-host': ['AI Host on Node.js (earlier)', 'The JavaScript AI host, for machines that run it already (it keeps updating itself). Needs Node.js. The native AI host above replaces it.'],
+  };
+  for (const group of Object.keys(GROUPS)) {
+    if (!d.items.some((i) => i.group === group)) continue;
     const sec = document.createElement('div'); sec.className = 'setSection';
-    const h = document.createElement('b'); h.textContent = group === 'desktop' ? 'Vibe Roller Desktop' : 'Vibe Roller AI Host'; sec.append(h);
+    const h = document.createElement('b'); h.textContent = GROUPS[group][0]; sec.append(h);
     const p = document.createElement('div'); p.className = 'status';
-    p.textContent = group === 'desktop'
-      ? 'VibeRoller Chat in its own window: servers, channels, groups, private messages, calls and Unity, signed in with your account. A launcher for Chrome, Edge or Brave with a Start-menu / application-menu entry; it opens this hub\'s page, so it is always the current version. (Installing from the browser, at the bottom, works too.)'
-      : 'Makes a computer an AI host: it lends its AI to this VibeRoller (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. Starts at boot as the VibeRollerAIHost service; the heart and the knife start and stop it. Updates itself from this hub. Needs Node.js. For your own host with its config inside, use Settings → Connections → My AI hosts.';
+    p.textContent = GROUPS[group][1];
     sec.append(p);
     const row = document.createElement('div'); row.className = 'row';
     for (const it of d.items.filter((i) => i.group === group)) {
       const b = document.createElement('button'); b.type = 'button'; if (it.os !== os) b.className = 'ghost';
-      b.append(ic('download', 'lead'), document.createTextNode(it.os + ' · ' + it.file + ' (' + Math.max(1, Math.round(it.bytes / 1024)) + ' KB)'));
+      b.append(ic('download', 'lead'), document.createTextNode(it.os + ' · ' + it.file + ' (' + (it.bytes >= 1048576 ? (it.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(it.bytes / 1024)) + ' KB') + ')'));
       b.onclick = () => grab(it, b);
       row.append(b);
     }

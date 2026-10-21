@@ -63,6 +63,26 @@ if [ -f "$ST/pending" ]; then
   exit 0
 fi
 
+# ---- the native programs (pre-built binaries for the Downloads and the updates): rebuilt in the background whenever the
+# running version's native/ differs from what native/dist was built from (or nothing is built yet). It never holds a
+# deploy up, a failed build changes nothing (the last build stays), and only one runs at a time. Log: __BASE__/native-build.log
+if [ -f native/build.sh ] && [ ! -f "$ST/pending" ]; then
+  BUILT=$(sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p' native/dist/x86_64-unknown-linux-gnu/BUILD.json 2>/dev/null | head -n 1)
+  NEEDS=0
+  if [ -z "$BUILT" ]; then NEEDS=1; elif ! git cat-file -e "$BUILT^{commit}" 2>/dev/null; then NEEDS=1; elif ! git diff --quiet "$BUILT" HEAD -- native/ 2>/dev/null; then NEEDS=1; fi
+  LOCK=$ST/native-build.pid
+  BUILD_CMD="nice -n 10 sh '$APP/native/build.sh' > '$BASE/native-build.log' 2>&1 && echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build done\" >> '$LOG' || echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build FAILED (the last build stays; see native-build.log)\" >> '$LOG'"
+  busy=0
+  if [ -n "${INVOCATION_ID:-}" ] && command -v systemd-run >/dev/null; then systemctl --user is-active -q viberoller-native-build 2>/dev/null && busy=1
+  else [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2>/dev/null && busy=1; fi
+  if [ "$NEEDS" = 1 ] && [ "$busy" = 0 ]; then
+    say "building the native programs for $(short "$(git rev-parse HEAD)") in the background (native-build.log)"
+    # under the systemd timer a background child would end with this (one-shot) run: the build gets a unit of its own
+    if [ -n "${INVOCATION_ID:-}" ] && command -v systemd-run >/dev/null; then systemd-run --user --quiet --collect --unit viberoller-native-build sh -c "$BUILD_CMD" || say "could not start the native build"
+    else (sh -c "$BUILD_CMD"; rm -f "$LOCK") & echo $! > "$LOCK"; fi
+  fi
+fi
+
 # ---- deploy what is new ----
 git fetch -q origin main || { say "fetch failed"; exit 1; }
 LOCAL=$(git rev-parse HEAD); REMOTE=$(git rev-parse origin/main)
@@ -78,7 +98,7 @@ git merge-base --is-ancestor "$REMOTE" "$LOCAL" && exit 0
 # a snapshot of the data before anything changes (the same files deploy/pack-data.sh packs), the last 10 kept
 SNAP=$BASE/snapshots; mkdir -p "$SNAP"
 LIST=''
-for p in bridge/auth.json bridge/state.json bridge/hub-state.json bridge/usage.json bridge/assistant.json bridge/providers.json bridge/forgejo.json bridge/forgejo-users.json bridge/server-owners.json bridge/ai-hosts.json bridge/config.local.json bridge/profiles bridge/profiles-deleted Chat Archive Board Notes Avatars Images Api; do
+for p in bridge/auth.json bridge/state.json bridge/hub-state.json bridge/front-sessions.json bridge/device-locks.json bridge/release-key.json bridge/usage.json bridge/assistant.json bridge/providers.json bridge/forgejo.json bridge/forgejo-users.json bridge/server-owners.json bridge/ai-hosts.json bridge/config.local.json bridge/profiles bridge/profiles-deleted Chat Archive Board Notes Avatars Images Api; do
   [ -e "$p" ] && LIST="$LIST $p"
 done
 if [ -n "$LIST" ]; then

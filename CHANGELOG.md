@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.17.0 — 2026-10-20
+
+### Added: the Downloads are the pre-built native programs (board T-134, items 1 + 2)
+- **Download panel**: first the native programs, pre-built for Windows and Linux, nothing to install first:
+  - **VibeRoller (native app)** (`app-windows` / `app-linux`): vr-desktop + the AI host it switches on. It runs from its
+    folder or installs itself (`vr-desktop --install`, or Tools → Settings → Install on this computer: the standard
+    folder with Start-menu + Desktop shortcuts / an application-menu entry and `~/.local/bin/viberoller`, an earlier
+    install updated). Public, like the Desktop packages.
+  - **VibeRoller AI Host (native)** (`host-windows` / `host-linux`): vr-host (+ vr-hostw), with the person's own host
+    config inside from Settings → My AI hosts (those buttons now hand out the native host when this hub has one built).
+    `vr-host install [--boot …]` installs it or updates an earlier install (the JavaScript host's folder too, taking its
+    ai-node.json and settings over; a running host there is stopped first and started again on the new version).
+  - The earlier script packages (browser launcher, the Node.js AI host) stay listed after them, for machines using them.
+- **Built automatically**: the server's auto-deploy rebuilds the native programs in the background whenever the running
+  version's `native/` differs from what `native/dist` was built from (a systemd unit of its own, so it outlives the
+  timer's run; a failed build keeps the last one; `native-build.log`). `native/build.sh` finds the server's own Node.js
+  so every build carries the release key. The data snapshots now include the Rust hub's files and the release key.
+- R167: the panel lists them, the zips hold the binaries (and the host config), the app is public and the host is not,
+  `/api/pub/versions` names them, and the downloaded host installs itself.
+
 ## 3.16.0 — 2026-10-20
 
 ### Changed: files run in Rust (board T-131, module 3 of 7)

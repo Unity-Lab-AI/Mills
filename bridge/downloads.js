@@ -34,7 +34,7 @@ function zip(entries) {
   const parts = [], central = []; let offset = 0;
   for (const e of entries) {
     const name = Buffer.from(e.name, 'utf8'), data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data, 'utf8');
-    const def = zlib.deflateRawSync(data, { level: 9 }), method = def.length < data.length ? 8 : 0, body = method ? def : data, crc = crc32(data);
+    const def = zlib.deflateRawSync(data, { level: e.binary ? 6 : 9 }), method = def.length < data.length ? 8 : 0, body = method ? def : data, crc = crc32(data);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6); local.writeUInt16LE(method, 8); local.writeUInt16LE(time, 10); local.writeUInt16LE(date, 12);
     local.writeUInt32LE(crc, 14); local.writeUInt32LE(body.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(name.length, 26); local.writeUInt16LE(0, 28);
@@ -62,7 +62,60 @@ function aiHostExample(hub) {
 }
 const withHub = (rel, hub) => src(rel).toString('utf8').split('__HUB__').join(hub);
 const HOST_CODE = ['ai-node.js', 'host-relay.js', 'common.js', 'worktree.js', 'pc-tools-mcp.js', 'board-mcp.js', 'team-mcp.js', 'vr-setup.js', 'vr-host.js'];
+// ---------- the native programs: pre-built binaries (native/build.sh → native/dist/<target>/), nothing else needed ----------
+const DIST = path.join(ROOT, '..', 'native', 'dist');
+const TARGET = { Windows: 'x86_64-pc-windows-gnu', Linux: 'x86_64-unknown-linux-gnu' };
+const bin = (os, name) => path.join(DIST, TARGET[os], os === 'Windows' ? name + '.exe' : name);
+const hasBins = (os, names) => names.every((n) => fs.existsSync(bin(os, n)));
+const binEntries = (folder, os, names) => names.filter((n) => fs.existsSync(bin(os, n))).map((n) => ({ name: `${folder}/${path.basename(bin(os, n))}`, data: fs.readFileSync(bin(os, n)), exec: os !== 'Windows', binary: true }));
+const distStamp = () => { try { return Object.values(TARGET).map((t) => fs.statSync(path.join(DIST, t, 'BUILD.json')).mtimeMs).join(','); } catch { return ''; } };
+function appReadme(os, hub) {
+  const win = os === 'Windows';
+  return `VibeRoller (${os}), the native app
+==================================
+VibeRoller in its own window: chat, Work, the board, notes, Files and Unity, signed in with your VibeRoller account
+(${hub}), plus what only an app on your computer can do: the Tools window has your projects folder (no permission
+prompts), a real terminal, build & run buttons, git with your Forgejo token, a local API proxy (tools on this computer
+use VibeRoller's AI through http://127.0.0.1:<port>/v1, OpenAI or Anthropic format, with your key), and the switch to
+share this computer's AI with the team (Settings → My AI hosts → "Run on this PC" sets it up).
+Pre-built: nothing to install first${win ? ' (Windows 10 / 11 has the WebView2 it uses)' : ' (needs WebKitGTK, which desktop Linux has: libwebkit2gtk-4.1-0)'}.
+
+  - Run ${win ? 'vr-desktop.exe' : './vr-desktop'}: it works right from this folder (portable).
+  - To install it (${win ? '%LOCALAPPDATA%\\VibeRoller\\Desktop, with Start-menu and Desktop shortcuts' : '~/.local/share/viberoller/desktop, an application-menu entry and ~/.local/bin/viberoller'}): Tools → Settings →
+    "Install on this computer", or run ${win ? 'vr-desktop.exe --install' : './vr-desktop --install'}. An earlier install is updated.
+  - It updates itself from ${hub} (releases signed with VibeRoller's key), and the window always shows the current
+    VibeRoller.
+  - vr-host${win ? '.exe' : ''} next to it is the AI host the app switches on and off (it runs on its own, also when the app is closed).
+`;
+}
+function hostReadme(os, hub, cfg) {
+  const win = os === 'Windows', exe = win ? 'vr-host.exe' : './vr-host';
+  return `VibeRoller AI Host (${os}), native
+==================================
+Makes this computer an AI host for VibeRoller at ${hub}: it lends its AI (its Claude / ChatGPT login, local models,
+Unity's engines) without sharing the computer itself. It connects OUT to the server; no port opens here.
+Pre-built: one program, nothing else to install (no Node.js).
+
+  - ${exe} install          installs it (${win ? '%LOCALAPPDATA%\\VibeRoller\\AIHost' : '~/.local/share/viberoller/ai-host'}) or updates an earlier install
+                             (the JavaScript host's folder too: it takes over its ai-node.json and settings).
+    ${exe} install --boot ${win ? 'service' : 'user'}   … and starts it at boot (${win ? 'the VibeRollerAIHost service; or sign-in' : 'a user service; or service (sudo) for the system'}).
+  - ${exe}                  the heart & knife control app: whether it runs, is connected, in use, up to date; start /
+                             stop / restart / pause / update / log / every setting / start at boot.
+  - ${exe} status | start | stop | set <setting> <value> | settings | log   for scripts.
+  - ${cfg ? `ai-node.json here is your host "${cfg.nickname}" (keep it private: the token is its key to the hub).` : 'Make your host in VibeRoller → Settings → My AI hosts, then download its own package (its ai-node.json inside).'}
+  - It updates itself from the hub (signed with VibeRoller's release key and your host's token), between answers.
+`;
+}
 const packages = {
+  'app-windows': { group: 'native', os: 'Windows', title: 'VibeRoller (native app)', file: 'VibeRoller-windows.zip', available: () => hasBins('Windows', ['vr-desktop']),
+    build: (hub) => [...binEntries('VibeRoller', 'Windows', ['vr-desktop', 'vr-host', 'vr-hostw']), { name: 'VibeRoller/README.txt', data: crlf(appReadme('Windows', hub)) }] },
+  'app-linux': { group: 'native', os: 'Linux', title: 'VibeRoller (native app)', file: 'VibeRoller-linux.zip', available: () => hasBins('Linux', ['vr-desktop']),
+    build: (hub) => [...binEntries('VibeRoller', 'Linux', ['vr-desktop', 'vr-host', 'vr-hostw']), { name: 'VibeRoller/README.txt', data: appReadme('Linux', hub) }] },
+  'host-windows': { group: 'native-host', os: 'Windows', title: 'VibeRoller AI Host (native)', file: 'VibeRollerAIHost-native-windows.zip', available: () => hasBins('Windows', ['vr-host']),
+    build: (hub, cfg) => [...binEntries('VibeRollerAIHost', 'Windows', ['vr-host', 'vr-hostw']), ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []), { name: 'VibeRollerAIHost/README.txt', data: crlf(hostReadme('Windows', hub, cfg)) }] },
+  'host-linux': { group: 'native-host', os: 'Linux', title: 'VibeRoller AI Host (native)', file: 'VibeRollerAIHost-native-linux.zip', available: () => hasBins('Linux', ['vr-host']),
+    build: (hub, cfg) => [...binEntries('VibeRollerAIHost', 'Linux', ['vr-host', 'vr-hostw']), ...(cfg ? [{ name: 'VibeRollerAIHost/ai-node.json', data: JSON.stringify(cfg, null, 2) + '\n' }] : []), { name: 'VibeRollerAIHost/README.txt', data: hostReadme('Linux', hub, cfg) }] },
+  // ---------- the earlier packages: scripts (a browser launcher, the JavaScript AI host on Node.js), kept for machines that use them ----------
   'desktop-windows': { group: 'desktop', os: 'Windows', title: 'Vibe Roller Desktop', file: 'VibeRollerDesktop-windows.zip',
     build: (hub) => [
       { name: 'VibeRollerDesktop/VibeRoller Desktop.cmd', data: crlf(`@echo off
@@ -194,19 +247,21 @@ function withVersion(id, entries) {
   return { version, entries: [...entries, { name: folder + '/VERSION.txt', data: version + '\n' }] };
 }
 
-const cache = new Map(); // id → { hub, data, version }  (the plain packages; one with a host's config inside is built fresh and never cached)
+const cache = new Map(); // id → { hub, stamp, data, version }  (the plain packages; one with a host's config inside is built fresh and never cached)
+const available = (id) => !packages[id].available || packages[id].available();
 function built(id, hub, cfg) {
+  if (!available(id)) throw Object.assign(new Error('Not built on this hub yet (sh native/build.sh).'), { status: 404 });
   if (cfg) { const v = withVersion(id, packages[id].build(hub, cfg)); return { data: zip(v.entries), version: v.version }; }
-  const c = cache.get(id);
-  if (c && c.hub === hub) return c;
+  const c = cache.get(id), stamp = distStamp();
+  if (c && c.hub === hub && c.stamp === stamp) return c;
   const v = withVersion(id, packages[id].build(hub));
-  const out = { hub, data: zip(v.entries), version: v.version };
+  const out = { hub, stamp, data: zip(v.entries), version: v.version };
   cache.set(id, out);
   return out;
 }
 const build = (id, hub, cfg) => built(id, hub, cfg).data;
 function list(hub) {
-  return Object.entries(packages).map(([id, p]) => { const b = built(id, hub); return { id, group: p.group, os: p.os, title: p.title, file: p.file, bytes: b.data.length, version: b.version }; });
+  return Object.entries(packages).filter(([id]) => available(id)).map(([id, p]) => { const b = built(id, hub); return { id, group: p.group, os: p.os, title: p.title, file: p.file, bytes: b.data.length, version: b.version, native: !!p.available }; });
 }
 // Public, before any sign-in: the package versions (an installed Desktop asks at every start) and the Desktop packages
 // themselves (they hold nothing but this hub's public address). The AI Host packages stay signed-in only.
@@ -215,7 +270,7 @@ function publicRoute(p, req, res, hub, native = null) {
   if (req.method !== 'GET' || !p.startsWith('/api/pub/')) return false;
   try {
     if (p === '/api/pub/versions') {
-      const body = { version: projectVersion() }; for (const id of Object.keys(packages)) body[id] = built(id, hub).version;
+      const body = { version: projectVersion() }; for (const id of Object.keys(packages)) if (available(id)) body[id] = built(id, hub).version;
       if (native) body.native = native.list();
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); return true;
     }
@@ -228,8 +283,8 @@ function publicRoute(p, req, res, hub, native = null) {
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length, 'Content-Disposition': `attachment; filename="${u.searchParams.get('name')}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(buf);
       return true;
     }
-    const m = /^\/api\/pub\/(desktop-(?:windows|linux))\.zip$/.exec(p);
-    if (!m) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"Not found"}'); return true; }
+    const m = /^\/api\/pub\/((?:desktop|app)-(?:windows|linux))\.zip$/.exec(p); // the Desktop packages (the native app too): nothing private in them
+    if (!m || !available(m[1])) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"Not found"}'); return true; }
     const b = built(m[1], hub);
     res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': b.data.length, 'Content-Disposition': `attachment; filename="${packages[m[1]].file}"`, 'Cache-Control': 'no-store' });
     res.end(b.data);
@@ -246,12 +301,12 @@ function route(p, req, res, hub, hostConfig = null) {
     if (!m) { const body = JSON.stringify({ items: list(hub) }); res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(body); return true; }
     const hostId = new URL(req.url, 'http://x').searchParams.get('host');
     let cfg = null;
-    if (hostId && packages[m[1]].group === 'ai-host') { if (!hostConfig) throw new Error('No host config available.'); cfg = hostConfig(hostId); }
+    if (hostId && ['ai-host', 'native-host'].includes(packages[m[1]].group)) { if (!hostConfig) throw new Error('No host config available.'); cfg = hostConfig(hostId); }
     const data = build(m[1], hub, cfg);
     res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': data.length, 'Content-Disposition': `attachment; filename="${cfg ? packages[m[1]].file.replace('.zip', '-' + cfg.nickname + '.zip') : packages[m[1]].file}"`, 'Cache-Control': 'no-store' });
     res.end(data);
   } catch (e) {
-    res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.writeHead(e.status === 404 ? 404 : 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ error: 'Could not build the package: ' + e.message }));
   }
   return true;

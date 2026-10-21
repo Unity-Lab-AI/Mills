@@ -14,6 +14,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod aihost;
+mod install;
 mod local;
 mod proxy;
 mod settings;
@@ -110,7 +111,9 @@ fn proxy_stop(st: S) -> Value { st.proxy.stop(); let _ = st.store.patch(json!({ 
 #[tauri::command]
 fn proxy_status(st: S) -> Value { let p = *st.proxy.port.lock().unwrap(); json!({ "running": st.proxy.running(), "port": p, "url": if p > 0 { format!("http://127.0.0.1:{p}/v1") } else { String::new() } }) }
 #[tauri::command]
-async fn update_check(st: S<'_>) -> R<Value> { update::check(&st.store.get().hub).await }
+async fn update_check(st: S<'_>) -> R<Value> { let mut v = update::check(&st.store.get().hub).await?; v["installed"] = json!(install::installed_here()); Ok(v) }
+#[tauri::command]
+fn install_here() -> R<String> { install::install() }
 #[tauri::command]
 async fn update_apply(app: AppHandle, st: S<'_>) -> R<bool> { let r = update::apply(&st.store.get().hub).await?; if r { app.restart(); } Ok(r) }
 
@@ -123,6 +126,7 @@ fn show_tools(app: &AppHandle) -> tauri::Result<()> {
 
 fn main() {
     if std::env::args().any(|a| a == "--selftest") { println!("vr-desktop {} ({}) loads", update::VERSION, update::TARGET); return; }
+    if std::env::args().any(|a| a == "--install") { match install::install() { Ok(m) => { println!("{m}"); return; } Err(e) => { eprintln!("{e}"); std::process::exit(1); } } }
     let smoke = std::env::args().any(|a| a == "--smoke");
     SMOKE.store(smoke, std::sync::atomic::Ordering::SeqCst);
     if smoke { std::thread::spawn(|| { std::thread::sleep(std::time::Duration::from_secs(40)); eprintln!("SMOKE timeout: the Tools page never reported"); std::process::exit(1); }); }
@@ -131,7 +135,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, open_tools, open_external, host_status, host_act, host_setup, settings_get, settings_set, pick_folder,
-            fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply])
+            fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
             let store = settings::Store::load(dir.clone());

@@ -127,7 +127,8 @@ $('sPick').onclick = async () => { const f = await call('pick_folder').catch(fai
 $('sSave').onclick = async () => {
   try { S = await call('settings_set', { patch: { hub: $('sHub').value.trim(), projects: $('sProjects').value, forgejoUrl: $('sFjUrl').value.trim(), forgejoToken: $('sFjTok').value.trim(), closeToTray: $('sTray').checked, autoUpdate: $('sAuto').checked } }); $('sFjTok').value = ''; fill(); cwd = ''; list(); $('sState').textContent = 'Saved. A new hub address applies at the next start.'; } catch (e) { $('sState').textContent = String(e); }
 };
-$('uCheck').onclick = async () => { $('uState').textContent = 'checking…'; try { const u = await call('update_check'); $('uState').textContent = u.available ? `version ${u.version} is ready (you have ${u.current})` : `up to date (${u.current})`; } catch (e) { $('uState').textContent = String(e); } };
+$('uCheck').onclick = async () => { $('uState').textContent = 'checking…'; try { const u = await call('update_check'); $('uState').textContent = (u.available ? `version ${u.version} is ready (you have ${u.current})` : `up to date (${u.current})`) + (u.installed ? '' : ' · running portable (not installed)'); } catch (e) { $('uState').textContent = String(e); } };
+$('uInstall').onclick = async () => { $('uState').textContent = 'installing…'; try { $('uState').textContent = await call('install_here'); } catch (e) { $('uState').textContent = String(e); } };
 $('uApply').onclick = async () => { $('uState').textContent = 'updating…'; try { const r = await call('update_apply'); if (!r) $('uState').textContent = 'already up to date'; } catch (e) { $('uState').textContent = String(e); } };
 
 (async () => {

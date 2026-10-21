@@ -4,12 +4,15 @@
 //!   vr-host run [--config <file>]   the host, supervised: restarted on new code / an update (exit 3) and after a crash
 //!   vr-host status | start | stop [--now] | restart [--now] | pause | resume | update | log [n] | lockdown
 //!           boot service | sign-in | user | off      settings      set <setting> <value>      version
+//!   vr-host install [--boot <mode>] install / update this download into the standard folder (an earlier install is
+//!                                   found and kept: its settings and logs stay)
 //!   vr-host --selftest              load everything and exit 0 (an update is tried this way first)
 //!   vr-host mcp pc|board|team       the team tools for a Work run's Claude Code (MCP over stdio)
 //! It works in the same folder, with the same ai-node.json and the same files, as the JavaScript host
 //! (bridge/ai-node.js + bridge/vr-host.js), so it can take that one's place, and either control app reads either host.
 mod control;
 mod files;
+mod install;
 mod mcp;
 mod proc;
 mod relay;
@@ -80,6 +83,7 @@ fn command(f: &Folder, w: &[&str], now: bool) -> i32 {
             }
         }
         "version" => { out(format!("{} {} {}", runner::VERSION, runner::COMMIT, runner::TARGET)); 0 }
+        "install" => { let all: Vec<String> = std::env::args().collect(); install::install(&all.iter().map(String::as_str).collect::<Vec<_>>()) }
         "tools" => { out(mcp::tool_names().to_string()); 0 }
         _ => { out("vr-host [run | status | start | stop [--now] | restart [--now] | pause | resume | update | log [n] | lockdown | boot <mode> | settings | set <setting> <value> | version]".into()); 1 }
     }

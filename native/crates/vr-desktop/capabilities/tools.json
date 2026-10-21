@@ -12,6 +12,6 @@
     "allow-term-open", "allow-term-write", "allow-term-resize", "allow-term-close",
     "allow-run-start", "allow-run-stop", "allow-git",
     "allow-proxy-start", "allow-proxy-stop", "allow-proxy-status",
-    "allow-update-check", "allow-update-apply"
+    "allow-update-check", "allow-update-apply", "allow-install-here"
   ]
 }
