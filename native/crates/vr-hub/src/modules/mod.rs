@@ -12,8 +12,11 @@ use crate::front::{json as jresp, Body, Hub, Req};
 pub mod ai_hosts;
 pub mod auth;
 pub mod board;
+pub mod chat;
 pub mod files;
 pub mod forgejo;
+pub mod guilds;
+pub mod perms;
 pub mod native_releases;
 pub mod notes;
 pub mod openai;
@@ -60,6 +63,7 @@ pub struct Modules {
     pub native: native_releases::Releases,
     pub work: Arc<work::Work>,
     pub api: openai::Api,
+    pub chat: Arc<chat::Chat>,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -68,8 +72,11 @@ impl Modules {
         let mills = root.join("..");
         let usage = Arc::new(usage::Usage::new(root, cfg, true));
         let auth = auth::Auth::new(root, cfg);
-        let api = openai::Api::new(root, &auth.accounts());
-        Ok(Modules { front_secret, auth, api, board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
+        let accounts = auth.accounts();
+        let api = openai::Api::new(root, &accounts);
+        let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
+        let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
+        Ok(Modules { front_secret, auth, api, chat, board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
             files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
@@ -81,7 +88,7 @@ impl Modules {
         if !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') && port.bytes().all(|b| b.is_ascii_digit()) && (port.is_empty() == !host.contains(':')) { u } else { format!("http://127.0.0.1:{}", cfg.port) }
     }
     /// Whether someone has set up their chat key (Chat/keys.json, the chat's: still the JavaScript hub's).
-    fn has_chat_key(&self, u: &str) -> bool { std::fs::read_to_string(self.mills.join("Chat").join("keys.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| !v[u].is_null()).unwrap_or(false) }
+    fn has_chat_key(&self, u: &str) -> bool { self.chat.has_key(u) }
     /// How a person is named on the board and in notes: their nickname, else their display name (bridge/server.js nameOf).
     pub fn name_of(&self, u: &str) -> String {
         let Some(a) = self.auth.account(u) else { return u.to_string() };
@@ -117,11 +124,12 @@ pub fn start_background(hub: &Arc<Hub>) {
     let h = hub.clone();
     tokio::spawn(async move { loop { h.mods.ai.dirty.notified().await; tokio::time::sleep(std::time::Duration::from_millis(50)).await; push_ai_state(&h).await; } });
     work::start(hub);
+    chat::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     let h = hub.clone();
     tokio::spawn(async move {
         let mut rx = h.mods.notes.ver.subscribe();
-        while rx.changed().await.is_ok() { crate::front::internal(&h, "/internal/front/room-changed", "{}".into()).await; }
+        while rx.changed().await.is_ok() { h.mods.chat.room_changed(); }
     });
 }
 /// The AI hosts' state to the JavaScript hub (see AiHosts::snapshot).
@@ -171,6 +179,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 None => answer(200, json!({ "text": b["message"], "files": [], "dirs": [] })),
             },
             p if p.starts_with("ai/") => ai_front(hub, r, &p[3..]).await,
+            // its Unity (post, what she was sent, composing), its profiles changed
+            p if p.starts_with("chat/") => answer(200, chat::front(hub, &p[5..], &b)),
             _ => answer(404, json!({ "ok": false, "error": "unknown" })),
         };
     }
@@ -233,6 +243,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         if let Some(acc) = a.account(u) {
             if let Some(x) = work::route(hub, r, &acc).await { return x; }
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
+            if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence
         }
     }
     // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
@@ -407,7 +418,7 @@ async fn files_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
             let id = &p["/api/room/file/".len()..];
             let Some((by, seq)) = m.files.owner_seq(id) else { return answer(404, json!({ "error": "Not found." })) };
             // its uploader always; anyone else while they may read its message: the chat (the JavaScript hub) knows
-            let allowed = by == u || (seq > 0 && crate::front::internal(hub, "/internal/front/may-read", json!({ "user": u, "seq": seq }).to_string()).await.and_then(|(_, b)| serde_json::from_slice::<Value>(&b).ok()).map(|v| v["ok"] == json!(true)).unwrap_or(false));
+            let allowed = by == u || (seq > 0 && chat::may_read(hub, u, seq));
             match m.files.fetch(id, m.auth.account(&by), allowed) { Some(buf) => serve_file(buf, "file", "application/octet-stream"), None => answer(404, json!({ "error": "Not found." })) }
         }
         "/api/work/file" if post => match m.files.work_upload(&a, &r.body, r.header("x-file-name").unwrap_or(""), r.header("content-type").unwrap_or("")) { Ok(v) => answer(200, v), Err(f) => fail(f) },
@@ -427,11 +438,20 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
     let target = || r.json()["username"].as_str().map(String::from);
     match r.path.as_str() {
         "/api/logout" if status == 200 => {
-            if let Some(u) = a.session_user(r) { w.share_stop(&u); }
+            if let Some(u) = a.session_user(r) { w.share_stop(&u); chat::calls_leave(hub, &u); hub.mods.chat.set_typing(&u, "", false); hub.mods.chat.gone(&u); }
             if let Some(t) = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")) { a.forget_session(&auth::token_key(t)); }
             None
         }
-        "/api/admin/delete" if status == 200 => { if let Some(u) = target() { a.drop_sessions(&u); a.unlock(&u); w.stop(hub, &u); w.share_stop(&u); w.forget(&u); } None }
+        "/api/admin/delete" if status == 200 => {
+            if let Some(u) = target() {
+                a.drop_sessions(&u); a.unlock(&u); w.stop(hub, &u); w.share_stop(&u); w.forget(&u);
+                let c = &hub.mods.chat; c.drop_key(&u); chat::calls_leave(hub, &u);
+                let us: Vec<(String, String, bool)> = a.accounts().into_iter().map(|x| (x.username, x.display, x.admin)).collect();
+                let ctx = guilds::Ctx { users: &us, seq: c.seq(), msg_conv: &|n| c.msg_conv(n), delete_recent: &|_, _, _| 0 };
+                c.guilds.drop_user(&u, &ctx); c.keys_changed();
+            }
+            None
+        }
         "/api/admin/stop" if status == 200 => { if let Some(u) = target() { w.stop(hub, &u); hub.mods.api.stop(&u); } None }
         "/api/projects" if status == 200 => { w.projects_changed(); None }
         "/api/admin/accounts" if status == 200 => {
@@ -443,6 +463,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
                 acc["lockedAt"] = lock.map(|l| l["at"].clone()).unwrap_or(Value::Null);
                 acc["signedIn"] = json!(a.signed_in(&u));
                 acc["busy"] = json!(acc["busy"] == json!(true) || w.busy(&u));
+                acc["chatKey"] = json!(hub.mods.chat.has_key(&u));
                 if let Some(x) = a.account(&u) { acc["model"] = json!(w.effective_model(&x)); }
             }
             Some(v.to_string().into_bytes())
@@ -476,4 +497,4 @@ fn s_of(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() 
 pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check" | "/api/status") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
 
 /// The modules this front answers itself.
-pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api"] }
+pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api", "chat"] }

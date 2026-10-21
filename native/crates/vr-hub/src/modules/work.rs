@@ -405,12 +405,7 @@ pub async fn tool(hub: &Arc<Hub>, which: &str, account: &str, b: &Value) -> Valu
                 let list: Vec<Value> = providers_list(hub, account).into_iter().map(|p| json!({ "id": p["id"], "label": p["label"], "kind": p["kind"], "owner": if s(&p, "owner").is_empty() { json!("host") } else { p["owner"].clone() }, "shared": p["shared"], "models": p["models"] })).collect();
                 return json!({ "ok": true, "result": { "providers": list, "current": if s(&st, "provider").is_empty() { "host".into() } else { s(&st, "provider") }, "model": s(&st, "model") } });
             }
-            _ => {
-                // the chat, presence, calls and servers are the JavaScript hub's: it answers, with what this hub knows
-                let extra = json!({ "usage": w.usage_status(hub, &a), "shares": w.shares_for(account) });
-                let body = json!({ "name": name, "args": args, "account": account, "extra": extra }).to_string();
-                return match crate::front::internal(hub, "/internal/front/team-tool", body).await { Some((200, b)) => serde_json::from_slice(&b).unwrap_or(json!({ "ok": false, "error": "The chat answered nonsense." })), _ => json!({ "ok": false, "error": "The chat is restarting; try again in a moment." }) };
-            }
+            _ => return super::chat::team_tool(hub, &name, &args, &a), // the chat, presence, calls, servers
         }
     }
     // pc-tool: the person's own AI host with direct computer access first (the native app), else the browser's open folder
@@ -704,6 +699,7 @@ pub fn start(hub: &Arc<Hub>) {
     tokio::spawn(async move { loop {
         h.mods.work.shares_changed.notified().await;
         let list = h.mods.work.shares_all();
+        h.mods.chat.room_changed(); // the room's long poll lists them
         crate::front::internal(&h, "/internal/front/shares", json!({ "shares": list }).to_string()).await;
     } });
     let h = hub.clone();

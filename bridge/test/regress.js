@@ -1022,7 +1022,7 @@ async function run() {
   const stale = await call('/api/room/messages?rev=' + rv0.latestRev + '&wait=1&ver=' + (rv0.ver - 1), A); // old version → answered at once
   check('R91', 'room long poll: held while nothing changes, answered right after a send (not on a timer), stale version answered at once',
     lp.status === 200 && tookMs >= 700 && tookMs < 3000 && (rwoke.data.messages || []).some((m) => m.seq === lp.data.seq) && rwoke.data.ver > rv0.ver && stale.status === 200,
-    `woke after ${tookMs} ms`);
+    `woke after ${tookMs} ms; send ${lp.status} ${JSON.stringify(lp.data).slice(0, 80)}; woke with it ${(rwoke.data.messages || []).some((m) => m.seq === lp.data.seq)} (${(rwoke.data.messages || []).map((m) => m.seq).join(',')}); ver ${rwoke.data.ver}/${rv0.ver}; stale ${stale.status}`);
 
   // Format v4: JSON deflated before encryption; a voice clip's audio is its own ciphertext, fetched on play.
   const blobAad4 = (from, mid) => 'mills-v4-blob|' + from + '|' + mid;

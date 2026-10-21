@@ -383,6 +383,9 @@ const linux = require('./linux-accounts')({ config, ROOT });
 const files = require('./files')({ CHAT_DIR, send: (...a) => send(...a), accountOf: (u) => accounts.get(u), linux });
 // behind the Rust hub with its files module, the chat tells it about its messages' files instead (and it sweeps)
 const FILES_MOVED = FRONT_MODS.has('files');
+// behind the Rust hub with its chat module, the chat is its own: messages, keys, servers, calls, presence. Unity's
+// brain stays here: the Rust hub says when she is called, she reads what she was sent and posts through it.
+const CHAT_MOVED = FRONT_MODS.has('chat');
 const filesGone = (ids) => { if (FILES_MOVED) frontCall('/__front/files/gone', { ids }).catch((e) => console.error('[mills] files gone: ' + e.message)); else files.chat.messageGone(ids); };
 const filesAllGone = () => { if (FILES_MOVED) frontCall('/__front/files/all-gone', {}).catch(() => {}); else files.chat.allGone(); };
 async function filesAttach(user, ids, seq, conv) {
@@ -397,7 +400,10 @@ const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv ==
 // anything they show changes (a message, edit, delete, receipt, share, member key) instead of polling.
 let roomVer = 1, keysVer = 1;
 const roomWaiters = new Set();
-function roomChanged() { roomVer++; for (const fn of [...roomWaiters]) fn(); }
+function roomChanged() {
+  roomVer++; for (const fn of [...roomWaiters]) fn();
+  if (CHAT_MOVED) frontCall('/__front/chat/changed', { keys: true }).catch(() => {}); // (a profile, a picture: the member list reloads)
+}
 // Presence + typing (bridge/presence.js): online / idle / offline from each page's open long poll, who is typing
 // where; Unity counts as typing while she composes (extraTyping).
 const presence = require('./presence')({ accounts, roomChanged: () => roomChanged(),
@@ -598,6 +604,7 @@ function agentContext(m) { // the earlier messages the caller sent along: [{ n: 
 // (the message is still sealed with the hub's own key, exactly like Unity's); { conv: 'ch:…' / 'grp:…' }
 // posts into a channel / group, wrapped for its members only.
 function agentSay(text, to, extra = {}) {
+  if (CHAT_MOVED) { frontCall('/__front/chat/say', { text, to: to || '', as: extra.as || '', via: extra.via || '', conv: extra.conv || '' }).catch((e) => console.log('[mills] room agent could not post: ' + e.message)); return 0; }
   const conv = !to && typeof extra.conv === 'string' && guilds.isGuildConv(extra.conv) ? extra.conv : '';
   const allowed = conv ? guilds.members(conv) || [] : null;
   const mid = crypto.randomBytes(16).toString('base64url'), aad = bodyAad(AGENT, to, mid);
@@ -613,7 +620,15 @@ function agentSay(text, to, extra = {}) {
   return msg.seq;
 }
 const nameOf = (u) => { if (u === AGENT) return AGENT_NAME; const a = accounts.get(u); return a ? publicPrefs(a).nick || a.display : u; };
-function agentPrompt() {
+const agentPromptText = (blocks) => {
+  const notes = agent.notes.splice(0);
+  return `You were called in the VibeRoller chat (you only ever see the messages that @-mention you, plus the few before them):\n\n${blocks || '(none)'}\n\n`
+    + (notes.length ? notes.join('\n') + '\n\n' : '') + 'Reply now.';
+};
+// Unity composing: everyone's page shows "Unity is typing…" (behind the Rust hub with its chat, it shows that)
+function agentTyping(on) { if (CHAT_MOVED) frontCall('/__front/chat/agent-typing', { on, target: agent.target || '', conv: agent.conv || '' }).catch(() => {}); else roomChanged(); }
+function agentPrompt() { // a string, or (behind the Rust hub with its chat, which reads her messages) a promise of one
+  if (CHAT_MOVED) return frontCall('/__front/chat/agent-prompt', {}).then((r) => agentPromptText(r.blocks)).catch(() => agentPromptText(''));
   // Each call since it last spoke, with (at most) the 5 messages before it that the caller sent along.
   const since = agent.state.lastSeq || 0;
   const blocks = messages.filter((m) => m.seq > since && m.from !== AGENT).slice(-6).map((m) => {
@@ -624,9 +639,7 @@ function agentPrompt() {
       + `[${m.ts}] ${m.to === AGENT ? '(private message to you) ' : ''}${nameOf(m.from)}: ${t}`;
   }).filter(Boolean);
   agent.state.lastSeq = seq;
-  const notes = agent.notes.splice(0);
-  return `You were called in the VibeRoller chat (you only ever see the messages that @-mention you, plus the few before them):\n\n${blocks.join('\n\n') || '(none)'}\n\n`
-    + (notes.length ? notes.join('\n') + '\n\n' : '') + 'Reply now.';
+  return agentPromptText(blocks.join('\n\n'));
 }
 const AGENT_SYSTEM = [
   `You are ${AGENT_NAME}, a member of the VibeRoller team chat room (the people in it are Unity AI Lab engineers, all adults, your people).`,
@@ -653,8 +666,9 @@ function agentGreet(acct) {
   // A first sign-in in a new browser uploads its chat key right after login: wait for it (max 60 s)
   // so the person can read their own greeting.
   const started = Date.now();
-  const go = () => {
-    if (!chatKeys[acct.username] && Date.now() - started < 60000) return setTimeout(go, 2000).unref();
+  const hasKey = () => (CHAT_MOVED ? frontCall('/__front/chat/has-key', { user: acct.username }).then((r) => !!r.ok).catch(() => false) : Promise.resolve(!!chatKeys[acct.username]));
+  const go = async () => {
+    if (!(await hasKey()) && Date.now() - started < 60000) return setTimeout(go, 2000).unref();
     Promise.resolve(roomBrain() === 'local' ? assistant.greeting(acct).catch(() => '') : '').then((facts) => {
       agent.notes.push(`${acct.display} (${acct.username}) just signed in to VibeRoller. Say hi to them.` + (facts ? '\n' + facts : ''));
       runAgent('', acct.username);
@@ -678,9 +692,13 @@ function runAgent(target = '', caller = '', conv = '') {
   if (agent.state.sessionId) args.push('--resume', agent.state.sessionId);
   const command = config.claudeCommand || 'claude';
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
-  const child = spawn(command, [...pre, ...args], { cwd: MILLS_DIR, windowsHide: true });
+  agent.running = { starting: true };
+  agentTyping(true); // browsers show "Unity is typing…" while she composes
+  Promise.resolve(agentPrompt()).then((prompt) => runAgentClaude(command, [...pre, ...args], prompt));
+}
+function runAgentClaude(command, args, prompt) {
+  const child = spawn(command, args, { cwd: MILLS_DIR, windowsHide: true });
   agent.running = child;
-  roomChanged(); // browsers show "Unity is typing…" while she composes
   let out = '', finished = false;
   child.stdout.on('data', (c) => { out += c; });
   child.stderr.on('data', () => {});
@@ -691,26 +709,25 @@ function runAgent(target = '', caller = '', conv = '') {
       try { const r = JSON.parse(line); if (r.session_id) agent.state.sessionId = r.session_id; if (typeof r.result === 'string') { text = r.result; break; } } catch {}
     }
     agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
-    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
-    else roomChanged(); // nothing posted: still take the typing indicator away
+    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } if (CHAT_MOVED) agentTyping(false); }
+    else agentTyping(false); // nothing posted: still take the typing indicator away
     if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || '', agent.nextConv || ''); else setTimeout(maybeRestart, 300);
   };
   child.on('error', (e) => done('(I could not start: ' + e.message + ')'));
   child.on('close', () => done(''));
-  child.stdin.end(agentPrompt());
+  child.stdin.end(prompt);
 }
 function runAgentLocal(target, caller) {
   const who = accounts.get(caller || target) || accounts.get(DEFAULT_USERNAME) || [...accounts.values()][0];
-  const prompt = agentPrompt();
   agent.running = { local: true };
-  roomChanged(); // browsers show "Unity is typing…" while she composes
-  assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' })
+  agentTyping(true); // browsers show "Unity is typing…" while she composes
+  Promise.resolve(agentPrompt()).then((prompt) => assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' }))
     .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join('') + (r.media || []).map((v) => `\n[[youtube:${v}]]`).join(''))
     .catch((e) => (/AI host is offline/.test(e.message) ? e.message : `(my brain glitched: ${e.message})`)) // no AI host: say so plainly
     .then((text) => {
       agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
-      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
-      else if (typeof roomChanged === 'function') roomChanged(); // nothing posted: still take the typing indicator away
+      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } if (CHAT_MOVED) agentTyping(false); }
+      else agentTyping(false); // nothing posted: still take the typing indicator away
       if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || '', agent.nextConv || ''); else setTimeout(maybeRestart, 300);
     });
 }
@@ -875,6 +892,13 @@ async function handleRequest(req, res) {
     // tools of its runs (the chat, presence, calls and servers are this hub's; extra = what the Rust hub knows)
     if (p === '/internal/front/shares' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); const b = await readBody(req, 1 << 20); frontShares = (Array.isArray(b.shares) ? b.shares : []).filter((s) => s && USERNAME_RE.test(String(s.user || ''))); roomChanged(); return send(res, 200, { ok: true }); }
     if (p === '/internal/front/work-busy' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); frontBusy = (await readBody(req, 4096)).busy === true; if (!frontBusy) setTimeout(maybeRestart, 300); return send(res, 200, { ok: true }); }
+    // the Rust hub in front (its chat module): Unity was called (target: a private answer to that person; conv: a channel / group)
+    if (p === '/internal/front/agent-call' && req.method === 'POST') {
+      if (!fromFront(req)) return send(res, 403, { ok: false });
+      const b = await readBody(req, 4096), ok = (x) => USERNAME_RE.test(String(x || ''));
+      runAgent(ok(b.target) ? String(b.target) : '', ok(b.caller) ? String(b.caller) : '', /^(ch|grp):/.test(String(b.conv || '')) ? String(b.conv) : '');
+      return send(res, 200, { ok: true });
+    }
     if (p === '/internal/front/team-tool' && req.method === 'POST') {
       if (!fromFront(req)) return send(res, 403, { ok: false, error: 'forbidden' });
       const b = await readBody(req), a = accounts.get(String(b.account || ''));

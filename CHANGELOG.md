@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.21.0 — 2026-10-21
+
+### Changed: the chat in Rust behind rustHub (board T-131, the last of its modules)
+- **vr-hub's chat module** (`native/crates/vr-hub/src/modules/chat.rs`, `guilds.rs`, `perms.rs`) runs the chat itself:
+  - messages: send, edit, delete, voice clips, attachments, end-to-end encrypted as before (ciphertext only; each
+    reader gets only their own key slot)
+  - keys, receipts, typing, presence, and the room's long poll
+  - servers, channels and groups, with Discord-style roles, permissions, invites, moderation, the audit log and pins
+  - calls (the encrypted set-up relay; who is in which call)
+  - the admin's "clear the chat"
+  - the team tools of Work runs
+- **Unity's side**: her key stays in `Chat/agent-key.json`. The Rust hub opens what she is sent, sees when she is
+  called, and posts what she answers. Her brain stays in the JavaScript hub, which hears she was called and reads what
+  she was sent through `/__front/chat/*`. What she has read is kept in `Chat/agent-seen.json`, taken over from
+  `agent-state.json`.
+- Same files: `Chat/messages.jsonl`, `keys.json`, `seen.json`, `guilds.json`. Nothing moves and nothing is
+  re-encrypted.
+- **What stays in the JavaScript hub:** profiles, prefs and pictures (it tells the Rust hub when one changes, so the
+  member list reloads), and Unity's section.
+
 ## 3.20.0 — 2026-10-21
 
 ### Changed: the external API and the AI providers in Rust behind rustHub (board T-131)
