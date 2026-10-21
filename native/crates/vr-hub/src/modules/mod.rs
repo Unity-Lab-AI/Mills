@@ -16,6 +16,7 @@ pub mod files;
 pub mod forgejo;
 pub mod native_releases;
 pub mod notes;
+pub mod openai;
 pub mod usage;
 pub mod work;
 pub mod worktree;
@@ -58,6 +59,7 @@ pub struct Modules {
     pub ai: Arc<ai_hosts::AiHosts>,
     pub native: native_releases::Releases,
     pub work: Arc<work::Work>,
+    pub api: openai::Api,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -65,7 +67,9 @@ impl Modules {
         let front_secret = std::env::var("VR_FRONT_SECRET").ok().filter(|s| s.len() >= 32).unwrap_or_else(|| vr_core::crypto::random_hex(24));
         let mills = root.join("..");
         let usage = Arc::new(usage::Usage::new(root, cfg, true));
-        Ok(Modules { front_secret, auth: auth::Auth::new(root, cfg), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
+        let auth = auth::Auth::new(root, cfg);
+        let api = openai::Api::new(root, &auth.accounts());
+        Ok(Modules { front_secret, auth, api, board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
             files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
@@ -189,6 +193,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         return Routed::Pass(vec![]);
     }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
+    // the OpenAI- / Anthropic-compatible API: its own bearer keys, for harnesses, not the browser app
+    if p == "/v1" || p.starts_with("/v1/") { return openai::v1(hub, r).await; }
     if p.starts_with("/node/") {
         let (status, out) = hub.mods.ai.route(&r.method, p, &r.query, &r.headers, &r.body, &hub.mods.native).await;
         // a host that said hello is on everyone's list before it hears back
@@ -224,7 +230,10 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     // ----- Work: runs, model / provider, project, usage, shared sessions, the conversation + queue, past sessions -----
     if let Some(u) = &user {
-        if let Some(acc) = a.account(u) { if let Some(x) = work::route(hub, r, &acc).await { return x; } }
+        if let Some(acc) = a.account(u) {
+            if let Some(x) = work::route(hub, r, &acc).await { return x; }
+            if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
+        }
     }
     // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
     if r.method == hyper::Method::POST && matches!(p, "/api/hosts/new" | "/api/hosts/rename" | "/api/hosts/remove" | "/api/hosts/share" | "/api/hosts/config") {
@@ -423,10 +432,8 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
             None
         }
         "/api/admin/delete" if status == 200 => { if let Some(u) = target() { a.drop_sessions(&u); a.unlock(&u); w.stop(hub, &u); w.share_stop(&u); w.forget(&u); } None }
-        "/api/admin/stop" if status == 200 => { if let Some(u) = target() { w.stop(hub, &u); } None }
+        "/api/admin/stop" if status == 200 => { if let Some(u) = target() { w.stop(hub, &u); hub.mods.api.stop(&u); } None }
         "/api/projects" if status == 200 => { w.projects_changed(); None }
-        // a provider removed in Settings: nobody's Work keeps pointing at it
-        "/api/providers/remove" if status == 200 => { if let Some(id) = r.json()["id"].as_str().filter(|x| !x.is_empty()) { for acc in a.accounts() { w.drop_provider(&acc, id); } } None }
         "/api/admin/accounts" if status == 200 => {
             let mut v: Value = serde_json::from_slice(body?).ok()?;
             for acc in v["accounts"].as_array_mut()? {
@@ -450,12 +457,15 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
             v["effectiveProvider"] = json!(w.effective(&hub.mods.ai, &acc.username, &s_of(&st, "provider")).map(|p| s_of(&p, "id")).unwrap_or_default());
             v["project"] = json!(w.project_of(&acc)); v["projects"] = w.project_list();
             v["share"] = json!(w.share_of(&acc.username));
+            v["providers"] = json!(work::providers_list(hub, &acc.username));
+            v["defaultProvider"] = json!(w.default_for(&hub.mods.ai, &acc.username).map(|p| s_of(&p, "id")).unwrap_or_default());
+            v["hubClaude"] = json!(hub.cfg.get("hubClaude") != Some(&json!(false)));
             Some(v.to_string().into_bytes())
         }
         // busy counts this hub's Work runs too (restart.js and the regression runner wait for nobody being busy)
         "/api/status" if status == 200 => {
             let mut v: Value = serde_json::from_slice(body?).ok()?;
-            if v.get("busy").is_some() && w.any_busy() { v["busy"] = json!(true); return Some(v.to_string().into_bytes()); }
+            if v.get("busy").is_some() && (w.any_busy() || hub.mods.api.busy()) { v["busy"] = json!(true); return Some(v.to_string().into_bytes()); }
             None
         }
         _ => None,
@@ -463,7 +473,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
 }
 fn s_of(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() }
 /// Which answers `after` needs to see whole (the rest stream through untouched).
-pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check" | "/api/status" | "/api/providers/remove") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
+pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check" | "/api/status") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
 
 /// The modules this front answers itself.
-pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work"] }
+pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api"] }

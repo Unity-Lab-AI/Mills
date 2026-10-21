@@ -7,6 +7,23 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.20.0 — 2026-10-21
+
+### Changed: the external API and the AI providers in Rust behind rustHub (board T-131)
+- **vr-hub's api module** (`native/crates/vr-hub/src/modules/openai.rs`) answers `/v1` itself:
+  - `/v1/models`, `/v1/chat/completions` (OpenAI) and `/v1/messages` + `count_tokens` (Anthropic), streamed or not, in
+    the same shapes, errors and limits (one answer at a time per key; the caller hanging up cancels it)
+  - every provider kind: this hub's Claude and a Claude Code login (`claude -p` in `Api/sandbox`), an Anthropic key, an
+    OpenAI-compatible endpoint, and an AI host's endpoint, Claude login, Codex login or legacy run
+- **Settings → API access** (`/api/apikey*`): the keys move to `bridge/api-keys.json` (sha256 only), taken over from
+  each account's `state.json` the first time.
+- **Settings → AI providers** (`/api/providers*`, `bridge/providers.json`): a removed provider is dropped from
+  everyone's Work and API choice.
+- **Settings → My AI hosts** (the list): answered here too. `/api/check` gets the providers and the default provider
+  from here.
+- The data lists (`handoff.js`, the auto-deploy's snapshots, `pack-data.sh`) include `bridge/api-keys.json`.
+- R111 reads the key's record from `api-keys.json` when the Rust hub is in front.
+
 ## 3.19.0 — 2026-10-21
 
 ### Changed: Work runs in Rust behind rustHub (board T-131)

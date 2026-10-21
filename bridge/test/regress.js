@@ -819,7 +819,9 @@ async function run() {
   const oldDead = await v1('/v1/models', made.key), newLive = await v1('/v1/models', rotated.key);
   // expiry: a 1-day key made "yesterday" is refused as expired (the runner backdates it in the scratch state file)
   const uState = path.join(SB, 'profiles', 't-user', 'state.json');
-  const st1 = JSON.parse(fs.readFileSync(uState, 'utf8')); // (the hub keeps its own copy in memory; expiry is judged from createdAt + expiresDays at call time)
+  // (the hub keeps its own copy in memory; expiry is judged from createdAt + expiresDays at call time). Behind the Rust
+  // hub the key's record is its own: bridge/api-keys.json, by username
+  const st1 = RUST_HUB ? { api: (JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-user'] } : JSON.parse(fs.readFileSync(uState, 'utf8'));
   const setExp = await call('/api/apikey/settings', U, { expiresDays: 1 });
   const stillOk = await v1('/v1/models', rotated.key);
   const revoked = (await call('/api/apikey/revoke', U, {})).data, afterRevoke = await v1('/v1/models', rotated.key);

@@ -246,13 +246,13 @@ impl Work {
     pub fn stop(&self, hub: &Hub, u: &str) {
         let (pid, remote) = match self.runs.lock().unwrap().get(u) { Some(r) => (r.pid, r.remote.clone()), None => return };
         if !remote.is_empty() { hub.mods.ai.cancel_work(&remote); return; }
-        if let Some(pid) = pid { kill(pid); }
+        if let Some(pid) = pid { kill_pid(pid); }
     }
 }
 #[cfg(unix)]
-fn kill(pid: u32) { unsafe { libc::kill(pid as i32, libc::SIGTERM); } }
+pub fn kill_pid(pid: u32) { unsafe { libc::kill(pid as i32, libc::SIGTERM); } }
 #[cfg(not(unix))]
-fn kill(pid: u32) { let _ = std::process::Command::new("taskkill").args(["/pid", &pid.to_string(), "/T", "/F"]).spawn(); }
+pub fn kill_pid(pid: u32) { let _ = std::process::Command::new("taskkill").args(["/pid", &pid.to_string(), "/T", "/F"]).spawn(); }
 
 fn ndjson(rx: mpsc::UnboundedReceiver<Result<Bytes, String>>) -> hyper::Response<crate::front::Body> {
     use http_body_util::BodyExt;
@@ -709,7 +709,7 @@ pub fn start(hub: &Arc<Hub>) {
     let h = hub.clone();
     tokio::spawn(async move { loop {
         h.mods.work.busy_changed.notified().await;
-        let busy = h.mods.work.any_busy();
+        let busy = h.mods.work.any_busy() || h.mods.api.busy();
         crate::front::internal(&h, "/internal/front/work-busy", json!({ "busy": busy }).to_string()).await;
     } });
 }
