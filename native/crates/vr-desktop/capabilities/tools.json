@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tools",
+  "description": "The Tools window: part of this app (its own page, never the hub's), so it may use this computer: files in the projects folder, the terminal, builds, git, the local API proxy, the AI host switch, updates.",
+  "windows": ["tools"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "allow-app-info", "allow-notify", "allow-open-external", "allow-host-status", "allow-host-act",
+    "allow-settings-get", "allow-settings-set", "allow-pick-folder",
+    "allow-fs-list", "allow-fs-read", "allow-fs-write", "allow-fs-delete", "allow-fs-mkdir",
+    "allow-term-open", "allow-term-write", "allow-term-resize", "allow-term-close",
+    "allow-run-start", "allow-run-stop", "allow-git",
+    "allow-proxy-start", "allow-proxy-stop", "allow-proxy-status",
+    "allow-update-check", "allow-update-apply", "allow-install-here"
+  ]
+}

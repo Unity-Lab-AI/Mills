@@ -7,6 +7,8 @@
 //   - app exits 0/2 → clean stop / "already running in another window": everything shuts down.
 //   - anything else → crash: retried after 5 s, up to 5 times in two minutes.
 // Running server.js directly still works for local use, but gives no tunnel and no self-restart.
+// Since 4.0.0 the Rust hub (vr-hub) is the hub and the JavaScript one runs behind it as its fallback; the Rust hub
+// exiting 75 restarts both (it owns bridge/.restart then).
 'use strict';
 
 const fs = require('fs');
@@ -20,6 +22,54 @@ const NO_TUNNEL = !config.tunnel || process.argv.includes('--no-tunnel');
 const tag = `[mills${PROFILE ? ':' + PROFILE : ''}]`;
 
 let app = null, cf = null, shuttingDown = false, crashes = [];
+
+// ---------- the Rust hub in front (native/crates/vr-hub; config "rustHub": { "enabled": true, "backPort": 7779 }) ----------
+// It takes config.port (what nginx sends the portal to) and answers the modules already moved to Rust; this hub moves
+// behind it to backPort on 127.0.0.1 and answers the rest. Its binary: VR_HUB_BIN, else native/dist/<target>/, else
+// native/target/release/. If it is missing or keeps failing, this hub takes config.port again by itself: nobody is
+// ever cut off by the Rust hub. On by default since 3.22.0 (every module passes the whole suite through it); config
+// "rustHub": false (or { "enabled": false }) runs this hub alone.
+const crypto = require('crypto');
+const TARGET = process.platform === 'win32' ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu';
+const hubBin = () => {
+  const exe = process.platform === 'win32' ? 'vr-hub.exe' : 'vr-hub';
+  return [process.env.VR_HUB_BIN, path.join(ROOT, '..', 'native', 'dist', TARGET, exe), path.join(ROOT, '..', 'native', 'target', 'release', exe)].find((f) => f && fs.existsSync(f)) || '';
+};
+let front = null, frontCrashes = [], rust = (() => {
+  const r = config.rustHub === undefined ? {} : config.rustHub;
+  if (!r || r.enabled === false || PROFILE) return null;
+  const bin = hubBin();
+  if (!bin) { console.log(`${tag} No vr-hub binary here (sh native/build.sh builds it; the auto-deploy does on the server): the JavaScript hub runs alone.`); return null; }
+  return { bin, backPort: Number(r.backPort) || config.port + 2, secret: crypto.randomBytes(24).toString('hex'), mods: rustModules(bin) };
+})();
+// the modules it answers: the JavaScript hub leaves those alone (their data is the Rust hub's)
+function rustModules(bin) { try { return require('child_process').execFileSync(bin, ['--modules'], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim(); } catch { return ''; } }
+function startFront() {
+  if (!rust || shuttingDown) return;
+  front = spawn(rust.bin, ['--port', String(config.port), '--back', String(rust.backPort), '--root', ROOT], { stdio: 'inherit', windowsHide: true, env: { ...process.env, VR_FRONT_SECRET: rust.secret, VR_NODE: process.execPath, MILLS_SUPERVISED: '1' } }); // VR_NODE: the Node.js its Work runs' tools (bridge/*-mcp.js) and bridge/worktree.js run on
+  front.on('exit', (code) => {
+    front = null;
+    if (shuttingDown) return;
+    if (code === 0) return shutdown(0);
+    // 75: a restart was asked for and nobody is busy (4.0.0: the Rust hub owns bridge/.restart): both hubs start again
+    // on the new code, the JavaScript one behind it first
+    if (code === 75) {
+      console.log(`${tag} Restarting both hubs with the new code…`);
+      rust.mods = rustModules(rust.bin); // a new build may answer more
+      if (app) { app.removeAllListeners('exit'); app.on('exit', () => { app = null; startApp(); }); app.kill('SIGTERM'); } else startApp();
+      return;
+    }
+    const now = Date.now(); frontCrashes = frontCrashes.filter((t) => now - t < 60000); frontCrashes.push(now);
+    if (frontCrashes.length >= 3 || code === 2) { // keeps failing (or its port is taken): this hub takes the port back
+      console.log(`${tag} The Rust hub stopped ${frontCrashes.length} time(s) (last code ${code}): the JavaScript hub takes port ${config.port} back by itself.`);
+      rust = null;
+      if (app) { app.removeAllListeners('exit'); app.on('exit', () => { app = null; startApp(); }); app.kill('SIGTERM'); } else startApp();
+      return;
+    }
+    console.log(`${tag} The Rust hub exited with code ${code}; starting it again.`);
+    setTimeout(startFront, 1000);
+  });
+}
 
 // ---------- bridge app ----------
 // Handed off (bridge/.handoff, written by bridge/handoff.js switch): the hub lives on the server now, and this machine
@@ -39,8 +89,9 @@ function startApp() {
     return;
   }
   app = spawn(process.execPath, [path.join(ROOT, 'server.js'), ...process.argv.slice(2)], {
-    stdio: 'inherit', env: { ...process.env, MILLS_SUPERVISED: '1' }, windowsHide: true,
+    stdio: 'inherit', env: { ...process.env, MILLS_SUPERVISED: '1', ...(rust ? { VR_BACK_PORT: String(rust.backPort), VR_FRONT_SECRET: rust.secret, VR_FRONT_MODULES: rust.mods } : {}) }, windowsHide: true,
   });
+  if (rust && !front) startFront();
   app.on('exit', (code) => {
     app = null;
     if (shuttingDown) return;
@@ -116,10 +167,11 @@ function shutdown(code) {
     else app.kill('SIGTERM');
   }
   if (cf) cf.kill();
+  if (front) { try { front.kill('SIGTERM'); } catch {} }
   setTimeout(() => process.exit(code), 600);
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => shutdown(0));
-process.on('exit', () => { if (cf) cf.kill(); if (app) app.kill(); });
+process.on('exit', () => { if (cf) cf.kill(); if (app) app.kill(); if (front) front.kill(); });
 
 startApp();
 // Open the tunnel only once the app has survived startup: if its port was already taken (another

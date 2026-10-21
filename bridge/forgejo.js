@@ -32,7 +32,8 @@ const path = require('path');
 
 const DEFAULT_URL = 'https://git.unityailab.com';
 
-module.exports = function createForgejo({ ROOT, board, readJson, writeJson, config = {}, log = console.log }) {
+// mirror: false when the board lives in the Rust hub (its mirror runs there; this module keeps the personal tokens)
+module.exports = function createForgejo({ ROOT, board, readJson, writeJson, config = {}, log = console.log, mirror = true }) {
   const FILE = path.join(ROOT, 'forgejo.json');
   const USERS = path.join(ROOT, 'forgejo-users.json');
   const cfg = readJson(FILE, null);
@@ -154,7 +155,7 @@ module.exports = function createForgejo({ ROOT, board, readJson, writeJson, conf
       fs.writeFileSync(FILE, JSON.stringify({ ...cfg, since: lastPoll }, null, 2));
     } catch (e) { log('[mills] forgejo poll: ' + e.message); }
   }
-  if (on) {
+  if (on && mirror) {
     board.onChange((what, t, opts) => { if (!(opts && opts.skipMirror)) outbound(what, t, opts && opts.actor); });
     const every = Math.max(3000, (Number(cfg.pollMinutes) || 2) * 60000);
     if (hubToken) { setTimeout(poll, 2000).unref(); setInterval(poll, every).unref(); }

@@ -1,0 +1,29 @@
+# VibeRoller native: the Rust side of VibeRoller (board T-124 onwards). One Cargo workspace for everything that runs on a
+# machine: the shared vr-core library (hub API client, AI host protocol, end-to-end encryption, settings, signed
+# updates), and later the AI host (vr-host), the desktop app (Tauri) and the hub. The JavaScript hub and host stay the
+# reference until the regression suite (bridge/test/regress.js) passes against the Rust ones (LAWS.md: forwards and
+# backwards compatible; Windows and Linux always).
+#
+# Build:   cargo build --release                                  (Linux, this machine's target)
+#          cargo build --release --target x86_64-pc-windows-gnu   (Windows, cross-compiled with mingw-w64: board T-123)
+# Test:    cargo test
+[workspace]
+resolver = "2"
+members = ["crates/vr-core", "crates/vr-desktop", "crates/vr-host", "crates/vr-hub"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.88"
+
+[workspace.dependencies]
+vr-core = { path = "crates/vr-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -7,6 +7,407 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 4.1.0 — 2026-10-21
+
+### Security: only Gee works on Gee's computer (Sponge's decisions on the T-135 assessment)
+- **An AI host's computer is only for its owner.** PC tools reach a host only when the hub registered it to that
+  person (Settings → My AI hosts, or "Run on this PC" in the native app), never for the name a host says it belongs to
+  in its hello (an older config-listed host could name anyone). PC tools elsewhere are unchanged: Work on the server,
+  the native app working on your own computer, the browser's open folder.
+- **An older AI host (no relay) would run a whole Work run on its own computer:** that is now refused for anyone but its
+  owner, with a message saying why (its AI through the API is unchanged: a sandboxed answer, no tools). A current host
+  only lends its AI; the run happens on the server.
+- **A custom endpoint (`openai`) or a Claude config folder on the hub's machine (`claude-cli`)** can be added only by an
+  admin signed in on an AI host of their own (online then), and counts only while its owner is an admin. An Anthropic
+  API key works for everyone, as before.
+- Both hubs (the JavaScript fallback too).
+
+### Tests
+- R112 (providers: the admin with a host of theirs makes them; no host / not an admin → refused), R152 (Work on an
+  older host's computer → refused for others).
+
+## 4.0.0 — 2026-10-21
+
+**MAJOR: the Rust hub is the hub** (board T-134, item 4). Every request is answered by `vr-hub` now; the JavaScript
+hub (`bridge/server.js`) answers nothing while it runs and stays behind it only as the **fallback**: `run.js` starts it
+alone when there is no `vr-hub` binary, when the Rust hub keeps failing, or with config `rustHub: false`. The pieces
+that changed on purpose, and stop working the old way:
+
+### Changed: the last routes and restarts move to the Rust hub
+- **`/api/status` and `/api/version`** are answered by the Rust hub. From this machine `/api/status` names the Rust
+  hub's own process (`pid`), whether anyone's AI is busy (Work, the API, Unity, Unity in the chat), `supervised`,
+  version and commit; from outside (the tunnel, or nginx with `behindProxy`) still only `{ ok, hub }`.
+- **Restarts are the Rust hub's.** It watches `bridge/.restart` (`node bridge/restart.js`, the admin's restart): as
+  soon as nobody is busy it ends with 75, and `run.js` starts **both** hubs again on the new code (the JavaScript one
+  first, then the Rust one, which reads the new module list). Before, only the JavaScript hub restarted, so a new
+  `vr-hub` build waited for a full stop. Behind the Rust hub the JavaScript hub no longer acts on the flag.
+
+### Changed: Downloads are the Rust hub's, native only, and need an account
+- **The Download panel hands out only the native programs:** the VibeRoller app and the native AI host (Windows +
+  Linux, with your own host's config when asked). The earlier script packages are gone: the browser launcher
+  (`bridge/desktop/`) and the Node.js AI host zip. `bridge/downloads.js` is removed; the JavaScript hub on its own says
+  downloads come from the Rust hub (503).
+- **Nothing is public any more.** `/api/pub/versions`, `/api/pub/native[/file]` and `/api/pub/*.zip` answer 410 to
+  everyone (signed in or not) with what to do instead; the list, the zips and the app's release need a session (401
+  without one).
+- **The desktop app updates itself with an account:** the hub's page hands the app its session when you sign in
+  (`set_session`, new and allowed for the hub's page) and clears it when you sign out. The app keeps it in its private
+  `desktop.json`, sends it only to its own hub (changing the hub address drops it), asks the new
+  `/api/native?app=vr-desktop&target=` with it, and its background update waits until someone is signed in. Against a
+  hub before 4.0.0 it still uses the old public route. **An app installed before 4.0.0 cannot update itself from a
+  4.0.0 hub** (it only knows the public route): download it once more from the Download panel.
+- AI hosts are unchanged: they update over their own authenticated link (`/node/update*`).
+- The Download panel says so when nothing is built on the hub yet.
+
+### Changed: Unity in the chat queues like an agent, one conversation at a time
+- **Every call is answered in its own conversation's turn.** Before, a call that came while she was busy took the one
+  waiting slot (a second call replaced the first, so one was never answered), and her next turn read **every** unseen
+  call across all conversations and answered them all in one place, so a private message to her could be answered in a
+  channel or to someone else.
+- Now, like a standard agent's message queue: calls that come while she is busy wait in order; more calls in a
+  conversation that is already waiting merge into that conversation's next turn; each turn sees only its own
+  conversation's messages (# Everyone, one channel / group, or one person's private messages). What she has answered is
+  kept per message in `Chat/agent-seen.json` (`lastSeq` + `handled`; an older file is read as before).
+- **On a Claude brain each conversation has its own session** (`Chat/agent-state.json` `threads`; # Everyone keeps
+  `sessionId`), so nothing said in one conversation is remembered in another. Sign-in greetings go to # Everyone's turn
+  only.
+- No per-person quotas (decided 2026-10-21).
+
+### Tests
+- R142 (the Download panel), R143 (a host's config, now from `/api/hosts/config`), R155 (updates need an account; it
+  replaces the script packages' installer checks) and R167 (the native downloads, `--rust-hub` only) follow.
+
+## 3.25.0 — 2026-10-21
+
+### Changed: Downloads and new projects in Rust behind the Rust hub (board T-134, toward 4.0.0)
+- **The Download panel** (`modules/downloads.rs`): the same packages, READMEs, zip files and VERSION.txt fingerprints:
+  - the native app and the native AI host (with your own host's config), and the earlier script packages
+  - the public versions, native releases and Desktop packages
+- **Starting or pulling in a project** (Work's header) is answered here; it runs `bridge/worktree.js new / clone` as
+  that person, with their Forgejo token.
+- The JavaScript hub now answers only `/api/status` and `/api/version`; it stays behind the Rust hub as the fallback.
+
+### Security (board T-135, the assessment's findings in the Rust hub)
+- **The hub can no longer be crashed by an AI host's answer.** A status code outside 100–599, or a header that is not
+  valid HTTP, made building the answer fail, which aborted the whole process. Such status codes now become 502 and
+  such headers are dropped.
+- **Unity's engines come only from a host in the hub's config or one owned by a hub admin**, unless config
+  `assistant.node` names one. Before, any person's host that announced an engine could receive everyone's Unity
+  prompts, voice and pictures.
+- **A Work run's tools (and Unity's Claude brain's) answer only as its own person.** The MCP key is now per account
+  (an HMAC of the hub's secret and the account), so a run that names another account in `x-mills-account` is
+  refused.
+- **`team_say` follows the person's own posting rules:** timeouts, permissions, the new-member wait, slowmode.
+- Read receipts and typing only for conversations that exist; nothing made up is kept.
+- **Unity's `read_page`** connects to exactly the address it checked (no DNS rebinding) and reads at most 2 MB within
+  20 s.
+- **Calls to an AI provider's endpoint follow no redirects.**
+- **The page server** refuses paths with a drive letter or a stream name: on Windows, `C:…` would name a path outside
+  `web/`.
+- **A linked Linux account's `~/uploaded_files`** is used only when it is a real folder in that home, not a link;
+  otherwise uploads go to the hub's own area for them. A link could have pointed at the hub's own data.
+- A person owns at most 100 group conversations.
+
+## 3.24.0 — 2026-10-21
+
+## 3.24.0 — 2026-10-21
+
+### Changed: the page, profiles and the admin's accounts in Rust behind the Rust hub (board T-134, toward 4.0.0)
+- **The page itself** (`modules/site.rs`): web/ as files, and index.html with this hub's values filled in, every script
+  and stylesheet asked for under this build's name, and its CSP pinned to the sha256 of its own inline scripts.
+  `/api/check` is answered here, and every API answer names the build (X-VR-Version).
+- **Profiles, prefs and pictures** (`modules/profile.rs`): the same rules and the same places (`state.json`
+  "profile" / "prefs", `Avatars/`).
+- **The admin's accounts** (`modules/admin.rs`): the list, making an account with its first password, deleting one
+  (moved to `profiles-deleted/`), Stop, and asking for a restart. **My Forgejo** (connect / disconnect) is here too.
+- **Still in the JavaScript hub:** `/api/status` and `/api/version`, the Download panel, and adding a project. It
+  re-reads the accounts when the Rust hub makes or deletes one.
+
+## 3.23.0 — 2026-10-21
+
+### Changed: Unity in Rust behind the Rust hub (board T-134, toward 4.0.0)
+- **Unity's section** (`native/crates/vr-hub/src/modules/unity*.rs`) runs in the Rust hub:
+  - her local brain (Ollama with native tool calls, through the AI host that lends her engines or here), or a Claude
+    brain (`claude -p` with her tools through `bridge/assistant-tools-mcp.js`, with this hub's own secret)
+  - every tool: time, place, weather, news, web search, public pages only, YouTube, pictures (make / edit / inpaint),
+    the calculator, tasks, calendar, reminders, memory, knowledge, and the PC / code tools done by the person's browser
+  - yes / no for destructive tools, voice and speech, uploads, and the reminders' notices
+- **The same files:** `<profile>/assistant.json` and `Images/`. Her brain choice and Claude session, and the admin's
+  PC / code switches, move to `<profile>/unity.json` (taken over from `state.json`); the admin's switches are answered
+  here too.
+- **The team chat's Unity** runs in the Rust hub as well: called by @<her name> or a private message, on her local
+  brain or a Claude model. She greets people at sign-in, with their local time, weather and news.
+- The JavaScript hub's Unity starts no engines and fires no reminders while the Rust hub runs her.
+
+## 3.22.0 — 2026-10-21
+
+### Changed: the Rust hub is on by default (board T-134, item 3)
+- `bridge/run.js` puts the Rust hub (vr-hub) in front whenever its binary is there; every module passes the whole suite
+  through it. Config `"rustHub": false` (or `{ "enabled": false }`) runs the JavaScript hub alone. Without the binary,
+  or when it keeps failing, the JavaScript hub runs alone by itself, as before.
+- The suite's normal run sets `rustHub: false`; `--rust-hub` runs it through the Rust hub.
+
+### Fixed: the native programs on Windows (board T-133, what the server can check)
+- **The desktop app starts on a clean Windows.** `vr-desktop.exe` loads `WebView2Loader.dll` from its own folder (the
+  windows-gnu build cannot link it in). The DLL now ships with it: `native/dist`, the native app download, and
+  `vr-desktop --install` all include it. Without it, the app stopped with "WebView2Loader.dll was not found".
+- **The host config is private on Windows too.** `vr_core::settings::private` locks a file's ACL on Windows when
+  someone else could read it: the person, SYSTEM and Administrators only, named by their well-known ids. Before, this
+  only happened on Linux. The native host now locks `ai-node.json` by itself, as it does on Linux, and `vr-host
+  lockdown` works the same way on Windows in any language. This matters for an install in `C:\VibeRollerAIHost`,
+  which every user can read.
+- **The AI host service:**
+  - Reinstalling it waits for the old one to stop and to be gone before making it again. A host finishing its work
+    took longer than the fixed 2 s wait, and the new service failed with "marked for deletion" (1072).
+  - Its access list is set without an audit part, which an elevated prompt cannot set; that would refuse the whole
+    change and leave non-admins unable to start or stop the service.
+- Checked on the server: the Windows programs load only Windows' own DLLs and the UCRT (no MinGW runtime);
+  `vr-desktop.exe` and `vr-hostw.exe` are window programs and `vr-host.exe` / `vr-hub.exe` console ones. The
+  hands-on list for a Windows PC is the team note `how-to/windows-verification.md`.
+
+## 3.21.0 — 2026-10-21
+
+### Changed: the chat in Rust behind rustHub (board T-131, the last of its modules)
+- **vr-hub's chat module** (`native/crates/vr-hub/src/modules/chat.rs`, `guilds.rs`, `perms.rs`) runs the chat itself:
+  - messages: send, edit, delete, voice clips, attachments, end-to-end encrypted as before (ciphertext only; each
+    reader gets only their own key slot)
+  - keys, receipts, typing, presence, and the room's long poll
+  - servers, channels and groups, with Discord-style roles, permissions, invites, moderation, the audit log and pins
+  - calls (the encrypted set-up relay; who is in which call)
+  - the admin's "clear the chat"
+  - the team tools of Work runs
+- **Unity's side**: her key stays in `Chat/agent-key.json`. The Rust hub opens what she is sent, sees when she is
+  called, and posts what she answers. Her brain stays in the JavaScript hub, which hears she was called and reads what
+  she was sent through `/__front/chat/*`. What she has read is kept in `Chat/agent-seen.json`, taken over from
+  `agent-state.json`.
+- Same files: `Chat/messages.jsonl`, `keys.json`, `seen.json`, `guilds.json`. Nothing moves and nothing is
+  re-encrypted.
+- **What stays in the JavaScript hub:** profiles, prefs and pictures (it tells the Rust hub when one changes, so the
+  member list reloads), and Unity's section.
+
+## 3.20.0 — 2026-10-21
+
+### Changed: the external API and the AI providers in Rust behind rustHub (board T-131)
+- **vr-hub's api module** (`native/crates/vr-hub/src/modules/openai.rs`) answers `/v1` itself:
+  - `/v1/models`, `/v1/chat/completions` (OpenAI) and `/v1/messages` + `count_tokens` (Anthropic), streamed or not, in
+    the same shapes, errors and limits (one answer at a time per key; the caller hanging up cancels it)
+  - every provider kind: this hub's Claude and a Claude Code login (`claude -p` in `Api/sandbox`), an Anthropic key, an
+    OpenAI-compatible endpoint, and an AI host's endpoint, Claude login, Codex login or legacy run
+- **Settings → API access** (`/api/apikey*`): the keys move to `bridge/api-keys.json` (sha256 only), taken over from
+  each account's `state.json` the first time.
+- **Settings → AI providers** (`/api/providers*`, `bridge/providers.json`): a removed provider is dropped from
+  everyone's Work and API choice.
+- **Settings → My AI hosts** (the list): answered here too. `/api/check` gets the providers and the default provider
+  from here.
+- The data lists (`handoff.js`, the auto-deploy's snapshots, `pack-data.sh`) include `bridge/api-keys.json`.
+- R111 reads the key's record from `api-keys.json` when the Rust hub is in front.
+
+## 3.19.0 — 2026-10-21
+
+### Changed: Work runs in Rust behind rustHub (board T-131)
+- **vr-hub's work module** (`native/crates/vr-hub/src/modules/work.rs`) runs Work itself:
+  - Claude Code in the person's own worktree, with the same arguments, instructions (the worktree law with the latest
+    background check), tools, model, provider and resume rules
+  - its stream to the page, Stop, and the PC tools relayed to the person's own AI host or their browser
+  - the board, notes and team tools of a run, here and on a host
+  - a host's shared login relayed for a run (`/llm/<token>/…`)
+  - the legacy runs on a host
+- Around it:
+  - the model / provider choice, the project, `/api/usage` (`usage.json` is written here now)
+  - shared Work sessions (watch-only), the Work conversation + queue (`work-current.json`), past sessions (`Archive/`)
+- **Each person's Work state** moves to `<profile>/work.json` (provider, model, Claude session, context, project, last
+  run), taken over from their `state.json` the first time.
+- **What stays in the JavaScript hub:**
+  - Settings → AI providers (`providers.json`, which the Rust hub reads) and adding projects
+  - the chat, presence, calls and servers, which the team tools still reach through it
+- **How the two hubs share the rest:**
+  - The Rust hub patches `/api/check`, `/api/status` (busy) and the admin's account list with what it knows.
+  - It tells the JavaScript hub its shared sessions and when a run is going, so a requested restart still waits for it.
+  - It runs the admin's Stop and stops runs on account deletion.
+  - `run.js` gives it the Node.js path for the tools of its runs.
+- `deploy/pack-data.sh`, the auto-deploy's snapshots and `handoff.js` include `bridge/work.json` and
+  `bridge/work-current.json`. `pack-data.sh` also now includes the Rust hub's files and the AI host registry.
+
+## 3.18.0 — 2026-10-21
+
+### Changed: the AI hosts run in Rust behind rustHub (board T-131)
+- **vr-hub's aihosts module** (`native/crates/vr-hub/src/modules/ai_hosts.rs`) answers every AI host itself: the
+  registry (`bridge/ai-hosts.json` + config `aiNodes`), the protocol (`/node/hello`, the long poll with the hub's
+  heartbeat, reply, stream, events, the JavaScript host's file updates, the native host's signed binary updates), the
+  sessions file (`bridge/ai-host-sessions.json`: a restart keeps every host's session), the up / down log, the probe of
+  older hosts, caps from the usage headers, and Settings → My AI hosts (new, rename, remove, share, config). The same
+  files and the same protocol, so a host (JavaScript or native, old or new) cannot tell which hub it talks to.
+- **The JavaScript hub uses them through the front** (`bridge/ai-nodes-front.js`, the same calls as
+  `bridge/ai-nodes.js`): it knows what the hosts offer from the front's snapshot (sent on every change and every 5 s;
+  online counted from each host's last poll), and carries Unity's engine calls, a host's endpoint and login calls (the
+  answer streams back as it comes), Work runs on a host (one line per event) and PC tools through `/__front/ai/*`. A Work
+  run's tools on a host (`/node/job/<id>/internal/<tool>`) come with the account the front checked the job's token for.
+  A host's usage windows reach the JavaScript hub's `/api/usage` as they come.
+- `native_releases.rs`: the release manifests and their signatures in Rust (the same text, Ed25519 + the host's HMAC).
+- Without rustHub (or with an older vr-hub that does not name `aihosts`) nothing changes: `bridge/ai-nodes.js` runs them.
+
+## 3.17.0 — 2026-10-20
+
+### Added: the Downloads are the pre-built native programs (board T-134, items 1 + 2)
+- **Download panel**: first the native programs, pre-built for Windows and Linux, nothing to install first:
+  - **VibeRoller (native app)** (`app-windows` / `app-linux`): vr-desktop + the AI host it switches on. It runs from its
+    folder or installs itself (`vr-desktop --install`, or Tools → Settings → Install on this computer: the standard
+    folder with Start-menu + Desktop shortcuts / an application-menu entry and `~/.local/bin/viberoller`, an earlier
+    install updated). Public, like the Desktop packages.
+  - **VibeRoller AI Host (native)** (`host-windows` / `host-linux`): vr-host (+ vr-hostw), with the person's own host
+    config inside from Settings → My AI hosts (those buttons now hand out the native host when this hub has one built).
+    `vr-host install [--boot …]` installs it or updates an earlier install (the JavaScript host's folder too, taking its
+    ai-node.json and settings over; a running host there is stopped first and started again on the new version).
+  - The earlier script packages (browser launcher, the Node.js AI host) stay listed after them, for machines using them.
+- **Built automatically**: the server's auto-deploy rebuilds the native programs in the background whenever the running
+  version's `native/` differs from what `native/dist` was built from (a systemd unit of its own, so it outlives the
+  timer's run; a failed build keeps the last one; `native-build.log`). `native/build.sh` finds the server's own Node.js
+  so every build carries the release key. The data snapshots now include the Rust hub's files and the release key.
+- R167: the panel lists them, the zips hold the binaries (and the host config), the app is public and the host is not,
+  `/api/pub/versions` names them, and the downloaded host installs itself.
+
+## 3.16.0 — 2026-10-20
+
+### Changed: files run in Rust (board T-131, module 3 of 7)
+- Behind `rustHub`, vr-hub's files module (`modules/files.rs`) answers the chat's attachments (ciphertext only, the
+  uploader's own seal), Work uploads (into the linked Linux account's `~/uploaded_files/<date>/`, else the hub's area),
+  and the Files library (list with files put there by hand, delete, edit in place, executable on / off), plus the link
+  status of the Linux account; the same files as before (`Chat/files`, `uploads-index.json`, the uploads).
+- The chat (still in the JavaScript hub) asks it to attach a message's files (the message number is taken first, so a
+  message sent meanwhile cannot take it), tells it when messages are gone or the chat is cleared, and answers whether
+  someone may read a message before one of its files is handed out (`/internal/front/may-read`). A Work run's attached
+  files get their paths from it. The Rust front also checks a page's origin and adds the hardening headers itself.
+
+## 3.15.0 — 2026-10-20
+
+### Changed: the board and team notes run in Rust (board T-131, module 2 of 7)
+- Behind `rustHub`, vr-hub owns the team board (`modules/board.rs`: tasks, claims, revisions, month-end aware repeats,
+  the calendar, the long poll; the same `Board/board.json`), its Forgejo issue mirror (`modules/forgejo.rs`: outbound
+  as the person who made the change, the poll as "Forgejo"; the personal tokens stay in the JavaScript hub, which it
+  reads), and team notes (`modules/notes.rs`: the same `Notes/` folder and `.index.json`). Due dates are read in the
+  machine's local time, as before.
+- Claude's board and notes tools (Work runs) still come in through the JavaScript hub, which checks the run's token and
+  hands them over (`/__front/board/tool`, `/__front/notes/tool`, with the front's secret); a notes change wakes the
+  pages' chat poll there (`/internal/front/room-changed`), and the notes' version rides along on every request.
+- `bridge/run.js` asks vr-hub which modules it answers (`vr-hub --modules`), and the JavaScript hub leaves those alone
+  (its own Forgejo mirror stays off). While moving house (`bridge/.maintenance`) the Rust hub answers changes "moved"
+  exactly as the JavaScript one does; `handoff.js pack` takes the Rust sign-in module's files along.
+
+## 3.14.0 — 2026-10-20
+
+### Changed: accounts & authentication run in Rust (board T-131, module 1 of 7)
+- Behind `rustHub`, vr-hub's auth module (`native/crates/vr-hub/src/modules/auth.rs`) does sign-in (scrypt, the same
+  auth.json; the per-address limits; the same cost for unknown names), the device lock, the 12-hour sessions (sha256
+  only, `bridge/front-sessions.json`), sign-out, the session gate for every request, and the admin's new password /
+  unlock / sign-out; the admin list gets its locks and sign-ins from it. On its first start it takes over the
+  JavaScript hub's sessions and device locks, so nobody is signed out or loses their lock.
+- The JavaScript hub, behind it, trusts who a request belongs to (`X-VR-User`) only with the front's secret and never
+  reads a token itself; a caller's own `X-VR-User` / `X-VR-Front-*` headers are dropped at the front. A sign-in there is
+  told to the JavaScript hub (`/internal/front/signed-in`: the client details, Unity's greeting).
+- Without `rustHub` nothing changes. The whole suite passes both ways.
+
+## 3.13.0 — 2026-10-20
+
+### Added: the Rust hub, in front (board T-130)
+- **vr-hub** (`native/crates/vr-hub`): the hub in Rust, growing module by module in front of the JavaScript hub. With
+  config `"rustHub": { "enabled": true, "backPort": 7779 }`, `bridge/run.js` starts it on the hub's port (what nginx
+  already sends the portal to, so nginx needs no change) and the JavaScript hub behind it on 127.0.0.1:backPort. It
+  answers the modules it has and passes everything else through, streamed both ways (long polls, streamed answers,
+  uploads up to 32 MB); while the JavaScript hub restarts, requests wait up to 30 s for it instead of failing. If its
+  binary is missing or it fails three times in a minute, the JavaScript hub takes the port back by itself.
+  `/__vr-front` names it and its modules; every answer carries `X-VR-Front`.
+- **The whole regression suite runs through it**: `node bridge/test/regress.js --rust-hub` (all checks pass; R166 checks
+  it is really in front and the JavaScript hub sits behind it). Off by default until the modules have moved (T-131).
+
+## 3.12.0 — 2026-10-20
+
+### Added: VibeRoller Desktop, native (Rust + Tauri), Linux and Windows (board T-128, T-129)
+- **Two windows, two levels of trust** (`native/crates/vr-desktop`): the main window shows the hub's own page (always
+  current; it updates itself as in the browser) and may ask the app only harmless things: its version, desktop
+  notifications, the unread count on the tray / taskbar, the Tools window, links in the browser, the AI host switch.
+  The **Tools** window is the app's own page (built in, never loaded from the network) and is the only one allowed to
+  touch the computer, so a script injected into a hub page could not.
+- **Tools**: the local projects folder (browse, edit, create, delete; no browser permission prompts), an integrated
+  terminal (a real pseudo-terminal: bash / pwsh / cmd), build & run with saved buttons per project, git with Forgejo
+  sign-in (the token goes along per call, never into the repo), the local API proxy (`http://127.0.0.1:<port>/v1` →
+  the hub's OpenAI- and Anthropic-compatible API with the person's key; this computer only; web pages refused), the AI
+  host switch (start / pause / resume / stop / update / start at boot) and the app's updates.
+- **Hosting this PC's AI from the app**: Settings → My AI hosts → **Run on this PC** (shown in the desktop app) fetches
+  that host's settings (`POST /api/hosts/config`, the owner only) and the app's own native AI host runs it.
+- **Tray** (show, Tools, AI host on / pause, updates, quit), close to tray, one instance at a time, native
+  notifications for chat messages while the window is in the background.
+- **Updates** signed with VibeRoller's release key: `/api/pub/native` + `/api/pub/native/file` (public: the binaries hold
+  nothing private and are signed); checked at start and every 6 hours, applied when no terminal or run is open.
+- **Built without root**: WebKitGTK / GTK development files from Debian's own packages in a user-space sysroot
+  (`native/tauri-env.sh setup`); Windows needs nothing more. `native/smoke-desktop.sh` starts the Linux app headless
+  (Xvfb in a user namespace) and checks both windows; R165 runs it against the test hub.
+- The page: `NATIVE` (window.__TAURI__ inside the app), the Tools tile, Run on this PC, the badge and notifications;
+  its CSP lets the app's IPC through (`ipc:` / `http://ipc.localhost`, which no browser has).
+
+## 3.11.0 — 2026-10-20
+
+### Added: the native AI host (Rust), pre-built for Linux and Windows (board T-122 … T-127)
+- **Toolchains on the server, all user space** (T-122, T-123): rustup / cargo / rustc 1.99.1 in the hub account, the
+  `x86_64-pc-windows-gnu` target, and llvm-mingw (`~/.local/opt/llvm-mingw`) as the Windows linker, its compiler-rt
+  and libunwind standing in for libgcc. `sh native/build.sh` tests, then builds release binaries for both
+  (`native/dist/<target>/` with `BUILD.json` + `SHA256SUMS`); `check` / `test` for less.
+- **vr-core** (T-125): the AI host protocol + session envelope (HKDF + AES-256-GCM), update signatures (HMAC + Ed25519),
+  the chat's end-to-end encryption exactly as the page does it (formats 3 / 4, files, own seals, voice clips), ai-node.json
+  with the control app's keys, defaults and checks (unknown keys kept), and a hub API client. Checked against Node and
+  WebCrypto both ways (R163).
+- **vr-host** (T-126, T-127): the AI host and its heart & knife control app in one program: the same folder, settings,
+  status file and control requests as the JavaScript host, so it can take that one's place and either control app works
+  with either. Login relays (Claude / Codex) with token refresh, engines with the engine guard, OpenAI-compatible
+  endpoints, streaming back, PC file tools, Work runs (with its own MCP servers for the PC / board / team tools), usage
+  caps, the heartbeat and reconnects, pause, a terminal dashboard (ratatui) with every setting, start at boot (Windows:
+  the VibeRollerAIHost service via the SCM, or sign-in through the window-less `vr-hostw`; Linux: system or user
+  systemd unit), and `vr-host run`, which supervises it (restart on exit 3, back off after crashes, log rotation).
+  The whole regression suite passes with it as the test host (`node bridge/test/regress.js --rust-host`); R164 runs it
+  through set / settings / its MCP tools / status / an update / pause / stop.
+- **Signed native releases from the hub** (`bridge/native-releases.js`): the binaries in `native/dist`, described in a
+  manifest signed with VibeRoller's release key (Ed25519, `bridge/release-key.json`, gitignored, made on first use; its
+  public half is built into every binary) and, for a host, with its own secret too. `GET /node/update/bin` +
+  `/node/update/bin/file` for hosts that say `update-bin`; a host checks, self-tests, swaps in its new binary (the old
+  one kept as `.old`), restarts on it and confirms it once it reached the hub; three starts that never reach it put the
+  old one back.
+
+## 3.10.0 — 2026-10-20
+
+### Security (board T-132)
+- **Sign-in sessions are stored as hashes**: `hub-state.json` keeps the sha256 of each session token, never the token,
+  so a copy of the file (a backup, a data snapshot) signs nobody in. Sessions an older hub saved in the clear are hashed
+  on the first start, so nobody is signed out by the update (a rollback to an older hub would sign people out once).
+- **No inline script runs but the page's own**: the hub serves the page with its CSP's `'unsafe-inline'` for scripts
+  replaced by the sha256 of each of the page's own inline scripts, so injected script and inline event handlers are
+  refused by the browser. `worker-src blob:` lets the code sandbox (run_code) start its workers, which the old policy
+  silently blocked. A static copy of the file with no hub in front still says `'unsafe-inline'`.
+- **No more hanging requests**: every request runs through `handleRequest(...).catch(...)`, so a route that hands back a
+  promise without awaiting it is answered when that promise fails, instead of leaving the connection open (the 3.8.0
+  upload hang, fixed for every route at once).
+- nginx rate limits: unchanged in the repo (`deploy/nginx-portal.conf` has them); installing them needs root. R162.
+
+### Added
+- **The Rust workspace** (board T-124): `native/` is one Cargo workspace (resolver 2, edition 2021, a small stripped
+  release profile) with the shared `vr-core` library crate, its planned modules named after their JavaScript
+  references; `native/target/` is gitignored and
+  `native/` is published (the whitelist .gitignore). Not compiled yet: the toolchain (T-122) is not installed.
+
+## 3.9.0 — 2026-10-20
+
+### Added
+- **Protocol adapters, both directions, one key** (bridge/openai.js; board T-120): `POST /v1/messages` takes
+  Anthropic's Messages format (system and content blocks, `max_tokens`, `stream`) and is answered by whichever provider
+  the key uses, an OpenAI-compatible endpoint or a host's local model too (Anthropic → OpenAI), in Anthropic's message
+  shape, streamed as Anthropic's events (`message_start` … `content_block_delta` … `message_stop`), errors in
+  Anthropic's shape. `POST /v1/chat/completions` (OpenAI format) keeps reaching every Claude (OpenAI → Anthropic).
+  `/v1/models` answers in Anthropic's list shape when `anthropic-version` is sent; `/v1/messages/count_tokens` gives a
+  rough count. The same `mills_…` key works as `Authorization: Bearer` or `x-api-key` on both. Text only: tool calls,
+  tool results and pictures are passed on as text.
+- **Files, complete** (board T-121): a Work file is edited in place (text up to 2 MB; Ctrl+S; its permissions kept),
+  made executable or not (chmod), and sent to Work as it is ("Use in Work", or "Run in Work": Claude runs it and
+  reports). Files put in `~/uploaded_files` outside VibeRoller (over SSH, by a Work run) show in the library too and
+  open, download, edit, run and delete like the rest. `POST /api/library/save?id=`, `POST /api/library/exec`. R160, R161.
+
 ## 3.8.0 — 2026-10-20
 
 ### Added

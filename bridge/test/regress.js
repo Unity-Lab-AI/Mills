@@ -85,6 +85,7 @@ function listening(port) {
   });
 }
 
+let RUST_BACK = 0;
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null, FAKE_LINUX = ''; // FAKE_LINUX: R159's stand-in Linux accounts (ignored by git: under bridge/profiles)
 // read a zip like an unzipper would (the Download packages): the central directory names every entry and points at its
 // local header; deflated entries are inflated, so the files inside can be checked
@@ -224,22 +225,22 @@ async function setup() {
     if ((f.endsWith('.js') && f !== 'master-logins.js') || f === 'cloudflared-quick.yml') fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   }
   fs.copyFileSync(path.join(__dirname, 'fake-claude.js'), path.join(SB, 'test', 'fake-claude.js'));
-  // what the Download panel packs (bridge/downloads.js): the AI node's launchers, example config and host tools
+  // the JavaScript AI host's launchers, example config and host tools
   for (const f of ['ai-node.example.json', 'start-node.bat', 'start-node.sh']) fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
-  fs.cpSync(path.join(BRIDGE, 'desktop'), path.join(SB, 'desktop'), { recursive: true }); // the Desktop packages' setup scripts
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
   for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
   PORT = await freePort(7799);
+  if (RUST_HUB) RUST_BACK = await freePort(PORT + 20); // the JavaScript hub behind the Rust one
   H = `http://127.0.0.1:${PORT}`;
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp' }, hostGroup: ['t-user'], linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -251,6 +252,7 @@ async function setup() {
   fs.mkdirSync(path.join(SCRATCH, 'Chat'), { recursive: true });
   fs.writeFileSync(path.join(SCRATCH, 'Chat', 'guilds.json'), JSON.stringify({ servers: [{ id: 'seedtest', name: 'Seed Test', members: ['t-admin', 't-user'], owner: 't-user', createdBy: 't-user', channels: [{ id: 'general', name: 'general' }] }], groups: [] }));
   fs.writeFileSync(path.join(SB, 'server-owners.json'), JSON.stringify({ servers: { seedtest: { owner: 't-admin', coOwners: ['t-user', 'nobody-here'] }, mills: { owner: 't-admin', coOwners: [] } } }));
+  fs.writeFileSync(path.join(SB, 'release-key.json'), JSON.stringify(TEST_RELEASE_KEY)); // R164: the scratch hub signs native releases with the test key
   fs.writeFileSync(path.join(SB, 'forgejo.json'), JSON.stringify({ url: `http://127.0.0.1:${OLLAMA_PORT}`, token: 'fake-forgejo-token', repo: 'UnityAILab/Mills', board: 'team', pollMinutes: 0.01 }));
   const sp = (args) => spawnSync(process.execPath, [path.join(SB, 'set-password.js'), ...args], { cwd: SB, encoding: 'utf8' });
   sp(['pw-default-0001']);
@@ -280,8 +282,58 @@ function startAiNode() {
       { id: 'codex', kind: 'codex-relay', label: 'Tadmin\'s Codex', models: ['gpt-test'], allowedUsers: ['t-user'], codexHome: cx, baseUrl: base + '/codex' },
       { id: 'local', kind: 'openai', label: 'Host local model', baseUrl: base + '/oai', models: ['tiny-local'], allowedUsers: ['t-user'] }] }));
   const log = fs.openSync(path.join(SCRATCH, 'ai-node.log'), 'a');
-  aiNodeProc = spawn(process.execPath, [path.join(SB, 'ai-node.js'), '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
+  // --rust-host: the native host (native/crates/vr-host) plays the test host, so every host check runs against it
+  aiNodeProc = RUST_HOST ? spawn(RUST_HOST, ['host', '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true })
+    : spawn(process.execPath, [path.join(SB, 'ai-node.js'), '--config', f], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
 }
+// the native programs, built for this machine when a Rust toolchain is here (native/build.sh): R163 / R164, --rust-host
+// built into their own target folder with a test-only release key (the scratch hub signs with it), so they never mix
+// with the real builds of native/build.sh
+const TEST_RELEASE_KEY = { secret: '4570e54a425b32604b04d14d172976b602af918eb6322d14e929867896b61b50', public: '241fc450dffa7aaf2155ed06404cd10d824f590c7c0c00a70b4ec6fa8e9b5a20' };
+const NATIVE_TARGET = path.join(MILLS, 'native', 'target', 'regress');
+const NATIVE_BIN = (() => {
+  const exe = (n) => path.join(NATIVE_TARGET, 'release', n + (WIN ? '.exe' : ''));
+  return { host: exe('vr-host'), interop: path.join(NATIVE_TARGET, 'release', 'examples', 'interop' + (WIN ? '.exe' : '')) };
+})();
+let nativeBuilt = null;
+function buildNative() { // → '' when built, else why not (once per run)
+  if (nativeBuilt !== null) return nativeBuilt;
+  const home = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+  const env = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET, VR_RELEASE_PUBKEY: TEST_RELEASE_KEY.public, VR_VERSION: (() => { try { return JSON.parse(fs.readFileSync(path.join(MILLS, 'versions.json'), 'utf8')).project; } catch { return ''; } })() };
+  env.PATH = path.join(env.CARGO_HOME, 'bin') + path.delimiter + (env.PATH || '');
+  const r = spawnSync('cargo', ['build', '--release', '-q', '-p', 'vr-host', '-p', 'vr-core', '-p', 'vr-hub', '--examples', '--bins'], { cwd: path.join(MILLS, 'native'), env, encoding: 'utf8', timeout: 1200000 });
+  return (nativeBuilt = buildResult(r));
+}
+function buildResult(r) {
+  if (r.error) return 'no Rust toolchain here (' + r.error.code + ')';
+  return r.status === 0 && fs.existsSync(NATIVE_BIN.host) ? '' : 'cargo build failed: ' + String(r.stderr || '').trim().split('\n').slice(-3).join(' ');
+}
+// the desktop app (Tauri) for this machine: built with native/tauri-env.sh's sysroot (Linux), into the same test target
+function buildDesktop() { // → { bin } or { why }
+  if (WIN) return { why: 'the desktop smoke check runs on Linux (Xvfb)' };
+  const home = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+  const sh = `export RUSTUP_HOME="${home}/.rustup" CARGO_HOME="${home}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}" VR_RELEASE_PUBKEY=${TEST_RELEASE_KEY.public} OWNER_HOME="${home}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; [ "$HAVE_TAURI_LINUX" = 1 ] || { echo NO-SYSROOT; exit 3; }; cargo build --release -q -p vr-desktop`;
+  const r = spawnSync('sh', ['-c', sh], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+  if (r.status === 3) return { why: 'no WebKitGTK sysroot here (sh native/tauri-env.sh setup)' };
+  const bin = path.join(NATIVE_TARGET, 'release', 'vr-desktop');
+  return r.status === 0 && fs.existsSync(bin) ? { bin } : { why: 'cargo build failed: ' + String(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' ') };
+}
+// --rust-hub: the Rust hub (native/crates/vr-hub) in front of the scratch hub, as config "rustHub" runs it on the server:
+// every check below then goes through it (the modules it has, it answers; the rest it passes to the JavaScript hub)
+const RUST_HUB = (() => {
+  if (!process.argv.includes('--rust-hub')) return '';
+  const why = buildNative();
+  if (why) { console.error('--rust-hub: ' + why); process.exit(2); }
+  const bin = path.join(NATIVE_TARGET, 'release', 'vr-hub' + (WIN ? '.exe' : ''));
+  process.env.VR_HUB_BIN = bin;
+  return bin;
+})();
+const RUST_HOST = (() => {
+  if (!process.argv.includes('--rust-host')) return '';
+  const why = buildNative();
+  if (why) { console.error('--rust-host: ' + why); process.exit(2); }
+  return NATIVE_BIN.host;
+})();
 async function startHub() {
   const log = fs.openSync(path.join(SCRATCH, 'hub.log'), 'a');
   hub = spawn(process.execPath, [path.join(SB, 'run.js'), '--no-tunnel'], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
@@ -511,8 +563,9 @@ async function run() {
   const ct = await subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode('regression secret text'));
   const keys = {};
   for (const m of members) if (m.pub) { const kiv = rand(12); keys[m.username] = { iv: toB64(kiv), wk: toB64(await subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await shared(pairs['t-admin'].priv, m.pub), raw)) }; }
-  await call('/api/room/send', A, { iv: toB64(iv), ct: toB64(ct), keys });
-  const got = ((await call('/api/room/messages?since=0', U)).data.messages || []).at(-1);
+  const sent23 = (await call('/api/room/send', A, { iv: toB64(iv), ct: toB64(ct), keys })).data || {};
+  // (its own message by number: Unity's sign-in greeting can land after it)
+  const got = ((await call('/api/room/messages?since=0', U)).data.messages || []).find((m) => m.seq === sent23.seq);
   let text = '';
   try {
     const mk = await subtle.decrypt({ name: 'AES-GCM', iv: fromB64(got.key.iv) }, await shared(restored, got.fromPub), fromB64(got.key.wk));
@@ -765,7 +818,9 @@ async function run() {
   const oldDead = await v1('/v1/models', made.key), newLive = await v1('/v1/models', rotated.key);
   // expiry: a 1-day key made "yesterday" is refused as expired (the runner backdates it in the scratch state file)
   const uState = path.join(SB, 'profiles', 't-user', 'state.json');
-  const st1 = JSON.parse(fs.readFileSync(uState, 'utf8')); // (the hub keeps its own copy in memory; expiry is judged from createdAt + expiresDays at call time)
+  // (the hub keeps its own copy in memory; expiry is judged from createdAt + expiresDays at call time). Behind the Rust
+  // hub the key's record is its own: bridge/api-keys.json, by username
+  const st1 = RUST_HUB ? { api: (JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-user'] } : JSON.parse(fs.readFileSync(uState, 'utf8'));
   const setExp = await call('/api/apikey/settings', U, { expiresDays: 1 });
   const stillOk = await v1('/v1/models', rotated.key);
   const revoked = (await call('/api/apikey/revoke', U, {})).data, afterRevoke = await v1('/v1/models', rotated.key);
@@ -781,42 +836,78 @@ async function run() {
     `key ${made.key ? 'made' : 'none'}, models ${models.status}, chat ${chat1.status} "${c1text.slice(0, 60)}", stream ${stream1.status} ${chunks.length} chunks, calls ${afterUse.calls}, rotate ${oldDead.status}/${newLive.status}, revoke ${afterRevoke.status}`);
 
   // AI providers (bridge/providers.js): a person's own Claude login / key / OpenAI endpoint, private or shared; the host's Claude untouched.
-  const prov0 = (await call('/api/providers', U)).data;
-  const badKind = await call('/api/providers/add', U, { kind: 'magic', label: 'x' });
-  const badAnth = await call('/api/providers/add', U, { kind: 'anthropic', label: 'bad', apiKey: 'nope' });
+  // (a custom endpoint or a Claude config folder: only an admin with an AI host of their own online, 4.1.0; so the admin
+  // owns these here, with a host of theirs saying hello for the moment, and t-user is the other person)
+  const prov0 = (await call('/api/providers', A)).data;
+  const badKind = await call('/api/providers/add', A, { kind: 'magic', label: 'x' });
+  const badAnth = await call('/api/providers/add', A, { kind: 'anthropic', label: 'bad', apiKey: 'nope' });
   const cfgDir = path.join(SCRATCH, 'claude-sponge-login');
-  const cli = (await call('/api/providers/add', U, { kind: 'claude-cli', label: 'Tuser Claude login', configDir: cfgDir, shared: false })).data;
-  const oai = (await call('/api/providers/add', U, { kind: 'openai', label: 'Tuser endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt, fake-mini', shared: true })).data;
-  const seenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
-  const secretLeak = JSON.stringify((await call('/api/providers', U)).data).includes('"apiKey"');
-  const pickCli = await call('/api/model', U, { provider: cli.provider.id, model: 'claude-sonnet-5-5' });
-  const cliRun = await chat(U, 'who runs me', { fresh: true });
-  const ck7 = (await call('/api/check', U)).data;
-  const pickOai = await call('/api/model', U, { provider: oai.provider.id, model: 'fake-gpt' });
-  const useOai = (await call('/api/apikey/rotate', U, {})).data;
-  const setOai = await call('/api/apikey/settings', U, { provider: oai.provider.id, model: 'fake-mini' });
+  const cliNoHost = await call('/api/providers/add', A, { kind: 'claude-cli', label: 'no host yet', configDir: cfgDir });
+  const tmpHost = (await call('/api/hosts/new', A, {})).data.host || {}, tmpCfg = (await call('/api/hosts/config', A, { id: tmpHost.id })).data.config || {};
+  await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': tmpHost.id, 'X-VR-Host-Token': tmpCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+  const cliNotAdmin = await call('/api/providers/add', U, { kind: 'claude-cli', label: 'Tuser Claude login', configDir: cfgDir });
+  const oaiNotAdmin = await call('/api/providers/add', U, { kind: 'openai', label: 'Tuser endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, models: 'fake-gpt' });
+  const cli = (await call('/api/providers/add', A, { kind: 'claude-cli', label: 'Tadmin Claude login', configDir: cfgDir, shared: false })).data;
+  const oai = (await call('/api/providers/add', A, { kind: 'openai', label: 'Tadmin endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt, fake-mini', shared: true })).data;
+  await call('/api/hosts/remove', A, { id: tmpHost.id });
+  const seenByU = (await call('/api/providers', U)).data.providers.map((p) => p.id);
+  const secretLeak = JSON.stringify((await call('/api/providers', A)).data).includes('"apiKey"');
+  const pickCli = await call('/api/model', A, { provider: cli.provider.id, model: 'claude-sonnet-5-5' });
+  const cliRun = await chat(A, 'who runs me', { fresh: true });
+  const ck7 = (await call('/api/check', A)).data;
+  const pickOai = await call('/api/model', A, { provider: oai.provider.id, model: 'fake-gpt' });
+  const useOai = (await call('/api/apikey/rotate', A, {})).data;
+  const setOai = await call('/api/apikey/settings', A, { provider: oai.provider.id, model: 'fake-mini' });
   const oaiModels = await v1('/v1/models', useOai.key);
   const oaiChat = await v1('/v1/chat/completions', useOai.key, { model: 'fake-gpt', messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'through-r112' }] });
   const oaiText = ((((JSON.parse(oaiChat.text || '{}').choices || [])[0] || {}).message || {}).content) || '';
   const oaiStream = await v1('/v1/chat/completions', useOai.key, { model: 'fake-gpt', stream: true, messages: [{ role: 'user', content: 'flow-r112' }] });
   const oaiStreamed = oaiStream.text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => ((JSON.parse(l.slice(6)).choices || [])[0] || {}).delta || {}).map((d) => d.content || '').join('');
-  const otherTouch = await call('/api/providers/update', A, { id: cli.provider.id, shared: true });
-  const shareIt = await call('/api/providers/update', U, { id: cli.provider.id, shared: true });
-  const nowSeenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
-  const rmOther = await call('/api/providers/remove', A, { id: cli.provider.id });
-  const rm = await call('/api/providers/remove', U, { id: cli.provider.id });
-  const ck7b = (await call('/api/check', U)).data;
-  await call('/api/providers/remove', U, { id: oai.provider.id }); await call('/api/apikey/revoke', U, {}); await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' });
-  check('R112', 'AI providers: the host Claude is always listed; a person adds a Claude Code login (own folder) and an OpenAI endpoint (private or shared; bad kind / key refused; secrets never listed); a private one is invisible to others; picking the login runs Work with CLAUDE_CONFIG_DIR set and that model; an OpenAI provider is refused for Work; the API key answers through the endpoint provider (plain + streaming, system passed); only the owner shares / removes; removal clears the person\'s choice',
+  // Anthropic → OpenAI: the Messages format in (Anthropic's x-api-key header, the same key), the OpenAI endpoint answers
+  const antHdr = { 'x-api-key': useOai.key, 'anthropic-version': '2023-06-01' };
+  const antMsg = await v1('/v1/messages', null, { model: 'claude-opus-5-5', max_tokens: 100, system: [{ type: 'text', text: 'sys' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'anthropic-in-r160' }] }] }, antHdr);
+  const antJ = (() => { try { return JSON.parse(antMsg.text); } catch { return {}; } })();
+  const antStream = await v1('/v1/messages', null, { model: 'fake-gpt', max_tokens: 100, stream: true, messages: [{ role: 'user', content: 'anthropic-stream-r160' }] }, antHdr);
+  const antEvents = antStream.text.split('\n').filter((l) => l.startsWith('event: ')).map((l) => l.slice(7));
+  const antStreamed = antStream.text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => { try { return JSON.parse(l.slice(6)); } catch { return {}; } }).filter((d) => d.type === 'content_block_delta').map((d) => d.delta.text).join('');
+  const antModels = await v1('/v1/models', null, undefined, antHdr), antModelsJ = (() => { try { return JSON.parse(antModels.text); } catch { return {}; } })();
+  const antCount = await v1('/v1/messages/count_tokens', null, { model: 'x', messages: [{ role: 'user', content: 'abcdefgh' }] }, antHdr);
+  const antNoKey = await v1('/v1/messages', null, { messages: [{ role: 'user', content: 'x' }] }, { 'anthropic-version': '2023-06-01' });
+  const antEmpty = await v1('/v1/messages', null, { max_tokens: 5, messages: [] }, antHdr);
+  const oaiXKey = await v1('/v1/chat/completions', null, { model: 'fake-gpt', messages: [{ role: 'user', content: 'xkey-r160' }] }, { 'x-api-key': useOai.key });
+  const otherTouch = await call('/api/providers/update', U, { id: cli.provider.id, shared: true });
+  const shareIt = await call('/api/providers/update', A, { id: cli.provider.id, shared: true });
+  const nowSeenByU = (await call('/api/providers', U)).data.providers.map((p) => p.id);
+  const rmOther = await call('/api/providers/remove', U, { id: cli.provider.id });
+  const rm = await call('/api/providers/remove', A, { id: cli.provider.id });
+  const ck7b = (await call('/api/check', A)).data;
+  await call('/api/providers/remove', A, { id: oai.provider.id }); await call('/api/apikey/revoke', A, {}); await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+  check('R112', 'AI providers: the host Claude is always listed; an admin with an AI host of their own online adds a Claude Code login (own folder) and an OpenAI endpoint (private or shared; bad kind / key refused; without a host of theirs online, or not an admin → refused; secrets never listed); a private one is invisible to others; picking the login runs Work with CLAUDE_CONFIG_DIR set and that model; an OpenAI provider is refused for Work; the API key answers through the endpoint provider (plain + streaming, system passed); only the owner shares / removes; removal clears the person\'s choice',
     // (the test AI host's own providers, "h:…", are listed too: they survive the early hub restart since 3.3.0)
-    prov0.providers.filter((p) => !String(p.id).startsWith('h:')).length === 1 && prov0.providers[0].id === 'host' && badKind.status === 400 && badAnth.status === 400 && cli.provider && oai.provider && !secretLeak
-    && !seenByA.includes(cli.provider.id) && seenByA.includes(oai.provider.id)
+    prov0.providers.filter((p) => !String(p.id).startsWith('h:')).length === 1 && prov0.providers[0].id === 'host' && badKind.status === 400 && badAnth.status === 400 && cliNoHost.status === 400 && cliNotAdmin.status === 400 && oaiNotAdmin.status === 400 && cli.provider && oai.provider && !secretLeak
+    && !seenByU.includes(cli.provider.id) && seenByU.includes(oai.provider.id)
     && pickCli.status === 200 && pickCli.data.provider === cli.provider.id && new RegExp('cfg=' + cfgDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(texts(cliRun.events)) && /model=claude-sonnet-5-5/.test(texts(cliRun.events)) && ck7.provider === cli.provider.id && (ck7.providers || []).some((p) => p.id === cli.provider.id)
     && pickOai.status === 400 && setOai.status === 200 && setOai.data.provider === oai.provider.id && oaiModels.status === 200 && /fake-mini/.test(oaiModels.text)
     && oaiChat.status === 200 && /^oai says: through-r112 \[sys 3\]/.test(oaiText) && /flow-r112/.test(oaiStreamed)
-    && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByA.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
+    && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByU.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
     && /id="provBox"/.test(html) && /\/api\/providers\/add/.test(html) && /o\.value = p\.id \+ '\|' \+ m/.test(html),
-    `providers at start ${prov0.providers.map((p) => p.id).join(',')}; cli ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
+    `providers at start ${prov0.providers.map((p) => p.id).join(',')}; refused no-host ${cliNoHost.status} not-admin ${cliNotAdmin.status}/${oaiNotAdmin.status}; cli ${cli.provider ? 'made' : JSON.stringify(cli).slice(0, 120)} ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
+  // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
+  const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
+  const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });
+  const antClaudeJ = (() => { try { return JSON.parse(antClaude.text); } catch { return {}; } })(), antClaudeText = ((antClaudeJ.content || [])[0] || {}).text || '';
+  await call('/api/apikey/revoke', U, {});
+  const oaSrc160 = fs.readFileSync(path.join(BRIDGE, 'openai.js'), 'utf8');
+  check('R160', 'protocol adapters: Anthropic → OpenAI: POST /v1/messages (system / content blocks, x-api-key header with the person\'s key) is answered by an OpenAI-compatible endpoint in Anthropic\'s message shape, streamed as Anthropic\'s events (message_start … content_block_delta … message_stop); /v1/models in Anthropic\'s list shape when anthropic-version is sent; count_tokens answers; no key → 401 and empty messages → 400 in Anthropic\'s error shape; the same key in x-api-key also opens /v1/chat/completions; Anthropic in → the host\'s Claude answers with the asked model',
+    antMsg.status === 200 && antJ.type === 'message' && antJ.role === 'assistant' && /^oai says: anthropic-in-r160 \[sys 3\]/.test(((antJ.content || [])[0] || {}).text || '') && antJ.stop_reason === 'end_turn' && antJ.usage && typeof antJ.usage.input_tokens === 'number'
+    && antStream.status === 200 && /text\/event-stream/.test(antStream.ct) && antEvents[0] === 'message_start' && antEvents.includes('content_block_delta') && antEvents[antEvents.length - 1] === 'message_stop' && /anthropic-stream-r160/.test(antStreamed)
+    && antModels.status === 200 && Array.isArray(antModelsJ.data) && antModelsJ.data.some((m) => m.type === 'model' && m.id === 'fake-gpt') && antModelsJ.has_more === false
+    && antCount.status === 200 && JSON.parse(antCount.text).input_tokens >= 2
+    && antNoKey.status === 401 && /"type":"error"/.test(antNoKey.text) && /authentication_error/.test(antNoKey.text) && antEmpty.status === 400 && /invalid_request_error/.test(antEmpty.text)
+    && oaiXKey.status === 200 && /xkey-r160/.test(oaiXKey.text)
+    && antClaude.status === 200 && /claude-in-r160/.test(antClaudeText) && /model=claude-haiku-5-5/.test(antClaudeText)
+    && /x-api-key/.test(oaSrc160),
+    `messages ${antMsg.status} "${antMsg.text.slice(0, 120)}"; stream ${antStream.status} events ${antEvents.join(',')}; models ${antModels.status}; count ${antCount.status}; nokey ${antNoKey.status}; empty ${antEmpty.status}; oai x-key ${oaiXKey.status}; claude ${antClaude.status} "${antClaudeText.slice(0, 80)}"`);
 
   // Chat v2: settings, private messages, edit / delete, receipts, agent privacy
   const seal = async (tok, priv, plain, to) => { // like the page's sealFor: everyone, or only sender + recipient
@@ -938,7 +1029,7 @@ async function run() {
   const stale = await call('/api/room/messages?rev=' + rv0.latestRev + '&wait=1&ver=' + (rv0.ver - 1), A); // old version → answered at once
   check('R91', 'room long poll: held while nothing changes, answered right after a send (not on a timer), stale version answered at once',
     lp.status === 200 && tookMs >= 700 && tookMs < 3000 && (rwoke.data.messages || []).some((m) => m.seq === lp.data.seq) && rwoke.data.ver > rv0.ver && stale.status === 200,
-    `woke after ${tookMs} ms`);
+    `woke after ${tookMs} ms; send ${lp.status} ${JSON.stringify(lp.data).slice(0, 80)}; woke with it ${(rwoke.data.messages || []).some((m) => m.seq === lp.data.seq)} (${(rwoke.data.messages || []).map((m) => m.seq).join(',')}); ver ${rwoke.data.ver}/${rv0.ver}; stale ${stale.status}`);
 
   // Format v4: JSON deflated before encryption; a voice clip's audio is its own ciphertext, fetched on play.
   const blobAad4 = (from, mid) => 'mills-v4-blob|' + from + '|' + mid;
@@ -1046,6 +1137,30 @@ async function run() {
   const hr = await fetch(H + '/api/status');
   check('R93', 'hub answers carry nosniff, no-referrer, frame DENY; API answers are no-store',
     hr.headers.get('x-content-type-options') === 'nosniff' && hr.headers.get('referrer-policy') === 'no-referrer' && hr.headers.get('x-frame-options') === 'DENY' && /no-store/.test(hr.headers.get('cache-control') || ''));
+  if (RUST_HUB) { // R166 (--rust-hub only): the Rust hub is really in front, and the JavaScript one is not reachable around it
+    const fr = await fetch(H + '/__vr-front').then(async (r) => ({ status: r.status, j: await r.json().catch(() => ({})), h: r.headers.get('x-vr-front') })).catch(() => ({}));
+    const st = await fetch(H + '/api/status');
+    const backDirect = await fetch(`http://127.0.0.1:${RUST_BACK}/api/status`).then((r) => r.status).catch(() => 'closed');
+    check('R166', 'the Rust hub (vr-hub) is in front: it answers /__vr-front with its version and native modules, every hub answer passes through it (X-VR-Front), and the JavaScript hub listens behind it on its own port on 127.0.0.1 only',
+      fr.status === 200 && fr.j.front === 'vr-hub' && !!st.headers.get('x-vr-front') && backDirect === 200,
+      `front ${fr.status} ${JSON.stringify(fr.j)}; status via front ${st.headers.get('x-vr-front')}; back ${backDirect}`);
+  }
+  {
+    // R162: sessions kept as hashes; the page's scripts pinned by hash; every route's failure answered
+    // (behind the Rust hub its auth module keeps them, in front-sessions.json, the same way)
+    const hs = JSON.parse(fs.readFileSync(path.join(SB, RUST_HUB ? 'front-sessions.json' : 'hub-state.json'), 'utf8')), keys = Object.keys(hs.sessions || {});
+    const tokHash = crypto.createHash('sha256').update(U).digest('hex');
+    const served = await (await fetch(H + '/')).text();
+    const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(served) || [])[1] || '';
+    const scriptSrc = (/script-src ([^;]*)/.exec(csp) || [])[1] || '';
+    const inline = [...served.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${crypto.createHash('sha256').update(m[1], 'utf8').digest('base64')}'`);
+    const srv162 = fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8');
+    check('R162', 'security: sign-in sessions are stored as sha256 hashes (hub-state.json holds no usable token, and the signed-in token still works); the page as the hub serves it allows no inline script but its own (script-src \'self\' + the sha256 of each of its inline scripts, no \'unsafe-inline\'; worker-src blob: for the code sandbox); every request runs through handleRequest(...).catch, so a route\'s unawaited promise that fails is answered instead of hanging',
+      hs.sessionsHashed === true && keys.length > 0 && !keys.includes(U) && keys.includes(tokHash) && !JSON.stringify(hs).includes(U)
+      && inline.length >= 1 && !/unsafe-inline/.test(scriptSrc) && inline.every((h) => scriptSrc.includes(h)) && /worker-src blob:/.test(csp) && /'unsafe-inline'/.test(indexHtml)
+      && /handleRequest\(req, res\)\.catch\(/.test(srv162) && /async function handleRequest\(req, res\)/.test(srv162),
+      `hashed ${hs.sessionsHashed} keys ${keys.length} raw ${keys.includes(U)} mine ${keys.includes(tokHash)}; script-src "${scriptSrc.slice(0, 120)}" inline ${inline.length}`);
+  }
 
   // Sign-in hashing is async now: parallel wrong guesses must still hit the 5-attempt limit.
   const burst = await Promise.all(Array.from({ length: 12 }, () => call('/api/login', null, { username: 'ghost-r65', password: 'wrong', deviceId: 'x'.repeat(32) })));
@@ -1055,7 +1170,7 @@ async function run() {
 
   const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html) || [])[1] || '';
   const missing66 = [
-    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
+    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com ipc: http:\/\/ipc\.localhost __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
     [/: \/\^https:\\\/\\\/\[a-z0-9-\]\+\\\.trycloudflare\\\.com\$\/;/.test(html) && /store\.set\('mills\.hub'/.test(html) && /const HUB_HOST = /.test(html), 'hub address pinned + cached (quick tunnel, or the named tunnel host injected at deploy)'],
     [/function trustedPub\(/.test(html) && /changedKeys\.has\(m\.username\)\) continue; \/\/ never encrypt to an unverified key/.test(html) && /Trust new key/.test(html), 'key pinning'],
     [/streams: \[call\.local\]/.test(html) && /sender\.setStreams\(isScreenTransceiver\(peer\.pc, t\) \? call\.screenStream : call\.local\)/.test(html) && /e\.streams && e\.streams\[0\]/.test(html), 'call lip-sync streams'],
@@ -1130,7 +1245,7 @@ async function run() {
   const slashCmds = [...html.matchAll(/\{ cmd: '(\/[a-z]+)'/g)].map((m) => m[1]);
   check('R115', '[static] slash commands in the Claude box: "/" opens a filtered menu of the common commands (compact, clear, model, review, cost, status, help, commit …), arrows / Tab / Enter pick, Esc closes; Mills commands run here (clear, stop, model, share, board …), the rest go to Claude Code as typed',
     /id="slashMenu"/.test(html) && slashCmds.length >= 20 && ['/compact', '/clear', '/model', '/review', '/cost', '/status', '/help', '/commit', '/stop', '/share'].every((c) => slashCmds.includes(c))
-    && /function renderSlash\(/.test(html) && /function runLocalSlash\(/.test(html) && /if \(message\.startsWith\('\/'\) && !picked\.length && runLocalSlash\(message\)\)/.test(html) && /e\.key === 'ArrowDown'/.test(html) && /pickSlash\(list\[slashIdx\]\)/.test(html),
+    && /function renderSlash\(/.test(html) && /function runLocalSlash\(/.test(html) && /if \(message\.startsWith\('\/'\) && !picked\.length && !fromLib\.length && runLocalSlash\(message\)\)/.test(html) && /e\.key === 'ArrowDown'/.test(html) && /pickSlash\(list\[slashIdx\]\)/.test(html),
     slashCmds.length + ' commands');
   check('R105', '[static] responsive: phone breakpoint (drawer chat list, board sheet + swipe columns, calendar agenda, full-screen dialogs, stacked Work panes, safe-area padding, no zoom-on-focus), touch-sized controls, laptop header tightening, admin table scrolls', !missing76.length, missing76.join(', '));
   check('R95', '[static] CSP, hub address pinned to the tunnel, key pinning (TOFU + Trust new key), call lip-sync + ICE batching, room long poll, v4 deflate + clips fetched on play', !missing66.length, missing66.join(', '));
@@ -1519,6 +1634,28 @@ async function run() {
       // the hub's own data never shows as a change in the live checkout (the auto-deploy refuses a checkout with changes)
       && ['bridge/uploads-index.json', 'bridge/uploads/x', 'bridge/ai-host-sessions.json', 'bridge/ai-node.status.json', 'Chat/files/x'].every((f) => spawnSync('git', ['check-ignore', '-q', f], { cwd: MILLS }).status === 0),
       `U linux ${JSON.stringify(libU.linux)}; A linked ${libA.linux && libA.linux.linked}; on disk ${onLinkedDisk}; work entry ${JSON.stringify({ k: wEntry.kind, n: wEntry.name, la: !!wEntry.lastAccess, uses: (wEntry.uses || []).length, f: wEntry.folder })}; chat U ${sByU1}/${sByU2} A ${sByA} entry ${JSON.stringify(sEntry.where || {})} del ${sDel.status} after ${sAfter}; notMine ${notMine.status}; work del ${wDel.status} gone ${wGone} serve ${wServe}`);
+    // R161: edit, execute, files put in uploaded_files outside VibeRoller, files sent to Work from the library
+    {
+      const up = await (await raw(U, '/api/work/file', Buffer.from('echo one\n'), { 'Content-Type': 'text/x-shellscript', 'X-File-Name': 'run-r161.sh' })).json().catch(() => ({}));
+      const saved = await raw(U, '/api/library/save?id=' + up.id, Buffer.from('echo two r161\n'), { 'Content-Type': 'application/octet-stream' });
+      const back = await (await raw(U, '/api/work/file/' + up.id)).text();
+      const saveOther = (await raw(A, '/api/library/save?id=' + up.id, Buffer.from('x'), { 'Content-Type': 'application/octet-stream' })).status;
+      const saveBin = (await raw(U, '/api/library/save?id=' + up.id, Buffer.from([1, 0, 2]), { 'Content-Type': 'application/octet-stream' })).status;
+      const exOn = await call('/api/library/exec', U, { id: up.id, on: true }), exOff = await call('/api/library/exec', U, { id: up.id, on: false }), exOther = await call('/api/library/exec', A, { id: up.id, on: true });
+      const handDir = path.join(FAKE_LINUX, 'home', 't-user', 'uploaded_files', 'by-hand'); fs.mkdirSync(handDir, { recursive: true }); fs.writeFileSync(path.join(handDir, 'made-over-ssh-r161.py'), 'print(1)\n');
+      const lib = (await call('/api/library', U)).data.entries || [], hand = lib.find((e) => e.name === 'made-over-ssh-r161.py') || {}, mine = lib.find((e) => e.id === up.id) || {};
+      const handGet = await (await raw(U, '/api/work/file/' + hand.id)).text().catch(() => '');
+      const handRun = texts((await chat(U, 'use it r161\n\n<!--vr-files ' + JSON.stringify([{ id: hand.id, n: hand.name, m: hand.mime, s: hand.size }]) + ' -->', { fresh: true })).events);
+      const handDel = await call('/api/library/delete', U, { id: hand.id }), handGone = !fs.existsSync(path.join(handDir, 'made-over-ssh-r161.py'));
+      await call('/api/library/delete', U, { id: up.id });
+      const lib161 = fs.readFileSync(path.join(MILLS, 'web', 'library.js'), 'utf8'), page161 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      check('R161', 'Files, complete: a Work file is edited in place (saved back, the owner only, text only), made executable and back (chmod, the owner only); a file put in uploaded_files outside VibeRoller (over SSH, by a Work run) shows in the library (type from its name, "disk"), opens, goes to Work as it is (its path handed to Claude) and deletes; [static] the Files screen has Edit (Ctrl+S), Executable, Use in Work / Run in Work, and Work sends library files with the message',
+        saved.status === 200 && /echo two r161/.test(back) && saveOther === 404 && saveBin === 400
+        && exOn.status === 200 && exOn.data.exec === true && exOff.data.exec === false && exOther.status === 404 && mine.size === 14 && mine.edited > 0
+        && hand.disk === true && hand.mime === 'text/x-python' && /by-hand$/.test(hand.folder || '') && /print\(1\)/.test(handGet) && /by-hand[\\/]made-over-ssh-r161\.py/.test(handRun) && handDel.status === 200 && handGone
+        && /function edit\(it\)/.test(lib161) && /\/api\/library\/save\?id=/.test(lib161) && /\/api\/library\/exec/.test(lib161) && /Run in Work/.test(lib161) && /function setWorkLibFiles/.test(page161) && /\.\.\.fromLib/.test(page161),
+        `save ${saved.status} back "${back.trim()}" other ${saveOther} bin ${saveBin}; exec ${exOn.status}/${exOn.data && exOn.data.exec}/${exOff.data && exOff.data.exec} other ${exOther.status}; mine ${JSON.stringify({ s: mine.size, e: !!mine.edited })}; hand ${JSON.stringify({ d: hand.disk, m: hand.mime, f: hand.folder })} get "${handGet.slice(0, 20)}" run "${handRun.slice(0, 120)}" del ${handDel.status} gone ${handGone}`);
+    }
   }
   const grpText = grpForU ? await read4(restored, grpForU).catch(() => null) : null;
   const addedInv = await call('/api/guilds/server/add', U, { server: gSid, add: ['t-admin'] }); // an invitation now…
@@ -1908,12 +2045,10 @@ async function run() {
     const badNick = await call('/api/hosts/rename', A, { id: newId, nickname: 'Bad Name!' });
     const notMine = await call('/api/hosts/rename', U, { id: newId, nickname: 'stolen-yak' });
     const mine1 = await call('/api/hosts', A);
-    // the package with this host's config inside, for its owner only
-    const cfgZip = await fetch(H + '/api/downloads/ai-host-linux.zip?host=' + newId, { headers: { Authorization: 'Bearer ' + A } });
-    const cfgZipBuf = Buffer.from(await cfgZip.arrayBuffer());
-    const cfgEntry = cfgZip.status === 200 ? unzipAll(cfgZipBuf).find((e) => e.name.endsWith('/ai-node.json')) : null;
-    const cfgJson = cfgEntry ? JSON.parse(cfgEntry.data.toString('utf8')) : {};
-    const cfgZipOther = await fetch(H + '/api/downloads/ai-host-linux.zip?host=' + newId, { headers: { Authorization: 'Bearer ' + U } });
+    // this host's config (what "Run on this PC" and the native AI host's download carry), for its owner only
+    const cfgZip = await call('/api/hosts/config', A, { id: newId });
+    const cfgJson = cfgZip.data.config || {};
+    const cfgZipOther = await call('/api/hosts/config', U, { id: newId });
     // a hub-made host (UUID + secret from Settings) really connects: a second host program with that config
     const host2Dir = path.join(SB, 'host2'); fs.mkdirSync(host2Dir, { recursive: true }); for (const f of ['ai-node.js', 'host-relay.js']) fs.copyFileSync(path.join(SB, f), path.join(host2Dir, f));
     fs.writeFileSync(path.join(host2Dir, 'ai-node.json'), JSON.stringify({ ...cfgJson, providers: [], engines: {} }));
@@ -1924,14 +2059,14 @@ async function run() {
     const host2Text = fs.readFileSync(path.join(SCRATCH, 'host2.log'), 'utf8');
     const removed = await call('/api/hosts/remove', A, { id: newId });
     const hubNodeSrc2 = fs.readFileSync(path.join(BRIDGE, 'ai-nodes.js'), 'utf8'), nodeSrc2 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), html2 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    check('R143', 'AI hosts: a host is a UUID + secret + nickname (adjective-animal); hello with the wrong secret → 401, without a nonce → 400; the handshake gives both sides the same e2e key (vr-… id) and the host tells the hub its user, providers (models, caps, allowed users) and engines; Settings → My AI hosts: new host (uuid, nickname), rename (bad nickname refused, only the owner), remove; the AI Host download with ?host= carries that host\'s config (owner only), and a host run from it connects and shows online; [static] HKDF + AES-256-GCM on both sides, randomUUID ids, ai-hosts.json gitignored, the Settings panels exist',
+    check('R143', 'AI hosts: a host is a UUID + secret + nickname (adjective-animal); hello with the wrong secret → 401, without a nonce → 400; the handshake gives both sides the same e2e key (vr-… id) and the host tells the hub its user, providers (models, caps, allowed users) and engines; Settings → My AI hosts: new host (uuid, nickname), rename (bad nickname refused, only the owner), remove; that host\'s config (owner only), and a host run with it connects and shows online; [static] HKDF + AES-256-GCM on both sides, randomUUID ids, ai-hosts.json gitignored, the Settings panels exist',
       testHost.online === true && testHost.nickname === 'test-node' && /^vr-[0-9a-f]{24}$/.test(testHost.kid || '') && testHost.user === '' && (testHost.providers || []).join(',') === 'claude,codex,local' && (testHost.engines || []).length === 4
       && helloBad.status === 401 && helloNoNonce.status === 400 && mine0.status === 200 && mine0.data.mine.length === 0 && made.status === 200 && /^[0-9a-f-]{36}$/.test(newId) && /^[a-z]+-[a-z]+(-\d+)?$/.test(made.data.host.nickname) && made.data.host.user === 't-admin'
       && renamed.status === 200 && renamed.data.host.nickname === 'brave-walrus-test' && badNick.status === 400 && notMine.status === 400 && mine1.data.mine.length === 1
-      && cfgZip.status === 200 && cfgJson.id === newId && cfgJson.token && cfgJson.token.length >= 24 && cfgJson.user === 't-admin' && cfgJson.hub === H && Array.isArray(cfgJson.providers) && cfgZipOther.status === 500
+      && cfgZip.status === 200 && cfgJson.id === newId && cfgJson.token && cfgJson.token.length >= 24 && cfgJson.user === 't-admin' && cfgJson.hub === H && Array.isArray(cfgJson.providers) && cfgZipOther.status >= 400
       && !!h2 && h2.online === true && /^vr-[0-9a-f]{24}$/.test(h2.kid || '') && /connected to .* as "brave-walrus-test" \(t-admin\)/.test(host2Text) && removed.status === 200 && removed.data.mine.length === 0
       && /hkdfSync/.test(hubNodeSrc2) && /aes-256-gcm/.test(hubNodeSrc2) && /randomUUID/.test(hubNodeSrc2) && /hkdfSync/.test(nodeSrc2) && /aes-256-gcm/.test(nodeSrc2) && /^bridge\/ai-hosts\.json$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /id="hostBox"/.test(html2) && /id="srcBox"/.test(html2),
-      `host ${JSON.stringify(testHost).slice(0, 160)}; hello bad ${helloBad.status} nonce ${helloNoNonce.status}; new ${made.status} ${JSON.stringify(made.data).slice(0, 120)}; rename ${renamed.status} bad ${badNick.status} other ${notMine.status}; zip ${cfgZip.status} cfg id ok ${cfgJson.id === newId} other ${cfgZipOther.status}; host2 ${JSON.stringify(h2 || {}).slice(0, 80)} log "${host2Text.split('\n')[0].slice(0, 100)}"`);
+      `host ${JSON.stringify(testHost).slice(0, 160)}; hello bad ${helloBad.status} nonce ${helloNoNonce.status}; new ${made.status} ${JSON.stringify(made.data).slice(0, 120)}; rename ${renamed.status} bad ${badNick.status} other ${notMine.status}; config ${cfgZip.status} cfg id ok ${cfgJson.id === newId} other ${cfgZipOther.status}; host2 ${JSON.stringify(h2 || {}).slice(0, 80)} log "${host2Text.split('\n')[0].slice(0, 100)}"`);
 
     // Work with a host's Claude: the run happens HERE (this hub's worktree), only its model calls go to the host, which adds its login
     const remoteId = 'h:test-node/claude';
@@ -2016,6 +2151,11 @@ async function run() {
     await sleep(300);
     const oldProv = ((await call('/api/check', U)).data.providers || []).find((p) => p.id === 'h:old-node/claude') || {};
     const newProv = ((await call('/api/check', U)).data.providers || []).find((p) => p.id === 'h:test-node/claude') || {};
+    // its Work would run on t-admin's computer: never for anyone else (4.1.0)
+    await call('/api/model', U, { provider: 'h:old-node/claude', model: 'claude-haiku-5-5' });
+    const notOwnerRun = await chat(U, 'run on their computer', { fresh: true });
+    const notOwnerErr = (notOwnerRun.events.find((e) => e.type === 'bridge_error') || {}).text || '';
+    await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' });
     // updates: a signed manifest of the host's files as the hub runs them, and the files themselves
     const th = { 'X-VR-Host': 'test-node', 'X-VR-Host-Token': NODE_SECRET };
     const manR = await fetch(H + '/node/update', { headers: th }), man = await manR.json().catch(() => ({}));
@@ -2043,11 +2183,12 @@ async function run() {
     const nodeSrc152 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), bat = fs.readFileSync(path.join(BRIDGE, 'start-node.bat'), 'utf8'), nsh = fs.readFileSync(path.join(BRIDGE, 'start-node.sh'), 'utf8');
     check('R152', 'older AI hosts keep working: a 2.x host (no caps, its Claude as claude-cli) is asked once with a relay job to an address nobody forwards, answers 404 "does not lend", and from then on its Claude runs Work the old way (claude-cli-work) instead of failing; a current host says it can relay + update and is not probed; hosts update from the hub: GET /node/update is a manifest of the host files (sha256) signed with that host\'s own secret, each file is served byte-exact, nothing else is (config, ../) and nobody else gets it (401); the host tries a new version with --selftest before swapping, keeps a backup, puts it back after 3 starts that never reach the hub, never swaps launchers, and "autoUpdate": false switches it off; the launchers start the host again on exit 3 (update) and after a crash',
       oldHello.status === 200 && oldHelloJ.update && typeof oldHelloJ.update.version === 'string' && /^relay:claude \/v1\/__viberoller_probe$/.test(probed) && oldProv.remoteKind === 'claude-cli-work' && newProv.remoteKind === 'claude-relay'
+      && /only its owner may work on that computer/.test(notOwnerErr)
       && manR.status === 200 && sigOk && fileOk && notHost === 404 && sneaky === 404 && anon === 401 && selfT.status === 0 && /selftest: .* loads/.test(selfT.stdout)
       && upd.swapped && upd.trial && upd.backup && upd.confirmed
       && /CAPS = \['relay', 'update'\]/.test(nodeSrc152) && /cfg\.autoUpdate !== false/.test(nodeSrc152) && /t\.starts <= 3/.test(nodeSrc152) && /selftest\(UPD\.stage\)/.test(nodeSrc152) && /timingSafeEqual\(got, want\)/.test(nodeSrc152)
       && /if errorlevel 3 goto run/.test(bat) && /if errorlevel 4 goto crashed/.test(bat) && /3\) ;;/.test(nsh) && /sleep 10/.test(nsh),
-      `old hello ${oldHello.status} probed "${probed}" old ${oldProv.remoteKind} new ${newProv.remoteKind}; manifest ${manR.status} sig ${sigOk} files ${(man.files || []).map((f) => f.name).join(',')}; file ${fileR.status} ok ${fileOk}; other ${notHost}/${sneaky} anon ${anon}; selftest ${selfT.status} "${String(selfT.stdout || selfT.stderr).trim().slice(0, 120)}"; self-update ${JSON.stringify(upd)}`);
+      `old hello ${oldHello.status} probed "${probed}" old ${oldProv.remoteKind} new ${newProv.remoteKind}; not owner "${notOwnerErr.slice(0, 80)}"; manifest ${manR.status} sig ${sigOk} files ${(man.files || []).map((f) => f.name).join(',')}; file ${fileR.status} ok ${fileOk}; other ${notHost}/${sneaky} anon ${anon}; selftest ${selfT.status} "${String(selfT.stdout || selfT.stderr).trim().slice(0, 120)}"; self-update ${JSON.stringify(upd)}`);
 
     // R157: the heart & knife control app (bridge/vr-host.js) and what the host does for it
     {
@@ -2129,31 +2270,27 @@ async function run() {
     'see the check text');
   }
 
-  // The Download panel (Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux), and the page served by the hub itself.
+  // The Download panel (the native programs only, for people with an account; the Rust hub's alone since 4.0.0), and the
+  // page served by the hub itself.
   {
-    const anon = await call('/api/downloads');
+    const anon = await call('/api/downloads'), anonNative = await call('/api/native?app=vr-desktop&target=x86_64-unknown-linux-gnu');
     const dl = await call('/api/downloads', U);
     const items = dl.data.items || [];
-    const zipRes = await fetch(H + '/api/downloads/ai-host-windows.zip', { headers: { Authorization: 'Bearer ' + U } });
-    const zipBuf = Buffer.from(await zipRes.arrayBuffer());
-    const unknown = await fetch(H + '/api/downloads/nope.zip', { headers: { Authorization: 'Bearer ' + U } });
-    const entries = unzipAll(zipBuf), names = entries.map((e) => e.name);
-    const linuxZip = Buffer.from(await (await fetch(H + '/api/downloads/desktop-linux.zip', { headers: { Authorization: 'Bearer ' + U } })).arrayBuffer());
-    const linuxFiles = unzipAll(linuxZip);
+    const unknown = await fetch(H + '/api/downloads/ai-host-windows.zip', { headers: { Authorization: 'Bearer ' + U } });
+    const pubGone = await Promise.all(['/api/pub/versions', '/api/pub/desktop-linux.zip', '/api/pub/native?app=vr-desktop&target=x86_64-unknown-linux-gnu'].map((p) => fetch(H + p).then((r) => r.status)));
+    const pubSigned = (await fetch(H + '/api/pub/versions', { headers: { Authorization: 'Bearer ' + U } })).status;
     const page = await (await fetch(H + '/')).text();
     const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), appJs = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
-    check('R142', 'Download: signed-in people get the four packages (Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux) listed with sizes and as real zip files (PK header, attachment, every file of the AI host inside, the hub\'s own address in them); anonymous → 401; unknown → 404; the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download button sits above Settings in the menu and in the app\'s user panel',
-      anon.status === 401 && dl.status === 200 && items.length === 4 && ['desktop-windows', 'desktop-linux', 'ai-host-windows', 'ai-host-linux'].every((id) => items.some((it) => it.id === id && it.bytes > 1000 && /\.zip$/.test(it.file)))
-      && zipRes.status === 200 && zipBuf.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && /attachment; filename="VibeRollerAIHost-windows\.zip"/.test(zipRes.headers.get('content-disposition') || '') && zipRes.headers.get('content-type') === 'application/zip'
-      && ['VibeRollerAIHost/ai-node.js', 'VibeRollerAIHost/common.js', 'VibeRollerAIHost/worktree.js', 'VibeRollerAIHost/pc-tools-mcp.js', 'VibeRollerAIHost/board-mcp.js', 'VibeRollerAIHost/team-mcp.js', 'VibeRollerAIHost/ai-node.example.json', 'VibeRollerAIHost/start-node.bat', 'VibeRollerAIHost/host-tools/HostTool.cs', 'VibeRollerAIHost/host-tools/AiHostService.cs', 'VibeRollerAIHost/host-tools/build-host-tools.ps1', 'VibeRollerAIHost/host-tools/build.cmd', 'VibeRollerAIHost/host-tools/install-ai-host-service.cmd', 'VibeRollerAIHost/README.txt'].every((n) => names.includes(n)) && !names.some((n) => n.endsWith('/ai-node.json'))
-      && linuxZip.slice(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && linuxFiles.length === 3 && linuxFiles.filter((e) => !e.name.endsWith('VERSION.txt')).every((e) => e.data.toString('utf8').includes(H)) && entries.some((e) => e.name.endsWith('README.txt') && e.data.toString('utf8').includes(H))
-      && entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js')))) && unknown.status === 404
+    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download button sits above Settings in the menu and in the app\'s user panel',
+      anon.status === 401 && anonNative.status === 401 && pubGone.every((s) => s === 410) && pubSigned === 410
+      && (RUST_HUB ? dl.status === 200 && Array.isArray(items) && items.every((it) => it.native === true && /^(app|host)-/.test(it.id)) && unknown.status === 404 : dl.status === 503 && unknown.status === 503)
+      && !fs.existsSync(path.join(BRIDGE, 'downloads.js')) && !fs.existsSync(path.join(BRIDGE, 'desktop'))
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
       && /class="menuFoot menuDl"/.test(html) && html.indexOf('data-downloads') < html.indexOf('id="goSettings"') && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
       // Work's bar: Download right above Settings; Settings has its own Downloads tab, which every Download button opens
       && (() => { const rail = (html.match(/<nav id="rail">[\s\S]*?<\/nav>/) || [''])[0]; return rail.indexOf('data-downloads') > -1 && rail.indexOf('data-downloads') < rail.indexOf('data-settings'); })()
       && /data-settab="downloads"/.test(html) && /<div data-setpane="downloads" hidden>[\s\S]*id="dlBody"[\s\S]*id="appBox"/.test(html) && /PROFILE\.tab\('downloads'\)/.test(html) && !/id="downloads" class="modal"/.test(html),
-      `anon ${anon.status} list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')} zip ${zipRes.status} ${names.length} entries (${names.join(' ')}); ai-node same ${entries.some((e) => e.name.endsWith('ai-node.js') && e.data.equals(fs.readFileSync(path.join(BRIDGE, 'ai-node.js'))))}; linux ${linuxFiles.length} files, hub named ${linuxFiles.filter((e) => e.data.toString('utf8').includes(H)).length}; unknown ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
+      `anon ${anon.status} native ${anonNative.status} pub ${pubGone.join(',')} signed ${pubSigned}; list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')}; old package ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
   }
 
   { // The hand-off (bridge/handoff.js): the running hub packs its own data, pauses writes, and can turn this machine into an AI host.
@@ -2233,60 +2370,21 @@ async function run() {
       `build ${build} hdr ${verHdr} check ${ck156.build} anon ${anonVer}; scripts ${tagged.slice(0, 3).join(' ')}`);
   }
 
-  // R155: every download is its own installer, launcher and updater (Linux paths run for real here; Windows: source)
+  // R155: updates need an account too (4.0.0): the desktop app updates itself with the session its hub page hands it
   {
-    const sh = (cmd) => spawnSync('sh', ['-c', cmd], { encoding: 'utf8' });
-    const canRun = !sh('true').error && sh('command -v curl').status === 0;
-    const canUnpack = sh('command -v unzip || command -v python3 || command -v bsdtar').status === 0;
-    const pubVers = await fetch(H + '/api/pub/versions').then((r) => r.json()).catch(() => ({}));
-    const pubDesk = await fetch(H + '/api/pub/desktop-linux.zip'), pubDeskBuf = Buffer.from(await pubDesk.arrayBuffer());
-    const pubHost = (await fetch(H + '/api/pub/ai-host-linux.zip')).status, pubOdd = (await fetch(H + '/api/pub/auth.json')).status;
-    const write = (buf, dir) => { for (const e of unzipAll(buf)) { const f = path.join(dir, e.name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, e.data); if (/\.sh$/.test(e.name)) fs.chmodSync(f, 0o755); } };
-    const out = {};
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-setup-home-'));
-    try {
-      if (!canRun) throw new Error('skip');
-      const env = { ...process.env, HOME: home, PATH: '/usr/bin:/bin' + (process.env.PATH ? ':' + path.dirname(process.execPath) : '') };
-      const run = (file, a = []) => spawnSync(file.endsWith('.js') ? process.execPath : 'sh', [file, ...a], { encoding: 'utf8', env, input: '', timeout: 60000 });
-      // ---- Desktop (Linux) ----
-      const pkg = path.join(home, 'Downloads'); write(pubDeskBuf, pkg);
-      const dsh = path.join(pkg, 'VibeRollerDesktop', 'viberoller-desktop.sh'), STDD = path.join(home, '.local', 'share', 'viberoller', 'desktop');
-      out.dStatus = /No other install found/.test(run(dsh, ['--status']).stdout);
-      run(dsh, ['--install', '--yes']);
-      const vOf = (d) => { try { return fs.readFileSync(path.join(d, 'VERSION.txt'), 'utf8').trim(); } catch { return ''; } };
-      out.dInstalled = vOf(STDD) === pubVers['desktop-linux'] && fs.existsSync(path.join(home, '.local', 'share', 'applications', 'viberoller-desktop.desktop')) && fs.existsSync(path.join(home, '.local', 'bin', 'viberoller-desktop'));
-      fs.writeFileSync(path.join(STDD, 'VERSION.txt'), '0.0.1+old\n'); // an older install …
-      const dUpd = run(dsh); // … the downloaded package finds it and updates it
-      out.dUpdated = vOf(STDD) === pubVers['desktop-linux'] && /updated to/.test(dUpd.stdout);
-      if (canUnpack) { // the installed copy updates itself from the hub at its next start
-        fs.writeFileSync(path.join(STDD, 'VERSION.txt'), '0.0.1+old\n');
-        run(path.join(home, '.local', 'bin', 'viberoller-desktop'));
-        out.dSelf = vOf(STDD) === pubVers['desktop-linux'];
-      } else out.dSelf = 'no unzip / python3 here';
-      // ---- AI Host (Linux) ----
-      const hostZip = Buffer.from(await (await fetch(H + '/api/downloads/ai-host-linux.zip', { headers: { Authorization: 'Bearer ' + U } })).arrayBuffer());
-      const hpkg = path.join(home, 'HostDownload'); write(hostZip, hpkg);
-      const setup = path.join(hpkg, 'VibeRollerAIHost', 'vr-setup.js'), STDH = path.join(home, '.local', 'share', 'viberoller', 'ai-host');
-      out.hStatus = /No other install found/.test(run(setup, ['--status']).stdout);
-      const hInst = run(setup, ['--install', '--yes']);
-      out.hInstalled = vOf(STDH) === pubVers['ai-host-linux'] && fs.existsSync(path.join(STDH, 'ai-node.js')) && fs.existsSync(path.join(STDH, '.vr-installed')) && /No ai-node\.json/.test(hInst.stdout);
-      fs.writeFileSync(path.join(STDH, 'VERSION.txt'), '0.0.1+old\n'); fs.writeFileSync(path.join(STDH, 'ai-node.json'), '{"mine":true}\n'); fs.writeFileSync(path.join(STDH, 'ai-node.js'), '// stale-copy-r155\n');
-      const hUpd = run(setup, ['--update']);
-      out.hUpdated = vOf(STDH) === pubVers['ai-host-linux'] && fs.readFileSync(path.join(STDH, 'ai-node.json'), 'utf8') === '{"mine":true}\n' && !/stale-copy-r155/.test(fs.readFileSync(path.join(STDH, 'ai-node.js'), 'utf8')) && /Found an earlier install/.test(hUpd.stdout);
-      // a host that runs from a git checkout is never overwritten
-      fs.rmSync(STDH, { recursive: true, force: true });
-      const gitHost = path.join(home, 'VibeRollerAIHost'); fs.mkdirSync(path.join(gitHost, '.git'), { recursive: true }); fs.writeFileSync(path.join(gitHost, 'ai-node.js'), '// git checkout\n');
-      const hGit = run(setup, ['--yes']);
-      out.hGitKept = /git checkout/.test(hGit.stdout) && fs.readFileSync(path.join(gitHost, 'ai-node.js'), 'utf8') === '// git checkout\n' && !fs.existsSync(STDH);
-    } catch (e) { if (e.message !== 'skip') out.error = e.message; }
-    finally { try { fs.rmSync(home, { recursive: true, force: true }); } catch {} }
-    const ps1 = fs.readFileSync(path.join(BRIDGE, 'desktop', 'vr-desktop.ps1'), 'utf8'), setupSrc = fs.readFileSync(path.join(BRIDGE, 'vr-setup.js'), 'utf8'), dl155 = fs.readFileSync(path.join(BRIDGE, 'downloads.js'), 'utf8');
-    check('R155', 'every download is its own installer, launcher and updater, Windows and Linux: each package carries VERSION.txt (the hub\'s version + a fingerprint of its contents) and /api/pub/versions names them (public, as are the Desktop packages; the AI Host packages are not); the Desktop finds no install → installs (menu entry, ~/.local/bin), finds an older one → updates it, and an installed copy updates itself from the hub at its next start; the AI Host setup installs into the standard folder, updates an older install keeping its ai-node.json, and never overwrites a host that runs from a git checkout; [static] the Windows Desktop (PowerShell) finds earlier installs through its folder and its shortcuts, installs or runs portable, updates itself; the AI Host setup finds the service\'s folder, holds a running launcher back, and starts a host its old launcher let stop',
-      /^\d+\.\d+\.\d+\+[0-9a-f]{8}$/.test(pubVers['desktop-linux'] || '') && /^\d+\.\d+\.\d+\+[0-9a-f]{8}$/.test(pubVers['ai-host-windows'] || '') && pubDesk.status === 200 && pubDeskBuf.slice(0, 2).toString() === 'PK' && pubHost === 404 && pubOdd === 404
-      && (!canRun || (out.dStatus && out.dInstalled && out.dUpdated && out.dSelf !== false && out.hStatus && out.hInstalled && out.hUpdated && out.hGitKept))
-      && /function Find-Installs/.test(ps1) && /function Self-Update/.test(ps1) && /\[switch\]\$Portable/.test(ps1) && /api\/pub\/versions/.test(ps1) && /Expand-Archive/.test(ps1)
-      && /sc', \['qc', 'VibeRollerAIHost'\]/.test(setupSrc) && /held\.push\(r\)/.test(setupSrc) && /followRestart/.test(setupSrc) && /publicRoute/.test(dl155),
-      canRun ? JSON.stringify(out) : 'sh / curl not here: source checks only');
+    const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu';
+    const anonRel = (await fetch(H + `/api/native?app=vr-desktop&target=${target}`)).status, anonFile = (await fetch(H + `/api/native/file?app=vr-desktop&target=${target}&name=vr-desktop`)).status;
+    const signedRel = (await fetch(H + `/api/native?app=vr-desktop&target=${target}`, { headers: { Authorization: 'Bearer ' + U } })).status;
+    const nd = path.join(MILLS, 'native', 'crates', 'vr-desktop');
+    const upd = fs.readFileSync(path.join(nd, 'src', 'update.rs'), 'utf8'), dmain = fs.readFileSync(path.join(nd, 'src', 'main.rs'), 'utf8'), dset = fs.readFileSync(path.join(nd, 'src', 'settings.rs'), 'utf8'), dbuild = fs.readFileSync(path.join(nd, 'build.rs'), 'utf8');
+    const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R155', 'updates need an account: the desktop app\'s release and its files answer 401 without a session (signed in: the Rust hub has it, 404 while nothing is built; the JavaScript hub alone: 503); [static] the hub\'s page hands the app its session on sign-in and clears it on sign-out (set_session, allowed for the hub\'s page), the app keeps it private and only for its own hub, asks /api/native with it (the public route only for a hub before 4.0.0), and its background update waits for someone to be signed in',
+      anonRel === 401 && anonFile === 401 && signedRel === (RUST_HUB ? 404 : 503)
+      && /\/api\/native\{q\}/.test(upd) && /with_token\(hub, session\)/.test(upd) && /\/api\/pub\/native\{q\}/.test(upd)
+      && /fn set_session\(/.test(dmain) && /allow-set-session/.test(dmain) && /"set_session"/.test(dbuild) && /hub_session\.is_empty\(\) \{ continue; \}/.test(dmain)
+      && /pub hub_session: String/.test(dset) && /if next\.hub != s\.hub \{ next\.hub_session\.clear\(\); \}/.test(dset) && /hub_session: String::new\(\), \.\.s/.test(dset)
+      && /NATIVE\.call\('set_session', \{ token \}\)/.test(html) && /NATIVE\.call\('set_session', \{ token: '' \}\)/.test(html),
+      `anon release ${anonRel} file ${anonFile}; signed ${signedRel}`);
   }
 
   // R149: the server's auto-deploy restarts the hub only for a really new main (production bug 2026-10-19: commits made
@@ -2631,6 +2729,114 @@ async function run() {
       && /X-VR-Version/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')) && /function pageUpdateAvailable\(build\)/.test(page154) && /hubBuild !== \(me\.build \|\| me\.version\)/.test(page154),
       `old ${oldAfter.remoteKind} new ${!!newAfter.id}; no session: ${askNew.status} / ${askOld.status}; 1.x ${legacyNoHello}; sessions file ${Object.keys(sessFile).join(',')}; ignored ${ign}`);
   }
+  // R163 / R164: the native (Rust) programs, built here when this machine has a Rust toolchain (else skipped)
+  {
+    const L163 = 'native core (native/crates/vr-core) against the JavaScript side, both ways: the AI host session key id + envelope (Rust seals → Node opens, Node seals → Rust opens) and the update HMAC as bridge/ai-nodes.js makes them; the chat as the page does it with WebCrypto: a page message (format 4) opened by Rust, Rust messages (formats 3 and 4) opened by the page, the uploader\'s own seal and a chat file opened by Rust';
+    const L164 = 'the native AI host (vr-host): without a running host "status" exits 3; "set" checks like the control app (a plain-http hub refused), keeps unknown keys and leaves the config private; "settings" lists every setting; its MCP servers offer exactly the JavaScript servers\' tools; the hub hands out a signed release of the binary (Ed25519 with the release key + the host\'s HMAC; nobody else gets it); "run" supervises it: it connects, writes its status file, updates itself from that release when asked (checked, self-tested, swapped, restarted on it, confirmed once it reached the hub), pauses / resumes, stops when asked';
+    const why = buildNative();
+    if (why) { skip('R163', L163, why); skip('R164', L164, why); }
+    else {
+      const io = await require('./native-interop').run(NATIVE_BIN.interop);
+      check('R163', L163, io.ok, io.ok ? Object.keys(io.parts).join(', ') : io.why);
+      const rdir = path.join(SCRATCH, 'rust-host'); fs.mkdirSync(rdir, { recursive: true });
+      const rexe = path.join(rdir, 'vr-host' + (WIN ? '.exe' : '')), rcfg = path.join(rdir, 'ai-node.json'), rsecret = OLD_NODE_SECRET + '-rs';
+      fs.copyFileSync(NATIVE_BIN.host, rexe); fs.chmodSync(rexe, 0o755);
+      fs.writeFileSync(rcfg, JSON.stringify({ hub: H, id: 'rust-node', token: rsecret, user: 't-admin', providers: [{ id: 'local', kind: 'openai', label: 'Rust host local', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, models: ['tiny-local'] }], engines: {}, keepMe: 'r164' }), { mode: 0o644 });
+      const vh = (...a) => spawnSync(rexe, [...a, '--config', rcfg], { encoding: 'utf8', timeout: 30000 });
+      const rstatus = () => { try { return JSON.parse(fs.readFileSync(path.join(rdir, 'ai-node.status.json'), 'utf8')); } catch { return {}; } };
+      const stNot = vh('status'), setBad = vh('set', 'hub', 'http://evil.example'), setOk = vh('set', 'update.checkMinutes', '7');
+      const cfgAfter = JSON.parse(fs.readFileSync(rcfg, 'utf8')), cfgMode = WIN ? 0o600 : fs.statSync(rcfg).mode & 0o777;
+      const listed = vh('settings').stdout;
+      const tools = (() => { try { return JSON.parse(vh('tools').stdout); } catch { return {}; } })();
+      const jsTools = (f) => (fs.readFileSync(path.join(BRIDGE, f), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1)).sort().join(',');
+      const toolsSame = [['pc', 'pc-tools-mcp.js'], ['board', 'board-mcp.js'], ['team', 'team-mcp.js']].every(([k, f]) => (tools[k] || []).slice().sort().join(',') === jsTools(f));
+      // a newer build in the scratch hub's native/dist: the same program with bytes appended (ELF / PE ignore trailing data)
+      const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target);
+      fs.mkdirSync(dist, { recursive: true });
+      fs.writeFileSync(path.join(dist, path.basename(rexe)), Buffer.concat([fs.readFileSync(NATIVE_BIN.host), Buffer.from('\nr164-newer-build\n')]), { mode: 0o755 });
+      fs.writeFileSync(path.join(dist, 'BUILD.json'), JSON.stringify({ version: '99.0.0', commit: 'c'.repeat(40) }));
+      const rh = { 'X-VR-Host': 'rust-node', 'X-VR-Host-Token': rsecret };
+      const man = await fetch(H + `/node/update/bin?app=vr-host&target=${target}`, { headers: rh }), manJ = await man.json().catch(() => ({}));
+      const manAnon = (await fetch(H + `/node/update/bin?app=vr-host&target=${target}`)).status;
+      const pub = crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(TEST_RELEASE_KEY.public, 'hex')]), format: 'der', type: 'spki' });
+      const sigOk = !!manJ.manifest && crypto.verify(null, Buffer.from(manJ.manifest), pub, Buffer.from(manJ.sig || '', 'hex'));
+      const hmacOk = !!manJ.manifest && manJ.hmac === crypto.createHmac('sha256', rsecret).update(manJ.manifest).digest('hex');
+      const rlog = fs.openSync(path.join(rdir, 'out.log'), 'a');
+      const rproc = spawn(rexe, ['run', '--config', rcfg], { cwd: rdir, stdio: ['ignore', rlog, rlog] });
+      let rExit = null; rproc.on('exit', (c) => { rExit = c; });
+      const hostUp = async () => { for (let i = 0; i < 80; i++) { const h = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === 'rust-node'); if (h && h.online && h.version) return h; await sleep(250); } return null; };
+      const up1 = await hostUp();
+      let st1 = rstatus(); for (let i = 0; i < 20 && st1.connected !== true; i++) { await sleep(250); st1 = rstatus(); } // rewritten within a second
+      const stRun = vh('status');
+      vh('update');
+      let swapped = false; for (let i = 0; i < 160 && !swapped; i++) { await sleep(250); try { swapped = fs.readFileSync(rexe).includes('r164-newer-build'); } catch {} }
+      let confirmed = false; for (let i = 0; i < 120 && !confirmed; i++) { await sleep(250); confirmed = swapped && !fs.existsSync(path.join(rdir, '.update-trial.json')) && /confirmed/.test(rstatus().lastUpdate || ''); }
+      const up2 = await hostUp();
+      vh('pause'); let paused = false; for (let i = 0; i < 40 && !paused; i++) { await sleep(250); paused = rstatus().paused === true; }
+      vh('resume'); let resumed = false; for (let i = 0; i < 40 && !resumed; i++) { await sleep(250); resumed = rstatus().paused === false; }
+      vh('stop', '--now'); for (let i = 0; i < 60 && rExit === null; i++) await sleep(250);
+      if (rExit === null) { try { rproc.kill(); } catch {} }
+      const outLog = (() => { try { return fs.readFileSync(path.join(rdir, 'out.log'), 'utf8'); } catch { return ''; } })();
+      check('R164', L164,
+        stNot.status === 3 && setBad.status === 1 && setOk.status === 0 && cfgAfter.update && cfgAfter.update.checkMinutes === 7 && cfgAfter.keepMe === 'r164' && cfgMode === 0o600
+        && /provider\.local\.max5h/.test(listed) && /security\.engineGuard/.test(listed) && toolsSame
+        && man.status === 200 && manAnon === 401 && sigOk && hmacOk && /"version":"99\.0\.0"/.test(manJ.manifest || '')
+        && !!up1 && st1.connected === true && st1.native === true && stRun.status === 0 && /CONNECTED/.test(stRun.stdout)
+        && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
+        `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
+    }
+    // R167: the Downloads hand out the native programs (pre-built), and they install themselves (the Rust hub's alone)
+    if (!why && RUST_HUB) {
+      const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target), ext = WIN ? '.exe' : '';
+      fs.mkdirSync(dist, { recursive: true });
+      fs.copyFileSync(NATIVE_BIN.host, path.join(dist, 'vr-host' + ext)); // (R164 left a "newer" one here: the real build again)
+      fs.writeFileSync(path.join(dist, 'vr-desktop' + ext), 'fake desktop r167'); fs.writeFileSync(path.join(dist, 'vr-hostw' + ext), 'fake hostw r167');
+      fs.writeFileSync(path.join(dist, 'BUILD.json'), JSON.stringify({ version: '3.99.0', commit: 'd'.repeat(40) }));
+      const osName = WIN ? 'windows' : 'linux';
+      const raw = (tok, p) => fetch(H + p, { headers: { Authorization: 'Bearer ' + tok } });
+      const dlAll = (await call('/api/downloads', A)).data || {}, dl = dlAll.items || [];
+      const appZip = await raw(A, `/api/downloads/app-${osName}.zip`), appEntries = appZip.status === 200 ? unzipAll(Buffer.from(await appZip.arrayBuffer())) : [];
+      const hostsNow = (await call('/api/hosts', A)).data.mine || [];
+      const myHost = hostsNow[0] || (await call('/api/hosts/new', A, {})).data.host;
+      const hostZip = await raw(A, `/api/downloads/host-${osName}.zip?host=${encodeURIComponent(myHost.id)}`), hostEntries = hostZip.status === 200 ? unzipAll(Buffer.from(await hostZip.arrayBuffer())) : [];
+      const pubApp = (await fetch(H + `/api/pub/app-${osName}.zip`)).status, anonApp = (await fetch(H + `/api/downloads/app-${osName}.zip`)).status;
+      // the desktop app's own release, signed in (what it updates itself from)
+      const rel = await raw(A, `/api/native?app=vr-desktop&target=${target}`), relJson = rel.status === 200 ? await rel.json() : {};
+      // the downloaded AI host installs itself (a scratch home), its config with it, private
+      const unz = path.join(SCRATCH, 'r167-download'); fs.mkdirSync(unz, { recursive: true });
+      for (const e of hostEntries) { const f = path.join(unz, e.name.split('/').slice(1).join('/')); fs.writeFileSync(f, e.data); if (/vr-host/.test(e.name)) fs.chmodSync(f, 0o755); }
+      const home167 = path.join(SCRATCH, 'r167-home'); fs.mkdirSync(home167, { recursive: true });
+      const inst = spawnSync(path.join(unz, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
+      const instDir = WIN ? path.join(home167, 'AppData', 'Local', 'VibeRoller', 'AIHost') : path.join(home167, '.local', 'share', 'viberoller', 'ai-host');
+      const instCfg = (() => { try { return JSON.parse(fs.readFileSync(path.join(instDir, 'ai-node.json'), 'utf8')); } catch { return {}; } })();
+      const instMode = WIN ? 0o600 : (() => { try { return fs.statSync(path.join(instDir, 'ai-node.json')).mode & 0o777; } catch { return 0; } })();
+      const again = spawnSync(path.join(instDir, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
+      check('R167', 'the Downloads hand out the native programs, pre-built: the native app (vr-desktop + the AI host) and the native AI host (with that person\'s own host config inside when asked) for this machine\'s system, to people with an account only (anonymous → 401, the old public route → 410); the list names the native releases, and the desktop app\'s signed release is there for a signed-in app; the downloaded AI host installs itself ("vr-host install": the standard folder, its config kept and private) and an installed copy knows it is the installed one',
+        dl.some((i) => i.id === `app-${osName}` && i.native && i.group === 'native') && dl.some((i) => i.id === `host-${osName}` && i.group === 'native-host')
+        && appEntries.some((e) => e.name === 'VibeRoller/vr-desktop' + ext) && appEntries.some((e) => e.name === 'VibeRoller/vr-host' + ext) && appEntries.some((e) => /VibeRoller\/README\.txt$/.test(e.name))
+        && hostEntries.some((e) => e.name === 'VibeRollerAIHost/vr-host' + ext) && hostEntries.some((e) => e.name === 'VibeRollerAIHost/ai-node.json' && JSON.parse(e.data.toString()).id === myHost.id)
+        && pubApp === 410 && anonApp === 401 && Array.isArray(dlAll.native) && rel.status === 200 && typeof relJson.sig === 'string'
+        && inst.status === 0 && fs.existsSync(path.join(instDir, 'vr-host' + ext)) && instCfg.id === myHost.id && instMode === 0o600 && /installed AI host/.test(again.stdout),
+        `items ${dl.map((i) => i.id).join(',')}; app ${appZip.status} ${appEntries.map((e) => e.name).join(',')}; host ${hostZip.status} ${hostEntries.map((e) => e.name).join(',')}; pub ${pubApp} anon ${anonApp}; native ${Array.isArray(dlAll.native)} release ${rel.status} ${Object.keys(relJson).join(',')}; install ${inst.status} "${String((inst.stdout || '') + (inst.stderr || '') + (inst.error || '')).trim().slice(0, 200)}" cfg ${instCfg.id === myHost.id} mode ${instMode.toString(8)}; again "${String(again.stdout || again.error || '').trim().slice(0, 100)}"`);
+    } else skip('R167', 'the Downloads hand out the native programs, pre-built, and they install themselves', why || 'the Rust hub\'s alone: --rust-hub runs it');
+    // R165: the desktop app (Tauri) starts on Linux, headless, against this hub
+    const L165 = 'the desktop app (vr-desktop, Tauri) starts on Linux (headless, Xvfb): its Tools window (its own page) loads, runs and reaches the app with the Tools permissions; its main window shows this hub\'s page, which sees the app (window.__TAURI__ → NATIVE) and is allowed the hub capability (app_info, notify) and shows the Tools tile; [static] the hub\'s page is never given the commands that touch the computer (files, terminal, runs, git, proxy, settings), and the Tools window\'s page is the app\'s own';
+    const dsk = why ? { why } : buildDesktop();
+    if (dsk.why) skip('R165', L165, dsk.why);
+    else {
+      const sm = spawnSync('sh', [path.join(MILLS, 'native', 'smoke-desktop.sh'), dsk.bin, H], { encoding: 'utf8', timeout: 180000 });
+      const mainSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'src', 'main.rs'), 'utf8');
+      const hubCap = (/CapabilityBuilder::new\("hub"\)[\s\S]*?\)\)\?;/.exec(mainSrc) || [''])[0];
+      const toolsCap = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'capabilities', 'tools.json'), 'utf8'));
+      const forbidden = ['fs-', 'term-', 'run-', 'allow-git', 'proxy-', 'settings-', 'pick-folder', 'update-'];
+      if (sm.status === 77) skip('R165', L165, sm.stdout.trim());
+      else check('R165', L165,
+        sm.status === 0 && /SMOKE smoke-ok/.test(sm.stdout) && new RegExp('SMOKE smoke-main 127\\.0\\.0\\.1:' + PORT + ' \\S+ tools-tile true').test(sm.stdout)
+        && !!hubCap && !forbidden.some((f) => hubCap.includes(f)) && /window\("main"\)/.test(hubCap) && toolsCap.windows.join() === 'tools' && !toolsCap.remote
+        && /WebviewUrl::App\("tools\.html/.test(mainSrc),
+        `smoke ${sm.status} "${(sm.stdout + sm.stderr).replace(/\s+/g, ' ').slice(0, 400)}"; hub capability clean ${!!hubCap && !forbidden.some((f) => hubCap.includes(f))}`);
+    }
+  }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });
   check('R135', 'Work state survives restarts: the conversation on screen (me / claude / tool entries, its saved-session id + title) and the queue + a pending "Send now" are kept per person on the hub (their profile folder), come back unchanged after a hub restart, and are nobody else\'s; bad input refused, empty messages dropped; [static] every queue change is saved, opening Work restores the conversation and the queue and starts the queue running, New chat clears it',
@@ -2663,7 +2869,7 @@ async function run() {
   const generic = ['[0-9a-f]{32}', '"hash"\\s*:\\s*"[0-9a-f]', 'C:\\\\\\\\Users\\\\\\\\', 'trycloudflare\\.com/', 'password\\s*[:=]\\s*"[^"]{6,}'];
   const pattern = [...generic, ...terms.map((t) => '\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b')].join('|');
   // web/vendor holds third-party libraries (checked by R102 against their published hashes), not our text
-  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor'], { cwd: MILLS, encoding: 'utf8' });
+  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor', ':!native/Cargo.lock'], { cwd: MILLS, encoding: 'utf8' }); // Cargo.lock: the crates' published checksums
   check('R31', `no names / passwords / ids / hashes / local paths in tracked files (${terms.length} local terms)`, gg.status === 1, (gg.stdout || '').split('\n').slice(0, 3).join(' | '));
   const junk = [];
   (function walk(d) {

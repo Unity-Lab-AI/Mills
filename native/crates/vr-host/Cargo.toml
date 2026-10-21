@@ -1,0 +1,24 @@
+[package]
+name = "vr-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crossterm = "0.29.0"
+futures-util = "0.3.34"
+ratatui = "0.30.2"
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tokio = { version = "1.54.0", features = ["full"] }
+vr-core = { version = "0.1.0", path = "../vr-core" }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"
+
+[target."cfg(windows)".dependencies]
+windows-service = "0.8.1"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Console", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Security"] }

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VibeRoller Tools</title>
+<link rel="stylesheet" href="tools.css">
+</head>
+<body>
+<nav id="nav">
+  <div class="brand">VibeRoller <b>Tools</b></div>
+  <button data-tab="files" class="on">Files</button>
+  <button data-tab="term">Terminal</button>
+  <button data-tab="build">Build &amp; run</button>
+  <button data-tab="git">Git</button>
+  <button data-tab="host">AI host</button>
+  <button data-tab="proxy">API proxy</button>
+  <button data-tab="settings">Settings</button>
+  <div class="foot" id="ver"></div>
+</nav>
+<main>
+  <section id="files" class="tab on">
+    <header><span id="crumbs"></span><span class="grow"></span><button id="fNewFile">New file</button><button id="fNewDir">New folder</button><button id="fUp">Up</button><button id="fRefresh">Refresh</button></header>
+    <div class="split">
+      <ul id="fList" class="list"></ul>
+      <div class="editor">
+        <div class="bar"><b id="edName">No file open</b><span class="grow"></span><span id="edState"></span><button id="edSave" disabled>Save (Ctrl+S)</button><button id="edDelete" class="danger" disabled>Delete</button></div>
+        <textarea id="ed" spellcheck="false" disabled></textarea>
+      </div>
+    </div>
+  </section>
+  <section id="term" class="tab">
+    <header><span>Terminal in <b id="termWhere">the projects folder</b></span><span class="grow"></span><button id="termNew">New terminal here</button><button id="termKill" class="danger">Close</button></header>
+    <pre id="termOut" tabindex="0" class="term">Open a terminal: it starts in the folder you have open under Files.</pre>
+  </section>
+  <section id="build" class="tab">
+    <header><span>Build and run in <b id="buildWhere">the projects folder</b></span></header>
+    <div class="row"><input id="bCmd" placeholder="A command, e.g. cargo build, npm test, make"><button id="bRun">Run</button><button id="bSave">Save as a button</button><button id="bStop" class="danger">Stop</button></div>
+    <div id="bSaved" class="chips"></div>
+    <pre id="bOut" class="term"></pre>
+  </section>
+  <section id="git" class="tab">
+    <header><span>Git in <b id="gitWhere">the projects folder</b></span><span class="grow"></span><span class="hint" id="gitAuth"></span></header>
+    <div class="row"><button data-git="status">Status</button><button data-git="log --oneline -20">Log</button><button data-git="diff --stat">Diff</button><button data-git="fetch --all --prune">Fetch</button><button data-git="pull --ff-only">Pull</button><button data-git="push">Push</button><button data-git="branch -a">Branches</button></div>
+    <div class="row"><input id="gMsg" placeholder="Commit message"><button id="gCommit">Add all + commit</button></div>
+    <div class="row"><input id="gClone" placeholder="Clone: https://git.unityailab.com/owner/repo.git"><button id="gCloneBtn">Clone here</button></div>
+    <div class="row"><input id="gArgs" placeholder="Any git command: checkout -b my-branch"><button id="gRun">Run git</button></div>
+    <pre id="gOut" class="term"></pre>
+  </section>
+  <section id="host" class="tab">
+    <header><span>Share this computer's AI with the team</span></header>
+    <p class="hint">The AI host lends this PC's Claude / ChatGPT login, local models and Unity's engines to the hub, never the computer itself. It keeps running after this window closes. Set it up from the hub: Settings → My AI hosts → <b>Run on this PC</b>.</p>
+    <div id="hostState" class="card"></div>
+    <div class="row"><button data-host="start">Start</button><button data-host="pause">Pause</button><button data-host="resume">Resume</button><button data-host="restart">Restart</button><button data-host="stop" class="danger">Stop</button><button data-host="update">Update now</button></div>
+    <div class="row"><span>Start at boot:</span><button data-host="boot-service">As a service</button><button data-host="boot-sign-in" class="win">At sign-in</button><button data-host="boot-user" class="lin">User service</button><button data-host="boot-off">Off</button></div>
+    <pre id="hostOut" class="term small"></pre>
+  </section>
+  <section id="proxy" class="tab">
+    <header><span>Local API proxy</span></header>
+    <p class="hint">Tools on this computer (an IDE, an SDK, a script) use VibeRoller's AI through <code>http://127.0.0.1:&lt;port&gt;/v1</code>, in the OpenAI format (<code>/v1/chat/completions</code>) or Anthropic's (<code>/v1/messages</code>), with no key of their own: this app adds yours. Only this computer can reach it; web pages cannot use it.</p>
+    <div class="row"><label>Port <input id="pPort" type="number" min="1024" max="65535"></label><label class="grow">Your API key (the hub: Settings → API access) <input id="pKey" type="password" placeholder="mills_… (leave empty to keep the saved one)"></label><button id="pSave">Save</button></div>
+    <div class="row"><button id="pStart">Start</button><button id="pStop" class="danger">Stop</button><span id="pState"></span></div>
+  </section>
+  <section id="settings" class="tab">
+    <header><span>Settings</span></header>
+    <div class="form">
+      <label>Hub address <input id="sHub"></label>
+      <label>Projects folder <span class="row"><input id="sProjects" readonly><button id="sPick">Choose…</button></span></label>
+      <label>Forgejo address <input id="sFjUrl"></label>
+      <label>Forgejo token (git pull / push as you; leave empty to keep the saved one) <input id="sFjTok" type="password"></label>
+      <label class="check"><input id="sTray" type="checkbox"> Closing the main window keeps VibeRoller in the tray</label>
+      <label class="check"><input id="sAuto" type="checkbox"> Update this app by itself (signed releases from the hub)</label>
+      <div class="row"><button id="sSave">Save</button><span id="sState"></span></div>
+    </div>
+    <div class="card"><b>Updates</b> <span id="uState"></span><div class="row"><button id="uCheck">Check now</button><button id="uApply">Update and restart</button><button id="uInstall">Install on this computer</button></div></div>
+  </section>
+  <div id="toast"></div>
+</main>
+<script src="tools.js"></script>
+</body>
+</html>

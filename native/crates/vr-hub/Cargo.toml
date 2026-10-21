@@ -1,0 +1,33 @@
+[package]
+name = "vr-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.23.1"
+bytes = "1.12.1"
+ed25519-dalek = "2"
+chrono-tz = "0.10"
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+regex = "1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+futures-util = "0.3.34"
+hex = "0.4.3"
+http = "1.5.0"
+http-body-util = "0.1.5"
+hyper = { version = "1", features = ["server", "client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio", "server-auto", "client-legacy", "http1"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls-no-provider", "json"] }
+scrypt = { version = "0.11", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha1 = "0.10"
+subtle = "2.6.1"
+tokio = { version = "1.54.0", features = ["full"] }
+vr-core = { version = "0.1.0", path = "../vr-core" }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"

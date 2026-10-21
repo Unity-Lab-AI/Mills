@@ -21,6 +21,9 @@ const { spawn } = require('child_process');
 
 module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle, aiNodes = null }) {
   const A = config.assistant || {};
+  // behind the Rust hub with its unity module, Unity is its own (native/crates/vr-hub/src/modules/unity*.rs): this one
+  // starts no engines and fires no reminders (assistant.json is the Rust hub's then)
+  const MOVED = !!process.env.VR_BACK_PORT && String(process.env.VR_FRONT_MODULES || '').split(',').includes('unity');
   const OLLAMA = (A.ollamaUrl || 'http://127.0.0.1:11434').replace(/\/$/, '');
   const LOCAL_MODEL = A.model || 'unity-brain';
   const FALLBACK_MODEL = A.fallbackModel || '';
@@ -74,7 +77,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     })();
     return ollamaState.starting;
   }
-  if (config.assistant !== false && !config.claudeCommand) ensureOllama(); // warm up at hub start (not in test hubs)
+  if (config.assistant !== false && !config.claudeCommand && !MOVED) ensureOllama(); // warm up at hub start (not in test hubs)
   // Python services on the host (Python 3.10 with torch): the image engine (bridge/image-engine.py),
   // Unity's voice (unity-voice-v2/serve.py) and the speech engine (bridge/speech-engine.py, whisper).
   // Each is started detached when it does not answer, so they survive hub restarts.
@@ -104,7 +107,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const ensureImage = () => ensureService(IMAGE_URL, [path.join(ROOT, 'image-engine.py'), '--port', port(IMAGE_URL, '5124'), '--checkpoint', IMAGE_CKPT], ROOT);
   const ensureVoice = () => ensureService(VOICE_URL, [path.join(VOICE_DIR, 'serve.py'), '--port', port(VOICE_URL, '5123')], VOICE_DIR);
   const ensureEars = () => ensureService(EARS_URL, [path.join(ROOT, 'speech-engine.py'), '--port', port(EARS_URL, '5125'), '--model', WHISPER], ROOT);
-  if (config.assistant !== false && !config.claudeCommand) { ensureImage(); ensureVoice(); ensureEars(); }
+  if (config.assistant !== false && !config.claudeCommand && !MOVED) { ensureImage(); ensureVoice(); ensureEars(); }
   const EMOTIONS = ['neutral', 'warm', 'happy', 'amused', 'excited', 'sad', 'concerned', 'frustrated', 'surprised'];
   const ACTS = ['statement', 'yes_no_question', 'wh_question', 'exclamation', 'instruction', 'reassurance', 'aside'];
 
@@ -491,7 +494,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   }
 
   // ---------- reminders: due ones become notices the browser picks up ----------
-  setInterval(() => {
+  if (!MOVED) setInterval(() => {
     for (const acct of accounts.values()) {
       const s = store(acct); let changed = false;
       for (const r of s.reminders) if (!r.fired && r.at <= Date.now()) { r.fired = true; changed = true; (acct.notices || (acct.notices = [])).push({ kind: 'reminder', id: r.id, text: r.text, at: r.at }); }

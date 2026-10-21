@@ -6,8 +6,10 @@
 <!-- Network reach of this page: itself, the hub (a Cloudflare tunnel) and the GitHub API that publishes
      the hub's address. No outside scripts, frames or plugins, so injected code has nowhere to send
      anything except by loading an image; markdown images (https) are allowed for that reason only and
-     are fetched without a referrer. (The page script is inline, hence 'unsafe-inline'.) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+     are fetched without a referrer. The page script is inline: the hub serves this page with 'unsafe-inline'
+     replaced by that script's own sha256 (bridge/server.js pinScripts), so no other inline script or
+     inline event handler can run; only a static copy of the file (no hub in front) still says 'unsafe-inline'. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com ipc: http://ipc.localhost __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>VibeRoller</title>
 <!-- VibeRoller Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -434,6 +436,10 @@
   .libMeta { display: flex; flex-wrap: wrap; gap: .2rem .9rem; font-size: .82rem; color: var(--muted); } .libMeta .libPath { font-family: ui-monospace, monospace; }
   .libActs { display: flex; flex-wrap: wrap; gap: .3rem; justify-content: flex-end; }
   @media (max-width: 820px) { .libRow { grid-template-columns: 1fr; } .libActs { justify-content: flex-start; } }
+  .libEdit { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  .libEdit > div { width: min(60rem, 100%); height: min(46rem, 100%); display: flex; flex-direction: column; gap: .5rem; padding: .75rem; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  .libEdit textarea { flex: 1; resize: none; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; white-space: pre; }
+  .libEdit .libActs { justify-content: space-between; align-items: center; }
   /* "Newest": sticks to the bottom of a conversation that has new content below while you read further up */
   .jumpNew { position: sticky; bottom: .5rem; align-self: center; z-index: 5; display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .8rem; border-radius: 999px; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); }
   #micBtn { padding: .35rem .6rem; }
@@ -805,6 +811,7 @@
     <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
     <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
     <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
+    <button id="goTools" class="tile" hidden><svg class="ic lead"><use href="#i-plug"/></svg>Tools<small>This computer: your projects, a terminal, builds, git, the AI host</small></button>
     <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
     <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
   </div>
@@ -951,9 +958,9 @@
       <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
         <div id="fjBox" class="apiBox"></div></div>
      </div>
-     <!-- the packages are built by the hub from its own code (bridge/downloads.js) -->
+     <!-- the native programs, pre-built, handed out by the Rust hub to people with an account (vr-hub downloads.rs) -->
      <div data-setpane="downloads" hidden>
-      <div class="setSection"><b>Staying up to date</b> — this page and the Desktop app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>node ai-node.js --update</code> in its folder (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</div>
+      <div class="setSection"><b>Staying up to date</b> — this page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</div>
       <div id="dlBody"></div>
       <div class="setSection"><b>VibeRoller Chat app from the browser</b> — the chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).
         <div id="appBox" class="apiBox"></div></div>
@@ -1313,6 +1320,10 @@ async function connect() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The native desktop app (native/crates/vr-desktop): window.__TAURI__ is there only inside it. The hub's page may ask it
+// for harmless things only: desktop notifications, the unread count on its tray / taskbar, its Tools window and the AI
+// host switch; everything that touches the computer lives in the Tools window, the app's own page.
+const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
 let reconnecting = false;
 async function api(path, opts = {}) {
   if (!base) throw new Error('VibeRoller is offline — ask the admin to start it.');
@@ -1635,6 +1646,8 @@ $('login').addEventListener('submit', async (e) => {
 });
 async function enter() {
   me = await json('/api/check');
+  // the desktop app updates itself with this session (updates need an account); an older app has no such command
+  if (NATIVE && token) NATIVE.call('set_session', { token }).catch(() => {});
   // app settings follow the account: its saved theme wins over this browser's; an account without one adopts the browser's
   if (me.prefs && typeof me.prefs.theme === 'string') { if (me.prefs.theme !== (store.get('mills.theme') || '')) { const m = me; me = null; applyTheme(m.prefs.theme); me = m; } } // (no chat re-render yet: it is drawn next)
   else if (store.get('mills.theme')) saveThemeChoice(store.get('mills.theme'));
@@ -1679,10 +1692,13 @@ $('goBoard').onclick = () => showScreen('board');
 $('goCal').onclick = () => showScreen('cal');
 $('goNotes').onclick = () => showScreen('notes');
 $('goFiles').onclick = () => showScreen('library');
+// the desktop app's Tools window (its own page, which may use this computer; the hub's page never can)
+if (NATIVE) { $('goTools').hidden = false; $('goTools').onclick = () => NATIVE.call('open_tools').catch((e) => sys(String(e), true)); document.body.classList.add('native'); }
 $('goAdmin').onclick = () => showScreen('admin');
 $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
+  if (NATIVE && token) NATIVE.call('set_session', { token: '' }).catch(() => {});
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes']) $(id).hidden = true;
@@ -1993,16 +2009,30 @@ async function uploadWorkFiles(list) {
   }
   return out;
 }
+// files already in the person's uploaded_files (Files → "Run in Work" / "Use in Work"): sent with the next Work message
+// as they are, no upload; shown as a line above the message box with a way to drop them
+let workLibFiles = [];
+function setWorkLibFiles(list, text) {
+  workLibFiles = list;
+  let bar = $('workLibBar');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'workLibBar'; bar.className = 'attTray'; $('workTray').after(bar); }
+  bar.textContent = ''; bar.hidden = !list.length;
+  if (list.length) {
+    bar.append(ic('file', 'lead'), 'From your files: ' + list.map((f) => f.n).join(', ') + ' ');
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'ghost'; x.textContent = 'Remove'; x.onclick = () => setWorkLibFiles([]); bar.append(x);
+  }
+  if (text !== undefined) { $('input').value = text; $('input').focus(); }
+}
 const workFileBytes = async (f) => { const r = await api('/api/work/file/' + f.id); if (!r.ok) throw new Error(r.status === 404 ? 'no longer kept (30 days)' : r.statusText); return r.arrayBuffer(); };
 $('composer').addEventListener('submit', async (e) => {
   e.preventDefault();
   let message = $('input').value.trim();
-  const picked = workTray.files.slice();
-  if (!message && !picked.length) return; // text, files, or both
-  if (message.startsWith('/') && !picked.length && runLocalSlash(message)) { $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true; return; } // a VibeRoller command: done here, nothing goes to Claude
-  if (picked.length) {
+  const picked = workTray.files.slice(), fromLib = workLibFiles.slice();
+  if (!message && !picked.length && !fromLib.length) return; // text, files, or both
+  if (message.startsWith('/') && !picked.length && !fromLib.length && runLocalSlash(message)) { $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true; return; } // a VibeRoller command: done here, nothing goes to Claude
+  if (picked.length || fromLib.length) {
     const b = $('send'); b.disabled = true; b.textContent = 'Uploading…';
-    try { message += '\n\n<!--vr-files ' + JSON.stringify(await uploadWorkFiles(picked)) + ' -->'; workTray.clear(); }
+    try { message += '\n\n<!--vr-files ' + JSON.stringify([...fromLib, ...(picked.length ? await uploadWorkFiles(picked) : [])]) + ' -->'; workTray.clear(); setWorkLibFiles([]); }
     catch (err) { sys('Not sent: ' + err.message, true); return; }
     finally { b.disabled = false; setBusy(busy); }
   }
@@ -2935,6 +2965,7 @@ function updateUnread() {
     setBadge(b, n);
   }
   document.title = (total ? `(${total}) ` : '') + 'VibeRoller · ' + me.display;
+  if (NATIVE && total !== updateUnread.native) { updateUnread.native = total; NATIVE.call('set_badge', { count: total }).catch(() => {}); } // the tray / taskbar count
 }
 function roomVisible() {
   if (!me || document.visibilityState !== 'visible') return false;
@@ -3212,6 +3243,8 @@ $('micBtn').onclick = startClip;
 $('recSend').onclick = () => stopClip(false);
 $('recCancel').onclick = () => stopClip(true);
 function toast(rec, kind) {
+  // in the desktop app with its window hidden or in the background: a desktop notification as well
+  if (NATIVE && (document.visibilityState !== 'visible' || !document.hasFocus())) NATIVE.call('notify', { title: authorOf(rec.m) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : ''), body: snippet(rec) }).catch(() => {});
   const t = document.createElement('div'); t.className = 'toast ' + kind; t.style.borderLeftColor = authorColor(rec.m);
   const b = document.createElement('b'); b.style.color = authorColor(rec.m);
   b.textContent = authorOf(rec.m) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : '') + ': ';
@@ -3773,7 +3806,8 @@ async function renderHosts() {
   box.textContent = '';
   const line = (...kids) => { const r = document.createElement('div'); r.className = 'row'; r.append(...kids); return r; };
   const dl = (h, os) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.append(ic('download', 'lead'), document.createTextNode(os)); b.title = 'The AI Host package for ' + os + ' with this host\'s config inside (keep it private)';
-    b.onclick = async () => { b.disabled = true; try { const r = await api('/api/downloads/ai-host-' + os.toLowerCase() + '.zip?host=' + encodeURIComponent(h.id)); if (!r.ok) throw new Error('Download failed (' + r.status + ')'); const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'VibeRollerAIHost-' + os.toLowerCase() + '-' + h.nickname + '.zip'; document.body.append(a); a.click(); a.remove(); } catch (e) { sysSettings(e.message); } b.disabled = false; }; return b; };
+    // the native host's package when this hub has one built, else the Node.js one
+    b.onclick = async () => { b.disabled = true; try { const q = '.zip?host=' + encodeURIComponent(h.id); let r = await api('/api/downloads/host-' + os.toLowerCase() + q), native = r.ok; if (!r.ok) r = await api('/api/downloads/ai-host-' + os.toLowerCase() + q); if (!r.ok) throw new Error('Download failed (' + r.status + ')'); const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'VibeRollerAIHost-' + (native ? 'native-' : '') + os.toLowerCase() + '-' + h.nickname + '.zip'; document.body.append(a); a.click(); a.remove(); } catch (e) { sysSettings(e.message); } b.disabled = false; }; return b; };
   for (const h of d.mine || []) {
     const it = document.createElement('div'); it.className = 'provItem';
     const b = document.createElement('b'); b.textContent = h.nickname; const dot = document.createElement('span'); dot.textContent = h.online ? ' · online' : h.seen ? ' · offline (last seen ' + new Date(h.seen).toLocaleString() + ')' : ' · never connected yet'; dot.style.color = h.online ? 'var(--ok, #3ddc84)' : 'var(--muted)'; b.append(dot); it.append(b);
@@ -3792,7 +3826,11 @@ async function renderHosts() {
     ren.onclick = () => { const n = prompt('New nickname (two to four lowercase words joined by dashes):', h.nickname); if (!n) return; json('/api/hosts/rename', { method: 'POST', body: JSON.stringify({ id: h.id, nickname: n }) }).then(renderHosts).catch((e) => sysSettings(e.message)); };
     const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
     rm.onclick = () => { if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; return; } json('/api/hosts/remove', { method: 'POST', body: JSON.stringify({ id: h.id }) }).then(() => { renderHosts(); refreshProviders(); }).catch((e) => sysSettings(e.message)); };
-    it.append(line(dl(h, 'Windows'), dl(h, 'Linux'), ren, rm));
+    // in the desktop app: this computer becomes that host (its settings go to the app's own AI host, which starts)
+    const here = document.createElement('button'); here.type = 'button'; here.append(ic('plug', 'lead'), document.createTextNode('Run on this PC')); here.hidden = !NATIVE;
+    here.title = 'The VibeRoller desktop app runs this host here, in the background (Tools → AI host to pause, stop or start it at boot)';
+    here.onclick = async () => { here.disabled = true; try { const r = await json('/api/hosts/config', { method: 'POST', body: JSON.stringify({ id: h.id }) }); sysSettings(await NATIVE.call('host_setup', { config: r.config })); setTimeout(renderHosts, 4000); } catch (e) { sysSettings(String(e.message || e)); } here.disabled = false; };
+    it.append(line(here, dl(h, 'Windows'), dl(h, 'Linux'), ren, rm));
     box.append(it);
   }
   const add = document.createElement('button'); add.type = 'button'; add.textContent = 'New host (this computer, or another of yours)';
@@ -3875,18 +3913,23 @@ async function renderDownloads() {
     } catch (e) { note.textContent = e.message; }
     b.disabled = false;
   };
-  for (const group of ['desktop', 'ai-host']) {
+  // the native programs (pre-built, nothing to install first)
+  if (!d.items.length) note.textContent = 'Nothing is built on this hub yet (the admin runs sh native/build.sh).';
+  const GROUPS = {
+    native: ['VibeRoller: the native app', 'VibeRoller in its own window, plus what only an app on your computer can do: the Tools window (your projects folder, a real terminal, build & run, git with your Forgejo token, a local API proxy for tools on your computer) and the switch to share this computer\'s AI. Pre-built for Windows and Linux; runs from its folder or installs itself, and updates itself (signed releases).'],
+    'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too), "vr-host" is the heart & knife control app, start at boot is one setting. Updates itself from this hub. For your own host with its config inside: Settings → My AI hosts.'],
+  };
+  for (const group of Object.keys(GROUPS)) {
+    if (!d.items.some((i) => i.group === group)) continue;
     const sec = document.createElement('div'); sec.className = 'setSection';
-    const h = document.createElement('b'); h.textContent = group === 'desktop' ? 'Vibe Roller Desktop' : 'Vibe Roller AI Host'; sec.append(h);
+    const h = document.createElement('b'); h.textContent = GROUPS[group][0]; sec.append(h);
     const p = document.createElement('div'); p.className = 'status';
-    p.textContent = group === 'desktop'
-      ? 'VibeRoller Chat in its own window: servers, channels, groups, private messages, calls and Unity, signed in with your account. A launcher for Chrome, Edge or Brave with a Start-menu / application-menu entry; it opens this hub\'s page, so it is always the current version. (Installing from the browser, at the bottom, works too.)'
-      : 'Makes a computer an AI host: it lends its AI to this VibeRoller (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. Starts at boot as the VibeRollerAIHost service; the heart and the knife start and stop it. Updates itself from this hub. Needs Node.js. For your own host with its config inside, use Settings → Connections → My AI hosts.';
+    p.textContent = GROUPS[group][1];
     sec.append(p);
     const row = document.createElement('div'); row.className = 'row';
     for (const it of d.items.filter((i) => i.group === group)) {
       const b = document.createElement('button'); b.type = 'button'; if (it.os !== os) b.className = 'ghost';
-      b.append(ic('download', 'lead'), document.createTextNode(it.os + ' · ' + it.file + ' (' + Math.max(1, Math.round(it.bytes / 1024)) + ' KB)'));
+      b.append(ic('download', 'lead'), document.createTextNode(it.os + ' · ' + it.file + ' (' + (it.bytes >= 1048576 ? (it.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(it.bytes / 1024)) + ' KB') + ')'));
       b.onclick = () => grab(it, b);
       row.append(b);
     }

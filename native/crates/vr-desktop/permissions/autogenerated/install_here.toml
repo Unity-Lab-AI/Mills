@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-here"
+description = "Enables the install_here command without any pre-configured scope."
+commands.allow = ["install_here"]
+
+[[permission]]
+identifier = "deny-install-here"
+description = "Denies the install_here command without any pre-configured scope."
+commands.deny = ["install_here"]

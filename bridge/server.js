@@ -19,7 +19,6 @@ const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
 const { ROOT, MILLS_DIR, readJson, writeJson, loadProfile, allProfiles, hashPassword } = require('./common');
 const worktree = require('./worktree');
-const downloads = require('./downloads'); // the Download panel: Vibe Roller Desktop + Vibe Roller AI Host, Windows + Linux
 
 const WEB_DIR = path.join(MILLS_DIR, 'web');
 const HUB = loadProfile('');          // hub-wide config: port, origins, tools, models, tunnel
@@ -171,19 +170,37 @@ async function checkPassword(acct, password) {
 loadAccounts();
 
 // ---------- sessions (persisted: a restart signs nobody out) ----------
+// Kept by the sha256 of the token, never the token itself (3.9.0): someone who reads hub-state.json (a backup, a data
+// snapshot) cannot sign in with what is in it. Sessions saved in the clear by an older hub are hashed on the first start.
+const tokenKey = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const hubState = readJson(HUB_STATE_FILE, {});
-const sessions = new Map(Object.entries(hubState.sessions || {}).filter(([, s]) => s && s.exp > Date.now() && accounts.has(s.user)));
+const sessions = new Map(Object.entries(hubState.sessions || {}).filter(([, s]) => s && s.exp > Date.now() && accounts.has(s.user)).map(([t, s]) => [hubState.sessionsHashed ? t : tokenKey(t), s]));
 for (const acct of accounts.values()) { // sessions saved by the old one-bridge-per-person layout
   if (!acct.state.sessions) continue;
-  for (const [t, exp] of Object.entries(acct.state.sessions)) if (exp > Date.now()) sessions.set(t, { user: acct.username, exp });
+  for (const [t, exp] of Object.entries(acct.state.sessions)) if (exp > Date.now()) sessions.set(tokenKey(t), { user: acct.username, exp });
   delete acct.state.sessions; saveState(acct);
 }
-function saveSessions() { hubState.sessions = Object.fromEntries(sessions); writeJson(HUB_STATE_FILE, hubState); }
+function saveSessions() { hubState.sessions = Object.fromEntries(sessions); hubState.sessionsHashed = true; writeJson(HUB_STATE_FILE, hubState); }
 saveSessions();
+// Behind the Rust hub (bridge/run.js, config rustHub): sign-in, the sessions and the device locks are its module
+// (native/crates/vr-hub/src/modules/auth.rs). It tells this hub who a request belongs to (X-VR-User), and that word is
+// trusted only with its secret (X-VR-Front-Secret, given to both at start); this hub then never reads a token itself.
+const FRONT_SECRET = process.env.VR_BACK_PORT ? String(process.env.VR_FRONT_SECRET || '') : '';
+const FRONT = FRONT_SECRET.length >= 32;
+const sameText = (a, b) => crypto.timingSafeEqual(crypto.createHash('sha256').update(String(a || '')).digest(), crypto.createHash('sha256').update(String(b || '')).digest());
+const fromFront = (req) => FRONT && sameText(req.headers['x-vr-front-secret'], FRONT_SECRET);
+// the modules the Rust hub answers (bridge/run.js asks it): their routes never reach this hub, and what this hub still
+// needs of them it asks there (frontCall); their data is the Rust hub's, so this hub leaves it alone
+const FRONT_MODS = new Set(FRONT ? String(process.env.VR_FRONT_MODULES || '').split(',').filter(Boolean) : []);
+async function frontCall(p, body) {
+  const r = await fetch(`http://127.0.0.1:${config.port}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Front-Secret': FRONT_SECRET }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout(30000) });
+  return r.json();
+}
 function sessionAccount(req) {
+  if (FRONT) { const u = String(req.headers['x-vr-user'] || ''); return fromFront(req) && USERNAME_RE.test(u) ? accounts.get(u) || null : null; }
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-  const s = m && sessions.get(m[1]);
-  if (!s || s.exp < Date.now() || !accounts.has(s.user)) { if (s) { sessions.delete(m[1]); saveSessions(); } return null; }
+  const k = m && tokenKey(m[1]), s = k && sessions.get(k);
+  if (!s || s.exp < Date.now() || !accounts.has(s.user)) { if (s) { sessions.delete(k); saveSessions(); } return null; }
   return accounts.get(s.user);
 }
 function dropSessions(username) {
@@ -197,7 +214,7 @@ setInterval(() => { const old = Date.now() - 30 * 60e3; for (const [k, f] of fai
 
 // ---------- claude runner + pc tool relay (one per account) ----------
 function emit(acct, ev) { if (acct.stream) acct.stream.write(JSON.stringify(ev) + '\n'); }
-function runClaude(acct, message, fresh, res, context) {
+function runClaude(acct, message, fresh, res, context, preWm = null) {
   shares.mirror(acct, 'user', message);
   let wd;
   try { wd = workDir(acct); } catch (e) {
@@ -225,13 +242,17 @@ function runClaude(acct, message, fresh, res, context) {
   if ((prov.kind === 'host' || prov.kind === 'claude-cli') && !aiHostOn()) return fail(AI_OFF_TEXT); // the host paused its AI (an Anthropic key of your own still works)
   if (prov.kind === 'host-claude' && !aiNodes.hostOnline(prov.hostId)) return fail(`${prov.nickname}${prov.owner ? ` (${nameOf(prov.owner)}'s AI host)` : ''} is offline right now. Pick another AI in the dropdown, or wait for it.`);
   if (prov.kind === 'host-claude' && prov.capped) return fail(`${prov.nickname}: ${prov.capped}. Pick another AI or wait for the window to reset.`);
+  // an older host (no relay) would run the whole Work run on its own computer: only its owner may touch that computer
+  if (prov.kind === 'host-claude' && prov.remoteKind === 'claude-cli-work' && prov.owner !== acct.username) {
+    return fail(`${prov.nickname} is an older AI host that would run Work on ${prov.owner ? nameOf(prov.owner) + "'s" : 'its own'} computer, and only its owner may work on that computer. Pick another AI in the dropdown, or ask them to update the host (then Work runs here and only its AI is used).`);
+  }
   const source = prov.kind === 'host' ? 'hub' : prov.kind === 'host-claude' ? prov.id : ''; // whose usage windows this run moves
   // a Claude session lives where it ran (relayed runs run here, on this hub)
   const where = prov.kind === 'host-claude' && prov.remoteKind === 'claude-cli-work' ? prov.hostId : 'hub';
   if (!fresh && acct.state.claudeSessionId && (acct.state.claudeSessionWhere || 'hub') === where) args.push('--resume', acct.state.claudeSessionId);
   acct.state.claudeSessionWhere = where;
   // attached files (the marker block at the end of the message): Claude gets their paths and may read that folder
-  const wm = files.workMessage(acct, message, { project: wd.project });
+  const wm = preWm && typeof preWm.text === 'string' && Array.isArray(preWm.dirs) ? preWm : files.workMessage(acct, message, { project: wd.project });
   for (const d of wm.dirs) args.push('--add-dir', d);
   const input = context ? `${wm.text}\n\n---\n${context}` : wm.text; // context = automatic summaries of the shared Work sessions this person is watching (added by their browser)
   acct.runProvider = prov.kind !== 'host' ? prov.id : '';
@@ -363,13 +384,29 @@ const b64 = (s, max) => typeof s === 'string' && s.length <= max && /^[A-Za-z0-9
 // linked ~/uploaded_files; everyone's library (Files) lists what they uploaded, where it went, when it was last used
 const linux = require('./linux-accounts')({ config, ROOT });
 const files = require('./files')({ CHAT_DIR, send: (...a) => send(...a), accountOf: (u) => accounts.get(u), linux });
-setInterval(() => { try { files.chat.sweep(); files.work.sweep([...accounts.values()]); } catch (e) { console.error('[mills] file sweep: ' + e.message); } }, 3600e3).unref();
+// behind the Rust hub with its files module, the chat tells it about its messages' files instead (and it sweeps)
+const FILES_MOVED = FRONT_MODS.has('files');
+// behind the Rust hub with its chat module, the chat is its own: messages, keys, servers, calls, presence. Unity's
+// brain stays here: the Rust hub says when she is called, she reads what she was sent and posts through it.
+const CHAT_MOVED = FRONT_MODS.has('chat');
+const filesGone = (ids) => { if (FILES_MOVED) frontCall('/__front/files/gone', { ids }).catch((e) => console.error('[mills] files gone: ' + e.message)); else files.chat.messageGone(ids); };
+const filesAllGone = () => { if (FILES_MOVED) frontCall('/__front/files/all-gone', {}).catch(() => {}); else files.chat.allGone(); };
+async function filesAttach(user, ids, seq, conv) {
+  if (!FILES_MOVED) return files.chat.attach(user, ids, seq, conv);
+  const r = await frontCall('/__front/files/attach', { user, ids, seq, conv });
+  if (!r.ok) throw Object.assign(new Error(r.error || 'Could not attach the files.'), { status: r.status || 400 });
+  return r.ids;
+}
+if (!FILES_MOVED) setInterval(() => { try { files.chat.sweep(); files.work.sweep([...accounts.values()]); } catch (e) { console.error('[mills] file sweep: ' + e.message); } }, 3600e3).unref();
 const validJwk = (k) => k && typeof k === 'object' && k.kty === 'EC' && k.crv === 'P-256' && b64(k.x, 64) && b64(k.y, 64) && !k.d;
 // Long-poll for the room: browsers wait on /api/room/messages?wait=1&ver=N and are answered the moment
 // anything they show changes (a message, edit, delete, receipt, share, member key) instead of polling.
 let roomVer = 1, keysVer = 1;
 const roomWaiters = new Set();
-function roomChanged() { roomVer++; for (const fn of [...roomWaiters]) fn(); }
+function roomChanged() {
+  roomVer++; for (const fn of [...roomWaiters]) fn();
+  if (CHAT_MOVED) frontCall('/__front/chat/changed', { keys: true }).catch(() => {}); // (a profile, a picture: the member list reloads)
+}
 // Presence + typing (bridge/presence.js): online / idle / offline from each page's open long poll, who is typing
 // where; Unity counts as typing while she composes (extraTyping).
 const presence = require('./presence')({ accounts, roomChanged: () => roomChanged(),
@@ -465,7 +502,7 @@ const board = require('./board')({
 
 // Forgejo (bridge/forgejo.js): everyone's own token ("My Forgejo"), and issue mirroring, off until
 // bridge/forgejo.json names a repo.
-const forgejo = require('./forgejo')({ ROOT, board, readJson, writeJson, config });
+const forgejo = require('./forgejo')({ ROOT, board, readJson, writeJson, config, mirror: !FRONT_MODS.has('board') });
 board.setViewExtra(() => ({ mirror: forgejo.status() }));
 
 // ---------- room agent ("claude") ----------
@@ -506,7 +543,7 @@ const guilds = require('./guilds')({ dir: CHAT_DIR, accounts, readJson, writeJso
     let n = 0;
     for (const m of messages) if (m.from === user && !m.deleted && convs.includes(m.conv) && Date.parse(m.ts) >= since) {
       for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
-      if (m.files) { files.chat.messageGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
+      if (m.files) { filesGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
       Object.assign(m, { deleted: true, keys: {}, rev: ++rev }); n++;
     }
     if (n) { saveMessages(); roomChanged(); }
@@ -570,6 +607,7 @@ function agentContext(m) { // the earlier messages the caller sent along: [{ n: 
 // (the message is still sealed with the hub's own key, exactly like Unity's); { conv: 'ch:…' / 'grp:…' }
 // posts into a channel / group, wrapped for its members only.
 function agentSay(text, to, extra = {}) {
+  if (CHAT_MOVED) { frontCall('/__front/chat/say', { text, to: to || '', as: extra.as || '', via: extra.via || '', conv: extra.conv || '' }).catch((e) => console.log('[mills] room agent could not post: ' + e.message)); return 0; }
   const conv = !to && typeof extra.conv === 'string' && guilds.isGuildConv(extra.conv) ? extra.conv : '';
   const allowed = conv ? guilds.members(conv) || [] : null;
   const mid = crypto.randomBytes(16).toString('base64url'), aad = bodyAad(AGENT, to, mid);
@@ -585,7 +623,15 @@ function agentSay(text, to, extra = {}) {
   return msg.seq;
 }
 const nameOf = (u) => { if (u === AGENT) return AGENT_NAME; const a = accounts.get(u); return a ? publicPrefs(a).nick || a.display : u; };
-function agentPrompt() {
+const agentPromptText = (blocks) => {
+  const notes = agent.notes.splice(0);
+  return `You were called in the VibeRoller chat (you only ever see the messages that @-mention you, plus the few before them):\n\n${blocks || '(none)'}\n\n`
+    + (notes.length ? notes.join('\n') + '\n\n' : '') + 'Reply now.';
+};
+// Unity composing: everyone's page shows "Unity is typing…" (behind the Rust hub with its chat, it shows that)
+function agentTyping(on) { if (CHAT_MOVED) frontCall('/__front/chat/agent-typing', { on, target: agent.target || '', conv: agent.conv || '' }).catch(() => {}); else roomChanged(); }
+function agentPrompt() { // a string, or (behind the Rust hub with its chat, which reads her messages) a promise of one
+  if (CHAT_MOVED) return frontCall('/__front/chat/agent-prompt', {}).then((r) => agentPromptText(r.blocks)).catch(() => agentPromptText(''));
   // Each call since it last spoke, with (at most) the 5 messages before it that the caller sent along.
   const since = agent.state.lastSeq || 0;
   const blocks = messages.filter((m) => m.seq > since && m.from !== AGENT).slice(-6).map((m) => {
@@ -596,9 +642,7 @@ function agentPrompt() {
       + `[${m.ts}] ${m.to === AGENT ? '(private message to you) ' : ''}${nameOf(m.from)}: ${t}`;
   }).filter(Boolean);
   agent.state.lastSeq = seq;
-  const notes = agent.notes.splice(0);
-  return `You were called in the VibeRoller chat (you only ever see the messages that @-mention you, plus the few before them):\n\n${blocks.join('\n\n') || '(none)'}\n\n`
-    + (notes.length ? notes.join('\n') + '\n\n' : '') + 'Reply now.';
+  return agentPromptText(blocks.join('\n\n'));
 }
 const AGENT_SYSTEM = [
   `You are ${AGENT_NAME}, a member of the VibeRoller team chat room (the people in it are Unity AI Lab engineers, all adults, your people).`,
@@ -625,8 +669,9 @@ function agentGreet(acct) {
   // A first sign-in in a new browser uploads its chat key right after login: wait for it (max 60 s)
   // so the person can read their own greeting.
   const started = Date.now();
-  const go = () => {
-    if (!chatKeys[acct.username] && Date.now() - started < 60000) return setTimeout(go, 2000).unref();
+  const hasKey = () => (CHAT_MOVED ? frontCall('/__front/chat/has-key', { user: acct.username }).then((r) => !!r.ok).catch(() => false) : Promise.resolve(!!chatKeys[acct.username]));
+  const go = async () => {
+    if (!(await hasKey()) && Date.now() - started < 60000) return setTimeout(go, 2000).unref();
     Promise.resolve(roomBrain() === 'local' ? assistant.greeting(acct).catch(() => '') : '').then((facts) => {
       agent.notes.push(`${acct.display} (${acct.username}) just signed in to VibeRoller. Say hi to them.` + (facts ? '\n' + facts : ''));
       runAgent('', acct.username);
@@ -650,9 +695,13 @@ function runAgent(target = '', caller = '', conv = '') {
   if (agent.state.sessionId) args.push('--resume', agent.state.sessionId);
   const command = config.claudeCommand || 'claude';
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
-  const child = spawn(command, [...pre, ...args], { cwd: MILLS_DIR, windowsHide: true });
+  agent.running = { starting: true };
+  agentTyping(true); // browsers show "Unity is typing…" while she composes
+  Promise.resolve(agentPrompt()).then((prompt) => runAgentClaude(command, [...pre, ...args], prompt));
+}
+function runAgentClaude(command, args, prompt) {
+  const child = spawn(command, args, { cwd: MILLS_DIR, windowsHide: true });
   agent.running = child;
-  roomChanged(); // browsers show "Unity is typing…" while she composes
   let out = '', finished = false;
   child.stdout.on('data', (c) => { out += c; });
   child.stderr.on('data', () => {});
@@ -663,26 +712,25 @@ function runAgent(target = '', caller = '', conv = '') {
       try { const r = JSON.parse(line); if (r.session_id) agent.state.sessionId = r.session_id; if (typeof r.result === 'string') { text = r.result; break; } } catch {}
     }
     agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
-    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
-    else roomChanged(); // nothing posted: still take the typing indicator away
+    if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), agent.target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } if (CHAT_MOVED) agentTyping(false); }
+    else agentTyping(false); // nothing posted: still take the typing indicator away
     if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || '', agent.nextConv || ''); else setTimeout(maybeRestart, 300);
   };
   child.on('error', (e) => done('(I could not start: ' + e.message + ')'));
   child.on('close', () => done(''));
-  child.stdin.end(agentPrompt());
+  child.stdin.end(prompt);
 }
 function runAgentLocal(target, caller) {
   const who = accounts.get(caller || target) || accounts.get(DEFAULT_USERNAME) || [...accounts.values()][0];
-  const prompt = agentPrompt();
   agent.running = { local: true };
-  roomChanged(); // browsers show "Unity is typing…" while she composes
-  assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' })
+  agentTyping(true); // browsers show "Unity is typing…" while she composes
+  Promise.resolve(agentPrompt()).then((prompt) => assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' }))
     .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join('') + (r.media || []).map((v) => `\n[[youtube:${v}]]`).join(''))
     .catch((e) => (/AI host is offline/.test(e.message) ? e.message : `(my brain glitched: ${e.message})`)) // no AI host: say so plainly
     .then((text) => {
       agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
-      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } }
-      else if (typeof roomChanged === 'function') roomChanged(); // nothing posted: still take the typing indicator away
+      if (text && text.trim()) { try { agentSay(text.trim().slice(0, 20000), target, { conv: agent.conv }); } catch (e) { console.log('[mills] room agent could not post: ' + e.message); } if (CHAT_MOVED) agentTyping(false); }
+      else agentTyping(false); // nothing posted: still take the typing indicator away
       if (agent.queued) runAgent(agent.nextTarget || '', agent.nextCaller || '', agent.nextConv || ''); else setTimeout(maybeRestart, 300);
     });
 }
@@ -701,9 +749,12 @@ function agentHear(msg) {
 // Nobody — no account's Work run and not the room agent — is mid-run.
 // The Unity section (bridge/assistant.js): Unity with tools, brain = local model or Claude.
 // AI nodes (bridge/ai-nodes.js): machines lending Unity's local engines to this hub when it runs elsewhere
-const aiNodes = require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }) });
+// the native programs' pre-built, signed binaries (native/dist, bridge/native-releases.js): AI host updates + Downloads
+const nativeReleases = require('./native-releases')({ ROOT, MILLS_DIR, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }) });
+// the AI hosts: here (bridge/ai-nodes.js), or in the Rust hub in front when it runs them (bridge/ai-nodes-front.js: the same calls)
+const aiNodes = FRONT_MODS.has('aihosts') ? require('./ai-nodes-front')({ ROOT, config, port: config.port, secret: FRONT_SECRET, log: (m) => console.log(m) }) : require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }), nativeReleases });
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300), aiNodes });
-const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
+const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy() || frontBusy;
 // Team notes (bridge/notes.js): markdown files in folders under VibeRoller/Notes, for people (/api/notes*) and Claude (notes_* tools).
 const notes = require('./notes')({ dir: path.join(MILLS_DIR, 'Notes'), send: (...a) => send(...a), readBody: (r) => readBody(r), displayOf: nameOf, changed: () => roomChanged() });
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
@@ -721,8 +772,14 @@ const calls = require('./calls')({ accounts, config, chatKeys, send: (...a) => s
 const { convMember } = calls; // "is this person part of that conversation" (also used by shared Work sessions)
 
 // Shared Work sessions (bridge/shares.js): watch-only windows on a person's Work run; shares.route() serves /api/work/*.
-const shares = require('./shares')({ accounts, convMember, roomChanged: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
+// Behind the Rust hub with its work module, the shares are its own: it tells this hub which there are (for the room poll)
+const WORK_MOVED = FRONT_MODS.has('work');
+let frontShares = [], frontBusy = false; // (from the Rust hub: its shared sessions, and whether a Work run of its is going)
+const shares = WORK_MOVED ? { mirror() {}, mirrorEvent() {}, stop() {}, route: async () => false, convOf: (u) => (frontShares.find((s) => s.user === u) || {}).conv || '', listFor: (u) => frontShares.filter((s) => s.user !== u && convMember(s.conv, u)) }
+  : require('./shares')({ accounts, convMember, roomChanged: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
 function maybeRestart() {
+  // behind the Rust hub (4.0.0) the restart is its: it ends with 75 when nobody is busy and run.js starts both again
+  if (FRONT_MODS.size) return;
   if (anyBusy() || !fs.existsSync(RESTART_FLAG)) return;
   try { fs.unlinkSync(RESTART_FLAG); } catch {}
   if (!SUPERVISED) return console.log('[mills] Restart requested, but this hub was started without run.js (start.bat / start.sh) — restart it by hand.');
@@ -766,9 +823,11 @@ function accountSummary(a) {
 // host when it offers their computer, else to their browser), the team board, the team chat.
 async function internalTool(tool, req, res, account) {
   const acct = accounts.get(account);
+  if (tool === 'board' && FRONT_MODS.has('board')) { const { name, args } = await readBody(req); return send(res, 200, await frontCall('/__front/board/tool', { name, args, account }).catch((e) => ({ ok: false, error: 'Board unreachable: ' + e.message }))); }
   if (tool === 'board') return board.internal(req, res, account);
   if (!acct) return send(res, 200, { ok: false, error: 'Unknown account.' });
   const { name, args } = await readBody(req);
+  if (tool === 'team' && /^notes_/.test(String(name || '')) && FRONT_MODS.has('notes')) return send(res, 200, await frontCall('/__front/notes/tool', { name, args, account }).catch((e) => ({ ok: false, error: 'Notes unreachable: ' + e.message })));
   if (tool === 'team') return send(res, 200, team.call(name, args, acct));
   // pc-tool: the person's own AI host with direct computer access first (the native app), else the browser's open folder
   const viaHost = aiNodes.pcHostFor(acct.username);
@@ -783,12 +842,48 @@ async function internalTool(tool, req, res, account) {
   return emit(acct, { type: 'pc_tool', id, name, args });
 }
 
-const server = http.createServer(async (req, res) => {
+// No inline script runs but the page's own (3.9.0): the page as served has its CSP's 'unsafe-inline' for scripts replaced
+// by the sha256 of each of its own inline scripts, taken after the hub filled in its values. Anything injected into the
+// page (a message, a name, a file someone managed to slip HTML into) cannot run, nor can inline event handlers.
+// worker-src blob: lets the code sandbox (run_code: Web Workers made from the page's own text) start.
+function pinScripts(html) {
+  const hashes = [];
+  html.replace(/<script>([\s\S]*?)<\/script>/g, (m, body) => { hashes.push(`'sha256-${crypto.createHash('sha256').update(body, 'utf8').digest('base64')}'`); return m; });
+  return html.replace(/(<meta http-equiv="Content-Security-Policy" content="[^"]*?script-src 'self') 'unsafe-inline';/, (m, a) => `${a} ${hashes.join(' ')}; worker-src blob:;`);
+}
+// A route that hands back a promise without awaiting it (`return x.route(...)`) leaves the try below before that promise
+// settles, so its rejection would skip the catch, and the request would hang with nobody answering it. Every request
+// therefore goes through handleRequest(...).catch(...): whatever fails, awaited or not, is answered (3.9.0).
+function answerError(e, res, p) {
+  // our own messages (and the 413 / bad JSON of readBody) go back as they are; anything from the system (a file error
+  // with a path in it, a stack) is logged here and answered plainly
+  if (res.headersSent) { try { res.end(); } catch {} return; }
+  if (e && e.status === 413) res.setHeader('Connection', 'close');
+  if (e && e.code && /^E[A-Z]+$/.test(e.code)) { console.error('[mills] request failed:', p, e); return send(res, 500, { error: 'Something went wrong on the hub; it is logged. Try again.' }); }
+  return send(res, (e && e.status) || 400, { error: String((e && e.message) || e).replace(/(?:\/srv|\/home|\/tmp|[A-Z]:\\)[^\s'"]*/g, '<path>') });
+}
+const server = http.createServer((req, res) => { handleRequest(req, res).catch((e) => { try { answerError(e, res, String(req.url || '').split('?')[0]); } catch {} }); });
+async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   for (const [k, v] of Object.entries(HARDEN)) res.setHeader(k, v);
   try {
     if (p === '/internal/assistant-tool') return await assistant.internal(req, res);
+    // the Rust hub in front (its files module): may this person read that message (and so its files)?
+    if (p === '/internal/front/may-read' && req.method === 'POST') {
+      if (!fromFront(req)) return send(res, 403, { ok: false });
+      const b = await readBody(req, 4096), u = String(b.user || ''), m = messages.find((x) => x.seq === Number(b.seq));
+      return send(res, 200, { ok: !!(m && !m.deleted && visibleTo(m, u) && (m.keys || {})[u]) });
+    }
+    // the Rust hub in front: something its modules keep changed that open pages follow through the chat's long poll (notes)
+    if (p === '/internal/front/room-changed' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); roomChanged(); return send(res, 200, { ok: true }); }
+    // the Rust hub in front: a sign-in went through there (what it starts here: the client details, Unity's greeting)
+    if (p === '/internal/front/signed-in' && req.method === 'POST') {
+      if (!fromFront(req)) return send(res, 403, { ok: false, error: 'forbidden' });
+      const b = await readBody(req, 65536), a = accounts.get(String(b.user || ''));
+      if (a) assistant.learnClient(a, b.client, String(b.ip || '')).catch(() => {}).then(() => agentGreet(a));
+      return send(res, 200, { ok: !!a });
+    }
     // Internal channel from the MCP relay (same machine, shared secret, names the account).
     if (p === '/internal/pc-tool' || p === '/internal/board' || p === '/internal/team') {
       if (!crypto.timingSafeEqual(crypto.createHash('sha256').update(String(req.headers['x-mills-internal'] || '')).digest(), crypto.createHash('sha256').update(INTERNAL_SECRET).digest())) return send(res, 403, { ok: false, error: 'forbidden' });
@@ -796,7 +891,33 @@ const server = http.createServer(async (req, res) => {
     }
     // The same tools for a Work run that runs ON AN AI HOST (Claude Code on Gee's PC for the hub on the server): the
     // host's MCP relays call /node/job/<job id>/internal/<tool> with the job's own token, good for that one run only.
+    // the Rust hub in front (its AI hosts module): what the hosts offer now, and a host's usage windows as they come
+    if (p === '/internal/front/hosts-state' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); aiNodes.setState && aiNodes.setState(await readBody(req, 8 << 20)); return send(res, 200, { ok: true }); }
+    // the Rust hub in front (its work module): its shared Work sessions, whether a run of its is going, and the team
+    // tools of its runs (the chat, presence, calls and servers are this hub's; extra = what the Rust hub knows)
+    if (p === '/internal/front/shares' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); const b = await readBody(req, 1 << 20); frontShares = (Array.isArray(b.shares) ? b.shares : []).filter((s) => s && USERNAME_RE.test(String(s.user || ''))); roomChanged(); return send(res, 200, { ok: true }); }
+    if (p === '/internal/front/work-busy' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); frontBusy = (await readBody(req, 4096)).busy === true; if (!frontBusy) setTimeout(maybeRestart, 300); return send(res, 200, { ok: true }); }
+    // the Rust hub in front made or deleted an account: the few routes still answered here know it at once
+    if (p === '/internal/front/accounts-changed' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); loadAccounts(); return send(res, 200, { ok: true }); }
+    // the Rust hub in front (its chat module): Unity was called (target: a private answer to that person; conv: a channel / group)
+    if (p === '/internal/front/agent-call' && req.method === 'POST') {
+      if (!fromFront(req)) return send(res, 403, { ok: false });
+      const b = await readBody(req, 4096), ok = (x) => USERNAME_RE.test(String(x || ''));
+      runAgent(ok(b.target) ? String(b.target) : '', ok(b.caller) ? String(b.caller) : '', /^(ch|grp):/.test(String(b.conv || '')) ? String(b.conv) : '');
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/internal/front/team-tool' && req.method === 'POST') {
+      if (!fromFront(req)) return send(res, 403, { ok: false, error: 'forbidden' });
+      const b = await readBody(req), a = accounts.get(String(b.account || ''));
+      if (!a) return send(res, 200, { ok: false, error: 'Unknown account.' });
+      return send(res, 200, team.call(String(b.name || ''), b.args || {}, a, b.extra || {}));
+    }
     const nj = /^\/node\/job\/([A-Za-z0-9_-]+)\/internal\/(pc-tool|board|team)$/.exec(p);
+    if (nj && FRONT_MODS.has('aihosts')) { // a Rust hub without its work module (3.18): it checked the job's token and names the account
+      const account = fromFront(req) ? String(req.headers['x-vr-front-job-account'] || '') : '';
+      if (!USERNAME_RE.test(account)) return send(res, 403, { ok: false, error: 'forbidden' });
+      return internalTool(nj[2], req, res, account);
+    }
     if (nj) {
       const job = aiNodes.jobFor(nj[1], req.headers['x-mills-internal']);
       if (!job) return send(res, 403, { ok: false, error: 'forbidden' });
@@ -829,14 +950,14 @@ const server = http.createServer(async (req, res) => {
         // cache busting: every script and stylesheet of the page is asked for under this build's name, so after an update no
         // browser (or cache in between) can hand back an older copy
         html = html.replace(/(<script src|<link rel="stylesheet" href)="([\w./-]+\.(?:js|css))"/g, (m, a, f) => `${a}="${f}?v=${encodeURIComponent(BUILD)}"`);
-        return res.end(html);
+        return res.end(pinScripts(html));
       }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
       return fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
     }
 
-    // the package versions and the Desktop packages: public (an installed Desktop updates itself before anyone signs in)
-    if (p.startsWith('/api/pub/') && downloads.publicRoute(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`)) return;
+    // the downloads are the Rust hub's alone (4.0.0), for people with an account; the public routes are gone
+    if (p.startsWith('/api/pub/')) return send(res, 410, { error: 'Downloads and updates need a VibeRoller account now: sign in and use the Download panel.' });
     if (p === '/api/status' && req.method === 'GET') {
       // The only thing anyone may learn without signing in is that a VibeRoller hub is here (the page needs
       // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
@@ -887,7 +1008,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 403, { error: 'This account is locked to another device. Ask an admin to reset it.' });
       }
       const token = crypto.randomBytes(32).toString('hex');
-      sessions.set(token, { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
+      sessions.set(tokenKey(token), { user: acct.username, exp: Date.now() + SESSION_MS }); saveSessions();
       assistant.learnClient(acct, client, outsideIp(req)).catch(() => {}).then(() => agentGreet(acct));
       return send(res, 200, { token, username: acct.username });
     }
@@ -914,7 +1035,8 @@ const server = http.createServer(async (req, res) => {
         provider: acct.state.provider || 'host', effectiveProvider: (providers.effective(acct.username, acct.state.provider || '') || {}).id || '', defaultProvider: (providers.defaultFor(acct.username) || {}).id || '', hubClaude: providers.HUB_CLAUDE,
         providers: providers.list(acct.username), version: VERSIONS.project, build: BUILD, versions: VERSIONS.modules, aiHost: aiHostOn(), aiNodes: aiNodes.status(), pcHost: aiNodes.pcHostFor(acct.username) });
     }
-    if (p.startsWith('/api/downloads') && downloads.route(p, req, res, PUBLIC_URL || `http://127.0.0.1:${config.port}`, (hostId) => aiNodes.hosts.configFor(acct.username, hostId, PUBLIC_URL || `http://127.0.0.1:${config.port}`))) return; // the Download panel's packages (+ this person's own AI host config)
+    // the Download panel is the Rust hub's (4.0.0): this hub runs without it only as the fallback
+    if (p.startsWith('/api/downloads') || p === '/api/native' || p === '/api/native/file') return send(res, 503, { error: 'Downloads come from the Rust hub (vr-hub), and this hub is running without it right now. Ask the admin.' });
     // ----- AI providers: everyone manages their own; the host's Claude is always there -----
     if (p === '/api/providers' && req.method === 'GET') return send(res, 200, { providers: providers.list(acct.username), provider: acct.state.provider || 'host' });
     if (p === '/api/providers/add' && req.method === 'POST') { try { return send(res, 200, { provider: providers.add(acct.username, await readBody(req)), providers: providers.list(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
@@ -953,7 +1075,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/logout' && req.method === 'POST') {
       calls.leave(acct.username); shares.stop(acct.username); presence.typing(acct.username, '', false);
       presence.gone(acct.username); // offline right away
-      sessions.delete((req.headers.authorization || '').slice(7)); saveSessions();
+      sessions.delete(tokenKey((req.headers.authorization || '').slice(7))); saveSessions();
       return send(res, 200, { ok: true });
     }
 
@@ -976,6 +1098,8 @@ const server = http.createServer(async (req, res) => {
     }
     // ----- AI hosts: machines lending their AI to this hub (Settings → My AI hosts) -----
     if (p === '/api/hosts' && req.method === 'GET') return send(res, 200, { mine: aiNodes.hosts.mine(acct.username), all: aiNodes.hosts.all().map((h) => ({ id: h.id, nickname: h.nickname, user: h.user, online: h.online, providers: h.providers.filter((x) => x.allowedUsers.includes(acct.username) || h.user === acct.username).map((x) => ({ id: x.id, kind: x.kind, label: x.label, models: x.models, capped: x.capped })) })), defaultProvider: (providers.defaultFor(acct.username) || {}).id || '', group: config.hostGroup || [] });
+    // one of this person's hosts, as its ai-node.json (the desktop app's "Run on this PC" sets itself up with it)
+    if (p === '/api/hosts/config' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { config: aiNodes.hosts.configFor(acct.username, String(b.id || ''), PUBLIC_URL || `http://127.0.0.1:${config.port}`) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/hosts/new' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { host: aiNodes.hosts.create(acct.username, b.nickname ? String(b.nickname) : ''), mine: aiNodes.hosts.mine(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/hosts/rename' && req.method === 'POST') { const b = await readBody(req); try { return send(res, 200, { host: aiNodes.hosts.rename(acct.username, String(b.id || ''), String(b.nickname || '')) }); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/hosts/remove' && req.method === 'POST') { const b = await readBody(req); try { aiNodes.hosts.remove(acct.username, String(b.id || '')); return send(res, 200, { mine: aiNodes.hosts.mine(acct.username) }); } catch (e) { return send(res, 400, { error: e.message }); } }
@@ -1009,7 +1133,13 @@ const server = http.createServer(async (req, res) => {
       if (!message || typeof message !== 'string') return send(res, 400, { error: 'Empty message.' }); // (files only: the marker block is the message)
       const ctx = typeof context === 'string' ? context.slice(0, 20000) : '';
       if (fresh) { delete acct.state.claudeSessionId; delete acct.state.ctx; }
-      return runClaude(acct, message, !!fresh, res, ctx);
+      // its attached files: their paths come from the Rust hub's files module when it has them
+      let wm = null;
+      if (FILES_MOVED && message.includes('<!--vr-files ')) {
+        wm = await frontCall('/__front/files/work-message', { account: acct.username, message, where: { project: projectOf(acct) } }).catch(() => null);
+        if (acct.running) return send(res, 409, { error: 'Claude is already working. Stop it first.' });
+      }
+      return runClaude(acct, message, !!fresh, res, ctx, wm);
     }
     if (p === '/api/pc-result' && req.method === 'POST') {
       const { id, ok, result, error } = await readBody(req);
@@ -1057,8 +1187,13 @@ const server = http.createServer(async (req, res) => {
       const slots = cleanSlots(keys, acct.username, to || '', conv);
       if (!slots[acct.username]) return send(res, 400, { error: 'Bad message.' });
       // its files (uploaded encrypted just before, by this sender, not sent yet) now belong to this message
-      let fileIds = []; try { fileIds = files.chat.attach(acct.username, fileIdsIn, seq + 1, to ? 'dm:' + [acct.username, to].sort().join('|') : conv || 'room'); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
-      const msg = { seq: ++seq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}), ...(fileIds.length ? { files: fileIds } : {}) };
+      // (asking the Rust hub's files module takes a moment: the message's number is taken first, so no other message
+      // sent meanwhile can get it; a refused attach leaves that number unused)
+      const fileConv = to ? 'dm:' + [acct.username, to].sort().join('|') : conv || 'room';
+      let fileIds = [], msgSeq;
+      if (FILES_MOVED && fileIdsIn !== undefined) { msgSeq = ++seq; try { fileIds = await filesAttach(acct.username, fileIdsIn, msgSeq, fileConv); } catch (e) { return send(res, e.status || 400, { error: e.message }); } }
+      else { try { fileIds = files.chat.attach(acct.username, fileIdsIn, seq + 1, fileConv); } catch (e) { return send(res, e.status || 400, { error: e.message }); } msgSeq = ++seq; }
+      const msg = { seq: msgSeq, ...(v !== undefined ? { v, mid } : {}), from: acct.username, ...(to ? { to } : {}), ...(conv ? { conv } : {}), ts: new Date().toISOString(), fromPub: mine.pub, iv, ct, keys: slots, ...(blob ? { blob } : {}), ...(fileIds.length ? { files: fileIds } : {}) };
       appendMessage(msg);
       if (!to) guilds.notePost(conv || 'room', acct.username); // slowmode
       agentHear(msg);
@@ -1089,7 +1224,7 @@ const server = http.createServer(async (req, res) => {
       if (!m || (m.from !== acct.username && !(!m.to && guilds.moderates(m.conv || 'room', acct.username) && visibleTo(m, acct.username)))) return send(res, 403, { error: 'You can only delete your own messages.' });
       if (!m.deleted) {
         for (const k of ['iv', 'ct', 'keys', 'fromPub', 'editedAt', 'blob']) delete m[k];
-        if (m.files) { files.chat.messageGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
+        if (m.files) { filesGone(m.files); delete m.files; } // its readers lose its attachments (the uploader keeps them in Files)
         Object.assign(m, { deleted: true, keys: {}, rev: ++rev });
         saveMessages();
       }
@@ -1137,7 +1272,7 @@ const server = http.createServer(async (req, res) => {
         for (const [u, convs] of Object.entries(seen)) {
           for (const [c, v] of Object.entries(convs)) if (c === 'room' || (c.startsWith('dm:') && c.split(/[:|]/).includes(acct.username)) || guilds.isMember(c, acct.username)) (seenOut[u] || (seenOut[u] = {}))[c] = v;
         }
-        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer, guildsVer: guilds.version(), notesVer: notes.version(),
+        send(res, 200, { messages: out.map(strip), latest: seq, latestRev: rev, seen: seenOut, shares: shares.listFor(acct.username), ver: roomVer, keysVer, guildsVer: guilds.version(), notesVer: FRONT_MODS.has('notes') ? Number(req.headers['x-vr-notes-ver']) || 1 : notes.version(),
           online: presence.online(), presence: presence.list(), typing: presence.typingFor(acct.username) });
       };
       if (url.searchParams.get('wait') !== '1') { presence.touch(acct.username); return answer(); }
@@ -1169,6 +1304,13 @@ const server = http.createServer(async (req, res) => {
     // Files: everything this person uploaded, where it went, when it was last used; and their Linux account's link
     if (p === '/api/library' && req.method === 'GET') return send(res, 200, { linux: linux.status(acct.username, files.work.fallbackDir(acct)), entries: files.library.list(acct) });
     if (p === '/api/library/delete' && req.method === 'POST') { const { id } = await readBody(req); return files.library.remove(acct, String(id || '')) ? send(res, 200, { ok: true }) : send(res, 404, { error: 'Not found.' }); }
+    if (p === '/api/library/save' && req.method === 'POST') { // the text editor: the raw new content, ?id=<file>
+      try { return send(res, 200, files.library.save(acct, String(url.searchParams.get('id') || ''), await files.readRaw(req))); } catch (e) { return send(res, e.status || 500, { error: e.message }); }
+    }
+    if (p === '/api/library/exec' && req.method === 'POST') {
+      const { id, on } = await readBody(req);
+      try { return send(res, 200, files.library.setExec(acct, String(id || ''), !!on)); } catch (e) { return send(res, e.status || 500, { error: e.message }); }
+    }
     if (p.startsWith('/api/work/file/') && req.method === 'GET') return files.work.serve(acct, p.slice('/api/work/file/'.length), res);
     if (p === '/api/room/blob' && req.method === 'GET') { // a voice clip's ciphertext, for a reader of that message
       const m = messages.find((x) => x.seq === Number(url.searchParams.get('seq')));
@@ -1235,7 +1377,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true, supervised: SUPERVISED });
       }
       if (p === '/api/admin/room/clear' && req.method === 'POST') {
-        messages = []; fs.writeFileSync(CHAT_FILE, ''); files.chat.allGone(); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
+        messages = []; fs.writeFileSync(CHAT_FILE, ''); filesAllGone(); agent.state.lastSeq = 0; writeJson(AGENT_STATE_FILE, agent.state);
         rev = 0; seen = {}; writeJson(SEEN_FILE, seen); // browsers see latestRev drop below theirs and reload
         roomChanged();
         console.log(`[mills] ${acct.username} cleared the chat history.`);
@@ -1246,17 +1388,14 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 404, { error: 'Unknown endpoint' });
   } catch (e) {
-    // our own messages (and the 413 / bad JSON of readBody) go back as they are; anything from the system (a file error
-    // with a path in it, a stack) is logged here and answered plainly
-    if (res.headersSent) { try { res.end(); } catch {} return; }
-    if (e && e.status === 413) res.setHeader('Connection', 'close');
-    if (e && e.code && /^E[A-Z]+$/.test(e.code)) { console.error('[mills] request failed:', p, e); return send(res, 500, { error: 'Something went wrong on the hub; it is logged. Try again.' }); }
-    return send(res, (e && e.status) || 400, { error: String((e && e.message) || e).replace(/(?:\/srv|\/home|\/tmp|[A-Z]:\\)[^\s'"]*/g, '<path>') });
+    return answerError(e, res, p);
   }
-});
+}
 
-server.listen(config.port, '127.0.0.1', () => {
-  console.log(`[mills] Hub running at http://localhost:${config.port}  (Claude works in ${MILLS_DIR})`);
+// behind the Rust hub (bridge/run.js, config rustHub): this hub listens on its own port and the Rust one takes config.port
+const LISTEN_PORT = Number(process.env.VR_BACK_PORT) || config.port;
+server.listen(LISTEN_PORT, '127.0.0.1', () => {
+  console.log(`[mills] Hub running at http://localhost:${LISTEN_PORT}${LISTEN_PORT !== config.port ? ` behind the Rust hub on ${config.port}` : ''}  (Claude works in ${MILLS_DIR})`);
   for (const a of accounts.values()) {
     console.log(`[mills]   ${a.username.padEnd(10)} ${a.display}${a.admin ? ' (admin)' : ''} · lock ${a.state.lockedDevice ? 'claimed' : 'unclaimed'} · model ${effectiveModel(a) || 'default'}${fs.existsSync(a.files.AUTH_FILE) ? '' : ' · NO PASSWORD SET'}`);
   }

@@ -1,9 +1,17 @@
-// OpenAI-compatible API on the VibeRoller hub, one key per person.
+// OpenAI- and Anthropic-compatible API on the VibeRoller hub, one key per person, both formats on every provider.
 //
-//   GET  /v1/models                      the models the key's provider serves
+//   GET  /v1/models                      the models the key's provider serves (Anthropic's list shape when the
+//                                        call carries an anthropic-version header)
 //   POST /v1/chat/completions            OpenAI chat format in (stream or not), answered by the person's
 //                                        chosen provider (bridge/providers.js): the host's Claude by default
-//   Authorization: Bearer mills_…        the person's own key, made in Settings → API access
+//                                        (OpenAI → Anthropic: a Claude provider answers an OpenAI client)
+//   POST /v1/messages                    Anthropic Messages format in (stream or not: Anthropic's SSE events),
+//                                        answered by the same provider, an OpenAI-compatible endpoint too
+//                                        (Anthropic → OpenAI: an Anthropic client such as an SDK reaches a GPT / local model)
+//   POST /v1/messages/count_tokens       a rough count (about 4 characters a token) for clients that ask first
+//   Authorization: Bearer mills_…        the person's own key, made in Settings → API access; the same key also
+//   x-api-key: mills_…                   works in Anthropic's header, so one key serves both formats
+// Text only: images, tool calls and tool results are passed on as their text (tool_result content), not as tools.
 //
 // Keys are stored as sha256 hashes in the account's state (the plain key is shown exactly once). Each
 // key can expire after N days ("auto rotate": it stops working and Settings offers a fresh one), and can
@@ -43,9 +51,9 @@ module.exports = function createOpenAI({ accounts, providers, send, readBody, wr
   }
   function revoke(acct) { delete acct.state.api; writeState(acct); return status(acct); }
   function accountForKey(req) {
-    const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-    if (!m || !KEY_RE.test(m[1])) return { error: 'Missing or malformed API key. Use "Authorization: Bearer mills_…" with the key from Settings → API access.' };
-    const h = hashKey(m[1]);
+    const m = /^Bearer (.+)$/.exec(req.headers.authorization || ''), k = m ? m[1].trim() : String(req.headers['x-api-key'] || '').trim();
+    if (!KEY_RE.test(k)) return { error: 'Missing or malformed API key. Use "Authorization: Bearer mills_…" (or "x-api-key: mills_…") with the key from Settings → API access.' };
+    const h = hashKey(k);
     const acct = [...accounts.values()].find((a) => a.state.api && a.state.api.hash === h);
     if (!acct) return { error: 'Unknown API key (rotated, revoked, or never issued).' };
     if (status(acct).expired) return { error: 'This API key has expired; rotate it in Settings → API access.' };
@@ -54,18 +62,32 @@ module.exports = function createOpenAI({ accounts, providers, send, readBody, wr
 
   // ---- OpenAI shapes ----
   function oaError(res, status, message, type = 'invalid_request_error') { send(res, status, { error: { message, type, code: null } }); }
+  // Anthropic's error shape; its type names (authentication_error, overloaded_error, …) differ slightly from OpenAI's
+  const ANT_TYPE = { service_unavailable: 'overloaded_error', rate_limit_error: 'rate_limit_error', authentication_error: 'authentication_error', invalid_request_error: 'invalid_request_error', not_found_error: 'not_found_error' };
+  function antError(res, status, message, type = 'invalid_request_error') { send(res, status, { type: 'error', error: { type: ANT_TYPE[type] || 'api_error', message } }); }
   const id = () => 'chatcmpl-' + crypto.randomBytes(12).toString('hex');
   async function handle(req, res, p) {
     res.setHeader('Access-Control-Allow-Origin', '*'); // bearer-key API for harnesses; the browser app never calls it
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta');
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+    const anthropic = p.startsWith('/v1/messages') || (p === '/v1/models' && !!req.headers['anthropic-version']);
+    const fail = anthropic ? antError : oaError;
     const { acct, error } = accountForKey(req);
-    if (error) return oaError(res, 401, error, 'authentication_error');
+    if (error) return fail(res, 401, error, 'authentication_error');
     const a = acct.state.api, prov = providers.effective(acct.username, a.provider || '');
-    if (!prov) return oaError(res, 503, 'No AI is available: this hub has no Claude of its own and no AI host offering one is connected.', 'service_unavailable');
+    if (!prov) return fail(res, 503, 'No AI is available: this hub has no Claude of its own and no AI host offering one is connected.', 'service_unavailable');
     if (p === '/v1/models' && req.method === 'GET') {
-      return send(res, 200, { object: 'list', data: (prov.models || []).map((m) => ({ id: m, object: 'model', created: 0, owned_by: prov.kind === 'host' ? 'mills' : prov.owner })) });
+      const ms = prov.models || [];
+      if (anthropic) return send(res, 200, { data: ms.map((m) => ({ type: 'model', id: m, display_name: m, created_at: '1970-01-01T00:00:00Z' })), has_more: false, first_id: ms[0] || null, last_id: ms[ms.length - 1] || null });
+      return send(res, 200, { object: 'list', data: ms.map((m) => ({ id: m, object: 'model', created: 0, owned_by: prov.kind === 'host' ? 'mills' : prov.owner })) });
     }
+    if (p === '/v1/messages/count_tokens' && req.method === 'POST') {
+      let body; try { body = await readBody(req); } catch { return antError(res, 400, 'Body is not JSON.'); }
+      const { system, messages } = fromAnthropic(body);
+      const chars = system.length + messages.reduce((n, m) => n + m.content.length, 0);
+      return send(res, 200, { input_tokens: Math.max(1, Math.ceil(chars / 4)) });
+    }
+    if (p === '/v1/messages' && req.method === 'POST') return messagesApi(req, res, acct, a, prov);
     if (p === '/v1/chat/completions' && req.method === 'POST') {
       let body; try { body = await readBody(req); } catch { return oaError(res, 400, 'Body is not JSON.'); }
       const messages = Array.isArray(body.messages) ? body.messages.filter((m) => m && typeof m.role === 'string').map((m) => ({ role: m.role, content: contentText(m.content) })) : [];
@@ -97,9 +119,64 @@ module.exports = function createOpenAI({ accounts, providers, send, readBody, wr
       } finally { running.delete(acct.username); onIdle(); }
       return;
     }
-    return oaError(res, 404, 'Unknown endpoint. This hub serves GET /v1/models and POST /v1/chat/completions.');
+    return fail(res, 404, 'Unknown endpoint. This hub serves GET /v1/models, POST /v1/chat/completions (OpenAI) and POST /v1/messages (Anthropic).', 'not_found_error');
   }
   const contentText = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => (x && x.type === 'text' ? x.text : '')).join('') : String(c ?? ''));
+
+  // ---- Anthropic shapes ----
+  // A block list → its text: text blocks as they are, a tool result's content, a tool call / picture as a short note.
+  function blockText(c) {
+    if (typeof c === 'string') return c;
+    if (!Array.isArray(c)) return String(c ?? '');
+    return c.map((b) => {
+      if (!b || typeof b !== 'object') return '';
+      if (b.type === 'text') return String(b.text || '');
+      if (b.type === 'tool_result') return blockText(b.content);
+      if (b.type === 'tool_use') return `[tool call ${b.name || ''}: ${JSON.stringify(b.input || {}).slice(0, 2000)}]`;
+      if (b.type === 'image' || b.type === 'document') return `[${b.type} not passed on]`;
+      return '';
+    }).filter(Boolean).join('\n');
+  }
+  function fromAnthropic(body) {
+    const system = blockText(body.system || '');
+    const messages = (Array.isArray(body.messages) ? body.messages : []).filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+      .map((m) => ({ role: m.role, content: blockText(m.content) }));
+    return { system, messages };
+  }
+  const msgId = () => 'msg_' + crypto.randomBytes(12).toString('hex');
+  async function messagesApi(req, res, acct, a, prov) {
+    let body; try { body = await readBody(req); } catch { return antError(res, 400, 'Body is not JSON.'); }
+    const { system, messages } = fromAnthropic(body || {});
+    if (!messages.length) return antError(res, 400, 'messages: at least one user or assistant message is required.');
+    if (running.has(acct.username)) return antError(res, 429, 'One request at a time per key; the previous one is still answering.', 'rate_limit_error');
+    const model = providers.pickModel(prov, typeof body.model === 'string' && (prov.models || []).includes(body.model) ? body.model : a.model);
+    const maxTokens = Number(body.max_tokens) > 0 ? Math.min(Math.round(Number(body.max_tokens)), 128000) : undefined;
+    const ctl = new AbortController(); running.set(acct.username, ctl);
+    req.on('close', () => { if (!res.writableEnded) ctl.abort(); });
+    a.calls = (a.calls || 0) + 1; a.lastUsed = new Date().toISOString(); writeState(acct);
+    const mid = msgId();
+    const antUsage = (u) => ({ input_tokens: (u && u.prompt_tokens) || 0, output_tokens: (u && u.completion_tokens) || 0 });
+    try {
+      if (body.stream) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+        const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+        ev('message_start', { message: { id: mid, type: 'message', role: 'assistant', content: [], model, stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } });
+        ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
+        ev('ping', {});
+        const r = await providers.complete({ provider: prov.id, user: acct.username, model, system, messages, maxTokens, signal: ctl.signal, onToken: (t) => ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: t } }) });
+        ev('content_block_stop', { index: 0 });
+        ev('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: antUsage(r.usage) });
+        ev('message_stop', {});
+        res.end();
+      } else {
+        const r = await providers.complete({ provider: prov.id, user: acct.username, model, system, messages, maxTokens, signal: ctl.signal });
+        send(res, 200, { id: mid, type: 'message', role: 'assistant', model: r.model || model, content: [{ type: 'text', text: r.text || '' }], stop_reason: 'end_turn', stop_sequence: null, usage: antUsage(r.usage) });
+      }
+    } catch (e) {
+      if (!res.headersSent) antError(res, e.status || 502, e.message, e.status === 503 ? 'service_unavailable' : e.status === 429 ? 'rate_limit_error' : 'api_error');
+      else { try { res.end(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: e.message } })}\n\n`); } catch {} }
+    } finally { running.delete(acct.username); onIdle(); }
+  }
 
   // Session-signed management from Settings (server.js routes these after the sign-in check).
   async function route(p, req, res, acct) {
