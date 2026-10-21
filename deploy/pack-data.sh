@@ -10,7 +10,7 @@ PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' bridge/conf
 curl -fsS -m 2 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1 && { echo "The hub is still running here. Stop it first, then run this again."; exit 1; }
 OUT=$HOME/viberoller-data-$(date +%Y%m%d-%H%M).tar.gz
 LIST=''
-for p in bridge/auth.json bridge/state.json bridge/hub-state.json bridge/usage.json bridge/assistant.json bridge/providers.json bridge/forgejo.json bridge/forgejo-users.json bridge/server-owners.json bridge/profiles bridge/profiles-deleted Chat Archive Board Notes Avatars Images Api; do
+for p in bridge/auth.json bridge/state.json bridge/work.json bridge/work-current.json bridge/hub-state.json bridge/front-sessions.json bridge/device-locks.json bridge/release-key.json bridge/usage.json bridge/assistant.json bridge/providers.json bridge/forgejo.json bridge/forgejo-users.json bridge/server-owners.json bridge/ai-hosts.json bridge/profiles bridge/profiles-deleted Chat Archive Board Notes Avatars Images Api; do
   [ -e "$p" ] && LIST="$LIST $p"
 done
 [ -n "$LIST" ] || { echo "Nothing to pack here: no data folders found next to bridge/."; exit 1; }

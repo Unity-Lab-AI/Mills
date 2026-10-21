@@ -54,9 +54,6 @@ pub struct AiHosts {
     pub usage: Arc<super::usage::Usage>,
     /// something people see changed (a hello, a host up / down, its usage, the registry): the JavaScript hub hears it
     pub dirty: Notify,
-    /// a host's windows, for the JavaScript hub's usage (its /api/usage), as they come
-    usage_tx: mpsc::UnboundedSender<(String, Value)>,
-    pub usage_rx: Mutex<Option<mpsc::UnboundedReceiver<(String, Value)>>>,
 }
 fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; let (x, y) = (vr_core::crypto::sha256(a.as_bytes()), vr_core::crypto::sha256(b.as_bytes())); bool::from(x.ct_eq(&y)) }
 fn clean_users(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')).take(50).collect()).unwrap_or_default() }
@@ -69,9 +66,8 @@ impl AiHosts {
         let legacy: Vec<Value> = cfg.get("aiNodes").and_then(Value::as_object).map(|m| m.iter().filter(|(n, s)| !n.is_empty() && n.len() <= 40 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && s.as_str().map(|s| s.len() >= 24).unwrap_or(false))
             .map(|(n, s)| json!({ "id": n, "user": "", "nickname": n, "secret": s, "legacy": true, "createdAt": Value::Null, "share": {} })).collect()).unwrap_or_default();
         let (version, commit) = release_now(root);
-        let (usage_tx, usage_rx) = mpsc::unbounded_channel();
         let h = Arc::new(AiHosts { root: root.to_path_buf(), cfg: cfg.clone(), db: Mutex::new(db), legacy, live: Mutex::default(), pending: Mutex::default(), was_up: Mutex::default(),
-            offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), usage, dirty: Notify::new(), usage_tx, usage_rx: Mutex::new(Some(usage_rx)) });
+            offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), usage, dirty: Notify::new() });
         h.restore_sessions();
         h
     }
@@ -189,6 +185,24 @@ impl AiHosts {
         let a = Self::allowed(r, p); let list: Vec<String> = a.as_array().map(|x| x.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default();
         list.iter().any(|x| x == user) || (list.iter().any(|x| x == "@group") && clean_users(self.cfg.get("hostGroup").unwrap_or(&Value::Null)).iter().any(|x| x == user))
     }
+    /// One provider by id "h:<hostId>/<providerId>" (user "" = whoever may use it).
+    pub fn provider(&self, pid: &str, user: &str) -> Option<Value> {
+        let rest = pid.strip_prefix("h:")?; let (hid, prov) = rest.split_once('/')?;
+        let r = self.record(hid)?; let live = self.live.lock().unwrap(); let n = live.get(hid)?; let hello = n.hello.as_ref()?;
+        let p = hello["providers"].as_array()?.iter().find(|x| x["id"] == json!(prov))?.clone();
+        if !user.is_empty() && !self.may_use_locked(&r, &p, user, n) { return None; }
+        let mut v = self.prov_view_locked(&r, hid, n, &p); v["id"] = json!(pid); Some(v)
+    }
+    /// The person's own AI host that offers their computer (the native app's "pc"), when it is online.
+    pub fn pc_host_for(&self, user: &str) -> Option<String> {
+        if user.is_empty() { return None; }
+        for r in self.all_records() {
+            let id = r["id"].as_str().unwrap_or("").to_string();
+            let pc = self.live.lock().unwrap().get(&id).and_then(|n| n.hello.as_ref().map(|h| h["pc"] == json!(true))).unwrap_or(false);
+            if pc && self.owner_of(&r) == user && self.online(&id) { return Some(id); }
+        }
+        None
+    }
     pub fn status(&self) -> Vec<Value> {
         let live = self.live.lock().unwrap(); let was = self.was_up.lock().unwrap();
         self.all_records().iter().map(|r| {
@@ -291,7 +305,6 @@ impl AiHosts {
         let rec = json!({ "five_hour": clean(&u["five_hour"]), "seven_day": clean(&u["seven_day"]), "at": now_ms() });
         if let Some(n) = self.live.lock().unwrap().get_mut(host) { n.usage.insert(pid.to_string(), rec.clone()); }
         self.usage.note_windows(&format!("h:{host}/{pid}"), &rec);
-        let _ = self.usage_tx.send((format!("h:{host}/{pid}"), rec));
         self.changed();
     }
     pub async fn pc_tool(self: &Arc<Self>, host: &str, name: &str, args: &Value) -> Result<Value, HostErr> {

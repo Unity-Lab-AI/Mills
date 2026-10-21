@@ -43,7 +43,7 @@ let front = null, frontCrashes = [], rust = (() => {
 })();
 function startFront() {
   if (!rust || shuttingDown) return;
-  front = spawn(rust.bin, ['--port', String(config.port), '--back', String(rust.backPort), '--root', ROOT], { stdio: 'inherit', windowsHide: true, env: { ...process.env, VR_FRONT_SECRET: rust.secret } });
+  front = spawn(rust.bin, ['--port', String(config.port), '--back', String(rust.backPort), '--root', ROOT], { stdio: 'inherit', windowsHide: true, env: { ...process.env, VR_FRONT_SECRET: rust.secret, VR_NODE: process.execPath, MILLS_SUPERVISED: '1' } }); // VR_NODE: the Node.js its Work runs' tools (bridge/*-mcp.js) and bridge/worktree.js run on
   front.on('exit', (code) => {
     front = null;
     if (shuttingDown) return;

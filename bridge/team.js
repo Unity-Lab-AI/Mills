@@ -74,12 +74,15 @@ module.exports = function createTeam({ accounts, agentSay, presenceList, display
       return ok({ you: acct.username, people: list });
     },
   };
-  // name + args from the MCP relay; acct = the account whose Work run this is
-  function call(name, args, acct) {
+  // name + args from the MCP relay; acct = the account whose Work run this is. extra: what the Rust hub in front knows
+  // when its runs ask (its Work module keeps the usage and the shared sessions): { usage, shares }
+  function call(name, args, acct, extra = null) {
     if (/^notes_/.test(name)) return notes ? notes.call(name, args || {}, acct) : no('Notes are not available.'); // bridge/notes.js
     const t = tools[name];
     if (!t) return no('Unknown team tool: ' + name);
-    try { return t(acct, args || {}); } catch (e) { return no(e.message); }
+    const saved = hub;
+    if (extra && typeof extra === 'object') hub = { ...hub, ...(extra.usage ? { usageStatus: () => extra.usage } : {}), ...(Array.isArray(extra.shares) ? { sharesFor: () => extra.shares } : {}) };
+    try { return t(acct, args || {}); } catch (e) { return no(e.message); } finally { hub = saved; }
   }
   return { call, TOOL_NAMES: Object.keys(tools) };
 };

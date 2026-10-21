@@ -16,10 +16,8 @@ pub mod files;
 pub mod forgejo;
 pub mod native_releases;
 pub mod notes;
-// most of these two are for the Work runs, which move here next; the AI hosts use their host windows and git
-#[allow(dead_code)]
 pub mod usage;
-#[allow(dead_code)]
+pub mod work;
 pub mod worktree;
 
 /// bridge/config.json overlaid with bridge/config.local.json, one level deep (bridge/common.js loadProfile).
@@ -59,17 +57,18 @@ pub struct Modules {
     pub files: files::Files,
     pub ai: Arc<ai_hosts::AiHosts>,
     pub native: native_releases::Releases,
+    pub work: Arc<work::Work>,
     mills: std::path::PathBuf,
 }
 impl Modules {
     pub fn new(root: &Path, cfg: &Config) -> Result<Modules, String> {
         let front_secret = std::env::var("VR_FRONT_SECRET").ok().filter(|s| s.len() >= 32).unwrap_or_else(|| vr_core::crypto::random_hex(24));
         let mills = root.join("..");
-        // usage.json stays the JavaScript hub's while its Work runs are there (it hears each host window from here)
-        let usage = Arc::new(usage::Usage::new(root, cfg, false));
+        let usage = Arc::new(usage::Usage::new(root, cfg, true));
         Ok(Modules { front_secret, auth: auth::Auth::new(root, cfg), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), mills })
+            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), mills })
     }
+    pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
     fn public_url(&self, cfg: &Config) -> String {
         let u = cfg.get("publicUrl").and_then(Value::as_str).unwrap_or("").trim_end_matches('/').to_lowercase();
@@ -113,9 +112,7 @@ pub fn start_background(hub: &Arc<Hub>) {
     hub.mods.ai.watch();
     let h = hub.clone();
     tokio::spawn(async move { loop { h.mods.ai.dirty.notified().await; tokio::time::sleep(std::time::Duration::from_millis(50)).await; push_ai_state(&h).await; } });
-    let h = hub.clone();
-    let rx = h.mods.ai.usage_rx.lock().unwrap().take();
-    if let Some(mut rx) = rx { tokio::spawn(async move { while let Some((source, w)) = rx.recv().await { crate::front::internal(&h, "/internal/front/usage-windows", json!({ "source": source, "windows": w }).to_string()).await; } }); }
+    work::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     let h = hub.clone();
     tokio::spawn(async move {
@@ -175,14 +172,23 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     // ----- AI hosts: their own id + secret, no browser session -----
     if let Some(rest) = p.strip_prefix("/node/job/") {
-        // the MCP tools of a Work run on a host, with the job's own token: on to the JavaScript hub as that person
+        // the MCP tools of a Work run on a host, with the job's own token, as that person
         let (id, tool) = rest.split_once("/internal/").unwrap_or(("", ""));
         if id.is_empty() || !matches!(tool, "pc-tool" | "board" | "team") { return answer(404, json!({ "error": "Not found" })); }
         return match hub.mods.ai.job_for(id, r.header("x-mills-internal").unwrap_or("")) {
-            Some((account, _)) => Routed::Pass(vec![("x-vr-front-job-account".into(), account)]),
+            Some((account, _)) => answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &r.json()).await),
             None => answer(403, json!({ "ok": false, "error": "forbidden" })),
         };
     }
+    // the MCP tools of a Work run here (this hub's own secret; anything else is the JavaScript hub's)
+    if let Some(tool) = p.strip_prefix("/internal/").filter(|t| matches!(*t, "pc-tool" | "board" | "team")) {
+        if r.method == hyper::Method::POST && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &hub.mods.work.secret) {
+            let account = r.header("x-mills-account").filter(|a| !a.is_empty()).map(String::from).unwrap_or_else(|| hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string());
+            return answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &r.json()).await);
+        }
+        return Routed::Pass(vec![]);
+    }
+    if p.starts_with("/llm/") { return work::llm(hub, r).await; }
     if p.starts_with("/node/") {
         let (status, out) = hub.mods.ai.route(&r.method, p, &r.query, &r.headers, &r.body, &hub.mods.native).await;
         // a host that said hello is on everyone's list before it hears back
@@ -215,6 +221,10 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if p == "/api/room/file" || p.starts_with("/api/room/file/") || p == "/api/work/file" || p.starts_with("/api/work/file/") || p == "/api/library" || p.starts_with("/api/library/") {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         return files_http(hub, r, &u).await;
+    }
+    // ----- Work: runs, model / provider, project, usage, shared sessions, the conversation + queue, past sessions -----
+    if let Some(u) = &user {
+        if let Some(acc) = a.account(u) { if let Some(x) = work::route(hub, r, &acc).await { return x; } }
     }
     // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
     if r.method == hyper::Method::POST && matches!(p, "/api/hosts/new" | "/api/hosts/rename" | "/api/hosts/remove" | "/api/hosts/share" | "/api/hosts/config") {
@@ -404,13 +414,19 @@ async fn files_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
 /// After the JavaScript hub answered: the module's part of a few answers (sign-out drops the session; the admin list
 /// gets the locks and sign-ins this module keeps; a deleted account loses its sessions and lock).
 pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec<u8>> {
-    let a = &hub.mods.auth;
+    let a = &hub.mods.auth; let w = &hub.mods.work;
+    let target = || r.json()["username"].as_str().map(String::from);
     match r.path.as_str() {
         "/api/logout" if status == 200 => {
+            if let Some(u) = a.session_user(r) { w.share_stop(&u); }
             if let Some(t) = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")) { a.forget_session(&auth::token_key(t)); }
             None
         }
-        "/api/admin/delete" if status == 200 => { if let Some(u) = r.json()["username"].as_str() { a.drop_sessions(u); a.unlock(u); } None }
+        "/api/admin/delete" if status == 200 => { if let Some(u) = target() { a.drop_sessions(&u); a.unlock(&u); w.stop(hub, &u); w.share_stop(&u); w.forget(&u); } None }
+        "/api/admin/stop" if status == 200 => { if let Some(u) = target() { w.stop(hub, &u); } None }
+        "/api/projects" if status == 200 => { w.projects_changed(); None }
+        // a provider removed in Settings: nobody's Work keeps pointing at it
+        "/api/providers/remove" if status == 200 => { if let Some(id) = r.json()["id"].as_str().filter(|x| !x.is_empty()) { for acc in a.accounts() { w.drop_provider(&acc, id); } } None }
         "/api/admin/accounts" if status == 200 => {
             let mut v: Value = serde_json::from_slice(body?).ok()?;
             for acc in v["accounts"].as_array_mut()? {
@@ -419,14 +435,35 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
                 acc["locked"] = json!(lock.is_some());
                 acc["lockedAt"] = lock.map(|l| l["at"].clone()).unwrap_or(Value::Null);
                 acc["signedIn"] = json!(a.signed_in(&u));
+                acc["busy"] = json!(acc["busy"] == json!(true) || w.busy(&u));
+                if let Some(x) = a.account(&u) { acc["model"] = json!(w.effective_model(&x)); }
             }
             Some(v.to_string().into_bytes())
+        }
+        // this hub's own part of what a page learns at start: the Work choices, the project, the share
+        "/api/check" if status == 200 => {
+            let mut v: Value = serde_json::from_slice(body?).ok()?;
+            let acc = a.session_user(r).and_then(|u| a.account(&u))?;
+            let st = w.state(&acc);
+            v["model"] = json!(s_of(&st, "model"));
+            v["provider"] = json!(if s_of(&st, "provider").is_empty() { "host".to_string() } else { s_of(&st, "provider") });
+            v["effectiveProvider"] = json!(w.effective(&hub.mods.ai, &acc.username, &s_of(&st, "provider")).map(|p| s_of(&p, "id")).unwrap_or_default());
+            v["project"] = json!(w.project_of(&acc)); v["projects"] = w.project_list();
+            v["share"] = json!(w.share_of(&acc.username));
+            Some(v.to_string().into_bytes())
+        }
+        // busy counts this hub's Work runs too (restart.js and the regression runner wait for nobody being busy)
+        "/api/status" if status == 200 => {
+            let mut v: Value = serde_json::from_slice(body?).ok()?;
+            if v.get("busy").is_some() && w.any_busy() { v["busy"] = json!(true); return Some(v.to_string().into_bytes()); }
+            None
         }
         _ => None,
     }
 }
+fn s_of(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() }
 /// Which answers `after` needs to see whole (the rest stream through untouched).
-pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts") }
+pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check" | "/api/status" | "/api/providers/remove") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
 
 /// The modules this front answers itself.
-pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts"] }
+pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work"] }

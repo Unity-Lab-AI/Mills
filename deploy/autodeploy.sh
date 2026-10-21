@@ -98,7 +98,7 @@ git merge-base --is-ancestor "$REMOTE" "$LOCAL" && exit 0
 # a snapshot of the data before anything changes (the same files deploy/pack-data.sh packs), the last 10 kept
 SNAP=$BASE/snapshots; mkdir -p "$SNAP"
 LIST=''
-for p in bridge/auth.json bridge/state.json bridge/hub-state.json bridge/front-sessions.json bridge/device-locks.json bridge/release-key.json bridge/usage.json bridge/assistant.json bridge/providers.json bridge/forgejo.json bridge/forgejo-users.json bridge/server-owners.json bridge/ai-hosts.json bridge/config.local.json bridge/profiles bridge/profiles-deleted Chat Archive Board Notes Avatars Images Api; do
+for p in bridge/auth.json bridge/state.json bridge/work.json bridge/work-current.json bridge/hub-state.json bridge/front-sessions.json bridge/device-locks.json bridge/release-key.json bridge/usage.json bridge/assistant.json bridge/providers.json bridge/forgejo.json bridge/forgejo-users.json bridge/server-owners.json bridge/ai-hosts.json bridge/config.local.json bridge/profiles bridge/profiles-deleted Chat Archive Board Notes Avatars Images Api; do
   [ -e "$p" ] && LIST="$LIST $p"
 done
 if [ -n "$LIST" ]; then

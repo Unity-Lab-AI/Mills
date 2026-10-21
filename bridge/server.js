@@ -734,7 +734,7 @@ const nativeReleases = require('./native-releases')({ ROOT, MILLS_DIR, release: 
 // the AI hosts: here (bridge/ai-nodes.js), or in the Rust hub in front when it runs them (bridge/ai-nodes-front.js: the same calls)
 const aiNodes = FRONT_MODS.has('aihosts') ? require('./ai-nodes-front')({ ROOT, config, port: config.port, secret: FRONT_SECRET, log: (m) => console.log(m) }) : require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }), nativeReleases });
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300), aiNodes });
-const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
+const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy() || frontBusy;
 // Team notes (bridge/notes.js): markdown files in folders under VibeRoller/Notes, for people (/api/notes*) and Claude (notes_* tools).
 const notes = require('./notes')({ dir: path.join(MILLS_DIR, 'Notes'), send: (...a) => send(...a), readBody: (r) => readBody(r), displayOf: nameOf, changed: () => roomChanged() });
 // Team tools for Claude in a Work run (bridge/team.js): post into the chat as "<person> · Claude", see who is here.
@@ -752,7 +752,11 @@ const calls = require('./calls')({ accounts, config, chatKeys, send: (...a) => s
 const { convMember } = calls; // "is this person part of that conversation" (also used by shared Work sessions)
 
 // Shared Work sessions (bridge/shares.js): watch-only windows on a person's Work run; shares.route() serves /api/work/*.
-const shares = require('./shares')({ accounts, convMember, roomChanged: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
+// Behind the Rust hub with its work module, the shares are its own: it tells this hub which there are (for the room poll)
+const WORK_MOVED = FRONT_MODS.has('work');
+let frontShares = [], frontBusy = false; // (from the Rust hub: its shared sessions, and whether a Work run of its is going)
+const shares = WORK_MOVED ? { mirror() {}, mirrorEvent() {}, stop() {}, route: async () => false, convOf: (u) => (frontShares.find((s) => s.user === u) || {}).conv || '', listFor: (u) => frontShares.filter((s) => s.user !== u && convMember(s.conv, u)) }
+  : require('./shares')({ accounts, convMember, roomChanged: () => roomChanged(), send: (...a) => send(...a), readBody: (r) => readBody(r) });
 function maybeRestart() {
   if (anyBusy() || !fs.existsSync(RESTART_FLAG)) return;
   try { fs.unlinkSync(RESTART_FLAG); } catch {}
@@ -867,9 +871,18 @@ async function handleRequest(req, res) {
     // host's MCP relays call /node/job/<job id>/internal/<tool> with the job's own token, good for that one run only.
     // the Rust hub in front (its AI hosts module): what the hosts offer now, and a host's usage windows as they come
     if (p === '/internal/front/hosts-state' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); aiNodes.setState && aiNodes.setState(await readBody(req, 8 << 20)); return send(res, 200, { ok: true }); }
-    if (p === '/internal/front/usage-windows' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); const b = await readBody(req, 65536); if (/^h:[^/]+\/[a-z0-9-]+$/.test(String(b.source || ''))) usage.noteWindows(String(b.source), b.windows || {}); return send(res, 200, { ok: true }); }
+    // the Rust hub in front (its work module): its shared Work sessions, whether a run of its is going, and the team
+    // tools of its runs (the chat, presence, calls and servers are this hub's; extra = what the Rust hub knows)
+    if (p === '/internal/front/shares' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); const b = await readBody(req, 1 << 20); frontShares = (Array.isArray(b.shares) ? b.shares : []).filter((s) => s && USERNAME_RE.test(String(s.user || ''))); roomChanged(); return send(res, 200, { ok: true }); }
+    if (p === '/internal/front/work-busy' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); frontBusy = (await readBody(req, 4096)).busy === true; if (!frontBusy) setTimeout(maybeRestart, 300); return send(res, 200, { ok: true }); }
+    if (p === '/internal/front/team-tool' && req.method === 'POST') {
+      if (!fromFront(req)) return send(res, 403, { ok: false, error: 'forbidden' });
+      const b = await readBody(req), a = accounts.get(String(b.account || ''));
+      if (!a) return send(res, 200, { ok: false, error: 'Unknown account.' });
+      return send(res, 200, team.call(String(b.name || ''), b.args || {}, a, b.extra || {}));
+    }
     const nj = /^\/node\/job\/([A-Za-z0-9_-]+)\/internal\/(pc-tool|board|team)$/.exec(p);
-    if (nj && FRONT_MODS.has('aihosts')) { // the front checked the job's token and names its account
+    if (nj && FRONT_MODS.has('aihosts')) { // a Rust hub without its work module (3.18): it checked the job's token and names the account
       const account = fromFront(req) ? String(req.headers['x-vr-front-job-account'] || '') : '';
       if (!USERNAME_RE.test(account)) return send(res, 403, { ok: false, error: 'forbidden' });
       return internalTool(nj[2], req, res, account);

@@ -7,6 +7,32 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.19.0 — 2026-10-21
+
+### Changed: Work runs in Rust behind rustHub (board T-131)
+- **vr-hub's work module** (`native/crates/vr-hub/src/modules/work.rs`) runs Work itself:
+  - Claude Code in the person's own worktree, with the same arguments, instructions (the worktree law with the latest
+    background check), tools, model, provider and resume rules
+  - its stream to the page, Stop, and the PC tools relayed to the person's own AI host or their browser
+  - the board, notes and team tools of a run, here and on a host
+  - a host's shared login relayed for a run (`/llm/<token>/…`)
+  - the legacy runs on a host
+- Around it:
+  - the model / provider choice, the project, `/api/usage` (`usage.json` is written here now)
+  - shared Work sessions (watch-only), the Work conversation + queue (`work-current.json`), past sessions (`Archive/`)
+- **Each person's Work state** moves to `<profile>/work.json` (provider, model, Claude session, context, project, last
+  run), taken over from their `state.json` the first time.
+- **What stays in the JavaScript hub:**
+  - Settings → AI providers (`providers.json`, which the Rust hub reads) and adding projects
+  - the chat, presence, calls and servers, which the team tools still reach through it
+- **How the two hubs share the rest:**
+  - The Rust hub patches `/api/check`, `/api/status` (busy) and the admin's account list with what it knows.
+  - It tells the JavaScript hub its shared sessions and when a run is going, so a requested restart still waits for it.
+  - It runs the admin's Stop and stops runs on account deletion.
+  - `run.js` gives it the Node.js path for the tools of its runs.
+- `deploy/pack-data.sh`, the auto-deploy's snapshots and `handoff.js` include `bridge/work.json` and
+  `bridge/work-current.json`. `pack-data.sh` also now includes the Rust hub's files and the AI host registry.
+
 ## 3.18.0 — 2026-10-21
 
 ### Changed: the AI hosts run in Rust behind rustHub (board T-131)
