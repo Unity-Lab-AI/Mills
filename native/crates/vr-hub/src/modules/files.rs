@@ -85,8 +85,12 @@ impl Linux {
     pub fn uploads_dir(&self, u: &str, fallback: &Path) -> (PathBuf, bool, String) {
         let lu = self.linux_user_of(u);
         if lu.is_empty() { return (fallback.to_path_buf(), false, lu); }
-        let d = PathBuf::from(self.users()[&lu]["home"].as_str().unwrap_or("")).join("uploaded_files");
-        let writable = d.is_dir() && std::fs::metadata(&d).map(|m| !m.permissions().readonly()).unwrap_or(false) && can_write(&d);
+        let home = PathBuf::from(self.users()[&lu]["home"].as_str().unwrap_or(""));
+        let d = home.join("uploaded_files");
+        // the real folder in their home, never a link (one could point at the hub's own data, which this hub may write)
+        let real = std::fs::symlink_metadata(&d).map(|m| m.is_dir() && !m.file_type().is_symlink()).unwrap_or(false)
+            && match (std::fs::canonicalize(&d), std::fs::canonicalize(&home)) { (Ok(c), Ok(h)) => c.starts_with(h), _ => false };
+        let writable = real && d.is_dir() && std::fs::metadata(&d).map(|m| !m.permissions().readonly()).unwrap_or(false) && can_write(&d);
         if writable { (d, true, lu) } else { (fallback.to_path_buf(), false, lu) }
     }
     pub fn status(&self, u: &str, fallback: &Path) -> Value {

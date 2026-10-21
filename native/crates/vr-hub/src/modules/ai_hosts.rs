@@ -219,9 +219,17 @@ impl AiHosts {
             return if ok { Some(want.to_string()) } else { None };
         }
         let ids: Vec<String> = self.live.lock().unwrap().iter().filter(|(_, n)| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).map(|(id, _)| id.clone()).collect();
-        ids.into_iter().find(|id| self.online(id))
+        // Unity's engines see everyone's prompts, voice and pictures: only a host from the hub's config or one of a hub
+        // admin's lends them, never just anyone's
+        ids.into_iter().find(|id| self.online(id) && self.record(id).map(|r| r["legacy"] == json!(true) || self.owner_is_admin(&r)).unwrap_or(false))
     }
 
+    fn owner_is_admin(&self, r: &Value) -> bool {
+        let u = r["user"].as_str().unwrap_or(""); if u.is_empty() || !super::auth::valid_username(u) { return false; }
+        let def = self.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills");
+        let f = if u == def { self.root.join("config.json") } else { self.root.join("profiles").join(u).join("config.json") };
+        std::fs::read_to_string(f).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|c| c["admin"] == json!(true)).unwrap_or(false)
+    }
     /// Why Unity's engines are away ('' while a host lends them).
     pub fn reason(&self) -> String { if self.pick_engine_host("ollama").is_some() { String::new() } else { OFFLINE_TEXT.into() } }
 
@@ -455,7 +463,7 @@ impl AiHosts {
                 if let Some(n) = self.live.lock().unwrap().get_mut(&id) { n.queue.retain(|x| x["id"] != json!(jid)); }
                 let body = vr_core::unb64(b["body"].as_str().unwrap_or("")).unwrap_or_default();
                 let (tx, rx) = mpsc::channel(2); if !body.is_empty() { let _ = tx.try_send(Ok(Bytes::from(body))); } drop(tx);
-                if let Some(Waiting::Whole(w)) = j.waiting { let _ = w.send(Ok(Relayed { status: b["status"].as_u64().map(|s| s as u16).filter(|s| *s > 0).unwrap_or(502), headers: pick_headers(&b["headers"]), body: rx })); }
+                if let Some(Waiting::Whole(w)) = j.waiting { let _ = w.send(Ok(Relayed { status: host_status(&b["status"]), headers: pick_headers(&b["headers"]), body: rx })); }
                 (200, Ok(json!({ "ok": true })))
             }
             "/node/stream" if post => {
@@ -464,7 +472,7 @@ impl AiHosts {
                     let mut pend = self.pending.lock().unwrap();
                     let Some(j) = pend.get_mut(&jid).filter(|j| j.host == id && j.kind != "work") else { return (404, Ok(json!({ "error": "No such job." }))) };
                     match j.waiting.take() {
-                        Some(Waiting::Whole(w)) => { let (tx, rx) = mpsc::channel(256); let _ = w.send(Ok(Relayed { status: b["status"].as_u64().map(|s| s as u16).filter(|s| *s > 0).unwrap_or(502), headers: pick_headers(&b["headers"]), body: rx })); j.waiting = Some(Waiting::Stream(tx.clone())); (Some(tx), true) }
+                        Some(Waiting::Whole(w)) => { let (tx, rx) = mpsc::channel(256); let _ = w.send(Ok(Relayed { status: host_status(&b["status"]), headers: pick_headers(&b["headers"]), body: rx })); j.waiting = Some(Waiting::Stream(tx.clone())); (Some(tx), true) }
                         Some(Waiting::Stream(tx)) => { j.waiting = Some(Waiting::Stream(tx.clone())); (Some(tx), false) }
                         other => { j.waiting = other; (None, false) }
                     }
@@ -575,8 +583,11 @@ pub fn release_now(root: &std::path::Path) -> (String, String) {
     let version = std::fs::read_to_string(mills.join("versions.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["project"].as_str().map(String::from)).unwrap_or_else(|| "0.0.0".into());
     (version, super::worktree::git(&mills, &["rev-parse", "HEAD"]).unwrap_or_default())
 }
+/// A host's status code, when it is one an HTTP answer can carry (else 502): a host never decides what breaks here.
+fn host_status(v: &Value) -> u16 { v.as_u64().filter(|s| (100..=599).contains(s)).map(|s| s as u16).unwrap_or(502) }
+/// The headers of a host's answer that are passed on: known names only, and only ones that are valid HTTP headers.
 fn pick_headers(v: &Value) -> Vec<(String, String)> {
     let ok = |k: &str| { let k = k.to_lowercase(); matches!(k.as_str(), "content-type" | "request-id" | "retry-after") || k.starts_with("anthropic-ratelimit-") || k.starts_with("x-codex-") || k.starts_with("openai-") };
-    v.as_object().map(|m| m.iter().filter(|(k, v)| ok(k) && v.is_string()).map(|(k, v)| (k.to_lowercase(), v.as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
+    v.as_object().map(|m| m.iter().filter(|(k, v)| ok(k) && v.as_str().map(|s| hyper::header::HeaderValue::from_str(s).is_ok()).unwrap_or(false) && hyper::header::HeaderName::from_bytes(k.to_lowercase().as_bytes()).is_ok()).map(|(k, v)| (k.to_lowercase(), v.as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
 }
 fn uuid4() -> String { let b = vr_core::crypto::random_bytes(16); let mut b: [u8; 16] = b.try_into().expect("16"); b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80; let h = hex::encode(b); format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32]) }

@@ -11,6 +11,7 @@ base64 = "0.23.1"
 bytes = "1.12.1"
 ed25519-dalek = "2"
 chrono-tz = "0.10"
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 regex = "1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 futures-util = "0.3.34"

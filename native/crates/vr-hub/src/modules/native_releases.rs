@@ -43,6 +43,14 @@ impl Releases {
         if let Some(s) = host_secret { v["hmac"] = json!(vr_core::crypto::hmac_hex(s.as_bytes(), text.as_bytes())); }
         Some(v)
     }
+    /// What is built, for /api/pub/versions.
+    pub fn list(&self, rel: &(String, String)) -> Vec<Value> {
+        let mut out = vec![];
+        for app in ["vr-host", "vr-desktop"] { for target in TARGETS { if let Some(m) = self.manifest_text(app, target, rel).and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+            out.push(json!({ "app": app, "target": target, "version": m["version"], "commit": m["commit"], "files": m["files"].as_array().cloned().unwrap_or_default().iter().map(|f| json!({ "name": f["name"], "size": f["size"], "sha256": f["sha256"] })).collect::<Vec<_>>() }));
+        } } }
+        out
+    }
     pub fn file(&self, app: &str, target: &str, name: &str) -> Option<Vec<u8>> {
         if !TARGETS.contains(&target) || !app_files(app)?.contains(&name) { return None; }
         std::fs::read(self.dist.join(target).join(name)).ok()

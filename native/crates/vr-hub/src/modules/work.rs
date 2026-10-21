@@ -77,6 +77,8 @@ impl Work {
         self.states.lock().unwrap().insert(a.username.clone(), v.clone());
         v
     }
+    /// One account's key for its runs' tools: a run can act only as its own person, whatever account it names.
+    pub fn secret_for(&self, account: &str) -> String { vr_core::crypto::hmac_hex(self.secret.as_bytes(), account.as_bytes()) }
     pub fn forget(&self, u: &str) { self.states.lock().unwrap().remove(u); }
     pub fn drop_provider(&self, a: &Account, id: &str) { if self.state(a)["provider"] == json!(id) { self.update(a, |m| { m.remove("provider"); }); } }
     pub fn busy(&self, u: &str) -> bool { self.runs.lock().unwrap().contains_key(u) }
@@ -201,7 +203,7 @@ impl Work {
     fn mcp_config(&self, a: &Account) -> PathBuf {
         let f = a.dir.join(".mcp-runtime-hub.json");
         let node = std::env::var("VR_NODE").unwrap_or_else(|_| "node".into());
-        let env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret, "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
+        let env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret_for(&a.username), "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
         let srv = |js: &str| json!({ "command": node, "args": [std::path::absolute(self.root.join(js)).unwrap_or_default().display().to_string()], "env": env });
         write_json(&f, &json!({ "mcpServers": { "pc": srv("pc-tools-mcp.js"), "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } }));
         vr_core::settings::private(&f);
@@ -537,6 +539,18 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
             answer(200, json!({ "model": s(&st, "model"), "provider": if s(&st, "provider").is_empty() { "host".into() } else { s(&st, "provider") }, "effective": w.effective_model(a), "effectiveProvider": eff }))
         }
         "/api/projects" if get => answer(200, json!({ "projects": w.project_list(), "project": w.project_of(a) })),
+        // { name } = start a new project; { url, name? } = pull in a repo (bridge/worktree.js new / clone, as this person)
+        "/api/projects" if post => {
+            let b = r.json(); let (name, url) = (s(&b, "name"), s(&b, "url"));
+            let mut env = w.work_env(u); env.push(("USERNAME".into(), u.clone())); env.push(("USER".into(), u.clone()));
+            let args: Vec<&str> = if url.is_empty() { vec!["new", name.as_str()] } else if name.is_empty() { vec!["clone", url.as_str()] } else { vec!["clone", url.as_str(), name.as_str()] };
+            let wt = &w.wt; let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&args, &env));
+            let made = regex::Regex::new(r"(?m)^(?:Created project|Pulled in) ([^:]+):").unwrap().captures(&out).map(|c| c[1].to_string());
+            match made.filter(|_| ok) {
+                Some(pj) => { w.projects_changed(); answer(200, json!({ "project": pj, "projects": w.project_list() })) }
+                None => { let e = err.trim().lines().last().unwrap_or("").trim_start_matches("Error: ").to_string(); let e = if e.is_empty() { out.trim().lines().last().unwrap_or("Could not make the project.").to_string() } else { e }; answer(if e.contains("exists already") { 409 } else { 400 }, json!({ "error": e })) }
+            }
+        }
         "/api/workspace" if post => {
             let b = r.json();
             let want = if !s(&b, "project").is_empty() { s(&b, "project") } else if !b["workspace"].is_null() && b["workspace"] != json!("") { HUB_PROJECT.into() } else { String::new() };

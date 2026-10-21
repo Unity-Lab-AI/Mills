@@ -16,6 +16,8 @@ pub mod site;
 pub mod auth;
 pub mod board;
 pub mod chat;
+pub mod downloads;
+pub mod downloads_text;
 pub mod files;
 pub mod forgejo;
 pub mod guilds;
@@ -75,6 +77,7 @@ pub struct Modules {
     pub unity: unity::Unity,
     pub unity_room: unity_routes::RoomState,
     pub build: site::Build,
+    pub downloads: downloads::Downloads,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -87,7 +90,7 @@ impl Modules {
         let api = openai::Api::new(root, &accounts);
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
-        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
+        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
             files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
@@ -208,15 +211,15 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     // the MCP tools of a Work run here (this hub's own secret; anything else is the JavaScript hub's)
     if let Some(tool) = p.strip_prefix("/internal/").filter(|t| matches!(*t, "pc-tool" | "board" | "team")) {
-        if r.method == hyper::Method::POST && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &hub.mods.work.secret) {
-            let account = r.header("x-mills-account").filter(|a| !a.is_empty()).map(String::from).unwrap_or_else(|| hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string());
+        let account = r.header("x-mills-account").filter(|a| !a.is_empty()).map(String::from).unwrap_or_else(|| hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string());
+        if r.method == hyper::Method::POST && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &hub.mods.work.secret_for(&account)) {
             return answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &r.json()).await);
         }
         return Routed::Pass(vec![]);
     }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
     // Unity's Claude brain calling her tools (this hub's secret; anything else is the JavaScript hub's)
-    if p == "/internal/assistant-tool" && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &hub.mods.unity.secret) { return unity_routes::internal(hub, r).await; }
+    if p == "/internal/assistant-tool" && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &vr_core::crypto::hmac_hex(hub.mods.unity.secret.as_bytes(), r.header("x-mills-account").unwrap_or("").as_bytes())) { return unity_routes::internal(hub, r).await; }
     // the OpenAI- / Anthropic-compatible API: its own bearer keys, for harnesses, not the browser app
     if p == "/v1" || p.starts_with("/v1/") { return openai::v1(hub, r).await; }
     if p.starts_with("/node/") {
@@ -239,6 +242,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     let a = &hub.mods.auth;
     if p == "/api/login" && r.method == hyper::Method::POST { return a.login(r, maintenance(hub)).await; }
+    // the package versions, the native releases and the Desktop packages: public (an installed Desktop updates itself before anyone signs in)
+    if let Some(x) = downloads::public(hub, r) { return x; }
     let user = a.session_user(r);
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
     let me = || { let mut h = vec![("x-vr-notes-ver".to_string(), hub.mods.notes.version().to_string())]; if let Some(u) = &user { h.push(("x-vr-user".to_string(), u.clone())); } h };
@@ -263,6 +268,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if p == "/api/check" && r.method == hyper::Method::GET { return answer(200, site::check(hub, &acc)); }
             if let Some(x) = profile::route(hub, r, &acc) { return x; } // profiles, prefs, pictures
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
+            if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
             if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // the admin switches Unity's own-computer tools for one account
                 if !acc.admin { return answer(403, json!({ "error": "Admins only." })); }
                 let b = r.json();

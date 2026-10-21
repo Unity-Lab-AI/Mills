@@ -7,6 +7,39 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.25.0 — 2026-10-21
+
+### Changed: Downloads and new projects in Rust behind the Rust hub (board T-134, toward 4.0.0)
+- **The Download panel** (`modules/downloads.rs`): the same packages, READMEs, zip files and VERSION.txt fingerprints:
+  - the native app and the native AI host (with your own host's config), and the earlier script packages
+  - the public versions, native releases and Desktop packages
+- **Starting or pulling in a project** (Work's header) is answered here; it runs `bridge/worktree.js new / clone` as
+  that person, with their Forgejo token.
+- The JavaScript hub now answers only `/api/status` and `/api/version`; it stays behind the Rust hub as the fallback.
+
+### Security (board T-135, the assessment's findings in the Rust hub)
+- **The hub can no longer be crashed by an AI host's answer.** A status code outside 100–599, or a header that is not
+  valid HTTP, made building the answer fail, which aborted the whole process. Such status codes now become 502 and
+  such headers are dropped.
+- **Unity's engines come only from a host in the hub's config or one owned by a hub admin**, unless config
+  `assistant.node` names one. Before, any person's host that announced an engine could receive everyone's Unity
+  prompts, voice and pictures.
+- **A Work run's tools (and Unity's Claude brain's) answer only as its own person.** The MCP key is now per account
+  (an HMAC of the hub's secret and the account), so a run that names another account in `x-mills-account` is
+  refused.
+- **`team_say` follows the person's own posting rules:** timeouts, permissions, the new-member wait, slowmode.
+- Read receipts and typing only for conversations that exist; nothing made up is kept.
+- **Unity's `read_page`** connects to exactly the address it checked (no DNS rebinding) and reads at most 2 MB within
+  20 s.
+- **Calls to an AI provider's endpoint follow no redirects.**
+- **The page server** refuses paths with a drive letter or a stream name: on Windows, `C:…` would name a path outside
+  `web/`.
+- **A linked Linux account's `~/uploaded_files`** is used only when it is a real folder in that home, not a link;
+  otherwise uploads go to the hub's own area for them. A link could have pointed at the hub's own data.
+- A person owns at most 100 group conversations.
+
+## 3.24.0 — 2026-10-21
+
 ## 3.24.0 — 2026-10-21
 
 ### Changed: the page, profiles and the admin's accounts in Rust behind the Rust hub (board T-134, toward 4.0.0)

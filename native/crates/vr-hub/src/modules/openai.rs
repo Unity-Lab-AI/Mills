@@ -51,7 +51,10 @@ impl Api {
             Some(m) => m,
             None => { let mut m = Map::new(); for a in accounts { if let Some(api) = read_json(&a.dir.join("state.json")).map(|st| st["api"].clone()).filter(Value::is_object) { m.insert(a.username.clone(), api); } } write_json(&f, &Value::Object(m.clone())); m }
         };
-        Api { root: root.to_path_buf(), mills: root.join(".."), keys: Mutex::new(keys), running: Mutex::default(), http: vr_core::hub::http_client(std::time::Duration::from_secs(15)).expect("http") }
+        // (no redirects: an endpoint someone typed in must not lead this hub on to an address of its own choosing)
+        let _ = vr_core::hub::http_client(std::time::Duration::from_secs(15));
+        let http = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build().expect("http");
+        Api { root: root.to_path_buf(), mills: root.join(".."), keys: Mutex::new(keys), running: Mutex::default(), http }
     }
     fn save(&self) { write_json(&self.root.join("api-keys.json"), &Value::Object(self.keys.lock().unwrap().clone())); }
     fn key_of(&self, u: &str) -> Value { self.keys.lock().unwrap().get(u).cloned().unwrap_or(json!({})) }

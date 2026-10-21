@@ -155,8 +155,9 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
 /// The Claude brain's tools (bridge/assistant-tools-mcp.js), with this hub's secret.
 pub async fn internal(hub: &Arc<Hub>, r: &Req) -> Routed {
     let u = &hub.mods.unity;
-    if !super::work::same_secret(r.header("x-mills-internal").unwrap_or(""), &u.secret) { return answer(403, json!({ "ok": false, "error": "forbidden" })); }
-    let acc = hub.mods.auth.account(r.header("x-mills-account").unwrap_or(""));
+    let who = r.header("x-mills-account").unwrap_or("");
+    if !super::work::same_secret(r.header("x-mills-internal").unwrap_or(""), &vr_core::crypto::hmac_hex(u.secret.as_bytes(), who.as_bytes())) { return answer(403, json!({ "ok": false, "error": "forbidden" })); }
+    let acc = hub.mods.auth.account(who);
     let b = r.json();
     if truthy(&b["list"]) {
         let tools = match &acc { Some(a) => u.tools_for(a, true), None => Unity::tools() };

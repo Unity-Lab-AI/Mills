@@ -216,7 +216,7 @@ pub async fn run_claude(hub: &Arc<Hub>, a: &Account, text: &str, ci: &mut Ci, mo
     if let Some(o) = &ci.out { u.claude_out.lock().unwrap().insert(a.username.clone(), o.clone()); }
     let mcp = a.dir.join(".mcp-assistant.json");
     let node = std::env::var("VR_NODE").unwrap_or_else(|_| "node".into());
-    super::unity::write_json(&mcp, &json!({ "mcpServers": { "assistant": { "command": node, "args": [std::path::absolute(hub.root.join("assistant-tools-mcp.js")).unwrap_or_default().display().to_string()], "env": { "MILLS_BRIDGE": format!("http://127.0.0.1:{}", hub.cfg.port), "MILLS_INTERNAL": u.secret, "MILLS_ACCOUNT": a.username } } } }));
+    super::unity::write_json(&mcp, &json!({ "mcpServers": { "assistant": { "command": node, "args": [std::path::absolute(hub.root.join("assistant-tools-mcp.js")).unwrap_or_default().display().to_string()], "env": { "MILLS_BRIDGE": format!("http://127.0.0.1:{}", hub.cfg.port), "MILLS_INTERNAL": vr_core::crypto::hmac_hex(u.secret.as_bytes(), a.username.as_bytes()), "MILLS_ACCOUNT": a.username } } } }));
     vr_core::settings::private(&mcp);
     let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "default", "--mcp-config"].iter().map(|x| x.to_string()).collect();
     args.extend([mcp.display().to_string(), "--strict-mcp-config".into(), "--allowedTools".into(), "mcp__assistant".into(), "--append-system-prompt".into(), format!("{}\n\n{}", u.persona(), dynamic_context(u, a, ci, false)), "--model".into(), model.into()]);

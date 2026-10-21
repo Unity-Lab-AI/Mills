@@ -33,7 +33,8 @@ pub fn page(hub: &Arc<Hub>, path: &str) -> Routed {
     let web = hub.root.join("..").join("web");
     let rel = if path == "/" { "index.html".to_string() } else { path.trim_start_matches('/').to_string() };
     let nf = || Routed::Answer(crate::front::json(404, &json!({ "error": "Not found" })));
-    if rel.split(['/', '\\']).any(|c| c == ".." || c.is_empty()) { return nf(); }
+    // inside web/ only: no "..", no empty part, no drive letter or stream name (on Windows "C:…" would be a path of its own)
+    if rel.contains(':') || rel.split(['/', '\\']).any(|c| c == ".." || c.is_empty()) { return nf(); }
     let f = web.join(&rel);
     if !f.is_file() { return nf(); }
     let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();

@@ -473,7 +473,9 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
         }
         "/api/room/typing" | "/api/room/seen" if post => {
             let conv = s(&b, "conv"); let ctx = ctx!(hub, us.clone());
-            let dm = dm_of(&conv);
+            // (a private conversation: two real accounts in order, this person one of them; nothing made up is kept)
+            let known = |n: &String| n == AGENT || us.iter().any(|q| q.0 == *n);
+            let dm = dm_of(&conv).filter(|(x, y)| x < y && known(x) && known(y));
             if conv != "room" && !dm.as_ref().map(|(x, y)| x == u || y == u).unwrap_or(false) && !c.guilds.is_member(&conv, u, &ctx) { return Some(answer(400, json!({ "error": "Unknown conversation." }))); }
             if p == "/api/room/typing" {
                 let on = !(b["on"].is_null() || b["on"] == json!(false) || b["on"] == json!(0) || b["on"] == json!(""));
@@ -683,10 +685,13 @@ pub fn team_tool(hub: &Arc<Hub>, name: &str, args: &Value, a: &Account) -> Value
                 let ctx = ctx!(hub, us.clone());
                 if !guilds::is_guild_conv(&conv) || !c.guilds.exists(&conv, &ctx) { return no(format!("No conversation \"{conv}\" (use team_channels to list them).")); }
                 if !c.guilds.is_member(&conv, u, &ctx) { return no(format!("{} is not in {conv}.", disp(u))); }
-                if !c.guilds.post_check(&conv, u, false, true, &ctx).is_empty() { return no(format!("{conv} is an announcement channel; {} may not post there.", disp(u))); }
             }
+            // the person's own rules where they post: timeouts, permissions, the new-member wait, slowmode
+            let place = if conv.is_empty() || conv == "room" { "room".to_string() } else { conv.clone() };
+            if to.is_empty() { let ctx = ctx!(hub, us.clone()); let why = c.guilds.post_check(&place, u, false, false, &ctx); if !why.is_empty() { return no(why); } }
             let label = format!("{} · Claude", disp(u));
             let seq = agent_say(hub, &text, &to, &label, u, if conv != "room" { &conv } else { "" });
+            if to.is_empty() { c.guilds.note_post_by(&place, u); }
             ok(json!({ "posted": true, "seq": seq, "as": label, "to": if !to.is_empty() { to } else if !conv.is_empty() && conv != "room" { conv } else { "everyone".into() } }))
         }
         "team_channels" => {

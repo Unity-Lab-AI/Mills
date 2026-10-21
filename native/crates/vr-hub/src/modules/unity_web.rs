@@ -100,27 +100,37 @@ impl Web {
         Ok(json!({ "ok": true, "query": q, "results": results }))
     }
     /// Only http(s), only public addresses (unless the hub config allows private ones: the regression runner's).
-    async fn public_url(&self, raw: &str) -> Result<reqwest::Url, String> {
+    /// The address, and the IP it was checked against (the request goes to exactly that one: no second lookup that a
+    /// name could answer differently).
+    async fn public_url(&self, raw: &str) -> Result<(reqwest::Url, Option<std::net::IpAddr>), String> {
         let u = reqwest::Url::parse(raw).map_err(|_| "Not a web address.".to_string())?;
         if u.scheme() != "http" && u.scheme() != "https" { return Err("Only http and https pages.".into()); }
-        if self.private_ok { return Ok(u); }
+        if self.private_ok { return Ok((u, None)); }
         if let Some(p) = u.port() { if ![80, 443, 8080].contains(&p) { return Err("That port is not allowed.".into()); } }
         let host = u.host_str().unwrap_or("").trim_matches(|c| c == '[' || c == ']').to_string();
         let ips: Vec<std::net::IpAddr> = match host.parse::<std::net::IpAddr>() { Ok(ip) => vec![ip], Err(_) => tokio::net::lookup_host((host.as_str(), 80)).await.map(|i| i.map(|a| a.ip()).collect()).unwrap_or_default() };
         let bad = |ip: &std::net::IpAddr| match ip { std::net::IpAddr::V4(v) => { let o = v.octets(); v.is_loopback() || v.is_private() || v.is_link_local() || o[0] == 0 || (o[0] == 100 && (64..=127).contains(&o[1])) } std::net::IpAddr::V6(v) => { let s0 = v.segments()[0]; v.is_loopback() || v.is_unspecified() || (s0 & 0xfe00) == 0xfc00 || (s0 & 0xffc0) == 0xfe80 || v.to_ipv4_mapped().map(|m| m.is_loopback() || m.is_private() || m.is_link_local()).unwrap_or(false) } };
         if ips.is_empty() || ips.iter().any(bad) || host.eq_ignore_ascii_case("localhost") { return Err("That address is on a private network; only public pages.".into()); }
-        Ok(u)
+        Ok((u, ips.first().copied()))
     }
     pub async fn read_page(&self, raw: &str) -> Result<Value, String> {
-        let mut u = self.public_url(raw).await?;
+        let (mut u, mut ip) = self.public_url(raw).await?;
         for _ in 0..4 { // every hop of a redirect is checked
-            let r = tokio::time::timeout(Duration::from_secs(15), self.manual.get(u.clone()).header("user-agent", UA).send()).await.map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string())?;
+            let client = match (ip, u.host_str()) {
+                (Some(ip), Some(h)) => reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::none()).resolve(h, std::net::SocketAddr::new(ip, u.port_or_known_default().unwrap_or(443))).build().map_err(|e| e.to_string())?,
+                _ => self.manual.clone(),
+            };
+            let mut r = tokio::time::timeout(Duration::from_secs(15), client.get(u.clone()).header("user-agent", UA).send()).await.map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string())?;
             let st = r.status().as_u16();
-            if (300..400).contains(&st) { if let Some(l) = r.headers().get("location").and_then(|v| v.to_str().ok()) { let next = u.join(l).map_err(|e| e.to_string())?; u = self.public_url(next.as_str()).await?; continue; } }
+            if (300..400).contains(&st) { if let Some(l) = r.headers().get("location").and_then(|v| v.to_str().ok()) { let next = u.join(l).map_err(|e| e.to_string())?; (u, ip) = self.public_url(next.as_str()).await?; continue; } }
             if !r.status().is_success() { return Err(format!("The page answered {st}")); }
             let ty = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
             if !["text", "html", "json", "xml"].iter().any(|k| ty.contains(k)) { return Err(format!("Not a text page ({ty}).")); }
-            let body: String = r.text().await.map_err(|e| e.to_string())?.chars().take(2_000_000).collect();
+            // at most 2 MB, within the time limit (an endless page cannot fill this hub's memory)
+            let mut buf: Vec<u8> = vec![];
+            let read = async { while let Ok(Some(c)) = r.chunk().await { buf.extend_from_slice(&c); if buf.len() >= 2_000_000 { break; } } };
+            let _ = tokio::time::timeout(Duration::from_secs(20), read).await;
+            let body: String = String::from_utf8_lossy(&buf).chars().take(2_000_000).collect();
             let title = regex::Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap().captures(&body).map(|c| unhtml(&c[1])).unwrap_or_default();
             let main = regex::Regex::new(r"(?is)<article.*?</article>|<main.*?</main>").unwrap().find(&body).map(|m| m.as_str().to_string());
             return Ok(json!({ "ok": true, "url": u.as_str(), "title": title, "text": unhtml(main.as_deref().unwrap_or(&body)).chars().take(6000).collect::<String>() }));

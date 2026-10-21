@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use super::perms::{self, Perms};
 
-const GROUP_MAX: usize = 10; const CHANNEL_MAX: usize = 50; const ROLE_MAX: usize = 25; const INVITE_MAX: usize = 50; const AUDIT_KEEP: usize = 200; const SERVER_MAX_PER_USER: usize = 25; const PIN_MAX: usize = 50;
+const GROUP_MAX: usize = 10; const CHANNEL_MAX: usize = 50; const ROLE_MAX: usize = 25; const INVITE_MAX: usize = 50; const AUDIT_KEEP: usize = 200; const SERVER_MAX_PER_USER: usize = 25; const PIN_MAX: usize = 50; const GROUPS_PER_USER: usize = 100;
 const INVITE_AGES: [i64; 7] = [0, 30, 60, 360, 720, 1440, 10080];
 const TIMEOUTS: [i64; 7] = [1, 5, 10, 60, 1440, 10080, 40320];
 const SLOWMODES: [i64; 14] = [0, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600];
@@ -598,6 +598,7 @@ impl Guilds {
                 let mut members = vec![user.to_string()]; for u in user_list(&b["members"]) { if !members.contains(&u) { members.push(u); } }
                 if members.len() < 2 { return Err("A group needs at least one other person.".into()); }
                 if members.len() > GROUP_MAX { return Err(format!("A group holds up to {GROUP_MAX} people.")); }
+                if arr(&db["groups"]).iter().filter(|g| g["owner"] == json!(user)).count() >= GROUPS_PER_USER { return Err(format!("You own {GROUPS_PER_USER} groups already; leave or hand one on first.")); }
                 let nm = clean_name(&b["name"], 40);
                 let nm = if nm.is_empty() { members.iter().map(|u| ctx.name(u)).collect::<Vec<_>>().join(", ").chars().take(40).collect() } else { nm };
                 let g = json!({ "id": hexid(5), "name": nm, "members": members, "owner": user, "createdBy": user, "createdAt": iso() });
