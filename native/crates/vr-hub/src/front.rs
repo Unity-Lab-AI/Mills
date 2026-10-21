@@ -100,7 +100,12 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
     // a native module answers, or lets the request through (possibly with headers of its own, e.g. who is signed in)
     let mut extra: Vec<(String, String)> = vec![];
     match modules::route(&hub, &r).await {
-        modules::Routed::Answer(mut resp) => { if let Some(o) = &cors { add_cors(&mut resp, o); } return with_front(resp); }
+        modules::Routed::Answer(mut resp) => {
+            if let Some(o) = &cors { add_cors(&mut resp, o); }
+            // signed-in pages notice a new build on their next call (and every 5 minutes) and update themselves
+            if r.path.starts_with("/api/") && !resp.headers().contains_key("x-vr-version") { if let Ok(v) = hyper::header::HeaderValue::from_str(&hub.mods.build.get(&hub).0) { resp.headers_mut().insert("x-vr-version", v); } }
+            return with_front(resp);
+        }
         modules::Routed::Pass(h) => extra = h,
         modules::Routed::SignedIn { token, user, client, ip } => {
             // Unity learns where they are and greets them; the page gets its token

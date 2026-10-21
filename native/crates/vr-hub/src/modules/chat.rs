@@ -315,6 +315,7 @@ fn avatar(hub: &Hub, u: &str) -> String {
     for (ext, mime) in [("webp", "image/webp"), ("png", "image/png"), ("jpg", "image/jpeg")] { if let Ok(b) = std::fs::read(c.mills.join("Avatars").join(format!("{u}.{ext}"))) { url = format!("data:{mime};base64,{}", vr_core::b64(&b)); break; } }
     c.avatars.lock().unwrap().insert(u.to_string(), url.clone()); url
 }
+pub fn public_prefs_of(hub: &Hub, a: &Account) -> Value { public_prefs(hub, a) }
 fn public_prefs(hub: &Hub, a: &Account) -> Value {
     let st = read_json(&a.dir.join("state.json")).unwrap_or(json!({}));
     let p = &st["profile"];

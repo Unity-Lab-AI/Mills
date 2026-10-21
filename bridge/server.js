@@ -892,6 +892,8 @@ async function handleRequest(req, res) {
     // tools of its runs (the chat, presence, calls and servers are this hub's; extra = what the Rust hub knows)
     if (p === '/internal/front/shares' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); const b = await readBody(req, 1 << 20); frontShares = (Array.isArray(b.shares) ? b.shares : []).filter((s) => s && USERNAME_RE.test(String(s.user || ''))); roomChanged(); return send(res, 200, { ok: true }); }
     if (p === '/internal/front/work-busy' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); frontBusy = (await readBody(req, 4096)).busy === true; if (!frontBusy) setTimeout(maybeRestart, 300); return send(res, 200, { ok: true }); }
+    // the Rust hub in front made or deleted an account: the few routes still answered here know it at once
+    if (p === '/internal/front/accounts-changed' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); loadAccounts(); return send(res, 200, { ok: true }); }
     // the Rust hub in front (its chat module): Unity was called (target: a private answer to that person; conv: a channel / group)
     if (p === '/internal/front/agent-call' && req.method === 'POST') {
       if (!fromFront(req)) return send(res, 403, { ok: false });

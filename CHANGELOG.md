@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.24.0 — 2026-10-21
+
+### Changed: the page, profiles and the admin's accounts in Rust behind the Rust hub (board T-134, toward 4.0.0)
+- **The page itself** (`modules/site.rs`): web/ as files, and index.html with this hub's values filled in, every script
+  and stylesheet asked for under this build's name, and its CSP pinned to the sha256 of its own inline scripts.
+  `/api/check` is answered here, and every API answer names the build (X-VR-Version).
+- **Profiles, prefs and pictures** (`modules/profile.rs`): the same rules and the same places (`state.json`
+  "profile" / "prefs", `Avatars/`).
+- **The admin's accounts** (`modules/admin.rs`): the list, making an account with its first password, deleting one
+  (moved to `profiles-deleted/`), Stop, and asking for a restart. **My Forgejo** (connect / disconnect) is here too.
+- **Still in the JavaScript hub:** `/api/status` and `/api/version`, the Download panel, and adding a project. It
+  re-reads the accounts when the Rust hub makes or deletes one.
+
 ## 3.23.0 — 2026-10-21
 
 ### Changed: Unity in Rust behind the Rust hub (board T-134, toward 4.0.0)

@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use crate::front::{json as jresp, Body, Hub, Req};
 
+pub mod admin;
 pub mod ai_hosts;
+pub mod profile;
+pub mod site;
 pub mod auth;
 pub mod board;
 pub mod chat;
@@ -71,6 +74,7 @@ pub struct Modules {
     pub chat: Arc<chat::Chat>,
     pub unity: unity::Unity,
     pub unity_room: unity_routes::RoomState,
+    pub build: site::Build,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -83,7 +87,7 @@ impl Modules {
         let api = openai::Api::new(root, &accounts);
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
-        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
+        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
             files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
@@ -226,7 +230,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     // never trust these from outside: only the front sets them
     // (the proxy strips any x-vr-front-* / x-vr-user header a caller sent)
-    if !p.starts_with("/api/") { return Routed::Pass(vec![]); }
+    // the page and its files
+    if !p.starts_with("/api/") { return if r.method == hyper::Method::GET && !p.starts_with("/internal/") { site::page(hub, p) } else { Routed::Pass(vec![]) }; }
     // moving house (bridge/handoff.js pack writes bridge/.maintenance): every change answers "moved", reading and the
     // Work run doing the move go on (the JavaScript hub's rule, for everything answered here and there)
     if r.method == hyper::Method::POST && !matches!(p, "/api/chat" | "/api/stop" | "/api/pc-result") && p != "/api/status" {
@@ -255,6 +260,9 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
             if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence
             if let Some(x) = unity_routes::route(hub, r, &acc).await { return x; } // Unity's section
+            if p == "/api/check" && r.method == hyper::Method::GET { return answer(200, site::check(hub, &acc)); }
+            if let Some(x) = profile::route(hub, r, &acc) { return x; } // profiles, prefs, pictures
+            if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
             if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // the admin switches Unity's own-computer tools for one account
                 if !acc.admin { return answer(403, json!({ "error": "Admins only." })); }
                 let b = r.json();

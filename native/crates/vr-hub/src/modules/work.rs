@@ -81,6 +81,7 @@ impl Work {
     pub fn drop_provider(&self, a: &Account, id: &str) { if self.state(a)["provider"] == json!(id) { self.update(a, |m| { m.remove("provider"); }); } }
     pub fn busy(&self, u: &str) -> bool { self.runs.lock().unwrap().contains_key(u) }
     pub fn any_busy(&self) -> bool { !self.runs.lock().unwrap().is_empty() }
+    pub fn default_model_of(&self, a: &Account) -> String { self.default_model(a) }
     fn default_model(&self, a: &Account) -> String {
         let c = if a.dir == self.root { Value::Object(self.cfg.raw.clone()) } else { read_json(&a.dir.join("config.json")).unwrap_or(Value::Null) };
         s(&c, "model")
