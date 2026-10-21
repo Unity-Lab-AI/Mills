@@ -103,9 +103,8 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
         modules::Routed::Answer(mut resp) => { if let Some(o) = &cors { add_cors(&mut resp, o); } return with_front(resp); }
         modules::Routed::Pass(h) => extra = h,
         modules::Routed::SignedIn { token, user, client, ip } => {
-            // the JavaScript hub learns of the sign-in (Unity greets, the person's client details) and the page gets its token
-            let note = serde_json::json!({ "user": user, "client": client, "ip": ip }).to_string();
-            internal(&hub, "/internal/front/signed-in", note).await;
+            // Unity learns where they are and greets them; the page gets its token
+            crate::modules::unity_routes::signed_in(&hub, &user, client, ip);
             let mut resp = json(200, &serde_json::json!({ "token": token, "username": user }));
             if let Some(o) = &cors { add_cors(&mut resp, o); }
             return with_front(resp);

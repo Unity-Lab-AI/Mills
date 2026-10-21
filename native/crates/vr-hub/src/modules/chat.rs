@@ -108,6 +108,9 @@ impl Chat {
     fn save_keys(&self) { write_json(&self.dir.join("keys.json"), &Value::Object(self.keys.lock().unwrap().clone())); }
     pub fn drop_key(&self, u: &str) { if self.keys.lock().unwrap().remove(u).is_some() { self.save_keys(); } }
     fn agent_enabled(&self, users: &[(String, String, bool)]) -> bool { self.agent_on && !users.iter().any(|u| u.0 == AGENT) }
+    pub fn agent_on(&self, users: &[(String, String, bool)]) -> bool { self.agent_enabled(users) }
+    /// Unity composing (target, conv) or not: everyone's "is typing".
+    pub fn set_agent_busy(&self, v: Option<(String, String)>) { *self.agent_busy.lock().unwrap() = v; self.room_changed(); }
     pub fn seq(&self) -> i64 { self.store.lock().unwrap().seq }
     /// The conversation of a message (None when deleted or unknown): pins and the guilds ask.
     pub fn msg_conv(&self, seq: i64) -> Option<String> { self.store.lock().unwrap().messages.iter().find(|m| m["seq"].as_i64() == Some(seq) && m["deleted"] != json!(true)).map(conv_of) }
@@ -282,7 +285,7 @@ async fn agent_hear(hub: &Arc<Hub>, msg: &Value) {
     let off = hub.root.join("ai-host.off").exists();
     let off_note = |to: &str, conv: &str| { agent_say(hub, "I can't answer right now: my host paused the AI. Ask me again once it is back.", to, "", "", conv); };
     let from = s(msg, "from");
-    let call = |target: String, caller: String, conv: String| { let h = hub.clone(); tokio::spawn(async move { crate::front::internal(&h, "/internal/front/agent-call", json!({ "target": target, "caller": caller, "conv": conv }).to_string()).await; }); };
+    let call = |target: String, caller: String, conv: String| super::unity_routes::run_agent(hub, target, caller, conv);
     if msg["to"] == json!(AGENT) { if c.agent_read(msg).is_some() { if off { return off_note(&from, ""); } call(from.clone(), from, String::new()); } return; }
     if !s(msg, "to").is_empty() { return; }
     let Some(text) = c.agent_read(msg) else { return };
@@ -291,7 +294,7 @@ async fn agent_hear(hub: &Arc<Hub>, msg: &Value) {
     if called { if off { return off_note("", msg["conv"].as_str().unwrap_or("")); } call(String::new(), from, s(msg, "conv")); }
 }
 /// What Unity was sent since she last spoke (with the few messages before each call): her brain's prompt.
-fn agent_blocks(hub: &Hub) -> String {
+pub fn agent_blocks(hub: &Hub) -> String {
     let c = &hub.mods.chat;
     let since = *c.agent_seen.lock().unwrap();
     let (list, seq): (Vec<Value>, i64) = { let st = c.store.lock().unwrap(); let l: Vec<Value> = st.messages.iter().filter(|m| m["seq"].as_i64().unwrap_or(0) > since && m["from"] != json!(AGENT)).cloned().collect(); (l, st.seq) };

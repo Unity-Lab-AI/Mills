@@ -20,6 +20,11 @@ pub mod perms;
 pub mod native_releases;
 pub mod notes;
 pub mod openai;
+pub mod unity;
+pub mod unity_brain;
+pub mod unity_routes;
+pub mod unity_time;
+pub mod unity_web;
 pub mod usage;
 pub mod work;
 pub mod worktree;
@@ -64,6 +69,8 @@ pub struct Modules {
     pub work: Arc<work::Work>,
     pub api: openai::Api,
     pub chat: Arc<chat::Chat>,
+    pub unity: unity::Unity,
+    pub unity_room: unity_routes::RoomState,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -76,7 +83,7 @@ impl Modules {
         let api = openai::Api::new(root, &accounts);
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
-        Ok(Modules { front_secret, auth, api, chat, board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
+        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
             files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
@@ -125,6 +132,7 @@ pub fn start_background(hub: &Arc<Hub>) {
     tokio::spawn(async move { loop { h.mods.ai.dirty.notified().await; tokio::time::sleep(std::time::Duration::from_millis(50)).await; push_ai_state(&h).await; } });
     work::start(hub);
     chat::start(hub);
+    unity_brain::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     let h = hub.clone();
     tokio::spawn(async move {
@@ -203,6 +211,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         return Routed::Pass(vec![]);
     }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
+    // Unity's Claude brain calling her tools (this hub's secret; anything else is the JavaScript hub's)
+    if p == "/internal/assistant-tool" && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &hub.mods.unity.secret) { return unity_routes::internal(hub, r).await; }
     // the OpenAI- / Anthropic-compatible API: its own bearer keys, for harnesses, not the browser app
     if p == "/v1" || p.starts_with("/v1/") { return openai::v1(hub, r).await; }
     if p.starts_with("/node/") {
@@ -244,6 +254,15 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = work::route(hub, r, &acc).await { return x; }
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
             if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence
+            if let Some(x) = unity_routes::route(hub, r, &acc).await { return x; } // Unity's section
+            if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // the admin switches Unity's own-computer tools for one account
+                if !acc.admin { return answer(403, json!({ "error": "Admins only." })); }
+                let b = r.json();
+                let Some(t) = b["username"].as_str().and_then(|x| a.account(x)) else { return answer(400, json!({ "error": "No such account." })) };
+                let u = &hub.mods.unity;
+                u.set_state(&t, |m| { if let Some(x) = b["pc"].as_bool() { m.insert("pc".into(), json!(x)); } if let Some(x) = b["code"].as_bool() { m.insert("code".into(), json!(x)); } });
+                return answer(200, json!({ "username": t.username, "pc": u.group_on(&t, "pc"), "code": u.group_on(&t, "code") }));
+            }
         }
     }
     // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
@@ -452,7 +471,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
             }
             None
         }
-        "/api/admin/stop" if status == 200 => { if let Some(u) = target() { w.stop(hub, &u); hub.mods.api.stop(&u); } None }
+        "/api/admin/stop" if status == 200 => { if let Some(u) = target() { w.stop(hub, &u); hub.mods.api.stop(&u); hub.mods.unity.stop(&u); } None }
         "/api/projects" if status == 200 => { w.projects_changed(); None }
         "/api/admin/accounts" if status == 200 => {
             let mut v: Value = serde_json::from_slice(body?).ok()?;
@@ -464,6 +483,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
                 acc["signedIn"] = json!(a.signed_in(&u));
                 acc["busy"] = json!(acc["busy"] == json!(true) || w.busy(&u));
                 acc["chatKey"] = json!(hub.mods.chat.has_key(&u));
+                if let Some(x) = a.account(&u) { acc["unityPc"] = json!(hub.mods.unity.group_on(&x, "pc")); acc["unityCode"] = json!(hub.mods.unity.group_on(&x, "code")); acc["busy"] = json!(acc["busy"] == json!(true) || hub.mods.unity.runs.lock().unwrap().contains_key(&u)); }
                 if let Some(x) = a.account(&u) { acc["model"] = json!(w.effective_model(&x)); }
             }
             Some(v.to_string().into_bytes())
@@ -486,7 +506,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
         // busy counts this hub's Work runs too (restart.js and the regression runner wait for nobody being busy)
         "/api/status" if status == 200 => {
             let mut v: Value = serde_json::from_slice(body?).ok()?;
-            if v.get("busy").is_some() && (w.any_busy() || hub.mods.api.busy()) { v["busy"] = json!(true); return Some(v.to_string().into_bytes()); }
+            if v.get("busy").is_some() && (w.any_busy() || hub.mods.api.busy() || hub.mods.unity.busy() || unity_routes::room_busy(hub)) { v["busy"] = json!(true); return Some(v.to_string().into_bytes()); }
             None
         }
         _ => None,
@@ -497,4 +517,4 @@ fn s_of(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() 
 pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check" | "/api/status") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
 
 /// The modules this front answers itself.
-pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api", "chat"] }
+pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api", "chat", "unity"] }

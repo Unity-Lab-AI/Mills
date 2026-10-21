@@ -1,12 +1,12 @@
 {
-  "project": "3.22.0",
+  "project": "3.23.0",
   "modules": {
     "bridge/ai-node.js": "3.3.0",
     "bridge/ai-nodes-front.js": "1.0.0",
     "bridge/ai-nodes.js": "2.6.0",
     "bridge/archive.js": "1.0.0",
     "bridge/assistant-tools-mcp.js": "1.0.0",
-    "bridge/assistant.js": "1.1.1",
+    "bridge/assistant.js": "1.1.2",
     "bridge/board-mcp.js": "1.0.1",
     "bridge/board.js": "1.0.0",
     "bridge/calls.js": "1.0.0",

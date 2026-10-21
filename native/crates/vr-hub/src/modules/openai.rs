@@ -30,7 +30,12 @@ fn err(status: u16, m: impl Into<String>) -> ApiErr { ApiErr { status, msg: m.in
 /// One answer being made: cancelled when its caller hangs up.
 #[derive(Default)]
 pub struct Cancel { on: AtomicBool, woke: Notify }
-impl Cancel { fn fire(&self) { self.on.store(true, Ordering::SeqCst); self.woke.notify_waiters(); } fn is(&self) -> bool { self.on.load(Ordering::SeqCst) } }
+impl Cancel {
+    pub fn fire(&self) { self.on.store(true, Ordering::SeqCst); self.woke.notify_waiters(); }
+    pub fn is(&self) -> bool { self.on.load(Ordering::SeqCst) }
+    /// Resolves once cancelled.
+    pub async fn woke(&self) { let n = self.woke.notified(); tokio::pin!(n); n.as_mut().enable(); if self.is() { return; } n.await }
+}
 pub struct Answer { text: String, model: String, usage: Value }
 
 pub struct Api { root: PathBuf, mills: PathBuf, keys: Mutex<Map<String, Value>>, running: Mutex<HashMap<String, Arc<Cancel>>>, http: reqwest::Client }

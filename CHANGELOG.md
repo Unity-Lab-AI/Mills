@@ -7,6 +7,22 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.23.0 — 2026-10-21
+
+### Changed: Unity in Rust behind the Rust hub (board T-134, toward 4.0.0)
+- **Unity's section** (`native/crates/vr-hub/src/modules/unity*.rs`) runs in the Rust hub:
+  - her local brain (Ollama with native tool calls, through the AI host that lends her engines or here), or a Claude
+    brain (`claude -p` with her tools through `bridge/assistant-tools-mcp.js`, with this hub's own secret)
+  - every tool: time, place, weather, news, web search, public pages only, YouTube, pictures (make / edit / inpaint),
+    the calculator, tasks, calendar, reminders, memory, knowledge, and the PC / code tools done by the person's browser
+  - yes / no for destructive tools, voice and speech, uploads, and the reminders' notices
+- **The same files:** `<profile>/assistant.json` and `Images/`. Her brain choice and Claude session, and the admin's
+  PC / code switches, move to `<profile>/unity.json` (taken over from `state.json`); the admin's switches are answered
+  here too.
+- **The team chat's Unity** runs in the Rust hub as well: called by @<her name> or a private message, on her local
+  brain or a Claude model. She greets people at sign-in, with their local time, weather and news.
+- The JavaScript hub's Unity starts no engines and fires no reminders while the Rust hub runs her.
+
 ## 3.22.0 — 2026-10-21
 
 ### Changed: the Rust hub is on by default (board T-134, item 3)

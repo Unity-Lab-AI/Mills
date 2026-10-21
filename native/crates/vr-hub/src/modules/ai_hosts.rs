@@ -222,6 +222,9 @@ impl AiHosts {
         ids.into_iter().find(|id| self.online(id))
     }
 
+    /// Why Unity's engines are away ('' while a host lends them).
+    pub fn reason(&self) -> String { if self.pick_engine_host("ollama").is_some() { String::new() } else { OFFLINE_TEXT.into() } }
+
     // ---------- jobs ----------
     fn enqueue(self: &Arc<Self>, host: &str, job: Value, p: Pending) -> Result<(), HostErr> {
         let id = job["id"].as_str().unwrap_or("").to_string();

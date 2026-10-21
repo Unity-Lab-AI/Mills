@@ -705,7 +705,7 @@ pub fn start(hub: &Arc<Hub>) {
     let h = hub.clone();
     tokio::spawn(async move { loop {
         h.mods.work.busy_changed.notified().await;
-        let busy = h.mods.work.any_busy() || h.mods.api.busy();
+        let busy = h.mods.work.any_busy() || h.mods.api.busy() || h.mods.unity.busy() || super::unity_routes::room_busy(&h);
         crate::front::internal(&h, "/internal/front/work-busy", json!({ "busy": busy }).to_string()).await;
     } });
 }
