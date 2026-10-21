@@ -7,6 +7,24 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.18.0 — 2026-10-21
+
+### Changed: the AI hosts run in Rust behind rustHub (board T-131)
+- **vr-hub's aihosts module** (`native/crates/vr-hub/src/modules/ai_hosts.rs`) answers every AI host itself: the
+  registry (`bridge/ai-hosts.json` + config `aiNodes`), the protocol (`/node/hello`, the long poll with the hub's
+  heartbeat, reply, stream, events, the JavaScript host's file updates, the native host's signed binary updates), the
+  sessions file (`bridge/ai-host-sessions.json`: a restart keeps every host's session), the up / down log, the probe of
+  older hosts, caps from the usage headers, and Settings → My AI hosts (new, rename, remove, share, config). The same
+  files and the same protocol, so a host (JavaScript or native, old or new) cannot tell which hub it talks to.
+- **The JavaScript hub uses them through the front** (`bridge/ai-nodes-front.js`, the same calls as
+  `bridge/ai-nodes.js`): it knows what the hosts offer from the front's snapshot (sent on every change and every 5 s;
+  online counted from each host's last poll), and carries Unity's engine calls, a host's endpoint and login calls (the
+  answer streams back as it comes), Work runs on a host (one line per event) and PC tools through `/__front/ai/*`. A Work
+  run's tools on a host (`/node/job/<id>/internal/<tool>`) come with the account the front checked the job's token for.
+  A host's usage windows reach the JavaScript hub's `/api/usage` as they come.
+- `native_releases.rs`: the release manifests and their signatures in Rust (the same text, Ed25519 + the host's HMAC).
+- Without rustHub (or with an older vr-hub that does not name `aihosts`) nothing changes: `bridge/ai-nodes.js` runs them.
+
 ## 3.17.0 — 2026-10-20
 
 ### Added: the Downloads are the pre-built native programs (board T-134, items 1 + 2)

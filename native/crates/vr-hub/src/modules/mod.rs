@@ -9,11 +9,18 @@ use std::sync::Arc;
 
 use crate::front::{json as jresp, Body, Hub, Req};
 
+pub mod ai_hosts;
 pub mod auth;
 pub mod board;
 pub mod files;
 pub mod forgejo;
+pub mod native_releases;
 pub mod notes;
+// most of these two are for the Work runs, which move here next; the AI hosts use their host windows and git
+#[allow(dead_code)]
+pub mod usage;
+#[allow(dead_code)]
+pub mod worktree;
 
 /// bridge/config.json overlaid with bridge/config.local.json, one level deep (bridge/common.js loadProfile).
 #[derive(Clone, Debug)]
@@ -50,14 +57,25 @@ pub struct Modules {
     pub mirror: Arc<forgejo::Mirror>,
     pub notes: notes::Notes,
     pub files: files::Files,
+    pub ai: Arc<ai_hosts::AiHosts>,
+    pub native: native_releases::Releases,
     mills: std::path::PathBuf,
 }
 impl Modules {
     pub fn new(root: &Path, cfg: &Config) -> Result<Modules, String> {
         let front_secret = std::env::var("VR_FRONT_SECRET").ok().filter(|s| s.len() >= 32).unwrap_or_else(|| vr_core::crypto::random_hex(24));
         let mills = root.join("..");
+        // usage.json stays the JavaScript hub's while its Work runs are there (it hears each host window from here)
+        let usage = Arc::new(usage::Usage::new(root, cfg, false));
         Ok(Modules { front_secret, auth: auth::Auth::new(root, cfg), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), mills })
+            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), mills })
+    }
+    /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
+    fn public_url(&self, cfg: &Config) -> String {
+        let u = cfg.get("publicUrl").and_then(Value::as_str).unwrap_or("").trim_end_matches('/').to_lowercase();
+        let host = u.strip_prefix("https://").unwrap_or("");
+        let (name, port) = host.split_once(':').unwrap_or((host, ""));
+        if !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') && port.bytes().all(|b| b.is_ascii_digit()) && (port.is_empty() == !host.contains(':')) { u } else { format!("http://127.0.0.1:{}", cfg.port) }
     }
     /// Whether someone has set up their chat key (Chat/keys.json, the chat's: still the JavaScript hub's).
     fn has_chat_key(&self, u: &str) -> bool { std::fs::read_to_string(self.mills.join("Chat").join("keys.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| !v[u].is_null()).unwrap_or(false) }
@@ -91,12 +109,25 @@ pub fn start_background(hub: &Arc<Hub>) {
     // files: the hourly sweep (chat uploads never sent, the old Work layout)
     let hf = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(std::time::Duration::from_secs(3600)).await; let accts = hf.mods.auth.accounts(); hf.mods.files.chat_sweep(&|u| hf.mods.auth.account(u)); hf.mods.files.work_sweep(&accts); } });
+    // AI hosts: the up / down watch, what changed to the JavaScript hub (its snapshot), each host window to its usage
+    hub.mods.ai.watch();
+    let h = hub.clone();
+    tokio::spawn(async move { loop { h.mods.ai.dirty.notified().await; tokio::time::sleep(std::time::Duration::from_millis(50)).await; push_ai_state(&h).await; } });
+    let h = hub.clone();
+    let rx = h.mods.ai.usage_rx.lock().unwrap().take();
+    if let Some(mut rx) = rx { tokio::spawn(async move { while let Some((source, w)) = rx.recv().await { crate::front::internal(&h, "/internal/front/usage-windows", json!({ "source": source, "windows": w }).to_string()).await; } }); }
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     let h = hub.clone();
     tokio::spawn(async move {
         let mut rx = h.mods.notes.ver.subscribe();
         while rx.changed().await.is_ok() { crate::front::internal(&h, "/internal/front/room-changed", "{}".into()).await; }
     });
+}
+/// The AI hosts' state to the JavaScript hub (see AiHosts::snapshot).
+pub async fn push_ai_state(hub: &Hub) {
+    let users: Vec<String> = hub.mods.auth.accounts().into_iter().map(|a| a.username).collect();
+    let snap = hub.mods.ai.snapshot(&users);
+    crate::front::internal(hub, "/internal/front/hosts-state", snap.to_string()).await;
 }
 fn from_front(hub: &Hub, r: &Req) -> bool {
     use subtle::ConstantTimeEq;
@@ -138,8 +169,28 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 Some(a) => answer(200, hub.mods.files.work_message(&a, b["message"].as_str().unwrap_or(""), b["where"].clone())),
                 None => answer(200, json!({ "text": b["message"], "files": [], "dirs": [] })),
             },
+            p if p.starts_with("ai/") => ai_front(hub, r, &p[3..]).await,
             _ => answer(404, json!({ "ok": false, "error": "unknown" })),
         };
+    }
+    // ----- AI hosts: their own id + secret, no browser session -----
+    if let Some(rest) = p.strip_prefix("/node/job/") {
+        // the MCP tools of a Work run on a host, with the job's own token: on to the JavaScript hub as that person
+        let (id, tool) = rest.split_once("/internal/").unwrap_or(("", ""));
+        if id.is_empty() || !matches!(tool, "pc-tool" | "board" | "team") { return answer(404, json!({ "error": "Not found" })); }
+        return match hub.mods.ai.job_for(id, r.header("x-mills-internal").unwrap_or("")) {
+            Some((account, _)) => Routed::Pass(vec![("x-vr-front-job-account".into(), account)]),
+            None => answer(403, json!({ "ok": false, "error": "forbidden" })),
+        };
+    }
+    if p.starts_with("/node/") {
+        let (status, out) = hub.mods.ai.route(&r.method, p, &r.query, &r.headers, &r.body, &hub.mods.native).await;
+        // a host that said hello is on everyone's list before it hears back
+        if p == "/node/hello" && status == 200 { push_ai_state(hub).await; }
+        return Routed::Answer(match out {
+            Ok(v) => jresp(status, &v),
+            Err((buf, mime)) => hyper::Response::builder().status(status).header("content-type", mime).header("content-length", buf.len()).header("cache-control", "no-store").body(crate::front::full(buf)).expect("response"),
+        });
     }
     // never trust these from outside: only the front sets them
     // (the proxy strips any x-vr-front-* / x-vr-user header a caller sent)
@@ -165,6 +216,24 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         return files_http(hub, r, &u).await;
     }
+    // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
+    if r.method == hyper::Method::POST && matches!(p, "/api/hosts/new" | "/api/hosts/rename" | "/api/hosts/remove" | "/api/hosts/share" | "/api/hosts/config") {
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        let (ai, b) = (&hub.mods.ai, r.json());
+        let s = |k: &str| b[k].as_str().map(String::from).unwrap_or_else(|| if b[k].is_null() { String::new() } else { b[k].to_string() });
+        let out = match p {
+            "/api/hosts/new" => ai.create(&u, &s("nickname")).map(|h| json!({ "host": h, "mine": ai.mine(&u) })),
+            "/api/hosts/rename" => ai.rename(&u, &s("id"), &s("nickname")).map(|h| json!({ "host": h })),
+            "/api/hosts/remove" => ai.remove(&u, &s("id")).map(|_| json!({ "mine": ai.mine(&u) })),
+            "/api/hosts/share" => ai.set_share(&u, &s("id"), &s("provider"), &if b["users"].is_null() && b.get("users").is_some() { Value::Null } else if b["users"].is_array() { b["users"].clone() } else { json!([]) }).map(|h| json!({ "host": h })),
+            _ => {
+                let models: Vec<String> = hub.cfg.get("models").and_then(Value::as_array).map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default();
+                ai.config_for(&u, &s("id"), &hub.mods.public_url(&hub.cfg), models).map(|c| json!({ "config": c }))
+            }
+        };
+        if out.is_ok() { push_ai_state(hub).await; }
+        return match out { Ok(v) => answer(200, v), Err(e) => answer(400, json!({ "error": e })) };
+    }
     // the admin's account switches that are this module's (the JavaScript hub keeps making / deleting accounts)
     if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/signout") {
         let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
@@ -186,6 +255,76 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         });
     }
     Routed::Pass(me())
+}
+
+/// A body that comes piece by piece (a host's answer as it streams, a Work run's events).
+fn stream_body(rx: tokio::sync::mpsc::Receiver<Result<bytes::Bytes, String>>) -> Body {
+    use http_body_util::BodyExt;
+    let s = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|x| (x.map(hyper::body::Frame::data).map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e)), rx)) });
+    http_body_util::StreamBody::new(s).boxed()
+}
+/// The JavaScript hub's Work runs, API, chat and Unity using the AI hosts (/__front/ai/…).
+async fn ai_front(hub: &Arc<Hub>, r: &Req, what: &str) -> Routed {
+    let ai = &hub.mods.ai;
+    match what {
+        "state" => { let users: Vec<String> = hub.mods.auth.accounts().into_iter().map(|a| a.username).collect(); answer(200, ai.snapshot(&users)) }
+        // a call carried to a host: engine (Unity's), provider (a host's endpoint) or login (a host's Claude / Codex login)
+        "fetch" => {
+            use base64::Engine;
+            let meta: Value = r.header("x-vr-ai").and_then(|h| base64::engine::general_purpose::STANDARD.decode(h).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(json!({}));
+            let s = |k: &str| meta[k].as_str().unwrap_or("").to_string();
+            let headers: Vec<(String, String)> = meta["headers"].as_object().map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect()).unwrap_or_default();
+            let method = if s("method").is_empty() { "GET".to_string() } else { s("method") };
+            let body = r.body.to_vec();
+            let res = match s("mode").as_str() {
+                "engine" => ai.engine_fetch(&s("engine"), &s("path"), &method, headers, body).await,
+                "provider" => ai.provider_fetch(&s("host"), &s("provider"), &s("path"), &method, headers, body).await,
+                "login" => ai.login_fetch(&s("host"), &s("provider"), &s("path"), &method, headers, body).await,
+                _ => Err(ai_hosts::HostErr { status: 400, msg: "unknown mode".into() }),
+            };
+            match res {
+                Ok(rel) => {
+                    // a login's usage headers may have moved its caps: the JavaScript hub knows before the answer ends
+                    if rel.headers.iter().any(|(k, _)| k.starts_with("anthropic-ratelimit-unified-")) { push_ai_state(hub).await; }
+                    let mut b = hyper::Response::builder().status(rel.status).header("cache-control", "no-store");
+                    for (k, v) in &rel.headers { b = b.header(k.as_str(), v.as_str()); }
+                    Routed::Answer(b.body(stream_body(rel.body)).expect("response"))
+                }
+                Err(e) => { let mut resp = jresp(e.status, &json!({ "error": e.msg })); resp.headers_mut().insert("x-vr-ai-error", hyper::header::HeaderValue::from_static("1")); Routed::Answer(resp) }
+            }
+        }
+        // a Work run on a host: one JSON line per event ({ id } first, { ev } …, then { done } or { error })
+        "work" => {
+            let b = r.json();
+            let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, String>>(256);
+            let line = |v: Value| Ok(bytes::Bytes::from(v.to_string() + "\n"));
+            match ai.run_work(b["host"].as_str().unwrap_or(""), b["provider"].as_str().unwrap_or(""), b["payload"].clone()) {
+                Err(e) => { let _ = tx.try_send(line(json!({ "error": e.msg, "status": e.status }))); }
+                Ok((id, _token, mut events)) => {
+                    let _ = tx.try_send(line(json!({ "id": id })));
+                    let ai = ai.clone();
+                    tokio::spawn(async move {
+                        while let Some(m) = events.recv().await {
+                            let (v, end) = match m { ai_hosts::WorkMsg::Event(ev) => (json!({ "ev": ev }), false), ai_hosts::WorkMsg::Done(c) => (json!({ "done": c }), true), ai_hosts::WorkMsg::Error(e) => (json!({ "error": e }), true) };
+                            // the JavaScript hub hung up on the run: the host is told to stop it
+                            if tx.send(line(v)).await.is_err() { ai.cancel_work(&id); return; }
+                            if end { return; }
+                        }
+                    });
+                }
+            }
+            Routed::Answer(hyper::Response::builder().status(200).header("content-type", "application/x-ndjson").header("cache-control", "no-store").body(stream_body(rx)).expect("response"))
+        }
+        "cancel" => { ai.cancel_work(r.json()["id"].as_str().unwrap_or("")); answer(200, json!({ "ok": true })) }
+        "pc-tool" => {
+            let b = r.json();
+            match ai.pc_tool(b["host"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""), &if b["args"].is_object() { b["args"].clone() } else { json!({}) }).await {
+                Ok(v) => answer(200, json!({ "result": v })),
+                Err(e) => answer(200, json!({ "error": e.msg })),
+            }
+        }
+        _ => answer(404, json!({ "ok": false, "error": "unknown" })),
+    }
 }
 
 async fn board_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
@@ -290,4 +429,4 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
 pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts") }
 
 /// The modules this front answers itself.
-pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files"] }
+pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts"] }

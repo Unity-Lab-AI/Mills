@@ -73,6 +73,9 @@ impl HostKey {
         let salt = hex::decode(format!("{host_nonce_hex}{server_nonce_hex}")).map_err(|_| Error::msg("the nonces must be hex"))?;
         Ok(HostKey { key: hkdf32(secret.as_bytes(), &salt, b"viberoller-ai-host-v1") })
     }
+    /// The key itself, hex (the hub keeps a host's session across its restarts: bridge/ai-host-sessions.json).
+    pub fn to_hex(&self) -> String { hex::encode(self.key) }
+    pub fn from_hex(h: &str) -> Option<Self> { let b = hex::decode(h).ok()?; Some(HostKey { key: b.try_into().ok()? }) }
     /// "vr-" + the first 24 hex characters of sha256(key): both sides compare it after the handshake.
     pub fn id(&self) -> String { format!("vr-{}", &sha256_hex(&self.key)[..24]) }
     pub fn seal(&self, value: &serde_json::Value) -> Result<Envelope> {

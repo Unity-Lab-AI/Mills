@@ -731,7 +731,8 @@ function agentHear(msg) {
 // AI nodes (bridge/ai-nodes.js): machines lending Unity's local engines to this hub when it runs elsewhere
 // the native programs' pre-built, signed binaries (native/dist, bridge/native-releases.js): AI host updates + Downloads
 const nativeReleases = require('./native-releases')({ ROOT, MILLS_DIR, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }) });
-const aiNodes = require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }), nativeReleases });
+// the AI hosts: here (bridge/ai-nodes.js), or in the Rust hub in front when it runs them (bridge/ai-nodes-front.js: the same calls)
+const aiNodes = FRONT_MODS.has('aihosts') ? require('./ai-nodes-front')({ ROOT, config, port: config.port, secret: FRONT_SECRET, log: (m) => console.log(m) }) : require('./ai-nodes')({ ROOT, config, send: (...a) => send(...a), readBody: (r) => readBody(r), readJson, writeJson, accounts, log: (m) => console.log(m), onUsage: usage.noteWindows, savedUsage: usage.windows, release: () => ({ version: VERSIONS.project, commit: RUNNING_COMMIT }), nativeReleases });
 const assistant = require('./assistant')({ config, ROOT, MILLS_DIR, readJson, writeJson, send, readBody, accounts, INTERNAL_SECRET, onIdle: () => setTimeout(maybeRestart, 300), aiNodes });
 const anyBusy = () => [...accounts.values()].some((a) => a.running) || !!agent.running || assistant.busy() || openai.busy();
 // Team notes (bridge/notes.js): markdown files in folders under VibeRoller/Notes, for people (/api/notes*) and Claude (notes_* tools).
@@ -864,7 +865,15 @@ async function handleRequest(req, res) {
     }
     // The same tools for a Work run that runs ON AN AI HOST (Claude Code on Gee's PC for the hub on the server): the
     // host's MCP relays call /node/job/<job id>/internal/<tool> with the job's own token, good for that one run only.
+    // the Rust hub in front (its AI hosts module): what the hosts offer now, and a host's usage windows as they come
+    if (p === '/internal/front/hosts-state' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); aiNodes.setState && aiNodes.setState(await readBody(req, 8 << 20)); return send(res, 200, { ok: true }); }
+    if (p === '/internal/front/usage-windows' && req.method === 'POST') { if (!fromFront(req)) return send(res, 403, { ok: false }); const b = await readBody(req, 65536); if (/^h:[^/]+\/[a-z0-9-]+$/.test(String(b.source || ''))) usage.noteWindows(String(b.source), b.windows || {}); return send(res, 200, { ok: true }); }
     const nj = /^\/node\/job\/([A-Za-z0-9_-]+)\/internal\/(pc-tool|board|team)$/.exec(p);
+    if (nj && FRONT_MODS.has('aihosts')) { // the front checked the job's token and names its account
+      const account = fromFront(req) ? String(req.headers['x-vr-front-job-account'] || '') : '';
+      if (!USERNAME_RE.test(account)) return send(res, 403, { ok: false, error: 'forbidden' });
+      return internalTool(nj[2], req, res, account);
+    }
     if (nj) {
       const job = aiNodes.jobFor(nj[1], req.headers['x-mills-internal']);
       if (!job) return send(res, 403, { ok: false, error: 'forbidden' });
