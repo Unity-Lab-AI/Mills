@@ -836,20 +836,28 @@ async function run() {
     `key ${made.key ? 'made' : 'none'}, models ${models.status}, chat ${chat1.status} "${c1text.slice(0, 60)}", stream ${stream1.status} ${chunks.length} chunks, calls ${afterUse.calls}, rotate ${oldDead.status}/${newLive.status}, revoke ${afterRevoke.status}`);
 
   // AI providers (bridge/providers.js): a person's own Claude login / key / OpenAI endpoint, private or shared; the host's Claude untouched.
-  const prov0 = (await call('/api/providers', U)).data;
-  const badKind = await call('/api/providers/add', U, { kind: 'magic', label: 'x' });
-  const badAnth = await call('/api/providers/add', U, { kind: 'anthropic', label: 'bad', apiKey: 'nope' });
+  // (a custom endpoint or a Claude config folder: only an admin with an AI host of their own online, 4.1.0; so the admin
+  // owns these here, with a host of theirs saying hello for the moment, and t-user is the other person)
+  const prov0 = (await call('/api/providers', A)).data;
+  const badKind = await call('/api/providers/add', A, { kind: 'magic', label: 'x' });
+  const badAnth = await call('/api/providers/add', A, { kind: 'anthropic', label: 'bad', apiKey: 'nope' });
   const cfgDir = path.join(SCRATCH, 'claude-sponge-login');
-  const cli = (await call('/api/providers/add', U, { kind: 'claude-cli', label: 'Tuser Claude login', configDir: cfgDir, shared: false })).data;
-  const oai = (await call('/api/providers/add', U, { kind: 'openai', label: 'Tuser endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt, fake-mini', shared: true })).data;
-  const seenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
-  const secretLeak = JSON.stringify((await call('/api/providers', U)).data).includes('"apiKey"');
-  const pickCli = await call('/api/model', U, { provider: cli.provider.id, model: 'claude-sonnet-5-5' });
-  const cliRun = await chat(U, 'who runs me', { fresh: true });
-  const ck7 = (await call('/api/check', U)).data;
-  const pickOai = await call('/api/model', U, { provider: oai.provider.id, model: 'fake-gpt' });
-  const useOai = (await call('/api/apikey/rotate', U, {})).data;
-  const setOai = await call('/api/apikey/settings', U, { provider: oai.provider.id, model: 'fake-mini' });
+  const cliNoHost = await call('/api/providers/add', A, { kind: 'claude-cli', label: 'no host yet', configDir: cfgDir });
+  const tmpHost = (await call('/api/hosts/new', A, {})).data.host || {}, tmpCfg = (await call('/api/hosts/config', A, { id: tmpHost.id })).data.config || {};
+  await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': tmpHost.id, 'X-VR-Host-Token': tmpCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+  const cliNotAdmin = await call('/api/providers/add', U, { kind: 'claude-cli', label: 'Tuser Claude login', configDir: cfgDir });
+  const oaiNotAdmin = await call('/api/providers/add', U, { kind: 'openai', label: 'Tuser endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, models: 'fake-gpt' });
+  const cli = (await call('/api/providers/add', A, { kind: 'claude-cli', label: 'Tadmin Claude login', configDir: cfgDir, shared: false })).data;
+  const oai = (await call('/api/providers/add', A, { kind: 'openai', label: 'Tadmin endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt, fake-mini', shared: true })).data;
+  await call('/api/hosts/remove', A, { id: tmpHost.id });
+  const seenByU = (await call('/api/providers', U)).data.providers.map((p) => p.id);
+  const secretLeak = JSON.stringify((await call('/api/providers', A)).data).includes('"apiKey"');
+  const pickCli = await call('/api/model', A, { provider: cli.provider.id, model: 'claude-sonnet-5-5' });
+  const cliRun = await chat(A, 'who runs me', { fresh: true });
+  const ck7 = (await call('/api/check', A)).data;
+  const pickOai = await call('/api/model', A, { provider: oai.provider.id, model: 'fake-gpt' });
+  const useOai = (await call('/api/apikey/rotate', A, {})).data;
+  const setOai = await call('/api/apikey/settings', A, { provider: oai.provider.id, model: 'fake-mini' });
   const oaiModels = await v1('/v1/models', useOai.key);
   const oaiChat = await v1('/v1/chat/completions', useOai.key, { model: 'fake-gpt', messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'through-r112' }] });
   const oaiText = ((((JSON.parse(oaiChat.text || '{}').choices || [])[0] || {}).message || {}).content) || '';
@@ -867,23 +875,23 @@ async function run() {
   const antNoKey = await v1('/v1/messages', null, { messages: [{ role: 'user', content: 'x' }] }, { 'anthropic-version': '2023-06-01' });
   const antEmpty = await v1('/v1/messages', null, { max_tokens: 5, messages: [] }, antHdr);
   const oaiXKey = await v1('/v1/chat/completions', null, { model: 'fake-gpt', messages: [{ role: 'user', content: 'xkey-r160' }] }, { 'x-api-key': useOai.key });
-  const otherTouch = await call('/api/providers/update', A, { id: cli.provider.id, shared: true });
-  const shareIt = await call('/api/providers/update', U, { id: cli.provider.id, shared: true });
-  const nowSeenByA = (await call('/api/providers', A)).data.providers.map((p) => p.id);
-  const rmOther = await call('/api/providers/remove', A, { id: cli.provider.id });
-  const rm = await call('/api/providers/remove', U, { id: cli.provider.id });
-  const ck7b = (await call('/api/check', U)).data;
-  await call('/api/providers/remove', U, { id: oai.provider.id }); await call('/api/apikey/revoke', U, {}); await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' });
-  check('R112', 'AI providers: the host Claude is always listed; a person adds a Claude Code login (own folder) and an OpenAI endpoint (private or shared; bad kind / key refused; secrets never listed); a private one is invisible to others; picking the login runs Work with CLAUDE_CONFIG_DIR set and that model; an OpenAI provider is refused for Work; the API key answers through the endpoint provider (plain + streaming, system passed); only the owner shares / removes; removal clears the person\'s choice',
+  const otherTouch = await call('/api/providers/update', U, { id: cli.provider.id, shared: true });
+  const shareIt = await call('/api/providers/update', A, { id: cli.provider.id, shared: true });
+  const nowSeenByU = (await call('/api/providers', U)).data.providers.map((p) => p.id);
+  const rmOther = await call('/api/providers/remove', U, { id: cli.provider.id });
+  const rm = await call('/api/providers/remove', A, { id: cli.provider.id });
+  const ck7b = (await call('/api/check', A)).data;
+  await call('/api/providers/remove', A, { id: oai.provider.id }); await call('/api/apikey/revoke', A, {}); await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+  check('R112', 'AI providers: the host Claude is always listed; an admin with an AI host of their own online adds a Claude Code login (own folder) and an OpenAI endpoint (private or shared; bad kind / key refused; without a host of theirs online, or not an admin → refused; secrets never listed); a private one is invisible to others; picking the login runs Work with CLAUDE_CONFIG_DIR set and that model; an OpenAI provider is refused for Work; the API key answers through the endpoint provider (plain + streaming, system passed); only the owner shares / removes; removal clears the person\'s choice',
     // (the test AI host's own providers, "h:…", are listed too: they survive the early hub restart since 3.3.0)
-    prov0.providers.filter((p) => !String(p.id).startsWith('h:')).length === 1 && prov0.providers[0].id === 'host' && badKind.status === 400 && badAnth.status === 400 && cli.provider && oai.provider && !secretLeak
-    && !seenByA.includes(cli.provider.id) && seenByA.includes(oai.provider.id)
+    prov0.providers.filter((p) => !String(p.id).startsWith('h:')).length === 1 && prov0.providers[0].id === 'host' && badKind.status === 400 && badAnth.status === 400 && cliNoHost.status === 400 && cliNotAdmin.status === 400 && oaiNotAdmin.status === 400 && cli.provider && oai.provider && !secretLeak
+    && !seenByU.includes(cli.provider.id) && seenByU.includes(oai.provider.id)
     && pickCli.status === 200 && pickCli.data.provider === cli.provider.id && new RegExp('cfg=' + cfgDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(texts(cliRun.events)) && /model=claude-sonnet-5-5/.test(texts(cliRun.events)) && ck7.provider === cli.provider.id && (ck7.providers || []).some((p) => p.id === cli.provider.id)
     && pickOai.status === 400 && setOai.status === 200 && setOai.data.provider === oai.provider.id && oaiModels.status === 200 && /fake-mini/.test(oaiModels.text)
     && oaiChat.status === 200 && /^oai says: through-r112 \[sys 3\]/.test(oaiText) && /flow-r112/.test(oaiStreamed)
-    && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByA.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
+    && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByU.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
     && /id="provBox"/.test(html) && /\/api\/providers\/add/.test(html) && /o\.value = p\.id \+ '\|' \+ m/.test(html),
-    `providers at start ${prov0.providers.map((p) => p.id).join(',')}; cli ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
+    `providers at start ${prov0.providers.map((p) => p.id).join(',')}; refused no-host ${cliNoHost.status} not-admin ${cliNotAdmin.status}/${oaiNotAdmin.status}; cli ${cli.provider ? 'made' : JSON.stringify(cli).slice(0, 120)} ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });
@@ -2143,6 +2151,11 @@ async function run() {
     await sleep(300);
     const oldProv = ((await call('/api/check', U)).data.providers || []).find((p) => p.id === 'h:old-node/claude') || {};
     const newProv = ((await call('/api/check', U)).data.providers || []).find((p) => p.id === 'h:test-node/claude') || {};
+    // its Work would run on t-admin's computer: never for anyone else (4.1.0)
+    await call('/api/model', U, { provider: 'h:old-node/claude', model: 'claude-haiku-5-5' });
+    const notOwnerRun = await chat(U, 'run on their computer', { fresh: true });
+    const notOwnerErr = (notOwnerRun.events.find((e) => e.type === 'bridge_error') || {}).text || '';
+    await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' });
     // updates: a signed manifest of the host's files as the hub runs them, and the files themselves
     const th = { 'X-VR-Host': 'test-node', 'X-VR-Host-Token': NODE_SECRET };
     const manR = await fetch(H + '/node/update', { headers: th }), man = await manR.json().catch(() => ({}));
@@ -2170,11 +2183,12 @@ async function run() {
     const nodeSrc152 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8'), bat = fs.readFileSync(path.join(BRIDGE, 'start-node.bat'), 'utf8'), nsh = fs.readFileSync(path.join(BRIDGE, 'start-node.sh'), 'utf8');
     check('R152', 'older AI hosts keep working: a 2.x host (no caps, its Claude as claude-cli) is asked once with a relay job to an address nobody forwards, answers 404 "does not lend", and from then on its Claude runs Work the old way (claude-cli-work) instead of failing; a current host says it can relay + update and is not probed; hosts update from the hub: GET /node/update is a manifest of the host files (sha256) signed with that host\'s own secret, each file is served byte-exact, nothing else is (config, ../) and nobody else gets it (401); the host tries a new version with --selftest before swapping, keeps a backup, puts it back after 3 starts that never reach the hub, never swaps launchers, and "autoUpdate": false switches it off; the launchers start the host again on exit 3 (update) and after a crash',
       oldHello.status === 200 && oldHelloJ.update && typeof oldHelloJ.update.version === 'string' && /^relay:claude \/v1\/__viberoller_probe$/.test(probed) && oldProv.remoteKind === 'claude-cli-work' && newProv.remoteKind === 'claude-relay'
+      && /only its owner may work on that computer/.test(notOwnerErr)
       && manR.status === 200 && sigOk && fileOk && notHost === 404 && sneaky === 404 && anon === 401 && selfT.status === 0 && /selftest: .* loads/.test(selfT.stdout)
       && upd.swapped && upd.trial && upd.backup && upd.confirmed
       && /CAPS = \['relay', 'update'\]/.test(nodeSrc152) && /cfg\.autoUpdate !== false/.test(nodeSrc152) && /t\.starts <= 3/.test(nodeSrc152) && /selftest\(UPD\.stage\)/.test(nodeSrc152) && /timingSafeEqual\(got, want\)/.test(nodeSrc152)
       && /if errorlevel 3 goto run/.test(bat) && /if errorlevel 4 goto crashed/.test(bat) && /3\) ;;/.test(nsh) && /sleep 10/.test(nsh),
-      `old hello ${oldHello.status} probed "${probed}" old ${oldProv.remoteKind} new ${newProv.remoteKind}; manifest ${manR.status} sig ${sigOk} files ${(man.files || []).map((f) => f.name).join(',')}; file ${fileR.status} ok ${fileOk}; other ${notHost}/${sneaky} anon ${anon}; selftest ${selfT.status} "${String(selfT.stdout || selfT.stderr).trim().slice(0, 120)}"; self-update ${JSON.stringify(upd)}`);
+      `old hello ${oldHello.status} probed "${probed}" old ${oldProv.remoteKind} new ${newProv.remoteKind}; not owner "${notOwnerErr.slice(0, 80)}"; manifest ${manR.status} sig ${sigOk} files ${(man.files || []).map((f) => f.name).join(',')}; file ${fileR.status} ok ${fileOk}; other ${notHost}/${sneaky} anon ${anon}; selftest ${selfT.status} "${String(selfT.stdout || selfT.stderr).trim().slice(0, 120)}"; self-update ${JSON.stringify(upd)}`);
 
     // R157: the heart & knife control app (bridge/vr-host.js) and what the host does for it
     {

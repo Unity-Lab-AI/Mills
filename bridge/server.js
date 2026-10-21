@@ -242,6 +242,10 @@ function runClaude(acct, message, fresh, res, context, preWm = null) {
   if ((prov.kind === 'host' || prov.kind === 'claude-cli') && !aiHostOn()) return fail(AI_OFF_TEXT); // the host paused its AI (an Anthropic key of your own still works)
   if (prov.kind === 'host-claude' && !aiNodes.hostOnline(prov.hostId)) return fail(`${prov.nickname}${prov.owner ? ` (${nameOf(prov.owner)}'s AI host)` : ''} is offline right now. Pick another AI in the dropdown, or wait for it.`);
   if (prov.kind === 'host-claude' && prov.capped) return fail(`${prov.nickname}: ${prov.capped}. Pick another AI or wait for the window to reset.`);
+  // an older host (no relay) would run the whole Work run on its own computer: only its owner may touch that computer
+  if (prov.kind === 'host-claude' && prov.remoteKind === 'claude-cli-work' && prov.owner !== acct.username) {
+    return fail(`${prov.nickname} is an older AI host that would run Work on ${prov.owner ? nameOf(prov.owner) + "'s" : 'its own'} computer, and only its owner may work on that computer. Pick another AI in the dropdown, or ask them to update the host (then Work runs here and only its AI is used).`);
+  }
   const source = prov.kind === 'host' ? 'hub' : prov.kind === 'host-claude' ? prov.id : ''; // whose usage windows this run moves
   // a Claude session lives where it ran (relayed runs run here, on this hub)
   const where = prov.kind === 'host-claude' && prov.remoteKind === 'claude-cli-work' ? prov.hostId : 'hub';

@@ -339,7 +339,7 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
       const serverNonce = crypto.randomBytes(16).toString('hex');
       n.key = derive(r.secret, hostNonce, serverNonce); n.kid = keyId(n.key);
       const caps = (Array.isArray(b.caps) ? b.caps : []).map(String).filter((c) => /^[a-z-]{1,20}$/.test(c)).slice(0, 20);
-      n.hello = { at: Date.now(), nickname: r.nickname, user: r.user || String(b.user || ''), providers: cleanProviders(b.providers), engines: (Array.isArray(b.engines) ? b.engines : Object.keys(b.engines || {})).filter((e) => ENGINES.includes(e)), version: String(b.version || '').slice(0, 20), os: String(b.os || '').slice(0, 20), pc: b.pc === true && !!(r.user || /^[a-z0-9-]{1,32}$/.test(String(b.user || ''))), caps };
+      n.hello = { at: Date.now(), nickname: r.nickname, user: r.user || String(b.user || ''), providers: cleanProviders(b.providers), engines: (Array.isArray(b.engines) ? b.engines : Object.keys(b.engines || {})).filter((e) => ENGINES.includes(e)), version: String(b.version || '').slice(0, 20), os: String(b.os || '').slice(0, 20), pc: b.pc === true && !!r.user, caps }; // its computer only for the owner it is registered to (4.1.0)
       n.relayOk = {}; saveSessions();
       log(`[ai-host] ${r.nickname} (${n.hello.user || 'no owner'}) connected: ${n.hello.providers.length} provider(s), engines ${n.hello.engines.join(', ') || 'none'}, key ${n.kid}${caps.length ? ', can ' + caps.join(' ') : ', an older host'}`);
       // extra fields are safe: every host so far reads only the ones it knows

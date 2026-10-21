@@ -7,6 +7,25 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 4.1.0 — 2026-10-21
+
+### Security: only Gee works on Gee's computer (Sponge's decisions on the T-135 assessment)
+- **An AI host's computer is only for its owner.** PC tools reach a host only when the hub registered it to that
+  person (Settings → My AI hosts, or "Run on this PC" in the native app), never for the name a host says it belongs to
+  in its hello (an older config-listed host could name anyone). PC tools elsewhere are unchanged: Work on the server,
+  the native app working on your own computer, the browser's open folder.
+- **An older AI host (no relay) would run a whole Work run on its own computer:** that is now refused for anyone but its
+  owner, with a message saying why (its AI through the API is unchanged: a sandboxed answer, no tools). A current host
+  only lends its AI; the run happens on the server.
+- **A custom endpoint (`openai`) or a Claude config folder on the hub's machine (`claude-cli`)** can be added only by an
+  admin signed in on an AI host of their own (online then), and counts only while its owner is an admin. An Anthropic
+  API key works for everyone, as before.
+- Both hubs (the JavaScript fallback too).
+
+### Tests
+- R112 (providers: the admin with a host of theirs makes them; no host / not an admin → refused), R152 (Work on an
+  older host's computer → refused for others).
+
 ## 4.0.0 — 2026-10-21
 
 **MAJOR: the Rust hub is the hub** (board T-134, item 4). Every request is answered by `vr-hub` now; the JavaScript

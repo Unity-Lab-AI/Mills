@@ -64,6 +64,12 @@ module.exports = function createProviders({ ROOT, MILLS_DIR, config, readJson, w
     if (!KINDS.includes(kind)) throw new Error('kind must be anthropic, claude-cli or openai.');
     const label = String(body.label || '').trim().slice(0, 60);
     if (!label) throw new Error('Give it a label.');
+    // a custom endpoint (the hub calls whatever address it names) or a Claude config folder on this machine: only admins
+    // signed in on an AI host of their own (4.1.0)
+    if (kind !== 'anthropic') {
+      const a = accounts && accounts.get(user), hosts = aiNodes && typeof aiNodes.status === 'function' ? aiNodes.status() : [];
+      if (!a || !a.admin || !hosts.some((h) => h.user === user && h.online)) throw new Error('A custom endpoint or a Claude config folder is for admins signed in on an AI host of their own (Settings → My AI hosts). An Anthropic API key works for everyone.');
+    }
     const p = { id: 'p-' + crypto.randomBytes(5).toString('hex'), kind, label, owner: user, shared: !!body.shared, createdAt: new Date().toISOString(), models: [] };
     if (kind === 'anthropic') {
       p.apiKey = String(body.apiKey || '').trim();

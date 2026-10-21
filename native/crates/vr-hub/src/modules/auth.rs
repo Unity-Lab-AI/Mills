@@ -26,6 +26,12 @@ const BLOCK_MS: u64 = 15 * 60 * 1000;
 
 #[derive(Clone, Debug)]
 pub struct Account { pub username: String, pub dir: PathBuf, pub admin: bool, pub display: String }
+/// An account's admin flag from its config.json (the default account's: bridge/config.json), without the whole list.
+pub fn admin_in(root: &std::path::Path, default_user: &str, user: &str) -> bool {
+    if user.is_empty() { return false; }
+    let f = if user == default_user { root.join("config.json") } else if valid_username(user) { root.join("profiles").join(user).join("config.json") } else { return false };
+    read_json(&f).map(|c| c["admin"].as_bool() == Some(true)).unwrap_or(false)
+}
 
 #[derive(Default)]
 struct Fail { count: u32, blocked_until: u64, inflight: u32, at: u64 }
@@ -85,6 +91,8 @@ impl Auth {
     fn save_sessions(&self) { write_json(&self.sessions_file(), &json!({ "sessions": Value::Object(self.sessions.lock().unwrap().clone()), "sessionsHashed": true })); }
     fn save_locks(&self) { write_json(&self.locks_file(), &Value::Object(self.locks.lock().unwrap().clone())); }
 
+    /// Is that account an admin? (what accounts() says, for one name)
+    pub fn is_admin(&self, user: &str) -> bool { admin_in(&self.root, &self.default_user, user) }
     /// The accounts, as the JavaScript hub sees them: the default one (bridge/ itself) and every profile with a
     /// config.json or an auth.json.
     pub fn accounts(&self) -> Vec<Account> {

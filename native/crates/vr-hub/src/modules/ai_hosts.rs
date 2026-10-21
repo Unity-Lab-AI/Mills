@@ -194,6 +194,11 @@ impl AiHosts {
         let mut v = self.prov_view_locked(&r, hid, n, &p); v["id"] = json!(pid); Some(v)
     }
     /// The person's own AI host that offers their computer (the native app's "pc"), when it is online.
+    /// Is one of this person's own AI hosts connected right now? (registered to them by the hub, as for PC tools: never
+    /// the name a host says hello with)
+    pub fn owns_online_host(&self, user: &str) -> bool {
+        !user.is_empty() && self.all_records().iter().any(|r| r["user"].as_str() == Some(user) && self.online(r["id"].as_str().unwrap_or("")))
+    }
     pub fn pc_host_for(&self, user: &str) -> Option<String> {
         if user.is_empty() { return None; }
         for r in self.all_records() {
@@ -411,7 +416,9 @@ impl AiHosts {
                 let engines: Vec<String> = match &b["engines"] { Value::Array(a) => a.iter().filter_map(|e| e.as_str().map(String::from)).collect(), Value::Object(m) => m.keys().cloned().collect(), _ => vec![] };
                 let engines: Vec<String> = engines.into_iter().filter(|e| ENGINES.contains(&e.as_str())).collect();
                 let user = { let u = r["user"].as_str().unwrap_or(""); if u.is_empty() { b["user"].as_str().unwrap_or("").to_string() } else { u.to_string() } };
-                let pc = b["pc"] == json!(true) && (!r["user"].as_str().unwrap_or("").is_empty() || (!user.is_empty() && user.len() <= 32 && user.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')));
+                // its computer (PC tools) only for the owner the hub registered it to (Settings → My AI hosts / "Run on
+                // this PC"), never for a name a host says it belongs to: only Gee works on Gee's computer
+                let pc = b["pc"] == json!(true) && !r["user"].as_str().unwrap_or("").is_empty();
                 let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"]), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps });
                 let kid = key.id();
                 { let mut live = self.live.lock().unwrap(); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }

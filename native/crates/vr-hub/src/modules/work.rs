@@ -101,7 +101,13 @@ impl Work {
     // ---------- providers (bridge/providers.js, read here) ----------
     fn hub_claude(&self) -> bool { self.cfg.get("hubClaude") != Some(&json!(false)) }
     fn host_entry(&self) -> Value { json!({ "id": "host", "kind": "host", "label": "Host Claude (default)", "owner": "", "shared": true, "models": self.model_ids() }) }
-    fn own_providers(&self) -> Vec<Value> { read_json(&self.root.join("providers.json")).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default() }
+    /// bridge/providers.json; a custom endpoint (openai) or a Claude config folder on this machine (claude-cli) counts
+    /// only while its owner is an admin (only admins with an AI host of their own may make one: openai.rs)
+    fn own_providers(&self) -> Vec<Value> {
+        let def = self.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string();
+        read_json(&self.root.join("providers.json")).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default().into_iter()
+            .filter(|p| !super::openai::admin_only(p) || super::auth::admin_in(&self.root, &def, p["owner"].as_str().unwrap_or(""))).collect()
+    }
     pub fn provider_get(&self, ai: &super::ai_hosts::AiHosts, id: &str, user: &str) -> Option<Value> {
         if id.is_empty() || id == "host" { return if self.hub_claude() { Some(self.host_entry()) } else { None }; }
         if id.starts_with("h:") { return ai.provider(id, user); }
@@ -298,6 +304,10 @@ async fn chat(hub: &Arc<Hub>, a: &Account, r: &Req) -> Routed {
     let host_id = s(&prov, "hostId"); let prov_id = s(&prov, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default();
     if kind == "host-claude" && !ai.online(&host_id) { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI host)", hub.mods.name_of(&owner)) }) })); }
     if kind == "host-claude" && !s(&prov, "capped").is_empty() { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}: {}. Pick another AI or wait for the window to reset.", s(&prov, "capped")) })); }
+    // an older host (no relay) would run the whole Work run on its own computer: only its owner may touch that computer
+    if kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work" && owner != a.username {
+        return one_line(json!({ "type": "bridge_error", "text": format!("{nick} is an older AI host that would run Work on {} computer, and only its owner may work on that computer. Pick another AI in the dropdown, or ask them to update the host (then Work runs here and only its AI is used).", if owner.is_empty() { "its own".to_string() } else { format!("{}'s", hub.mods.name_of(&owner)) }) }));
+    }
     let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else { String::new() };
     // a Claude session lives where it ran (relayed runs run here, on this hub)
     let wher = if kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work" { host_id.clone() } else { "hub".to_string() };

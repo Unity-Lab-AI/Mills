@@ -101,7 +101,12 @@ fn pub_view(p: &Value) -> Value {
     for k in ["baseUrl", "configDir"] { if !s(p, k).is_empty() { v[k] = p[k].clone(); } }
     v
 }
+/// A custom endpoint (this hub calls whatever address it names) or a Claude config folder on this machine: admins only.
+pub fn admin_only(p: &Value) -> bool { matches!(p["kind"].as_str(), Some("openai") | Some("claude-cli")) }
 fn add_provider(hub: &Hub, user: &str, b: &Value) -> Result<Value, String> {
+    if admin_only(b) {
+        if !hub.mods.auth.is_admin(user) || !hub.mods.ai.owns_online_host(user) { return Err("A custom endpoint or a Claude config folder is for admins signed in on an AI host of their own (Settings → My AI hosts). An Anthropic API key works for everyone.".into()); }
+    }
     let kind = s(b, "kind");
     if !["anthropic", "claude-cli", "openai"].contains(&kind.as_str()) { return Err("kind must be anthropic, claude-cli or openai.".into()); }
     let label: String = s(b, "label").trim().chars().take(60).collect();
