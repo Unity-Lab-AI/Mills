@@ -67,15 +67,16 @@ pub fn set_boot(f: &Folder, mode: &str) -> Vec<String> {
                 return lines;
             }
             let _ = run("reg", &["delete", RUN_KEY, "/v", "VibeRoller AI Host", "/f"]);
-            if svc.exists { let _ = run("sc", &["stop", SVC]); std::thread::sleep(std::time::Duration::from_secs(2)); let _ = run("sc", &["delete", SVC]); std::thread::sleep(std::time::Duration::from_secs(1)); }
+            if svc.exists { remove_service(); }
             // the service runs as LocalSystem; the logins it lends are this person's (their profile folder is passed on)
             let bin = format!("\"{exe}\" service-run --config \"{}\" --home \"{}\"", f.config.display(), home().display());
             let (ok, out) = run("sc", &["create", SVC, "binPath=", &bin, "start=", "auto", "DisplayName=", "VibeRoller AI Host", "obj=", "LocalSystem"]);
             if !ok { lines.push(format!("Could not create the service: {}", out.trim().lines().last().unwrap_or(""))); return lines; }
             let _ = run("sc", &["description", SVC, "Lends this PC's AI (its Claude / ChatGPT login, local models, Unity's engines) to the VibeRoller hub, never the computer itself. Starts at boot."]);
             let _ = run("sc", &["failure", SVC, "reset=", "86400", "actions=", "restart/5000/restart/10000/restart/30000"]);
-            // signed-in users (not only administrators) may start and stop it: what the heart and the knife do
-            let _ = run("sc", &["sdset", SVC, "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPWPDTLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)"]);
+            // signed-in users (not only administrators) may start and stop it: what the heart and the knife do (the access
+            // list only: an audit part would need a privilege an elevated prompt does not have switched on)
+            let _ = run("sc", &["sdset", SVC, "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPWPDTLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"]);
             let (ok, _) = run("sc", &["start", SVC]);
             lines.push(if ok { "The VibeRollerAIHost service is installed, running, and starts at every boot. Log: ai-node.log".into() } else { "The service is installed; it starts at the next boot (or: sc start VibeRollerAIHost).".into() });
             let _ = args;
@@ -83,7 +84,7 @@ pub fn set_boot(f: &Folder, mode: &str) -> Vec<String> {
             if svc.exists {
                 #[cfg(windows)]
                 if !crate::winsys::is_admin() { lines.push("Windows asks for administrator rights once to remove the service …".into()); let _ = crate::winsys::run_elevated(&exe, &format!("boot {mode} --config \"{}\"", f.config.display())); return lines; }
-                let _ = run("sc", &["stop", SVC]); let _ = run("sc", &["delete", SVC]); lines.push("The service is removed.".into());
+                remove_service(); lines.push("The service is removed.".into());
             }
             if mode == "sign-in" {
                 let cmd = format!("\"{}\" {}", hostw(&exe), args.iter().map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a.clone() }).collect::<Vec<_>>().join(" "));
@@ -124,6 +125,15 @@ pub fn set_boot(f: &Folder, mode: &str) -> Vec<String> {
         }
     }
     lines
+}
+/// Stops the Windows service, waits until it has stopped (the host finishes what is in flight, up to a few seconds),
+/// deletes it and waits until it is gone: a service only marked for deletion cannot be made again (error 1072).
+fn remove_service() {
+    let wait = |done: &dyn Fn() -> bool, secs: u64| { for _ in 0..secs * 4 { if done() { return; } std::thread::sleep(std::time::Duration::from_millis(250)); } };
+    let _ = run("sc", &["stop", SVC]);
+    wait(&|| { let (ok, out) = run("sc", &["query", SVC]); !ok || out.contains("STOPPED") }, 20);
+    let _ = run("sc", &["delete", SVC]);
+    wait(&|| !run("sc", &["query", SVC]).0, 15);
 }
 /// The window-less starter next to this program on Windows (vr-hostw.exe), else this program.
 pub fn hostw(exe: &str) -> String {
@@ -184,18 +194,15 @@ pub fn log_tail(f: &Folder, n: usize) -> Vec<String> {
 pub fn lockdown(f: &Folder) -> String {
     if !f.config.exists() { return "No ai-node.json here yet.".into(); }
     if !WIN { vr_core::settings::private(&f.config); return "ai-node.json: readable by you only.".into(); }
-    let me = std::env::var("USERNAME").unwrap_or_default();
-    let c = f.config.display().to_string();
-    let (ok, out) = run("icacls", &[&c, "/inheritance:r", "/grant:r", &format!("{me}:F"), "SYSTEM:F", "Administrators:F"]);
-    if ok { "ai-node.json: only you, SYSTEM (the service) and Administrators may read it.".into() } else { format!("Could not change its permissions: {}", out.trim().lines().last().unwrap_or("")) }
+    #[cfg(windows)]
+    { match vr_core::settings::win_lock(&f.config) { Ok(()) => "ai-node.json: only you, SYSTEM (the service) and Administrators may read it.".into(), Err(e) => format!("Could not change its permissions: {e}") } }
+    #[cfg(not(windows))]
+    { String::new() }
 }
 /// Is the config locked down? (Linux: no group / other bits; Windows: no "Users" / "Everyone" entry in its ACL.)
 pub fn config_private(f: &Folder) -> Option<bool> {
     if !f.config.exists() { return None; }
-    if !WIN { return Some(!vr_core::settings::readable_by_others(&f.config)); }
-    let (ok, out) = run("icacls", &[&f.config.display().to_string()]);
-    if !ok { return None; }
-    Some(!["BUILTIN\\Users", "Everyone", "Authenticated Users"].iter().any(|w| out.contains(w)))
+    Some(!vr_core::settings::readable_by_others(&f.config))
 }
 
 /// Everything the dashboard shows, in one read.

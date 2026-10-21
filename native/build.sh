@@ -67,6 +67,8 @@ case "${1:-all}" in
       [ -d "target/$T/release" ] || continue
       rm -rf "dist/.next-$T"; mkdir -p "dist/.next-$T"
       for b in vr-host vr-hostw vr-desktop vr-hub; do for f in "target/$T/release/$b" "target/$T/release/$b.exe"; do [ -f "$f" ] && cp "$f" "dist/.next-$T/"; done; done
+      # Windows: the desktop app loads WebView2Loader.dll from its own folder (the windows-gnu build cannot link it in)
+      [ -f "target/$T/release/WebView2Loader.dll" ] && cp "target/$T/release/WebView2Loader.dll" "dist/.next-$T/"
       printf '{"version":"%s","commit":"%s","target":"%s","builtAt":"%s"}\n' "${VR_VERSION:-}" "${VR_COMMIT:-}" "$T" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "dist/.next-$T/BUILD.json"
       (cd "dist/.next-$T" && for f in *; do case "$f" in SHA256SUMS|BUILD.json|'*') ;; *) sha256sum "$f";; esac; done > SHA256SUMS)
       rm -rf "dist/.old-$T"; [ -d "dist/$T" ] && mv "dist/$T" "dist/.old-$T"; mv "dist/.next-$T" "dist/$T"; rm -rf "dist/.old-$T"

@@ -18,7 +18,9 @@ pub fn install() -> Result<String, String> {
     let target = standard();
     if installed_here() { return Ok(format!("VibeRoller Desktop is installed in {} (this copy).", target.display())); }
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-    let names: &[&str] = if cfg!(windows) { &["vr-desktop.exe", "vr-host.exe", "vr-hostw.exe", "README.txt", "VERSION.txt"] } else { &["vr-desktop", "vr-host", "vr-hostw", "README.txt", "VERSION.txt"] };
+    // (Windows: WebView2Loader.dll too, which the app loads from its own folder; a loaded one can be renamed, so the
+    // running app's copy steps aside as .old like the program does)
+    let names: &[&str] = if cfg!(windows) { &["vr-desktop.exe", "WebView2Loader.dll", "vr-host.exe", "vr-hostw.exe", "README.txt", "VERSION.txt"] } else { &["vr-desktop", "vr-host", "vr-hostw", "README.txt", "VERSION.txt"] };
     for n in names {
         let src = here.join(n); if !src.exists() { continue; }
         let dst = target.join(n);

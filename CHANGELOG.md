@@ -7,6 +7,32 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 3.22.0 — 2026-10-21
+
+### Changed: the Rust hub is on by default (board T-134, item 3)
+- `bridge/run.js` puts the Rust hub (vr-hub) in front whenever its binary is there; every module passes the whole suite
+  through it. Config `"rustHub": false` (or `{ "enabled": false }`) runs the JavaScript hub alone. Without the binary,
+  or when it keeps failing, the JavaScript hub runs alone by itself, as before.
+- The suite's normal run sets `rustHub: false`; `--rust-hub` runs it through the Rust hub.
+
+### Fixed: the native programs on Windows (board T-133, what the server can check)
+- **The desktop app starts on a clean Windows.** `vr-desktop.exe` loads `WebView2Loader.dll` from its own folder (the
+  windows-gnu build cannot link it in). The DLL now ships with it: `native/dist`, the native app download, and
+  `vr-desktop --install` all include it. Without it, the app stopped with "WebView2Loader.dll was not found".
+- **The host config is private on Windows too.** `vr_core::settings::private` locks a file's ACL on Windows when
+  someone else could read it: the person, SYSTEM and Administrators only, named by their well-known ids. Before, this
+  only happened on Linux. The native host now locks `ai-node.json` by itself, as it does on Linux, and `vr-host
+  lockdown` works the same way on Windows in any language. This matters for an install in `C:\VibeRollerAIHost`,
+  which every user can read.
+- **The AI host service:**
+  - Reinstalling it waits for the old one to stop and to be gone before making it again. A host finishing its work
+    took longer than the fixed 2 s wait, and the new service failed with "marked for deletion" (1072).
+  - Its access list is set without an audit part, which an elevated prompt cannot set; that would refuse the whole
+    change and leave non-admins unable to start or stop the service.
+- Checked on the server: the Windows programs load only Windows' own DLLs and the UCRT (no MinGW runtime);
+  `vr-desktop.exe` and `vr-hostw.exe` are window programs and `vr-host.exe` / `vr-hub.exe` console ones. The
+  hands-on list for a Windows PC is the team note `how-to/windows-verification.md`.
+
 ## 3.21.0 — 2026-10-21
 
 ### Changed: the chat in Rust behind rustHub (board T-131, the last of its modules)

@@ -25,7 +25,8 @@ let app = null, cf = null, shuttingDown = false, crashes = [];
 // It takes config.port (what nginx sends the portal to) and answers the modules already moved to Rust; this hub moves
 // behind it to backPort on 127.0.0.1 and answers the rest. Its binary: VR_HUB_BIN, else native/dist/<target>/, else
 // native/target/release/. If it is missing or keeps failing, this hub takes config.port again by itself: nobody is
-// ever cut off by the Rust hub.
+// ever cut off by the Rust hub. On by default since 3.22.0 (every module passes the whole suite through it); config
+// "rustHub": false (or { "enabled": false }) runs this hub alone.
 const crypto = require('crypto');
 const TARGET = process.platform === 'win32' ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu';
 const hubBin = () => {
@@ -33,10 +34,10 @@ const hubBin = () => {
   return [process.env.VR_HUB_BIN, path.join(ROOT, '..', 'native', 'dist', TARGET, exe), path.join(ROOT, '..', 'native', 'target', 'release', exe)].find((f) => f && fs.existsSync(f)) || '';
 };
 let front = null, frontCrashes = [], rust = (() => {
-  const r = config.rustHub;
-  if (!r || !r.enabled || PROFILE) return null;
+  const r = config.rustHub === undefined ? {} : config.rustHub;
+  if (!r || r.enabled === false || PROFILE) return null;
   const bin = hubBin();
-  if (!bin) { console.log(`${tag} rustHub is on, but no vr-hub binary was found (sh native/build.sh builds it): running without it.`); return null; }
+  if (!bin) { console.log(`${tag} No vr-hub binary here (sh native/build.sh builds it; the auto-deploy does on the server): the JavaScript hub runs alone.`); return null; }
   // the modules it answers: this hub leaves those alone (their data is the Rust hub's)
   const mods = (() => { try { return require('child_process').execFileSync(bin, ['--modules'], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim(); } catch { return ''; } })();
   return { bin, backPort: Number(r.backPort) || config.port + 2, secret: crypto.randomBytes(24).toString('hex'), mods };

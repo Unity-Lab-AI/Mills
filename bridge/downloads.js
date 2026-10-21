@@ -68,6 +68,8 @@ const TARGET = { Windows: 'x86_64-pc-windows-gnu', Linux: 'x86_64-unknown-linux-
 const bin = (os, name) => path.join(DIST, TARGET[os], os === 'Windows' ? name + '.exe' : name);
 const hasBins = (os, names) => names.every((n) => fs.existsSync(bin(os, n)));
 const binEntries = (folder, os, names) => names.filter((n) => fs.existsSync(bin(os, n))).map((n) => ({ name: `${folder}/${path.basename(bin(os, n))}`, data: fs.readFileSync(bin(os, n)), exec: os !== 'Windows', binary: true }));
+// the Windows desktop app loads WebView2Loader.dll from its own folder (the windows-gnu build cannot link it in)
+const webviewLoader = (folder) => { const f = path.join(DIST, TARGET.Windows, 'WebView2Loader.dll'); return fs.existsSync(f) ? [{ name: `${folder}/WebView2Loader.dll`, data: fs.readFileSync(f), binary: true }] : []; };
 const distStamp = () => { try { return Object.values(TARGET).map((t) => fs.statSync(path.join(DIST, t, 'BUILD.json')).mtimeMs).join(','); } catch { return ''; } };
 function appReadme(os, hub) {
   const win = os === 'Windows';
@@ -108,7 +110,7 @@ Pre-built: one program, nothing else to install (no Node.js).
 }
 const packages = {
   'app-windows': { group: 'native', os: 'Windows', title: 'VibeRoller (native app)', file: 'VibeRoller-windows.zip', available: () => hasBins('Windows', ['vr-desktop']),
-    build: (hub) => [...binEntries('VibeRoller', 'Windows', ['vr-desktop', 'vr-host', 'vr-hostw']), { name: 'VibeRoller/README.txt', data: crlf(appReadme('Windows', hub)) }] },
+    build: (hub) => [...binEntries('VibeRoller', 'Windows', ['vr-desktop', 'vr-host', 'vr-hostw']), ...webviewLoader('VibeRoller'), { name: 'VibeRoller/README.txt', data: crlf(appReadme('Windows', hub)) }] },
   'app-linux': { group: 'native', os: 'Linux', title: 'VibeRoller (native app)', file: 'VibeRoller-linux.zip', available: () => hasBins('Linux', ['vr-desktop']),
     build: (hub) => [...binEntries('VibeRoller', 'Linux', ['vr-desktop', 'vr-host', 'vr-hostw']), { name: 'VibeRoller/README.txt', data: appReadme('Linux', hub) }] },
   'host-windows': { group: 'native-host', os: 'Windows', title: 'VibeRoller AI Host (native)', file: 'VibeRollerAIHost-native-windows.zip', available: () => hasBins('Windows', ['vr-host']),
