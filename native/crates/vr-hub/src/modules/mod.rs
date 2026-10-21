@@ -302,7 +302,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         return match out { Ok(v) => answer(200, v), Err(e) => answer(400, json!({ "error": e })) };
     }
     // the admin's account switches that are this module's (the JavaScript hub keeps making / deleting accounts)
-    if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/signout") {
+    if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/allow-device" | "/api/admin/signout") {
         let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
         if !a.account(u).map(|x| x.admin).unwrap_or(false) { return Routed::Answer(jresp(403, &json!({ "error": "Admins only." }))); }
         let target = r.json()["username"].as_str().and_then(|t| a.account(t));
@@ -318,6 +318,10 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 jresp(200, &json!({ "username": t.username, "password": pw }))
             }
             "/api/admin/unlock" => { a.unlock(&t.username); jresp(200, &json!({ "ok": true })) }
+            "/api/admin/allow-device" => match a.allow_device(&t.username) {
+                Ok(n) => { println!("[vr-hub] {u} let \"{}\" add one more device (it has {n}).", t.username); jresp(200, &json!({ "ok": true, "username": t.username, "devices": n })) }
+                Err(e) => jresp(400, &json!({ "error": e })),
+            },
             _ => { if t.username != *u { a.drop_sessions(&t.username); } jresp(200, &json!({ "ok": true })) }
         });
     }
@@ -497,6 +501,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
                 let u = acc["username"].as_str().unwrap_or("").to_string();
                 let lock = a.lock_of(&u);
                 acc["locked"] = json!(lock.is_some());
+                acc["devices"] = json!(lock.as_ref().map(|l| auth::lock_devices(l).len()).unwrap_or(0)); acc["allowNext"] = json!(lock.as_ref().map(|l| l["allowNext"] == json!(true)).unwrap_or(false));
                 acc["lockedAt"] = lock.map(|l| l["at"].clone()).unwrap_or(Value::Null);
                 acc["signedIn"] = json!(a.signed_in(&u));
                 acc["busy"] = json!(acc["busy"] == json!(true) || w.busy(&u));

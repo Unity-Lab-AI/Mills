@@ -11,7 +11,8 @@ use crate::front::{Hub, Req};
 fn summary(hub: &Hub, a: &Account) -> Value {
     let au = &hub.mods.auth; let lock = au.lock_of(&a.username); let u = &a.username;
     let busy = hub.mods.work.busy(u) || hub.mods.unity.runs.lock().unwrap().contains_key(u);
-    json!({ "username": u, "display": a.display, "admin": a.admin, "locked": lock.is_some(), "lockedAt": lock.map(|l| l["at"].clone()).unwrap_or(Value::Null), "signedIn": au.signed_in(u), "busy": busy,
+    let (devices, allow_next) = lock.as_ref().map(|l| (super::auth::lock_devices(l).len(), l["allowNext"] == json!(true))).unwrap_or((0, false));
+    json!({ "username": u, "display": a.display, "admin": a.admin, "locked": lock.is_some(), "lockedAt": lock.map(|l| l["at"].clone()).unwrap_or(Value::Null), "devices": devices, "allowNext": allow_next, "signedIn": au.signed_in(u), "busy": busy,
         "model": hub.mods.work.effective_model(a), "chatKey": hub.mods.chat.has_key(u), "hasPassword": a.dir.join("auth.json").exists(), "unityPc": hub.mods.unity.group_on(a, "pc"), "unityCode": hub.mods.unity.group_on(a, "code") })
 }
 fn forgejo_url(hub: &Hub) -> String { std::fs::read_to_string(hub.root.join("forgejo.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|c| c["url"].as_str().map(String::from)).or_else(|| hub.cfg.get("forgejoUrl").and_then(Value::as_str).map(String::from)).unwrap_or_else(|| "https://git.unityailab.com".into()).trim_end_matches('/').to_string() }

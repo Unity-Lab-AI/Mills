@@ -7,6 +7,32 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 4.1.1 — 2026-10-21
+
+### Fixed (found by Gee's Windows check, board T-133)
+- **One account, several devices.** The device lock allowed exactly one device, and the app and the browser on one PC
+  are two devices (the app's window keeps its own storage). Now an admin's **"Allow one more device"** (Admin →
+  accounts) lets the next sign-in from a new device join the account's devices (up to 5). The devices it has keep
+  working, and any further new device is refused again until an admin allows it. "Reset lock" still clears all of them.
+  The account list says how many devices an account has and whether one more is allowed. Existing locks keep their
+  device (`device-locks.json` gets an optional `devices` list and `allowNext`; the JavaScript fallback the same in
+  state.json). The refusal now says to ask for one more device.
+- **A hard reload no longer signs you out or leaves a blank page.** The page started before its last scripts had
+  loaded (on a hard reload they come over the network), and any error while opening signed you out, which could then
+  fail too and hide everything. It now starts once every script is there. A session ends only when the hub says it is
+  over (401); any other failure keeps you signed in and shows what went wrong.
+- **Old shortcuts go:** installing the app (`vr-desktop --install`) or the native AI host (`vr-host install`) on
+  Windows removes the earlier JavaScript host's separate "Start / Stop VibeRoller AI Host" shortcuts from the Desktop
+  and the Start menu.
+- **The new Rust hub really runs after a deploy.** The auto-deploy builds the native programs after the deploy is
+  verified, and nothing restarted the hub after that, so a deploy ran the new JavaScript with the previous `vr-hub`
+  until some later restart. A finished native build now asks the hub for a graceful restart (`bridge/.restart`: it
+  waits until nobody is busy, nobody is signed out).
+
+### Tests
+- R168 (several devices: admins only, the next new device joins, the first keeps working, a further one is refused);
+  R6 follows the new message.
+
 ## 4.1.0 — 2026-10-21
 
 ### Security: only Gee works on Gee's computer (Sponge's decisions on the T-135 assessment)

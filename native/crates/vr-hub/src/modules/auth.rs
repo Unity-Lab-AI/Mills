@@ -137,6 +137,16 @@ impl Auth {
     pub fn signed_in(&self, user: &str) -> usize { let now = now_ms(); self.sessions.lock().unwrap().values().filter(|s| s["user"].as_str() == Some(user) && s["exp"].as_u64().unwrap_or(0) > now).count() }
     pub fn lock_of(&self, user: &str) -> Option<Value> { self.locks.lock().unwrap().get(user).cloned() }
     pub fn unlock(&self, user: &str) { self.locks.lock().unwrap().remove(user); self.save_locks(); }
+    /// The admin's "allow one more device": the next sign-in from a new device joins this account's devices (up to
+    /// MAX_DEVICES) instead of being refused. Nothing to do for an account no device has claimed yet.
+    pub fn allow_device(&self, user: &str) -> Result<usize, String> {
+        let mut locks = self.locks.lock().unwrap();
+        let Some(l) = locks.get_mut(user) else { return Err("No device has claimed this account yet: its next sign-in does.".into()) };
+        let n = lock_devices(l).len();
+        if n >= MAX_DEVICES { return Err(format!("This account already has {MAX_DEVICES} devices: reset its lock first.")); }
+        l["allowNext"] = json!(true); drop(locks); self.save_locks();
+        Ok(n)
+    }
 
     fn sweep(&self) { // counters nobody touched for 30 minutes go (never all at once)
         let mut last = self.last_sweep.lock().unwrap();
@@ -187,10 +197,17 @@ impl Auth {
         let dh = vr_core::crypto::sha256_hex(device.unwrap_or_default().as_bytes());
         {
             let mut locks = self.locks.lock().unwrap();
-            match locks.get(&acct.username).and_then(|l| l["device"].as_str().map(String::from)) {
+            match locks.get_mut(&acct.username) {
                 None => { locks.insert(acct.username.clone(), json!({ "device": dh, "at": iso_now() })); drop(locks); self.save_locks(); println!("[vr-hub] {}: claimed by first sign-in.", acct.username); }
-                Some(d) if d != dh => { println!("[vr-hub] {}: refused a sign-in from another device.", acct.username); return Routed::Answer(jresp(403, &json!({ "error": "This account is locked to another device. Ask an admin to reset it." }))); }
-                _ => {}
+                Some(l) if lock_devices(l).contains(&dh) => {}
+                // the admin allowed one more device: this one joins (the browser and the app on one PC are two devices)
+                Some(l) if l["allowNext"] == json!(true) => {
+                    if !l["devices"].is_array() { l["devices"] = json!([]); }
+                    l["devices"].as_array_mut().unwrap().push(json!({ "device": dh, "at": iso_now() }));
+                    l.as_object_mut().unwrap().remove("allowNext");
+                    drop(locks); self.save_locks(); println!("[vr-hub] {}: another device joined (allowed by an admin).", acct.username);
+                }
+                Some(_) => { println!("[vr-hub] {}: refused a sign-in from another device.", acct.username); return Routed::Answer(jresp(403, &json!({ "error": "This account is locked to its own devices. Ask an admin to allow one more device (or to reset the lock)." }))); }
             }
         }
         let token = vr_core::crypto::random_hex(32);
@@ -200,6 +217,14 @@ impl Auth {
     }
 }
 
+/// How many devices one account may have (the browser, the app, a laptop …).
+pub const MAX_DEVICES: usize = 5;
+/// A lock's devices: the first one ("device", as every lock had before 4.1.1) and the ones an admin let join.
+pub fn lock_devices(l: &Value) -> Vec<String> {
+    let mut v: Vec<String> = l["device"].as_str().map(String::from).into_iter().collect();
+    v.extend(l["devices"].as_array().map(|a| a.iter().filter_map(|d| d["device"].as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default());
+    v
+}
 pub fn iso_now() -> String { iso_at(now_ms() as i64) }
 /// new Date(ms).toISOString()
 pub fn iso_at(ms: i64) -> String {

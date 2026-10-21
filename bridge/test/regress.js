@@ -465,7 +465,21 @@ async function run() {
   }
 
   const locked = await login('t-user', 'pw-t-user-0001', devA);
-  check('R6', 'right password from a different device → 403 locked', locked.status === 403 && /locked to another device/.test(locked.data.error || ''));
+  check('R6', 'right password from a different device → 403 locked', locked.status === 403 && /locked to its own devices/.test(locked.data.error || ''));
+  { // R168: an account may have several devices (the browser and the app on one PC are two): an admin allows one more,
+    // the next new device joins, the old one keeps working, a further new one is refused again (4.1.1)
+    const notAdmin = await call('/api/admin/allow-device', (await login('t-user', 'pw-t-user-0001', devB)).data.token, { username: 't-user' });
+    const allowed = await call('/api/admin/allow-device', A, { username: 't-user' });
+    const listed = ((await call('/api/admin/accounts', A)).data.accounts || []).find((x) => x.username === 't-user') || {};
+    const joined = await login('t-user', 'pw-t-user-0001', devA);
+    const oldOne = await login('t-user', 'pw-t-user-0001', devB);
+    const devD = 'device-dddddddddddddddd', third = await login('t-user', 'pw-t-user-0001', devD);
+    const after = ((await call('/api/admin/accounts', A)).data.accounts || []).find((x) => x.username === 't-user') || {};
+    for (const t of [joined, oldOne]) if (t.data && t.data.token) await call('/api/logout', t.data.token, {});
+    check('R168', 'one account, several devices: an admin\'s "allow one more device" (admins only) lets the next new device join (the account list says 1 device, +1 allowed, then 2), the first device keeps working, and a further new device is refused again until the admin allows it',
+      notAdmin.status === 403 && allowed.status === 200 && listed.devices === 1 && listed.allowNext === true && joined.status === 200 && oldOne.status === 200 && third.status === 403 && after.devices === 2 && after.allowNext === false,
+      `not admin ${notAdmin.status}; allow ${allowed.status}; listed ${listed.devices}/${listed.allowNext}; joined ${joined.status} old ${oldOne.status} third ${third.status}; after ${after.devices}/${after.allowNext}`);
+  }
 
   const evil = await call('/api/status', null, undefined, { Origin: 'https://evil.example' });
   check('R7', 'request from a non-allowed Origin → 403', evil.status === 403);
@@ -2708,7 +2722,7 @@ async function run() {
   for (let i = 0; i < 60 && (pid2 === pid1 || !pid2); i++) { await sleep(250); pid2 = (await call('/api/status')).data.pid; }
   const after = await call('/api/check', U);
   check('R9', 'graceful restart: new pid, token kept, lock + model kept, flag consumed', pid2 && pid2 !== pid1 && after.status === 200 && after.data.model === 'claude-opus-5-5'
-    && (await login('t-user', 'pw-t-user-0001', devA)).status === 403 && !fs.existsSync(path.join(SB, '.restart')));
+    && (await login('t-user', 'pw-t-user-0001', 'device-eeeeeeeeeeeeeeee')).status === 403 && !fs.existsSync(path.join(SB, '.restart'))); // (devA joined t-user's devices in R168)
   // R154: a hub restart keeps every AI host's session: an older host that never says hello again (the "old-node" played
   // in R152, a 2.x host) still offers its Claude right after the restart, the way it did before it; a host the hub has
   // no session for is asked to say hello again (428 for hosts that send their version, 401 for older ones: they re-hello

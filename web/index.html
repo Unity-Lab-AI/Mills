@@ -4112,12 +4112,13 @@ async function loadAdmin() {
       const tr = document.createElement('tr');
       const td = (t) => { const c = document.createElement('td'); c.textContent = t; tr.append(c); return c; };
       td(a.display + ' (' + a.username + ')' + (a.admin ? ' · admin' : ''));
-      td([a.locked ? 'device locked' : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key set' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
+      td([a.locked ? (a.devices > 1 ? a.devices + ' devices' : 'device locked') + (a.allowNext ? ' (+1 allowed)' : '') : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key set' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
       td(modelName(a.model));
       const actions = td('');
       actions.append(
         confirmButton('New password', () => adminCall('password', { username: a.username }, (d) => adminOut(`New password for ${d.username}:\n${d.password}\n\nTheir other devices are signed out. Chat history stays readable in browsers that already hold the key.`))),
-        confirmButton('Reset lock', () => adminCall('unlock', { username: a.username }, () => adminOut(`${a.username}: device lock cleared. Their next sign-in claims the account.`))),
+        ...(a.locked ? [confirmButton('Allow one more device', () => adminCall('allow-device', { username: a.username }, () => { adminOut(`${a.username}: their next sign-in from a new device (the app, another computer) joins their devices; the ones they have keep working.`); }))] : []),
+        confirmButton('Reset lock', () => adminCall('unlock', { username: a.username }, () => adminOut(`${a.username}: device lock cleared (all their devices). Their next sign-in claims the account.`))),
         confirmButton('Sign out', () => adminCall('signout', { username: a.username }, () => adminOut(`${a.username}: signed out everywhere.`))),
       );
       for (const [key, label] of [['pc', 'PC files'], ['code', 'Run code']]) { // Unity's own-computer tools for this account
@@ -4141,7 +4142,16 @@ $('adminRefresh').onclick = loadAdmin;
 $('adminRestart').replaceWith(confirmButton('Restart hub', () => adminCall('restart', {}, (d) => adminOut(d.supervised ? 'Restarting as soon as nobody has Claude working. The page reconnects by itself.' : 'Restart requested, but the hub was not started with start.bat; restart it by hand.'))));
 $('adminClearChat').replaceWith(confirmButton('Clear chat history', () => adminCall('room/clear', {}, () => adminOut('Chat history cleared for everyone.'))));
 
-connect().then((ok) => { if (ok && token) enter().catch(() => signOut()); });
+// Start once every script below has loaded too (calls.js … app.js): on a hard reload they come over the network, and
+// entering before them threw, which signed people out and left a blank page. A session ends only on the hub's 401
+// (api() signs out then); any other failure keeps it and shows the sign-in page with what went wrong.
+function startPage() {
+  connect().then((ok) => {
+    if (!ok || !token) return;
+    enter().catch((e) => { if (!token) return; console.error(e); $('login').hidden = false; $('loginErr').textContent = 'Could not open VibeRoller: ' + (e && e.message ? e.message : e) + ' Reload the page to try again.'; });
+  });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startPage, { once: true }); else startPage();
 </script>
 <!-- voice / video calls, theater and screen share: web/calls.js (loaded after the page script, uses its helpers) -->
 <script src="calls.js"></script>

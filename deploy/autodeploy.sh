@@ -71,7 +71,9 @@ if [ -f native/build.sh ] && [ ! -f "$ST/pending" ]; then
   NEEDS=0
   if [ -z "$BUILT" ]; then NEEDS=1; elif ! git cat-file -e "$BUILT^{commit}" 2>/dev/null; then NEEDS=1; elif ! git diff --quiet "$BUILT" HEAD -- native/ 2>/dev/null; then NEEDS=1; fi
   LOCK=$ST/native-build.pid
-  BUILD_CMD="nice -n 10 sh '$APP/native/build.sh' > '$BASE/native-build.log' 2>&1 && echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build done\" >> '$LOG' || echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build FAILED (the last build stays; see native-build.log)\" >> '$LOG'"
+  # a finished build asks the hub for a graceful restart (it waits for nobody being busy), so the new Rust hub (vr-hub)
+  # runs too, not just the new JavaScript; the AI hosts take their new build from it by themselves
+  BUILD_CMD="nice -n 10 sh '$APP/native/build.sh' > '$BASE/native-build.log' 2>&1 && date -u +%Y-%m-%dT%H:%M:%SZ > '$APP/bridge/.restart' && echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build done; graceful restart requested (the new Rust hub)\" >> '$LOG' || echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build FAILED (the last build stays; see native-build.log)\" >> '$LOG'"
   busy=0
   if [ -n "${INVOCATION_ID:-}" ] && command -v systemd-run >/dev/null; then systemctl --user is-active -q viberoller-native-build 2>/dev/null && busy=1
   else [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2>/dev/null && busy=1; fi
