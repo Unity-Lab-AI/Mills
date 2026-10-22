@@ -48,6 +48,16 @@ export PATH="$NODE_BIN:$BASE/tools/bin:$PATH"
 if [ ! -x "$BASE/tools/bin/claude" ]; then
   echo "installing Claude Code under $BASE/tools"; HOME=$HOME_DIR npm_config_prefix="$BASE/tools" "$NODE_BIN/npm" install -g @anthropic-ai/claude-code >/dev/null 2>&1 && echo "claude: $("$BASE/tools/bin/claude" --version 2>/dev/null || echo installed)" || echo "claude could not be installed (Work runs need it; everything else works without it): npm_config_prefix=$BASE/tools npm install -g @anthropic-ai/claude-code"
 else echo "claude: $("$BASE/tools/bin/claude" --version 2>/dev/null || echo present)"; fi
+# fj (the Forgejo CLI, forgejo-cli): Work runs use it signed in as the person (bridge/fj.js). The pre-built release
+# binary (building it needs OpenSSL headers, root-only); no root needed, it lives under tools/bin like claude.
+if [ ! -x "$BASE/tools/bin/fj" ]; then
+  FJ_V=v0.7.0; T=$(mktemp -d)
+  echo "installing fj (forgejo-cli $FJ_V) under $BASE/tools"
+  if curl -fsSL "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/$FJ_V/forgejo-cli-$(uname -m)-linux.tar.gz" | tar -xz -C "$T" 2>/dev/null && [ -f "$T/fj" ]; then
+    mkdir -p "$BASE/tools/bin" && mv "$T/fj" "$BASE/tools/bin/fj" && chmod 755 "$BASE/tools/bin/fj" && echo "fj: $("$BASE/tools/bin/fj" version 2>/dev/null | head -n 1)"
+  else echo "fj could not be installed (Work runs use it for Forgejo; everything else works without it): put the forgejo-cli release binary at $BASE/tools/bin/fj"; fi
+  rm -rf "$T"
+else echo "fj: $("$BASE/tools/bin/fj" version 2>/dev/null | head -n 1)"; fi
 
 say "Live checkout ($APP)"
 if [ -d "$APP/.git" ]; then git -C "$APP" fetch -q origin main && git -C "$APP" merge -q --ff-only origin/main && echo "fast-forwarded to $(git -C "$APP" rev-parse --short HEAD)"

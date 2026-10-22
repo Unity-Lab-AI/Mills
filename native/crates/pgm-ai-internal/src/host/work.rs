@@ -107,6 +107,9 @@ pub async fn work_job(h: H, job: Job) {
     if p.kind == "claude-cli" && !p.config_dir.is_empty() { c.env("CLAUDE_CONFIG_DIR", &p.config_dir); }
     if p.kind == "anthropic" && !p.api_key.is_empty() { c.env("ANTHROPIC_API_KEY", &p.api_key); }
     if let Some(env) = payload["env"].as_object() { for (k, v) in env { if let Some(v) = v.as_str() { c.env(k, v); } } }
+    let pe = |k: &str| payload["env"][k].as_str().unwrap_or("").to_string();
+    let who: String = payload["account"].as_str().unwrap_or("").chars().filter(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '-').collect();
+    if !who.is_empty() { for (k, v) in crate::fj::env(&h.folder.f(".fj").join(&who), &pe("FORGEJO_URL"), &pe("FORGEJO_TOKEN"), &pe("FORGEJO_LOGIN")) { c.env(k, v); } } // fj signed in as the person, from the token the hub sent
     log(format!("run {job_id} for {}: {} ({}{})", payload["account"].as_str().unwrap_or(""), if sandbox { "API answer".to_string() } else { format!("{} in {}", payload["project"].as_str().unwrap_or("VibeRoller"), dir.display()) }, p.label, payload["model"].as_str().map(|m| format!(", {m}")).unwrap_or_default()));
     let mut child = match c.spawn() { Ok(ch) => ch, Err(e) => { let _ = std::fs::remove_file(&mcp_file); fail!(format!("{nick} could not start claude: {e}")); } };
     h.runs.lock().unwrap().insert(job_id.clone(), stop_tx);

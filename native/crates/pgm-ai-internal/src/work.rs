@@ -210,7 +210,7 @@ impl Work {
             "You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.".into(),
             format!("Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search ({name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create."),
         ]);
-        if self.forgejo_rec(u).map(|r| !s(&r, "token").is_empty()).unwrap_or(false) { parts.push(format!("Forgejo ({}): {name} saved their own token, so git pushes / fetches to that host authenticate as them, and FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token).", self.forgejo_url())); }
+        if self.forgejo_rec(u).map(|r| !s(&r, "token").is_empty()).unwrap_or(false) { parts.push(format!("Forgejo ({}): {name} saved their own token, so git pushes / fetches to that host authenticate as them, FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token), and fj (the Forgejo CLI) is signed in as them in this run. node bridge/worktree.js repos [words] lists the repos they can see (private ones too), repo-create <owner/name> makes one, publish <owner/name> --project <name> puts a project on Forgejo (a GitHub origin kept as upstream).", self.forgejo_url())); }
         parts.push("Team notes (markdown files in folders, shared by everyone): notes_list (with a search), notes_read, notes_write (path like \"plans/next-week.md\"; whole text), notes_delete (only when asked). Good for plans, meeting notes, decisions, how-tos.".into());
         parts.push(format!("The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as \"{name} · Claude\", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about."));
         let laws = self.hub_laws();
@@ -404,7 +404,9 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let pre: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     let mut cmd = tokio::process::Command::new(&command);
     cmd.args(&pre).args(&args).current_dir(&wd.dir).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(false);
-    for (k, v) in prov_env.iter().chain(relay_env.iter()).chain(w.work_env(&a.username).iter()) { cmd.env(k, v); }
+    let fe = w.work_env(&a.username); let get = |k: &str| fe.iter().find(|(x, _)| x == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    let fj_env = crate::fj::env(&a.dir.join(".fj"), &get("FORGEJO_URL"), &get("FORGEJO_TOKEN"), &get("FORGEJO_LOGIN")); // fj signed in as them
+    for (k, v) in prov_env.iter().chain(relay_env.iter()).chain(fe.iter()).chain(fj_env.iter()) { cmd.env(k, v); }
     #[cfg(windows)]
     { cmd.creation_flags(0x0800_0000); }
     let (h, a2, id) = (hub.clone(), a.clone(), run_id.clone());

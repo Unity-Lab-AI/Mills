@@ -9,6 +9,7 @@
 // The answer echoes the model and the working folder (cwd) so the runner can check both.
 'use strict';
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 
 const argv = process.argv.slice(2);
@@ -142,7 +143,11 @@ process.stdin.on('end', async () => {
   }
   // cfg / key: which Claude login / API key this run was handed (a person's own provider), '' = the host's
   // wt: the allowed-tools entries that name worktree.js (a run in another project may call the hub's copy by its full path)
-  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | relay=${relay} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')} | adddir=${opt('--add-dir') || ''}` }],
+  // fjw: the `fj` first on the PATH is this person's wrapper (R172), and the keys file it points at names these hosts
+  const fjDir = (process.env.PATH || '').split(path.delimiter)[0] || '';
+  const fjW = (() => { try { return fs.readFileSync(path.join(fjDir, 'fj'), 'utf8'); } catch { return ''; } })();
+  const fjKeys = (() => { const d = (fjW.match(/(?:XDG_DATA_HOME|APPDATA)='([^']+)'/) || [])[1]; if (!d) return ''; try { const k = JSON.parse(fs.readFileSync(path.join(d, ...(process.platform === 'win32' ? ['forgejo-cli', 'forgejo-cli', 'data'] : ['forgejo-cli']), 'keys.json'), 'utf8')); return Object.entries(k.hosts || {}).map(([h, v]) => `${h}=${v.type}`).join('+'); } catch { return 'nokeys'; } })();
+  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | fjw=${/made by VibeRoller/.test(fjW) ? 'wrapper:' + fjKeys : ''} | relay=${relay} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')} | adddir=${opt('--add-dir') || ''}` }],
     ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
   // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
   out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
