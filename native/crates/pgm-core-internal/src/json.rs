@@ -6,8 +6,26 @@
 use serde_json::Value;
 use std::path::Path;
 
-/// The file as JSON, or None (missing, unreadable, not JSON).
-pub fn read_json(p: &Path) -> Option<Value> { std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()) }
+/// The file as JSON, or None (missing, empty, unreadable). A file that is there but is not JSON is bad data: it is moved
+/// aside as `<file>.bad-<yyyymmdd-hhmmss>` (kept, never deleted, never overwritten by the next save), a notice says so
+/// ([`crate::notices`]), and the caller goes on with its defaults (FR2, VibeRoller's plans/full-rust-hub.md).
+pub fn read_json(p: &Path) -> Option<Value> {
+    let t = std::fs::read_to_string(p).ok()?;
+    if t.trim().is_empty() { return None; }
+    match serde_json::from_str(&t) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            let stamp = crate::time::iso_now().replace(['-', ':'], "").replace('T', "-").trim_end_matches('Z').chars().take(15).collect::<String>();
+            let aside = p.with_file_name(format!("{}.bad-{stamp}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+            let shown = p.iter().rev().take(2).map(|x| x.to_string_lossy().to_string()).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/");
+            match std::fs::rename(p, &aside) {
+                Ok(()) => crate::notices::push(format!("**A data file could not be read.** `{shown}` is not valid JSON ({e}); it was moved to `{}` (kept) and the program went on without it, with defaults. If it held something important, fix it and put it back.", aside.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())),
+                Err(re) => crate::notices::push(format!("**A data file could not be read.** `{shown}` is not valid JSON ({e}) and could not be moved aside ({re}); the program went on without it, with defaults.")),
+            }
+            None
+        }
+    }
+}
 /// Written atomically (temp file + rename), pretty.
 pub fn write_json(p: &Path, v: &Value) { let tmp = p.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(v).unwrap_or_default()).is_ok() { let _ = std::fs::rename(&tmp, p); } }
 /// Written atomically and readable by its owner only.

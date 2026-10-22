@@ -7,6 +7,35 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.5.0 — 2026-10-22
+
+MINOR: **the full-Rust hub, steps 2–5 (FR2–FR5 of plans/full-rust-hub.md): kept builds, a trial before the swap, a
+Rust supervisor, bad data moved aside.** The JavaScript hub still runs behind the Rust one (FR6 retires it).
+- **FR3 kept builds** (`native/keep-builds.sh`, `native/use-build.sh`; `build.sh` stages each build under
+  `native/dist/<target>/<commit>/` and puts it in service through use-build.sh, which copies its files to
+  `dist/<target>/` itself — the layout run.js, the Downloads and the hosts' updates read never changed — writes
+  `current` and keeps the current build + the 2 newest good ones). The auto-deploy records a verified version's
+  build in `dist/<target>/good` and, on a rollback, puts the last good build back in service with the checkout
+  (before this a rollback kept running the new binary).
+- **FR5 trial before the swap** (`deploy/trial.sh <vr-hub> <checkout>`): the staged build runs on a side port
+  against a private copy of the settings, data and page; it must answer `/api/status` with the checkout's version,
+  `/` 200 and `/api/version` 401 within 30 s. The auto-deploy stages (`VR_STAGE_ONLY=1`), tries, then puts the build
+  in service and asks for the restart; a failed trial keeps the old build and says so in the team chat
+  (`bridge/.announce/`). A build that cannot start never reaches anyone.
+- **FR4 vr-run** (`native/crates/vr-run`, Windows + Linux): the supervisor in Rust. Runs the hub from the kept
+  builds (`current`), the JavaScript hub behind it while `bridge/server.js` exists; health-checks `/api/status`
+  every 10 s (3 misses = hung or dead → killed); a build that crashes 3 times within a minute or fails its health
+  checks gives way to the previous good build (`bridge/.fell-back`, posted to the chat), the newest is tried again
+  after 10 minutes, then hourly; exit 75 = restart on new code; Ctrl-C / SIGTERM stop it. `bridge/start.sh` runs it
+  when it is built; the server's service still runs run.js until it is switched by hand (one line in
+  deploy/viberoller-hub.service), so nothing changes there by itself.
+- **FR2 bad data** (pgm-libs 5.6.0): a data file that is there but is not JSON is moved aside as
+  `<file>.bad-<yyyymmdd-hhmmss>` (kept, never overwritten by the next save), the hub starts with defaults for that
+  part and says so in the team chat (pgm-core `notices`). The chat's notice loop also posts `.fell-back` and
+  `.announce/*.txt` (every 10 s).
+- Suite: R175, R176, R177, R178 pass and are plain checks now; R179 (FR6) probes every `/api/` path the JavaScript
+  hub names and lists the ones it still answers.
+
 ## 5.4.1 — 2026-10-22
 
 PATCH: `bridge/unity.json` (the Rust hub's copy of Unity's state, data) is gitignored. It was untracked in the live

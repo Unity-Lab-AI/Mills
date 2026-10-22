@@ -6039,6 +6039,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vr-run"
+version = "0.1.0"
+dependencies = [
+ "pgm-core-internal",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "vswhom"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
