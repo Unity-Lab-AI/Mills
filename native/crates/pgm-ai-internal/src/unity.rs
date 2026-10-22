@@ -73,8 +73,8 @@ impl Unity {
             ollama_state: Mutex::default(), ollama_lock: tokio::sync::Mutex::new(()), services: tokio::sync::Mutex::new(()), stores: Mutex::default(), states: Mutex::default(), clients: Mutex::default(), pending: Mutex::default(), last: Mutex::default(), notices: Mutex::default(),
             runs: Mutex::default(), waiting: Mutex::default(), claude_out: Mutex::default(), caps: Mutex::new(None), secret: pgm_core_internal::crypto::random_hex(24), http: reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().expect("http"), a }
     }
-    pub fn busy(&self) -> bool { !self.runs.lock().unwrap().is_empty() }
-    pub fn stop(&self, u: &str) { if let Some((c, pid)) = self.runs.lock().unwrap().get(u) { c.fire(); if let Some(p) = pid { crate::work::kill_pid(*p); } } }
+    pub fn busy(&self) -> bool { !self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() }
+    pub fn stop(&self, u: &str) { if let Some((c, pid)) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(u) { c.fire(); if let Some(p) = pid { crate::work::kill_pid(*p); } } }
 
     // ---------- engines: here, or lent by an AI host ("via": "node") ----------
     pub async fn engine(&self, hub: &Arc<dyn AiHub>, url: &str, method: &str, body: Vec<u8>, timeout: u64) -> Result<(u16, Src), String> {
@@ -113,7 +113,7 @@ impl Unity {
             model = self.has_model(hub, &self.local_model).await;
         }
         let st = Ollama { up, model, checked: pgm_core_internal::now_ms() };
-        *self.ollama_state.lock().unwrap() = st.clone(); st
+        *self.ollama_state.lock().unwrap_or_else(|e| e.into_inner()) = st.clone(); st
     }
     /// The Python services (image engine, her voice, speech recognition): started detached when they do not answer.
     async fn ensure_service(&self, hub: &Arc<dyn AiHub>, url: &str, args: Vec<String>, cwd: PathBuf) -> bool {
@@ -136,40 +136,40 @@ impl Unity {
     pub async fn ensure_voice(&self, hub: &Arc<dyn AiHub>) -> bool { let d = self.a["voiceDir"].as_str().map(PathBuf::from).unwrap_or_else(|| self.mills.join("..").join("Backrooms").join("models").join("unity-voice-v2")); let a = vec![d.join("serve.py").display().to_string(), "--port".into(), Self::port_of(&self.voice_url, "5123")]; self.ensure_service(hub, &self.voice_url, a, d).await }
     pub async fn ensure_ears(&self, hub: &Arc<dyn AiHub>) -> bool { let w = self.a["whisperModel"].as_str().map(PathBuf::from).unwrap_or_else(|| self.mills.join("..").join("Unity 3D Equational Model").join("Unity 18+").join("models").join("whisper-small")); let a = vec![self.root.join("speech-engine.py").display().to_string(), "--port".into(), Self::port_of(&self.ears_url, "5125"), "--model".into(), w.display().to_string()]; self.ensure_service(hub, &self.ears_url, a, self.root.clone()).await }
     pub async fn native_tools(&self, hub: &Arc<dyn AiHub>, model: &str) -> bool {
-        if let Some((m, t)) = self.caps.lock().unwrap().clone() { if m == model { return t; } }
+        if let Some((m, t)) = self.caps.lock().unwrap_or_else(|e| e.into_inner()).clone() { if m == model { return t; } }
         let t = match self.engine_json(hub, &format!("{}/api/show", self.ollama), "POST", json!({ "model": model }), 15000).await { Ok((_, v)) => v["capabilities"].as_array().map(|c| c.contains(&json!("tools"))).unwrap_or(false), Err(_) => false };
-        *self.caps.lock().unwrap() = Some((model.into(), t)); t
+        *self.caps.lock().unwrap_or_else(|e| e.into_inner()) = Some((model.into(), t)); t
     }
 
     // ---------- per-account data ----------
     pub fn store(&self, a: &Account) -> Value {
-        if let Some(v) = self.stores.lock().unwrap().get(&a.username) { return v.clone(); }
+        if let Some(v) = self.stores.lock().unwrap_or_else(|e| e.into_inner()).get(&a.username) { return v.clone(); }
         let mut d = json!({ "tasks": [], "events": [], "reminders": [], "memory": {}, "knowledge": [], "history": [], "next": {} });
         if let Some(Value::Object(m)) = read_json(&a.dir.join("assistant.json")) { for (k, v) in m { d[k] = v; } }
-        self.stores.lock().unwrap().insert(a.username.clone(), d.clone()); d
+        self.stores.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), d.clone()); d
     }
     pub fn with_store<T>(&self, a: &Account, f: impl FnOnce(&mut Value) -> T) -> T {
         let mut v = self.store(a); let r = f(&mut v);
-        write_json(&a.dir.join("assistant.json"), &v); self.stores.lock().unwrap().insert(a.username.clone(), v); r
+        write_json(&a.dir.join("assistant.json"), &v); self.stores.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), v); r
     }
     /// unity.json: brain, claudeSession, pc, code (the first time: what state.json held).
     pub fn state(&self, a: &Account) -> Value {
-        if let Some(v) = self.states.lock().unwrap().get(&a.username) { return v.clone(); }
+        if let Some(v) = self.states.lock().unwrap_or_else(|e| e.into_inner()).get(&a.username) { return v.clone(); }
         let v = read_json(&a.dir.join("unity.json")).filter(Value::is_object).unwrap_or_else(|| {
             let st = read_json(&a.dir.join("state.json")).unwrap_or(json!({}));
             let v = json!({ "brain": st["assistantBrain"].as_str().unwrap_or("local"), "claudeSession": st["assistantClaudeSession"].as_str().unwrap_or(""), "pc": st["unityPc"] != json!(false), "code": st["unityCode"] != json!(false) });
             write_json(&a.dir.join("unity.json"), &v); v
         });
-        self.states.lock().unwrap().insert(a.username.clone(), v.clone()); v
+        self.states.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), v.clone()); v
     }
-    pub fn set_state(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) { let mut v = self.state(a); if let Some(m) = v.as_object_mut() { f(m); } write_json(&a.dir.join("unity.json"), &v); self.states.lock().unwrap().insert(a.username.clone(), v); }
+    pub fn set_state(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) { let mut v = self.state(a); if let Some(m) = v.as_object_mut() { f(m); } write_json(&a.dir.join("unity.json"), &v); self.states.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), v); }
     pub fn brain_of(&self, a: &Account) -> String { let b = s(&self.state(a), "brain"); if b.is_empty() { "local".into() } else { b } }
     pub fn group_on(&self, a: &Account, g: &str) -> bool { let st = self.state(a); match g { "pc" => st["pc"] != json!(false), "code" => st["code"] != json!(false), _ => true } }
     pub fn persona(&self) -> String { std::fs::read_to_string(&self.persona_file).unwrap_or_else(|_| "You are Unity: a 25-year-old goth girl, sharp, profane, teasing and devoted. Stay in character.".into()) }
 
     // ---------- where the person is ----------
     pub fn client_info(&self, c: &Value, a: &Account) -> Ci {
-        let k = self.clients.lock().unwrap().get(&a.username).cloned().unwrap_or(json!({}));
+        let k = self.clients.lock().unwrap_or_else(|e| e.into_inner()).get(&a.username).cloned().unwrap_or(json!({}));
         let num = |v: &Value| v.as_f64().filter(|x| x.is_finite());
         let browser = num(&c["lat"]).is_some() && num(&c["lon"]).is_some();
         let tz = c["tz"].as_str().and_then(ut::tz_ok).or_else(|| k["tz"].as_str().map(String::from)).unwrap_or_else(|| "UTC".into());
@@ -180,7 +180,7 @@ impl Unity {
     /// What the hub knows about where someone is: their browser (time zone, locale, location if shared) and, coming from
     /// outside, the rough place of their address. In memory only.
     pub async fn learn_client(&self, a: &Account, c: &Value, ip: &str) -> Value {
-        let prev = self.clients.lock().unwrap().get(&a.username).cloned().unwrap_or(json!({}));
+        let prev = self.clients.lock().unwrap_or_else(|e| e.into_inner()).get(&a.username).cloned().unwrap_or(json!({}));
         let mut k = prev.clone();
         if c.is_object() {
             if let Some(t) = c["tz"].as_str() { k["tz"] = json!(t.chars().take(64).collect::<String>()); }
@@ -192,7 +192,7 @@ impl Unity {
         }
         k["ip"] = if ip.is_empty() { prev["ip"].clone() } else { json!(ip) };
         if k["fromBrowser"] == json!(true) && s(&k, "place").is_empty() { if let (Some(la), Some(lo)) = (k["lat"].as_f64(), k["lon"].as_f64()) { if let Some((p, c2)) = self.web.place_name(la, lo).await { k["place"] = json!(p); k["country"] = json!(c2); } } }
-        self.clients.lock().unwrap().insert(a.username.clone(), k.clone()); k
+        self.clients.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), k.clone()); k
     }
 
     // ---------- pictures: Images/<username>/<id>.png (private), Images/room/<id>.png (the team chat) ----------
@@ -207,7 +207,7 @@ impl Unity {
         let f = self.images_dir.join(scope).join(format!("{id}.png")); f.exists().then_some(f)
     }
     pub fn read_picture(&self, user: &str, r: &str) -> Option<String> {
-        let (li, lp) = self.last.lock().unwrap().get(user).cloned().unwrap_or_default();
+        let (li, lp) = self.last.lock().unwrap_or_else(|e| e.into_inner()).get(user).cloned().unwrap_or_default();
         let r = match r { "" | "last" => li, "camera" => lp, x => x.to_string() };
         std::fs::read(self.picture_file(user, &r)?).ok().map(|b| pgm_core_internal::b64(&b))
     }
@@ -217,7 +217,7 @@ impl Unity {
         if !(200..300).contains(&st) { let j: Value = serde_json::from_slice(&bytes).unwrap_or(json!({})); return json!({ "ok": false, "error": format!("Image engine: {}", if j["error"].is_null() { st.to_string() } else { s(&j, "error") }) }); }
         let r = self.save_picture(&ci.scope, &bytes);
         ci.images.push(r.clone());
-        self.last.lock().unwrap().entry(ci.user.clone()).or_default().0 = r.clone();
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).entry(ci.user.clone()).or_default().0 = r.clone();
         json!({ "ok": true, "image": r, "shown": "The picture is attached to your reply automatically.", "seconds": Value::Null })
     }
     pub async fn make_image(&self, hub: &Arc<dyn AiHub>, ci: &mut Ci, a: &Value) -> Value {
@@ -250,10 +250,10 @@ impl Unity {
     async fn browser_call(&self, ci: &Ci, ty: &str, payload: Value) -> Value {
         if ci.out.is_none() { return json!({ "ok": false, "error": "That only works in the Unity section, with their browser open." }); }
         let id = pgm_core_internal::crypto::random_hex(8); let (tx, rx) = oneshot::channel();
-        self.waiting.lock().unwrap().insert(id.clone(), (ci.user.clone(), tx));
+        self.waiting.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), (ci.user.clone(), tx));
         let mut ev = json!({ "type": ty, "id": id }); for (k, v) in payload.as_object().cloned().unwrap_or_default() { ev[k] = v; }
         ci.send(ev);
-        match tokio::time::timeout(Duration::from_secs(120), rx).await { Ok(Ok(v)) => v, _ => { self.waiting.lock().unwrap().remove(&id); json!({ "ok": false, "error": "Their browser did not answer in time." }) } }
+        match tokio::time::timeout(Duration::from_secs(120), rx).await { Ok(Ok(v)) => v, _ => { self.waiting.lock().unwrap_or_else(|e| e.into_inner()).remove(&id); json!({ "ok": false, "error": "Their browser did not answer in time." }) } }
     }
     pub async fn execute(&self, hub: &Arc<dyn AiHub>, a: &Account, name: &str, args: &Value, ci: &mut Ci) -> Value {
         let Some(t) = Self::tools().into_iter().find(|t| t["name"] == json!(name)) else { return json!({ "ok": false, "error": format!("No tool called {name}.") }) };

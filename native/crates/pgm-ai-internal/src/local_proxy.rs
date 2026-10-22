@@ -19,16 +19,16 @@ fn text(status: StatusCode, msg: &str) -> Response<Body> {
 #[derive(Default)]
 pub struct Proxy { stop: Mutex<Option<tokio::sync::oneshot::Sender<()>>>, pub port: Mutex<u16> }
 impl Proxy {
-    pub fn running(&self) -> bool { self.stop.lock().unwrap().is_some() }
-    pub fn stop(&self) { if let Some(s) = self.stop.lock().unwrap().take() { let _ = s.send(()); } *self.port.lock().unwrap() = 0; }
+    pub fn running(&self) -> bool { self.stop.lock().unwrap_or_else(|e| e.into_inner()).is_some() }
+    pub fn stop(&self) { if let Some(s) = self.stop.lock().unwrap_or_else(|e| e.into_inner()).take() { let _ = s.send(()); } *self.port.lock().unwrap_or_else(|e| e.into_inner()) = 0; }
     pub async fn start(&self, port: u16, hub: String, key: String) -> Result<(), String> {
         self.stop();
         if key.is_empty() { return Err("Set your VibeRoller API key first (the hub: Settings → API access).".into()); }
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| format!("Could not listen on 127.0.0.1:{port}: {e}"))?;
         let http = pgm_net_internal::client::http_client(std::time::Duration::from_secs(15)).map_err(|e| e.to_string())?;
         let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
-        *self.stop.lock().unwrap() = Some(tx);
-        *self.port.lock().unwrap() = port;
+        *self.stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        *self.port.lock().unwrap_or_else(|e| e.into_inner()) = port;
         tokio::spawn(async move {
             loop {
                 tokio::select! {

@@ -33,7 +33,7 @@ impl Usage {
     }
     fn save(&self, db: &Value) { if !self.persist { return; } let tmp = self.file.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(db).unwrap_or_default()).is_ok() { let _ = std::fs::rename(&tmp, &self.file); } }
     fn with_bucket<R>(&self, source: &str, f: impl FnOnce(&mut Value) -> R) -> R {
-        let mut db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let r = if source.is_empty() || source == "hub" { f(&mut db) } else {
             if !db["sources"][source].is_object() { db["sources"][source] = json!({}); }
             f(&mut db["sources"][source])
@@ -84,14 +84,14 @@ impl Usage {
     }
     /// The exact windows of a source (null when not known or reset).
     pub fn windows(&self, source: &str) -> Value {
-        let db = self.db.lock().unwrap(); let now = now_ms();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms();
         let b = if source.is_empty() || source == "hub" { &*db } else { &db["sources"][source] };
         let ok = |l: &Value| if l["exact"].as_bool() == Some(true) && l["resetsAt"].as_u64().map(|r| r > now).unwrap_or(false) { json!({ "utilization": l["utilization"], "resetsAt": l["resetsAt"], "status": l["status"] }) } else { Value::Null };
         json!({ "five_hour": ok(&b["limits"]["five_hour"]), "seven_day": ok(&b["limits"]["seven_day"]) })
     }
     /// The /api/usage answer: the windows of the source the person's provider uses, and their context (ctx, session).
     pub fn status(&self, source: &str, ctx: &Value, session: &str) -> Value {
-        let db = self.db.lock().unwrap(); let now = now_ms();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms();
         let b = if source.is_empty() || source == "hub" { (*db).clone() } else { db["sources"][source].clone() };
         let win = |key: &str, start: &Value, len: u64| -> Value {
             let l = &b["limits"][key];

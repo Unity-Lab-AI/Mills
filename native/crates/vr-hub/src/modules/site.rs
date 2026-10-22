@@ -18,7 +18,7 @@ impl Build {
     /// The JavaScript hub behind named another build than this one: said once per build it names (the answer gets this
     /// hub's build either way; a graceful restart brings the two together again).
     pub fn note_back(&self, theirs: &str, mine: &str) {
-        let mut last = self.1.lock().unwrap();
+        let mut last = self.1.lock().unwrap_or_else(|e| e.into_inner());
         if *last != theirs { *last = theirs.to_string(); println!("[vr-hub] The JavaScript hub behind runs {theirs}, this hub {mine}: pages are told {mine}. A restart (Admin → Restart, or node bridge/restart.js) brings them together."); }
     }
     /// The commit this hub started from (the auto-deploy's health check compares it with what it deployed).

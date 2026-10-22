@@ -10,7 +10,7 @@ use crate::front::{Hub, Req};
 
 fn summary(hub: &Hub, a: &Account) -> Value {
     let au = &hub.mods.auth; let lock = au.lock_of(&a.username); let u = &a.username;
-    let busy = hub.mods.work.busy(u) || hub.mods.unity.runs.lock().unwrap().contains_key(u);
+    let busy = hub.mods.work.busy(u) || hub.mods.unity.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(u);
     let (devices, allow_next) = lock.as_ref().map(|l| (super::auth::lock_devices(l).len(), l["allowNext"] == json!(true))).unwrap_or((0, false));
     json!({ "username": u, "display": a.display, "admin": a.admin, "locked": lock.is_some(), "lockedAt": lock.map(|l| l["at"].clone()).unwrap_or(Value::Null), "devices": devices, "allowNext": allow_next, "signedIn": au.signed_in(u), "busy": busy,
         "model": hub.mods.work.effective_model(a), "chatKey": hub.mods.chat.has_key(u), "hasPassword": a.dir.join("auth.json").exists(), "unityPc": hub.mods.unity.group_on(a, "pc"), "unityCode": hub.mods.unity.group_on(a, "code") })

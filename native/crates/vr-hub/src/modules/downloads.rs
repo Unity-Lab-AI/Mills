@@ -49,7 +49,7 @@ impl Downloads {
     /// The package as a zip and its version (hub version + a fingerprint of all but a personal ai-node.json).
     fn built(&self, hub_v: &str, id: &str, hub: &str, cfg: Option<&Value>) -> (Arc<Vec<u8>>, String) {
         let stamp = self.stamp();
-        if cfg.is_none() { if let Some((h, s, z, v)) = self.cache.lock().unwrap().get(id) { if h == hub && *s == stamp { return (z.clone(), v.clone()); } } }
+        if cfg.is_none() { if let Some((h, s, z, v)) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(id) { if h == hub && *s == stamp { return (z.clone(), v.clone()); } } }
         let mut entries = self.build(id, hub, cfg);
         let mut all = vec![];
         for en in &entries { if !en.name.ends_with("/ai-node.json") { all.extend(en.name.as_bytes()); all.push(0u8); all.extend(&en.data); } }
@@ -57,7 +57,7 @@ impl Downloads {
         let folder = entries.first().map(|x| x.name.split('/').next().unwrap_or("").to_string()).unwrap_or_default();
         entries.push(e(format!("{folder}/VERSION.txt"), format!("{version}\n")));
         let z = Arc::new(zip(&entries));
-        if cfg.is_none() { self.cache.lock().unwrap().insert(id.into(), (hub.into(), stamp, z.clone(), version.clone())); }
+        if cfg.is_none() { self.cache.lock().unwrap_or_else(|e| e.into_inner()).insert(id.into(), (hub.into(), stamp, z.clone(), version.clone())); }
         (z, version)
     }
 }

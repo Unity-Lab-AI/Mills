@@ -57,7 +57,7 @@ impl Verifier {
         let secret = secret_of(&product).ok_or("unknown product")?;
         let path_q = if r.query.is_empty() { r.path.clone() } else { format!("{}?{}", r.path, r.query) };
         if !hmac_ok(secret.as_bytes(), payload(r.method.as_str(), &path_q, ts, &nonce, &user, &r.body).as_bytes(), &sig) { return Err("bad signature"); }
-        let mut seen = self.seen.lock().unwrap();
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         seen.retain(|_, t| now.saturating_sub(*t) <= 2 * MAX_SKEW_MS);
         if seen.insert(format!("{product}|{nonce}"), now).is_some() { return Err("replayed"); }
         Ok(Signed { product, user })
