@@ -40,13 +40,15 @@ let front = null, frontCrashes = [], rust = (() => {
   if (!r || r.enabled === false || PROFILE) return null;
   const bin = hubBin();
   if (!bin) { console.log(`${tag} No vr-hub binary here (sh native/build.sh builds it; the auto-deploy does on the server): the JavaScript hub runs alone.`); return null; }
-  return { bin, backPort: Number(r.backPort) || config.port + 2, secret: crypto.randomBytes(24).toString('hex'), mods: rustModules(bin) };
+  // alone (5.6.0, FR6): the Rust hub without this JavaScript hub behind it: server.js is not started at all, and a Rust
+  // hub that keeps failing is started again (vr-run falls back to the previous good build instead; this supervisor has none)
+  return { bin, backPort: Number(r.backPort) || config.port + 2, secret: crypto.randomBytes(24).toString('hex'), mods: rustModules(bin), alone: r.alone === true };
 })();
 // the modules it answers: the JavaScript hub leaves those alone (their data is the Rust hub's)
 function rustModules(bin) { try { return require('child_process').execFileSync(bin, ['--modules'], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim(); } catch { return ''; } }
 function startFront() {
   if (!rust || shuttingDown) return;
-  front = spawn(rust.bin, ['--port', String(config.port), '--back', String(rust.backPort), '--root', ROOT], { stdio: 'inherit', windowsHide: true, env: { ...process.env, VR_FRONT_SECRET: rust.secret, VR_NODE: process.execPath, MILLS_SUPERVISED: '1' } }); // VR_NODE: the Node.js its Work runs' tools (bridge/*-mcp.js) and bridge/worktree.js run on
+  front = spawn(rust.bin, ['--port', String(config.port), ...(rust.alone ? ['--alone'] : ['--back', String(rust.backPort)]), '--root', ROOT], { stdio: 'inherit', windowsHide: true, env: { ...process.env, VR_FRONT_SECRET: rust.secret, VR_NODE: process.execPath, MILLS_SUPERVISED: '1' } }); // VR_NODE: the Node.js its Work runs' tools (bridge/*-mcp.js) and bridge/worktree.js run on
   front.on('exit', (code) => {
     front = null;
     if (shuttingDown) return;
@@ -54,12 +56,13 @@ function startFront() {
     // 75: a restart was asked for and nobody is busy (4.0.0: the Rust hub owns bridge/.restart): both hubs start again
     // on the new code, the JavaScript one behind it first
     if (code === 75) {
-      console.log(`${tag} Restarting both hubs with the new code…`);
+      console.log(`${tag} Restarting ${rust.alone ? 'the hub' : 'both hubs'} with the new code…`);
       rust.mods = rustModules(rust.bin); // a new build may answer more
       if (app) { app.removeAllListeners('exit'); app.on('exit', () => { app = null; startApp(); }); app.kill('SIGTERM'); } else startApp();
       return;
     }
     const now = Date.now(); frontCrashes = frontCrashes.filter((t) => now - t < 60000); frontCrashes.push(now);
+    if (rust.alone) { console.log(`${tag} The Rust hub exited with code ${code}; starting it again in 5 s (alone: no JavaScript hub to fall back to; vr-run falls back to the previous good build).`); setTimeout(startFront, 5000); return; }
     if (frontCrashes.length >= 3 || code === 2) { // keeps failing (or its port is taken): this hub takes the port back
       console.log(`${tag} The Rust hub stopped ${frontCrashes.length} time(s) (last code ${code}): the JavaScript hub takes port ${config.port} back by itself.`);
       rust = null;
@@ -88,6 +91,7 @@ function startApp() {
     });
     return;
   }
+  if (rust && rust.alone) { if (!front) startFront(); return; } // alone: no server.js at all
   app = spawn(process.execPath, [path.join(ROOT, 'server.js'), ...process.argv.slice(2)], {
     stdio: 'inherit', env: { ...process.env, MILLS_SUPERVISED: '1', ...(rust ? { VR_BACK_PORT: String(rust.backPort), VR_FRONT_SECRET: rust.secret, VR_FRONT_MODULES: rust.mods } : {}) }, windowsHide: true,
   });

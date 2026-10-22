@@ -249,7 +249,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -333,8 +333,10 @@ function buildDesktop() { // → { bin } or { why }
 }
 // --rust-hub: the Rust hub (native/crates/vr-hub) in front of the scratch hub, as config "rustHub" runs it on the server:
 // every check below then goes through it (the modules it has, it answers; the rest it passes to the JavaScript hub)
+// --rust-alone (FR6): the Rust hub ALONE, no JavaScript hub started at all (config rustHub.alone): every check through it
+const RUST_ALONE = process.argv.includes('--rust-alone');
 const RUST_HUB = (() => {
-  if (!process.argv.includes('--rust-hub')) return '';
+  if (!process.argv.includes('--rust-hub') && !RUST_ALONE) return '';
   const why = buildNative();
   if (why) { console.error('--rust-hub: ' + why); process.exit(2); }
   const bin = path.join(NATIVE_TARGET, 'release', 'vr-hub' + (WIN ? '.exe' : ''));
@@ -1168,8 +1170,8 @@ async function run() {
     const fr = await fetch(H + '/__vr-front').then(async (r) => ({ status: r.status, j: await r.json().catch(() => ({})), h: r.headers.get('x-vr-front') })).catch(() => ({}));
     const st = await fetch(H + '/api/status');
     const backDirect = await fetch(`http://127.0.0.1:${RUST_BACK}/api/status`).then((r) => r.status).catch(() => 'closed');
-    check('R166', 'the Rust hub (vr-hub) is in front: it answers /__vr-front with its version and native modules, every hub answer passes through it (X-VR-Front), and the JavaScript hub listens behind it on its own port on 127.0.0.1 only',
-      fr.status === 200 && fr.j.front === 'vr-hub' && !!st.headers.get('x-vr-front') && backDirect === 200,
+    check('R166', 'the Rust hub (vr-hub) is in front: it answers /__vr-front with its version and native modules, every hub answer passes through it (X-VR-Front), and the JavaScript hub listens behind it on its own port on 127.0.0.1 only (--rust-alone: there is no JavaScript hub at all)',
+      fr.status === 200 && fr.j.front === 'vr-hub' && !!st.headers.get('x-vr-front') && (RUST_ALONE ? backDirect === 'closed' : backDirect === 200),
       `front ${fr.status} ${JSON.stringify(fr.j)}; status via front ${st.headers.get('x-vr-front')}; back ${backDirect}`);
   }
   {
@@ -1352,7 +1354,7 @@ async function run() {
   const bDel2 = await call('/api/board/delete', A, { id: tid });
   const bGone = !((await call('/api/board', A)).data.tasks || []).some((t) => t.id === tid);
   const onDiskB = JSON.parse(fs.readFileSync(path.join(SCRATCH, 'Board', 'board.json'), 'utf8')).tasks.find((t) => t.id === tid) || {};
-  const mcpRt = fs.readFileSync(path.join(SB, '.mcp-runtime.json'), 'utf8');
+  const mcpRt = fs.readFileSync((RUST_ALONE ? path.join(SB, 'profiles', 't-admin', '.mcp-runtime-hub.json') : path.join(SB, '.mcp-runtime.json')), 'utf8'); // the MCP servers a Work run gets: the JavaScript hub's file, or the Rust hub's own (alone)
   check('R99', 'team board: create wakes other people\'s long poll; a claim blocks others\' edits + claims; a stale revision is refused; assignee; monthly repeat re-arms month-end aware (Jan 31 → Feb 28 → Mar 31, leap Feb 29); Claude in a Work run creates / claims / notes as "<person> · Claude" and its claim blocks even its own person; delete leaves a tombstone; board MCP wired into Work runs',
     bt.status === 200 && (bWoke.data.tasks || []).some((t) => t.id === tid) && bClaim.status === 200 && bClaim.data.task.status === 'doing'
     && bBlockedU.status === 409 && bClaimU.status === 409 && bStale.status === 409 && bOk.status === 200 && bOk.data.task.assignee === 't-user'
@@ -1583,7 +1585,7 @@ async function run() {
     teamOut.all === 'Tadmin · Claude' && teamOut.dm === 't-user' && teamOut.bad === false && teamOut.people >= 3
     && !!roomPost && roomPost.via === 't-admin' && roomText === 'hello team from a Work run r108' && !!dmPost && dmText === 'private note r108'
     && teamMsgsD.some((m) => !m.to) && !teamMsgsD.some((m) => m.to) && !unityReplied
-    && /team-mcp\.js/.test(fs.readFileSync(path.join(SB, '.mcp-runtime.json'), 'utf8')) && /mcp__team/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8'))
+    && /team-mcp\.js/.test(fs.readFileSync((RUST_ALONE ? path.join(SB, 'profiles', 't-admin', '.mcp-runtime-hub.json') : path.join(SB, '.mcp-runtime.json')), 'utf8')) && /mcp__team/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8'))
     && /const authorOf = \(m\) => m\.as \|\| [^\n]*nickOf\(m\.from\)/.test(html), // the "<person> · Claude" label wins over any (server) nickname
     `tool ${JSON.stringify(teamOut)}, room "${roomText}", dm "${dmText}", D sees dm ${teamMsgsD.some((m) => m.to)}, Unity replied ${unityReplied}`);
 
@@ -2466,12 +2468,15 @@ async function run() {
 const mode = () => { try { return fs.readFileSync(process.argv[3], 'utf8').trim(); } catch { return 'ok'; } };
 if (mode() === 'crash') process.exit(1);
 http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit })); }).listen(port, '127.0.0.1');\n`);
-    const scenario = async (name, builds, cur, good, expect, change) => { // builds: commit → mode; cur = the newest; good = the good list newest first
+    const scenario = async (name, builds, cur, good, expect, change, withJs) => { // builds: commit → mode; cur = the newest; good = the good list newest first; withJs: a stand-in bridge/server.js (the JavaScript hub) in the root
       if (built177.status !== 0) return { name, ok: false, why: 'vr-run not built' };
       const dir = path.join(SCRATCH, 'dist177-' + name); fs.mkdirSync(dir, { recursive: true });
+      const root0 = path.join(SCRATCH, 'root177-' + name, 'bridge'); fs.mkdirSync(root0, { recursive: true });
+      if (withJs) fs.writeFileSync(path.join(root0, 'server.js'), `const http = require('http'); const port = Number(process.env.VR_BACK_PORT || process.env.MILLS_PORT || 0); if (!port) process.exit(1);
+http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit: process.env.VR_BACK_PORT ? 'js-behind' : 'js-alone' })); }).listen(port, '127.0.0.1');\n`);
       for (const [c, m] of Object.entries(builds)) { fs.mkdirSync(path.join(dir, c), { recursive: true }); fs.writeFileSync(path.join(dir, c, 'mode'), m); fs.writeFileSync(path.join(dir, c, 'vr-hub'), `#!/bin/sh\nexec "${process.execPath}" "${fakeHub}" ${c} "${path.join(dir, c, 'mode')}" "$@"\n`, { mode: 0o755 }); }
       fs.writeFileSync(path.join(dir, 'current'), cur + '\n'); fs.writeFileSync(path.join(dir, 'good'), good.join('\n') + '\n'); // current: a plain file naming the commit (keep-builds.sh writes it so)
-      const port = await freePort(PORT + 300), root = path.join(SCRATCH, 'root177-' + name, 'bridge'); fs.mkdirSync(root, { recursive: true });
+      const port = await freePort(PORT + 300), root = root0;
       const log = fs.openSync(path.join(SCRATCH, `vr-run-${name}.log`), 'a');
       const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
       const who = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); return (await r.json()).commit || ''; } catch { return ''; } };
@@ -2486,9 +2491,12 @@ http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 
     const hang = await scenario('hang', { n1: 'hang', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const fine = await scenario('fine', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1');
     const again = await scenario('exit75', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1', async (dir) => { fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500); }); // the next health check makes the fake exit 75; vr-run starts it again
-    check('R177', 'FR4 the Rust supervisor vr-run (replacing run.js): starts the newest build ("current"); a build that crashes 3 times within a minute is marked bad and the previous good build takes over (bridge/.fell-back names both); a build that accepts connections but never answers the health check (/api/status every --health-every s, --health-timeout s, 3 misses) is killed and the previous good build takes over; a healthy build stays; exit 75 = the build is started again (restart on new code)',
-      built177.status === 0 && crash.ok && crash.fell && crash.fell.from === 'n1' && crash.fell.to === 'g1' && hang.ok && hang.fell && hang.fell.to === 'g1' && fine.ok && !fine.fell && again.ok && !again.fell,
-      built177.status !== 0 ? `vr-run does not build: ${String(built177.stderr || '').trim().split('\n').slice(-2).join(' ').slice(0, 160)}` : `crash → ${crash.seen || 'nobody'} in ${crash.ms} ms fell ${JSON.stringify(crash.fell)} · hang → ${hang.seen || 'nobody'} in ${hang.ms} ms fell ${JSON.stringify(hang.fell)} · fine → ${fine.seen} fell ${!!fine.fell} · exit 75 → ${again.seen} fell ${!!again.fell}`);
+    // the first swap's last net: every kept Rust build is bad and bridge/server.js still exists → the JavaScript hub takes the port alone (as run.js did)
+    const jsAlone = await scenario('jsalone', { n1: 'crash' }, 'n1', [], 'js-alone', null, true);
+    const jsAloneNote = fs.existsSync(path.join(SCRATCH, 'root177-jsalone', 'bridge', '.announce')) && fs.readdirSync(path.join(SCRATCH, 'root177-jsalone', 'bridge', '.announce')).some((f) => /^js-alone-/.test(f));
+    check('R177', 'FR4 the Rust supervisor vr-run (replacing run.js): starts the newest build ("current"); a build that crashes 3 times within a minute is marked bad and the previous good build takes over (bridge/.fell-back names both); a build that accepts connections but never answers the health check (/api/status every --health-every s, --health-timeout s, 3 misses) is killed and the previous good build takes over; a healthy build stays; exit 75 = the build is started again (restart on new code); while bridge/server.js still exists, every kept build failing hands the port to the JavaScript hub alone (the first swap\'s last net), said in .announce',
+      built177.status === 0 && crash.ok && crash.fell && crash.fell.from === 'n1' && crash.fell.to === 'g1' && hang.ok && hang.fell && hang.fell.to === 'g1' && fine.ok && !fine.fell && again.ok && !again.fell && jsAlone.ok && jsAloneNote,
+      built177.status !== 0 ? `vr-run does not build: ${String(built177.stderr || '').trim().split('\n').slice(-2).join(' ').slice(0, 160)}` : `crash → ${crash.seen || 'nobody'} in ${crash.ms} ms fell ${JSON.stringify(crash.fell)} · hang → ${hang.seen || 'nobody'} in ${hang.ms} ms fell ${JSON.stringify(hang.fell)} · fine → ${fine.seen} fell ${!!fine.fell} · exit 75 → ${again.seen} fell ${!!again.fell} · all bad + server.js → ${jsAlone.seen || 'nobody'} in ${jsAlone.ms} ms, said ${jsAloneNote}`);
   }
   if (RUST_HUB && !WIN) { // R178 (FR5): deploy/trial.sh tries a build on a side port against a copy of the data before it is swapped in
     const tr = path.join(MILLS, 'deploy', 'trial.sh');
@@ -2500,21 +2508,6 @@ http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 
     check('R178', 'FR5 a new build is tried before it is swapped in: sh deploy/trial.sh <vr-hub> <checkout> copies the settings, data and page to a private temporary root, starts the build there on a free port, expects /api/status 200 naming the checkout\'s version, / 200 and /__vr-front naming the front within 30 s, stops it, removes the copy: exit 0; a build that cannot start: exit 1 within 35 s; [static] the auto-deploy stages a build, tries it and only then puts it in service',
       ok178.status === 0 && bad178.status === 1 && badMs < 35000 && left178 <= 0 && /trial\.sh/.test(ad178) && /VR_STAGE_ONLY=1/.test(ad178),
       `good build exit ${ok178.status} ${String(ok178.stdout || ok178.stderr || '').trim().split('\n').pop().slice(0, 120)} · /bin/false exit ${bad178.status} in ${badMs} ms · copies left ${Math.max(0, left178)} · autodeploy runs it ${/trial\.sh/.test(ad178)}`);
-  }
-  if (RUST_HUB) { // R179 (FR6): who answers each route; the list of routes still answered by the JavaScript hub must shrink to none
-    // every /api/ path the JavaScript hub names (bridge/server.js and the modules it routes to), probed with GET as the
-    // admin: who answers is what counts, not the status (a POST-only route answers 404 either way). Paths that act on a
-    // GET-less route are left out all the same (nothing is restarted, cleared or deleted by the meter).
-    const js179 = ['server.js', 'files.js', 'notes.js', 'linux-accounts.js', 'forgejo.js', 'guilds.js', 'calls.js', 'shares.js', 'archive.js', 'user-profile.js', 'handoff.js', 'host-relay.js', 'usage.js', 'providers.js', 'board.js', 'assistant.js', 'ai-nodes.js', 'ai-nodes-front.js', 'openai.js'].map((f) => { try { return fs.readFileSync(path.join(BRIDGE, f), 'utf8'); } catch { return ''; } }).join('\n');
-    const found179 = new Set([...js179.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)].map((m) => m[1]));
-    const skip179 = /(logout|restart|delete|clear|stop|password|create|signout|unlock|allow|set-admin|handoff\/(switch|undo)|send|upload|disconnect|\/connect|remove|move|complete|claim|release|forget|reset|kill|update|answer|run|start|join|leave|invite|ban|kick|timeout|save|write|rename|mkdir|share|unshare|set$|toggle|clear)/;
-    const routes179 = [...new Set(['/api/check', '/api/version', '/api/status', '/api/room/messages?since=0', '/api/guilds', '/api/board', '/api/board/calendar', '/api/notes/tree', '/api/projects', '/api/forgejo/me', '/api/admin/accounts', '/api/admin/gateway/products', '/api/assistant/state', '/api/files/library', '/api/usage', '/api/providers', '/api/downloads', '/api/work/state', '/api/shares', '/api/linux/me', '/api/ai-hosts', '/api/archive/list', ...[...found179].filter((p) => !skip179.test(p)).sort()])];
-    const by179 = [];
-    for (const p of routes179) { const r = await tryFetch(H + p, { Authorization: 'Bearer ' + A }); by179.push(`${p.replace(/\?.*$/, '')}=${(r.h.get && r.h.get('x-vr-by')) || '-'}${r.status >= 500 || !r.status ? '!' + r.status : ''}`); }
-    const node179 = by179.filter((x) => /=node/.test(x)).map((x) => x.split('=')[0]), unmarked179 = by179.filter((x) => /=-/.test(x)).map((x) => x.split('=')[0]), broken179 = by179.filter((x) => /!/.test(x));
-    spec('R179', 'FR6 retire the JavaScript hub: every /api/ answer says who answered (x-vr-by: rust | node) and no route is left to the JavaScript hub',
-      unmarked179.length === 0 && node179.length === 0 && broken179.length === 0,
-      `${routes179.length} routes probed · still node (${node179.length}): ${node179.join(' ') || 'none'} · unmarked: ${unmarked179.join(' ') || 'none'} · broken: ${broken179.join(' ') || 'none'}`);
   }
 
   // R155: updates need an account too (4.0.0): the desktop app updates itself with the session its hub page hands it
@@ -3158,6 +3151,34 @@ http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 
   for (let i = 0; i < 60 && (pid4 === pid3 || !pid4); i++) { await sleep(250); pid4 = (await call('/api/status')).data.pid; }
   check('R10', 'restart waits for an active run, then happens', midPid === pid3 && pid4 && pid4 !== pid3);
   check('R89', 'while a restart is pending no NEW run starts (503, the page retries), so queued messages cannot hold it off', heldOff.status === 503 && heldOffU.status === 503);
+
+  if (RUST_HUB) { // R179 (FR6): who answers each route; the list of routes still answered by the JavaScript hub must shrink to none
+    // Every /api/ path the JavaScript hub names (bridge/server.js: `p === '…' && req.method === '…'`, and the modules it
+    // routes to), probed as the admin with the method the JavaScript hub expects (GET; a POST with {} where the path is
+    // POST-only, since a GET on it answers 404 from whoever owns it). Who answers is what counts, not the status. Routes
+    // that act (restart, clear, delete, sign-out, passwords, stop, handoff …) are never probed. Last in the suite: a
+    // probe that changed something (presence, typing, seen) disturbs nothing after it.
+    const srv179 = fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8');
+    const methods179 = new Map();
+    for (const m of srv179.matchAll(/p === '(\/api\/[a-z0-9/_-]+)'(?: && req\.method === '([A-Z]+)')?/g)) methods179.set(m[1], m[2] || (methods179.get(m[1]) || 'GET'));
+    for (const m of srv179.matchAll(/p\.startsWith\('(\/api\/[a-z0-9/_-]+)'\)/g)) if (!methods179.has(m[1] + 'probe')) methods179.set(m[1].endsWith('/') ? m[1] + 'probe' : m[1], 'GET');
+    const js179 = ['files.js', 'notes.js', 'linux-accounts.js', 'forgejo.js', 'guilds.js', 'calls.js', 'shares.js', 'archive.js', 'user-profile.js', 'handoff.js', 'host-relay.js', 'usage.js', 'providers.js', 'board.js', 'assistant.js', 'ai-nodes.js', 'ai-nodes-front.js', 'openai.js'].map((f) => { try { return fs.readFileSync(path.join(BRIDGE, f), 'utf8'); } catch { return ''; } }).join('\n');
+    for (const m of js179.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)) if (!methods179.has(m[1])) methods179.set(m[1], 'ANY');
+    const skip179 = /(logout|restart|\/clear|\/delete|\/stop$|password|create|signout|unlock|allow-device|set-admin|handoff|\/remove|disconnect|library\/exec|workspace|\/kill|\/reset|\/forget|unity-tools|room\/send|room\/file|work\/file|\/exec)/;
+    const probe = async (p, method, body) => { try { const r = await fetch(H + p, { method, headers: { Authorization: 'Bearer ' + A, 'Content-Type': 'application/json' }, body: method === 'POST' ? JSON.stringify(body || {}) : undefined }); return { status: r.status, by: r.headers.get('x-vr-by') || '-' }; } catch (e) { return { status: 0, by: '-' }; } };
+    const by179 = [];
+    for (const [p, method] of [...methods179.entries()].sort()) {
+      if (skip179.test(p) || p.includes('/pub/')) continue;
+      if (p.endsWith('/') || p.endsWith('/probe') || p.startsWith('/api/v1/') || p === '/api/show' || p === '/api/tags') continue; // prefixes, and Forgejo's / Ollama's API paths quoted in forgejo.js / assistant.js (not hub routes)
+      let r = await probe(p, method === 'POST' ? 'POST' : 'GET');
+      if (method === 'ANY' && r.by === 'node' && [404, 405].includes(r.status)) r = await probe(p, 'POST'); // the modules' routes: the method is not in the source line
+      by179.push({ p, method: method === 'POST' ? 'POST' : method === 'ANY' && r.status !== 404 ? 'POST?' : 'GET', ...r });
+    }
+    const node179 = by179.filter((x) => x.by === 'node').map((x) => x.p), unmarked179 = by179.filter((x) => x.by === '-').map((x) => `${x.p}(${x.status})`), broken179 = by179.filter((x) => x.status >= 500 || !x.status).map((x) => `${x.p}(${x.status})`);
+    check('R179', 'FR6 retire the JavaScript hub: every /api/ answer says who answered (x-vr-by: rust | node) and no route the JavaScript hub names is still answered by it (probed with the method it expects; routes that act are never probed)',
+      unmarked179.length === 0 && node179.length === 0 && broken179.length === 0,
+      `${by179.length} routes probed · still node (${node179.length}): ${node179.join(' ') || 'none'} · unmarked: ${unmarked179.join(' ') || 'none'} · broken: ${broken179.join(' ') || 'none'}`);
+  }
 
   check('R11', 'account password files unchanged (scratch and production)', sha(path.join(SB, 'profiles', 't-admin', 'auth.json')) === authBefore
     && prodAccountFiles().every((f) => prodBefore[f] === sha(f)));
