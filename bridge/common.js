@@ -56,7 +56,7 @@ function loadProfile(PROFILE) {
     console.error(`Missing bridge/profiles/${PROFILE}/config.json (at least {"user": "<display name>"}).`);
     process.exit(1);
   }
-  if (PROFILE) { delete baseConfig.port; delete baseConfig.gistId; } // never share a port or a gist between profiles
+  if (PROFILE) { delete baseConfig.port; delete baseConfig.gistId; delete baseConfig.admin; } // never share a port, a gist or the default account's admin flag between profiles
   const config = Object.assign({
     port: 7777,
     user: '', // display name of the account ('' = its username, capitalised)

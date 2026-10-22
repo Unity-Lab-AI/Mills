@@ -7,6 +7,15 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.2.3 — 2026-10-22
+
+PATCH: Admin → accounts has **Make admin / Remove admin** (`POST /api/admin/set-admin {username, admin}`), so the
+founders (Gee, Sponge, Mills) are all admins without editing files. Nobody can remove their own admin, so there is
+always one left. A profile's flag goes into its `config.json`. The default account's flag goes into
+`config.local.json` (its permissions kept), and the Rust hub now reads it there too (pgm-identity `admin_in` /
+`accounts`, mirrored to pgm-libs). `bridge/common.js` no longer lets the default account's `admin` reach the profiles.
+Suite: R171. bridge/common.js 1.2.1, bridge/server.js 4.1.2, web/index.html 1.14.2.
+
 ## 5.2.2 — 2026-10-22
 
 PATCH: `native/build-products.sh` also builds the products' Linux desktop apps (a tar.gz each) when the WebKitGTK

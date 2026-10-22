@@ -2673,6 +2673,28 @@ async function run() {
   const stOn = (await call('/api/assistant/state', U)).data.tools || {};
   check('R87', 'admin switches per account: non-admin 403; off → tools refused for that person; on again', notAdmin.status === 403 && off.data.pc === false && off.data.code === false && stOff.pc === false && sumOff.unityPc === false
     && offRes.ok === false && /switched/.test(offRes.error || '') && !offEv.some((e) => e.type === 'pc_tool') && stOn.pc === true && stOn.code === true, JSON.stringify(offRes));
+  { // R171: admins make other admins (the founders), never remove themselves; the default account's flag stays its own
+    const sum = async () => ((await call('/api/admin/accounts', A)).data.accounts || []);
+    const notAdm = await call('/api/admin/set-admin', U, { username: 't-user', admin: true });
+    const mk = await call('/api/admin/set-admin', A, { username: 't-user', admin: true });
+    const uSees = await call('/api/admin/accounts', U), uPw = await call('/api/admin/unlock', U, { username: 'nobody-r171' }); // past the admin check (no such account), nothing changed
+    const self = await call('/api/admin/set-admin', A, { username: 't-admin', admin: false });
+    const local = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(local), before = hadLocal ? fs.readFileSync(local) : null;
+    if (hadLocal) fs.chmodSync(local, 0o600);
+    const dflt = (await sum()).find((x) => !['t-admin', 't-user'].includes(x.username)) || {};
+    const mkD = await call('/api/admin/set-admin', A, { username: dflt.username, admin: true });
+    const afterD = await sum(), localMode = fs.statSync(local).mode & 0o777;
+    const leak = afterD.filter((x) => x.admin).map((x) => x.username).sort().join(',');
+    await call('/api/admin/set-admin', A, { username: dflt.username, admin: false });
+    if (hadLocal) fs.writeFileSync(local, before);
+    const rm = await call('/api/admin/set-admin', A, { username: 't-user', admin: false });
+    const uAfter = await call('/api/admin/accounts', U);
+    check('R171', 'Admin → Make admin / Remove admin: non-admin 403; the new admin can use Admin at once (both hubs); nobody removes their own admin; the default account\'s flag goes into config.local.json (its permissions kept) and never makes the profiles admins; removed again → 403',
+      notAdm.status === 403 && mk.status === 200 && mk.data.admin === true && uSees.status === 200 && uPw.status !== 403 && uPw.status < 500 && self.status === 400
+      && mkD.status === 200 && mkD.data.admin === true && leak === [dflt.username, 't-admin', 't-user'].sort().join(',') && (!hadLocal || localMode === 0o600)
+      && rm.status === 200 && rm.data.admin === false && uAfter.status === 403 && /set-admin/.test(html),
+      `${notAdm.status} ${mk.status} ${uSees.status}/${uPw.status} self ${self.status} default ${dflt.username} ${mkD.status} admins ${leak} mode ${localMode.toString(8)} rm ${rm.status} after ${uAfter.status}`);
+  }
   check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
   check('R106', '[static] every message you send shows its status: Work (queued / working / done / stopped / failed), Unity section, @unity in Chat (waiting / answering / answered)',
     /function msgStatus\(/.test(html) && /msgStatus\(el, 'queued'/.test(html) && /msgStatus\(mine, 'working'/.test(html) && /msgStatus\(mineU, 'working'/.test(html) && /function refreshAgentWaits/.test(html) && /'Unity answered'/.test(html));
@@ -2828,8 +2850,10 @@ async function run() {
   let pid2 = pid1;
   for (let i = 0; i < 60 && (pid2 === pid1 || !pid2); i++) { await sleep(250); pid2 = (await call('/api/status')).data.pid; }
   const after = await call('/api/check', U);
+  const lockedOut = (await login('t-user', 'pw-t-user-0001', 'device-eeeeeeeeeeeeeeee')).status;
   check('R9', 'graceful restart: new pid, token kept, lock + model kept, flag consumed', pid2 && pid2 !== pid1 && after.status === 200 && after.data.model === 'claude-opus-5-5'
-    && (await login('t-user', 'pw-t-user-0001', 'device-eeeeeeeeeeeeeeee')).status === 403 && !fs.existsSync(path.join(SB, '.restart'))); // (devA joined t-user's devices in R168)
+    && lockedOut === 403 && !fs.existsSync(path.join(SB, '.restart')), // (devA joined t-user's devices in R168)
+    `pid ${pid1}→${pid2} check ${after.status} model ${after.data && after.data.model} new device ${lockedOut} flag ${fs.existsSync(path.join(SB, '.restart'))}`);
   // R154: a hub restart keeps every AI host's session: an older host that never says hello again (the "old-node" played
   // in R152, a 2.x host) still offers its Claude right after the restart, the way it did before it; a host the hub has
   // no session for is asked to say hello again (428 for hosts that send their version, 401 for older ones: they re-hello

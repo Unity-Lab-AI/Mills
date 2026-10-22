@@ -1338,6 +1338,18 @@ async function handleRequest(req, res) {
         saveState(t);
         return send(res, 200, { username: t.username, pc: t.state.unityPc !== false, code: t.state.unityCode !== false });
       }
+      if (p === '/api/admin/set-admin' && req.method === 'POST') { // make an account an admin, or not (never yourself: there is always one left)
+        const t = needTarget(), on = body.admin === true;
+        if (t === acct && !on) return send(res, 400, { error: 'You cannot remove your own admin: another admin can.' });
+        const file = t.profile ? path.join(t.files.PROFILE_DIR, 'config.json') : path.join(ROOT, 'config.local.json'); // the default account's own settings stay out of the tracked config.json
+        const c = readJson(file, {});
+        if (on) c.admin = true; else delete c.admin;
+        const mode = fs.existsSync(file) ? fs.statSync(file).mode & 0o777 : 0o600; // config.local.json holds the hosts' tokens: it keeps its permissions
+        fs.writeFileSync(file + '.tmp', JSON.stringify(c, null, 2), { mode }); fs.chmodSync(file + '.tmp', mode); fs.renameSync(file + '.tmp', file);
+        loadAccounts();
+        console.log(`[mills] ${acct.username} ${on ? 'made' : 'removed'} "${t.username}" ${on ? 'an admin' : 'as admin'}.`);
+        return send(res, 200, { username: t.username, admin: !!(accounts.get(t.username) || {}).admin });
+      }
       if (p === '/api/admin/accounts' && req.method === 'GET') return send(res, 200, { accounts: [...accounts.values()].map(accountSummary), me: acct.username });
       if (p === '/api/admin/create' && req.method === 'POST') {
         const username = String(body.username || '').trim().toLowerCase();
