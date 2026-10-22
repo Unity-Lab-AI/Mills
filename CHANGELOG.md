@@ -7,6 +7,15 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 4.1.3 — 2026-10-22
+
+### Fixed: a page that reloads itself over and over
+- **The page's self-update can no longer loop.** A signed-in page reloads onto a new build when a hub answer names
+  another build than the one it loaded (X-VR-Version). After 4.1.1 went live, a Chrome tab kept reloading. Now the tab
+  remembers the build it just reloaded for. If a hub answer still names that build within 10 minutes of the reload,
+  and the page itself has another one, the page stays where it is: it says so once in the chat (both builds and the
+  request) and writes the same to the browser console, so the cause can be found.
+
 ## 4.1.2 — 2026-10-21
 
 ### Fixed: the auto-deploy stopped deploying
