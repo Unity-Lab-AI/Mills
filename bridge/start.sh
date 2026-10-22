@@ -14,6 +14,7 @@ fi
 T=x86_64-unknown-linux-gnu
 if [ -x "../native/dist/$T/vr-run" ] && [ -f "../native/dist/$T/current" ]; then
   P=$(node -e "console.log(require('./common').loadProfile('').config.port)" 2>/dev/null || echo 7777)
+  # config "rustHub": { "alone": true } = no JavaScript hub at all (vr-run reads it too; said here for the log)
   exec env VR_NODE="$(command -v node)" "../native/dist/$T/vr-run" --root "$(pwd)" --port "$P" --builds "$(cd "../native/dist/$T" && pwd)"
 fi
 exec node run.js

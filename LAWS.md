@@ -78,6 +78,12 @@ number should scale less than the third number, however, this is all dependent o
   log when the other went away and for how long, and reconnect within seconds as if nothing happened; `hub_status`
   shows each AI host up or down and since when.
 - A host only restarts or updates when nothing is in flight and nothing came for 3 minutes.
+- Swapping what runs the hub (run.js → vr-run, the JavaScript hub behind → the Rust hub alone, 5.6.0) is one hub
+  restart and nothing else for a host: the host link (`/node/*`) has been the Rust hub's since 4.0, every host keeps
+  its session across a restart (R154), and a host that has not updated keeps working (R152). Do it at a quiet moment
+  (`/api/status` from the server says `busy: false`, hub_status shows no shared Work session), announce it first, and
+  watch `/api/status` come back; vr-run's own fallback (the previous good build; for the first swap also the
+  JavaScript hub) covers a bad build without anyone's hand.
 
 ## Nothing breaks, and nothing is lost
 

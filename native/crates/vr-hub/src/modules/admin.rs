@@ -51,7 +51,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
         }
         _ => {}
     }
-    if !p.starts_with("/api/admin/") || !matches!(p, "/api/admin/accounts" | "/api/admin/create" | "/api/admin/delete" | "/api/admin/restart" | "/api/admin/stop") { return None; }
+    if !p.starts_with("/api/admin/") || !matches!(p, "/api/admin/accounts" | "/api/admin/create" | "/api/admin/delete" | "/api/admin/restart" | "/api/admin/stop" | "/api/admin/set-admin") { return None; }
     if !a.admin { return Some(answer(403, json!({ "error": "Admins only." }))); }
     let au = &hub.mods.auth; let b = r.json();
     let target = || b["username"].as_str().and_then(|u| au.account(u));
@@ -90,6 +90,23 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
             answer(200, json!({ "ok": true }))
         }
         "/api/admin/restart" if post => { let _ = std::fs::write(hub.root.join(".restart"), format!("{}\n", super::auth::iso_now())); answer(200, json!({ "ok": true, "supervised": std::env::var("MILLS_SUPERVISED").is_ok() })) }
+        // an account made an admin, or not (never yourself: there is always one left). A profile's flag goes into its
+        // config.json; the default account's into config.local.json (its own settings stay out of the tracked config.json),
+        // which keeps its permissions (it holds the hosts' secrets).
+        "/api/admin/set-admin" if post => {
+            let Some(t) = target() else { return Some(answer(400, json!({ "error": "No such account." }))) };
+            let on = b["admin"] == json!(true);
+            if t.username == a.username && !on { return Some(answer(400, json!({ "error": "You cannot remove your own admin: another admin can." }))); }
+            let f = if t.dir == hub.root { hub.root.join("config.local.json") } else { t.dir.join("config.json") };
+            let mode = std::fs::metadata(&f).ok().map(|m| m.permissions());
+            let mut c = pgm_core_internal::json::read_json(&f).filter(Value::is_object).unwrap_or_else(|| json!({}));
+            if on { c["admin"] = json!(true); } else if let Some(m) = c.as_object_mut() { m.remove("admin"); }
+            super::unity::write_json(&f, &c);
+            if let Some(m) = mode { let _ = std::fs::set_permissions(&f, m); } else if t.dir == hub.root { vr_core::settings::private(&f); }
+            println!("[vr-hub] {} {} \"{}\"{}.", a.username, if on { "made" } else { "removed" }, t.username, if on { " an admin" } else { " as admin" });
+            accounts_changed(hub).await;
+            answer(200, json!({ "username": t.username, "admin": au.is_admin(&t.username) }))
+        }
         _ => answer(404, json!({ "error": "Unknown admin endpoint" })),
     })
 }

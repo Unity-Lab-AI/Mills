@@ -1,5 +1,5 @@
 {
-  "project": "5.5.0",
+  "project": "5.6.0",
   "modules": {
     "bridge/ai-node.js": "3.4.0",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -27,7 +27,7 @@
     "bridge/presence.js": "1.0.0",
     "bridge/providers.js": "1.4.0",
     "bridge/restart.js": "1.0.0",
-    "bridge/run.js": "1.5.0",
+    "bridge/run.js": "1.6.0",
     "bridge/server.js": "4.2.0",
     "bridge/set-password.js": "1.0.0",
     "bridge/shares.js": "1.0.0",

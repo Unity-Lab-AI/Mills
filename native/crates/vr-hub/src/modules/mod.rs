@@ -175,7 +175,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         panic!("test panic");
     }
     // the front itself: who answers here (for the tools and the regression suite; nothing private)
-    if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules() }))); }
+    if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules(), "alone": hub.alone() }))); }
     // the JavaScript hub asking a module of this one (with the front's secret, from this machine only)
     if let Some(rest) = p.strip_prefix("/__front/") {
         if !from_front(hub, r) { return answer(403, json!({ "ok": false, "error": "forbidden" })); }
@@ -261,6 +261,13 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if let Some(x) = downloads::gone(r) { return x; }
     let user = a.session_user(r);
     if user.is_none() && (p == "/api/native" || p == "/api/native/file" || p == "/api/downloads" || p.starts_with("/api/downloads/")) { return answer(401, json!({ "error": "Not signed in." })); }
+    // signing out (FR6: this hub's own): the session is gone, the chat sees them leave, their calls and shared Work end
+    if p == "/api/logout" && r.method == hyper::Method::POST {
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        hub.mods.work.share_stop(&u); chat::calls_leave(&**hub, &u); hub.mods.chat.set_typing(&u, "", false); hub.mods.chat.gone(&u);
+        if let Some(t) = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")) { a.forget_session(&auth::token_key(t)); }
+        return answer(200, json!({ "ok": true }));
+    }
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
     let me = || { let mut h = vec![("x-vr-notes-ver".to_string(), hub.mods.notes.version().to_string())]; if let Some(u) = &user { h.push(("x-vr-user".to_string(), u.clone())); } h };
     // ----- the board and the notes: this hub's own now -----

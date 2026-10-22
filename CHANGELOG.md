@@ -7,6 +7,24 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.6.0 — 2026-10-22
+
+MINOR: **the full-Rust hub, step 6 (FR6): the Rust hub stands alone.** With the honest meter (R179 probes every
+`/api/` path with the method the JavaScript hub expects) only `/api/logout` and `/api/admin/set-admin` were still
+answered by the JavaScript hub; both are the Rust hub's now (`modules/mod.rs`, `modules/admin.rs`).
+- **Alone mode:** `vr-hub --alone` (no `--back`): no JavaScript hub behind it; what it has no module for is 404 at
+  once, never waited for. Config `"rustHub": { "alone": true }`: `run.js` then never starts `server.js` and starts a
+  failing Rust hub again instead of handing the port to JavaScript; `vr-run --alone` (or that config) does the same
+  and falls back to the previous good Rust build instead of the JavaScript hub. `/__vr-front` says `alone`.
+- **The suite's third mode:** `node bridge/test/regress.js --rust-alone` runs every check against the Rust hub alone
+  (R166 expects no JavaScript hub). The normal and `--rust-hub` modes stay until the JavaScript hub is deleted.
+- **vr-run, the first swap's last net:** while `bridge/server.js` exists and every kept Rust build failed, the
+  JavaScript hub takes the port alone (as run.js did), said in the chat; the newest build is tried again later.
+  R177 proves it. With `alone`, or once server.js is gone, there is no such net: the previous good build is the net.
+- The server stays on `run.js` + the JavaScript hub behind until the swap is made by hand (see plans/full-rust-hub.md
+  § the swap): the swap is one config line (`rustHub.alone`), one service line (`vr-run`) and one restart at a quiet
+  moment. bridge/run.js 1.6.0.
+
 ## 5.5.0 — 2026-10-22
 
 MINOR: **the full-Rust hub, steps 2–5 (FR2–FR5 of plans/full-rust-hub.md): kept builds, a trial before the swap, a
