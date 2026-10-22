@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.6.1 — 2026-10-22
+
+PATCH: **the library law** (LAWS.md). Sponge: code that two projects need is written once, in a library (pgm-libs and
+what grows next to it: the Jcode PGM plugin SDK and host, the harness interface), and used from there; look for an
+existing crate before writing, extend it rather than copy; copying a function between projects is the signal to move it
+into the library. A library change follows the product release checklist (bump, lock, `--locked` build, tag, bump the
+users). No code change.
+
 ## 5.6.0 — 2026-10-22
 
 MINOR: **the full-Rust hub, step 6 (FR6): the Rust hub stands alone.** With the honest meter (R179 probes every
