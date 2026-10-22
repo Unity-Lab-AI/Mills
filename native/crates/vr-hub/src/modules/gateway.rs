@@ -10,8 +10,10 @@
 //! - A product acts only for people it linked: someone who signed in to it with their VibeRoller login
 //!   (`identity/verify`). Links are per product (`bridge/gateway/links/<id>.json`); an admin's "remove" ends them.
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use pgm_net_internal::http::Backend;
 
 use super::auth::Account;
 use super::Routed;
@@ -24,9 +26,11 @@ pub const NAME: &str = "PGM Gateway";
 
 pub struct Gateway {
     dir: PathBuf,
-    products: Mutex<Map<String, Value>>, // id → { name, secret, ai, created }
+    products: Mutex<Map<String, Value>>, // id → { name, secret, ai, port?, created }
     links: Mutex<Map<String, Value>>,    // id → { username → { at } }
     verifier: Verifier,
+    /// the products served through this hub (`/p/<id>/` → 127.0.0.1:port), one backend each, made when first asked for
+    backends: Mutex<HashMap<String, Arc<Backend>>>,
 }
 impl Gateway {
     pub fn new(root: &std::path::Path) -> Gateway {
@@ -34,7 +38,13 @@ impl Gateway {
         let products = read_json(&dir.join("products.json")).and_then(|v| v["products"].as_object().cloned()).unwrap_or_default();
         let mut links = Map::new();
         for id in products.keys() { links.insert(id.clone(), read_json(&dir.join("links").join(format!("{id}.json"))).filter(Value::is_object).unwrap_or(json!({}))); }
-        Gateway { dir, products: Mutex::new(products), links: Mutex::new(links), verifier: Verifier::default() }
+        Gateway { dir, products: Mutex::new(products), links: Mutex::new(links), verifier: Verifier::default(), backends: Mutex::default() }
+    }
+    /// A product's port on this machine, when it is served through this hub.
+    fn port_of(&self, id: &str) -> Option<u16> { self.products.lock().unwrap().get(id).and_then(|p| p["port"].as_u64()).filter(|p| (1..=65535).contains(p)).map(|p| p as u16) }
+    fn backend(&self, id: &str, port: u16) -> Arc<Backend> {
+        let mut bs = self.backends.lock().unwrap();
+        match bs.get(id) { Some(b) if b.addr.port() == port => b.clone(), _ => { let b = Arc::new(Backend::plain(std::net::SocketAddr::from(([127, 0, 0, 1], port)), std::time::Duration::from_secs(5))); bs.insert(id.into(), b.clone()); b } }
     }
     fn save(&self) {
         let _ = pgm_core_internal::fs::private_dir(&self.dir);
@@ -54,14 +64,17 @@ impl Gateway {
     /// What an admin sees: no secrets.
     pub fn list(&self) -> Vec<Value> {
         let links = self.links.lock().unwrap();
-        self.products.lock().unwrap().iter().map(|(id, p)| json!({ "id": id, "name": p["name"], "ai": p["ai"] == json!(true), "created": p["created"], "linked": links.get(id).and_then(Value::as_object).map(|m| m.len()).unwrap_or(0), "secretFile": format!("bridge/gateway/{id}.secret") })).collect()
+        self.products.lock().unwrap().iter().map(|(id, p)| json!({ "id": id, "name": p["name"], "ai": p["ai"] == json!(true), "port": p["port"], "path": p["port"].as_u64().map(|_| format!("/p/{id}/")), "created": p["created"], "linked": links.get(id).and_then(Value::as_object).map(|m| m.len()).unwrap_or(0), "secretFile": format!("bridge/gateway/{id}.secret") })).collect()
     }
-    /// A new product, or a new secret for one (the old one stops working at once). Its links stay.
-    pub fn put(&self, id: &str, name: &str, ai: bool) -> Result<Value, String> {
+    /// A new product, or a new secret for one (the old one stops working at once). Its links stay. `port`: the
+    /// product's own port on this machine, to serve it at `/p/<id>/` (0 = not served here).
+    pub fn put(&self, id: &str, name: &str, ai: bool, port: u64) -> Result<Value, String> {
         if !valid_id(id) { return Err("A product id is 1–32 of a-z, 0-9 and \"-\".".into()); }
         let name = name.trim(); if name.is_empty() || name.chars().count() > 64 { return Err("A product needs a name (up to 64 characters).".into()); }
+        if port > 65535 { return Err("A port is 1–65535 (0 = not served through this hub).".into()); }
         let secret = pgm_core_internal::crypto::random_hex(32);
-        { let mut ps = self.products.lock().unwrap(); let created = ps.get(id).map(|p| p["created"].clone()).unwrap_or_else(|| json!(pgm_core_internal::time::iso_now())); ps.insert(id.into(), json!({ "name": name, "secret": secret, "ai": ai, "created": created })); }
+        { let mut ps = self.products.lock().unwrap(); let created = ps.get(id).map(|p| p["created"].clone()).unwrap_or_else(|| json!(pgm_core_internal::time::iso_now()));
+          let mut v = json!({ "name": name, "secret": secret, "ai": ai, "created": created }); if port > 0 { v["port"] = json!(port); } ps.insert(id.into(), v); }
         self.links.lock().unwrap().entry(id.to_string()).or_insert(json!({}));
         self.save();
         let f = self.dir.join(format!("{id}.secret"));
@@ -80,6 +93,29 @@ impl Gateway {
 }
 
 fn answer(status: u16, v: Value) -> Routed { Routed::Answer(jresp(status, &v)) }
+
+/// `/p/<id>/…`: a product served through this hub, so it is on this site with no server set-up of its own (the
+/// subdomain of its own comes later; a product's page works under both). Only to a registered product's port on
+/// this machine; nothing a caller sent can pretend to be the hub or nginx (x-vr-*, x-pgm-*, the forwarded address
+/// come from here only); the product's internal routes are never reachable this way.
+pub async fn serve(hub: &Arc<Hub>, r: &Req, rest: &str) -> Routed {
+    let g = &hub.mods.gateway;
+    let (id, path) = rest.split_once('/').map(|(i, p)| (i, format!("/{p}"))).unwrap_or((rest, String::new()));
+    let Some(port) = (if valid_id(id) { g.port_of(id) } else { None }) else { return answer(404, json!({ "error": "No such product here." })) };
+    if path.is_empty() { // /p/<id> → /p/<id>/ so the page's relative links work
+        return Routed::Answer(hyper::Response::builder().status(302).header("location", format!("/p/{id}/")).header("content-length", 0).body(crate::front::full("")).expect("response"));
+    }
+    if path.starts_with("/internal/") || path.starts_with("/__") { return answer(404, json!({ "error": "Not found" })); }
+    let pq = if r.query.is_empty() { path } else { format!("{path}?{}", r.query) };
+    // the caller's address as nginx saw it (behind it the hub trusts only those headers), else the peer
+    let behind = hub.cfg.get("behindProxy") == Some(&json!(true));
+    let ip = { let i = if behind { hub.mods.auth.outside_ip(r) } else { String::new() }; if i.is_empty() { r.peer.ip().to_string() } else { i } };
+    let proto = if behind && r.header("x-forwarded-proto").is_some() { r.header("x-forwarded-proto").unwrap_or("https").to_string() } else { "http".to_string() };
+    let extra = vec![("x-forwarded-for".to_string(), ip.clone()), ("x-real-ip".to_string(), ip), ("x-forwarded-proto".to_string(), proto), ("x-forwarded-prefix".to_string(), format!("/p/{id}")), ("x-pgm-gateway".to_string(), crate::VERSION.to_string())];
+    let keep = |k: &str| !(k.starts_with("x-vr-") || k.starts_with("x-pgm-") || k.starts_with("x-forwarded-") || k == "x-real-ip" || k == "cf-connecting-ip" || k == "forwarded");
+    let b = g.backend(id, port);
+    Routed::Answer(b.proxy_to(&pq, r.method.clone(), &r.headers, r.body.clone(), keep, &extra).await)
+}
 
 /// `/internal/gateway/<rest>`: a product's signed request.
 pub async fn route(hub: &Arc<Hub>, r: &Req, rest: &str) -> Routed {
@@ -137,7 +173,7 @@ pub fn admin(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
     let b = r.json();
     Some(match (r.method.as_str(), p) {
         ("GET", "/api/admin/gateway/products") => answer(200, json!({ "gateway": NAME, "products": g.list() })),
-        ("POST", "/api/admin/gateway/products") => match g.put(b["id"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""), b["ai"].as_bool().unwrap_or(false)) {
+        ("POST", "/api/admin/gateway/products") => match g.put(b["id"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""), b["ai"].as_bool().unwrap_or(false), b["port"].as_u64().or_else(|| b["port"].as_str().and_then(|s| s.trim().parse().ok())).unwrap_or(0)) {
             Ok(v) => { println!("[vr-hub] gateway: {} set product {}", a.username, v["id"]); answer(200, json!({ "product": v })) }
             Err(e) => answer(400, json!({ "error": e })),
         },

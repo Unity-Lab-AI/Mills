@@ -7,6 +7,27 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.2.0 — 2026-10-22
+
+**MINOR: PGM Gateway serves its products on this site** (board T-147 / T-150). A product registered with its port is
+reachable at `/p/<id>/` (PGM Prod Suit: `/p/prodsuit/`) through the hub, so it needs no server set-up of its own
+(no DNS, certificate or nginx change) and no change on any host. A subdomain of its own can come later; a product's
+page works under both.
+- The hub passes `/p/<id>/…` to the product on 127.0.0.1:port (pgm-net-internal `Backend::plain`, `proxy_to`):
+  streamed, with the caller's address as nginx saw it, `X-Forwarded-Prefix`, and never anything a caller sent as
+  `x-vr-*`, `x-pgm-*` or a forwarded address. `/p/<id>` redirects to `/p/<id>/`; a product's `/internal/` and `/__…`
+  are never reachable this way; an unknown product, one without a port, or one that is down answers 404 / 503 for
+  that path only. Nothing of the hub's own routes moved.
+- Admin → PGM Gateway products takes the port and shows where each product is served (`web/index.html` 1.14.0).
+- **The page is also the products' page** (`web/index.html` 1.14.0, `web/app.js` 1.1.2; the pgm-libs web kit): a
+  product's server fills `__MILLS_PRODUCT__` (its id, name, base path, screens) and the same page shows that product:
+  its name, only its screens on the menu, no Downloads / Connections, and everything it keeps in the browser (session,
+  chat keys, settings, device id) under the product's own name, so on the shared site it never touches VibeRoller's.
+  The hub fills nothing in and the page is VibeRoller's as before.
+- Regression R170 (with `--rust-hub`) also runs a stand-in product behind `/p/`: the redirect, GET / POST with the
+  path and body as sent, the forwarded headers, forged headers dropped, `/internal/` and `/__front/` closed, unknown /
+  portless / down products.
+
 ## 5.1.1 — 2026-10-22
 
 PATCH: what VibeRoller needs for the first PGM product (PGM Prod Suit, its own repository UnityAILab/pgm-prodsuit;
