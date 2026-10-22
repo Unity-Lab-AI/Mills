@@ -17,7 +17,9 @@ PATH=$CARGO_HOME/bin:$PATH; [ -d "$LLVM_MINGW/bin" ] && PATH=$PATH:$LLVM_MINGW/b
 command -v x86_64-w64-mingw32-gcc >/dev/null || { echo "no mingw-w64 (x86_64-w64-mingw32-gcc): cannot build the Windows apps" >&2; exit 1; }
 export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
 command -v x86_64-w64-mingw32-ar >/dev/null && export AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
-WIN=x86_64-pc-windows-gnu
+WIN=x86_64-pc-windows-gnu LINUX=x86_64-unknown-linux-gnu
+export OWNER_HOME
+. "$HERE/tauri-env.sh"
 HUB=${PRODUCTS_HUB:-https://portal.unityailab.com}
 GIT=${PRODUCTS_GIT:-https://git.unityailab.com/UnityAILab}
 cd "$HERE"
@@ -44,6 +46,21 @@ echo "$PRODUCTS" | while IFS='|' read -r id name ident; do
   rm -f "$out"; node "$HERE/zip.js" "$out" "$stage" >/dev/null
   rm -rf "$stage"
   echo "   $out ($(du -h "$out" | cut -f1))"
+  # Linux too, when the WebKitGTK sysroot is there (native/tauri-env.sh setup; the app runs against the desktop's own
+  # libwebkit2gtk-4.1): a tar.gz with the binary and the README
+  outl=""
+  if [ "$HAVE_TAURI_LINUX" = 1 ]; then
+    echo "   building the Linux app"
+    VR_DEFAULT_HUB="$HUB/p/$id" VR_APP_NAME="$name" VR_VERSION="${tag#v}" \
+      TAURI_CONFIG="{\"productName\":\"$name\",\"identifier\":\"$ident\"}" \
+      nice -n 10 cargo build -p vr-desktop --release --target "$LINUX" --target-dir target/products -q
+    outl="dist/products/$id-linux-$tag.tar.gz"; stage="dist/products/.stage-$id"; rm -rf "$stage"; mkdir -p "$stage"
+    cp "target/products/$LINUX/release/vr-desktop" "$stage/$id"
+    printf '%s\n' "$name, the desktop app (Linux x86_64), $tag" "" "Unpack anywhere and run ./$id (it needs the desktop's WebKitGTK: libwebkit2gtk-4.1-0, as VibeRoller's own app). It opens $HUB/p/$id/ in its own window." "Sign in with your VibeRoller username and password; the first time, your $name account is made from it." > "$stage/README.txt"
+    rm -f "$outl"; tar -czf "$outl" -C "$stage" .
+    rm -rf "$stage"
+    echo "   $outl ($(du -h "$outl" | cut -f1))"
+  fi
   [ "${PUBLISH:-1}" = 1 ] || continue
   [ "$tag" = dev ] && { echo "   no tag on Forgejo: not published"; continue; }
   : "${FORGEJO_URL:?FORGEJO_URL is needed to publish}" "${FORGEJO_TOKEN:?FORGEJO_TOKEN is needed to publish}"
@@ -56,9 +73,11 @@ echo "$PRODUCTS" | while IFS='|' read -r id name ident; do
   fi
   rid=$(printf '%s' "$rel" | sed -n 's/^{"id":\([0-9]*\),.*/\1/p'); [ -n "$rid" ] || rid=$(printf '%s' "$rel" | tr ',' '\n' | sed -n 's/^{\{0,1\}"id":\([0-9]*\)$/\1/p' | head -n 1)
   [ -n "$rid" ] || { echo "   could not read the release id: $rel" >&2; exit 1; }
-  zname=$(basename "$out")
-  old=$(curl -fsS -m 20 -H "$auth" "$api/releases/$rid/assets" | tr '{' '\n' | grep "\"name\":\"$zname\"" | sed -n 's/.*"id":\([0-9]*\),.*/\1/p' | head -n 1 || true)
-  [ -n "$old" ] && curl -fsS -m 20 -H "$auth" -X DELETE "$api/releases/$rid/assets/$old" >/dev/null
-  curl -fsS -m 300 -H "$auth" -X POST "$api/releases/$rid/assets?name=$zname" -F "attachment=@$out" >/dev/null
+  for f in "$out" $outl; do
+    zname=$(basename "$f")
+    old=$(curl -fsS -m 20 -H "$auth" "$api/releases/$rid/assets" | tr '{' '\n' | grep "\"name\":\"$zname\"" | sed -n 's/.*"id":\([0-9]*\),.*/\1/p' | head -n 1 || true)
+    [ -n "$old" ] && curl -fsS -m 20 -H "$auth" -X DELETE "$api/releases/$rid/assets/$old" >/dev/null
+    curl -fsS -m 300 -H "$auth" -X POST "$api/releases/$rid/assets?name=$zname" -F "attachment=@$f" >/dev/null
+  done
   echo "   published: $GIT/pgm-$id/releases/tag/$tag"
 done
