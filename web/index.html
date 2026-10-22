@@ -1334,7 +1334,7 @@ async function api(path, opts = {}) {
     if (res && ![502, 503, 504, 530].includes(res.status)) {
       if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
       const hubBuild = res.headers.get('x-vr-version');
-      if (hubBuild && me && (me.build || me.version) && hubBuild !== (me.build || me.version)) pageUpdateAvailable(hubBuild);
+      if (hubBuild && me && (me.build || me.version) && hubBuild !== (me.build || me.version)) pageUpdateAvailable(hubBuild, path);
       if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
       return res;
     }
@@ -1358,7 +1358,19 @@ async function api(path, opts = {}) {
 let pageUpdate = null, editorDirty = false;
 const UPDATE_STATE = 'vr.update.state';
 setInterval(() => { if (me && token) api('/api/version').catch(() => {}); }, 5 * 60e3);
-function pageUpdateAvailable(build) {
+const UPDATE_LAST = 'vr.update.last';
+function pageUpdateAvailable(build, path) {
+  // never a reload loop: when this tab reloaded for this very build a moment ago and the hub still names another
+  // build than the page got, the page stays (once said, with both builds, so the cause can be found)
+  let last = null; try { last = JSON.parse(sessionStorage.getItem(UPDATE_LAST) || 'null'); } catch {}
+  if (last && last.build === build && Date.now() - last.at < 10 * 60e3) {
+    if (!pageUpdateAvailable.warned) {
+      pageUpdateAvailable.warned = true;
+      console.warn('VibeRoller: not reloading again', { hubSays: build, pageHas: me && me.build, pageVersion: me && me.version, request: path, reloadedAt: new Date(last.at).toISOString() });
+      sys(`VibeRoller ${build} is running, but this page still got ${(me && (me.build || me.version)) || 'another build'} after reloading for it (on ${path || 'a request'}). It stays as it is instead of reloading again; please tell an admin.`);
+    }
+    return;
+  }
   if (pageUpdate) { pageUpdate.build = build; return; }
   pageUpdate = { build, told: false };
   const go = () => {
@@ -1374,6 +1386,7 @@ async function hardReload(build) {
   const screen = ['shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes'].find((id) => $(id) && !$(id).hidden) || '';
   const drafts = {}; for (const id of ['input', 'roomInput', 'assistInput']) if ($(id) && $(id).value) drafts[id] = $(id).value;
   try { sessionStorage.setItem(UPDATE_STATE, JSON.stringify({ screen, drafts, from: me && (me.build || me.version), at: Date.now() })); } catch {}
+  try { sessionStorage.setItem(UPDATE_LAST, JSON.stringify({ build, at: Date.now() })); } catch {}
   try { if ('caches' in window) await Promise.all((await caches.keys()).map((k) => caches.delete(k))); } catch {}
   try { if (navigator.serviceWorker) for (const r of await navigator.serviceWorker.getRegistrations()) await r.update(); } catch {}
   await sleep(500); // the saves are out

@@ -2740,7 +2740,7 @@ async function run() {
       pid2 !== pid1 && oldAfter.remoteKind === 'claude-cli-work' && !!newAfter.id && askNew.status === 428 && askOld.status === 401 && legacyNoHello === 'held'
       && !!(sessFile['old-node'] && sessFile['old-node'].hello && /^[0-9a-f]{64}$/.test(sessFile['old-node'].key)) && ign === 0
       && /beat: beat\(\)/.test(nodes154) && /r\.status === 428/.test(host154) && /Math\.min\(RECONNECT_MAX_MS, 1000 \* misses\)/.test(host154) && /quiet = \(ms = UPDATE_QUIET_MS\)/.test(host154) && /maxDelaySeconds, 1, 60, 5\)/.test(host154) && /quietMinutes, 1, 60, 3\)/.test(host154) && /aiHosts/.test(team154)
-      && /X-VR-Version/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')) && /function pageUpdateAvailable\(build\)/.test(page154) && /hubBuild !== \(me\.build \|\| me\.version\)/.test(page154),
+      && /X-VR-Version/.test(fs.readFileSync(path.join(BRIDGE, 'server.js'), 'utf8')) && /function pageUpdateAvailable\(build, path\)/.test(page154) && /last\.build === build && Date\.now\(\) - last\.at < 10 \* 60e3/.test(page154) && /sessionStorage\.setItem\(UPDATE_LAST/.test(page154) && /hubBuild !== \(me\.build \|\| me\.version\)/.test(page154),
       `old ${oldAfter.remoteKind} new ${!!newAfter.id}; no session: ${askNew.status} / ${askOld.status}; 1.x ${legacyNoHello}; sessions file ${Object.keys(sessFile).join(',')}; ignored ${ign}`);
   }
   // R163 / R164: the native (Rust) programs, built here when this machine has a Rust toolchain (else skipped)
