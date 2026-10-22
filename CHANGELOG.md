@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.1.1 — 2026-10-22
+
+PATCH: what VibeRoller needs for the first PGM product (PGM Prod Suit, its own repository UnityAILab/pgm-prodsuit;
+board T-147, plan: team note plans/pgm-products.md).
+- **Admin → PGM Gateway products** (`web/index.html` 1.13.4): add a product (id, name, AI on or off), give it a new
+  secret, remove it. It shows how many people each one linked and the file its secret is in; never the secret. The
+  box shows only when the Rust hub is in front (the gateway is its own).
+- **The board is shared with the products** (`web/board.js` 1.0.2, also the pgm-libs web kit 5.1.1): a page may set
+  `window.BOARD_OPTS = { ai: false, product }` before loading it. Then there are no Claude buttons, the product's name
+  shows in reminders, and it works on a page without Work. VibeRoller sets nothing and nothing changes here.
+- The libraries' own repository: UnityAILab/pgm-libs (tags v5.1.0, v5.1.1), noted in native/crates/NAMES.md.
+- Regression R170 also checks the products box and the board's options [static].
+
 ## 5.1.0 — 2026-10-22
 
 **MINOR: the hub is also PGM Gateway** (board T-145, plan: team note plans/pgm-products.md). This is the first step

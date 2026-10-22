@@ -18,3 +18,7 @@ Dependency order (a library only uses the ones before it): Core → Platform, Ne
 HCom and AI do not use each other: what one needs from the other goes through the program around them (the hub
 implements `ChatHost` and `AiHub`). `vr-core` is VibeRoller's old shared crate: it now only re-exports from these, so
 code that names `vr_core::…` keeps working. How to use a library elsewhere: each crate's README.md.
+
+Since 5.1.0 the libraries also have a repository of their own, https://git.unityailab.com/UnityAILab/pgm-libs (tagged
+`vX.Y.Z`, with the web kit), which the PGM products build from. Until VibeRoller builds from it too, this copy and
+that one are kept identical: a change to a crate here goes there as well, with a new tag.

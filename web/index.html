@@ -1097,6 +1097,17 @@
       <button class="ghost" id="adminRefresh">Refresh</button>
     </div>
     <div id="adminOut">Generated passwords appear here once. Copy them before leaving this page.</div>
+    <!-- PGM Gateway (5.1.1): the products this hub is the gateway for (native/crates/vr-hub gateway.rs); hidden when the
+         Rust hub is not in front (the gateway is its own) -->
+    <div class="setSection" id="gwBox" hidden><b>PGM Gateway products</b> — programs of their own (PGM Prod Suit, ShaDow Chat, Hyper Prod Man) whose people sign in the first time with their VibeRoller login and, with AI on, use the AI hosts as themselves. A product's secret goes only to the file shown (for the product on this server), never to this page.
+      <table><thead><tr><th>Product</th><th>People linked</th><th>Secret file</th><th>Actions</th></tr></thead><tbody id="gwRows"></tbody></table>
+      <div class="row">
+        <input id="gwId" placeholder="product id (a-z, 0-9, -), e.g. prodsuit" autocapitalize="none" spellcheck="false">
+        <input id="gwName" placeholder="name, e.g. PGM Prod Suit">
+        <label style="font-size:.85rem"><input type="checkbox" id="gwAi" style="width:auto"> AI</label>
+        <button id="gwAdd">Add product</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -4195,7 +4206,28 @@ async function loadAdmin() {
       rows.append(tr);
     }
   } catch (err) { adminOut('Error: ' + err.message); }
+  loadGateway();
 }
+// PGM Gateway products (the Rust hub's; without it the box stays hidden)
+async function loadGateway() {
+  let d; try { d = await json('/api/admin/gateway/products'); } catch { $('gwBox').hidden = true; return; }
+  $('gwBox').hidden = false;
+  const rows = $('gwRows'); rows.textContent = '';
+  for (const p of d.products || []) {
+    const tr = document.createElement('tr');
+    const td = (t) => { const c = document.createElement('td'); c.textContent = t; tr.append(c); return c; };
+    td(`${p.name} (${p.id})${p.ai ? ' · AI' : ''}`); td(String(p.linked)); td(p.secretFile);
+    td('').append(
+      confirmButton('New secret', () => adminCall('gateway/products', { id: p.id, name: p.name, ai: p.ai }, () => adminOut(`${p.id}: a new secret is in ${p.secretFile}; the old one stopped working (a product reads it again on its next request).`))),
+      confirmButton('Remove', () => adminCall('gateway/products/remove', { id: p.id }, () => adminOut(`${p.id}: removed; its secret and its links are gone (its own accounts stay with it).`))),
+    );
+    rows.append(tr);
+  }
+}
+$('gwAdd').onclick = () => adminCall('gateway/products', { id: $('gwId').value.trim().toLowerCase(), name: $('gwName').value.trim(), ai: $('gwAi').checked }, (d) => {
+  adminOut(`${d.product.id}: added. Its secret is in ${d.product.secretFile} on this server (owner only); point the product's config there.`);
+  $('gwId').value = ''; $('gwName').value = ''; $('gwAi').checked = false;
+});
 $('createUser').onclick = () => adminCall('create', { username: $('newUser').value.trim().toLowerCase(), display: $('newDisplay').value.trim(), admin: $('newAdmin').checked }, (d) => {
   adminOut(`Account created.\nUsername: ${d.username}\nPassword: ${d.password}\nAddress: ${location.origin}${location.pathname}`);
   $('newUser').value = ''; $('newDisplay').value = ''; $('newAdmin').checked = false;
