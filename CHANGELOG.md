@@ -7,6 +7,30 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.1.0 — 2026-10-22
+
+**MINOR: the hub is also PGM Gateway** (board T-145, plan: team note plans/pgm-products.md). This is the first step
+towards separate products (PGM Prod Suit, ShaDow Chat, Hyper Prod Man), each its own program with its own data and
+accounts. The gateway gives them what only it has. Nothing changes for VibeRoller, its pages or any AI host: the host
+protocol, its address and every route stay the same.
+
+- **Products:** an admin registers one (`/api/admin/gateway/products`: list, add or renew its secret, remove). The
+  secret is kept only in owner-only files (`bridge/gateway/products.json`, and `bridge/gateway/<id>.secret` for the
+  product's program on this machine); no answer ever shows it.
+- **The product link** (pgm-net-internal `product`): every request a product makes is signed with its secret (method,
+  path, time, a one-time nonce, the person, the body). The gateway takes it only from this machine, never through a
+  proxy, at most a minute old, never twice. `/internal/` stays closed from outside (nginx).
+- **Sign in with your VibeRoller login:** `identity/verify` checks a VibeRoller username and password for the product
+  (pgm-identity-internal `verify_password`: no session, no device lock, the same sign-in limits) and links that person
+  to that product. A product acts only for people it linked.
+- **AI for linked people:** `ai/providers` and `/internal/gateway/v1/*` (the same OpenAI- / Anthropic-compatible API
+  as `/v1`, pgm-ai-internal `v1_as`) run as that VibeRoller account, so every host share applies with nothing changed
+  on hosts. Only for products registered with AI on.
+- The gateway's data is gitignored, in the deploy snapshot and in the data pack (`bridge/handoff.js` 1.2.4,
+  deploy/pack-data, deploy/autodeploy.sh).
+- Regression R170 (with `--rust-hub`): registering, signing, refusals (unsigned, replayed, moved, proxied, too old,
+  wrong secret, not linked, not admin, renewed, removed), the sign-in limits, AI as the linked person.
+
 ## 5.0.0 — 2026-10-22
 
 **MAJOR: the Rust code is rearranged into reusable libraries** (board T-136 … T-144, plan: team note

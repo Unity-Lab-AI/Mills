@@ -21,6 +21,7 @@ pub mod downloads;
 pub mod downloads_text;
 pub mod files;
 pub mod forgejo;
+pub mod gateway;
 pub mod guilds;
 pub mod perms;
 pub mod native_releases;
@@ -67,6 +68,7 @@ pub struct Modules {
     pub unity_room: unity_routes::RoomState,
     pub build: site::Build,
     pub downloads: downloads::Downloads,
+    pub gateway: gateway::Gateway,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -80,7 +82,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), mills })
+            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -206,6 +208,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         }
         return Routed::Pass(vec![]);
     }
+    // PGM Gateway: a product's signed requests (from this machine only; see gateway.rs)
+    if let Some(rest) = p.strip_prefix("/internal/gateway/") { return gateway::route(hub, r, rest).await; }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
     // Unity's Claude brain calling her tools (this hub's secret; anything else is the JavaScript hub's)
     if p == "/internal/assistant-tool" && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &vr_core::crypto::hmac_hex(hub.mods.unity.secret.as_bytes(), r.header("x-mills-account").unwrap_or("").as_bytes())) { return unity_routes::internal(hub, r).await; }
@@ -261,6 +265,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if p == "/api/version" && r.method == hyper::Method::GET { let b = hub.mods.build.get(hub).0; return answer(200, json!({ "version": b.split('+').next().unwrap_or(""), "build": b })); }
             if let Some(x) = profile::route(hub, r, &acc) { return x; } // profiles, prefs, pictures
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
+            if let Some(x) = gateway::admin(hub, r, &acc) { return x; } // the admin's gateway products
             if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
             if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // the admin switches Unity's own-computer tools for one account
                 if !acc.admin { return answer(403, json!({ "error": "Admins only." })); }

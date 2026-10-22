@@ -1,5 +1,5 @@
 {
-  "project": "5.0.0",
+  "project": "5.1.0",
   "modules": {
     "bridge/ai-node.js": "3.3.0",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -14,7 +14,7 @@
     "bridge/files.js": "1.2.0",
     "bridge/forgejo.js": "1.1.0",
     "bridge/guild-perms.js": "1.1.1",
-    "bridge/handoff.js": "1.2.3",
+    "bridge/handoff.js": "1.2.4",
     "bridge/guilds.js": "1.1.1",
     "bridge/host-relay.js": "1.0.0",
     "bridge/linux-accounts.js": "1.0.0",

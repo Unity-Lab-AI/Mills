@@ -6,8 +6,11 @@
 //!   poll for jobs with the hub's heartbeat, whole / streamed / sealed answers, re-hello (the VibeRoller AI host
 //!   protocol)
 //! - [`poll`]: long polls that never miss a wake-up
+//! - [`product`]: the product link: a product signing its requests to a PGM Gateway on the same machine (the
+//!   gateway's verifier, the product's client)
 
 pub mod client;
 pub mod hostlink;
 pub mod http;
 pub mod poll;
+pub mod product;

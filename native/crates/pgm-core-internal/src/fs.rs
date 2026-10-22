@@ -11,6 +11,15 @@ pub fn private(path: &Path) {
     #[cfg(windows)]
     { if readable_by_others(path) { let _ = win_lock(path); } }
 }
+/// A folder (made if missing) only its owner may open: mode 700 on Linux, the owner-only ACL on Windows.
+pub fn private_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?; }
+    #[cfg(windows)]
+    { if readable_by_others(path) { let _ = win_lock(path); } }
+    Ok(())
+}
 /// Is the file readable by anyone but its owner? (Linux: group / other bits; Windows: a Users / Everyone /
 /// Authenticated Users entry in its ACL.)
 pub fn readable_by_others(path: &Path) -> bool {

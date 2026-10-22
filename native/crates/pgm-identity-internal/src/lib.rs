@@ -178,36 +178,12 @@ impl Auth {
         self.sweep();
         let uname = b["username"].as_str().unwrap_or("").trim().to_lowercase();
         let ip = { let i = self.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
-        let (fk, gk) = (format!("{uname}|{ip}"), format!("ip|{ip}"));
-        let now = now_ms();
-        {
-            let mut fails = self.fails.lock().unwrap();
-            let (fc, fb, fi) = { let f = fails.entry(fk.clone()).or_insert_with(|| Fail { at: now, ..Default::default() }); (f.count, f.blocked_until, f.inflight) };
-            let (gc, gb, gi) = { let g = fails.entry(gk.clone()).or_insert_with(|| Fail { at: now, ..Default::default() }); (g.count, g.blocked_until, g.inflight) };
-            if now < fb || now < gb || fc + fi >= 5 || gc + gi >= 20 { return a(429, json!({ "error": "Too many failed attempts. Try again in 15 minutes." })); }
-            if gi >= 3 { return a(429, json!({ "error": "Too many sign-ins at once from here. Try again in a moment." })); }
-            fails.get_mut(&fk).unwrap().inflight += 1; fails.get_mut(&gk).unwrap().inflight += 1;
-        }
+        let (fk, gk) = match self.attempt_begin(&uname, &ip) { Ok(k) => k, Err(e) => return a(429, json!({ "error": e })) };
         let acct = if valid_username(&uname) { self.account(&uname) } else { None };
-        let password = b["password"].as_str().map(String::from);
         let device = b["deviceId"].as_str().map(String::from);
-        let auth = acct.as_ref().and_then(|a| read_json(&a.dir.join("auth.json")));
-        // scrypt runs off the async threads, so a flood of wrong passwords never stalls the server
-        let good_pw = tokio::task::spawn_blocking(move || match (&auth, &password) {
-            (Some(a), Some(pw)) => check_password(a, pw),
-            _ => { let _ = scrypt_hash(password.as_deref().unwrap_or(""), b"mills-no-such-user", 14, 8, 1); false } // the same cost either way
-        }).await.unwrap_or(false);
+        let good_pw = password_ok(acct.as_ref(), b["password"].as_str().map(String::from)).await;
         let good = good_pw && acct.is_some() && device.as_ref().map(|d| d.len() >= 16).unwrap_or(false);
-        let mut fails = self.fails.lock().unwrap();
-        for k in [&fk, &gk] { if let Some(f) = fails.get_mut(k) { f.inflight = f.inflight.saturating_sub(1); } }
-        if !good {
-            let t = now_ms();
-            if let Some(f) = fails.get_mut(&fk) { f.at = t; f.count += 1; if f.count >= 5 { f.blocked_until = t + BLOCK_MS; f.count = 0; } }
-            if let Some(g) = fails.get_mut(&gk) { g.at = t; g.count += 1; if g.count >= 20 { g.blocked_until = t + BLOCK_MS; g.count = 0; } }
-            return a(401, json!({ "error": "Wrong username or password." }));
-        }
-        fails.remove(&fk);
-        drop(fails);
+        if !self.attempt_end(&fk, &gk, good) { return a(401, json!({ "error": "Wrong username or password." })); }
         let acct = acct.expect("checked");
         let dh = pgm_core_internal::crypto::sha256_hex(device.unwrap_or_default().as_bytes());
         {
@@ -230,6 +206,56 @@ impl Auth {
         self.save_sessions();
         Login::SignedIn { token, user: acct.username, client: b["client"].clone(), ip: self.outside_ip(r) }
     }
+
+    /// Only "is this the account's password?" for another program the person signs in to with this account (a PGM
+    /// product through its gateway): no session, no device lock. It counts against the same limits as a sign-in here
+    /// (per name + address, per address), so it is no faster way to guess. `ip`: the person's address as that program
+    /// saw it ("" = unknown).
+    pub async fn verify_password(&self, username: &str, password: &str, ip: &str) -> Result<Account, (u16, String)> {
+        self.sweep();
+        let uname = username.trim().to_lowercase();
+        let ip = if ip.trim().is_empty() { "unknown".to_string() } else { ip.trim().to_string() };
+        let (fk, gk) = self.attempt_begin(&uname, &ip).map_err(|e| (429, e.to_string()))?;
+        let acct = if valid_username(&uname) { self.account(&uname) } else { None };
+        let good = password_ok(acct.as_ref(), Some(password.to_string())).await && acct.is_some();
+        if !self.attempt_end(&fk, &gk, good) { return Err((401, "Wrong username or password.".into())); }
+        Ok(acct.expect("checked"))
+    }
+    /// An attempt for that name from that address begins: its two counters' keys, or why not now.
+    fn attempt_begin(&self, uname: &str, ip: &str) -> Result<(String, String), &'static str> {
+        let (fk, gk) = (format!("{uname}|{ip}"), format!("ip|{ip}"));
+        let now = now_ms();
+        let mut fails = self.fails.lock().unwrap();
+        let (fc, fb, fi) = { let f = fails.entry(fk.clone()).or_insert_with(|| Fail { at: now, ..Default::default() }); (f.count, f.blocked_until, f.inflight) };
+        let (gc, gb, gi) = { let g = fails.entry(gk.clone()).or_insert_with(|| Fail { at: now, ..Default::default() }); (g.count, g.blocked_until, g.inflight) };
+        if now < fb || now < gb || fc + fi >= 5 || gc + gi >= 20 { return Err("Too many failed attempts. Try again in 15 minutes."); }
+        if gi >= 3 { return Err("Too many sign-ins at once from here. Try again in a moment."); }
+        fails.get_mut(&fk).unwrap().inflight += 1; fails.get_mut(&gk).unwrap().inflight += 1;
+        Ok((fk, gk))
+    }
+    /// The attempt ended (`good`: it went through): a failure counts, a success clears that name's counter.
+    fn attempt_end(&self, fk: &str, gk: &str, good: bool) -> bool {
+        let mut fails = self.fails.lock().unwrap();
+        for k in [fk, gk] { if let Some(f) = fails.get_mut(k) { f.inflight = f.inflight.saturating_sub(1); } }
+        if !good {
+            let t = now_ms();
+            if let Some(f) = fails.get_mut(fk) { f.at = t; f.count += 1; if f.count >= 5 { f.blocked_until = t + BLOCK_MS; f.count = 0; } }
+            if let Some(g) = fails.get_mut(gk) { g.at = t; g.count += 1; if g.count >= 20 { g.blocked_until = t + BLOCK_MS; g.count = 0; } }
+            return false;
+        }
+        fails.remove(fk);
+        true
+    }
+}
+
+/// The account's password against its auth.json. scrypt runs off the async threads, so a flood of wrong passwords never
+/// stalls the server, and it costs the same when there is no such account.
+async fn password_ok(acct: Option<&Account>, password: Option<String>) -> bool {
+    let auth = acct.and_then(|a| read_json(&a.dir.join("auth.json")));
+    tokio::task::spawn_blocking(move || match (&auth, &password) {
+        (Some(a), Some(pw)) => check_password(a, pw),
+        _ => { let _ = scrypt_hash(password.as_deref().unwrap_or(""), b"mills-no-such-user", 14, 8, 1); false }
+    }).await.unwrap_or(false)
 }
 
 fn scrypt_hash(pw: &str, salt: &[u8], log_n: u8, r: u32, p: u32) -> Option<Vec<u8>> {
