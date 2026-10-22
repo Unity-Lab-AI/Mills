@@ -32,6 +32,8 @@ pgm-core-internal = { path = "../pgm-core-internal" }
 pgm-platform-internal = { path = "../pgm-platform-internal" }
 pgm-net-internal = { path = "../pgm-net-internal" }
 pgm-identity-internal = { path = "../pgm-identity-internal" }
+pgm-collab-internal = { path = "../pgm-collab-internal" }
+pgm-dist-internal = { path = "../pgm-dist-internal" }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.191"

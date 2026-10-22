@@ -3311,6 +3311,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgm-collab-internal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pgm-core-internal",
+ "pgm-net-internal",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "pgm-core-internal"
 version = "0.1.0"
 dependencies = [
@@ -3326,6 +3338,22 @@ dependencies = [
  "sha2",
  "subtle",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pgm-dist-internal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ed25519-dalek",
+ "flate2",
+ "hex",
+ "p256",
+ "pgm-core-internal",
+ "pgm-net-internal",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5864,6 +5892,7 @@ dependencies = [
  "hmac",
  "p256",
  "pgm-core-internal",
+ "pgm-dist-internal",
  "pgm-net-internal",
  "rand 0.9.5",
  "reqwest",
@@ -5934,7 +5963,9 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "pgm-collab-internal",
  "pgm-core-internal",
+ "pgm-dist-internal",
  "pgm-identity-internal",
  "pgm-net-internal",
  "pgm-platform-internal",

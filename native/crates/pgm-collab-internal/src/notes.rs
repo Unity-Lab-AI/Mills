@@ -146,7 +146,7 @@ impl Notes {
     /// Claude in a Work run, as "<person> · Claude" (bridge/notes.js call).
     pub fn tool(&self, name: &str, args: &Value, who: &str) -> Value {
         let r = match name {
-            "notes_list" => Ok(json!({ "notes": self.search(args["q"].as_str().unwrap_or("")).into_iter().map(|n| { let at = n["at"].as_f64().unwrap_or(0.0) as i64; let mut o = json!({ "path": n["path"], "by": n["by"], "at": crate::modules::auth::iso_at(at), "size": n["size"] }); if !n["snippet"].as_str().unwrap_or("").is_empty() { o["snippet"] = n["snippet"].clone(); } o }).collect::<Vec<_>>() })),
+            "notes_list" => Ok(json!({ "notes": self.search(args["q"].as_str().unwrap_or("")).into_iter().map(|n| { let at = n["at"].as_f64().unwrap_or(0.0) as i64; let mut o = json!({ "path": n["path"], "by": n["by"], "at": pgm_core_internal::time::iso_at(at), "size": n["size"] }); if !n["snippet"].as_str().unwrap_or("").is_empty() { o["snippet"] = n["snippet"].clone(); } o }).collect::<Vec<_>>() })),
             "notes_read" => self.read(args["path"].as_str().unwrap_or("")),
             "notes_write" => self.write(&format!("{who} · Claude"), args["path"].as_str().unwrap_or(""), args["text"].as_str().unwrap_or(""), None),
             "notes_delete" => self.remove(args["path"].as_str().unwrap_or("")),

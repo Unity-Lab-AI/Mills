@@ -13,9 +13,13 @@
 //! - [`unity`], [`unity_brain`], [`unity_routes`]: the assistant: her tools, her brain (a local model's tool loop or
 //!   Claude), confirmations, voice / speech / pictures, her section's routes, the chat's AI member and its queue
 //! - [`hub`]: what all of this needs from the program around it ([`hub::AiHub`])
+//! - [`host`]: the AI host program's side (the job loop, relays, Work on the host, its MCP tools, its folder + settings)
+//! - [`local_proxy`]: a local API proxy (127.0.0.1 → a hub's /v1 with a person's key; no web page can use it)
 
 pub mod ai_hosts;
+pub mod host;
 pub mod hub;
+pub mod local_proxy;
 pub mod openai;
 pub mod unity;
 pub mod unity_brain;
