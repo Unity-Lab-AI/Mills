@@ -17,18 +17,21 @@ use pgm_net_internal::http::{self as kit, Backend};
 pub struct Hub {
     pub root: PathBuf,
     pub cfg: Config,
-    /// the JavaScript hub behind this one (it trusts this front by the shared secret)
-    backend: Backend,
+    /// the JavaScript hub behind this one (it trusts this front by the shared secret); None = this hub alone (FR6:
+    /// `vr-hub --alone`, no JavaScript hub at all: what it does not answer is 404, never waited for)
+    backend: Option<Backend>,
     pub mods: modules::Modules,
     /// the hub itself, for library work that outlives a call (the chat calling an agent)
     me: std::sync::Weak<Hub>,
 }
 impl Hub {
-    pub fn new(root: PathBuf, cfg: Config, back: SocketAddr) -> Result<Arc<Hub>, String> {
+    pub fn new(root: PathBuf, cfg: Config, back: Option<SocketAddr>) -> Result<Arc<Hub>, String> {
         let mods = modules::Modules::new(&root, &cfg)?;
-        let backend = Backend::new(back, "x-vr-front-secret", mods.front_secret.as_str());
+        let backend = back.map(|b| Backend::new(b, "x-vr-front-secret", mods.front_secret.as_str()));
         Ok(Arc::new_cyclic(|me| Hub { root, cfg, backend, mods, me: me.clone() }))
     }
+    /// Is this hub alone (no JavaScript hub behind it)?
+    pub fn alone(&self) -> bool { self.backend.is_none() }
     pub fn me(&self) -> Option<Arc<dyn pgm_ai_internal::hub::AiHub>> { self.me.upgrade().map(|h| h as Arc<dyn pgm_ai_internal::hub::AiHub>) }
 }
 
@@ -38,7 +41,9 @@ pub async fn serve(hub: Arc<Hub>, addr: SocketAddr) -> i32 {
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => { eprintln!("[vr-hub] port {} is taken: another hub runs here", addr.port()); return 2; }
         Err(e) => { eprintln!("[vr-hub] cannot listen on {addr}: {e}"); return 1; }
     };
-    println!("[vr-hub] {} in front of the JavaScript hub: http://{addr} → http://{}", crate::VERSION, hub.backend.addr);
+    match &hub.backend { Some(b) => println!("[vr-hub] {} in front of the JavaScript hub: http://{addr} → http://{}", crate::VERSION, b.addr), None => println!("[vr-hub] {} alone on http://{addr} (no JavaScript hub)", crate::VERSION) }
+    // the accounts, as the JavaScript hub listed them at start (an operator's first look at the log)
+    println!("[vr-hub] accounts: {}", hub.mods.auth.accounts().iter().map(|a| format!("{}{}", a.username, if a.admin { " (admin)" } else { "" })).collect::<Vec<_>>().join(", "));
     modules::start_background(&hub);
     let stop = kit::shutdown_signal();
     tokio::pin!(stop);
@@ -111,8 +116,16 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
         }
         modules::Routed::No => {}
     }
+    // alone (FR6): nothing behind this hub. The login gate stays what it was: an /api/ path without a sign-in is 401
+    // (the JavaScript hub answered that before looking at the path); signed in, what this hub did not answer is 404.
+    let Some(backend) = &hub.backend else {
+        let signed_in = extra.iter().any(|(k, _)| k == "x-vr-user");
+        let mut r404 = if r.path.starts_with("/api/") && !signed_in { json(401, &serde_json::json!({ "error": "Not signed in." })) } else { json(404, &serde_json::json!({ "error": "Not found" })) };
+        r404.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust"));
+        return with_front(r404);
+    };
     // who is signed in is the front's word only: a caller's own x-vr-user / x-vr-front-* never reach the JavaScript hub
-    let mut resp = hub.backend.proxy(&parts, r.body.clone(), |k| !k.starts_with("x-vr-front-") && k != "x-vr-user", &extra).await;
+    let mut resp = backend.proxy(&parts, r.body.clone(), |k| !k.starts_with("x-vr-front-") && k != "x-vr-user", &extra).await;
     resp.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("node")); // the JavaScript hub answered (what FR6 still has to move: R179)
     // One build per hub: the page compares X-VR-Version with the build /api/check named (this hub's), so an answer of
     // the JavaScript hub behind it must name the same one. Its own (read when IT started) could differ when the two
@@ -133,7 +146,7 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
     with_front(Response::from_parts(p, full(out)))
 }
 /// A word to the JavaScript hub from the front (its internal API, with the front's secret).
-pub async fn internal(hub: &Hub, path: &str, body: String) -> Option<(u16, Bytes)> { hub.backend.internal(path, body).await }
+pub async fn internal(hub: &Hub, path: &str, body: String) -> Option<(u16, Bytes)> { hub.backend.as_ref()?.internal(path, body).await }
 /// Every answer: who answered, and the hardening the JavaScript hub puts on its own (no sniffing, no referrer, never framed).
 fn with_front(r: Response<Body>) -> Response<Body> { kit::harden(r, ("x-vr-front", crate::VERSION)) }
 impl Hub {

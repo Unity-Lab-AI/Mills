@@ -6,6 +6,7 @@
 //! answered here; everything else passes through to the JavaScript hub, streamed both ways (long polls, streamed
 //! answers, uploads). While the JavaScript hub restarts (a deploy, new code), requests wait for it instead of failing.
 //!   vr-hub --port <front> --back <port of the JavaScript hub> --root <bridge folder>
+//!   vr-hub --port <front> --alone --root <bridge folder>          (5.6.0: no JavaScript hub; what it has no module for is 404)
 //! The regression suite runs every check through it (node bridge/test/regress.js --rust-hub).
 mod front;
 mod modules;
@@ -26,10 +27,12 @@ fn main() {
     let root = PathBuf::from(arg(&args, "--root").unwrap_or_else(|| ".".into()));
     let cfg = modules::Config::load(&root);
     let port: u16 = arg(&args, "--port").and_then(|p| p.parse().ok()).unwrap_or(cfg.port);
-    let back: u16 = match arg(&args, "--back").and_then(|p| p.parse().ok()) { Some(b) => b, None => { eprintln!("[vr-hub] --back <port of the JavaScript hub> is needed"); std::process::exit(1); } };
+    // --alone (FR6, 5.6.0): no JavaScript hub behind this one; else --back names its port
+    let alone = args.iter().any(|a| a == "--alone");
+    let back: Option<u16> = match arg(&args, "--back").and_then(|p| p.parse().ok()) { Some(b) => Some(b), None if alone => None, None => { eprintln!("[vr-hub] --back <port of the JavaScript hub> is needed (or --alone)"); std::process::exit(1); } };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
     let code = rt.block_on(async move {
-        let hub = match front::Hub::new(root, cfg, SocketAddr::from(([127, 0, 0, 1], back))) { Ok(h) => h, Err(e) => { eprintln!("[vr-hub] {e}"); return 1; } };
+        let hub = match front::Hub::new(root, cfg, if alone { None } else { back.map(|b| SocketAddr::from(([127, 0, 0, 1], b))) }) { Ok(h) => h, Err(e) => { eprintln!("[vr-hub] {e}"); return 1; } };
         front::serve(hub, SocketAddr::from(([127, 0, 0, 1], port))).await
     });
     std::process::exit(code);
