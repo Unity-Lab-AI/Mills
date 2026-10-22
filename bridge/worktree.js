@@ -38,6 +38,11 @@
 //                                                        auto-deploy then ships it (health-checked, rolls back by itself);
 //                                                        without an auto-deploy the host folder is fast-forwarded here and
 //                                                        --restart asks the hub to restart itself gracefully on the new code
+//   node bridge/worktree.js repos [words]                the Forgejo repos you can see (private ones too), as you (your token)
+//   node bridge/worktree.js repo-create <owner/name>     a new empty Forgejo repo (yours or an organisation's); --private, --description
+//   node bridge/worktree.js publish <owner/name>         put a project on Forgejo: the repo made when missing, a GitHub origin kept
+//                                                        as "upstream", origin = Forgejo, every branch + tag pushed, develop made
+//   node bridge/worktree.js tag <name> [message]         a tag on Forgejo at the project's integration branch, fetched here
 // Every command takes --project <name> (default: VibeRoller) to act on another project.
 // The hub's live code is the host folder; going live stays a separate, explicit step (only when asked).
 //
@@ -512,14 +517,96 @@ function live(opts = {}) {
   return lines;
 }
 
-module.exports = { ensure, repair, project, listProjects, create, clone, freshness, describe, update, renew, WT_ROOT, REPO, PROJECTS_ROOT, HUB_PROJECT };
+// ---- Forgejo's API as the person whose run this is (their token from Settings → My Forgejo, in FORGEJO_TOKEN; it
+// is never printed). A Work run may only run allowed commands, and this script is one, so this is how a run searches
+// the person's repos (private ones too), makes a repo and publishes a project to Forgejo.
+const FJ_URL = String(process.env.FORGEJO_URL || OWN_CFG.forgejoUrl || 'https://git.unityailab.com').replace(/\/+$/, '');
+async function fj(method, p, body) {
+  const token = process.env.FORGEJO_TOKEN;
+  if (!token) throw new Error('No Forgejo token in this run: save yours in Settings → My Forgejo (the next run carries it).');
+  const r = await fetch(FJ_URL + '/api/v1' + p, { method, headers: { Authorization: 'token ' + token, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
+  const text = await r.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+  if (!r.ok) throw Object.assign(new Error(`Forgejo ${method} ${p} → ${r.status} ${((data && data.message) || text).slice(0, 200)}`), { status: r.status });
+  return data;
+}
+// Every repo the person can see whose name or description matches (all of them without a query), private ones too.
+async function fjRepos(q = '') {
+  const out = [];
+  for (let page = 1; page <= 50; page++) {
+    const d = await fj('GET', `/repos/search?limit=50&page=${page}&private=true${q ? '&q=' + encodeURIComponent(q) + '&includeDesc=true' : ''}`);
+    const list = (d && d.data) || [];
+    out.push(...list);
+    if (list.length < 50) break;
+  }
+  return out;
+}
+// A new empty repo: "<owner>/<name>" (an organisation, or the person themselves).
+async function fjCreate(full, { priv = false, description = '' } = {}) {
+  const [owner, name] = String(full || '').split('/');
+  if (!owner || !name || !/^[\w.-]{1,100}$/.test(name)) throw new Error('Name the repo as <owner>/<name>.');
+  const me = await fj('GET', '/user');
+  const body = { name, description, private: !!priv, auto_init: false };
+  return me.login.toLowerCase() === owner.toLowerCase() ? fj('POST', '/user/repos', body) : fj('POST', `/orgs/${encodeURIComponent(owner)}/repos`, body);
+}
+// Publish a project to Forgejo as <owner>/<name>: the repo is made when missing; a remote "origin" elsewhere (GitHub)
+// is kept as "upstream" (to pull its updates later); origin becomes Forgejo; every branch and tag is pushed; a
+// project without a develop branch gets one (the integration branch the worktrees build on).
+async function publish(full, pj, opts = {}) {
+  const p = project(pj), lines = [];
+  if (p.hub) throw new Error('VibeRoller itself is on Forgejo already.');
+  const url = `${FJ_URL}/${full}.git`;
+  const pushLong = (...args) => execFileSync('git', ['push', '-q', 'origin', ...args], { cwd: p.repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: GIT_ENV, timeout: 30 * 60000 }); // a big repo's first push takes a while
+  let repo = null;
+  try { repo = await fj('GET', `/repos/${full}`); lines.push(`${full} exists on Forgejo.`); }
+  catch (e) { if (e.status !== 404) throw e; repo = await fjCreate(full, opts); lines.push(`Made ${repo.full_name} on Forgejo (${repo.private ? 'private' : 'public'}).`); }
+  const origin = tryGit(p.repo, 'remote', 'get-url', 'origin');
+  if (origin.ok && origin.out.trim() !== url && !origin.out.trim().startsWith(FJ_URL + '/')) {
+    if (tryGit(p.repo, 'remote', 'get-url', 'upstream').ok) throw new Error('This project already has an "upstream" remote: sort its remotes out by hand.');
+    git(p.repo, 'remote', 'rename', 'origin', 'upstream'); lines.push(`origin (${origin.out.trim()}) kept as "upstream".`);
+  }
+  if (tryGit(p.repo, 'remote', 'get-url', 'origin').ok) git(p.repo, 'remote', 'set-url', 'origin', url); else git(p.repo, 'remote', 'add', 'origin', url);
+  if (!branchExists(p.repo, DEVELOP)) { git(p.repo, 'branch', DEVELOP); lines.push(`Made ${DEVELOP} from ${git(p.repo, 'rev-parse', '--abbrev-ref', 'HEAD').trim()}.`); }
+  pushLong('--all'); pushLong('--tags');
+  git(p.repo, 'fetch', '-q', 'origin');
+  for (const b of [DEVELOP, p.main]) if (b && branchExists(p.repo, b)) tryGit(p.repo, 'branch', '-q', '--set-upstream-to', 'origin/' + b, b);
+  if (git(p.repo, 'rev-parse', '--abbrev-ref', 'HEAD').trim() !== DEVELOP && !git(p.repo, 'status', '--porcelain').trim()) git(p.repo, 'checkout', '-q', DEVELOP);
+  lines.push(`Pushed every branch and tag to ${url}; origin is Forgejo now.`);
+  return lines;
+}
+
+// A tag on Forgejo at the project's integration branch (what everyone has), then fetched here: a release tag never
+// points at a commit Forgejo lacks.
+async function tag(name, pj, message = '') {
+  const p = project(pj);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/.test(name || '')) throw new Error('A tag name: letters, digits, dots, dashes, slashes.');
+  const origin = tryGit(p.repo, 'remote', 'get-url', 'origin');
+  const m = origin.ok && origin.out.trim().startsWith(FJ_URL + '/') ? origin.out.trim().slice(FJ_URL.length + 1).replace(/\.git$/, '').match(/^([^/]+)\/([^/]+)$/) : null;
+  if (!m) throw new Error(`${p.name}'s origin is not on ${FJ_URL}: "publish" first.`);
+  git(p.repo, 'fetch', '-q', 'origin');
+  const target = git(p.repo, 'rev-parse', `refs/remotes/origin/${p.main}`);
+  const t = await fj('POST', `/repos/${m[1]}/${m[2]}/tags`, { tag_name: name, target, message: message || name });
+  git(p.repo, 'fetch', '-q', 'origin', '--tags');
+  return `Tagged ${m[1]}/${m[2]} ${t.name || name} at ${target.slice(0, 7)} (${p.main} on Forgejo).`;
+}
+
+module.exports = { ensure, repair, project, listProjects, create, clone, freshness, describe, update, renew, fjRepos, fjCreate, publish, tag, WT_ROOT, REPO, PROJECTS_ROOT, HUB_PROJECT };
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const take = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv.splice(i, 2)[1] || '' : ''; };
-  const repoArg = take('--repo'), pj = take('--project') || undefined;
+  const repoArg = take('--repo'), pj = take('--project') || undefined, desc = take('--description');
+  const priv = argv.includes('--private'); if (priv) argv.splice(argv.indexOf('--private'), 1);
   const [cmd, user, ...rest] = argv;
-  try {
+  const fail = (e) => { console.error(e.message); process.exit(1); };
+  if (cmd === 'repos') { // node bridge/worktree.js repos [words]: the Forgejo repos you can see, private ones too
+    fjRepos([user, ...rest].filter(Boolean).join(' ')).then((list) => {
+      console.log(list.length ? list.map((r) => `${r.full_name}${r.private ? ' (private)' : ''}${r.fork ? ' (fork)' : ''}${r.mirror ? ' (mirror)' : ''}  ${r.clone_url}${r.description ? '\n    ' + r.description.replace(/\s+/g, ' ').slice(0, 160) : ''}`).join('\n') : 'No repo matches.');
+    }, fail);
+  } else if (cmd === 'repo-create') fjCreate(user, { priv, description: desc }).then((r) => console.log(`Made ${r.full_name} (${r.private ? 'private' : 'public'}): ${r.clone_url}`), fail);
+  else if (cmd === 'publish') publish(user, pj, { priv, description: desc }).then((l) => console.log(l.join('\n')), fail);
+  else if (cmd === 'tag') tag(user, pj, rest.join(' ')).then(console.log, fail);
+  else try {
     if (cmd === 'status') console.log(status(pj));
     else if (cmd === 'projects') console.log(projectsText());
     else if (cmd === 'new') { const p = create(user, process.env.USERNAME || process.env.USER || 'VibeRoller'); console.log(`Created project ${p.name}: ${p.repo} (${p.main})`); }
@@ -542,6 +629,6 @@ if (require.main === module) {
     else if (cmd === 'sync') console.log(sync(user, pj));
     else if (cmd === 'merge') console.log(merge(user, pj));
     else if (cmd === 'live') { if (pj && pj.toLowerCase() !== HUB_PROJECT.toLowerCase()) throw new Error('live is for VibeRoller itself; other projects are pushed by merge.'); console.log(live({ restart: process.argv.includes('--restart') }).join('\n')); }
-    else { console.error('Usage: node bridge/worktree.js [--project <name>] projects | new <name> | clone <url> [name] | status | repair [--repo <host folder>] | ensure <username> | check <username> | update <username> | renew <username> | commit <username> [message] | sync <username> | merge <username> | live [--restart]'); process.exit(1); }
+    else { console.error('Usage: node bridge/worktree.js [--project <name>] projects | new <name> | clone <url> [name] | status | repair [--repo <host folder>] | ensure <username> | check <username> | update <username> | renew <username> | commit <username> [message] | sync <username> | merge <username> | live [--restart] | repos [words] | repo-create <owner/name> [--private] [--description text] | publish <owner/name> [--private] [--description text] | tag <name> [message]'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }
 }

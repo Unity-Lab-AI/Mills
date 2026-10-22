@@ -32,6 +32,12 @@ modifications to the new worktree, then abandon and delete just the old worktree
 - `merge` and `live` push to Forgejo FIRST and change nothing locally when that push fails. Nothing goes live that
   Forgejo does not have. A server-only `main` once restarted the hub every minute and every AI host lost its line.
 - Pushing as yourself needs your Forgejo account connected (Settings → My Forgejo). Your Work runs then push as you.
+- Your Work runs also have `fj` (the Forgejo CLI) signed in as you, next to git: your token in a keys file of your own,
+  no `fj auth` needed (a run of yours never acts as anyone else). `node bridge/worktree.js repos [words]` lists the
+  repos you can see (private ones too), `repo-create <owner/name>` makes one, `publish <owner/name> --project <name>`
+  puts a project on Forgejo (a GitHub origin is kept as `upstream`, origin becomes Forgejo, every branch and tag goes
+  up, a `develop` is made), `tag <name> [message]` tags the integration branch on Forgejo. On the server fj is the
+  pre-built forgejo-cli binary under tools/bin (deploy/setup-server.sh).
 
 ## Versioning law (replaces how hub law 14 picks the bump; the rest of law 14 stands)
 

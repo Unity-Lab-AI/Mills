@@ -98,6 +98,8 @@ bridge/server-owners.json
 Avatars/
 # My Forgejo: everyone's own Forgejo token (Settings), kept on the host only
 bridge/forgejo-users.json
+# fj (the Forgejo CLI) signed in per person in their Work runs: their keys file + wrapper (the default account's, and a host's per account)
+bridge/.fj/
 Notes/
 Images/
 __pycache__/

@@ -18,6 +18,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
 const { ROOT, MILLS_DIR, readJson, writeJson, loadProfile, allProfiles, hashPassword } = require('./common');
+const fj = require('./fj'); // fj (the Forgejo CLI) signed in as the person, in their Work runs here
 const worktree = require('./worktree');
 
 const WEB_DIR = path.join(MILLS_DIR, 'web');
@@ -126,7 +127,7 @@ function systemPrompt(acct, wd) {
     `When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.`,
     `You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.`,
     `Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search (${name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create.`,
-    ...(forgejo.tokenFor(acct.username) ? [`Forgejo (${forgejo.url}): ${name} saved their own token, so git pushes / fetches to that host authenticate as them, and FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token).`] : []),
+    ...(forgejo.tokenFor(acct.username) ? [`Forgejo (${forgejo.url}): ${name} saved their own token, so git pushes / fetches to that host authenticate as them, FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token), and fj (the Forgejo CLI) is signed in as them in this run. node bridge/worktree.js repos [words] lists the repos they can see (private ones too), repo-create <owner/name> makes one, publish <owner/name> --project <name> puts a project on Forgejo (a GitHub origin kept as upstream).`] : []),
     `Team notes (markdown files in folders, shared by everyone): notes_list (with a search), notes_read, notes_write (path like "plans/next-week.md"; whole text), notes_delete (only when asked). Good for plans, meeting notes, decisions, how-tos.`,
     `The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as "${name} · Claude", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about.`,
   ].join(' ') + (hubLaws() ? '\n\n' + hubLaws() : '');
@@ -294,7 +295,8 @@ function runClaude(acct, message, fresh, res, context, preWm = null) {
   // Claude (bridge/test/fake-claude.js); production config leaves them unset → the real `claude`.
   const command = config.claudeCommand || 'claude';
   const pre = Array.isArray(config.claudeArgs) ? config.claudeArgs : [];
-  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...provEnv, ...relayEnv, ...forgejo.workEnv(acct.username) } }); // + their own Forgejo token, if they saved one
+  const fjEnv = forgejo.workEnv(acct.username); // + their own Forgejo token, if they saved one, and fj signed in as them
+  const child = spawn(command, [...pre, ...args], { cwd: wd.dir, windowsHide: true, env: { ...process.env, ...provEnv, ...relayEnv, ...fjEnv, ...fj.env(path.join(acct.files.PROFILE_DIR, '.fj'), { url: fjEnv.FORGEJO_URL, token: fjEnv.FORGEJO_TOKEN, login: fjEnv.FORGEJO_LOGIN }) } });
   acct.running = child;
   let buf = '';
   child.stdout.on('data', (chunk) => {
