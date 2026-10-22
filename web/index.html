@@ -3788,7 +3788,7 @@ async function renderForgejo() {
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
-const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint' };
+const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM' };
 async function renderApiAccess(freshKey) {
   const box = $('apiBox'); if (!box) return;
   let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
@@ -3849,28 +3849,34 @@ async function renderProviders() {
   // add one
   const form = document.createElement('div'); form.className = 'row';
   const kind = document.createElement('select');
-  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
+  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)'], ['jcode', 'Jcode PGM on the host (jcodepgm binary; runs Work)']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
   const label = document.createElement('input'); label.placeholder = 'label, e.g. "Sponge\'s Claude"'; label.maxLength = 60;
   const secret = document.createElement('input'); secret.type = 'password'; secret.placeholder = 'API key'; secret.autocomplete = 'off';
   const where = document.createElement('input'); where.placeholder = 'base URL, e.g. https://api.example.com/v1';
+  const jprov = document.createElement('input'); jprov.placeholder = 'jcode provider profile to run with (-p), e.g. viberoller (optional)'; jprov.maxLength = 80;
   const models = document.createElement('input'); models.placeholder = 'model ids, comma separated (optional for Claude)';
   const shared = document.createElement('label'); shared.className = 'chk'; const shc = document.createElement('input'); shc.type = 'checkbox'; shared.append(shc, ' share with the team');
   const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add';
   const msg = document.createElement('span'); msg.className = 'status';
-  const sync = () => { secret.hidden = kind.value === 'claude-cli'; where.hidden = kind.value !== 'claude-cli' && kind.value !== 'openai'; where.placeholder = kind.value === 'openai' ? 'base URL, e.g. https://api.example.com/v1' : 'folder on the host, e.g. D:\\claude-logins\\sponge or /home/host/claude-logins/sponge (the host runs `claude login` once with CLAUDE_CONFIG_DIR set to it)'; };
+  const sync = () => {
+    secret.hidden = kind.value === 'claude-cli' || kind.value === 'jcode'; where.hidden = kind.value === 'anthropic'; jprov.hidden = kind.value !== 'jcode';
+    where.placeholder = kind.value === 'openai' ? 'base URL, e.g. https://api.example.com/v1' : kind.value === 'jcode' ? 'the jcodepgm binary on the host: a path, or just jcodepgm when it is on PATH' : 'folder on the host, e.g. D:\\claude-logins\\sponge or /home/host/claude-logins/sponge (the host runs `claude login` once with CLAUDE_CONFIG_DIR set to it)';
+    models.placeholder = kind.value === 'jcode' ? 'model ids jcode may be asked for, comma separated (empty = jcode\'s own default)' : 'model ids, comma separated (optional for Claude)';
+  };
   kind.onchange = sync; sync();
   add.onclick = async () => {
     const body = { kind: kind.value, label: label.value, shared: shc.checked, models: models.value };
-    if (kind.value !== 'claude-cli') body.apiKey = secret.value;
+    if (kind.value !== 'claude-cli' && kind.value !== 'jcode') body.apiKey = secret.value;
     if (kind.value === 'openai') body.baseUrl = where.value; if (kind.value === 'claude-cli') body.configDir = where.value;
-    try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify(body) }); label.value = secret.value = where.value = models.value = ''; msg.textContent = 'Added.'; renderProviders(); renderApiAccess(); refreshProviders(); }
+    if (kind.value === 'jcode') { body.command = where.value; body.provider = jprov.value; }
+    try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify(body) }); label.value = secret.value = where.value = jprov.value = models.value = ''; msg.textContent = 'Added.'; renderProviders(); renderApiAccess(); refreshProviders(); }
     catch (e) { msg.textContent = e.message; }
   };
-  form.append(kind, label, secret, where, models, shared, add, msg); box.append(form);
+  form.append(kind, label, secret, where, jprov, models, shared, add, msg); box.append(form);
 }
 function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
 // ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
-const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint' };
+const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM' };
 async function renderSource() {
   const box = $('srcBox'); if (!box) return;
   let d; try { d = await json('/api/check'); } catch (e) { box.textContent = e.message; return; }

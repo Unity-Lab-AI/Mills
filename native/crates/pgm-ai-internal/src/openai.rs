@@ -96,17 +96,22 @@ fn clean_models(m: &Value, fallback: Vec<String>) -> Vec<String> {
 }
 fn pub_view(p: &Value) -> Value {
     let mut v = json!({ "id": p["id"], "kind": p["kind"], "label": p["label"], "owner": p["owner"], "shared": p["shared"] == json!(true), "models": if p["models"].is_array() { p["models"].clone() } else { json!([]) }, "hasKey": !s(p, "apiKey").is_empty(), "createdAt": p["createdAt"] });
-    for k in ["baseUrl", "configDir"] { if !s(p, k).is_empty() { v[k] = p[k].clone(); } }
+    for k in ["baseUrl", "configDir", "command", "home", "provider"] { if !s(p, k).is_empty() { v[k] = p[k].clone(); } }
+    if p["args"].is_array() { v["args"] = p["args"].clone(); }
+    if p["kind"] == json!(crate::jcode::KIND) { v["harness"] = json!(crate::jcode::HARNESS); }
     v
 }
-/// A custom endpoint (this hub calls whatever address it names) or a Claude config folder on this machine: admins only.
-pub fn admin_only(p: &Value) -> bool { matches!(p["kind"].as_str(), Some("openai") | Some("claude-cli")) }
+/// A custom endpoint (this hub calls whatever address it names), a Claude config folder or a Jcode PGM binary on this
+/// machine: admins only.
+pub fn admin_only(p: &Value) -> bool { matches!(p["kind"].as_str(), Some("openai") | Some("claude-cli") | Some("jcode")) }
 fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String> {
     if admin_only(b) {
-        if !hub.is_admin(user) || !hub.ai().owns_online_host(user) { return Err("A custom endpoint or a Claude config folder is for admins signed in on an AI host of their own (Settings → My AI hosts). An Anthropic API key works for everyone.".into()); }
+        // a Jcode PGM binary runs here on the hub, so only being an admin counts; the other two need an AI host of theirs
+        let needs_host = s(b, "kind") != crate::jcode::KIND;
+        if !hub.is_admin(user) || (needs_host && !hub.ai().owns_online_host(user)) { return Err("A custom endpoint or a Claude config folder is for admins signed in on an AI host of their own (Settings → My AI hosts); a Jcode PGM binary is for admins. An Anthropic API key works for everyone.".into()); }
     }
     let kind = s(b, "kind");
-    if !["anthropic", "claude-cli", "openai"].contains(&kind.as_str()) { return Err("kind must be anthropic, claude-cli or openai.".into()); }
+    if !["anthropic", "claude-cli", "openai", "jcode"].contains(&kind.as_str()) { return Err("kind must be anthropic, claude-cli, openai or jcode.".into()); }
     let label: String = s(b, "label").trim().chars().take(60).collect();
     if label.is_empty() { return Err("Give it a label.".into()); }
     let mut p = json!({ "id": format!("p-{}", pgm_core_internal::crypto::random_hex(5)), "kind": kind, "label": label, "owner": user, "shared": b["shared"].as_bool().unwrap_or(false), "createdAt": pgm_core_internal::time::iso_now(), "models": [] });
@@ -121,6 +126,21 @@ fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String>
             let d = s(b, "configDir").trim().to_string();
             if d.is_empty() || !Path::new(&d).is_absolute() { return Err("configDir must be an absolute folder on the host (the one you ran `claude login` with CLAUDE_CONFIG_DIR set to).".into()); }
             p["configDir"] = json!(d); p["models"] = json!(clean_models(&b["models"], host_models(hub)));
+        }
+        "jcode" => {
+            // a Jcode PGM binary on this machine (its path, or just its name on PATH), optional extra args, an optional
+            // jcode home (else each person gets <profile>/jcode-home), the jcode provider profile to run with (-p), and
+            // the models it may be asked for (-m; empty = jcode's own default)
+            let c = s(b, "command").trim().to_string();
+            let c = if c.is_empty() { crate::jcode::DEFAULT_COMMAND.to_string() } else { c };
+            if c.contains('\n') || c.contains('\0') { return Err("command must be a binary path or name.".into()); }
+            p["command"] = json!(c);
+            if let Some(a) = b["args"].as_array() { let a: Vec<String> = a.iter().filter_map(|x| x.as_str().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect(); if !a.is_empty() { p["args"] = json!(a); } }
+            let h = s(b, "home").trim().to_string();
+            if !h.is_empty() { if !Path::new(&h).is_absolute() { return Err("home must be an absolute folder on the host (the jcode home, JCODE_HOME, Work runs use).".into()); } p["home"] = json!(h); }
+            let pr: String = s(b, "provider").trim().chars().take(80).collect();
+            if !pr.is_empty() { p["provider"] = json!(pr); }
+            p["models"] = json!(clean_models(&b["models"], vec![]));
         }
         _ => {
             let url = s(b, "baseUrl").trim().trim_end_matches('/').to_string();
@@ -140,8 +160,13 @@ fn update_provider(hub: &dyn AiHub, user: &str, id: &str, b: &Value) -> Result<V
     let Some(p) = list.iter_mut().find(|x| x["id"] == json!(id)).filter(|x| x["owner"] == json!(user)) else { return Err("Not your provider.".into()) };
     if !b["label"].is_null() { let l: String = match &b["label"] { Value::String(t) => t.trim().chars().take(60).collect(), v => v.to_string() }; if !l.is_empty() { p["label"] = json!(l); } }
     if b.get("shared").is_some() { p["shared"] = json!(!(b["shared"].is_null() || b["shared"] == json!(false) || b["shared"] == json!(0) || b["shared"] == json!(""))); }
-    if b.get("models").is_some() { let fb = if p["kind"] == json!("openai") { p["models"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() } else { host_models(hub) }; p["models"] = json!(clean_models(&b["models"], fb)); }
-    if !s(b, "apiKey").is_empty() && p["kind"] != json!("claude-cli") { p["apiKey"] = json!(s(b, "apiKey").trim()); }
+    if b.get("models").is_some() { let fb = if p["kind"] == json!("openai") || p["kind"] == json!("jcode") { p["models"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() } else { host_models(hub) }; p["models"] = json!(clean_models(&b["models"], fb)); }
+    if !s(b, "apiKey").is_empty() && p["kind"] != json!("claude-cli") && p["kind"] != json!("jcode") { p["apiKey"] = json!(s(b, "apiKey").trim()); }
+    if p["kind"] == json!("jcode") {
+        if !s(b, "command").trim().is_empty() { p["command"] = json!(s(b, "command").trim()); }
+        if b.get("provider").is_some() { let pr: String = s(b, "provider").trim().chars().take(80).collect(); if pr.is_empty() { p.as_object_mut().map(|m| m.remove("provider")); } else { p["provider"] = json!(pr); } }
+        if let Some(h) = b.get("home").and_then(Value::as_str) { let h = h.trim(); if h.is_empty() { p.as_object_mut().map(|m| m.remove("home")); } else if Path::new(h).is_absolute() { p["home"] = json!(h); } }
+    }
     let v = pub_view(p); save_providers(hub, list);
     Ok(v)
 }

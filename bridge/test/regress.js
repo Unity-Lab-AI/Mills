@@ -234,6 +234,7 @@ async function setup() {
     if ((f.endsWith('.js') && f !== 'master-logins.js') || f === 'cloudflared-quick.yml') fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   }
   fs.copyFileSync(path.join(__dirname, 'fake-claude.js'), path.join(SB, 'test', 'fake-claude.js'));
+  fs.copyFileSync(path.join(__dirname, 'fake-jcode.js'), path.join(SB, 'test', 'fake-jcode.js')); // R180: a stand-in `jcodepgm run --ndjson`
   // the JavaScript AI host's launchers, example config and host tools
   for (const f of ['ai-node.example.json', 'start-node.bat', 'start-node.sh']) fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
@@ -921,6 +922,45 @@ async function run() {
     && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByU.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
     && /id="provBox"/.test(html) && /\/api\/providers\/add/.test(html) && /o\.value = p\.id \+ '\|' \+ m/.test(html),
     `providers at start ${prov0.providers.map((p) => p.id).join(',')}; refused no-host ${cliNoHost.status} not-admin ${cliNotAdmin.status}/${oaiNotAdmin.status}; cli ${cli.provider ? 'made' : JSON.stringify(cli).slice(0, 120)} ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
+  // Jcode PGM as a Work harness (R180, 5.7.0): an admin adds a `jcode` provider (a jcodepgm binary on the hub; the fake
+  // here), picks it, and a Work run goes through `jcodepgm run --ndjson` in the worktree with a private jcode home that
+  // carries the hub's MCP servers and the system prompt as its overlay; jcode's events reach the page in the shape it
+  // renders; a session resumes with the same harness only; an error ends as a failed result; a non-admin is refused.
+  if (RUST_HUB) {
+    const jNotAdmin = await call('/api/providers/add', U, { kind: 'jcode', label: 'Tuser jcode', command: process.execPath });
+    const jBadHome = await call('/api/providers/add', A, { kind: 'jcode', label: 'bad home', command: process.execPath, home: 'relative/x' });
+    const jc = (await call('/api/providers/add', A, { kind: 'jcode', label: 'Jcode PGM (fake)', command: process.execPath, args: [path.join(SB, 'test', 'fake-jcode.js')], provider: 'viberoller', models: 'claude-haiku-5-5, claude-sonnet-5-5', shared: false })).data;
+    const jView = jc.provider || {};
+    const pickJ = await call('/api/model', A, { provider: jView.id, model: 'claude-haiku-5-5' });
+    const jRun1 = await chat(A, 'hello from r180 MCP TOOL', { fresh: true });
+    const t1 = texts(jRun1.events);
+    const init1 = jRun1.events.find((e) => e.type === 'system' && e.subtype === 'init') || {};
+    const toolUse = jRun1.events.some((e) => e.type === 'assistant' && e.message.content.some((c) => c.type === 'tool_use' && c.name === 'bash' && c.input && c.input.command === 'echo hi'));
+    const toolRes = jRun1.events.some((e) => e.type === 'user' && e.message.content.some((c) => c.type === 'tool_result' && c.tool_use_id === 't1' && c.is_error === false));
+    const res1 = jRun1.events.find((e) => e.type === 'result') || {};
+    const done1 = jRun1.events.find((e) => e.type === 'bridge_done') || {};
+    const jRun2 = await chat(A, 'again r180');
+    const t2 = texts(jRun2.events);
+    const jFail = await chat(A, 'please FAIL r180');
+    const resF = jFail.events.find((e) => e.type === 'result') || {};
+    const doneF = jFail.events.find((e) => e.type === 'bridge_done') || {};
+    const jHome = path.join(SB, 'profiles', 't-admin', 'jcode-home');
+    const jMcp = fs.existsSync(path.join(jHome, 'mcp.json')) ? JSON.parse(fs.readFileSync(path.join(jHome, 'mcp.json'), 'utf8')) : {};
+    const jOverlay = fs.existsSync(path.join(jHome, 'prompt-overlay.md')) ? fs.readFileSync(path.join(jHome, 'prompt-overlay.md'), 'utf8') : '';
+    // back to Claude: a jcode session id is never resumed by Claude Code
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+    const back = await chat(A, 'back to claude r180');
+    const backText = texts(back.events);
+    await call('/api/providers/remove', A, { id: jView.id });
+    check('R180', 'Jcode PGM as a Work harness: an admin adds a jcode provider (a jcodepgm binary on the hub; refused for a non-admin, a relative home refused); picking it runs Work through `jcodepgm run --ndjson` in the worktree with the asked model and provider profile, a private jcode home per person carrying the hub\'s MCP servers (the pc tool answers through them) and the system prompt as the prompt overlay; the events reach the page in its shape (init, assistant text + tool_use, tool_result, result) and the run ends 0; the next message resumes the same jcode session; an error is a failed result and a non-zero end; switching back to Claude never resumes a jcode session',
+      jNotAdmin.status === 400 && jBadHome.status === 400 && !!jView.id && jView.harness === 'jcode' && pickJ.status === 200 && pickJ.data.provider === jView.id
+      && init1.harness === 'jcode' && /^fakej-/.test(init1.session_id || '') && /jcode-answer model=claude-haiku-5-5 provider=viberoller/.test(t1) && /resume=no/.test(t1) && /overlay:yes/.test(t1) && /MCP:\{"ok":true/.test(t1)
+      && toolUse && toolRes && res1.is_error === false && res1.harness === 'jcode' && done1.code === 0
+      && /resume=yes/.test(t2) && resF.is_error === true && /fake failure/.test(resF.result || '') && doneF.code === 1
+      && jMcp.mcpServers && jMcp.mcpServers.pc && jMcp.mcpServers.board && jMcp.mcpServers.team && /Worktree law/.test(jOverlay)
+      && back.status === 200 && !/jcode-answer/.test(backText),
+      `add ${jNotAdmin.status}/${jBadHome.status}/${jc.provider ? 'made' : JSON.stringify(jc).slice(0, 100)}, pick ${pickJ.status}, run1 "${t1.slice(0, 160)}" tool ${toolUse}/${toolRes} result ${res1.is_error} code ${done1.code}; run2 "${t2.slice(-40)}"; fail ${resF.is_error} code ${doneF.code}; home mcp ${Object.keys(jMcp.mcpServers || {}).join(',')} overlay ${jOverlay.length}b; back "${backText.slice(0, 60)}"`);
+  } else skip('R180', 'Jcode PGM as a Work harness (a jcode provider runs Work through jcodepgm run --ndjson)', 'the Rust hub\'s: --rust-hub runs it');
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });

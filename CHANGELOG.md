@@ -7,6 +7,32 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.7.0 — 2026-10-22
+
+MINOR: **Jcode PGM as a Work harness** (the first step of Jcode-Mods `EXTENSIBILITY.md` §3 and `ARCHITECTURE.md`:
+a second coding harness next to Claude Code, picked per provider).
+- **A `jcode` provider** (Settings → AI providers, admins only): a `jcodepgm` binary on the hub (a path, or the name
+  on PATH), optional extra args, an optional jcode home, the jcode provider profile to run with (`-p`), and the models
+  it may be asked for (`-m`; empty = jcode's own default). `Work::harness_of` (pgm-ai) says which harness a provider
+  runs: "claude" (host, host-claude, anthropic, claude-cli), "jcode", or none (an endpoint / ChatGPT login: API and
+  Unity only). `/api/model` accepts either harness; the old "not Claude" refusal names both.
+- **A run on it:** `jcodepgm run --ndjson --no-update [-p …] [-m …] [--resume …] <message>` in the person's worktree,
+  with a **private jcode home per person** (`<profile>/jcode-home`; the provider may name one): the hub's three MCP
+  servers (pc, board, team) written as its `mcp.json`, the hub's system prompt (laws included) as its
+  `prompt-overlay.md`, `JCODE_RUNTIME_DIR` inside it, no auto-update, no auto-poke, no telemetry, the person's own
+  Claude Code MCP config kept out (`JCODE_DISABLE_CLAUDE_MCP`). Forgejo and `fj` env as for Claude Code.
+- **One event shape for the page:** jcode's NDJSON (`start`, `text_delta`, `tool_start / tool_input / tool_exec /
+  tool_done`, `tokens`, `done`, `error`) is mapped onto the shape the page renders already (`system/init`,
+  `assistant` text and tool_use blocks, `user` tool_result, `result` with `is_error`), every mapped event tagged
+  `harness: "jcode"`; other jcode events arrive as `{ type: "jcode", event }`. Usage, context and shared Work sessions
+  work unchanged.
+- **Sessions follow their harness:** `sessionHarness` in work.json; a Jcode PGM session id is never handed to Claude
+  Code (`--resume`) and vice versa; switching providers starts fresh.
+- R180 (`--rust-hub` / `--rust-alone`; the JavaScript hub does not learn this): a fake `jcodepgm` (test/fake-jcode.js)
+  proves the add / refuse rules, the command line, the home (MCP answers through it, the overlay is there), the event
+  mapping, resume, a failed run, and that going back to Claude never resumes a jcode session.
+- pgm-libs 5.7.0 carries the same `pgm-ai` (library law).
+
 ## 5.6.1 — 2026-10-22
 
 PATCH: **the library law** (LAWS.md). Sponge: code that two projects need is written once, in a library (pgm-libs and
