@@ -43,6 +43,11 @@ if [ -f "$ST/pending" ]; then
   RESTARTED=${RESTARTED:-0}; FAILS=${FAILS:-0}
   if [ "$(running)" = "$NEW" ]; then
     echo "$NEW" > "$ST/last-good"; rm -f "$ST/pending"
+    # the kept builds (FR3): a verified version's build is a good one (newest first; native/keep-builds.sh keeps the 2 newest)
+    for T in x86_64-unknown-linux-gnu x86_64-pc-windows-gnu; do
+      G=native/dist/$T/good
+      if [ -d "native/dist/$T/$NEW" ]; then { echo "$NEW"; [ -f "$G" ] && grep -vx "$NEW" "$G"; } > "$G.tmp" 2>/dev/null; mv "$G.tmp" "$G"; fi
+    done
     say "verified $(short "$NEW") (VibeRoller $(version)): the hub is up on it; it is now the last good version"
     exit 0
   fi
@@ -57,6 +62,10 @@ if [ -f "$ST/pending" ]; then
   GOOD=$(cat "$ST/last-good" 2>/dev/null || echo "$OLD")
   echo "$NEW" > "$ST/bad"; rm -f "$ST/pending"
   git reset -q --hard "$GOOD"
+  # the kept builds (FR3): the last good version's build goes back in service with its checkout (when it was kept)
+  for T in x86_64-unknown-linux-gnu x86_64-pc-windows-gnu; do
+    [ -d "native/dist/$T/$GOOD" ] && sh native/use-build.sh "native/dist/$T" "$GOOD" >> "$LOG" 2>&1 && say "the native build of $(short "$GOOD") is back in service for $T"
+  done
   date -u +%Y-%m-%dT%H:%M:%SZ > bridge/.restart
   printf 'Version %s did not come up within 2 minutes of its restart, so the hub went back to %s (VibeRoller %s), the last version that ran fine. %s stays out until main moves on.\n' "$(short "$NEW")" "$(short "$GOOD")" "$(version)" "$(short "$NEW")" > bridge/.rolled-back
   say "ROLLED BACK: $(short "$NEW") did not come up (hub answered: $(answers && echo "yes, on $(short "$(running)")" || echo no)); back on $(short "$GOOD") (VibeRoller $(version)); $(short "$NEW") is skipped until main moves on"
@@ -70,10 +79,17 @@ if [ -f native/build.sh ] && [ ! -f "$ST/pending" ]; then
   BUILT=$(sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p' native/dist/x86_64-unknown-linux-gnu/BUILD.json 2>/dev/null | head -n 1)
   NEEDS=0
   if [ -z "$BUILT" ]; then NEEDS=1; elif ! git cat-file -e "$BUILT^{commit}" 2>/dev/null; then NEEDS=1; elif ! git diff --quiet "$BUILT" HEAD -- native/ 2>/dev/null; then NEEDS=1; fi
+  # a build of this very commit that failed its trial is not tried again until main moves on
+  [ "$NEEDS" = 1 ] && [ -d "native/dist/x86_64-unknown-linux-gnu/$(git rev-parse HEAD)" ] && [ "$(cat native/dist/x86_64-unknown-linux-gnu/current 2>/dev/null)" != "$(git rev-parse HEAD)" ] && NEEDS=0
   LOCK=$ST/native-build.pid
-  # a finished build asks the hub for a graceful restart (it waits for nobody being busy), so the new Rust hub (vr-hub)
-  # runs too, not just the new JavaScript; the AI hosts take their new build from it by themselves
-  BUILD_CMD="nice -n 10 sh '$APP/native/build.sh' > '$BASE/native-build.log' 2>&1 && date -u +%Y-%m-%dT%H:%M:%SZ > '$APP/bridge/.restart' && echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build done; graceful restart requested (the new Rust hub)\" >> '$LOG' || echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build FAILED (the last build stays; see native-build.log)\" >> '$LOG'"
+  # The build is staged under native/dist/<target>/<commit>/ (VR_STAGE_ONLY=1), tried on a side port against a copy of
+  # the data (deploy/trial.sh, FR5), and only then put in service (native/use-build.sh, FR3; the Windows build with it).
+  # A finished build asks the hub for a graceful restart (it waits for nobody being busy), so the new Rust hub (vr-hub)
+  # runs too, not just the new JavaScript; the AI hosts take their new build from it by themselves. A failed trial keeps
+  # the old build and says so in the team chat (bridge/.announce/, posted by the hub).
+  BC=$(git rev-parse HEAD); LT=x86_64-unknown-linux-gnu; WT=x86_64-pc-windows-gnu
+  TRIAL_FAIL="mkdir -p '$APP/bridge/.announce' && printf '**A new native build was NOT put in service.** The build of %s failed its trial (deploy/trial.sh on a side port against a copy of the data); the build in service stays. See native-build.log on the server.\n' '$(short "$BC")' > '$APP/bridge/.announce/trial-failed-\$(date +%s).txt'"
+  BUILD_CMD="export VR_COMMIT='$BC' VR_STAGE_ONLY=1; nice -n 10 sh '$APP/native/build.sh' > '$BASE/native-build.log' 2>&1 || { echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build FAILED (the last build stays; see native-build.log)\" >> '$LOG'; exit 1; }; if sh '$APP/deploy/trial.sh' '$APP/native/dist/$LT/$BC/vr-hub' '$APP' >> '$BASE/native-build.log' 2>&1; then sh '$APP/native/use-build.sh' '$APP/native/dist/$LT' '$BC' >> '$BASE/native-build.log' 2>&1 && { [ -d '$APP/native/dist/$WT/$BC' ] && sh '$APP/native/use-build.sh' '$APP/native/dist/$WT' '$BC' >> '$BASE/native-build.log' 2>&1; true; } && date -u +%Y-%m-%dT%H:%M:%SZ > '$APP/bridge/.restart' && echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build done and tried; graceful restart requested (the new Rust hub)\" >> '$LOG'; else echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build of $(short "$BC") FAILED ITS TRIAL (the build in service stays; see native-build.log)\" >> '$LOG'; $TRIAL_FAIL; fi"
   busy=0
   if [ -n "${INVOCATION_ID:-}" ] && command -v systemd-run >/dev/null; then systemctl --user is-active -q viberoller-native-build 2>/dev/null && busy=1
   else [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2>/dev/null && busy=1; fi

@@ -2444,11 +2444,16 @@ async function run() {
     fs.writeFileSync(path.join(dist176, 'good'), 'c4\nc3\nc2\nc1\n'); // good builds, newest first; c5 = the current (not yet good)
     const r176 = fs.existsSync(kb) ? spawnSync('sh', [kb, dist176, 'c5', path.join(dist176, 'good')], { encoding: 'utf8', timeout: 30000 }) : { status: -1, stdout: '', stderr: 'no native/keep-builds.sh' };
     const left176 = fs.readdirSync(dist176).filter((d) => /^c\d$/.test(d)).sort();
-    let cur176 = ''; try { cur176 = fs.readlinkSync(path.join(dist176, 'current')); } catch { /* none */ }
+    let cur176 = ''; try { cur176 = fs.readFileSync(path.join(dist176, 'current'), 'utf8').trim(); } catch { /* none */ }
     const build176 = fs.readFileSync(path.join(MILLS, 'native', 'build.sh'), 'utf8'), ad176 = fs.readFileSync(path.join(MILLS, 'deploy', 'autodeploy.sh'), 'utf8');
-    spec('R176', 'FR3 kept builds per commit: sh native/keep-builds.sh <dist> <current> <good list> keeps the current build and the 2 newest good ones, deletes the rest, points "current" at the current build; [static] build.sh writes builds under their commit and calls it, the auto-deploy\'s rollback restores "current" with the checkout',
-      r176.status === 0 && left176.join(',') === 'c3,c4,c5' && /c5\/?$/.test(cur176) && /keep-builds\.sh/.test(build176) && /keep-builds\.sh/.test(ad176) && /\/current/.test(ad176),
-      `exit ${r176.status} ${String(r176.stderr || '').trim().slice(0, 100)} · left ${left176.join(',')} · current → ${cur176 || 'none'} · build.sh keeps ${/keep-builds\.sh/.test(build176)} · autodeploy restores current ${/\/current/.test(ad176)}`);
+    // use-build.sh: the staged build c4 goes in service (its files copied over the top-level ones), current → c4, the kept set follows
+    fs.writeFileSync(path.join(dist176, 'c4', 'BUILD.json'), '{"commit":"c4"}');
+    const u176 = fs.existsSync(path.join(MILLS, 'native', 'use-build.sh')) ? spawnSync('sh', [path.join(MILLS, 'native', 'use-build.sh'), dist176, 'c4'], { encoding: 'utf8', timeout: 30000 }) : { status: -1, stderr: 'no native/use-build.sh' };
+    let top176 = ''; try { top176 = fs.readFileSync(path.join(dist176, 'vr-hub'), 'utf8'); } catch { /* none */ }
+    let cur176b = ''; try { cur176b = fs.readFileSync(path.join(dist176, 'current'), 'utf8').trim(); } catch { /* none */ }
+    check('R176', 'FR3 kept builds per commit: sh native/keep-builds.sh <dist> <current> <good list> keeps the current build and the 2 newest good ones, deletes the rest, writes "current" (the current commit); sh native/use-build.sh <dist> <commit> puts a kept build in service (its files at <dist>/ itself, where run.js, vr-run and the Downloads read them; current follows); [static] build.sh stages builds under their commit and puts them in service through use-build.sh, the auto-deploy\'s rollback puts the last good build back in service with the checkout',
+      r176.status === 0 && left176.join(',') === 'c3,c4,c5' && cur176 === 'c5' && u176.status === 0 && top176 === 'c4' && cur176b === 'c4' && /use-build\.sh/.test(build176) && /VR_STAGE_ONLY/.test(build176) && /use-build\.sh/.test(ad176),
+      `keep exit ${r176.status} ${String(r176.stderr || '').trim().slice(0, 100)} · left ${left176.join(',')} · current ${cur176 || 'none'} · use exit ${u176.status} ${String(u176.stderr || '').trim().slice(0, 100)} top-level now ${top176 || 'none'} current ${cur176b || 'none'} · build.sh uses ${/use-build\.sh/.test(build176)} · autodeploy restores ${/use-build\.sh/.test(ad176)}`);
   }
   if (!WIN) { // R177 (FR4): the Rust supervisor vr-run: crash-loop → the previous good build; a hang → killed, the previous good build; exit 75 → started again
     const native = path.join(MILLS, 'native'), home177 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
@@ -2465,7 +2470,7 @@ http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 
       if (built177.status !== 0) return { name, ok: false, why: 'vr-run not built' };
       const dir = path.join(SCRATCH, 'dist177-' + name); fs.mkdirSync(dir, { recursive: true });
       for (const [c, m] of Object.entries(builds)) { fs.mkdirSync(path.join(dir, c), { recursive: true }); fs.writeFileSync(path.join(dir, c, 'mode'), m); fs.writeFileSync(path.join(dir, c, 'vr-hub'), `#!/bin/sh\nexec "${process.execPath}" "${fakeHub}" ${c} "${path.join(dir, c, 'mode')}" "$@"\n`, { mode: 0o755 }); }
-      fs.symlinkSync(cur, path.join(dir, 'current')); fs.writeFileSync(path.join(dir, 'good'), good.join('\n') + '\n');
+      fs.writeFileSync(path.join(dir, 'current'), cur + '\n'); fs.writeFileSync(path.join(dir, 'good'), good.join('\n') + '\n'); // current: a plain file naming the commit (keep-builds.sh writes it so)
       const port = await freePort(PORT + 300), root = path.join(SCRATCH, 'root177-' + name, 'bridge'); fs.mkdirSync(root, { recursive: true });
       const log = fs.openSync(path.join(SCRATCH, `vr-run-${name}.log`), 'a');
       const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
@@ -2480,8 +2485,8 @@ http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 
     const crash = await scenario('crash', { n1: 'crash', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const hang = await scenario('hang', { n1: 'hang', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const fine = await scenario('fine', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1');
-    const again = await scenario('exit75', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1', async (dir) => { fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); await fetch(`http://127.0.0.1:${PORT}/api/status`).catch(() => {}); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 400); });
-    spec('R177', 'FR4 the Rust supervisor vr-run (replacing run.js): starts the newest build ("current"); a build that crashes 3 times within a minute is marked bad and the previous good build takes over (bridge/.fell-back names both); a build that accepts connections but never answers the health check (/api/status every --health-every s, --health-timeout s, 3 misses) is killed and the previous good build takes over; a healthy build stays; exit 75 = the build is started again (restart on new code)',
+    const again = await scenario('exit75', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1', async (dir) => { fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500); }); // the next health check makes the fake exit 75; vr-run starts it again
+    check('R177', 'FR4 the Rust supervisor vr-run (replacing run.js): starts the newest build ("current"); a build that crashes 3 times within a minute is marked bad and the previous good build takes over (bridge/.fell-back names both); a build that accepts connections but never answers the health check (/api/status every --health-every s, --health-timeout s, 3 misses) is killed and the previous good build takes over; a healthy build stays; exit 75 = the build is started again (restart on new code)',
       built177.status === 0 && crash.ok && crash.fell && crash.fell.from === 'n1' && crash.fell.to === 'g1' && hang.ok && hang.fell && hang.fell.to === 'g1' && fine.ok && !fine.fell && again.ok && !again.fell,
       built177.status !== 0 ? `vr-run does not build: ${String(built177.stderr || '').trim().split('\n').slice(-2).join(' ').slice(0, 160)}` : `crash → ${crash.seen || 'nobody'} in ${crash.ms} ms fell ${JSON.stringify(crash.fell)} · hang → ${hang.seen || 'nobody'} in ${hang.ms} ms fell ${JSON.stringify(hang.fell)} · fine → ${fine.seen} fell ${!!fine.fell} · exit 75 → ${again.seen} fell ${!!again.fell}`);
   }
@@ -2492,18 +2497,24 @@ http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 
     const t178 = Date.now(), bad178 = fs.existsSync(tr) ? spawnSync('sh', [tr, '/bin/false', SCRATCH], { encoding: 'utf8', timeout: 90000 }) : { status: -1, stdout: '', stderr: '' };
     const badMs = Date.now() - t178, left178 = fs.readdirSync(require('os').tmpdir()).filter((d) => /^vr-trial-/.test(d)).length - before178;
     const ad178 = fs.readFileSync(path.join(MILLS, 'deploy', 'autodeploy.sh'), 'utf8');
-    spec('R178', 'FR5 a new build is tried before it is swapped in: sh deploy/trial.sh <vr-hub> <checkout> copies the data to a temporary root, starts the build there on a free port, expects /api/status 200 naming its commit, / 200 and /api/version 401 within 30 s, stops it, removes the copy: exit 0; a build that cannot start: exit 1 within 35 s; [static] the auto-deploy runs it before "current" moves',
-      ok178.status === 0 && bad178.status === 1 && badMs < 35000 && left178 <= 0 && /trial\.sh/.test(ad178),
+    check('R178', 'FR5 a new build is tried before it is swapped in: sh deploy/trial.sh <vr-hub> <checkout> copies the settings, data and page to a private temporary root, starts the build there on a free port, expects /api/status 200 naming the checkout\'s version, / 200 and /__vr-front naming the front within 30 s, stops it, removes the copy: exit 0; a build that cannot start: exit 1 within 35 s; [static] the auto-deploy stages a build, tries it and only then puts it in service',
+      ok178.status === 0 && bad178.status === 1 && badMs < 35000 && left178 <= 0 && /trial\.sh/.test(ad178) && /VR_STAGE_ONLY=1/.test(ad178),
       `good build exit ${ok178.status} ${String(ok178.stdout || ok178.stderr || '').trim().split('\n').pop().slice(0, 120)} · /bin/false exit ${bad178.status} in ${badMs} ms · copies left ${Math.max(0, left178)} · autodeploy runs it ${/trial\.sh/.test(ad178)}`);
   }
   if (RUST_HUB) { // R179 (FR6): who answers each route; the list of routes still answered by the JavaScript hub must shrink to none
-    const routes179 = ['/api/check', '/api/version', '/api/status', '/api/room/messages?since=0', '/api/guilds', '/api/board', '/api/board/calendar', '/api/notes/tree', '/api/projects', '/api/forgejo/me', '/api/admin/accounts', '/api/admin/gateway/products', '/api/assistant/state', '/api/files/library', '/api/usage', '/api/providers', '/api/downloads', '/api/work/state', '/api/shares', '/api/linux/me', '/api/ai-hosts', '/api/archive/list', '/api/profile', '/api/room/members', '/api/keys', '/api/unity/state', '/api/handoff/status'];
+    // every /api/ path the JavaScript hub names (bridge/server.js and the modules it routes to), probed with GET as the
+    // admin: who answers is what counts, not the status (a POST-only route answers 404 either way). Paths that act on a
+    // GET-less route are left out all the same (nothing is restarted, cleared or deleted by the meter).
+    const js179 = ['server.js', 'files.js', 'notes.js', 'linux-accounts.js', 'forgejo.js', 'guilds.js', 'calls.js', 'shares.js', 'archive.js', 'user-profile.js', 'handoff.js', 'host-relay.js', 'usage.js', 'providers.js', 'board.js', 'assistant.js', 'ai-nodes.js', 'ai-nodes-front.js', 'openai.js'].map((f) => { try { return fs.readFileSync(path.join(BRIDGE, f), 'utf8'); } catch { return ''; } }).join('\n');
+    const found179 = new Set([...js179.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)].map((m) => m[1]));
+    const skip179 = /(logout|restart|delete|clear|stop|password|create|signout|unlock|allow|set-admin|handoff\/(switch|undo)|send|upload|disconnect|\/connect|remove|move|complete|claim|release|forget|reset|kill|update|answer|run|start|join|leave|invite|ban|kick|timeout|save|write|rename|mkdir|share|unshare|set$|toggle|clear)/;
+    const routes179 = [...new Set(['/api/check', '/api/version', '/api/status', '/api/room/messages?since=0', '/api/guilds', '/api/board', '/api/board/calendar', '/api/notes/tree', '/api/projects', '/api/forgejo/me', '/api/admin/accounts', '/api/admin/gateway/products', '/api/assistant/state', '/api/files/library', '/api/usage', '/api/providers', '/api/downloads', '/api/work/state', '/api/shares', '/api/linux/me', '/api/ai-hosts', '/api/archive/list', ...[...found179].filter((p) => !skip179.test(p)).sort()])];
     const by179 = [];
     for (const p of routes179) { const r = await tryFetch(H + p, { Authorization: 'Bearer ' + A }); by179.push(`${p.replace(/\?.*$/, '')}=${(r.h.get && r.h.get('x-vr-by')) || '-'}${r.status >= 500 || !r.status ? '!' + r.status : ''}`); }
     const node179 = by179.filter((x) => /=node/.test(x)).map((x) => x.split('=')[0]), unmarked179 = by179.filter((x) => /=-/.test(x)).map((x) => x.split('=')[0]), broken179 = by179.filter((x) => /!/.test(x));
     spec('R179', 'FR6 retire the JavaScript hub: every /api/ answer says who answered (x-vr-by: rust | node) and no route is left to the JavaScript hub',
       unmarked179.length === 0 && node179.length === 0 && broken179.length === 0,
-      `still node (${node179.length}): ${node179.join(' ') || 'none'} · unmarked: ${unmarked179.join(' ') || 'none'} · broken: ${broken179.join(' ') || 'none'}`);
+      `${routes179.length} routes probed · still node (${node179.length}): ${node179.join(' ') || 'none'} · unmarked: ${unmarked179.join(' ') || 'none'} · broken: ${broken179.join(' ') || 'none'}`);
   }
 
   // R155: updates need an account too (4.0.0): the desktop app updates itself with the session its hub page hands it
@@ -2979,6 +2990,7 @@ http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 
   if (RUST_HUB) { // R175 (FR2): an unreadable data file never stops the hub starting: moved aside as .bad-<time> (kept), defaults, said in the team chat
     const pf175 = path.join(SB, 'gateway', 'products.json'), garbage = '{"products": garbage';
     fs.mkdirSync(path.dirname(pf175), { recursive: true }); fs.writeFileSync(pf175, garbage);
+    const seq175 = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
     const pidA = (await call('/api/status')).data.pid;
     spawnSync(process.execPath, [path.join(SB, 'restart.js')], { cwd: SB });
     let pidB = pidA;
@@ -2986,9 +2998,13 @@ http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 
     const bad175 = fs.readdirSync(path.dirname(pf175)).filter((f) => /^products\.json\.bad-\d{8}-\d{6}$/.test(f));
     const kept175 = bad175.length === 1 && fs.readFileSync(path.join(path.dirname(pf175), bad175[0]), 'utf8') === garbage;
     let fresh175 = false; try { fresh175 = !!JSON.parse(fs.readFileSync(pf175, 'utf8')); } catch { fresh175 = !fs.existsSync(pf175); }
-    const said175 = JSON.stringify((await call('/api/room/messages?since=0', A)).data || {}).includes('products.json.bad-');
+    let said175 = false; // posted as VibeRoller by the chat's notice loop, 3 s after the start: sealed to every member, read here as t-user
+    for (let i = 0; i < 40 && !said175; i++) {
+      await sleep(500);
+      for (const m of ((await call('/api/room/messages?since=' + seq175, U)).data.messages || []).filter((m) => m.from === 'claude' && !m.to)) { const t = await roomRead(restored, m); if (t && t.includes('products.json.bad-')) { said175 = true; break; } }
+    }
     const gw175 = await call('/api/admin/gateway/products', A);
-    spec('R175', 'FR2 bad data never stops the hub starting: an unreadable data file (here bridge/gateway/products.json) is moved aside as <file>.bad-<yyyymmdd-hhmmss> byte for byte, the hub starts with defaults for that part (the gateway answers with no products), nothing overwrites the original silently, and the team chat says what happened',
+    check('R175', 'FR2 bad data never stops the hub starting: an unreadable data file (here bridge/gateway/products.json) is moved aside as <file>.bad-<yyyymmdd-hhmmss> byte for byte, the hub starts with defaults for that part (the gateway answers with no products), nothing overwrites the original silently, and the team chat says what happened',
       !!pidB && pidB !== pidA && kept175 && fresh175 && gw175.status === 200 && said175,
       `restart ${pidA}→${pidB} · moved aside ${bad175.join(',') || 'no'} kept ${kept175} · fresh ${fresh175} · gateway ${gw175.status} · said in chat ${said175}`);
   }
