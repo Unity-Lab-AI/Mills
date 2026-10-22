@@ -2744,7 +2744,12 @@ async function run() {
     // products through pgm-libs): VibeRoller sets none, so it keeps its Claude buttons
     const page170 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), board170 = fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8');
     const stat170 = /async function loadGateway\(\)/.test(page170) && /id="gwBox" hidden/.test(page170) && /adminCall\('gateway\/products\/remove'/.test(page170)
-      && /Object\.assign\(\{ ai: true, product: 'VibeRoller' \}, window\.BOARD_OPTS \|\| \{\}\)/.test(board170) && !/BOARD_OPTS\s*=/.test(page170);
+      && /Object\.assign\(\{ ai: true, product: 'VibeRoller' \}, window\.BOARD_OPTS \|\| \{\}\)/.test(board170) && !/BOARD_OPTS\s*=/.test(page170)
+      // the page as a product's shell (5.2.0): PRODUCT from the placeholder, everything stored under NS, the base path, only its screens
+      && /const PRODUCT = \(\(\) => \{ const v = '__MILLS_PRODUCT__';/.test(page170) && /const NS = PRODUCT \? PRODUCT\.id \+ '\.' : '';/.test(page170) && /const TOKEN_KEY = NS \+ 'mills\.token';/.test(page170)
+      && /localStorage\.getItem\(NS \+ k\)/.test(page170) && /indexedDB\.open\(NS \+ 'mills', 1\)/.test(page170) && !/localStorage\.(get|set)Item\('mills/.test(page170) && !/sessionStorage\.(get|set)Item\('/.test(page170)
+      && /return location\.origin \+ \(PRODUCT \? PRODUCT\.base : ''\);/.test(page170) && /if \(PRODUCT && !\['menu', 'admin', \.\.\.PRODUCT\.screens\]\.includes\(name\)\) name = 'menu';/.test(page170)
+      && (await call('/')).status === 200 && /__MILLS_PRODUCT__/.test(await fetch(H + '/').then((r) => r.text())); // the hub leaves the placeholder: PRODUCT stays null here
     if (RUST_HUB) {
       const notAdmin = await call('/api/admin/gateway/products', U, { id: 'prodsuit', name: 'PGM Prod Suit' });
       const made = await call('/api/admin/gateway/products', A, { id: 'prodsuit', name: 'PGM Prod Suit', ai: true });
@@ -2780,6 +2785,25 @@ async function run() {
       const aiText = (((JSON.parse(ai.text || '{}').choices || [])[0] || {}).message || {}).content || '';
       const linksFile = path.join(SB, 'gateway', 'links', 'prodsuit.json');
       const links = fs.existsSync(linksFile) ? JSON.parse(fs.readFileSync(linksFile, 'utf8')) : {};
+      // a product served through the hub at /p/<id>/ (5.2.0): a stand-in product on a port of its own
+      const fakeProd = require('http').createServer((req, res) => { let body = ''; req.on('data', (c) => { body += c; }); req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json', 'x-prod': 'yes' }); res.end(JSON.stringify({ path: req.url, method: req.method, body, h: { host: req.headers.host, xff: req.headers['x-forwarded-for'], prefix: req.headers['x-forwarded-prefix'], proto: req.headers['x-forwarded-proto'], vr: req.headers['x-vr-user'] || '', pgm: req.headers['x-pgm-user'] || '', gw: req.headers['x-pgm-gateway'] || '', auth: req.headers.authorization || '' } })); }); });
+      const prodPort = await freePort(PORT + 40); await new Promise((r) => fakeProd.listen(prodPort, '127.0.0.1', r));
+      const withPort = await call('/api/admin/gateway/products', A, { id: 'fakeprod', name: 'Fake product', port: prodPort });
+      const badPort = await call('/api/admin/gateway/products', A, { id: 'badport', name: 'x', port: 70000 });
+      const noSlash = await fetch(H + '/p/fakeprod', { redirect: 'manual' });
+      const viaGet = await fetch(H + '/p/fakeprod/a/b?x=1', { headers: { 'x-vr-user': 't-admin', 'x-pgm-user': 't-admin', 'x-forwarded-for': '203.0.113.9', Authorization: 'Bearer abc' } });
+      const viaGetBody = await viaGet.json().catch(() => ({}));
+      const viaPost = await fetch(H + '/p/fakeprod/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"u":1}' }).then((r) => r.json()).catch(() => ({}));
+      const viaInternal = await fetch(H + '/p/fakeprod/internal/gateway/status').then((r) => r.status);
+      const viaFront = await fetch(H + '/p/fakeprod/__front/x').then((r) => r.status);
+      const unknownProd = await fetch(H + '/p/nothere/').then((r) => r.status);
+      const noPortProd = await fetch(H + '/p/prodsuit/').then((r) => r.status);
+      await new Promise((r) => fakeProd.close(r));
+      const prodDown = await fetch(H + '/p/fakeprod/').then((r) => r.status);
+      await call('/api/admin/gateway/products/remove', A, { id: 'fakeprod' });
+      const served = withPort.status === 200 && (withPort.data.product || {}).path === '/p/fakeprod/' && badPort.status === 400 && noSlash.status === 302 && noSlash.headers.get('location') === '/p/fakeprod/'
+        && viaGet.status === 200 && viaGet.headers.get('x-prod') === 'yes' && viaGetBody.path === '/a/b?x=1' && viaGetBody.h.prefix === '/p/fakeprod' && viaGetBody.h.vr === '' && viaGetBody.h.pgm === '' && viaGetBody.h.auth === 'Bearer abc' && viaGetBody.h.xff === '127.0.0.1' && /^\d+\.\d+\.\d+/.test(viaGetBody.h.gw)
+        && viaPost.method === 'POST' && viaPost.body === '{"u":1}' && viaPost.path === '/api/login' && viaInternal === 404 && viaFront === 404 && unknownProd === 404 && noPortProd === 404 && prodDown === 503;
       // a new secret: the old one stops at once; removing the product ends its links
       await call('/api/admin/gateway/products', A, { id: 'prodsuit', name: 'PGM Prod Suit', ai: true });
       const oldSecret = await gw('GET', '/internal/gateway/status', '');
@@ -2793,8 +2817,8 @@ async function run() {
         && beforeLink.status === 404 && aiBefore.status === 404 && wrongPw.status === 401 && verified.status === 200 && /"username":"t-user"/.test(verified.text) && blocked.status === 429
         && profile.status === 200 && /"username":"t-user"/.test(profile.text) && provs.status === 200 && /"providers":\[/.test(provs.text) && !/apiKey|configDir|baseUrl/.test(provs.text)
         && ai.status === 200 && /gw-r170/.test(aiText) && !!links['t-user'] && !links['t-admin']
-        && oldSecret.status === 403 && removed.status === 200 && gone && ignored && stat170,
-        `static ${stat170}; notAdmin ${notAdmin.status} made ${made.status} ${JSON.stringify(made.data).slice(0, 120)} badId ${badId.status} secret ${secret.length} mode ${mode.toString(8)}; status ${status.status} unsigned ${unsigned} once ${once.status} twice ${twice.status} moved ${moved.status} proxied ${proxied.status} old ${old.status} wrongKey ${wrongKey.status}; before ${beforeLink.status}/${aiBefore.status} wrongPw ${wrongPw.status} verified ${verified.status} ${verified.text.slice(0, 80)} blocked ${blocked.status}; profile ${profile.status} provs ${provs.status} ${provs.text.slice(0, 120)}; ai ${ai.status} "${aiText.slice(0, 80)}" ${ai.text.slice(0, 120)}; links ${JSON.stringify(links).slice(0, 80)}; oldSecret ${oldSecret.status} removed ${removed.status} gone ${gone} ignored ${ignored}`);
+        && oldSecret.status === 403 && removed.status === 200 && gone && ignored && stat170 && served,
+        `static ${stat170}; served ${served} (${withPort.status} ${JSON.stringify(withPort.data).slice(0, 100)} badPort ${badPort.status} noSlash ${noSlash.status} ${noSlash.headers.get('location')} get ${viaGet.status} ${JSON.stringify(viaGetBody).slice(0, 300)} post ${JSON.stringify(viaPost).slice(0, 120)} internal ${viaInternal} front ${viaFront} unknown ${unknownProd} noPort ${noPortProd} down ${prodDown}); notAdmin ${notAdmin.status} made ${made.status} ${JSON.stringify(made.data).slice(0, 120)} badId ${badId.status} secret ${secret.length} mode ${mode.toString(8)}; status ${status.status} unsigned ${unsigned} once ${once.status} twice ${twice.status} moved ${moved.status} proxied ${proxied.status} old ${old.status} wrongKey ${wrongKey.status}; before ${beforeLink.status}/${aiBefore.status} wrongPw ${wrongPw.status} verified ${verified.status} ${verified.text.slice(0, 80)} blocked ${blocked.status}; profile ${profile.status} provs ${provs.status} ${provs.text.slice(0, 120)}; ai ${ai.status} "${aiText.slice(0, 80)}" ${ai.text.slice(0, 120)}; links ${JSON.stringify(links).slice(0, 80)}; oldSecret ${oldSecret.status} removed ${removed.status} gone ${gone} ignored ${ignored}`);
     } else check('R170', 'PGM Gateway: product data stays out of git; [static] the admin\'s products box, the board kit\'s options (VibeRoller keeps its Claude buttons) [the gateway is the Rust hub\'s: --rust-hub runs it]', spawnSync('git', ['check-ignore', '-q', 'bridge/gateway/products.json'], { cwd: MILLS }).status === 0 && stat170, `static ${stat170}`);
   }
   // Persistence & restart (scratch restart.js: graceful flag only)

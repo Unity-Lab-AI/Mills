@@ -45,7 +45,7 @@ function renderAppCard(target) { // Settings → Downloads → "VibeRoller Chat 
   box.append(how);
 }
 if (APP_MODE) { // app mode: the chat is the whole app
-  document.title = 'VibeRoller Chat';
+  document.title = typeof PRODUCT !== 'undefined' && PRODUCT ? PRODUCT.name : 'VibeRoller Chat';
   const back = () => { for (const b of document.querySelectorAll('[data-back]')) b.hidden = true; };
   back();
 }

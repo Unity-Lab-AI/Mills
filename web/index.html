@@ -791,7 +791,7 @@
 <form id="login" class="center">
   <svg class="brandMark" aria-hidden="true"><use href="#i-mills"/></svg>
   <h1 id="title">VibeRoller</h1>
-  <p>Sign in with your VibeRoller username and password.</p>
+  <p id="loginHint">Sign in with your VibeRoller username and password.</p>
   <input id="username" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>
   <input id="password" type="password" placeholder="Password" autocomplete="current-password">
   <button type="submit" id="signin">Sign in</button>
@@ -1100,10 +1100,11 @@
     <!-- PGM Gateway (5.1.1): the products this hub is the gateway for (native/crates/vr-hub gateway.rs); hidden when the
          Rust hub is not in front (the gateway is its own) -->
     <div class="setSection" id="gwBox" hidden><b>PGM Gateway products</b> — programs of their own (PGM Prod Suit, ShaDow Chat, Hyper Prod Man) whose people sign in the first time with their VibeRoller login and, with AI on, use the AI hosts as themselves. A product's secret goes only to the file shown (for the product on this server), never to this page.
-      <table><thead><tr><th>Product</th><th>People linked</th><th>Secret file</th><th>Actions</th></tr></thead><tbody id="gwRows"></tbody></table>
+      <table><thead><tr><th>Product</th><th>Served here</th><th>People linked</th><th>Secret file</th><th>Actions</th></tr></thead><tbody id="gwRows"></tbody></table>
       <div class="row">
         <input id="gwId" placeholder="product id (a-z, 0-9, -), e.g. prodsuit" autocapitalize="none" spellcheck="false">
         <input id="gwName" placeholder="name, e.g. PGM Prod Suit">
+        <input id="gwPort" placeholder="its port here, e.g. 7790 (served at /p/id/)" inputmode="numeric" style="max-width:14rem">
         <label style="font-size:.85rem"><input type="checkbox" id="gwAi" style="width:auto"> AI</label>
         <button id="gwAdd">Add product</button>
       </div>
@@ -1223,7 +1224,14 @@ const GH_USER = '__MILLS_GIST_OWNER__'; // filled in at deploy time from the MIL
 // One VibeRoller hub serves every account; people sign in with username + password.
 // An old ?user=<name> link still works: it just fills in the username.
 const GIST_FILE = 'mills-bridge.json';
-const TOKEN_KEY = 'mills.token';
+// A PGM product serving this page as its own (5.2.0: PGM ShaDow Chat, Hyper Prod Man): its server fills __MILLS_PRODUCT__
+// with base64 JSON { id, name, base, screens, ai }. VibeRoller's hub leaves it as it is: PRODUCT is null and nothing
+// changes. A product's page keeps everything it stores in the browser under its own name (NS), so on a shared origin
+// (/p/<id>/ on the hub's site) it never reads or clears VibeRoller's session, keys or settings.
+const PRODUCT = (() => { const v = '__MILLS_PRODUCT__'; if (v.startsWith('__')) return null; try { const p = JSON.parse(atob(v)); return /^[a-z0-9-]{1,32}$/.test(p.id || '') && typeof p.name === 'string' && Array.isArray(p.screens) ? { ...p, base: /^\/p\/[a-z0-9-]+$/.test(p.base || '') ? p.base : '' } : null; } catch { return null; } })();
+const NS = PRODUCT ? PRODUCT.id + '.' : '';
+const APP_NAME = PRODUCT ? PRODUCT.name : 'VibeRoller';
+const TOKEN_KEY = NS + 'mills.token';
 const $ = (id) => document.getElementById(id);
 // Icons from the sprite at the top of <body>. ic('mic') → an <svg>; label(el, 'mic', 'Mute') replaces
 // el's content with icon + text (no text = icon only).
@@ -1234,11 +1242,18 @@ function ic(name, cls) {
 }
 function label(el, name, text) { el.textContent = ''; el.append(ic(name, text ? 'lead' : '')); if (text) el.append(text); return el; }
 const store = {
-  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  get(k) { try { return localStorage.getItem(NS + k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(NS + k, v); } catch {} },
 };
 let me = null;               // { username, display, admin, models, ... } from /api/check
 let USER_NAME = 'you';       // display name of whoever is signed in
+if (PRODUCT) { // a product's page: its name, only its screens on the menu, no Downloads / Connections (those are the hub's)
+  document.title = PRODUCT.name; $('title').textContent = PRODUCT.name;
+  $('loginHint').textContent = 'Sign in with your VibeRoller username and password. The first time, your ' + PRODUCT.name + ' account is made from it; after that it is its own.';
+  for (const [s, id] of Object.entries({ shell: 'goWork', room: 'goChat', board: 'goBoard', cal: 'goCal', notes: 'goNotes', library: 'goFiles', assist: 'goAssist' })) if (!PRODUCT.screens.includes(s)) $(id).hidden = true;
+  $('goDownloads').hidden = true;
+  for (const t of ['connections', 'downloads']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
+}
 $('username').value = (new URLSearchParams(location.search).get('user') || store.get('mills.username') || '').toLowerCase();
 if ($('username').value) $('password').focus();
 
@@ -1295,7 +1310,7 @@ const SERVED_BY_HUB = '__MILLS_SERVED__' === 'hub';
 if (!SERVED_BY_HUB && HUB_HOST && location.protocol === 'https:' && location.origin !== HUB_HOST) location.replace(HUB_HOST + '/');
 const HUB_URL_RE = HUB_HOST ? new RegExp('^(?:' + HUB_HOST.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '|https://[a-z0-9-]+\\.trycloudflare\\.com)$') : /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
 async function findBridge(fresh) {
-  if (SERVED_BY_HUB || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com') || (HUB_HOST && location.origin === HUB_HOST)) return location.origin;
+  if (SERVED_BY_HUB || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com') || (HUB_HOST && location.origin === HUB_HOST)) return location.origin + (PRODUCT ? PRODUCT.base : '');
   // Last good address first: skips two GitHub API round trips (and its 60-an-hour limit) on every load.
   const cached = store.get('mills.hub');
   if (!fresh && cached && HUB_URL_RE.test(cached)) {
@@ -1369,9 +1384,9 @@ async function api(path, opts = {}) {
 //   - the reload busts every cache: the service worker's caches are emptied and the worker updated, the page is asked
 //     for under the new build's name, and the hub names every script and stylesheet with the build too.
 let pageUpdate = null, editorDirty = false;
-const UPDATE_STATE = 'vr.update.state';
+const UPDATE_STATE = NS + 'vr.update.state';
 setInterval(() => { if (me && token) api('/api/version').catch(() => {}); }, 5 * 60e3);
-const UPDATE_LAST = 'vr.update.last';
+const UPDATE_LAST = NS + 'vr.update.last';
 function pageUpdateAvailable(build, path) {
   // never a reload loop: when this tab reloaded for this very build a moment ago and the hub still names another
   // build than the page got, the page stays (once said, with both builds, so the cause can be found)
@@ -1695,8 +1710,8 @@ async function enter() {
   if (me.prefs && typeof me.prefs.theme === 'string') { if (me.prefs.theme !== (store.get('mills.theme') || '')) { const m = me; me = null; applyTheme(m.prefs.theme); me = m; } } // (no chat re-render yet: it is drawn next)
   else if (store.get('mills.theme')) saveThemeChoice(store.get('mills.theme'));
   USER_NAME = me.display;
-  document.title = `VibeRoller · ${me.display}`;
-  $('brand').textContent = `VibeRoller · ${me.display}`;
+  document.title = `${APP_NAME} · ${me.display}`;
+  $('brand').textContent = `${APP_NAME} · ${me.display}`;
   $('menuUser').textContent = me.username;
   $('goAdmin').hidden = !me.admin;
   $('login').hidden = true;
@@ -1716,6 +1731,7 @@ async function enter() {
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
+  if (PRODUCT && !['menu', 'admin', ...PRODUCT.screens].includes(name)) name = 'menu'; // a product has only its own screens
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
@@ -1759,7 +1775,7 @@ $('menuLogout').onclick = logoutClick;
 // ---------- folder on the user's PC (File System Access API) ----------
 let rootHandle = null;
 const idb = {
-  open() { return new Promise((ok, no) => { const r = indexedDB.open('mills', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }); },
+  open() { return new Promise((ok, no) => { const r = indexedDB.open(NS + 'mills', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }); },
   async get(k) { const db = await this.open(); return new Promise((ok) => { const r = db.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => ok(r.result); r.onerror = () => ok(null); }); },
   async set(k, v) { const db = await this.open(); return new Promise((ok) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = ok; t.onerror = ok; }); },
 };
@@ -2650,7 +2666,7 @@ function padBucket(n) { // 256, 512, ... 64 KiB, then whole 64 KiB steps
 }
 const padPlain = (s) => { const b = enc.encode(s), out = new Uint8Array(padBucket(b.length)).fill(0x20); out.set(b); return out; }; // JSON ignores trailing spaces
 // Downgrade guard: once a sender has sent a v3 message, a later old-format message from them is refused.
-const v3Since = JSON.parse(localStorage.getItem('mills.v3since') || '{}'); // sender -> first v3 seq seen
+const v3Since = JSON.parse(store.get('mills.v3since') || '{}'); // sender -> first v3 seq seen
 const midSeen = new Map(); // mid -> seq it first appeared under
 
 // ── Team chat: conversations (# Everyone + private), replies, edits, deletes, @mentions, receipts ──
@@ -2736,7 +2752,7 @@ async function decryptMsg(m) {
       const p = parsePayload(m.v === 4 ? dec.decode(await inflate(unframe(body))) : dec.decode(body).trimEnd());
       if (p.a && p.a.k && !m.blobLen) p.a = null; // a clip key without a stored clip: nothing to play
       midSeen.set(m.mid, m.seq);
-      if (!(v3Since[m.from] <= m.seq)) { v3Since[m.from] = m.seq; localStorage.setItem('mills.v3since', JSON.stringify(v3Since)); }
+      if (!(v3Since[m.from] <= m.seq)) { v3Since[m.from] = m.seq; store.set('mills.v3since', JSON.stringify(v3Since)); }
       return p;
     } catch { return { t: '(could not decrypt)', r: null, locked: true }; }
   }
@@ -4216,17 +4232,19 @@ async function loadGateway() {
   for (const p of d.products || []) {
     const tr = document.createElement('tr');
     const td = (t) => { const c = document.createElement('td'); c.textContent = t; tr.append(c); return c; };
-    td(`${p.name} (${p.id})${p.ai ? ' · AI' : ''}`); td(String(p.linked)); td(p.secretFile);
+    td(`${p.name} (${p.id})${p.ai ? ' · AI' : ''}`);
+    const served = td(''); if (p.path) { const a = document.createElement('a'); a.href = p.path; a.target = '_blank'; a.rel = 'noopener'; a.textContent = `${p.path} → port ${p.port}`; served.append(a); } else served.textContent = 'no (its own site)';
+    td(String(p.linked)); td(p.secretFile);
     td('').append(
-      confirmButton('New secret', () => adminCall('gateway/products', { id: p.id, name: p.name, ai: p.ai }, () => adminOut(`${p.id}: a new secret is in ${p.secretFile}; the old one stopped working (a product reads it again on its next request).`))),
+      confirmButton('New secret', () => adminCall('gateway/products', { id: p.id, name: p.name, ai: p.ai, port: p.port || 0 }, () => adminOut(`${p.id}: a new secret is in ${p.secretFile}; the old one stopped working (a product reads it again on its next request).`))),
       confirmButton('Remove', () => adminCall('gateway/products/remove', { id: p.id }, () => adminOut(`${p.id}: removed; its secret and its links are gone (its own accounts stay with it).`))),
     );
     rows.append(tr);
   }
 }
-$('gwAdd').onclick = () => adminCall('gateway/products', { id: $('gwId').value.trim().toLowerCase(), name: $('gwName').value.trim(), ai: $('gwAi').checked }, (d) => {
-  adminOut(`${d.product.id}: added. Its secret is in ${d.product.secretFile} on this server (owner only); point the product's config there.`);
-  $('gwId').value = ''; $('gwName').value = ''; $('gwAi').checked = false;
+$('gwAdd').onclick = () => adminCall('gateway/products', { id: $('gwId').value.trim().toLowerCase(), name: $('gwName').value.trim(), ai: $('gwAi').checked, port: Number($('gwPort').value.trim() || 0) }, (d) => {
+  adminOut(`${d.product.id}: added. Its secret is in ${d.product.secretFile} on this server (owner only); point the product's config there.${d.product.path ? ` It is served at ${d.product.path}.` : ''}`);
+  $('gwId').value = ''; $('gwName').value = ''; $('gwPort').value = ''; $('gwAi').checked = false;
 });
 $('createUser').onclick = () => adminCall('create', { username: $('newUser').value.trim().toLowerCase(), display: $('newDisplay').value.trim(), admin: $('newAdmin').checked }, (d) => {
   adminOut(`Account created.\nUsername: ${d.username}\nPassword: ${d.password}\nAddress: ${location.origin}${location.pathname}`);

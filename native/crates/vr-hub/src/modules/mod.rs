@@ -208,8 +208,9 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         }
         return Routed::Pass(vec![]);
     }
-    // PGM Gateway: a product's signed requests (from this machine only; see gateway.rs)
+    // PGM Gateway: a product's signed requests (from this machine only; see gateway.rs), and the products served here
     if let Some(rest) = p.strip_prefix("/internal/gateway/") { return gateway::route(hub, r, rest).await; }
+    if let Some(rest) = p.strip_prefix("/p/") { return gateway::serve(hub, r, rest).await; }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
     // Unity's Claude brain calling her tools (this hub's secret; anything else is the JavaScript hub's)
     if p == "/internal/assistant-tool" && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &vr_core::crypto::hmac_hex(hub.mods.unity.secret.as_bytes(), r.header("x-mills-account").unwrap_or("").as_bytes())) { return unity_routes::internal(hub, r).await; }

@@ -75,26 +75,35 @@ pub const HOP: &[&str] = &["connection", "keep-alive", "proxy-authenticate", "pr
 /// A backend behind this server (on this machine): requests passed on with a shared secret header, streamed back.
 pub struct Backend {
     pub addr: SocketAddr,
-    /// (header, value) the backend trusts this server by
+    /// (header, value) the backend trusts this server by; an empty header name = none
     pub secret: (String, String),
+    /// how long a request waits for a backend that is down (a restart) before answering 503
+    pub wait: Duration,
     client: Client<HttpConnector, Full<Bytes>>,
 }
 impl Backend {
     pub fn new(addr: SocketAddr, secret_header: &str, secret: &str) -> Backend {
         let mut conn = HttpConnector::new(); conn.set_nodelay(true); conn.set_connect_timeout(Some(Duration::from_secs(2)));
         let client = Client::builder(TokioExecutor::new()).pool_idle_timeout(Duration::from_secs(30)).build(conn);
-        Backend { addr, secret: (secret_header.to_string(), secret.to_string()), client }
+        Backend { addr, secret: (secret_header.to_string(), secret.to_string()), wait: Duration::from_secs(30), client }
     }
+    /// A backend with no shared secret (a program of its own on this machine, e.g. a product behind a gateway), waited
+    /// for `wait` while it is down.
+    pub fn plain(addr: SocketAddr, wait: Duration) -> Backend { let mut b = Backend::new(addr, "", ""); b.wait = wait; b }
     /// Passes a request on, streamed back. `keep(header)` says which of the caller's headers go along (the hop headers
-    /// never do); `extra` are this server's own. While the backend is down (a restart) it waits up to 30 s for it.
+    /// never do); `extra` are this server's own. While the backend is down (a restart) it waits up to `wait` for it.
     pub async fn proxy(&self, parts: &hyper::http::request::Parts, body: Bytes, keep: impl Fn(&str) -> bool, extra: &[(String, String)]) -> Response<Body> {
         let pq = parts.uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| "/".into());
+        self.proxy_to(&pq, parts.method.clone(), &parts.headers, body, keep, extra).await
+    }
+    /// As [`proxy`](Self::proxy), to a path of this server's choosing (a prefix taken off, say).
+    pub async fn proxy_to(&self, pq: &str, method: hyper::Method, headers: &hyper::HeaderMap, body: Bytes, keep: impl Fn(&str) -> bool, extra: &[(String, String)]) -> Response<Body> {
         let started = Instant::now();
         loop {
-            let mut b = Request::builder().method(parts.method.clone()).uri(format!("http://{}{}", self.addr, pq));
-            for (k, v) in &parts.headers { if !HOP.contains(&k.as_str()) && keep(k.as_str()) { b = b.header(k, v); } }
+            let mut b = Request::builder().method(method.clone()).uri(format!("http://{}{}", self.addr, pq));
+            for (k, v) in headers { if !HOP.contains(&k.as_str()) && keep(k.as_str()) { b = b.header(k, v); } }
             for (k, v) in extra { b = b.header(k.as_str(), v.as_str()); }
-            b = b.header(self.secret.0.as_str(), self.secret.1.as_str());
+            if !self.secret.0.is_empty() { b = b.header(self.secret.0.as_str(), self.secret.1.as_str()); }
             let req = b.body(Full::new(body.clone())).expect("request");
             match self.client.request(req).await {
                 Ok(resp) => {
@@ -102,7 +111,7 @@ impl Backend {
                     for h in HOP { p.headers.remove(*h); }
                     return Response::from_parts(p, inc.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>).boxed());
                 }
-                Err(e) if e.is_connect() && started.elapsed() < Duration::from_secs(30) => { tokio::time::sleep(Duration::from_millis(250)).await; }
+                Err(e) if e.is_connect() && started.elapsed() < self.wait => { tokio::time::sleep(Duration::from_millis(250)).await; }
                 Err(e) => return json(if e.is_connect() { 503 } else { 502 }, &serde_json::json!({ "error": "The hub is restarting; try again in a moment.", "detail": e.to_string() })),
             }
         }

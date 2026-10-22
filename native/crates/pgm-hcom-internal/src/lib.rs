@@ -15,3 +15,4 @@ pub mod e2e;
 pub mod files;
 pub mod guilds;
 pub mod perms;
+pub mod profile;
