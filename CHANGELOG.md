@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.2.2 — 2026-10-22
+
+PATCH: `native/build-products.sh` also builds the products' Linux desktop apps (a tar.gz each) when the WebKitGTK
+sysroot is there (`native/tauri-env.sh setup`, user space, no root; it is there on the server now, so VibeRoller's own
+Linux desktop app is built and offered by the Downloads too), and attaches both the Windows and the Linux app to the
+product's release on Forgejo.
+
 ## 5.2.1 — 2026-10-22
 
 PATCH: the libraries' copy here is brought level with pgm-libs 5.4.0 (the products' needs; nothing the hub uses
