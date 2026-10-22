@@ -7,6 +7,32 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 4.1.4 — 2026-10-22
+
+### Fixed (what Sponge ran into on the portal)
+- **A Work reply survives a reload.** A reply's progress only came over the answer to the message that started it.
+  After a reload the page could not see the reply at all until it was over. Opening a past session said "Claude is
+  working, stop it first". Worse, the page sent the next queued message at once; the hub refused it because a reply
+  was still going, and that message was lost.
+  - Now the Rust hub keeps what a running reply has sent (`GET /api/work/attach`). The page saves, with the
+    conversation, how far into the reply it has shown it.
+  - After a reload, opening Work shows the reply live from exactly there, to its end, and only then sends what is
+    queued. A PC tool request goes out again only while it still waits for an answer, so it never runs twice.
+  - A reply whose stream breaks off (the network, a proxy) is picked up the same way.
+  - A reply that just ended is still there for 5 minutes, so a reload right at the end sees how it ended.
+  - The message when opening a past session during a reply now says what is going on.
+- **No reload in front of you.** A new version is offered in a small bar ("VibeRoller X is ready. Reload now /
+  Later"). The page takes it by itself only when its tab is in the background, and still never during a reply, a call
+  or unsaved work.
+- **Never a black page.** When opening the page fails, or takes over 20 s, and no screen is showing, the sign-in form
+  comes back and says what went wrong (the session is kept). Before, an error after the sign-in form was hidden could
+  leave just the background (seen after a hard refresh).
+- **The GitHub Pages copy is retired:** opened there, the page goes to the hub (portal.unityailab.com).
+
+### Tests
+- R169 (joining a reply after a reload, `--rust-hub`; static checks for the update bar, the black-page guard and the
+  Pages redirect).
+
 ## 4.1.3 — 2026-10-22
 
 ### Fixed: a page that reloads itself over and over

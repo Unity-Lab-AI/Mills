@@ -1280,6 +1280,8 @@ const HUB_HOST = (() => { const v = '__MILLS_HUB_HOST__'; return /^https:\/\/[a-
 // The hub fills this in when it serves the page itself (any name that reaches it: the portal, a tunnel, localhost):
 // then the hub is simply this page's own origin, and no published address is looked up.
 const SERVED_BY_HUB = '__MILLS_SERVED__' === 'hub';
+// The GitHub Pages copy is retired (4.1.4): VibeRoller lives at its hub, so the page from anywhere else goes there.
+if (!SERVED_BY_HUB && HUB_HOST && location.protocol === 'https:' && location.origin !== HUB_HOST) location.replace(HUB_HOST + '/');
 const HUB_URL_RE = HUB_HOST ? new RegExp('^(?:' + HUB_HOST.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '|https://[a-z0-9-]+\\.trycloudflare\\.com)$') : /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
 async function findBridge(fresh) {
   if (SERVED_BY_HUB || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('trycloudflare.com') || (HUB_HOST && location.origin === HUB_HOST)) return location.origin;
@@ -1377,9 +1379,26 @@ function pageUpdateAvailable(build, path) {
     const wait = [busy && 'the Work reply has finished', assistBusy && 'Unity has answered', (typeof call !== 'undefined' && call.conv) && 'your call has ended',
       editorDirty && 'the open file is saved', (typeof NOTES !== 'undefined' && NOTES.dirty && NOTES.dirty()) && 'the open note is saved'].filter(Boolean);
     if (wait.length) { if (!pageUpdate.told) { pageUpdate.told = true; sys(`VibeRoller ${pageUpdate.build} is ready. This page switches to it by itself as soon as ${wait.join(' and ')}.`); } return; }
+    // never reloaded in front of you: while this tab is in view it offers the update; it takes it by itself once the
+    // tab is in the background (switched away from, minimised)
+    if (document.visibilityState === 'visible') { updateBar(pageUpdate.build); return; }
     clearInterval(pageUpdate.timer); hardReload(pageUpdate.build);
   };
   pageUpdate.timer = setInterval(go, 5000); go();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && pageUpdate) go(); });
+}
+function updateBar(build) {
+  if (pageUpdate && pageUpdate.later) return; // "Later": not offered again; it still updates in the background
+  let bar = $('updateBar');
+  if (!bar) {
+    bar = document.createElement('div'); bar.id = 'updateBar'; bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position:fixed;top:.5rem;left:50%;transform:translateX(-50%);z-index:9999;display:flex;gap:.6rem;align-items:center;padding:.45rem .8rem;border-radius:.6rem;background:var(--panel,#222);color:var(--text,#eee);border:1px solid var(--accent,#c33);box-shadow:0 4px 18px rgba(0,0,0,.4);font-size:.85rem';
+    const t = document.createElement('span'); t.className = 'updText';
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Reload now'; b.onclick = () => { bar.remove(); clearInterval(pageUpdate && pageUpdate.timer); hardReload(build); };
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'ghost'; x.textContent = 'Later'; x.title = 'It updates by itself when this tab is in the background'; x.onclick = () => { if (pageUpdate) pageUpdate.later = true; bar.remove(); };
+    bar.append(t, b, x); document.body.append(bar);
+  }
+  bar.querySelector('.updText').textContent = `VibeRoller ${build} is ready.`;
 }
 async function hardReload(build) {
   if (workStarted) { try { saveCurrent(); saveQueue(); } catch {} } // (only once Work was opened here: never overwrite the hub's copy with an empty one)
@@ -2084,7 +2103,7 @@ function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = nu
 let runOutcome = null; // set by handleEvent: { state, text } for the message being worked on
 async function send(message) {
   const mine = bubble('me'); renderText(mine, message); record('me', message); scroll(true); // you sent it: to the bottom
-  const t0 = Date.now(); runOutcome = null;
+  const t0 = Date.now(); runOutcome = null; runEnded = false; curRun = null;
   msgStatus(mine, 'working', 'Claude is working on this…');
   const tick = setInterval(() => { if (!runOutcome) msgStatus(mine, 'working', 'Claude is working on this… ' + elapsed(t0)); }, 5000);
   setBusy(true); runModel = ''; stderrText = ''; showThinking();
@@ -2095,17 +2114,22 @@ async function send(message) {
     fresh = false;
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const l = buf.slice(0, i); buf = buf.slice(i + 1);
-        if (l.trim()) { try { handleEvent(JSON.parse(l)); } catch {} }
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const l = buf.slice(0, i); buf = buf.slice(i + 1);
+          if (l.trim()) { try { handleEvent(JSON.parse(l)); } catch {} if (curRun) curRun.n++; }
+        }
       }
-    }
+    } catch {} // the stream broke off (the network, a proxy): the run itself goes on in the hub
+    // the reply did not end on this stream: join the run again and follow it to its end
+    if (curRun && !runEnded) await followRun(curRun, true);
   } catch (err) { sys(err.message, true); runOutcome = { state: 'failed', text: 'Failed: ' + err.message }; }
+  curRun = null; saveCurrentSoon();
   clearInterval(tick);
   msgStatus(mine, ...(runOutcome ? [runOutcome.state, runOutcome.text] : ['stopped', 'Stopped after ' + elapsed(t0)]));
   hideThinking(); setBusy(false); $('input').focus();
@@ -2116,7 +2140,29 @@ async function send(message) {
 }
 
 let runModel = '', stderrText = ''; // which model this run used (from Claude's init event) + its stderr, shown only if the run fails
+// The run on screen and how many of its events this page has shown: saved with the transcript, so after a reload
+// (or when the stream breaks off) the page joins the run where it was (GET /api/work/attach) and shows nothing twice.
+let curRun = null, runEnded = false;
+// Joins the person's run: everything after `saved.n`, then each event as it comes, until it ends. inSend = called by
+// send() for its own reply (it keeps its own busy state and status); else (Work opened after a reload) this does both.
+// True when it followed a run. An older hub has no such route: nothing happens.
+async function followRun(saved, inSend) {
+  let run = (saved && saved.id) || '', after = run ? saved.n || 0 : 0, joined = false;
+  for (;;) {
+    let d; try { d = await json('/api/work/attach?run=' + encodeURIComponent(run) + '&after=' + after); } catch { break; }
+    if (!d || !d.run) break; // nothing running (and nothing that just ended from where this page was)
+    if (!joined && !inSend && d.busy) { joined = true; setBusy(true); sys('Claude is still working on your last message: following it live.'); }
+    run = d.run; curRun = { id: d.run, n: d.from || 0 };
+    for (const ev of d.events || []) handleEvent(ev);
+    curRun = { id: d.run, n: d.next || 0 }; after = curRun.n; saveCurrentSoon();
+    if (!d.busy) break;
+  }
+  if (joined) { hideThinking(); setBusy(false); refreshUsage(); }
+  return joined;
+}
 function handleEvent(ev) {
+  if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; return; }
+  if (ev.type === 'bridge_done') runEnded = true;
   if (ev.type === 'pc_tool') return runPcTool(ev);
   // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
   if ((ev.type === 'assistant' && ev.message && ev.message.usage) || /rate_limit/.test(String(ev.type || '')) || ev.type === 'result') refreshUsageSoon();
@@ -2293,7 +2339,7 @@ let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSa
 // opening Work later (after a reload, a restart, on another device) puts it back and Claude continues it.
 let currentSaveTimer = null;
 function saveCurrentSoon() { clearTimeout(currentSaveTimer); currentSaveTimer = setTimeout(saveCurrent, 800); }
-function saveCurrent() { clearTimeout(currentSaveTimer); if (me) json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle }) }).catch(() => {}); }
+function saveCurrent() { clearTimeout(currentSaveTimer); if (me) json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle, run: curRun }) }).catch(() => {}); }
 function record(cls, text) { transcript.push({ cls, text }); saveCurrentSoon(); }
 async function restoreWork() { // opening Work: the previous conversation, then the queue (which starts running)
   let s; try { s = await json('/api/work/current'); } catch { return; }
@@ -2306,7 +2352,10 @@ async function restoreWork() { // opening Work: the previous conversation, then 
   }
   if (s.sendNow && !sendNowMessage) sendNowMessage = s.sendNow;
   for (const m of s.queue || []) enqueue(m, true);
-  if ((s.queue || []).length || s.sendNow) sys('Your queue is back: ' + ((s.queue || []).length + (s.sendNow ? 1 : 0)) + ' message(s) still to go.' + (busy ? '' : ' Running the next one now.'));
+  if ((s.queue || []).length || s.sendNow) sys('Your queue is back: ' + ((s.queue || []).length + (s.sendNow ? 1 : 0)) + ' message(s) still to go.');
+  // a reply still going (the page was reloaded meanwhile): shown live from where this page was, to its end; the queue
+  // waits for it (sending now would be refused and the message lost)
+  if (!busy) { await followRun(s.run); curRun = null; saveCurrentSoon(); }
   if (!busy && (sendNowMessage || queue.length)) drain();
 }
 function setConversation(id, title, items) {
@@ -4158,6 +4207,18 @@ $('adminClearChat').replaceWith(confirmButton('Clear chat history', () => adminC
 // Start once every script below has loaded too (calls.js … app.js): on a hard reload they come over the network, and
 // entering before them threw, which signed people out and left a blank page. A session ends only on the hub's 401
 // (api() signs out then); any other failure keeps it and shows the sign-in page with what went wrong.
+// Never a black page: when no screen at all is showing and something failed (or opening takes over 20 s), the sign-in
+// form comes back and says what went wrong (the session is kept; it is also in the browser console).
+const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library'];
+function nothingShown() { return SCREENS.every((id) => !$(id) || $(id).hidden); }
+function bootTrouble(msg) {
+  if (!nothingShown()) return;
+  console.error('VibeRoller did not open:', msg);
+  $('login').hidden = false; $('loginErr').textContent = 'VibeRoller did not open: ' + msg + ' Reload the page; if it keeps happening, tell an admin what this says.';
+}
+window.addEventListener('error', (e) => bootTrouble(e.message || 'a script error'));
+window.addEventListener('unhandledrejection', (e) => bootTrouble(String((e.reason && e.reason.message) || e.reason || 'an error')));
+setTimeout(() => { if (nothingShown()) bootTrouble('it took too long to open.'); }, 20000);
 function startPage() {
   connect().then((ok) => {
     if (!ok || !token) return;
