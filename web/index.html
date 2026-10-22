@@ -4211,6 +4211,8 @@ async function loadAdmin() {
         ...(a.locked ? [confirmButton('Allow one more device', () => adminCall('allow-device', { username: a.username }, () => { adminOut(`${a.username}: their next sign-in from a new device (the app, another computer) joins their devices; the ones they have keep working.`); }))] : []),
         confirmButton('Reset lock', () => adminCall('unlock', { username: a.username }, () => adminOut(`${a.username}: device lock cleared (all their devices). Their next sign-in claims the account.`))),
         confirmButton('Sign out', () => adminCall('signout', { username: a.username }, () => adminOut(`${a.username}: signed out everywhere.`))),
+        ...(!a.admin ? [confirmButton('Make admin', () => adminCall('set-admin', { username: a.username, admin: true }, () => adminOut(`${a.username} is an admin now (Admin, accounts, products, restarts).`)))]
+          : a.username !== me.username ? [confirmButton('Remove admin', () => adminCall('set-admin', { username: a.username, admin: false }, () => adminOut(`${a.username} is no longer an admin.`)))] : []),
       );
       for (const [key, label] of [['pc', 'PC files'], ['code', 'Run code']]) { // Unity's own-computer tools for this account
         const lab = document.createElement('label'); lab.style.cssText = 'font-size:.75rem;margin:0 .3rem;white-space:nowrap';

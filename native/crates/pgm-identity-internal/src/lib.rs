@@ -29,11 +29,18 @@ pub const MAX_DEVICES: usize = 5;
 
 #[derive(Clone, Debug)]
 pub struct Account { pub username: String, pub dir: PathBuf, pub admin: bool, pub display: String }
-/// An account's admin flag from its config.json (the default account's: `<root>/config.json`), without the whole list.
+/// An account's admin flag from its config.json (the default account's: `<root>/config.local.json`, else
+/// `<root>/config.json`, as the JavaScript hub reads it), without the whole list.
 pub fn admin_in(root: &Path, default_user: &str, user: &str) -> bool {
     if user.is_empty() { return false; }
-    let f = if user == default_user { root.join("config.json") } else if valid_username(user) { root.join("profiles").join(user).join("config.json") } else { return false };
-    read_json(&f).map(|c| c["admin"].as_bool() == Some(true)).unwrap_or(false)
+    if user == default_user { return default_admin(root); }
+    if !valid_username(user) { return false; }
+    read_json(&root.join("profiles").join(user).join("config.json")).map(|c| c["admin"].as_bool() == Some(true)).unwrap_or(false)
+}
+fn default_admin(root: &Path) -> bool {
+    let local = read_json(&root.join("config.local.json")).unwrap_or(Value::Null);
+    if let Some(b) = local["admin"].as_bool() { return b; }
+    read_json(&root.join("config.json")).map(|c| c["admin"].as_bool() == Some(true)).unwrap_or(false)
 }
 pub fn valid_username(u: &str) -> bool { !u.is_empty() && u.len() <= 32 && u.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') }
 /// What a session token is kept as: its sha256.
@@ -114,9 +121,8 @@ impl Auth {
             Account { admin: c["admin"].as_bool() == Some(true), display, dir, username }
         };
         let mut out = vec![];
-        let base = read_json(&self.root.join("config.json")).unwrap_or(Value::Null);
         let mut d = profile(self.root.clone(), self.default_user.clone());
-        d.admin = base["admin"].as_bool() == Some(true);
+        d.admin = default_admin(&self.root);
         out.push(d);
         let mut names: Vec<String> = std::fs::read_dir(self.root.join("profiles")).map(|r| r.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
         names.sort();
