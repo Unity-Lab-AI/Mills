@@ -1389,6 +1389,9 @@ let pageUpdate = null, editorDirty = false;
 const UPDATE_STATE = NS + 'vr.update.state';
 setInterval(() => { if (me && token) api('/api/version').catch(() => {}); }, 5 * 60e3);
 const UPDATE_LAST = NS + 'vr.update.last';
+// ?v=<build> only asks the browser for a fresh copy when the page reloads onto a new build; once loaded it means
+// nothing, so it leaves the address (it used to stay there for good, naming a build long gone)
+try { const u = new URL(location.href); if (u.searchParams.has('v')) { u.searchParams.delete('v'); history.replaceState(history.state, '', u.toString()); } } catch {}
 function pageUpdateAvailable(build, path) {
   // never a reload loop: when this tab reloaded for this very build a moment ago and the hub still names another
   // build than the page got, the page stays (once said, with both builds, so the cause can be found)

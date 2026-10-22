@@ -92,7 +92,17 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
         modules::Routed::No => {}
     }
     // who is signed in is the front's word only: a caller's own x-vr-user / x-vr-front-* never reach the JavaScript hub
-    let resp = hub.backend.proxy(&parts, r.body.clone(), |k| !k.starts_with("x-vr-front-") && k != "x-vr-user", &extra).await;
+    let mut resp = hub.backend.proxy(&parts, r.body.clone(), |k| !k.starts_with("x-vr-front-") && k != "x-vr-user", &extra).await;
+    // One build per hub: the page compares X-VR-Version with the build /api/check named (this hub's), so an answer of
+    // the JavaScript hub behind it must name the same one. Its own (read when IT started) could differ when the two
+    // started apart (one restarted alone after a crash, or an older one kept running), and then every page offered an
+    // update to that other build, again and again (Sponge saw "VibeRoller 4.1.0 is ready" on 5.x). The page and its
+    // files come from here, so this hub's build is the one that counts; a different one is logged once.
+    if r.path.starts_with("/api/") {
+        let mine = hub.mods.build.get(&hub).0;
+        if let Some(theirs) = resp.headers().get("x-vr-version").and_then(|v| v.to_str().ok()).filter(|t| *t != mine) { hub.mods.build.note_back(theirs, &mine); }
+        if let Ok(v) = hyper::header::HeaderValue::from_str(&mine) { resp.headers_mut().insert("x-vr-version", v); }
+    }
     if !modules::wants_after(&r) { return with_front(resp); }
     // a module's part of this answer: the whole answer is read, maybe changed, and handed on
     let (mut p, b) = resp.into_parts();
