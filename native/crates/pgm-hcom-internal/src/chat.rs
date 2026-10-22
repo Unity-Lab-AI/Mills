@@ -398,13 +398,35 @@ pub fn start(hub: Arc<dyn ChatHost>) {
     // receipts are saved half a second after a change
     let h = hub.clone();
     tokio::spawn(async move { loop { h.chat().seen_dirty.notified().await; tokio::time::sleep(Duration::from_millis(500)).await; let v = Value::Object(h.chat().seen.lock().unwrap_or_else(|e| e.into_inner()).clone()); write_json(&h.chat().dir.join("seen.json"), &v); } });
-    // the auto-deploy went back to the last good version: say so once
+    // what the machine has to say to the team, posted as VibeRoller (every 10 s, the first time after 3 s): the
+    // auto-deploy went back to the last good version (.rolled-back), the supervisor fell back to an earlier build
+    // (.fell-back, FR4), notes left by the deploy or the supervisor (.announce/*.txt), and this program's own notices
+    // (pgm-core notices: a data file that could not be read and was moved aside, FR2)
     let h = hub.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        let f = h.root().join(".rolled-back"); if !f.exists() { return; }
-        let text = std::fs::read_to_string(&f).unwrap_or_default().trim().to_string(); let _ = std::fs::remove_file(&f);
-        agent_say(&*h, &format!("**VibeRoller rolled itself back.** {} Nothing was lost: deploys never touch data. Whoever shipped it: look at the deploy log, fix, and ship again.", if text.is_empty() { "A new version did not come up, so the hub went back to the last good one." } else { &text }), "", "VibeRoller", "", "");
+        loop {
+            let root = h.root();
+            let f = root.join(".rolled-back");
+            if f.exists() {
+                let text = std::fs::read_to_string(&f).unwrap_or_default().trim().to_string(); let _ = std::fs::remove_file(&f);
+                agent_say(&*h, &format!("**VibeRoller rolled itself back.** {} Nothing was lost: deploys never touch data. Whoever shipped it: look at the deploy log, fix, and ship again.", if text.is_empty() { "A new version did not come up, so the hub went back to the last good one." } else { &text }), "", "VibeRoller", "", "");
+            }
+            let f = root.join(".fell-back");
+            if let Some(v) = read_json(&f) {
+                let _ = std::fs::remove_file(&f);
+                let (from, to, why) = (s(&v, "from"), s(&v, "to"), s(&v, "why"));
+                agent_say(&*h, &format!("**VibeRoller fell back to an earlier build.** The build {} {}, so the hub runs the previous good build {} now. Nothing was lost. Whoever shipped it: look at the server's log, fix, and ship again.", &from[..from.len().min(7)], if why.is_empty() { "failed" } else { &why }, &to[..to.len().min(7)]), "", "VibeRoller", "", "");
+            }
+            let dir = root.join(".announce");
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                let mut names: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|x| x == "txt").unwrap_or(false)).collect();
+                names.sort();
+                for p in names { let text = std::fs::read_to_string(&p).unwrap_or_default().trim().to_string(); let _ = std::fs::remove_file(&p); if !text.is_empty() { agent_say(&*h, &text, "", "VibeRoller", "", ""); } }
+            }
+            for text in pgm_core_internal::notices::drain() { agent_say(&*h, &text, "", "VibeRoller", "", ""); }
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
     });
 }
 

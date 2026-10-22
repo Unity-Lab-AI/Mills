@@ -8,12 +8,14 @@
 //! - [`json`]: JSON files read and written atomically (and privately), and reading fields out of a JSON value
 //! - [`fs`]: file protection: only the owner may read a file (Unix mode 600, Windows ACL via icacls)
 //! - [`text`]: `encodeURIComponent` and friends
+//! - [`notices`]: what a library has to tell the people running the program (a data file moved aside), drained by it
 #![forbid(unsafe_code)]
 
 pub mod config;
 pub mod crypto;
 pub mod fs;
 pub mod json;
+pub mod notices;
 pub mod text;
 pub mod time;
 

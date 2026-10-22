@@ -15,6 +15,10 @@ Environment=HOME=__BASE__/home
 Environment=CLAUDE_CONFIG_DIR=__BASE__/home/.claude
 Environment=PATH=__BASE__/node/current/bin:__BASE__/tools/bin:/usr/local/bin:/usr/bin:/bin
 Environment=NODE_ENV=production
+# vr-run (the Rust supervisor, native/crates/vr-run, 5.5.0) takes over from run.js with one line, once it is built here
+# (native/dist/x86_64-unknown-linux-gnu/vr-run) and someone chooses the moment (a deliberate restart of this service):
+#   ExecStart=__BASE__/app/native/dist/x86_64-unknown-linux-gnu/vr-run --root __BASE__/app/bridge --port 7777 --builds __BASE__/app/native/dist/x86_64-unknown-linux-gnu
+#   Environment=VR_NODE=__BASE__/node/current/bin/node
 ExecStart=__BASE__/node/current/bin/node run.js --no-tunnel
 Restart=on-failure
 RestartSec=5

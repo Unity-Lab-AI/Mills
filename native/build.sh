@@ -61,18 +61,23 @@ case "${1:-all}" in
     cargo test --workspace $LINUX_SKIP
     cargo build --workspace $LINUX_SKIP --release --target "$LINUX"
     [ "$HAVE_WIN" = 1 ] && cargo build --workspace --release --target "$WIN"
-    # every binary of the workspace, per target, next to a SHA256SUMS the hub's Downloads can serve and check; made
-    # beside the old set and swapped in at once, so the hub never hands out half a release
+    # every binary of the workspace, per target, next to a SHA256SUMS the hub's Downloads can serve and check. Kept builds
+    # (FR3): each build is staged under dist/<target>/<commit>/ and then put in service by native/use-build.sh (the files
+    # at dist/<target>/ itself, where run.js, vr-run, the Downloads and the hosts' updates read them), which keeps the
+    # current build + the 2 newest good ones. VR_STAGE_ONLY=1 stages without putting it in service: the auto-deploy
+    # tries the build first (deploy/trial.sh) and puts it in service itself.
+    C=${VR_COMMIT:-nocommit-$(date -u +%Y%m%d%H%M%S)}
     for T in "$LINUX" "$WIN"; do
       [ -d "target/$T/release" ] || continue
-      rm -rf "dist/.next-$T"; mkdir -p "dist/.next-$T"
-      for b in vr-host vr-hostw vr-desktop vr-hub; do for f in "target/$T/release/$b" "target/$T/release/$b.exe"; do [ -f "$f" ] && cp "$f" "dist/.next-$T/"; done; done
+      S="dist/$T/.stage"; rm -rf "$S"; mkdir -p "$S"
+      for b in vr-host vr-hostw vr-desktop vr-hub vr-run; do for f in "target/$T/release/$b" "target/$T/release/$b.exe"; do [ -f "$f" ] && cp "$f" "$S/"; done; done
       # Windows: the desktop app loads WebView2Loader.dll from its own folder (the windows-gnu build cannot link it in)
-      [ -f "target/$T/release/WebView2Loader.dll" ] && cp "target/$T/release/WebView2Loader.dll" "dist/.next-$T/"
-      printf '{"version":"%s","commit":"%s","target":"%s","builtAt":"%s"}\n' "${VR_VERSION:-}" "${VR_COMMIT:-}" "$T" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "dist/.next-$T/BUILD.json"
-      (cd "dist/.next-$T" && for f in *; do case "$f" in SHA256SUMS|BUILD.json|'*') ;; *) sha256sum "$f";; esac; done > SHA256SUMS)
-      rm -rf "dist/.old-$T"; [ -d "dist/$T" ] && mv "dist/$T" "dist/.old-$T"; mv "dist/.next-$T" "dist/$T"; rm -rf "dist/.old-$T"
-      echo "dist/$T: $(ls "dist/$T" | grep -vcE '^(SHA256SUMS|BUILD.json)$') binaries"
+      [ -f "target/$T/release/WebView2Loader.dll" ] && cp "target/$T/release/WebView2Loader.dll" "$S/"
+      printf '{"version":"%s","commit":"%s","target":"%s","builtAt":"%s"}\n' "${VR_VERSION:-}" "${VR_COMMIT:-}" "$T" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$S/BUILD.json"
+      (cd "$S" && for f in *; do case "$f" in SHA256SUMS|BUILD.json|'*') ;; *) sha256sum "$f";; esac; done > SHA256SUMS)
+      rm -rf "dist/$T/$C"; mv "$S" "dist/$T/$C"
+      echo "dist/$T/$C: $(ls "dist/$T/$C" | grep -vcE '^(SHA256SUMS|BUILD.json)$') binaries staged"
+      [ "${VR_STAGE_ONLY:-0}" = 1 ] || sh "$HERE/use-build.sh" "dist/$T" "$C"
     done ;;
   *) echo "usage: sh native/build.sh [all|test|check]" >&2; exit 2 ;;
 esac

@@ -1,0 +1,13 @@
+[package]
+name = "vr-run"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "VibeRoller's supervisor: runs the hub from the kept builds, health-checks it, falls back to the previous good build"
+
+[dependencies]
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tokio = { version = "1.54.0", features = ["full"] }
+pgm-core-internal = { path = "../pgm-core-internal" }
