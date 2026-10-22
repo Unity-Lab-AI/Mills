@@ -3329,6 +3329,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgm-identity-internal"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hex",
+ "pgm-core-internal",
+ "pgm-net-internal",
+ "scrypt",
+ "serde_json",
+ "subtle",
+ "tokio",
+]
+
+[[package]]
 name = "pgm-net-internal"
 version = "0.1.0"
 dependencies = [
@@ -5921,6 +5935,7 @@ dependencies = [
  "hyper-util",
  "libc",
  "pgm-core-internal",
+ "pgm-identity-internal",
  "pgm-net-internal",
  "pgm-platform-internal",
  "regex",

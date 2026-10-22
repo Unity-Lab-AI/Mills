@@ -6,9 +6,21 @@
 //! - [`unity_time`]: the assistant's clock and calculator: time zones, "in 2 minutes" / dates, a safe calculator
 //! - [`unity_web`]: the assistant's web tools: search, news, weather, YouTube, reading a page (the address it checked,
 //!   capped)
-//! Providers, inference APIs, Work runs, the assistant's brain and the host runner join as they move (board T-140).
+//! - [`openai`]: providers (keys, endpoints, logins; admin-only kinds) and the inference APIs: OpenAI- and
+//!   Anthropic-compatible /v1 (plain + streaming, format conversion), per-person API keys
+//! - [`work`]: AI coding runs (Claude Code here, relayed to a host's login, or on an older host), their log + attach /
+//!   follow, the MCP tool relays (pc / board / team), shared sessions, projects, past sessions
+//! - [`unity`], [`unity_brain`], [`unity_routes`]: the assistant: her tools, her brain (a local model's tool loop or
+//!   Claude), confirmations, voice / speech / pictures, her section's routes, the chat's AI member and its queue
+//! - [`hub`]: what all of this needs from the program around it ([`hub::AiHub`])
 
 pub mod ai_hosts;
+pub mod hub;
+pub mod openai;
+pub mod unity;
+pub mod unity_brain;
+pub mod unity_routes;
 pub mod unity_time;
 pub mod unity_web;
 pub mod usage;
+pub mod work;

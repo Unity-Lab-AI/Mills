@@ -6,8 +6,11 @@
 //! - [`perms`]: Discord's permission model and order (server → @everyone → roles → member; ranks)
 //! - [`files`]: attachments (ciphertext only), people's uploads (in their linked Linux account or here) and the Files
 //!   library (when, where, last used)
-//! The chat store, receipts, typing, presence, calls and profiles join as they move (board T-141).
+//! - [`chat`]: the chat itself: messages (only ciphertext, a key slot per reader), receipts, typing, presence, the room's
+//!   long poll, calls (set-up relay, who is in which call), the chat's AI member (her key, what she is sent, her queue
+//!   per conversation), the team tools; what it needs around it: [`chat::ChatHost`]
 
+pub mod chat;
 pub mod e2e;
 pub mod files;
 pub mod guilds;

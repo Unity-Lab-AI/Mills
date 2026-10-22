@@ -3,7 +3,7 @@
 //! (/internal/front/…, with the front's secret), and where one of them needs the JavaScript hub, it asks it the same way.
 //! The order they move in: board T-131. Moved so far: accounts & authentication (auth.rs).
 use hyper::Response;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -34,21 +34,9 @@ pub mod usage;
 pub mod work;
 pub mod worktree;
 
-/// bridge/config.json overlaid with bridge/config.local.json, one level deep (bridge/common.js loadProfile).
-#[derive(Clone, Debug)]
-pub struct Config { pub raw: Map<String, Value>, pub port: u16 }
-impl Config {
-    pub fn load(root: &Path) -> Config {
-        let read = |f: &str| -> Map<String, Value> { std::fs::read_to_string(root.join(f)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default() };
-        let mut base = read("config.json");
-        for (k, v) in read("config.local.json") {
-            match (base.get_mut(&k), &v) { (Some(Value::Object(b)), Value::Object(l)) => { for (k2, v2) in l { b.insert(k2.clone(), v2.clone()); } } _ => { base.insert(k, v); } }
-        }
-        let port = base.get("port").and_then(Value::as_u64).unwrap_or(7777) as u16;
-        Config { raw: base, port }
-    }
-    pub fn get(&self, k: &str) -> Option<&Value> { self.raw.get(k) }
-}
+/// bridge/config.json overlaid with bridge/config.local.json, one level deep (bridge/common.js loadProfile):
+/// pgm-core-internal since 5.0.0.
+pub use pgm_core_internal::config::Config;
 
 pub enum Routed {
     /// answered here

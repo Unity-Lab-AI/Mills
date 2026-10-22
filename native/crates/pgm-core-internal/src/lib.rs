@@ -1,6 +1,7 @@
 //! **pgm-core-internal** = PGM_Core_Internal (PsyGraphMediaCoreInternal): the basics every PsyGraphMedia library and
 //! program shares. Nothing here knows about any one product (VibeRoller is just its first user).
 //! - [`Error`] / [`Result`]: an error meant for a person, with an HTTP-like status where one applies
+//! - [`config`]: config.json overlaid with the machine's own config.local.json
 //! - [`b64`] / [`unb64`], [`now_ms`]
 //! - [`crypto`]: random bytes / ids, SHA-256, HMAC-SHA256 (constant-time check), AES-256-GCM, HKDF-SHA256
 //! - [`time`]: ISO 8601 timestamps exactly as JavaScript's `new Date(ms).toISOString()`
@@ -9,6 +10,7 @@
 //! - [`text`]: `encodeURIComponent` and friends
 #![forbid(unsafe_code)]
 
+pub mod config;
 pub mod crypto;
 pub mod fs;
 pub mod json;
