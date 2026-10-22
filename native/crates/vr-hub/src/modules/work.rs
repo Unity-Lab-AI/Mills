@@ -24,7 +24,17 @@ use vr_core::now_ms;
 const AI_OFF_TEXT: &str = "The host's AI is switched off right now (its host paused it). Chat, the board and your own AI keep working; pick your own AI in the model dropdown, or try again once it is back.";
 const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSessionWhere", "ctx", "project", "lastRunAt"];
 
-struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>> }
+struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog }
+/// Everything a run has sent, so a page that reloads (or a second tab) can join it again: GET /api/work/attach.
+/// `base` = how many of the oldest events were dropped (a run keeps its last RUN_LOG_MAX).
+#[derive(Default, Clone)]
+struct RunLog { base: usize, events: Vec<Value>, woke: Arc<tokio::sync::Notify> }
+const RUN_LOG_MAX: usize = 20000;
+impl RunLog {
+    fn push(&mut self, ev: Value) { self.events.push(ev); if self.events.len() > RUN_LOG_MAX { let k = self.events.len() - RUN_LOG_MAX; self.events.drain(0..k); self.base += k; } self.woke.notify_waiters(); }
+    fn next(&self) -> usize { self.base + self.events.len() }
+    fn since(&self, after: usize) -> Vec<Value> { self.events.iter().skip(after.saturating_sub(self.base)).cloned().collect() }
+}
 struct Share { conv: String, since: String, n: u64, log: Vec<Value>, live: Value, ver: u64, woke: Arc<Notify> }
 #[derive(Clone, Default)]
 struct Fresh { text: String, at: u64, busy: bool }
@@ -38,6 +48,8 @@ pub struct Work {
     pub wt: Worktrees,
     states: Mutex<HashMap<String, Value>>,
     runs: Mutex<HashMap<String, Run>>,
+    /// a run that just ended, for a few minutes: (its id, what it sent, when it ended)
+    ended: Mutex<HashMap<String, (String, RunLog, u64)>>,
     llm: Mutex<HashMap<String, (String, String, String, u64)>>,
     fresh: Mutex<HashMap<String, Fresh>>,
     shares: Mutex<HashMap<String, Share>>,
@@ -55,7 +67,7 @@ fn iso() -> String { super::auth::iso_now() }
 
 impl Work {
     pub fn new(root: &Path, cfg: &Config) -> Work {
-        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: vr_core::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
+        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: vr_core::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
     }
     // ---------- each person's Work state ----------
     fn state_file(a: &Account) -> PathBuf { a.dir.join("work.json") }
@@ -230,7 +242,7 @@ impl Work {
     }
 
     // ---------- the run's stream ----------
-    fn emit(&self, u: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap().get(u) { let _ = r.tx.send(line(ev)); } }
+    fn emit(&self, u: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap().get_mut(u) { let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     fn on_event(&self, hub: &Hub, a: &Account, ev: Value, source: &str) {
         if let Some(sid) = ev["session_id"].as_str().filter(|s| !s.is_empty()) { let sid = sid.to_string(); self.update(a, |m| { m.insert("claudeSessionId".into(), json!(sid)); }); }
         let usage = &hub.mods.ai.usage;
@@ -246,10 +258,40 @@ impl Work {
     }
     fn finish(&self, a: &Account, run_id: &str, code: Value) {
         let run = { let mut runs = self.runs.lock().unwrap(); if runs.get(&a.username).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&a.username) } else { None } };
-        let Some(r) = run else { return };
+        let Some(mut r) = run else { return };
         for (_, p) in r.pending { let _ = p.send(json!({ "ok": false, "error": "Run ended" })); }
-        let _ = r.tx.send(line(json!({ "type": "bridge_done", "code": code })));
+        let done = json!({ "type": "bridge_done", "code": code });
+        let _ = r.tx.send(line(done.clone()));
+        r.ev.push(done);
+        // a page reloading just now still sees how it ended (for a few minutes)
+        self.ended.lock().unwrap().insert(a.username.clone(), (r.id.clone(), r.ev, now_ms()));
         self.busy_changed.notify_one();
+    }
+    /// GET /api/work/attach?run=<id>&after=<n>: the person's run so far and as it goes (a long poll, 25 s): the events
+    /// after the n-th, whether it is still going, and its id. A page that was reloaded joins its run this way. A PC tool
+    /// request goes out again only while it still waits for an answer (never run twice).
+    async fn attach(&self, u: &str, run: &str, after: usize) -> Value {
+        let view = |w: &Work| -> (Value, bool, Option<Arc<tokio::sync::Notify>>) {
+            if let Some(r) = w.runs.lock().unwrap().get(u) {
+                let from = if r.id == run { after } else { 0 };
+                let evs: Vec<Value> = r.ev.since(from).into_iter().filter(|e| e["type"] != json!("pc_tool") || r.pending.contains_key(e["id"].as_str().unwrap_or(""))).collect();
+                let ready = !evs.is_empty() || r.id != run;
+                return (json!({ "run": r.id, "busy": true, "from": from, "next": r.ev.next(), "events": evs }), ready, Some(r.ev.woke.clone()));
+            }
+            let mut ended = w.ended.lock().unwrap();
+            ended.retain(|_, x| now_ms() - x.2 < 5 * 60_000);
+            match ended.get(u) {
+                Some((id, ev, _)) if id == run => { let evs: Vec<Value> = ev.since(after).into_iter().filter(|e| e["type"] != json!("pc_tool")).collect(); (json!({ "run": id, "busy": false, "from": after, "next": ev.next(), "events": evs }), true, None) }
+                _ => (json!({ "run": "", "busy": false, "events": [] }), true, None),
+            }
+        };
+        let (v, ready, woke) = view(self);
+        if ready { return v; }
+        let Some(woke) = woke else { return v };
+        let n = woke.notified(); tokio::pin!(n); n.as_mut().enable();
+        let (v, ready, _) = view(self); if ready { return v; }
+        let _ = tokio::time::timeout(Duration::from_secs(25), n).await;
+        view(self).0
     }
     /// Stops the person's run: the process here, or the host is told.
     pub fn stop(&self, hub: &Hub, u: &str) {
@@ -322,7 +364,9 @@ async fn chat(hub: &Arc<Hub>, a: &Account, r: &Req) -> Routed {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = vr_core::crypto::random_hex(8);
-    w.runs.lock().unwrap().insert(a.username.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new() });
+    w.runs.lock().unwrap().insert(a.username.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default() });
+    // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
+    w.emit(&a.username, json!({ "type": "bridge_run", "id": run_id }));
     w.busy_changed.notify_one();
     // the page hears something every 15 s while Claude thinks
     { let (h, u, id) = (hub.clone(), a.username.clone(), run_id.clone()); tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(15)).await; let alive = h.mods.work.runs.lock().unwrap().get(&u).map(|r| r.id == id).unwrap_or(false); if !alive { return; } h.mods.work.emit(&u, json!({ "type": "ping" })); } }); }
@@ -574,6 +618,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
         }
         // ----- the Work conversation + queue, kept across restarts -----
         "/api/work/current" if get => answer(200, work_current(a)),
+        "/api/work/attach" if get => answer(200, w.attach(u, &r.param("run").unwrap_or_default(), r.param("after").and_then(|x| x.parse().ok()).unwrap_or(0)).await),
         "/api/work/current" if post => {
             let b = r.json(); let mut st = work_current(a);
             let Some(list) = b["transcript"].as_array() else { return Some(answer(400, json!({ "error": "transcript must be a list." }))) };
@@ -585,6 +630,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
             st["transcript"] = json!(out);
             st["archiveId"] = b["archiveId"].as_str().filter(|x| !x.is_empty()).map(|x| json!(x.chars().take(80).collect::<String>())).unwrap_or(Value::Null);
             st["archiveTitle"] = b["archiveTitle"].as_str().filter(|x| !x.is_empty()).map(|x| json!(x.chars().take(200).collect::<String>())).unwrap_or(Value::Null);
+            // how far into a running reply this transcript goes (the page joins the run from there after a reload)
+            st["run"] = match (b["run"]["id"].as_str(), b["run"]["n"].as_u64()) { (Some(id), Some(n)) if id.len() <= 32 && id.bytes().all(|c| c.is_ascii_hexdigit()) => json!({ "id": id, "n": n }), _ => Value::Null };
             save_work_current(a, &mut st);
             answer(200, json!({ "ok": true, "items": n }))
         }
@@ -659,7 +706,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
                     answer(200, json!({ "id": id, "title": title }))
                 }
                 "/api/archive/open" => {
-                    if w.busy(u) { return Some(answer(409, json!({ "error": "Claude is working. Stop it first." }))); }
+                    if w.busy(u) { return Some(answer(409, json!({ "error": "Claude is still working on your current conversation (Work shows it live). Wait for it, or stop it there, then open this one." }))); }
                     let Some(f) = archive_file(&dir, &s(&b, "id")) else { return Some(answer(400, json!({ "error": "Bad conversation id." }))) };
                     let Some(entry) = read_json(&f) else { return Some(answer(404, json!({ "error": "Conversation not found." }))) };
                     let sid = entry["sessionId"].clone(); w.update(a, |m| { m.insert("claudeSessionId".into(), sid); });
@@ -682,7 +729,7 @@ fn work_current_file(a: &Account) -> PathBuf { a.dir.join("work-current.json") }
 fn work_current(a: &Account) -> Value {
     let s0 = read_json(&work_current_file(a)).filter(Value::is_object).unwrap_or(json!({}));
     let or_null = |k: &str| if s0[k].is_null() || s0[k] == json!("") { Value::Null } else { s0[k].clone() };
-    json!({ "transcript": if s0["transcript"].is_array() { s0["transcript"].clone() } else { json!([]) }, "archiveId": or_null("archiveId"), "archiveTitle": or_null("archiveTitle"), "queue": if s0["queue"].is_array() { s0["queue"].clone() } else { json!([]) }, "sendNow": or_null("sendNow"), "updatedAt": or_null("updatedAt") })
+    json!({ "transcript": if s0["transcript"].is_array() { s0["transcript"].clone() } else { json!([]) }, "archiveId": or_null("archiveId"), "archiveTitle": or_null("archiveTitle"), "run": if s0["run"].is_object() { s0["run"].clone() } else { Value::Null }, "queue": if s0["queue"].is_array() { s0["queue"].clone() } else { json!([]) }, "sendNow": or_null("sendNow"), "updatedAt": or_null("updatedAt") })
 }
 fn save_work_current(a: &Account, st: &mut Value) {
     st["updatedAt"] = json!(iso());
