@@ -28,6 +28,14 @@ sha1 = "0.10"
 subtle = "2.6.1"
 tokio = { version = "1.54.0", features = ["full"] }
 vr-core = { version = "0.1.0", path = "../vr-core" }
+pgm-core-internal = { path = "../pgm-core-internal" }
+pgm-platform-internal = { path = "../pgm-platform-internal" }
+pgm-net-internal = { path = "../pgm-net-internal" }
+pgm-identity-internal = { path = "../pgm-identity-internal" }
+pgm-collab-internal = { path = "../pgm-collab-internal" }
+pgm-dist-internal = { path = "../pgm-dist-internal" }
+pgm-hcom-internal = { path = "../pgm-hcom-internal" }
+pgm-ai-internal = { path = "../pgm-ai-internal" }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.191"

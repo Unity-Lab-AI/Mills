@@ -3,28 +3,20 @@
 //! running but the page's own (its CSP's 'unsafe-inline' for scripts replaced by the sha256 of each inline script).
 //! Also what a page learns at start (/api/check) and the build every signed-in answer names (X-VR-Version).
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use super::auth::Account;
 use super::Routed;
 use crate::front::Hub;
 
-/// version + "+" + the commit's first 7, read once at start (a restart picks up a new one, as the pages expect).
-pub struct Build { at: Mutex<(u64, String, Value, String)> }
-impl Default for Build { fn default() -> Self { Build { at: Mutex::new((0, String::new(), json!({}), String::new())) } } }
+/// version + "+" + the commit's first 7, read once at start (a restart picks up a new one, as the pages expect):
+/// pgm-dist-internal's version stamp (PGM_Dist_Internal) since 5.0.0, of the checkout above bridge/.
+#[derive(Default)]
+pub struct Build(pgm_dist_internal::version::Build);
 impl Build {
-    fn load(&self, hub: &Hub) -> std::sync::MutexGuard<'_, (u64, String, Value, String)> {
-        let mut b = self.at.lock().unwrap();
-        if b.0 == 0 {
-            let (v, c) = super::ai_hosts::release_now(&hub.root);
-            let mods = std::fs::read_to_string(hub.root.join("..").join("versions.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| v["modules"].clone()).unwrap_or(json!({}));
-            *b = (vr_core::now_ms(), if c.is_empty() { v } else { format!("{v}+{}", &c[..7.min(c.len())]) }, mods, c);
-        }
-        b
-    }
-    pub fn get(&self, hub: &Hub) -> (String, Value) { let b = self.load(hub); (b.1.clone(), b.2.clone()) }
+    pub fn get(&self, hub: &Hub) -> (String, Value) { self.0.get(&hub.root.join("..")) }
     /// The commit this hub started from (the auto-deploy's health check compares it with what it deployed).
-    pub fn commit(&self, hub: &Hub) -> String { self.load(hub).3.clone() }
+    pub fn commit(&self, hub: &Hub) -> String { self.0.commit(&hub.root.join("..")) }
 }
 /// Is anyone's AI busy here (Work, the API, Unity, Unity in the chat)? A restart waits for nobody being busy.
 pub fn busy(hub: &Hub) -> bool { hub.mods.work.any_busy() || hub.mods.api.busy() || hub.mods.unity.busy() || super::unity_routes::room_busy(hub) }
@@ -91,6 +83,6 @@ pub fn check(hub: &Arc<Hub>, a: &Account) -> Value {
         "project": w.project_of(a), "projects": w.project_list(), "prefs": prefs, "share": w.share_of(&a.username),
         "provider": if s("provider").is_empty() { "host".to_string() } else { s("provider") }, "effectiveProvider": w.effective(ai, &a.username, &s("provider")).map(|p| p["id"].clone()).unwrap_or(json!("")),
         "defaultProvider": w.default_for(ai, &a.username).map(|p| p["id"].clone()).unwrap_or(json!("")), "hubClaude": hub.cfg.get("hubClaude") != Some(&json!(false)),
-        "providers": super::work::providers_list(hub, &a.username), "version": build.split('+').next().unwrap_or(""), "build": build, "versions": mods,
+        "providers": super::work::providers_list(&**hub, &a.username), "version": build.split('+').next().unwrap_or(""), "build": build, "versions": mods,
         "aiHost": !hub.root.join("ai-host.off").exists(), "aiNodes": ai.status(), "pcHost": ai.pc_host_for(&a.username) })
 }

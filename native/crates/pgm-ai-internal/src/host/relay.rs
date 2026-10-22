@@ -7,11 +7,11 @@ use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::files::log;
-use crate::runner::H;
-use vr_core::host::Job;
-use vr_core::settings::Provider;
-use vr_core::{now_ms, Error, Result};
+use crate::host::folder::log;
+use crate::host::runner::H;
+use crate::host::settings::Provider;
+use pgm_core_internal::{now_ms, Error, Result};
+use pgm_net_internal::hostlink::Job;
 
 /// Whose logins: VR_LOGIN_HOME (the Windows service runs as LocalSystem and is told the installing person's profile),
 /// else this account's home.
@@ -77,7 +77,7 @@ async fn refresh_login(h: &H, p: &Provider) {
     let cmd = if !p.command.is_empty() { p.command.clone() } else if claude { h.cfg.work().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string() } else { "codex".into() };
     let args: Vec<&str> = if claude { vec!["-p", "--strict-mcp-config", "--max-turns", "1", "--model", "claude-haiku-5-5"] } else { vec!["exec", "--skip-git-repo-check", "-s", "read-only", "Reply with OK."] };
     log(format!("refreshing the {} login", if claude { "Claude" } else { "Codex" }));
-    let mut c = crate::proc::command(&cmd);
+    let mut c = pgm_platform_internal::proc::command(&cmd);
     c.args(&args).current_dir(&sandbox).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .env_remove("ANTHROPIC_BASE_URL").env_remove("ANTHROPIC_AUTH_TOKEN").env_remove("ANTHROPIC_API_KEY")
         .env(if claude { "CLAUDE_CONFIG_DIR" } else { "CODEX_HOME" }, dir_of(p));

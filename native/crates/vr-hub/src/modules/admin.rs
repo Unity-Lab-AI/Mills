@@ -72,13 +72,13 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
             accounts_changed(hub).await;
             answer(200, json!({ "username": u, "password": pw }))
         }
-        "/api/admin/stop" if post => { let Some(t) = target() else { return Some(answer(400, json!({ "error": "No such account." }))) }; hub.mods.work.stop(hub, &t.username); hub.mods.api.stop(&t.username); hub.mods.unity.stop(&t.username); answer(200, json!({ "ok": true })) }
+        "/api/admin/stop" if post => { let Some(t) = target() else { return Some(answer(400, json!({ "error": "No such account." }))) }; hub.mods.work.stop(&**hub, &t.username); hub.mods.api.stop(&t.username); hub.mods.unity.stop(&t.username); answer(200, json!({ "ok": true })) }
         "/api/admin/delete" if post => {
             let Some(t) = target() else { return Some(answer(400, json!({ "error": "No such account." }))) };
             if t.username == a.username { return Some(answer(400, json!({ "error": "You cannot delete your own account." }))); }
             if t.dir == hub.root { return Some(answer(400, json!({ "error": format!("The \"{}\" account lives in bridge/ itself and cannot be deleted here.", t.username) }))); }
             let (w, c) = (&hub.mods.work, &hub.mods.chat); let u = &t.username;
-            w.stop(hub, u); hub.mods.unity.stop(u); au.drop_sessions(u); au.unlock(u); w.share_stop(u); w.forget(u); super::chat::calls_leave(hub, u);
+            w.stop(&**hub, u); hub.mods.unity.stop(u); au.drop_sessions(u); au.unlock(u); w.share_stop(u); w.forget(u); super::chat::calls_leave(&**hub, u);
             let us: Vec<(String, String, bool)> = au.accounts().into_iter().map(|x| (x.username, x.display, x.admin)).collect();
             c.guilds.drop_user(u, &super::guilds::Ctx { users: &us, seq: c.seq(), msg_conv: &|n| c.msg_conv(n), delete_recent: &|_, _, _| 0 });
             for e in ["webp", "png", "jpg"] { let _ = std::fs::remove_file(hub.mods.mills_dir().join("Avatars").join(format!("{u}.{e}"))); }

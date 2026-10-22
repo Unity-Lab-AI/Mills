@@ -8,14 +8,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
-use crate::files::log;
-use crate::runner::H;
-use vr_core::host::{EventsAnswer, Job};
+use crate::host::folder::log;
+use crate::host::runner::H;
+use pgm_net_internal::hostlink::{EventsAnswer, Job};
 
 fn valid_user(u: &str) -> bool { !u.is_empty() && u.len() <= 32 && u.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') }
 fn valid_project(n: &str) -> bool { !n.is_empty() && n.len() <= 64 && n.chars().next().map(|c| c.is_ascii_alphanumeric()).unwrap_or(false) && n.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) && !n.contains("..") && !n.eq_ignore_ascii_case("_repo") }
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let o = crate::proc::std_command("git").args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").output().map_err(|e| e.to_string())?;
+    let o = pgm_platform_internal::proc::std_command("git").args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { Err(String::from_utf8_lossy(&o.stderr).trim().lines().last().unwrap_or("git failed").to_string()) }
 }
 /// The folder a run happens in: the person's worktree of the project on work/<person> (made when missing, the
@@ -93,7 +93,7 @@ pub async fn work_job(h: H, job: Job) {
         let env = json!({ "MILLS_BRIDGE": payload["mcpBase"].as_str().unwrap_or(""), "MILLS_INTERNAL": payload["token"].as_str().unwrap_or(""), "MILLS_USER": payload["display"].as_str().or(payload["account"].as_str()).unwrap_or(""), "MILLS_ACCOUNT": payload["account"].as_str().unwrap_or("") });
         let srv = |which: &str| json!({ "command": me, "args": ["mcp", which], "env": env });
         let _ = std::fs::write(&mcp_file, json!({ "mcpServers": { "pc": srv("pc"), "board": srv("board"), "team": srv("team") } }).to_string());
-        vr_core::settings::private(&mcp_file);
+        pgm_core_internal::fs::private(&mcp_file);
         args.extend(["--mcp-config".into(), mcp_file.display().to_string(), "--strict-mcp-config".into()]);
         let tools: Vec<String> = payload["allowedTools"].as_array().map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect()).unwrap_or_default();
         if !tools.is_empty() { args.extend(["--allowedTools".into(), tools.join(",")]); }
@@ -102,7 +102,7 @@ pub async fn work_job(h: H, job: Job) {
     let w = h.cfg.work();
     let command = w.get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
     let pre: Vec<String> = w.get("claudeArgs").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-    let mut c = crate::proc::command(&command);
+    let mut c = pgm_platform_internal::proc::command(&command);
     c.args(&pre).args(&args).current_dir(&dir).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     if p.kind == "claude-cli" && !p.config_dir.is_empty() { c.env("CLAUDE_CONFIG_DIR", &p.config_dir); }
     if p.kind == "anthropic" && !p.api_key.is_empty() { c.env("ANTHROPIC_API_KEY", &p.api_key); }

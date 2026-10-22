@@ -3,7 +3,7 @@
 //! (/internal/front/…, with the front's secret), and where one of them needs the JavaScript hub, it asks it the same way.
 //! The order they move in: board T-131. Moved so far: accounts & authentication (auth.rs).
 use hyper::Response;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ pub mod admin;
 pub mod ai_hosts;
 pub mod profile;
 pub mod site;
+mod traits;
 pub mod auth;
 pub mod board;
 pub mod chat;
@@ -34,21 +35,9 @@ pub mod usage;
 pub mod work;
 pub mod worktree;
 
-/// bridge/config.json overlaid with bridge/config.local.json, one level deep (bridge/common.js loadProfile).
-#[derive(Clone, Debug)]
-pub struct Config { pub raw: Map<String, Value>, pub port: u16 }
-impl Config {
-    pub fn load(root: &Path) -> Config {
-        let read = |f: &str| -> Map<String, Value> { std::fs::read_to_string(root.join(f)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default() };
-        let mut base = read("config.json");
-        for (k, v) in read("config.local.json") {
-            match (base.get_mut(&k), &v) { (Some(Value::Object(b)), Value::Object(l)) => { for (k2, v2) in l { b.insert(k2.clone(), v2.clone()); } } _ => { base.insert(k, v); } }
-        }
-        let port = base.get("port").and_then(Value::as_u64).unwrap_or(7777) as u16;
-        Config { raw: base, port }
-    }
-    pub fn get(&self, k: &str) -> Option<&Value> { self.raw.get(k) }
-}
+/// bridge/config.json overlaid with bridge/config.local.json, one level deep (bridge/common.js loadProfile):
+/// pgm-core-internal since 5.0.0.
+pub use pgm_core_internal::config::Config;
 
 pub enum Routed {
     /// answered here
@@ -95,7 +84,7 @@ impl Modules {
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
-    fn public_url(&self, cfg: &Config) -> String {
+    pub(crate) fn public_url(&self, cfg: &Config) -> String {
         let u = cfg.get("publicUrl").and_then(Value::as_str).unwrap_or("").trim_end_matches('/').to_lowercase();
         let host = u.strip_prefix("https://").unwrap_or("");
         let (name, port) = host.split_once(':').unwrap_or((host, ""));
@@ -459,7 +448,7 @@ async fn files_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
             let id = &p["/api/room/file/".len()..];
             let Some((by, seq)) = m.files.owner_seq(id) else { return answer(404, json!({ "error": "Not found." })) };
             // its uploader always; anyone else while they may read its message: the chat (the JavaScript hub) knows
-            let allowed = by == u || (seq > 0 && chat::may_read(hub, u, seq));
+            let allowed = by == u || (seq > 0 && chat::may_read(&**hub, u, seq));
             match m.files.fetch(id, m.auth.account(&by), allowed) { Some(buf) => serve_file(buf, "file", "application/octet-stream"), None => answer(404, json!({ "error": "Not found." })) }
         }
         "/api/work/file" if post => match m.files.work_upload(&a, &r.body, r.header("x-file-name").unwrap_or(""), r.header("content-type").unwrap_or("")) { Ok(v) => answer(200, v), Err(f) => fail(f) },

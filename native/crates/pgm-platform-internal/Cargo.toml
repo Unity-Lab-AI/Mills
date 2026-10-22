@@ -1,0 +1,22 @@
+[package]
+name = "pgm-platform-internal"
+description = "PGM_Platform_Internal (PsyGraphMediaPlatformInternal): the machine, the same on Windows and Linux: starting / finding / stopping programs, a program's own folders, installing a program in place, the Windows service and systemd units, start at boot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pgm-core-internal = { path = "../pgm-core-internal" }
+tokio = { version = "1.54.0", features = ["process"] }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"
+
+[target."cfg(windows)".dependencies]
+windows-service = "0.8.1"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

@@ -3311,6 +3311,145 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgm-ai-internal"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "chrono-tz",
+ "futures-util",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "pgm-collab-internal",
+ "pgm-core-internal",
+ "pgm-dist-internal",
+ "pgm-identity-internal",
+ "pgm-net-internal",
+ "pgm-platform-internal",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tokio",
+]
+
+[[package]]
+name = "pgm-collab-internal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pgm-core-internal",
+ "pgm-net-internal",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "pgm-core-internal"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.23.1",
+ "hex",
+ "hkdf",
+ "hmac",
+ "rand 0.9.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pgm-dist-internal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ed25519-dalek",
+ "flate2",
+ "hex",
+ "p256",
+ "pgm-core-internal",
+ "pgm-net-internal",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pgm-hcom-internal"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "flate2",
+ "hex",
+ "hyper",
+ "libc",
+ "p256",
+ "pgm-core-internal",
+ "pgm-identity-internal",
+ "pgm-net-internal",
+ "rand_core 0.6.4",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "sha1",
+ "subtle",
+ "tokio",
+]
+
+[[package]]
+name = "pgm-identity-internal"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hex",
+ "pgm-core-internal",
+ "pgm-net-internal",
+ "scrypt",
+ "serde_json",
+ "subtle",
+ "tokio",
+]
+
+[[package]]
+name = "pgm-net-internal"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "pgm-core-internal",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "pgm-platform-internal"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "pgm-core-internal",
+ "tokio",
+ "windows-service",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "phf"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5803,6 +5942,10 @@ dependencies = [
  "hkdf",
  "hmac",
  "p256",
+ "pgm-ai-internal",
+ "pgm-core-internal",
+ "pgm-dist-internal",
+ "pgm-net-internal",
  "rand 0.9.5",
  "reqwest",
  "rustls",
@@ -5823,6 +5966,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "pgm-ai-internal",
  "portable-pty",
  "reqwest",
  "serde",
@@ -5843,6 +5987,9 @@ dependencies = [
  "crossterm",
  "futures-util",
  "libc",
+ "pgm-ai-internal",
+ "pgm-core-internal",
+ "pgm-platform-internal",
  "ratatui",
  "reqwest",
  "serde",
@@ -5870,6 +6017,14 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "pgm-ai-internal",
+ "pgm-collab-internal",
+ "pgm-core-internal",
+ "pgm-dist-internal",
+ "pgm-hcom-internal",
+ "pgm-identity-internal",
+ "pgm-net-internal",
+ "pgm-platform-internal",
  "regex",
  "reqwest",
  "scrypt",

@@ -15,10 +15,8 @@ mod files;
 mod install;
 mod mcp;
 mod proc;
-mod relay;
 mod runner;
 mod tui;
-mod work;
 #[cfg(windows)]
 mod winservice;
 #[cfg(windows)]

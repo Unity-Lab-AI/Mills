@@ -1,0 +1,25 @@
+[package]
+name = "pgm-core-internal"
+description = "PGM_Core_Internal (PsyGraphMediaCoreInternal): the basics every PsyGraphMedia library and program uses: errors, base64, time, hashing / HMAC / AES-GCM / ids, JSON files (atomic, private), file protection, text helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+aes-gcm = "0.10.3"
+base64 = "0.23.1"
+hex = "0.4.3"
+hkdf = "0.12.4"
+hmac = "0.12.1"
+rand = "0.9.5"
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha2 = "0.10.9"
+subtle = "2.6.1"
+thiserror = "2.0.21"
