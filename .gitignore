@@ -76,6 +76,13 @@ bridge/ai-hosts.json
 bridge/release-key.json
 bridge/ai-host-sessions.json
 bridge/.mcp-host-*.json
+# the Rust hub's own data (since 3.x behind it, the hub since 4.0.0): sessions, device locks, API keys, Work state
+bridge/front-sessions.json
+bridge/device-locks.json
+bridge/api-keys.json
+bridge/work.json
+# the auto-deploy's note that it went back to the last good version (the hub posts it, then removes it)
+bridge/.rolled-back
 # the hand-off to the server (bridge/handoff.js): this machine runs the AI host instead of the hub; writes paused during the move
 bridge/.handoff
 bridge/.maintenance

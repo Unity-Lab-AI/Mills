@@ -7,6 +7,16 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 4.1.2 — 2026-10-21
+
+### Fixed: the auto-deploy stopped deploying
+- **The Rust hub's own data files are gitignored now** (`bridge/front-sessions.json`, `device-locks.json`,
+  `api-keys.json`, `work.json`; also the auto-deploy's `bridge/.rolled-back` note). Without that, the live checkout
+  looked as if it had uncommitted changes as soon as the Rust hub first ran there (4.1.0, 07:17), and the auto-deploy
+  refused every deploy after it ("live checkout has uncommitted changes"). That is why 4.1.1 did not come up.
+  (On the server, those four names were listed in the live checkout's own `.git/info/exclude` once, by hand, to let
+  this version through.)
+
 ## 4.1.1 — 2026-10-21
 
 ### Fixed (found by Gee's Windows check, board T-133)
