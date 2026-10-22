@@ -130,6 +130,18 @@ impl Board {
     }
     pub fn version(&self) -> u64 { *self.ver.borrow() }
     pub fn seen(&self, user: &str) { self.viewers.lock().unwrap().insert(user.to_string(), now_ms() as i64); }
+    /// A board with that id exists after this (made with `name` if it did not; an existing one is renamed to `name`):
+    /// a program whose boards stand for something else (a chat's servers) keeps them in step this way.
+    pub fn ensure_board(&self, id: &str, name: &str) {
+        let mut db = self.db.lock().unwrap();
+        let changed = match db["boards"].as_array_mut().unwrap().iter_mut().find(|x| x["id"] == json!(id)) {
+            Some(x) => { if x["name"] != json!(name) { x["name"] = json!(name); true } else { false } }
+            None => { db["boards"].as_array_mut().unwrap().push(json!({ "id": id, "name": name })); true }
+        };
+        if changed { self.save(&mut db); }
+    }
+    /// Which board a live task is on.
+    pub fn board_of(&self, task_id: &str) -> Option<String> { let db = self.db.lock().unwrap(); find(&db, task_id).and_then(|t| t["board"].as_str().map(String::from)) }
 
     /// The board as a page shows it.
     pub fn view(&self, user: &str, name_of: &dyn Fn(&str) -> String, has: &dyn Fn(&str) -> bool, mirror: Value) -> Value {
@@ -281,6 +293,7 @@ impl Board {
                 log(db, Some(&tc), a, "deleted", None); self.save(db);
                 Out { status: 200, body: json!({ "ok": true }), changes: change("deleted", &tc) }
             }
+            "newBoard" if b["_noNewBoards"] == json!(true) => no(400, "Boards here are the servers' own: every server has one."),
             "newBoard" => {
                 let name: String = b["name"].as_str().map(|s| s.trim().chars().take(40).collect()).unwrap_or_default();
                 if name.is_empty() { return no(400, "A board needs a name."); }

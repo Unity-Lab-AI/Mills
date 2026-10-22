@@ -26,6 +26,10 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
+/// What this app is called (the window, the taskbar count, the tray): VibeRoller, or a PGM product's name when built
+/// as that product's app (native/build-products.sh sets VR_APP_NAME and the product's address as the default hub).
+const APP_NAME: &str = match option_env!("VR_APP_NAME") { Some(n) => n, None => "VibeRoller" };
+
 struct App { store: settings::Store, terms: Arc<local::Terms>, runs: Arc<local::Runs>, proxy: proxy::Proxy, host_dir: String }
 type S<'a> = State<'a, App>;
 type R<T> = Result<T, String>;
@@ -52,9 +56,9 @@ fn notify(app: AppHandle, title: String, body: String) -> R<()> {
 }
 #[tauri::command]
 fn set_badge(app: AppHandle, count: u32) {
-    let title = if count > 0 { format!("({count}) VibeRoller") } else { "VibeRoller".into() };
+    let title = if count > 0 { format!("({count}) {APP_NAME}") } else { APP_NAME.into() };
     if let Some(w) = app.get_webview_window("main") { let _ = w.set_title(&title); let _ = w.set_badge_count(if count > 0 { Some(count as i64) } else { None }); }
-    if let Some(t) = app.tray_by_id("main") { let _ = t.set_tooltip(Some(if count > 0 { format!("VibeRoller: {count} unread") } else { "VibeRoller".into() })); }
+    if let Some(t) = app.tray_by_id("main") { let _ = t.set_tooltip(Some(if count > 0 { format!("{APP_NAME}: {count} unread") } else { APP_NAME.into() })); }
 }
 /// The hub's page: who is signed in ('' = signed out). Updates need an account (4.0.0); the session only ever goes to
 /// this app's hub, and the releases stay checked against the release key built into this program whoever's session it is.
@@ -155,7 +159,7 @@ fn main() {
                 .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup"))?;
             let url: tauri::Url = hub.parse().map_err(|e| format!("bad hub address {hub}: {e}"))?;
             let host = url.host_str().unwrap_or("").to_string();
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).title("VibeRoller").inner_size(1320.0, 880.0).min_inner_size(420.0, 520.0)
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).title(APP_NAME).inner_size(1320.0, 880.0).min_inner_size(420.0, 520.0)
                 // links to other sites open in the browser, not in the app
                 .on_navigation(move |u| { let same = u.host_str() == Some(host.as_str()) || u.scheme() == "tauri" || u.scheme() == "about" || u.scheme() == "blob" || u.scheme() == "data"; if !same && (u.scheme() == "https" || u.scheme() == "http") { let _ = open_external(u.to_string()); } same })
                 .build()?;
@@ -168,7 +172,7 @@ fn main() {
             let upd = MenuItem::with_id(h, "update", "Check for updates", true, None::<&str>)?;
             let quit = MenuItem::with_id(h, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(h, &[&show, &tools, &PredefinedMenuItem::separator(h)?, &host_on, &host_off, &PredefinedMenuItem::separator(h)?, &upd, &quit])?;
-            TrayIconBuilder::with_id("main").icon(app.default_window_icon().cloned().ok_or("no icon")?).tooltip("VibeRoller").menu(&menu).show_menu_on_left_click(false)
+            TrayIconBuilder::with_id("main").icon(app.default_window_icon().cloned().ok_or("no icon")?).tooltip(APP_NAME).menu(&menu).show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| {
                     let st = app.state::<App>();
                     match ev.id.as_ref() {
