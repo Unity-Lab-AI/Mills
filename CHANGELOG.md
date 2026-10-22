@@ -7,6 +7,27 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.3.0 — 2026-10-22
+
+MINOR: Forgejo, fully, from a Work run: **`fj` (the Forgejo CLI) signed in as you**, and Forgejo's API through
+`worktree.js`.
+- `bridge/fj.js` (new) + `pgm-ai-internal` `fj.rs`: fj keeps its logins in one keys file per operating-system account,
+  so on a shared machine everyone's runs would be one login. Every run now gets the person's own: a folder of theirs
+  with that file (their token from Settings → My Forgejo, owner-only) and an `fj` wrapper first on the PATH that points
+  fj at it (XDG_DATA_HOME / APPDATA for the fj process alone). The hub does it for runs here (under their profile),
+  a host for the runs it takes (`bridge/.fj/<account>`, gitignored); the JavaScript and Rust hub / host all the same.
+  No fj on the machine or no token: nothing is made, as before. Hosts that have not updated: fj unauthenticated, as
+  before (nothing else changes; the token already travelled in the run's environment).
+- `worktree.js`: `repos [words]` (the Forgejo repos you can see, private ones too), `repo-create <owner/name>`
+  (`--private`, `--description`), `publish <owner/name> --project <name>` (the repo made when missing, a GitHub
+  origin kept as `upstream`, origin = Forgejo, every branch + tag pushed, a `develop` made), `tag <name> [message]`
+  (a tag on Forgejo at the project's integration branch, fetched here). As you, through your token: a run's allowed
+  command, so Claude never needs an approval for it.
+- `deploy/setup-server.sh` installs the pre-built forgejo-cli binary under tools/bin (building it needs OpenSSL
+  headers, root-only); the run's system prompt and LAWS.md say what a run has.
+- Suite: R172 (the wrapper, the keys file, owner-only, nobody else's, gone on disconnect; the static checks).
+  bridge/fj.js 1.0.0, bridge/server.js 4.2.0, bridge/ai-node.js 3.4.0, bridge/worktree.js 2.3.0.
+
 ## 5.2.3 — 2026-10-22
 
 PATCH: Admin → accounts has **Make admin / Remove admin** (`POST /api/admin/set-admin {username, admin}`), so the

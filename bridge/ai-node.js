@@ -298,7 +298,11 @@ async function workJob(job) {
   if (payload.systemPrompt) args.push('--append-system-prompt', String(payload.systemPrompt));
   if (payload.model) args.push('--model', String(payload.model));
   if (payload.resume) args.push('--resume', String(payload.resume));
-  const env = { ...process.env, ...(p.kind === 'claude-cli' && p.configDir ? { CLAUDE_CONFIG_DIR: String(p.configDir) } : {}), ...(p.kind === 'anthropic' && p.apiKey ? { ANTHROPIC_API_KEY: String(p.apiKey) } : {}), ...(payload.env && typeof payload.env === 'object' ? payload.env : {}) };
+  const pe = payload.env && typeof payload.env === 'object' ? payload.env : {};
+  const who = String(payload.account || '').replace(/[^a-z0-9-]/g, '');
+  const env = { ...process.env, ...(p.kind === 'claude-cli' && p.configDir ? { CLAUDE_CONFIG_DIR: String(p.configDir) } : {}), ...(p.kind === 'anthropic' && p.apiKey ? { ANTHROPIC_API_KEY: String(p.apiKey) } : {}), ...pe,
+    ...(who ? require('./fj').env(path.join(__dirname, '.fj', who), { url: pe.FORGEJO_URL, token: pe.FORGEJO_TOKEN, login: pe.FORGEJO_LOGIN }) : {}) }; // fj (the Forgejo CLI) signed in as the person, from the token the hub sent
+
   const command = String(WORK.claudeCommand || 'claude'), pre = Array.isArray(WORK.claudeArgs) ? WORK.claudeArgs : [];
   log(`run ${jobId} for ${payload.account}: ${payload.sandbox ? 'API answer' : payload.project + ' in ' + wd.dir} (${p.label}${payload.model ? ', ' + payload.model : ''})`);
   let child;

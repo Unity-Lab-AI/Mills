@@ -236,7 +236,7 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
@@ -261,6 +261,9 @@ async function setup() {
     fs.writeFileSync(path.join(SB, 'profiles', name, 'config.json'), JSON.stringify(conf));
     sp(['--profile', name, `pw-${name}-0001`]);
   }
+  // R172: a stand-in `fj` first on the PATH of the scratch hub and the test host, so a run's fj wrapper (the person's
+  // own keys file) is made and can be checked (the real fj is never called)
+  if (process.platform !== 'win32') { const bin = path.join(SCRATCH, 'bin'); fs.mkdirSync(bin, { recursive: true }); fs.writeFileSync(path.join(bin, 'fj'), '#!/bin/sh\necho "fake fj $*"\n', { mode: 0o755 }); process.env.PATH = bin + path.delimiter + (process.env.PATH || ''); }
 }
 // The throwaway hub runs Unity's engines THROUGH an AI node (bridge/ai-node.js, its own process), the way the hub on
 // the server will: every Unity check below then also tests the node path end to end (R137).
@@ -1440,10 +1443,23 @@ async function run() {
   await call('/api/board/complete', U, { id: fjMineT.id });
   await until(async () => { const is = fjMineI && fakeForgejo.issues.get(fjMineI.number); return is && is.state === 'closed'; });
   const fjPatchBy = fakeForgejo.patchedBy;
-  const fjEnvOf = (events) => ((texts(events).match(/fj=([^\s|]*)/) || [])[1] || '');
-  const fjRunU = fjEnvOf((await chat(U, 'forgejo env r122', { fresh: true })).events), fjRunA = fjEnvOf((await chat(A, 'forgejo env r122', { fresh: true })).events);
+  const fjEnvOf = (events) => ((texts(events).match(/fj=([^\s|]*)/) || [])[1] || ''), fjwOf = (events) => ((texts(events).match(/fjw=([^\s|]*)/) || [])[1] || '');
+  const fjRunUEv = (await chat(U, 'forgejo env r122', { fresh: true })).events, fjRunAEv = (await chat(A, 'forgejo env r122', { fresh: true })).events;
+  const fjRunU = fjEnvOf(fjRunUEv), fjRunA = fjEnvOf(fjRunAEv);
+  // R172: the run's `fj` is the person's wrapper (their keys file with their token for the Forgejo host, owner-only), nobody else's
+  const fjwU = fjwOf(fjRunUEv), fjwA = fjwOf(fjRunAEv);
+  const fjwFiles = [path.join(SB, 'profiles', 't-user', '.fj'), path.join(SB, '.fj', 't-user')].map((d) => ({ d, keys: path.join(d, 'forgejo-cli', 'keys.json'), wrap: path.join(d, 'fj-bin', 'fj') })).filter((x) => fs.existsSync(x.keys));
+  const fjwKeys = fjwFiles.length ? JSON.parse(fs.readFileSync(fjwFiles[0].keys, 'utf8')) : {};
+  const fjwMode = fjwFiles.length && process.platform !== 'win32' ? (fs.statSync(fjwFiles[0].keys).mode & 0o777).toString(8) + '/' + (fs.statSync(fjwFiles[0].d).mode & 0o777).toString(8) : 'n/a';
+  const fjwRuns = fjwFiles.length && process.platform !== 'win32' ? spawnSync(fjwFiles[0].wrap, ['whoami', '--host', 'x'], { encoding: 'utf8' }).stdout.trim() : '';
   const fjOff = (await call('/api/forgejo/disconnect', U, {})).data;
-  const fjRunU2 = fjEnvOf((await chat(U, 'forgejo env r122 after', { fresh: true })).events);
+  const fjRunU2Ev = (await chat(U, 'forgejo env r122 after', { fresh: true })).events;
+  const fjRunU2 = fjEnvOf(fjRunU2Ev), fjwU2 = fjwOf(fjRunU2Ev);
+  const fjwHost = `127.0.0.1:${OLLAMA_PORT}`, fjwLeak = JSON.stringify(fjwKeys).includes('fake-personal-token-1') && !JSON.stringify(fjwKeys).includes('fake-personal-token-1'); // (the file is the person's own: their token belongs there)
+  check('R172', 'fj (the Forgejo CLI) signed in as the person in their Work run: the `fj` first on the PATH is a wrapper of theirs over the real fj, pointing it at their own keys file (their token for the Forgejo host, owner-only, under their profile here / the host\'s .fj/<account>); no token → no wrapper (nobody else\'s); gone when they disconnect; [static] bridge/.fj/ never ships, worktree.js repos / repo-create / publish',
+    process.platform === 'win32' || (fjwU === `wrapper:${fjwHost}=Application` && fjwA === '' && fjwFiles.length === 1 && ((fjwKeys.hosts || {})[fjwHost] || {}).token === 'fake-personal-token-1' && fjwMode === '600/700' && fjwRuns === 'fake fj whoami --host x' && fjwU2 === '' && !fjwLeak
+      && /^bridge\/\.fj\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /cmd === 'repos'/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'worktree.js'), 'utf8')) && /async function publish\(/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'worktree.js'), 'utf8'))),
+    `U "${fjwU}" A "${fjwA}" files ${fjwFiles.map((x) => x.d).join(',')} token ok ${((fjwKeys.hosts || {})[fjwHost] || {}).token === 'fake-personal-token-1'} mode ${fjwMode} runs "${fjwRuns}" after "${fjwU2}"`);
   const fjAnon = await fetch(H + '/api/forgejo/me');
   for (const t of [fjMineT, fjHubT]) await call('/api/board/delete', t === fjHubT ? A : U, { id: t.id });
   check('R122', 'My Forgejo: a person saves their own Forgejo token (Settings), the hub checks it with Forgejo (bad shape / wrong token refused), shows who it belongs to and never sends it back; their board changes reach Forgejo as them (others fall back to the hub token); their own Work run gets FORGEJO_TOKEN + a git extraHeader for the Forgejo host, nobody else\'s does; Remove takes it away; signed-out callers get 401; the token file is gitignored',
