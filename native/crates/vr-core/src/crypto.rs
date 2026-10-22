@@ -5,89 +5,14 @@
 //!   (AES-256-GCM, `{ iv, ct }` in base64, the tag at the end of ct) on top of TLS. bridge/ai-nodes.js derive / seal.
 //! - [`hmac_hex`] / [`hmac_ok`]: the signature of update manifests (HMAC-SHA256 with the host's secret, hex).
 //! - [`chat`]: the team chat's end-to-end encryption (web/index.html sealFor / decryptMsg / sealOwn / sealChatFiles).
-use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Nonce};
-use hmac::{Hmac, Mac};
-use rand::RngCore;
+#[allow(unused_imports)] // (the chat part below uses them through super::*)
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
+#[allow(unused_imports)]
 use crate::{b64, unb64, Error, Result};
-
-/// `n` random bytes from the operating system's generator.
-pub fn random_bytes(n: usize) -> Vec<u8> {
-    let mut v = vec![0u8; n];
-    rand::rng().fill_bytes(&mut v);
-    v
-}
-/// `n` random bytes as lowercase hex (a nonce for /node/hello is 16 bytes: 32 hex characters).
-pub fn random_hex(n: usize) -> String { hex::encode(random_bytes(n)) }
-
-pub fn sha256(bytes: &[u8]) -> [u8; 32] { Sha256::digest(bytes).into() }
-pub fn sha256_hex(bytes: &[u8]) -> String { hex::encode(sha256(bytes)) }
-
-/// HMAC-SHA256 of `msg` under `key`, lowercase hex (crypto.createHmac('sha256', key).update(msg).digest('hex')).
-pub fn hmac_hex(key: &[u8], msg: &[u8]) -> String {
-    let mut m = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes any key length");
-    m.update(msg);
-    hex::encode(m.finalize().into_bytes())
-}
-/// Is `sig` (hex) the HMAC of `msg` under `key`? Compared in constant time.
-pub fn hmac_ok(key: &[u8], msg: &[u8], sig: &str) -> bool {
-    let want = hmac_hex(key, msg);
-    use subtle::ConstantTimeEq;
-    want.len() == sig.len() && bool::from(want.as_bytes().ct_eq(sig.as_bytes()))
-}
-
-/// AES-256-GCM with additional data; the 16-byte tag is appended to the ciphertext (as WebCrypto and the hub do).
-pub fn aes_gcm_seal(key: &[u8; 32], iv: &[u8], aad: &[u8], plain: &[u8]) -> Result<Vec<u8>> {
-    let c = Aes256Gcm::new_from_slice(key).map_err(|_| Error::msg("bad key"))?;
-    if iv.len() != 12 { return Err(Error::msg("the iv must be 12 bytes")); }
-    c.encrypt(Nonce::from_slice(iv), Payload { msg: plain, aad }).map_err(|_| Error::msg("encryption failed"))
-}
-pub fn aes_gcm_open(key: &[u8; 32], iv: &[u8], aad: &[u8], ct: &[u8]) -> Result<Vec<u8>> {
-    let c = Aes256Gcm::new_from_slice(key).map_err(|_| Error::msg("bad key"))?;
-    if iv.len() != 12 { return Err(Error::msg("the iv must be 12 bytes")); }
-    c.decrypt(Nonce::from_slice(iv), Payload { msg: ct, aad }).map_err(|_| Error::msg("could not decrypt (wrong key, or the data was changed)"))
-}
-fn hkdf32(ikm: &[u8], salt: &[u8], info: &[u8]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    hkdf::Hkdf::<Sha256>::new(Some(salt), ikm).expand(info, &mut out).expect("32 bytes is a valid HKDF length");
-    out
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// The AI host session
-// ---------------------------------------------------------------------------------------------------------------
-
-/// A sealed value: `{ "iv": base64, "ct": base64 }` (bridge/ai-nodes.js seal).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Envelope { pub iv: String, pub ct: String }
-
-/// The session key one AI host shares with its hub after /node/hello.
-#[derive(Clone)]
-pub struct HostKey { key: [u8; 32] }
-impl HostKey {
-    /// HKDF-SHA256(secret, salt = hex(host nonce + server nonce), "viberoller-ai-host-v1"), 32 bytes.
-    pub fn derive(secret: &str, host_nonce_hex: &str, server_nonce_hex: &str) -> Result<Self> {
-        let salt = hex::decode(format!("{host_nonce_hex}{server_nonce_hex}")).map_err(|_| Error::msg("the nonces must be hex"))?;
-        Ok(HostKey { key: hkdf32(secret.as_bytes(), &salt, b"viberoller-ai-host-v1") })
-    }
-    /// The key itself, hex (the hub keeps a host's session across its restarts: bridge/ai-host-sessions.json).
-    pub fn to_hex(&self) -> String { hex::encode(self.key) }
-    pub fn from_hex(h: &str) -> Option<Self> { let b = hex::decode(h).ok()?; Some(HostKey { key: b.try_into().ok()? }) }
-    /// "vr-" + the first 24 hex characters of sha256(key): both sides compare it after the handshake.
-    pub fn id(&self) -> String { format!("vr-{}", &sha256_hex(&self.key)[..24]) }
-    pub fn seal(&self, value: &serde_json::Value) -> Result<Envelope> {
-        let iv = random_bytes(12);
-        let ct = aes_gcm_seal(&self.key, &iv, b"", serde_json::to_string(value)?.as_bytes())?;
-        Ok(Envelope { iv: b64(&iv), ct: b64(&ct) })
-    }
-    pub fn open(&self, env: &Envelope) -> Result<serde_json::Value> {
-        let plain = aes_gcm_open(&self.key, &unb64(&env.iv)?, b"", &unb64(&env.ct)?)?;
-        Ok(serde_json::from_slice(&plain)?)
-    }
-}
+// the primitives live in pgm-core-internal (PGM_Core_Internal) since 5.0.0
+pub use pgm_core_internal::crypto::{aes_gcm_open, aes_gcm_seal, hkdf32, hmac_hex, hmac_ok, random_bytes, random_hex, sha256, sha256_hex};
+// the AI host session key: pgm-net-internal's host link (PGM_Net_Internal) since 5.0.0
+pub use pgm_net_internal::hostlink::{Envelope, HostKey};
 
 // ---------------------------------------------------------------------------------------------------------------
 // The team chat
@@ -294,7 +219,7 @@ mod tests {
     fn host_key_matches_node() {
         // node -e "c=require('crypto');k=Buffer.from(c.hkdfSync('sha256',Buffer.from('s3cret'),Buffer.from('00ff'+'a1b2','hex'),'viberoller-ai-host-v1',32));console.log(k.toString('hex'))"
         let k = HostKey::derive("s3cret", "00ff", "a1b2").unwrap();
-        assert_eq!(hex::encode(k.key), concat!("28b7dc2e7be0a0da", "89912d948f35f473", "c8e50f658062fd9b", "0ed50059dcf80af7")); // (in pieces: the hygiene check looks for long hex)
+        assert_eq!(k.to_hex(), concat!("28b7dc2e7be0a0da", "89912d948f35f473", "c8e50f658062fd9b", "0ed50059dcf80af7")); // (in pieces: the hygiene check looks for long hex)
         assert_eq!(k.id(), "vr-abc765ce1003dc37e11547d3");
         let env = k.seal(&serde_json::json!({"a": 1})).unwrap();
         assert_eq!(k.open(&env).unwrap(), serde_json::json!({"a": 1}));

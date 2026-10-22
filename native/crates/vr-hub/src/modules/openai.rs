@@ -39,9 +39,7 @@ impl Cancel {
 pub struct Answer { text: String, model: String, usage: Value }
 
 pub struct Api { root: PathBuf, mills: PathBuf, keys: Mutex<Map<String, Value>>, running: Mutex<HashMap<String, Arc<Cancel>>>, http: reqwest::Client }
-fn read_json(p: &Path) -> Option<Value> { std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()) }
-fn write_json(p: &Path, v: &Value) { let tmp = p.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(v).unwrap_or_default()).is_ok() { vr_core::settings::private(&tmp); let _ = std::fs::rename(&tmp, p); } }
-fn s(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() }
+use pgm_core_internal::json::{read_json, s, write_json_private as write_json};
 fn js_len(t: &str) -> usize { t.encode_utf16().count() }
 
 impl Api {

@@ -38,7 +38,7 @@ pub struct Guilds { file: PathBuf, db: Mutex<Value>, ver: AtomicU64, last_post: 
 fn obj(v: &Value) -> Value { if v.is_object() { v.clone() } else { json!({}) } }
 fn arr(v: &Value) -> Vec<Value> { v.as_array().cloned().unwrap_or_default() }
 fn strs(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() }
-fn s(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() }
+use pgm_core_internal::json::s;
 fn truthy(v: &Value) -> bool { !(v.is_null() || *v == json!(false) || *v == json!(0) || *v == json!("")) }
 fn now() -> u64 { vr_core::now_ms() }
 fn iso() -> String { super::auth::iso_now() }

@@ -54,9 +54,8 @@ pub struct Unity {
     pub secret: String,
     http: reqwest::Client,
 }
-fn read_json(p: &Path) -> Option<Value> { std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()) }
-pub fn write_json(p: &Path, v: &Value) { let tmp = p.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(v).unwrap_or_default()).is_ok() { let _ = std::fs::rename(&tmp, p); } }
-pub fn s(v: &Value, k: &str) -> String { match &v[k] { Value::String(x) => x.clone(), Value::Null => String::new(), o => o.to_string() } }
+use pgm_core_internal::json::read_json;
+pub use pgm_core_internal::json::{s_any as s, write_json};
 pub fn truthy(v: &Value) -> bool { !(v.is_null() || *v == json!(false) || *v == json!(0) || *v == json!("") || *v == json!("false")) }
 fn clean_url(v: &Value, d: &str) -> String { v.as_str().unwrap_or(d).trim_end_matches('/').to_string() }
 

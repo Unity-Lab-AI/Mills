@@ -46,8 +46,7 @@ pub struct Auth {
     last_sweep: Mutex<Instant>,
 }
 
-fn read_json(p: &Path) -> Option<Value> { std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()) }
-fn write_json(p: &Path, v: &Value) { let tmp = p.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(v).unwrap_or_default()).is_ok() { vr_core::settings::private(&tmp); let _ = std::fs::rename(&tmp, p); } }
+use pgm_core_internal::json::{read_json, write_json_private as write_json};
 pub fn valid_username(u: &str) -> bool { !u.is_empty() && u.len() <= 32 && u.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') }
 pub fn token_key(t: &str) -> String { vr_core::crypto::sha256_hex(t.as_bytes()) }
 
@@ -225,20 +224,8 @@ pub fn lock_devices(l: &Value) -> Vec<String> {
     v.extend(l["devices"].as_array().map(|a| a.iter().filter_map(|d| d["device"].as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default());
     v
 }
-pub fn iso_now() -> String { iso_at(now_ms() as i64) }
-/// new Date(ms).toISOString()
-pub fn iso_at(ms: i64) -> String {
-    let s = ms.div_euclid(1000); let (days, rem) = (s.div_euclid(86400), s.rem_euclid(86400));
-    let (y, m, d) = civil(days);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3600, rem / 60 % 60, rem % 60, ms.rem_euclid(1000))
-}
-fn civil(z: i64) -> (i64, u32, u32) { // days since 1970-01-01 → (year, month, day)
-    let z = z + 719468; let era = z.div_euclid(146097); let doe = z.rem_euclid(146097);
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
+// new Date(ms).toISOString(): pgm-core-internal since 4.2.0
+pub use pgm_core_internal::time::{iso_at, iso_now};
 
 fn scrypt_hash(pw: &str, salt: &[u8], log_n: u8, r: u32, p: u32) -> Option<Vec<u8>> {
     let params = scrypt::Params::new(log_n, r, p, 64).ok()?;
@@ -278,6 +265,7 @@ mod tests {
         assert!(!check_password(&h, "hello therE"));
         assert_eq!(new_password().len(), 20);
         assert!(iso_now().ends_with('Z') && iso_now().len() == 24);
+        use pgm_core_internal::time::civil;
         assert_eq!(civil(0), (1970, 1, 1)); assert_eq!(civil(20381), (2025, 10, 20));
     }
 }

@@ -14,127 +14,32 @@ pub const WIN: bool = cfg!(windows);
 pub const SVC: &str = if WIN { "VibeRollerAIHost" } else { "viberoller-ai-host" };
 
 pub fn exe() -> String { std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "vr-host".into()) }
-fn home() -> PathBuf { std::env::var_os(if WIN { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default() }
-fn user_unit() -> PathBuf { home().join(".config").join("systemd").join("user").join(format!("{SVC}.service")) }
-const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+fn home() -> PathBuf { pgm_platform_internal::folders::home() }
 
-#[derive(Default, Clone)]
-pub struct Service { pub exists: bool, pub running: bool, pub auto: bool, pub scope: String }
-pub fn service() -> Service {
-    if WIN {
-        let (ok, out) = run("sc", &["query", SVC]);
-        if !ok { return Service::default(); }
-        return Service { exists: true, running: out.contains("RUNNING"), auto: run("sc", &["qc", SVC]).1.contains("AUTO_START"), scope: "service".into() };
-    }
-    for user in [false, true] {
-        let a = |k: &str| { let mut v: Vec<&str> = vec![]; if user { v.push("--user"); } v.push(k); v.push(SVC); run("systemctl", &v) };
-        let mut cat: Vec<&str> = vec![]; if user { cat.push("--user"); } cat.extend(["cat", "viberoller-ai-host.service"]);
-        if run("systemctl", &cat).0 {
-            return Service { exists: true, running: a("is-active").1.trim() == "active", auto: a("is-enabled").1.trim() == "enabled", scope: if user { "user".into() } else { "system".into() } };
-        }
-    }
-    Service::default()
-}
-pub fn boot_mode(s: &Service) -> &'static str {
-    if s.exists && s.auto { return if !WIN && s.scope == "user" { "user" } else { "service" }; }
-    if WIN && run("reg", &["query", RUN_KEY, "/v", "VibeRoller AI Host"]).0 { return "sign-in"; }
-    "off"
-}
-pub fn boot_label(m: &str) -> &'static str {
-    match m {
-        "service" if WIN => "the VibeRollerAIHost service (from boot, before anyone signs in)",
-        "service" => "the system service (from boot)",
-        "user" => "a user service (when you are signed in; from boot with lingering on)",
-        "sign-in" => "at sign-in (in the background, no window)",
-        _ => "not at boot (start it by hand)",
-    }
-}
-pub fn boot_modes() -> &'static [&'static str] { if WIN { &["service", "sign-in", "off"] } else { &["service", "user", "off"] } }
+// The service, the start at sign-in, the systemd units: pgm-platform-internal (PGM_Platform_Internal) since 5.0.0; what
+// the VibeRoller AI Host is as a service is said here.
+pub use pgm_platform_internal::service::Service;
+pub fn service() -> Service { pgm_platform_internal::service::status(SVC) }
+fn names() -> pgm_platform_internal::service::ServiceSpec { pgm_platform_internal::service::ServiceSpec { name: SVC.into(), display: "VibeRoller AI Host".into(), ..Default::default() } }
+pub fn boot_mode(s: &Service) -> &'static str { pgm_platform_internal::service::boot_mode(&names(), s) }
+pub fn boot_label(m: &str) -> String { pgm_platform_internal::service::boot_label(&names(), m) }
+pub fn boot_modes() -> &'static [&'static str] { pgm_platform_internal::service::boot_modes() }
 
 /// The command line the service / the background start / the user unit run.
 fn run_line(f: &Folder) -> (String, Vec<String>) { (exe(), vec!["run".into(), "--config".into(), f.config.display().to_string()]) }
-
-pub fn set_boot(f: &Folder, mode: &str) -> Vec<String> {
-    let mut lines = vec![];
-    let svc = service();
-    if WIN {
-        let (exe, args) = run_line(f);
-        if mode == "service" {
-            #[cfg(windows)]
-            if !crate::winsys::is_admin() {
-                lines.push("Windows asks for administrator rights once to install the service …".into());
-                if !crate::winsys::run_elevated(&exe, &format!("boot service --config \"{}\"", f.config.display())) { lines.push("It was not allowed.".into()); }
-                return lines;
-            }
-            let _ = run("reg", &["delete", RUN_KEY, "/v", "VibeRoller AI Host", "/f"]);
-            if svc.exists { remove_service(); }
-            // the service runs as LocalSystem; the logins it lends are this person's (their profile folder is passed on)
-            let bin = format!("\"{exe}\" service-run --config \"{}\" --home \"{}\"", f.config.display(), home().display());
-            let (ok, out) = run("sc", &["create", SVC, "binPath=", &bin, "start=", "auto", "DisplayName=", "VibeRoller AI Host", "obj=", "LocalSystem"]);
-            if !ok { lines.push(format!("Could not create the service: {}", out.trim().lines().last().unwrap_or(""))); return lines; }
-            let _ = run("sc", &["description", SVC, "Lends this PC's AI (its Claude / ChatGPT login, local models, Unity's engines) to the VibeRoller hub, never the computer itself. Starts at boot."]);
-            let _ = run("sc", &["failure", SVC, "reset=", "86400", "actions=", "restart/5000/restart/10000/restart/30000"]);
-            // signed-in users (not only administrators) may start and stop it: what the heart and the knife do (the access
-            // list only: an audit part would need a privilege an elevated prompt does not have switched on)
-            let _ = run("sc", &["sdset", SVC, "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPWPDTLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"]);
-            let (ok, _) = run("sc", &["start", SVC]);
-            lines.push(if ok { "The VibeRollerAIHost service is installed, running, and starts at every boot. Log: ai-node.log".into() } else { "The service is installed; it starts at the next boot (or: sc start VibeRollerAIHost).".into() });
-            let _ = args;
-        } else {
-            if svc.exists {
-                #[cfg(windows)]
-                if !crate::winsys::is_admin() { lines.push("Windows asks for administrator rights once to remove the service …".into()); let _ = crate::winsys::run_elevated(&exe, &format!("boot {mode} --config \"{}\"", f.config.display())); return lines; }
-                remove_service(); lines.push("The service is removed.".into());
-            }
-            if mode == "sign-in" {
-                let cmd = format!("\"{}\" {}", hostw(&exe), args.iter().map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a.clone() }).collect::<Vec<_>>().join(" "));
-                let (ok, out) = run("reg", &["add", RUN_KEY, "/v", "VibeRoller AI Host", "/t", "REG_SZ", "/d", &cmd, "/f"]);
-                lines.push(if ok { "It starts at sign-in now, in the background (no window).".into() } else { format!("Could not set it: {}", out.trim()) });
-            } else { let _ = run("reg", &["delete", RUN_KEY, "/v", "VibeRoller AI Host", "/f"]); lines.push("It no longer starts by itself; start it here when you want it.".into()); }
-        }
-        return lines;
-    }
+/// The VibeRoller AI Host as a service.
+fn spec(f: &Folder) -> pgm_platform_internal::service::ServiceSpec {
     let (exe, args) = run_line(f);
-    let exec = format!("{exe} {}", args.iter().map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a.clone() }).collect::<Vec<_>>().join(" "));
-    let unit = |desc: &str, extra: &str, wanted: &str| format!("[Unit]\nDescription={desc}\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nWorkingDirectory={}\nExecStart={exec}\n{extra}Restart=always\nRestartSec=5\nStandardOutput=append:{}\nStandardError=append:{}\n\n[Install]\nWantedBy={wanted}\n", f.dir.display(), f.log().display(), f.log().display());
-    if mode == "service" {
-        if svc.exists && svc.scope == "user" { let _ = run("systemctl", &["--user", "disable", "--now", SVC]); let _ = std::fs::remove_file(user_unit()); }
-        let me = std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_default();
-        let tmp = std::env::temp_dir().join(format!("{SVC}.service"));
-        let _ = std::fs::write(&tmp, unit("VibeRoller AI Host", &format!("User={me}\nEnvironment=HOME={}\n", home().display()), "multi-user.target"));
-        lines.push("Installing the system service (sudo asks for your password) …".into());
-        let ok = std::process::Command::new("sudo").args(["sh", "-c", &format!("install -m 644 '{}' /etc/systemd/system/{SVC}.service && systemctl daemon-reload && systemctl enable --now {SVC}", tmp.display())]).status().map(|s| s.success()).unwrap_or(false);
-        let _ = std::fs::remove_file(&tmp);
-        lines.push(if ok { "The system service is installed, running, and starts at every boot.".into() } else { "Could not install the system service (sudo was refused or failed).".into() });
-    } else {
-        if svc.exists && svc.scope == "system" {
-            lines.push("Removing the system service (sudo asks for your password) …".into());
-            let _ = std::process::Command::new("sudo").args(["sh", "-c", &format!("systemctl disable --now {SVC}; rm -f /etc/systemd/system/{SVC}.service; systemctl daemon-reload")]).status();
-        }
-        if mode == "user" {
-            let _ = std::fs::create_dir_all(user_unit().parent().unwrap_or(&home()));
-            let _ = std::fs::write(user_unit(), unit("VibeRoller AI Host (user service)", "", "default.target"));
-            let _ = run("systemctl", &["--user", "daemon-reload"]);
-            let (ok, out) = run("systemctl", &["--user", "enable", "--now", SVC]);
-            let me = std::env::var("USER").unwrap_or_default();
-            lines.push(if ok { format!("It runs as your user service now, and starts when you sign in. To start it at boot without signing in: sudo loginctl enable-linger {me}") } else { format!("Could not enable the user service: {}", out.trim().lines().last().unwrap_or("")) });
-        } else {
-            if svc.exists && svc.scope == "user" { let _ = run("systemctl", &["--user", "disable", "--now", SVC]); }
-            let _ = std::fs::remove_file(user_unit());
-            lines.push("It no longer starts by itself; start it here when you want it.".into());
-        }
+    pgm_platform_internal::service::ServiceSpec {
+        name: SVC.into(), display: "VibeRoller AI Host".into(),
+        description: "Lends this PC's AI (its Claude / ChatGPT login, local models, Unity's engines) to the VibeRoller hub, never the computer itself. Starts at boot.".into(),
+        // the service runs as LocalSystem; the logins it lends are this person's (their profile folder is passed on)
+        service_bin: format!("\"{exe}\" service-run --config \"{}\" --home \"{}\"", f.config.display(), home().display()),
+        signin_exe: hostw(&exe), elevate_args: format!("boot {{mode}} --config \"{}\"", f.config.display()),
+        exe, args, dir: f.dir.clone(), log: f.log(), log_name: "ai-node.log".into(),
     }
-    lines
 }
-/// Stops the Windows service, waits until it has stopped (the host finishes what is in flight, up to a few seconds),
-/// deletes it and waits until it is gone: a service only marked for deletion cannot be made again (error 1072).
-fn remove_service() {
-    let wait = |done: &dyn Fn() -> bool, secs: u64| { for _ in 0..secs * 4 { if done() { return; } std::thread::sleep(std::time::Duration::from_millis(250)); } };
-    let _ = run("sc", &["stop", SVC]);
-    wait(&|| { let (ok, out) = run("sc", &["query", SVC]); !ok || out.contains("STOPPED") }, 20);
-    let _ = run("sc", &["delete", SVC]);
-    wait(&|| !run("sc", &["query", SVC]).0, 15);
-}
+pub fn set_boot(f: &Folder, mode: &str) -> Vec<String> { pgm_platform_internal::service::set_boot(&spec(f), mode) }
 /// The window-less starter next to this program on Windows (vr-hostw.exe), else this program.
 pub fn hostw(exe: &str) -> String {
     let p = PathBuf::from(exe).with_file_name(if WIN { "vr-hostw.exe" } else { "vr-hostw" });
@@ -145,7 +50,7 @@ pub fn start(f: &Folder) -> String {
     let _ = std::fs::remove_file(f.off());
     let svc = service();
     if svc.exists {
-        let (ok, out) = if WIN { run("sc", &["start", SVC]) } else if svc.scope == "user" { run("systemctl", &["--user", "start", SVC]) } else { run("systemctl", &["start", SVC]) };
+        let (ok, out) = pgm_platform_internal::service::start(SVC, &svc);
         return if ok || out.contains("1056") || out.to_lowercase().contains("already") { "Started (the service runs it).".into() } else { format!("Could not start the service: {}", out.trim().lines().last().unwrap_or("")) };
     }
     if let Some(pid) = f.host_pid() { return format!("It is running already (pid {pid})."); }
@@ -153,21 +58,11 @@ pub fn start(f: &Folder) -> String {
     match spawn_background(f) { Ok(()) => "Started (in the background; its log is ai-node.log).".into(), Err(e) => format!("Could not start it: {e}") }
 }
 /// `vr-host run` in the background, its output in ai-node.log, no window.
-pub fn spawn_background(f: &Folder) -> std::io::Result<()> {
-    let (exe, args) = run_line(f);
-    let log = std::fs::OpenOptions::new().create(true).append(true).open(f.log())?;
-    let mut c = std::process::Command::new(&exe);
-    c.args(&args).current_dir(&f.dir).stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log);
-    #[cfg(windows)]
-    { use std::os::windows::process::CommandExt; c.creation_flags(crate::winsys::CREATE_NO_WINDOW | 0x0000_0008 /* DETACHED_PROCESS */); }
-    #[cfg(unix)]
-    { use std::os::unix::process::CommandExt; c.process_group(0); }
-    c.spawn().map(|_| ())
-}
+pub fn spawn_background(f: &Folder) -> std::io::Result<()> { let (exe, args) = run_line(f); pgm_platform_internal::proc::spawn_detached(&exe, &args, &f.dir, &f.log()) }
 pub fn stop(f: &Folder, now: bool) -> String {
     let svc = service();
     if svc.exists && svc.running {
-        let (ok, out) = if WIN { run("sc", &["stop", SVC]) } else if svc.scope == "user" { run("systemctl", &["--user", "stop", SVC]) } else { run("systemctl", &["stop", SVC]) };
+        let (ok, out) = pgm_platform_internal::service::stop(SVC, &svc);
         return if ok { "Stopped (the service). VibeRoller keeps running for everyone; Unity says her AI host is offline.".into() } else { format!("Could not stop the service: {}", out.trim().lines().last().unwrap_or("")) };
     }
     if f.host_pid().is_none() { return "It is not running.".into(); }

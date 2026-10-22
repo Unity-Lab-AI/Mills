@@ -59,10 +59,8 @@ pub struct Work {
     /// a run started or ended (the JavaScript hub restarts only while nobody's Claude is busy, here included)
     pub busy_changed: Notify,
 }
-fn read_json(p: &Path) -> Option<Value> { std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()) }
-fn write_json(p: &Path, v: &Value) { let tmp = p.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(v).unwrap_or_default()).is_ok() { let _ = std::fs::rename(&tmp, p); } }
+use pgm_core_internal::json::{read_json, s, write_json};
 fn line(v: Value) -> Result<Bytes, String> { Ok(Bytes::from(v.to_string() + "\n")) }
-fn s(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() }
 fn iso() -> String { super::auth::iso_now() }
 
 impl Work {
@@ -300,10 +298,8 @@ impl Work {
         if let Some(pid) = pid { kill_pid(pid); }
     }
 }
-#[cfg(unix)]
-pub fn kill_pid(pid: u32) { unsafe { libc::kill(pid as i32, libc::SIGTERM); } }
-#[cfg(not(unix))]
-pub fn kill_pid(pid: u32) { let _ = std::process::Command::new("taskkill").args(["/pid", &pid.to_string(), "/T", "/F"]).spawn(); }
+/// Asks a process to stop (pgm-platform-internal since 5.0.0).
+pub use pgm_platform_internal::proc::kill_pid;
 
 fn ndjson(rx: mpsc::UnboundedReceiver<Result<Bytes, String>>) -> hyper::Response<crate::front::Body> {
     use http_body_util::BodyExt;

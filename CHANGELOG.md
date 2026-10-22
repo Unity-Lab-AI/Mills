@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.0.0 — 2026-10-22
+
+**MAJOR: the Rust code is rearranged into reusable libraries** (board T-136 … T-144, plan: team note
+plans/pgm-libraries.md). Nothing behaves differently: no route, field, header, host-protocol message or data file
+changed, and every regression check passes as before (normal and `--rust-hub`). The libraries know nothing about
+VibeRoller's hub, so any other project can use them. Names: native/crates/NAMES.md.
+
+### The libraries
+- **pgm-core-internal** (PGM_Core_Internal, PsyGraphMediaCoreInternal): errors, base64, time (ISO exactly as
+  JavaScript), SHA-256 / HMAC / AES-GCM / HKDF / ids, JSON files written atomically (and privately), file protection
+  (Linux mode 600, Windows ACL), text helpers. The hub's five copies of the JSON / time helpers are now this one.
+
 ## 4.1.4 — 2026-10-22
 
 ### Fixed (what Sponge ran into on the portal)

@@ -58,9 +58,7 @@ pub struct Chat {
     handle: String,
     mills: PathBuf,
 }
-fn read_json(p: &Path) -> Option<Value> { std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()) }
-fn write_json(p: &Path, v: &Value) { let tmp = p.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(v).unwrap_or_default()).is_ok() { let _ = std::fs::rename(&tmp, p); } }
-fn s(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() }
+use pgm_core_internal::json::{read_json, s, write_json};
 fn b64ok(v: &Value, max: usize) -> bool { v.as_str().map(|x| x.len() <= max && x.bytes().all(|c| c.is_ascii_alphanumeric() || b"+/=_-".contains(&c))).unwrap_or(false) }
 fn dm_of(conv: &str) -> Option<(String, String)> { match guilds::parse(conv) { Some(guilds::Conv::Dm(a, b)) => Some((a, b)), _ => None } }
 fn iso() -> String { super::auth::iso_now() }

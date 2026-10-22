@@ -1,0 +1,21 @@
+[package]
+name = "pgm-identity-internal"
+description = "PGM_Identity_Internal (PsyGraphMediaIdentityInternal): who someone is: accounts from folders, scrypt passwords, hashed sessions, device locks (several devices), sign-in limits per address, admins, per-account keys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pgm-core-internal = { path = "../pgm-core-internal" }
+pgm-net-internal = { path = "../pgm-net-internal" }
+base64 = "0.23.1"
+hex = "0.4.3"
+scrypt = { version = "0.11", default-features = false }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+subtle = "2.6.1"
+tokio = { version = "1.54.0", features = ["rt"] }

@@ -10,7 +10,7 @@ pub struct Web { http: reqwest::Client, manual: reqwest::Client, cache: Mutex<Ha
 /// Where the person is, as far as anyone knows (lat / lon may be unknown).
 #[derive(Clone, Default)]
 pub struct Place { pub lat: Option<f64>, pub lon: Option<f64>, pub place: String, pub country: String, pub locale: String }
-fn s(v: &Value, k: &str) -> String { match &v[k] { Value::String(x) => x.clone(), Value::Null => String::new(), o => o.to_string() } }
+use pgm_core_internal::json::s_any as s;
 fn enc(x: &str) -> String { vr_core::hub::urlencode(x) }
 
 pub fn unhtml(t: &str) -> String {

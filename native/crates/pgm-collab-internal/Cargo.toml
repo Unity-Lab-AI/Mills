@@ -1,0 +1,19 @@
+[package]
+name = "pgm-collab-internal"
+description = "PGM_Collab_Internal (PsyGraphMediaCollaborationInternal): working together: a task board for people and AI agents, markdown notes, projects with one git worktree per person, Forgejo accounts and the board / issues mirror"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pgm-core-internal = { path = "../pgm-core-internal" }
+pgm-net-internal = { path = "../pgm-net-internal" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls-no-provider", "json"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tokio = { version = "1.54.0", features = ["full"] }

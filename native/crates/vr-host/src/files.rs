@@ -43,18 +43,8 @@ impl Folder {
     }
 }
 
-pub fn pid_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    { let r = unsafe_kill0(pid); r }
-    #[cfg(windows)]
-    { crate::winsys::pid_alive(pid) }
-}
-#[cfg(unix)]
-fn unsafe_kill0(pid: u32) -> bool {
-    // kill(pid, 0): 0 = it exists; EPERM = it exists but belongs to someone else
-    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
+/// Is that process still there? (pgm-platform-internal since 5.0.0)
+pub use pgm_platform_internal::proc::pid_alive;
 
 /// One line in the log: "HH:MM:SS [ai-host] …" to stdout (the service / background start send stdout to ai-node.log).
 pub fn log(msg: impl AsRef<str>) {

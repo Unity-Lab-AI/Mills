@@ -9,7 +9,8 @@
 # Test:    cargo test
 [workspace]
 resolver = "2"
-members = ["crates/vr-core", "crates/vr-desktop", "crates/vr-host", "crates/vr-hub"]
+# the PGM libraries (PsyGraphMedia*Internal, reusable in any project: crates/NAMES.md) and the VibeRoller programs on them
+members = ["crates/pgm-core-internal", "crates/pgm-platform-internal", "crates/pgm-net-internal", "crates/vr-core", "crates/vr-desktop", "crates/vr-host", "crates/vr-hub"]
 
 [workspace.package]
 version = "0.1.0"
@@ -20,6 +21,7 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 vr-core = { path = "crates/vr-core" }
+pgm-core-internal = { path = "crates/pgm-core-internal" }
 
 [profile.release]
 opt-level = 3
