@@ -2737,6 +2737,61 @@ async function run() {
         `mid busy ${mid.busy} run ${mid.run}; events ${all.map((e) => e.type).join(',')}; end busy ${d.busy}; again ${(again.events || []).length}/${again.busy}; none "${none.run}"; current keeps run ${cur}; static ${stat}`);
     } else check('R169', 'the page follows a Work run after a reload, offers updates instead of reloading in front of you, never stays black, sends the GitHub Pages copy to the hub [static; joining a run is the Rust hub\'s: --rust-hub runs it]', stat, `static ${stat}`);
   }
+  { // R170 (5.1.0): PGM Gateway: an admin registers a product (its secret only in a private file), the product's signed
+    // requests (pgm-net-internal's product link) check a VibeRoller login (the sign-in limits apply), link that person,
+    // and use the AI hosts / providers as them; unsigned, replayed, re-pathed, proxied, unlinked and non-admin all refused
+    if (RUST_HUB) {
+      const notAdmin = await call('/api/admin/gateway/products', U, { id: 'prodsuit', name: 'PGM Prod Suit' });
+      const made = await call('/api/admin/gateway/products', A, { id: 'prodsuit', name: 'PGM Prod Suit', ai: true });
+      const badId = await call('/api/admin/gateway/products', A, { id: 'Bad Id', name: 'x' });
+      const secFile = path.join(SB, 'gateway', 'prodsuit.secret');
+      const secret = fs.existsSync(secFile) ? fs.readFileSync(secFile, 'utf8').trim() : '';
+      const mode = fs.existsSync(secFile) ? (fs.statSync(secFile).mode & 0o777) : 0;
+      const listed = (await call('/api/admin/gateway/products', A)).data || {};
+      const sign = (method, pq, user, body, ts = Date.now(), nonce = crypto.randomBytes(16).toString('hex'), sec = secret) => {
+        const sha = crypto.createHash('sha256').update(body || '').digest('hex');
+        const sig = crypto.createHmac('sha256', sec).update(`pgm-product-v1\n${method}\n${pq}\n${ts}\n${nonce}\n${user}\n${sha}`).digest('hex');
+        return { 'x-pgm-product': 'prodsuit', 'x-pgm-ts': String(ts), 'x-pgm-nonce': nonce, 'x-pgm-user': user, 'x-pgm-sig': sig };
+      };
+      const gw = async (method, pq, user, bodyObj, hs) => { const body = bodyObj === undefined ? '' : JSON.stringify(bodyObj); const r = await fetch(H + pq, { method, headers: { 'Content-Type': 'application/json', ...(hs || sign(method, pq, user, body)) }, body: body || undefined }); return { status: r.status, text: await r.text() }; };
+      const status = await gw('GET', '/internal/gateway/status', '');
+      const unsigned = await fetch(H + '/internal/gateway/status').then((r) => r.status);
+      const replayHs = sign('GET', '/internal/gateway/status', '');
+      const once = await gw('GET', '/internal/gateway/status', '', undefined, replayHs), twice = await gw('GET', '/internal/gateway/status', '', undefined, replayHs);
+      const moved = await gw('GET', '/internal/gateway/identity/profile', 't-user', undefined, sign('GET', '/internal/gateway/status', 't-user'));
+      const proxied = await gw('GET', '/internal/gateway/status', '', undefined, { ...sign('GET', '/internal/gateway/status', ''), 'X-Forwarded-For': '198.51.100.7' });
+      const old = await gw('GET', '/internal/gateway/status', '', undefined, sign('GET', '/internal/gateway/status', '', '', Date.now() - 120000));
+      const wrongKey = await gw('GET', '/internal/gateway/status', '', undefined, sign('GET', '/internal/gateway/status', '', '', Date.now(), crypto.randomBytes(16).toString('hex'), 'x'.repeat(64)));
+      const beforeLink = await gw('GET', '/internal/gateway/identity/profile', 't-user');
+      const aiBefore = await gw('POST', '/internal/gateway/v1/chat/completions', 't-user', { messages: [{ role: 'user', content: 'gw-r170' }] });
+      const wrongPw = await gw('POST', '/internal/gateway/identity/verify', '', { username: 't-user', password: 'not-it-r170', ip: '198.51.100.70' });
+      const verified = await gw('POST', '/internal/gateway/identity/verify', '', { username: 'T-User', password: 'pw-t-user-0001', ip: '198.51.100.71' });
+      // the same limits as a sign-in: five wrong passwords for a name from an address block it there
+      for (let i = 0; i < 5; i++) await gw('POST', '/internal/gateway/identity/verify', '', { username: 't-admin', password: 'guess-r170-' + i, ip: '198.51.100.72' });
+      const blocked = await gw('POST', '/internal/gateway/identity/verify', '', { username: 't-admin', password: 'pw-t-admin-0001', ip: '198.51.100.72' });
+      const profile = await gw('GET', '/internal/gateway/identity/profile', 't-user');
+      const provs = await gw('GET', '/internal/gateway/ai/providers', 't-user');
+      const ai = await gw('POST', '/internal/gateway/v1/chat/completions', 't-user', { messages: [{ role: 'user', content: 'gw-r170' }] });
+      const aiText = (((JSON.parse(ai.text || '{}').choices || [])[0] || {}).message || {}).content || '';
+      const linksFile = path.join(SB, 'gateway', 'links', 'prodsuit.json');
+      const links = fs.existsSync(linksFile) ? JSON.parse(fs.readFileSync(linksFile, 'utf8')) : {};
+      // a new secret: the old one stops at once; removing the product ends its links
+      await call('/api/admin/gateway/products', A, { id: 'prodsuit', name: 'PGM Prod Suit', ai: true });
+      const oldSecret = await gw('GET', '/internal/gateway/status', '');
+      const removed = await call('/api/admin/gateway/products/remove', A, { id: 'prodsuit' });
+      const gone = !fs.existsSync(secFile) && !fs.existsSync(linksFile);
+      const ignored = spawnSync('git', ['check-ignore', '-q', 'bridge/gateway/products.json'], { cwd: MILLS }).status === 0;
+      check('R170', 'PGM Gateway: an admin registers a product (secret only in an owner-only file, never in an answer); its signed requests check a VibeRoller login (the sign-in limits apply), link that person, and reach the AI hosts / providers as them; unsigned, replayed, moved to another path, proxied, too old, wrong secret, not linked, not admin, a renewed secret and a removed product are all refused; its data stays out of git',
+        notAdmin.status === 403 && made.status === 200 && (made.data.product || {}).id === 'prodsuit' && !JSON.stringify(made.data).includes(secret) && badId.status === 400 && /^[0-9a-f]{64}$/.test(secret) && (process.platform === 'win32' || mode === 0o600)
+        && (listed.products || []).some((p) => p.id === 'prodsuit' && p.ai === true) && !JSON.stringify(listed).includes(secret)
+        && status.status === 200 && /PGM Gateway/.test(status.text) && unsigned === 403 && once.status === 200 && twice.status === 403 && moved.status === 403 && proxied.status === 403 && old.status === 403 && wrongKey.status === 403
+        && beforeLink.status === 404 && aiBefore.status === 404 && wrongPw.status === 401 && verified.status === 200 && /"username":"t-user"/.test(verified.text) && blocked.status === 429
+        && profile.status === 200 && /"username":"t-user"/.test(profile.text) && provs.status === 200 && /"providers":\[/.test(provs.text) && !/apiKey|configDir|baseUrl/.test(provs.text)
+        && ai.status === 200 && /gw-r170/.test(aiText) && !!links['t-user'] && !links['t-admin']
+        && oldSecret.status === 403 && removed.status === 200 && gone && ignored,
+        `notAdmin ${notAdmin.status} made ${made.status} ${JSON.stringify(made.data).slice(0, 120)} badId ${badId.status} secret ${secret.length} mode ${mode.toString(8)}; status ${status.status} unsigned ${unsigned} once ${once.status} twice ${twice.status} moved ${moved.status} proxied ${proxied.status} old ${old.status} wrongKey ${wrongKey.status}; before ${beforeLink.status}/${aiBefore.status} wrongPw ${wrongPw.status} verified ${verified.status} ${verified.text.slice(0, 80)} blocked ${blocked.status}; profile ${profile.status} provs ${provs.status} ${provs.text.slice(0, 120)}; ai ${ai.status} "${aiText.slice(0, 80)}" ${ai.text.slice(0, 120)}; links ${JSON.stringify(links).slice(0, 80)}; oldSecret ${oldSecret.status} removed ${removed.status} gone ${gone} ignored ${ignored}`);
+    } else check('R170', 'PGM Gateway: product data stays out of git [static; the gateway is the Rust hub\'s: --rust-hub runs it]', spawnSync('git', ['check-ignore', '-q', 'bridge/gateway/products.json'], { cwd: MILLS }).status === 0);
+  }
   // Persistence & restart (scratch restart.js: graceful flag only)
   const authBefore = sha(path.join(SB, 'profiles', 't-admin', 'auth.json'));
   const pid1 = (await call('/api/status')).data.pid;

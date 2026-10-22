@@ -405,8 +405,17 @@ pub async fn v1(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
     if r.method == hyper::Method::OPTIONS { return cors(hyper::Response::builder().status(204).body(pgm_net_internal::http::full("")).expect("response")); }
     let anthropic = p.starts_with("/v1/messages") || (p == "/v1/models" && r.header("anthropic-version").is_some());
     let fail = |st: u16, m: &str, t: &str| if anthropic { ant_error(st, m, t) } else { oa_error(st, m, t) };
+    let user = match hub.api().account_for_key(r) { Ok(u) => u, Err(e) => return fail(401, &e, "authentication_error") };
+    v1_as(hub, r, user).await
+}
+/// The API as that account, who the caller already is (a key checked by [`v1`], or a gateway product's signed request
+/// for a person it linked): the same answers, the same providers and sharing, the same one-at-a-time rule.
+pub async fn v1_as(hub: &Arc<dyn AiHub>, r: &Req, user: String) -> Resp {
+    let p = r.path.as_str();
+    if r.method == hyper::Method::OPTIONS { return cors(hyper::Response::builder().status(204).body(pgm_net_internal::http::full("")).expect("response")); }
+    let anthropic = p.starts_with("/v1/messages") || (p == "/v1/models" && r.header("anthropic-version").is_some());
+    let fail = |st: u16, m: &str, t: &str| if anthropic { ant_error(st, m, t) } else { oa_error(st, m, t) };
     let api = hub.api();
-    let user = match api.account_for_key(r) { Ok(u) => u, Err(e) => return fail(401, &e, "authentication_error") };
     let a = api.key_of(&user);
     let Some(prov) = hub.work().effective(hub.ai(), &user, &s(&a, "provider")) else { return fail(503, "No AI is available: this hub has no Claude of its own and no AI host offering one is connected.", "service_unavailable") };
     let models: Vec<String> = prov["models"].as_array().map(|m| m.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
