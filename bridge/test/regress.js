@@ -2398,6 +2398,19 @@ async function run() {
       && /if \(workStarted\) \{ try \{ saveCurrent\(\); saveQueue\(\);/.test(page) && /function restoreAfterUpdate\(\)/.test(page) && /restoreAfterUpdate\(\); \/\/ the page just updated/.test(page) && /editorDirty = true/.test(page) && /dirty: \(\) => !!N\.dirty/.test(notes156)
       && /checkUpdate\(\); \}, UPDATE_CHECK_MS\)/.test(host156) && /checkMinutes, 1, 60, 5\)/.test(host156),
       `build ${build} hdr ${verHdr} check ${ck156.build} anon ${anonVer}; scripts ${tagged.slice(0, 3).join(' ')}`);
+    // R173: one build per hub, whoever answers: every signed-in answer (the Rust hub's own and the ones of the
+    // JavaScript hub behind it) names the build /api/check named, so a page never offers an update to another build
+    // (Sponge saw "VibeRoller 4.1.0 is ready" on 5.x); the page drops ?v= from its address once loaded
+    const hdrs173 = [];
+    for (const p of ['/api/check', '/api/version', '/api/forgejo/me', '/api/board', '/api/notes/tree', '/api/projects', '/api/room/state', '/api/guilds']) {
+      const r = await fetch(H + p, { headers: { Authorization: 'Bearer ' + U } }); hdrs173.push(`${p}=${r.status}:${r.headers.get('x-vr-version')}`);
+    }
+    const signed173 = hdrs173.filter((x) => !/=40[14]:/.test(x));
+    const front173 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-hub', 'src', 'front.rs'), 'utf8');
+    check('R173', 'one build per hub: every signed-in answer names the build /api/check named, the Rust hub\'s own answers and the JavaScript hub\'s behind it alike (a JavaScript hub that started apart is logged, the page is told the Rust hub\'s build); [static] the page drops ?v= from its address once loaded',
+      signed173.length >= 4 && signed173.every((x) => x.endsWith(':' + build)) && /hub\.mods\.build\.note_back\(theirs, &mine\)/.test(front173)
+      && /if \(u\.searchParams\.has\('v'\)\) \{ u\.searchParams\.delete\('v'\); history\.replaceState\(/.test(page),
+      hdrs173.join(' '));
   }
 
   // R155: updates need an account too (4.0.0): the desktop app updates itself with the session its hub page hands it

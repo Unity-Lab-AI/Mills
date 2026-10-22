@@ -7,6 +7,17 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.3.1 — 2026-10-22
+
+PATCH: **"VibeRoller 4.1.0 is ready" on 5.x** (Sponge). The page compares the build every answer names (X-VR-Version)
+with the one `/api/check` named. Since the Rust hub answers `/api/check` itself, those were two programs' builds,
+each read when that program started: the Rust hub's, and the JavaScript hub's behind it on every answer it passes
+on. When the two started apart (one restarted alone after a crash, or an older JavaScript hub kept running behind
+a newer Rust hub), every page offered an update to the other build, reloaded onto it, and stayed put with that build
+in its address. Now the Rust hub puts its own build on every `/api/` answer it passes on, so a page only ever sees
+one; a JavaScript hub naming another build is logged once (a restart brings the two together). The page also drops
+`?v=` from its address once loaded (it only busts the cache while reloading). Suite: R173. web/index.html 1.14.3.
+
 ## 5.3.0 — 2026-10-22
 
 MINOR: Forgejo, fully, from a Work run: **`fj` (the Forgejo CLI) signed in as you**, and Forgejo's API through
