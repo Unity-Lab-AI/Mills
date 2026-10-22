@@ -2740,6 +2740,11 @@ async function run() {
   { // R170 (5.1.0): PGM Gateway: an admin registers a product (its secret only in a private file), the product's signed
     // requests (pgm-net-internal's product link) check a VibeRoller login (the sign-in limits apply), link that person,
     // and use the AI hosts / providers as them; unsigned, replayed, re-pathed, proxied, unlinked and non-admin all refused
+    // [static] the admin's Gateway products box (index.html) and the board kit's options (web/board.js, shared with the
+    // products through pgm-libs): VibeRoller sets none, so it keeps its Claude buttons
+    const page170 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), board170 = fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8');
+    const stat170 = /async function loadGateway\(\)/.test(page170) && /id="gwBox" hidden/.test(page170) && /adminCall\('gateway\/products\/remove'/.test(page170)
+      && /Object\.assign\(\{ ai: true, product: 'VibeRoller' \}, window\.BOARD_OPTS \|\| \{\}\)/.test(board170) && !/BOARD_OPTS\s*=/.test(page170);
     if (RUST_HUB) {
       const notAdmin = await call('/api/admin/gateway/products', U, { id: 'prodsuit', name: 'PGM Prod Suit' });
       const made = await call('/api/admin/gateway/products', A, { id: 'prodsuit', name: 'PGM Prod Suit', ai: true });
@@ -2788,9 +2793,9 @@ async function run() {
         && beforeLink.status === 404 && aiBefore.status === 404 && wrongPw.status === 401 && verified.status === 200 && /"username":"t-user"/.test(verified.text) && blocked.status === 429
         && profile.status === 200 && /"username":"t-user"/.test(profile.text) && provs.status === 200 && /"providers":\[/.test(provs.text) && !/apiKey|configDir|baseUrl/.test(provs.text)
         && ai.status === 200 && /gw-r170/.test(aiText) && !!links['t-user'] && !links['t-admin']
-        && oldSecret.status === 403 && removed.status === 200 && gone && ignored,
-        `notAdmin ${notAdmin.status} made ${made.status} ${JSON.stringify(made.data).slice(0, 120)} badId ${badId.status} secret ${secret.length} mode ${mode.toString(8)}; status ${status.status} unsigned ${unsigned} once ${once.status} twice ${twice.status} moved ${moved.status} proxied ${proxied.status} old ${old.status} wrongKey ${wrongKey.status}; before ${beforeLink.status}/${aiBefore.status} wrongPw ${wrongPw.status} verified ${verified.status} ${verified.text.slice(0, 80)} blocked ${blocked.status}; profile ${profile.status} provs ${provs.status} ${provs.text.slice(0, 120)}; ai ${ai.status} "${aiText.slice(0, 80)}" ${ai.text.slice(0, 120)}; links ${JSON.stringify(links).slice(0, 80)}; oldSecret ${oldSecret.status} removed ${removed.status} gone ${gone} ignored ${ignored}`);
-    } else check('R170', 'PGM Gateway: product data stays out of git [static; the gateway is the Rust hub\'s: --rust-hub runs it]', spawnSync('git', ['check-ignore', '-q', 'bridge/gateway/products.json'], { cwd: MILLS }).status === 0);
+        && oldSecret.status === 403 && removed.status === 200 && gone && ignored && stat170,
+        `static ${stat170}; notAdmin ${notAdmin.status} made ${made.status} ${JSON.stringify(made.data).slice(0, 120)} badId ${badId.status} secret ${secret.length} mode ${mode.toString(8)}; status ${status.status} unsigned ${unsigned} once ${once.status} twice ${twice.status} moved ${moved.status} proxied ${proxied.status} old ${old.status} wrongKey ${wrongKey.status}; before ${beforeLink.status}/${aiBefore.status} wrongPw ${wrongPw.status} verified ${verified.status} ${verified.text.slice(0, 80)} blocked ${blocked.status}; profile ${profile.status} provs ${provs.status} ${provs.text.slice(0, 120)}; ai ${ai.status} "${aiText.slice(0, 80)}" ${ai.text.slice(0, 120)}; links ${JSON.stringify(links).slice(0, 80)}; oldSecret ${oldSecret.status} removed ${removed.status} gone ${gone} ignored ${ignored}`);
+    } else check('R170', 'PGM Gateway: product data stays out of git; [static] the admin\'s products box, the board kit\'s options (VibeRoller keeps its Claude buttons) [the gateway is the Rust hub\'s: --rust-hub runs it]', spawnSync('git', ['check-ignore', '-q', 'bridge/gateway/products.json'], { cwd: MILLS }).status === 0 && stat170, `static ${stat170}`);
   }
   // Persistence & restart (scratch restart.js: graceful flag only)
   const authBefore = sha(path.join(SB, 'profiles', 't-admin', 'auth.json'));

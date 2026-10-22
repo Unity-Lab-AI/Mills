@@ -1,8 +1,11 @@
 // VibeRoller team board, calendar and the Work "My tasks" pane (page side of bridge/board.js).
 // Loaded before the main page script; everything here runs only after sign-in, so it may use the
 // page's helpers ($, json, ic, label, MD, me, nickOf, colorOf, showScreen, …) at call time.
+// Shared with the other PGM products (the pgm-libs web kit): a page may set window.BOARD_OPTS before loading it,
+// { ai: false } (no Claude buttons: no Work screen there), product: its name (in reminders). VibeRoller sets nothing.
 (function () {
   'use strict';
+  const OPT = Object.assign({ ai: true, product: 'VibeRoller' }, window.BOARD_OPTS || {});
   const B = { data: null, ver: 0, gen: 0, board: 'team', filter: '', mine: false, open: null, detail: null, cal: null, members: [] };
   const DAY = 86400e3;
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -19,7 +22,7 @@
 
   async function op(name, body) {
     try { const r = await json('/api/board/' + name, { method: 'POST', body: JSON.stringify(body) }); await refresh(); return r; }
-    catch (e) { note(e.message, true); if (!$('shell').hidden) sys(e.message, true); return null; }
+    catch (e) { note(e.message, true); if ($('shell') && !$('shell').hidden) sys(e.message, true); return null; }
   }
   async function refresh() { try { apply(await json('/api/board')); } catch {} }
   function apply(d) {
@@ -47,9 +50,9 @@
       const b = el('b'); label(b, 'calendar', (over ? 'Overdue: ' : 'Due today: ') + t.id); tt.append(b, ' ' + t.title); tt.style.setProperty('--toast-s', '14s');
       tt.onclick = () => { tt.remove(); B.board = t.board; showScreen('board'); openDetail(t.id); };
       tt.addEventListener('animationend', () => tt.remove()); $('toasts').append(tt);
-      try { if (window.Notification && Notification.permission === 'granted') new Notification((over ? 'Overdue task: ' : 'Due today: ') + t.title, { body: t.id + ' on the VibeRoller board' }); } catch {}
+      try { if (window.Notification && Notification.permission === 'granted') new Notification((over ? 'Overdue task: ' : 'Due today: ') + t.title, { body: t.id + ' on the ' + OPT.product + ' board' }); } catch {}
     }
-    const P = prefs(); if (P.sound.on) playTone('mention', P.sound.mention);
+    const P = typeof prefs === 'function' ? prefs() : null; if (P && P.sound.on && typeof playTone === 'function') playTone('mention', P.sound.mention);
     store.set(key, JSON.stringify(seen));
   }
   async function loop(gen) {
@@ -223,7 +226,7 @@
       if (mineHeld) btn('close', 'Release', () => op('release', { id: t.id }).then(() => openDetail(t.id)));
       if (t.status !== 'done') btn('check', t.recur ? 'Complete (repeats)' : 'Complete', () => op('complete', { id: t.id }).then(() => openDetail(t.id)));
     }
-    btn('bot', 'Give to Claude', () => giveToClaude(t));
+    if (OPT.ai) btn('bot', 'Give to Claude', () => giveToClaude(t));
     if (!held) btn('share', 'Delegate', () => delegate(t)); // hand it to a teammate with a signed note (assignee + note in one step)
     if (!held) {
       const del = btn('trash', 'Delete', async () => {
@@ -337,7 +340,7 @@
         const acts = el('div', 'tpActs');
         const give = label(el('button', 'ghost'), 'bot', 'Claude'); give.type = 'button'; give.title = 'Put this task in the box for Claude'; give.onclick = () => giveToClaude(t);
         const openB = label(el('button', 'ghost'), 'board', 'Open'); openB.type = 'button'; openB.onclick = () => { B.board = t.board; showScreen('board'); openDetail(t.id); };
-        acts.append(give, openB); r.append(acts); host.append(r);
+        if (OPT.ai) acts.append(give); acts.append(openB); r.append(acts); host.append(r);
       }
     };
     section('Held by you or your Claude', held, 'Nothing claimed.');
@@ -383,7 +386,7 @@
         b('calendar', 'Tomorrow', () => shift(t, 1), 'Move the due date to tomorrow');
         b('repeat', 'Next week', () => shift(t, 7), 'Move the due date a week on');
         b('board', 'Open', () => { $('myDay').hidden = true; B.board = t.board; showScreen('board'); openDetail(t.id); });
-        b('bot', 'Claude', () => { $('myDay').hidden = true; giveToClaude(t); });
+        if (OPT.ai) b('bot', 'Claude', () => { $('myDay').hidden = true; giveToClaude(t); });
         r.append(acts); body.append(r);
       }
     };
@@ -400,7 +403,8 @@
   // ── wiring ──
   function wire() {
     if (wire.done) return; wire.done = true;
-    $('bdMyDay').onclick = openMyDay; $('calMyDay').onclick = openMyDay; $('mdClose').onclick = () => { $('myDay').hidden = true; }; $('mdClaude').onclick = planWithClaude;
+    $('bdMyDay').onclick = openMyDay; $('calMyDay').onclick = openMyDay; $('mdClose').onclick = () => { $('myDay').hidden = true; };
+    if ($('mdClaude')) { if (OPT.ai) $('mdClaude').onclick = planWithClaude; else $('mdClaude').hidden = true; }
     $('myDay').onclick = (e) => { if (e.target.id === 'myDay') $('myDay').hidden = true; };
     $('bdBoard').onchange = () => { B.board = $('bdBoard').value; closeDetail(); renderBoard(); };
     $('bdFilter').oninput = () => { B.filter = $('bdFilter').value; renderBoard(); };
@@ -409,7 +413,7 @@
     $('calPrev').onclick = () => { B.cal = new Date(B.cal.getFullYear(), B.cal.getMonth() - 1, 1); renderCal(); };
     $('calNext').onclick = () => { B.cal = new Date(B.cal.getFullYear(), B.cal.getMonth() + 1, 1); renderCal(); };
     $('calToday').onclick = () => { B.cal = null; renderCal(); };
-    $('tpOpenBoard').onclick = () => showScreen('board');
+    if ($('tpOpenBoard')) $('tpOpenBoard').onclick = () => showScreen('board');
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('board').hidden && B.open && !e.target.closest('input, textarea, select')) closeDetail(); });
     // keyboard (from HyperProductivityManager): "/" focuses the board filter, Ctrl+1 / 2 / 3 switch Board / Calendar / Work
     document.addEventListener('keydown', (e) => {
@@ -418,6 +422,7 @@
       if (e.key === '/' && !typing && !$('board').hidden) { e.preventDefault(); $('bdFilter').focus(); return; }
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && ['1', '2', '3'].includes(e.key) && $('login').hidden) {
         const screen = { 1: 'board', 2: 'cal', 3: 'shell' }[e.key];
+        if (!$(screen)) return; // a page without Work (another PGM product)
         if ($('menu').hidden && $(screen).hidden === false) return; // already there
         e.preventDefault(); showScreen(screen);
       }
