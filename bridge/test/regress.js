@@ -46,6 +46,15 @@ function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
 }
+// A spec check: what the hub SHOULD do (team note plans/full-rust-hub.md), written before it is built. Passing = PASS;
+// failing = SPEC (not built yet: it names the gap, never blocks a release) unless --spec-strict makes it a FAIL. When
+// the item is built, its spec() becomes a check().
+const SPEC_STRICT = process.argv.includes('--spec-strict');
+function spec(id, label, pass, detail = '') {
+  if (pass) return check(id, label, true, detail);
+  results.push({ id, label, status: SPEC_STRICT ? 'FAIL' : 'SPEC', detail });
+  console.log(`${SPEC_STRICT ? 'FAIL' : 'SPEC'} ${id.padEnd(4)} ${label}  — not built yet${detail ? ': ' + detail : ''}`);
+}
 
 // ---------- production snapshot (read-only) ----------
 // The running hub and its account files live in the MAIN checkout (the host folder), which is not this
@@ -264,6 +273,7 @@ async function setup() {
   // R172: a stand-in `fj` first on the PATH of the scratch hub and the test host, so a run's fj wrapper (the person's
   // own keys file) is made and can be checked (the real fj is never called)
   if (process.platform !== 'win32') { const bin = path.join(SCRATCH, 'bin'); fs.mkdirSync(bin, { recursive: true }); fs.writeFileSync(path.join(bin, 'fj'), '#!/bin/sh\necho "fake fj $*"\n', { mode: 0o755 }); process.env.PATH = bin + path.delimiter + (process.env.PATH || ''); }
+  process.env.VR_TEST_HOOKS = '1'; // the Rust hub's test hooks (/__vr-test/…), for the runner's throwaway hub only (R174)
 }
 // The throwaway hub runs Unity's engines THROUGH an AI node (bridge/ai-node.js, its own process), the way the hub on
 // the server will: every Unity check below then also tests the node path end to end (R137).
@@ -2412,6 +2422,89 @@ async function run() {
       && /if \(u\.searchParams\.has\('v'\)\) \{ u\.searchParams\.delete\('v'\); history\.replaceState\(/.test(page),
       hdrs173.join(' '));
   }
+  // ---- the full-Rust hub spec (team note plans/full-rust-hub.md): what the hub SHOULD do, checked before it is built.
+  // spec() = SPEC (not built yet) until it passes; then it is a plain check. R174 FR1 · R176 FR3 · R177 FR4 · R178 FR5 ·
+  // R179 FR6 here; R175 FR2 after the restart (R9).
+  const tryFetch = async (u, h = {}) => { try { const r = await fetch(u, { headers: h }); return { status: r.status, j: await r.json().catch(() => ({})), h: r.headers }; } catch (e) { return { status: 0, j: { error: e.message }, h: new Map() }; } };
+  if (RUST_HUB) { // R174 (FR1): a panic inside one request answers 500, the hub keeps its pid, a lock held during the panic recovers
+    const pid0 = (await call('/api/status')).data.pid;
+    const pan = await tryFetch(H + '/__vr-test/panic');
+    const panLock = await tryFetch(H + '/__vr-test/panic?lock=gateway');
+    await sleep(500);
+    const st174 = await call('/api/status'), gw174 = await call('/api/admin/gateway/products', A);
+    const log174 = fs.readFileSync(path.join(SCRATCH, 'hub.log'), 'utf8'), cargo174 = fs.readFileSync(path.join(MILLS, 'native', 'Cargo.toml'), 'utf8'), mod174 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-hub', 'src', 'modules', 'mod.rs'), 'utf8');
+    check('R174', 'FR1 a bad request never takes the Rust hub down: a panic inside a request answers that request 500 ("failed inside the hub; it was logged") and the hub keeps its pid; a lock held during the panic (the gateway\'s products) still works afterwards; the hub log names the request; the test hook exists only with VR_TEST_HOOKS=1; [static] the release build unwinds, not aborts',
+      pan.status === 500 && /failed inside the hub/.test(pan.j.error || '') && panLock.status === 500 && st174.status === 200 && !!pid0 && st174.data.pid === pid0 && gw174.status === 200
+      && /a request failed inside the hub: GET \/__vr-test\/panic/.test(log174) && /VR_TEST_HOOKS/.test(mod174) && /^panic = "unwind"/m.test(cargo174),
+      `panic ${pan.status} ${JSON.stringify(pan.j).slice(0, 80)} · in the gateway lock ${panLock.status} · status ${st174.status} pid ${pid0}→${st174.data.pid} · gateway ${gw174.status} · logged ${/failed inside the hub/.test(log174)} · unwind ${/^panic = "unwind"/m.test(cargo174)}`);
+  } else skip('R174', 'FR1 a bad request never takes the Rust hub down', 'the Rust hub\'s: --rust-hub runs it');
+  if (!WIN) { // R176 (FR3): kept builds per commit: native/keep-builds.sh keeps the current build + the 2 newest good ones
+    const kb = path.join(MILLS, 'native', 'keep-builds.sh'), dist176 = path.join(SCRATCH, 'dist176');
+    for (const c of ['c1', 'c2', 'c3', 'c4', 'c5']) { fs.mkdirSync(path.join(dist176, c), { recursive: true }); fs.writeFileSync(path.join(dist176, c, 'vr-hub'), c); }
+    fs.writeFileSync(path.join(dist176, 'good'), 'c4\nc3\nc2\nc1\n'); // good builds, newest first; c5 = the current (not yet good)
+    const r176 = fs.existsSync(kb) ? spawnSync('sh', [kb, dist176, 'c5', path.join(dist176, 'good')], { encoding: 'utf8', timeout: 30000 }) : { status: -1, stdout: '', stderr: 'no native/keep-builds.sh' };
+    const left176 = fs.readdirSync(dist176).filter((d) => /^c\d$/.test(d)).sort();
+    let cur176 = ''; try { cur176 = fs.readlinkSync(path.join(dist176, 'current')); } catch { /* none */ }
+    const build176 = fs.readFileSync(path.join(MILLS, 'native', 'build.sh'), 'utf8'), ad176 = fs.readFileSync(path.join(MILLS, 'deploy', 'autodeploy.sh'), 'utf8');
+    spec('R176', 'FR3 kept builds per commit: sh native/keep-builds.sh <dist> <current> <good list> keeps the current build and the 2 newest good ones, deletes the rest, points "current" at the current build; [static] build.sh writes builds under their commit and calls it, the auto-deploy\'s rollback restores "current" with the checkout',
+      r176.status === 0 && left176.join(',') === 'c3,c4,c5' && /c5\/?$/.test(cur176) && /keep-builds\.sh/.test(build176) && /keep-builds\.sh/.test(ad176) && /\/current/.test(ad176),
+      `exit ${r176.status} ${String(r176.stderr || '').trim().slice(0, 100)} · left ${left176.join(',')} · current → ${cur176 || 'none'} · build.sh keeps ${/keep-builds\.sh/.test(build176)} · autodeploy restores current ${/\/current/.test(ad176)}`);
+  }
+  if (!WIN) { // R177 (FR4): the Rust supervisor vr-run: crash-loop → the previous good build; a hang → killed, the previous good build; exit 75 → started again
+    const native = path.join(MILLS, 'native'), home177 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const env177 = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home177, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home177, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET };
+    env177.PATH = path.join(env177.CARGO_HOME, 'bin') + path.delimiter + (env177.PATH || '');
+    const vrRun = path.join(NATIVE_TARGET, 'release', 'vr-run');
+    const built177 = fs.existsSync(path.join(native, 'crates', 'vr-run')) ? spawnSync('cargo', ['build', '--release', '-q', '-p', 'vr-run'], { cwd: native, env: env177, encoding: 'utf8', timeout: 1200000 }) : { status: -1, stderr: 'no crate native/crates/vr-run' };
+    const fakeHub = path.join(SCRATCH, 'fake-hub.js'); // a stand-in build: answers /api/status with its commit; modes: ok | crash | hang; exit 75 when asked
+    fs.writeFileSync(fakeHub, `const http = require('http'), fs = require('fs'); const commit = process.argv[2], port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+const mode = () => { try { return fs.readFileSync(process.argv[3], 'utf8').trim(); } catch { return 'ok'; } };
+if (mode() === 'crash') process.exit(1);
+http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit })); }).listen(port, '127.0.0.1');\n`);
+    const scenario = async (name, builds, cur, good, expect, change) => { // builds: commit → mode; cur = the newest; good = the good list newest first
+      if (built177.status !== 0) return { name, ok: false, why: 'vr-run not built' };
+      const dir = path.join(SCRATCH, 'dist177-' + name); fs.mkdirSync(dir, { recursive: true });
+      for (const [c, m] of Object.entries(builds)) { fs.mkdirSync(path.join(dir, c), { recursive: true }); fs.writeFileSync(path.join(dir, c, 'mode'), m); fs.writeFileSync(path.join(dir, c, 'vr-hub'), `#!/bin/sh\nexec "${process.execPath}" "${fakeHub}" ${c} "${path.join(dir, c, 'mode')}" "$@"\n`, { mode: 0o755 }); }
+      fs.symlinkSync(cur, path.join(dir, 'current')); fs.writeFileSync(path.join(dir, 'good'), good.join('\n') + '\n');
+      const port = await freePort(PORT + 300), root = path.join(SCRATCH, 'root177-' + name, 'bridge'); fs.mkdirSync(root, { recursive: true });
+      const log = fs.openSync(path.join(SCRATCH, `vr-run-${name}.log`), 'a');
+      const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
+      const who = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); return (await r.json()).commit || ''; } catch { return ''; } };
+      let seen = '', pid1 = 0; const t0 = Date.now();
+      for (let i = 0; i < 100 && seen !== expect; i++) { await sleep(300); seen = await who(); }
+      if (change) { const r0 = await fetch(`http://127.0.0.1:${port}/api/status`).then((r) => r.json()).catch(() => ({})); pid1 = r0.pid || 0; await change(dir); let again = ''; for (let i = 0; i < 100 && (!again || again === String(pid1)); i++) { await sleep(300); try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); const j = await r.json(); again = String(j.pid || ''); seen = j.commit || ''; } catch { again = ''; } } }
+      const fell = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, '.fell-back'), 'utf8')); } catch { return null; } })();
+      proc.kill('SIGTERM'); await sleep(500); try { proc.kill('SIGKILL'); } catch { /* gone */ }
+      return { name, ok: seen === expect, seen, ms: Date.now() - t0, fell };
+    };
+    const crash = await scenario('crash', { n1: 'crash', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
+    const hang = await scenario('hang', { n1: 'hang', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
+    const fine = await scenario('fine', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1');
+    const again = await scenario('exit75', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1', async (dir) => { fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); await fetch(`http://127.0.0.1:${PORT}/api/status`).catch(() => {}); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 400); });
+    spec('R177', 'FR4 the Rust supervisor vr-run (replacing run.js): starts the newest build ("current"); a build that crashes 3 times within a minute is marked bad and the previous good build takes over (bridge/.fell-back names both); a build that accepts connections but never answers the health check (/api/status every --health-every s, --health-timeout s, 3 misses) is killed and the previous good build takes over; a healthy build stays; exit 75 = the build is started again (restart on new code)',
+      built177.status === 0 && crash.ok && crash.fell && crash.fell.from === 'n1' && crash.fell.to === 'g1' && hang.ok && hang.fell && hang.fell.to === 'g1' && fine.ok && !fine.fell && again.ok && !again.fell,
+      built177.status !== 0 ? `vr-run does not build: ${String(built177.stderr || '').trim().split('\n').slice(-2).join(' ').slice(0, 160)}` : `crash → ${crash.seen || 'nobody'} in ${crash.ms} ms fell ${JSON.stringify(crash.fell)} · hang → ${hang.seen || 'nobody'} in ${hang.ms} ms fell ${JSON.stringify(hang.fell)} · fine → ${fine.seen} fell ${!!fine.fell} · exit 75 → ${again.seen} fell ${!!again.fell}`);
+  }
+  if (RUST_HUB && !WIN) { // R178 (FR5): deploy/trial.sh tries a build on a side port against a copy of the data before it is swapped in
+    const tr = path.join(MILLS, 'deploy', 'trial.sh');
+    const before178 = fs.readdirSync(require('os').tmpdir()).filter((d) => /^vr-trial-/.test(d)).length;
+    const ok178 = fs.existsSync(tr) ? spawnSync('sh', [tr, RUST_HUB, SCRATCH], { encoding: 'utf8', timeout: 90000 }) : { status: -1, stdout: '', stderr: 'no deploy/trial.sh' };
+    const t178 = Date.now(), bad178 = fs.existsSync(tr) ? spawnSync('sh', [tr, '/bin/false', SCRATCH], { encoding: 'utf8', timeout: 90000 }) : { status: -1, stdout: '', stderr: '' };
+    const badMs = Date.now() - t178, left178 = fs.readdirSync(require('os').tmpdir()).filter((d) => /^vr-trial-/.test(d)).length - before178;
+    const ad178 = fs.readFileSync(path.join(MILLS, 'deploy', 'autodeploy.sh'), 'utf8');
+    spec('R178', 'FR5 a new build is tried before it is swapped in: sh deploy/trial.sh <vr-hub> <checkout> copies the data to a temporary root, starts the build there on a free port, expects /api/status 200 naming its commit, / 200 and /api/version 401 within 30 s, stops it, removes the copy: exit 0; a build that cannot start: exit 1 within 35 s; [static] the auto-deploy runs it before "current" moves',
+      ok178.status === 0 && bad178.status === 1 && badMs < 35000 && left178 <= 0 && /trial\.sh/.test(ad178),
+      `good build exit ${ok178.status} ${String(ok178.stdout || ok178.stderr || '').trim().split('\n').pop().slice(0, 120)} · /bin/false exit ${bad178.status} in ${badMs} ms · copies left ${Math.max(0, left178)} · autodeploy runs it ${/trial\.sh/.test(ad178)}`);
+  }
+  if (RUST_HUB) { // R179 (FR6): who answers each route; the list of routes still answered by the JavaScript hub must shrink to none
+    const routes179 = ['/api/check', '/api/version', '/api/status', '/api/room/messages?since=0', '/api/guilds', '/api/board', '/api/board/calendar', '/api/notes/tree', '/api/projects', '/api/forgejo/me', '/api/admin/accounts', '/api/admin/gateway/products', '/api/assistant/state', '/api/files/library', '/api/usage', '/api/providers', '/api/downloads', '/api/work/state', '/api/shares', '/api/linux/me', '/api/ai-hosts', '/api/archive/list', '/api/profile', '/api/room/members', '/api/keys', '/api/unity/state', '/api/handoff/status'];
+    const by179 = [];
+    for (const p of routes179) { const r = await tryFetch(H + p, { Authorization: 'Bearer ' + A }); by179.push(`${p.replace(/\?.*$/, '')}=${(r.h.get && r.h.get('x-vr-by')) || '-'}${r.status >= 500 || !r.status ? '!' + r.status : ''}`); }
+    const node179 = by179.filter((x) => /=node/.test(x)).map((x) => x.split('=')[0]), unmarked179 = by179.filter((x) => /=-/.test(x)).map((x) => x.split('=')[0]), broken179 = by179.filter((x) => /!/.test(x));
+    spec('R179', 'FR6 retire the JavaScript hub: every /api/ answer says who answered (x-vr-by: rust | node) and no route is left to the JavaScript hub',
+      unmarked179.length === 0 && node179.length === 0 && broken179.length === 0,
+      `still node (${node179.length}): ${node179.join(' ') || 'none'} · unmarked: ${unmarked179.join(' ') || 'none'} · broken: ${broken179.join(' ') || 'none'}`);
+  }
 
   // R155: updates need an account too (4.0.0): the desktop app updates itself with the session its hub page hands it
   {
@@ -2883,6 +2976,22 @@ async function run() {
   check('R9', 'graceful restart: new pid, token kept, lock + model kept, flag consumed', pid2 && pid2 !== pid1 && after.status === 200 && after.data.model === 'claude-opus-5-5'
     && lockedOut === 403 && !fs.existsSync(path.join(SB, '.restart')), // (devA joined t-user's devices in R168)
     `pid ${pid1}→${pid2} check ${after.status} model ${after.data && after.data.model} new device ${lockedOut} flag ${fs.existsSync(path.join(SB, '.restart'))}`);
+  if (RUST_HUB) { // R175 (FR2): an unreadable data file never stops the hub starting: moved aside as .bad-<time> (kept), defaults, said in the team chat
+    const pf175 = path.join(SB, 'gateway', 'products.json'), garbage = '{"products": garbage';
+    fs.mkdirSync(path.dirname(pf175), { recursive: true }); fs.writeFileSync(pf175, garbage);
+    const pidA = (await call('/api/status')).data.pid;
+    spawnSync(process.execPath, [path.join(SB, 'restart.js')], { cwd: SB });
+    let pidB = pidA;
+    for (let i = 0; i < 80 && (pidB === pidA || !pidB); i++) { await sleep(250); try { pidB = (await call('/api/status')).data.pid; } catch { pidB = 0; } }
+    const bad175 = fs.readdirSync(path.dirname(pf175)).filter((f) => /^products\.json\.bad-\d{8}-\d{6}$/.test(f));
+    const kept175 = bad175.length === 1 && fs.readFileSync(path.join(path.dirname(pf175), bad175[0]), 'utf8') === garbage;
+    let fresh175 = false; try { fresh175 = !!JSON.parse(fs.readFileSync(pf175, 'utf8')); } catch { fresh175 = !fs.existsSync(pf175); }
+    const said175 = JSON.stringify((await call('/api/room/messages?since=0', A)).data || {}).includes('products.json.bad-');
+    const gw175 = await call('/api/admin/gateway/products', A);
+    spec('R175', 'FR2 bad data never stops the hub starting: an unreadable data file (here bridge/gateway/products.json) is moved aside as <file>.bad-<yyyymmdd-hhmmss> byte for byte, the hub starts with defaults for that part (the gateway answers with no products), nothing overwrites the original silently, and the team chat says what happened',
+      !!pidB && pidB !== pidA && kept175 && fresh175 && gw175.status === 200 && said175,
+      `restart ${pidA}→${pidB} · moved aside ${bad175.join(',') || 'no'} kept ${kept175} · fresh ${fresh175} · gateway ${gw175.status} · said in chat ${said175}`);
+  }
   // R154: a hub restart keeps every AI host's session: an older host that never says hello again (the "old-node" played
   // in R152, a 2.x host) still offers its Claude right after the restart, the way it did before it; a host the hub has
   // no session for is asked to say hello again (428 for hosts that send their version, 401 for older ones: they re-hello
@@ -3085,8 +3194,8 @@ async function run() {
   stopHub();
   if (ollamaSrv) ollamaSrv.close();
   await sleep(800);
-  const failed = results.filter((r) => r.status === 'FAIL'), skipped = results.filter((r) => r.status === 'SKIP');
-  console.log(`\n${results.length - failed.length - skipped.length} passed, ${failed.length} failed, ${skipped.length} skipped.`);
+  const failed = results.filter((r) => r.status === 'FAIL'), skipped = results.filter((r) => r.status === 'SKIP'), pending = results.filter((r) => r.status === 'SPEC');
+  console.log(`\n${results.length - failed.length - skipped.length - pending.length} passed, ${failed.length} failed, ${skipped.length} skipped${pending.length ? `, ${pending.length} spec pending (not built yet: ${pending.map((r) => r.id).join(' ')})` : ''}.`);
   if (failed.length) code = code || 1;
   if (SCRATCH && !KEEP) { try { fs.rmSync(SCRATCH, { recursive: true, force: true }); } catch (e) { console.log('Could not delete scratch folder: ' + e.message); } }
   else if (SCRATCH) console.log('Scratch kept at ' + SCRATCH);

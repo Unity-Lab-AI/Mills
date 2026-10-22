@@ -108,15 +108,15 @@ fn about_her(t: &str) -> bool { !regex::Regex::new(r"(?i)(of|draw|paint|render|m
 /// A yes / no to the destructive tool she asked about.
 pub async fn resolve_pending(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut Ci) -> String {
     let u = hub.unity();
-    let Some(p) = u.pending.lock().unwrap().get(&a.username).cloned() else { return String::new() };
+    let Some(p) = u.pending.lock().unwrap_or_else(|e| e.into_inner()).get(&a.username).cloned() else { return String::new() };
     let t = text.trim();
     if regex::Regex::new(r"(?i)^(yes|y|yeah|yep|do it|go ahead|confirm|sure|ok|okay)[.!]*$").unwrap().is_match(t) {
-        u.pending.lock().unwrap().remove(&a.username);
+        u.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&a.username);
         let r = u.execute(hub, a, &s(&p, "tool"), &p["args"], ci).await;
         ci.send(json!({ "type": "tool_result", "name": p["tool"], "result": r }));
         return format!("[confirmed] {} -> {}", s(&p, "tool"), r.to_string().chars().take(800).collect::<String>());
     }
-    if regex::Regex::new(r"(?i)^(no|n|nope|cancel|never ?mind|abort|don'?t)[.!]*$").unwrap().is_match(t) { u.pending.lock().unwrap().remove(&a.username); return format!("[cancelled] the user declined {}", s(&p, "tool")); }
+    if regex::Regex::new(r"(?i)^(no|n|nope|cancel|never ?mind|abort|don'?t)[.!]*$").unwrap().is_match(t) { u.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&a.username); return format!("[cancelled] the user declined {}", s(&p, "tool")); }
     String::new()
 }
 /// One tool call from either brain; a destructive one waits for the person's yes / no.
@@ -125,7 +125,7 @@ pub async fn call_tool(hub: &Arc<dyn AiHub>, a: &Account, name: &str, args: &Val
     ci.send(json!({ "type": "tool", "name": name, "args": args }));
     let confirm = Unity::tools().iter().any(|t| t["name"] == json!(name) && t["confirm"] == json!(true));
     let result = if confirm {
-        u.pending.lock().unwrap().insert(a.username.clone(), json!({ "tool": name, "args": args }));
+        u.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), json!({ "tool": name, "args": args }));
         ci.send(json!({ "type": "confirm", "tool": name, "args": args }));
         json!({ "ok": false, "pending": true, "message": format!("{name} needs {}'s confirmation; ask them to say yes or no.", a.display) })
     } else { u.execute(hub, a, name, args, ci).await };
@@ -213,7 +213,7 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
 pub async fn run_claude(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut Ci, model: &str) -> Result<String, String> {
     let u = hub.unity();
     let note = resolve_pending(hub, a, text, ci).await;
-    if let Some(o) = &ci.out { u.claude_out.lock().unwrap().insert(a.username.clone(), o.clone()); }
+    if let Some(o) = &ci.out { u.claude_out.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), o.clone()); }
     let mcp = a.dir.join(".mcp-assistant.json");
     let node = std::env::var("VR_NODE").unwrap_or_else(|_| "node".into());
     crate::unity::write_json(&mcp, &json!({ "mcpServers": { "assistant": { "command": node, "args": [std::path::absolute(hub.root().join("assistant-tools-mcp.js")).unwrap_or_default().display().to_string()], "env": { "MILLS_BRIDGE": format!("http://127.0.0.1:{}", hub.cfg().port), "MILLS_INTERNAL": pgm_core_internal::crypto::hmac_hex(u.secret.as_bytes(), a.username.as_bytes()), "MILLS_ACCOUNT": a.username } } } }));
@@ -227,7 +227,7 @@ pub async fn run_claude(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut 
     #[cfg(windows)]
     { cmd.creation_flags(0x0800_0000); }
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    if let Some(r) = u.runs.lock().unwrap().get_mut(&a.username) { r.1 = child.id(); }
+    if let Some(r) = u.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&a.username) { r.1 = child.id(); }
     if let Some(mut stdin) = child.stdin.take() { let inp = if note.is_empty() { text.to_string() } else { format!("{text}\n\n(system note: {note})") }; tokio::spawn(async move { let _ = stdin.write_all(inp.as_bytes()).await; let _ = stdin.shutdown().await; }); }
     let mut fin = String::new();
     if let Some(out) = child.stdout.take() {
@@ -240,7 +240,7 @@ pub async fn run_claude(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut 
         }
     }
     let _ = child.wait().await;
-    u.claude_out.lock().unwrap().remove(&a.username);
+    u.claude_out.lock().unwrap_or_else(|e| e.into_inner()).remove(&a.username);
     Ok(fin.trim().to_string())
 }
 
@@ -273,7 +273,7 @@ pub fn start(hub: &Arc<dyn AiHub>) {
             let fired: Vec<Value> = { let st = u.store(&a); arr(&st, "reminders").into_iter().filter(|r| r["fired"] != json!(true) && r["at"].as_i64().map(|t| t <= now()).unwrap_or(false)).collect() };
             if fired.is_empty() { continue; }
             u.with_store(&a, |st| { for r in st["reminders"].as_array_mut().unwrap() { if fired.iter().any(|f| f["id"] == r["id"]) { r["fired"] = json!(true); } } });
-            let mut n = u.notices.lock().unwrap(); let l = n.entry(a.username.clone()).or_default();
+            let mut n = u.notices.lock().unwrap_or_else(|e| e.into_inner()); let l = n.entry(a.username.clone()).or_default();
             for r in fired { l.push(json!({ "kind": "reminder", "id": r["id"], "text": r["text"], "at": r["at"] })); }
         }
     } });

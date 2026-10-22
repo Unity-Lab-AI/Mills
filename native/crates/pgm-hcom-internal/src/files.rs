@@ -67,7 +67,7 @@ impl Linux {
         Linux { map: cfg.get("linuxUsers").and_then(Value::as_object).cloned().unwrap_or_default(), passwd: cfg.get("linuxPasswdFile").and_then(Value::as_str).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/etc/passwd")), cache: Mutex::new((0, Map::new())), hub_user, root: root.to_path_buf() }
     }
     fn users(&self) -> Map<String, Value> {
-        let mut c = self.cache.lock().unwrap();
+        let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if now_ms() - c.0 < 60_000 && c.0 > 0 { return c.1.clone(); }
         let mut m = Map::new();
         for l in std::fs::read_to_string(&self.passwd).unwrap_or_default().lines() {
@@ -122,7 +122,7 @@ impl Files {
     fn index_file(a: &Account) -> PathBuf { a.dir.join("uploads-index.json") }
     pub fn read_index(a: &Account) -> Map<String, Value> { std::fs::read_to_string(Self::index_file(a)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["entries"].as_object().cloned()).unwrap_or_default() }
     fn update_index(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) {
-        let _g = self.lock.lock().unwrap();
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut e = Self::read_index(a); f(&mut e);
         let file = Self::index_file(a); let tmp = a.dir.join("uploads-index.json.tmp");
         if std::fs::write(&tmp, json!({ "entries": Value::Object(e) }).to_string()).is_ok() { let _ = std::fs::rename(&tmp, &file); }

@@ -132,18 +132,18 @@ impl Chat {
             presence: Mutex::default(), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
     }
     pub fn room_changed(&self) { self.room_ver.fetch_add(1, Ordering::SeqCst); self.room_woke.notify_waiters(); }
-    pub fn keys_changed(&self) { self.keys_ver.fetch_add(1, Ordering::SeqCst); self.avatars.lock().unwrap().clear(); self.room_changed(); }
-    pub fn has_key(&self, u: &str) -> bool { self.keys.lock().unwrap().contains_key(u) }
-    fn pub_of(&self, u: &str) -> Option<Value> { self.keys.lock().unwrap().get(u).map(|k| k["pub"].clone()) }
-    fn save_keys(&self) { write_json(&self.dir.join("keys.json"), &Value::Object(self.keys.lock().unwrap().clone())); }
-    pub fn drop_key(&self, u: &str) { if self.keys.lock().unwrap().remove(u).is_some() { self.save_keys(); } }
+    pub fn keys_changed(&self) { self.keys_ver.fetch_add(1, Ordering::SeqCst); self.avatars.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.room_changed(); }
+    pub fn has_key(&self, u: &str) -> bool { self.keys.lock().unwrap_or_else(|e| e.into_inner()).contains_key(u) }
+    fn pub_of(&self, u: &str) -> Option<Value> { self.keys.lock().unwrap_or_else(|e| e.into_inner()).get(u).map(|k| k["pub"].clone()) }
+    fn save_keys(&self) { write_json(&self.dir.join("keys.json"), &Value::Object(self.keys.lock().unwrap_or_else(|e| e.into_inner()).clone())); }
+    pub fn drop_key(&self, u: &str) { if self.keys.lock().unwrap_or_else(|e| e.into_inner()).remove(u).is_some() { self.save_keys(); } }
     fn agent_enabled(&self, users: &[(String, String, bool)]) -> bool { self.agent_on && !users.iter().any(|u| u.0 == AGENT) }
     pub fn agent_on(&self, users: &[(String, String, bool)]) -> bool { self.agent_enabled(users) }
     /// Unity composing (target, conv) or not: everyone's "is typing".
-    pub fn set_agent_busy(&self, v: Option<(String, String)>) { *self.agent_busy.lock().unwrap() = v; self.room_changed(); }
-    pub fn seq(&self) -> i64 { self.store.lock().unwrap().seq }
+    pub fn set_agent_busy(&self, v: Option<(String, String)>) { *self.agent_busy.lock().unwrap_or_else(|e| e.into_inner()) = v; self.room_changed(); }
+    pub fn seq(&self) -> i64 { self.store.lock().unwrap_or_else(|e| e.into_inner()).seq }
     /// The conversation of a message (None when deleted or unknown): pins and the guilds ask.
-    pub fn msg_conv(&self, seq: i64) -> Option<String> { self.store.lock().unwrap().messages.iter().find(|m| m["seq"].as_i64() == Some(seq) && m["deleted"] != json!(true)).map(conv_of) }
+    pub fn msg_conv(&self, seq: i64) -> Option<String> { self.store.lock().unwrap_or_else(|e| e.into_inner()).messages.iter().find(|m| m["seq"].as_i64() == Some(seq) && m["deleted"] != json!(true)).map(conv_of) }
     fn save_messages(store: &Store, dir: &Path) {
         let f = dir.join("messages.jsonl"); let tmp = f.with_extension("jsonl.tmp");
         let mut out = String::new(); for m in &store.messages { out.push_str(&m.to_string()); out.push('\n'); }
@@ -151,7 +151,7 @@ impl Chat {
     }
     fn append(&self, mut msg: Value) -> i64 {
         let seqn = msg["seq"].as_i64().unwrap_or(0);
-        { let mut st = self.store.lock().unwrap(); st.rev += 1; msg["rev"] = json!(st.rev);
+        { let mut st = self.store.lock().unwrap_or_else(|e| e.into_inner()); st.rev += 1; msg["rev"] = json!(st.rev);
           use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("messages.jsonl")) { let _ = writeln!(f, "{msg}"); }
           st.messages.push(msg); }
         self.room_changed(); seqn
@@ -159,7 +159,7 @@ impl Chat {
     /// Deletes a person's messages in these conversations since then (a ban that deletes): their readers lose the files.
     fn delete_recent(&self, user: &str, convs: &[String], since: i64, files: &Files, acct: &dyn Fn(&str) -> Option<Account>) -> usize {
         let mut gone_files: Vec<String> = vec![]; let mut n = 0;
-        { let mut st = self.store.lock().unwrap(); let mut rev = st.rev;
+        { let mut st = self.store.lock().unwrap_or_else(|e| e.into_inner()); let mut rev = st.rev;
           for m in st.messages.iter_mut() {
               let ts = chrono::DateTime::parse_from_rfc3339(m["ts"].as_str().unwrap_or("")).map(|d| d.timestamp_millis()).unwrap_or(0);
               if m["from"] == json!(user) && m["deleted"] != json!(true) && m["conv"].as_str().map(|c| convs.iter().any(|x| x == c)).unwrap_or(false) && ts >= since {
@@ -203,7 +203,7 @@ fn reader(hub: &dyn ChatHost, user: &str, us: &[(String, String, bool)]) -> Read
 /// May this person read message `seq` (and so its files)?
 pub fn may_read(hub: &dyn ChatHost, user: &str, seq: i64) -> bool {
     let us = users(hub); let rd = reader(hub, user, &us);
-    let st = hub.chat().store.lock().unwrap();
+    let st = hub.chat().store.lock().unwrap_or_else(|e| e.into_inner());
     st.messages.iter().find(|m| m["seq"].as_i64() == Some(seq)).map(|m| m["deleted"] != json!(true) && rd.visible(m) && !m["keys"][user].is_null()).unwrap_or(false)
 }
 fn conv_member(hub: &dyn ChatHost, conv: &str, user: &str, us: &[(String, String, bool)]) -> bool {
@@ -215,19 +215,19 @@ fn conv_member(hub: &dyn ChatHost, conv: &str, user: &str, us: &[(String, String
 // ---------- presence + typing ----------
 impl Chat {
     fn pres_set(&self, user: &str, f: impl FnOnce(&mut Pres)) {
-        let changed = { let mut m = self.presence.lock().unwrap(); let p = m.entry(user.to_string()).or_default(); let before = (p.online, p.idle, p.screen.clone()); f(p); p.seen = now_ms(); let after = (p.online, p.idle, p.screen.clone()); if before != after { p.at = now_ms(); true } else { false } };
+        let changed = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); let before = (p.online, p.idle, p.screen.clone()); f(p); p.seen = now_ms(); let after = (p.online, p.idle, p.screen.clone()); if before != after { p.at = now_ms(); true } else { false } };
         if changed { self.room_changed(); }
     }
-    pub fn touch(&self, user: &str) { self.presence.lock().unwrap().entry(user.to_string()).or_default().seen = now_ms(); }
-    fn poll_opened(&self, user: &str) { { let mut m = self.presence.lock().unwrap(); let p = m.entry(user.to_string()).or_default(); p.polls += 1; p.gen += 1; } self.pres_set(user, |p| p.online = true); }
+    pub fn touch(&self, user: &str) { self.presence.lock().unwrap_or_else(|e| e.into_inner()).entry(user.to_string()).or_default().seen = now_ms(); }
+    fn poll_opened(&self, user: &str) { { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); p.polls += 1; p.gen += 1; } self.pres_set(user, |p| p.online = true); }
     fn poll_closed(self: &Arc<Self>, user: &str) {
-        let gen = { let mut m = self.presence.lock().unwrap(); let p = m.entry(user.to_string()).or_default(); p.polls = p.polls.saturating_sub(1); if p.polls > 0 { return; } p.gen += 1; p.gen };
+        let gen = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); p.polls = p.polls.saturating_sub(1); if p.polls > 0 { return; } p.gen += 1; p.gen };
         let (c, u) = (self.clone(), user.to_string());
-        tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(GONE_MS)).await; let still = c.presence.lock().unwrap().get(&u).map(|p| p.gen == gen && p.polls == 0).unwrap_or(false); if still { c.pres_set(&u, |p| { p.online = false; p.idle = false; }); } });
+        tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(GONE_MS)).await; let still = c.presence.lock().unwrap_or_else(|e| e.into_inner()).get(&u).map(|p| p.gen == gen && p.polls == 0).unwrap_or(false); if still { c.pres_set(&u, |p| { p.online = false; p.idle = false; }); } });
     }
-    pub fn gone(&self, user: &str) { { let mut m = self.presence.lock().unwrap(); let p = m.entry(user.to_string()).or_default(); p.polls = 0; p.gen += 1; } self.pres_set(user, |p| { p.online = false; p.idle = false; }); }
+    pub fn gone(&self, user: &str) { { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); p.polls = 0; p.gen += 1; } self.pres_set(user, |p| { p.online = false; p.idle = false; }); }
     pub fn presence_list(&self, us: &[(String, String, bool)]) -> Vec<Value> {
-        let now = now_ms(); let mut m = self.presence.lock().unwrap();
+        let now = now_ms(); let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner());
         let mut out: Vec<(String, Value)> = vec![];
         for (u, p) in m.iter_mut() {
             if !us.iter().any(|x| x.0 == *u) { continue; }
@@ -238,19 +238,19 @@ impl Chat {
     }
     pub fn online(&self, us: &[(String, String, bool)]) -> Vec<String> { self.presence_list(us).into_iter().filter(|p| p["online"] == json!(true)).map(|p| s(&p, "user")).collect() }
     pub fn set_typing(self: &Arc<Self>, user: &str, conv: &str, on: bool) {
-        let prev = self.typing.lock().unwrap().remove(user);
+        let prev = self.typing.lock().unwrap_or_else(|e| e.into_inner()).remove(user);
         if !on { if prev.is_some() { self.room_changed(); } return; }
-        let at = now_ms(); self.typing.lock().unwrap().insert(user.to_string(), (conv.to_string(), at));
+        let at = now_ms(); self.typing.lock().unwrap_or_else(|e| e.into_inner()).insert(user.to_string(), (conv.to_string(), at));
         let (c, u) = (self.clone(), user.to_string());
-        tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(TYPING_MS)).await; let lapsed = { let mut t = c.typing.lock().unwrap(); if t.get(&u).map(|x| x.1 == at).unwrap_or(false) { t.remove(&u); true } else { false } }; if lapsed { c.room_changed(); } });
+        tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(TYPING_MS)).await; let lapsed = { let mut t = c.typing.lock().unwrap_or_else(|e| e.into_inner()); if t.get(&u).map(|x| x.1 == at).unwrap_or(false) { t.remove(&u); true } else { false } }; if lapsed { c.room_changed(); } });
         if prev.map(|p| p.0 != conv).unwrap_or(true) { self.room_changed(); }
     }
 }
 fn typing_for(hub: &dyn ChatHost, user: &str, us: &[(String, String, bool)]) -> Vec<Value> {
     let c = &hub.chat();
-    let list: Vec<(String, String)> = c.typing.lock().unwrap().iter().map(|(u, t)| (u.clone(), t.0.clone())).collect();
+    let list: Vec<(String, String)> = c.typing.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(u, t)| (u.clone(), t.0.clone())).collect();
     let mut out: Vec<Value> = list.into_iter().filter(|(u, conv)| u != user && conv_member(hub, conv, user, us)).map(|(u, conv)| json!({ "user": u, "conv": conv })).collect();
-    if let Some((target, conv)) = c.agent_busy.lock().unwrap().clone() { if c.agent_enabled(us) && (target.is_empty() || target == user) { out.push(json!({ "user": AGENT, "conv": if target.is_empty() { if conv.is_empty() { "room".to_string() } else { conv } } else { let mut v = [AGENT.to_string(), user.to_string()]; v.sort(); format!("dm:{}|{}", v[0], v[1]) } })); } }
+    if let Some((target, conv)) = c.agent_busy.lock().unwrap_or_else(|e| e.into_inner()).clone() { if c.agent_enabled(us) && (target.is_empty() || target == user) { out.push(json!({ "user": AGENT, "conv": if target.is_empty() { if conv.is_empty() { "room".to_string() } else { conv } } else { let mut v = [AGENT.to_string(), user.to_string()]; v.sort(); format!("dm:{}|{}", v[0], v[1]) } })); } }
     out
 }
 
@@ -291,7 +291,7 @@ pub fn agent_say(hub: &dyn ChatHost, text: &str, to: &str, as_: &str, via: &str,
     let iv = pgm_core_internal::crypto::random_bytes(12);
     let Ok(ct) = pgm_core_internal::crypto::aes_gcm_seal(&raw, &iv, aad.as_bytes(), &crate::e2e::pad_plain(text)) else { return 0 };
     let mut readers: Vec<(String, Value)> = vec![(AGENT.into(), c.agent_pub.clone())];
-    { let keys = c.keys.lock().unwrap(); for (u, _, _) in &us { if let Some(k) = keys.get(u) { if (to.is_empty() || u == to) && allowed.as_ref().map(|l| l.contains(u)).unwrap_or(true) { readers.push((u.clone(), k["pub"].clone())); } } } }
+    { let keys = c.keys.lock().unwrap_or_else(|e| e.into_inner()); for (u, _, _) in &us { if let Some(k) = keys.get(u) { if (to.is_empty() || u == to) && allowed.as_ref().map(|l| l.contains(u)).unwrap_or(true) { readers.push((u.clone(), k["pub"].clone())); } } } }
     let mut slots = Map::new();
     for (u, p) in readers {
         let Ok(pj) = serde_json::from_value::<PubJwk>(p) else { continue };
@@ -299,7 +299,7 @@ pub fn agent_say(hub: &dyn ChatHost, text: &str, to: &str, as_: &str, via: &str,
         let kiv = pgm_core_internal::crypto::random_bytes(12);
         if let Ok(w) = pgm_core_internal::crypto::aes_gcm_seal(&wk, &kiv, format!("{aad}|{u}").as_bytes(), &raw) { slots.insert(u, json!({ "iv": pgm_core_internal::b64(&kiv), "wk": pgm_core_internal::b64(&w) })); }
     }
-    let seq = { let mut st = c.store.lock().unwrap(); st.seq += 1; st.seq };
+    let seq = { let mut st = c.store.lock().unwrap_or_else(|e| e.into_inner()); st.seq += 1; st.seq };
     let mut msg = json!({ "seq": seq, "v": 3, "mid": mid, "from": AGENT });
     if !to.is_empty() { msg["to"] = json!(to); }
     if !conv.is_empty() { msg["conv"] = json!(conv); }
@@ -330,8 +330,8 @@ pub fn agent_dest(m: &Value) -> (String, String) { if m["to"] == json!(AGENT) { 
 /// one turn; other conversations' calls stay for their own turn and never show up here.
 pub fn agent_blocks(hub: &dyn ChatHost, target: &str, conv: &str) -> String {
     let c = &hub.chat();
-    let mut seen = c.agent_seen.lock().unwrap();
-    let st = c.store.lock().unwrap();
+    let mut seen = c.agent_seen.lock().unwrap_or_else(|e| e.into_inner());
+    let st = c.store.lock().unwrap_or_else(|e| e.into_inner());
     let open: Vec<(i64, String, &Value)> = st.messages.iter().filter(|m| { let q = m["seq"].as_i64().unwrap_or(0); q > seen.0 && !seen.1.contains(&q) && m["from"] != json!(AGENT) })
         .filter_map(|m| c.agent_read(m).map(|t| (m["seq"].as_i64().unwrap_or(0), t, m))).collect();
     let mine: Vec<&(i64, String, &Value)> = open.iter().filter(|(_, _, m)| { let (t, cv) = agent_dest(m); t == target && (!t.is_empty() || cv == conv) }).collect();
@@ -350,10 +350,10 @@ pub fn agent_blocks(hub: &dyn ChatHost, target: &str, conv: &str) -> String {
 // ---------- members + profiles (kept by the JavaScript hub in state.json; pictures in Avatars/) ----------
 fn avatar(hub: &dyn ChatHost, u: &str) -> String {
     let c = &hub.chat();
-    if let Some(a) = c.avatars.lock().unwrap().get(u) { return a.clone(); }
+    if let Some(a) = c.avatars.lock().unwrap_or_else(|e| e.into_inner()).get(u) { return a.clone(); }
     let mut url = String::new();
     for (ext, mime) in [("webp", "image/webp"), ("png", "image/png"), ("jpg", "image/jpeg")] { if let Ok(b) = std::fs::read(c.mills.join("Avatars").join(format!("{u}.{ext}"))) { url = format!("data:{mime};base64,{}", pgm_core_internal::b64(&b)); break; } }
-    c.avatars.lock().unwrap().insert(u.to_string(), url.clone()); url
+    c.avatars.lock().unwrap_or_else(|e| e.into_inner()).insert(u.to_string(), url.clone()); url
 }
 pub fn public_prefs_of(hub: &dyn ChatHost, a: &Account) -> Value { public_prefs(hub, a) }
 fn public_prefs(hub: &dyn ChatHost, a: &Account) -> Value {
@@ -365,12 +365,12 @@ fn public_prefs(hub: &dyn ChatHost, a: &Account) -> Value {
 
 // ---------- calls ----------
 impl Chat {
-    fn call_wake(&self, users: &[String]) { let w = self.call_woke.lock().unwrap(); for u in users { if let Some(n) = w.get(u) { n.notify_waiters(); } } }
-    fn call_notify(&self, u: &str) -> Arc<Notify> { self.call_woke.lock().unwrap().entry(u.to_string()).or_default().clone() }
+    fn call_wake(&self, users: &[String]) { let w = self.call_woke.lock().unwrap_or_else(|e| e.into_inner()); for u in users { if let Some(n) = w.get(u) { n.notify_waiters(); } } }
+    fn call_notify(&self, u: &str) -> Arc<Notify> { self.call_woke.lock().unwrap_or_else(|e| e.into_inner()).entry(u.to_string()).or_default().clone() }
 }
-fn calls_changed(hub: &dyn ChatHost, conv: &str, us: &[(String, String, bool)]) { let c = &hub.chat(); c.calls.lock().unwrap().ver += 1; let who: Vec<String> = us.iter().map(|x| x.0.clone()).filter(|u| conv_member(hub, conv, u, us)).collect(); c.call_wake(&who); }
+fn calls_changed(hub: &dyn ChatHost, conv: &str, us: &[(String, String, bool)]) { let c = &hub.chat(); c.calls.lock().unwrap_or_else(|e| e.into_inner()).ver += 1; let who: Vec<String> = us.iter().map(|x| x.0.clone()).filter(|u| conv_member(hub, conv, u, us)).collect(); c.call_wake(&who); }
 pub fn calls_state(hub: &dyn ChatHost, user: &str, us: &[(String, String, bool)]) -> Value {
-    let c = &hub.chat(); let list = c.calls.lock().unwrap().calls.clone();
+    let c = &hub.chat(); let list = c.calls.lock().unwrap_or_else(|e| e.into_inner()).calls.clone();
     let ctx = ctx!(hub, us.to_vec());
     let mut out = Map::new();
     for (conv, ps) in list { if ps.is_empty() || !conv_member(hub, &conv, user, us) { continue; }
@@ -381,7 +381,7 @@ pub fn calls_state(hub: &dyn ChatHost, user: &str, us: &[(String, String, bool)]
 }
 pub fn calls_leave(hub: &dyn ChatHost, user: &str) {
     let us = users(hub); let mut changed = vec![];
-    { let mut cs = hub.chat().calls.lock().unwrap(); for (c, ps) in cs.calls.iter_mut() { let n = ps.len(); ps.retain(|(u, _)| u != user); if ps.len() != n { changed.push(c.clone()); } } cs.calls.retain(|(_, ps)| !ps.is_empty()); cs.mailbox.remove(user); }
+    { let mut cs = hub.chat().calls.lock().unwrap_or_else(|e| e.into_inner()); for (c, ps) in cs.calls.iter_mut() { let n = ps.len(); ps.retain(|(u, _)| u != user); if ps.len() != n { changed.push(c.clone()); } } cs.calls.retain(|(_, ps)| !ps.is_empty()); cs.mailbox.remove(user); }
     for c in changed { calls_changed(hub, &c, &us); }
 }
 /// The chat's background work: calls nobody polls for a minute end, temporary members who went offline leave, receipts
@@ -390,14 +390,14 @@ pub fn start(hub: Arc<dyn ChatHost>) {
     // browsers long-poll at least every 25 s while in a call; 60 s of silence = gone
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(10)).await; let now = now_ms(); let mut changed = vec![];
-        { let mut cs = h.chat().calls.lock().unwrap(); for (c, ps) in cs.calls.iter_mut() { let n = ps.len(); ps.retain(|(_, p)| now.saturating_sub(p["seen"].as_u64().unwrap_or(0)) <= 60000); if ps.len() != n { changed.push(c.clone()); } } cs.calls.retain(|(_, ps)| !ps.is_empty()); }
+        { let mut cs = h.chat().calls.lock().unwrap_or_else(|e| e.into_inner()); for (c, ps) in cs.calls.iter_mut() { let n = ps.len(); ps.retain(|(_, p)| now.saturating_sub(p["seen"].as_u64().unwrap_or(0)) <= 60000); if ps.len() != n { changed.push(c.clone()); } } cs.calls.retain(|(_, ps)| !ps.is_empty()); }
         if !changed.is_empty() { let us = users(&*h); for c in changed { calls_changed(&*h, &c, &us); } } } });
     // temporary members who went offline leave; ended timeouts go
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(20)).await; let us = users(&*h); let on = h.chat().online(&us); if h.chat().guilds.sweep(&|u| on.iter().any(|x| x == u)) { h.chat().room_changed(); } } });
     // receipts are saved half a second after a change
     let h = hub.clone();
-    tokio::spawn(async move { loop { h.chat().seen_dirty.notified().await; tokio::time::sleep(Duration::from_millis(500)).await; let v = Value::Object(h.chat().seen.lock().unwrap().clone()); write_json(&h.chat().dir.join("seen.json"), &v); } });
+    tokio::spawn(async move { loop { h.chat().seen_dirty.notified().await; tokio::time::sleep(Duration::from_millis(500)).await; let v = Value::Object(h.chat().seen.lock().unwrap_or_else(|e| e.into_inner()).clone()); write_json(&h.chat().dir.join("seen.json"), &v); } });
     // the auto-deploy went back to the last good version: say so once
     let h = hub.clone();
     tokio::spawn(async move {
@@ -433,16 +433,16 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
     let b = r.json();
     Some(match p {
         "/api/room/members" if get => {
-            let keys = c.keys.lock().unwrap().clone();
+            let keys = c.keys.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let mut list: Vec<Value> = hub.accounts().iter().map(|acc| { let pp = public_prefs(hub, acc); json!({ "username": acc.username, "display": acc.display, "nick": pp["nick"], "color": pp["color"], "profile": pp["profile"], "pub": keys.get(&acc.username).map(|k| k["pub"].clone()).unwrap_or(Value::Null) }) }).collect();
             if agent_on { list.push(json!({ "username": AGENT, "display": c.agent_name, "nick": "", "color": Value::Null, "pub": c.agent_pub, "agent": true })); }
             answer(200, json!({ "members": list }))
         }
-        "/api/room/mykey" if get => answer(200, c.keys.lock().unwrap().get(u).cloned().unwrap_or(json!({}))),
+        "/api/room/mykey" if get => answer(200, c.keys.lock().unwrap_or_else(|e| e.into_inner()).get(u).cloned().unwrap_or(json!({}))),
         "/api/room/mykey" if post => {
             let (pubk, backup) = (&b["pub"], &b["backup"]);
             if !valid_jwk(pubk) || !backup.is_object() || !b64ok(&backup["salt"], 64) || !b64ok(&backup["iv"], 64) || !b64ok(&backup["ct"], 4096) { return Some(answer(400, json!({ "error": "Bad key." }))); }
-            c.keys.lock().unwrap().insert(u.into(), json!({ "pub": { "kty": "EC", "crv": "P-256", "x": pubk["x"], "y": pubk["y"] }, "backup": { "salt": backup["salt"], "iv": backup["iv"], "ct": backup["ct"] }, "updated": iso() }));
+            c.keys.lock().unwrap_or_else(|e| e.into_inner()).insert(u.into(), json!({ "pub": { "kty": "EC", "crv": "P-256", "x": pubk["x"], "y": pubk["y"] }, "backup": { "salt": backup["salt"], "iv": backup["iv"], "ct": backup["ct"] }, "updated": iso() }));
             c.save_keys(); c.keys_changed();
             answer(200, json!({ "ok": true }))
         }
@@ -453,7 +453,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             let why = if to.is_empty() { c.guilds.post_check(if conv.is_empty() { "room" } else { &conv }, u, b.get("blob").is_some(), false, &ctx) } else { String::new() };
             if !why.is_empty() { return Some(answer(403, json!({ "error": why }))); }
             let v = &b["v"];
-            if !v.is_null() && !(matches!(v.as_u64(), Some(3 | 4)) && mid_ok(&b["mid"]) && !c.store.lock().unwrap().messages.iter().any(|x| x["mid"] == b["mid"])) { return Some(answer(400, json!({ "error": "Bad message." }))); }
+            if !v.is_null() && !(matches!(v.as_u64(), Some(3 | 4)) && mid_ok(&b["mid"]) && !c.store.lock().unwrap_or_else(|e| e.into_inner()).messages.iter().any(|x| x["mid"] == b["mid"])) { return Some(answer(400, json!({ "error": "Bad message." }))); }
             if b.get("blob").is_some() && !(v.as_u64() == Some(4) && b64ok(&b["blob"], MAX_CT)) { return Some(answer(if b["blob"].as_str().map(|x| x.len() > MAX_CT).unwrap_or(false) { 413 } else { 400 }, json!({ "error": "That voice clip is too large or malformed (up to about 2 minutes)." }))); }
             let Some(mine) = c.pub_of(u) else { return Some(answer(400, json!({ "error": "Your chat key is not set up yet." }))) };
             if b["ct"].as_str().map(|x| x.len() > MAX_CT).unwrap_or(false) { return Some(answer(413, json!({ "error": "That message is too large (voice clips can be up to about 2 minutes)." }))); }
@@ -464,7 +464,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             if !slots.contains_key(u) { return Some(answer(400, json!({ "error": "Bad message." }))); }
             // its files (uploaded encrypted just before by this sender) now belong to this message: its number is taken first
             let file_conv = if !to.is_empty() { let mut v = [u.to_string(), to.clone()]; v.sort(); format!("dm:{}|{}", v[0], v[1]) } else if conv.is_empty() { "room".into() } else { conv.clone() };
-            let seqn = { let mut st = c.store.lock().unwrap(); st.seq += 1; st.seq };
+            let seqn = { let mut st = c.store.lock().unwrap_or_else(|e| e.into_inner()); st.seq += 1; st.seq };
             let file_ids = if b.get("files").is_some() { match hub.files().attach(Some(a), u, &b["files"], seqn, &file_conv) { Ok(ids) => ids, Err(f) => return Some(answer(f.status, json!({ "error": f.msg }))) } } else { vec![] };
             let mut msg = json!({ "seq": seqn });
             if !v.is_null() { msg["v"] = v.clone(); msg["mid"] = b["mid"].clone(); }
@@ -479,19 +479,19 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
         }
         "/api/room/edit" if post => {
             let target = b["seq"].as_i64().unwrap_or(-1);
-            let m = c.store.lock().unwrap().messages.iter().find(|x| x["seq"].as_i64() == Some(target)).cloned();
+            let m = c.store.lock().unwrap_or_else(|e| e.into_inner()).messages.iter().find(|x| x["seq"].as_i64() == Some(target)).cloned();
             let Some(m) = m.filter(|m| m["from"] == json!(u) && m["deleted"] != json!(true)) else { return Some(answer(403, json!({ "error": "You can only edit your own messages." }))) };
             let ctx = ctx!(hub, us.clone());
             let why = if s(&m, "to").is_empty() { c.guilds.post_check(m["conv"].as_str().filter(|x| !x.is_empty()).unwrap_or("room"), u, false, true, &ctx) } else { String::new() };
             if !why.is_empty() { return Some(answer(403, json!({ "error": why }))); }
             let Some(mine) = c.pub_of(u).filter(|_| b64ok(&b["iv"], 64) && b64ok(&b["ct"], MAX_CT)) else { return Some(answer(400, json!({ "error": "Bad message." }))) };
             let v = &b["v"];
-            if !v.is_null() && !(matches!(v.as_u64(), Some(3 | 4)) && mid_ok(&b["mid"]) && (if m["mid"].is_string() { m["mid"] == b["mid"] } else { !c.store.lock().unwrap().messages.iter().any(|x| x["mid"] == b["mid"]) })) { return Some(answer(400, json!({ "error": "Bad message." }))); }
+            if !v.is_null() && !(matches!(v.as_u64(), Some(3 | 4)) && mid_ok(&b["mid"]) && (if m["mid"].is_string() { m["mid"] == b["mid"] } else { !c.store.lock().unwrap_or_else(|e| e.into_inner()).messages.iter().any(|x| x["mid"] == b["mid"]) })) { return Some(answer(400, json!({ "error": "Bad message." }))); }
             if m["blob"].is_string() && v.as_u64() != Some(4) { return Some(answer(400, json!({ "error": "Bad message." }))); }
             let conv = s(&m, "conv"); let allowed = if conv.is_empty() { None } else { c.guilds.members(&conv, &ctx) };
             let slots = clean_slots(&b["keys"], u, &s(&m, "to"), allowed.as_deref(), &us, agent_on);
             if !slots.contains_key(u) { return Some(answer(400, json!({ "error": "Bad message." }))); }
-            let rev = { let mut st = c.store.lock().unwrap(); st.rev += 1; let rev = st.rev;
+            let rev = { let mut st = c.store.lock().unwrap_or_else(|e| e.into_inner()); st.rev += 1; let rev = st.rev;
                 if let Some(x) = st.messages.iter_mut().find(|x| x["seq"].as_i64() == Some(target)) {
                     if !v.is_null() { x["v"] = v.clone(); x["mid"] = b["mid"].clone(); } else if let Some(o) = x.as_object_mut() { o.remove("v"); o.remove("mid"); }
                     for (k, val) in [("iv", b["iv"].clone()), ("ct", b["ct"].clone()), ("keys", Value::Object(slots)), ("fromPub", mine), ("editedAt", json!(iso())), ("rev", json!(rev))] { x[k] = val; }
@@ -502,11 +502,11 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
         }
         "/api/room/delete" if post => {
             let target = b["seq"].as_i64().unwrap_or(-1);
-            let m = c.store.lock().unwrap().messages.iter().find(|x| x["seq"].as_i64() == Some(target)).cloned();
+            let m = c.store.lock().unwrap_or_else(|e| e.into_inner()).messages.iter().find(|x| x["seq"].as_i64() == Some(target)).cloned();
             let ok = match &m { None => false, Some(m) => m["from"] == json!(u) || (s(m, "to").is_empty() && { let ctx = ctx!(hub, us.clone()); c.guilds.moderates(m["conv"].as_str().filter(|x| !x.is_empty()).unwrap_or("room"), u, &ctx) } && reader(hub, u, &us).visible(m)) };
             if !ok { return Some(answer(403, json!({ "error": "You can only delete your own messages." }))); }
             let mut gone = vec![];
-            let rev = { let mut st = c.store.lock().unwrap(); let mut rev = st.rev; let mut changed = false;
+            let rev = { let mut st = c.store.lock().unwrap_or_else(|e| e.into_inner()); let mut rev = st.rev; let mut changed = false;
                 if let Some(x) = st.messages.iter_mut().find(|x| x["seq"].as_i64() == Some(target)) { if x["deleted"] != json!(true) { tombstone(x, &mut gone); rev += 1; x["rev"] = json!(rev); changed = true; } else { rev = x["rev"].as_i64().unwrap_or(rev); } }
                 if changed { st.rev = rev; Chat::save_messages(&st, &c.dir); } rev };
             if !gone.is_empty() { hub.files().message_gone(&gone, &|x| hub.account(x)); }
@@ -525,7 +525,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
                 c.set_typing(u, &conv, on && may);
             } else {
                 let v = (b["seq"].as_f64().unwrap_or(0.0) as i64).min(c.seq());
-                let changed = { let mut seen = c.seen.lock().unwrap(); let mine = seen.entry(u.to_string()).or_insert(json!({})); if v > mine[&conv].as_i64().unwrap_or(0) { mine[&conv] = json!(v); true } else { false } };
+                let changed = { let mut seen = c.seen.lock().unwrap_or_else(|e| e.into_inner()); let mine = seen.entry(u.to_string()).or_insert(json!({})); if v > mine[&conv].as_i64().unwrap_or(0) { mine[&conv] = json!(v); true } else { false } };
                 if changed { c.seen_dirty.notify_one(); c.room_changed(); }
             }
             answer(200, json!({ "ok": true }))
@@ -552,7 +552,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
         "/api/room/blob" if get => {
             let n = r.param("seq").and_then(|x| x.parse::<i64>().ok()).unwrap_or(-1);
             let rd = reader(hub, u, &us);
-            let st = c.store.lock().unwrap();
+            let st = c.store.lock().unwrap_or_else(|e| e.into_inner());
             match st.messages.iter().find(|m| m["seq"].as_i64() == Some(n)).filter(|m| m["blob"].is_string() && rd.visible(m) && !m["keys"][u].is_null()) { Some(m) => answer(200, json!({ "blob": m["blob"] })), None => answer(404, json!({ "error": "Not found." })) }
         }
         p if p.starts_with("/api/call/") => return Some(calls_route(hub, r, a, &us, &b).await),
@@ -571,10 +571,10 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
         },
         "/api/admin/room/clear" if post => {
             if !a.admin { return Some(answer(403, json!({ "error": "Admins only." }))); }
-            { let mut st = c.store.lock().unwrap(); st.messages.clear(); st.rev = 0; let _ = std::fs::write(c.dir.join("messages.jsonl"), ""); }
+            { let mut st = c.store.lock().unwrap_or_else(|e| e.into_inner()); st.messages.clear(); st.rev = 0; let _ = std::fs::write(c.dir.join("messages.jsonl"), ""); }
             hub.files().all_gone(&|x| hub.account(x));
-            *c.agent_seen.lock().unwrap() = (0, Default::default()); write_json(&c.dir.join("agent-seen.json"), &json!({ "lastSeq": 0 }));
-            c.seen.lock().unwrap().clear(); write_json(&c.dir.join("seen.json"), &json!({}));
+            *c.agent_seen.lock().unwrap_or_else(|e| e.into_inner()) = (0, Default::default()); write_json(&c.dir.join("agent-seen.json"), &json!({ "lastSeq": 0 }));
+            c.seen.lock().unwrap_or_else(|e| e.into_inner()).clear(); write_json(&c.dir.join("seen.json"), &json!({}));
             c.room_changed();
             println!("[vr-hub] {u} cleared the chat history.");
             answer(200, json!({ "ok": true }))
@@ -605,7 +605,7 @@ fn room_answer(hub: &dyn ChatHost, r: &Req, u: &str, us: &[(String, String, bool
     let rd = reader(hub, u, us);
     let strip = |m: &Value| -> Value { let mut o = m.as_object().cloned().unwrap_or_default(); let key = o.remove("keys").map(|k| k[u].clone()).filter(|k| !k.is_null()).unwrap_or(Value::Null); let blob = o.remove("blob"); o.insert("key".into(), key); if let Some(bl) = blob.and_then(|b| b.as_str().map(|x| x.len())) { o.insert("blobLen".into(), json!(bl)); } Value::Object(o) };
     let (out, latest, latest_rev): (Vec<Value>, i64, i64) = {
-        let st = c.store.lock().unwrap();
+        let st = c.store.lock().unwrap_or_else(|e| e.into_inner());
         let mine: Vec<&Value> = st.messages.iter().filter(|m| rd.visible(m)).collect();
         let pick: Vec<&Value> = if let Some(rv) = r.param("rev") {
             let after: i64 = rv.parse::<f64>().map(|f| f as i64).unwrap_or(0);
@@ -614,7 +614,7 @@ fn room_answer(hub: &dyn ChatHost, r: &Req, u: &str, us: &[(String, String, bool
         (pick.into_iter().map(strip).collect(), st.seq, st.rev)
     };
     let mut seen_out = Map::new();
-    for (who, convs) in c.seen.lock().unwrap().iter() { for (cv, v) in convs.as_object().cloned().unwrap_or_default() { if rd.sees_conv(&cv) { seen_out.entry(who.clone()).or_insert(json!({}))[&cv] = v; } } }
+    for (who, convs) in c.seen.lock().unwrap_or_else(|e| e.into_inner()).iter() { for (cv, v) in convs.as_object().cloned().unwrap_or_default() { if rd.sees_conv(&cv) { seen_out.entry(who.clone()).or_insert(json!({}))[&cv] = v; } } }
     answer(200, json!({ "messages": out, "latest": latest, "latestRev": latest_rev, "seen": seen_out, "shares": hub.shares_for(u), "ver": c.room_ver.load(Ordering::SeqCst), "keysVer": c.keys_ver.load(Ordering::SeqCst), "guildsVer": c.guilds.version(), "notesVer": hub.notes_version(),
         "online": c.online(us), "presence": c.presence_list(us), "typing": typing_for(hub, u, us) }))
 }
@@ -630,7 +630,7 @@ async fn calls_route(hub: &dyn ChatHost, r: &Req, a: &Account, us: &[(String, St
             if !c.has_key(u) { return answer(400, json!({ "error": "Your chat key is not set up yet." })); }
             if c.guilds.media(&conv, u, &ctx)["connect"] != json!(true) { return answer(403, json!({ "error": "You may not join calls here (no \"connect\" permission, or you are timed out)." })); }
             let mut left = vec![];
-            { let mut cs = c.calls.lock().unwrap();
+            { let mut cs = c.calls.lock().unwrap_or_else(|e| e.into_inner());
               for (cv, ps) in cs.calls.iter_mut() { if *cv != conv { let n = ps.len(); ps.retain(|(x, _)| x != u); if ps.len() != n { left.push(cv.clone()); } } }
               cs.calls.retain(|(_, ps)| !ps.is_empty());
               if !cs.calls.iter().any(|(cv, _)| *cv == conv) { cs.calls.push((conv.clone(), vec![])); }
@@ -640,30 +640,30 @@ async fn calls_route(hub: &dyn ChatHost, r: &Req, a: &Account, us: &[(String, St
             for cv in left { calls_changed(hub, &cv, us); }
             calls_changed(hub, &conv, us);
             let ice = hub.cfg().get("iceServers").filter(|v| v.is_array()).cloned().unwrap_or_else(|| serde_json::from_str(ICE_DEFAULT).unwrap());
-            answer(200, json!({ "calls": calls_state(hub, u, us), "ver": c.calls.lock().unwrap().ver, "iceServers": ice }))
+            answer(200, json!({ "calls": calls_state(hub, u, us), "ver": c.calls.lock().unwrap_or_else(|e| e.into_inner()).ver, "iceServers": ice }))
         }
         ("POST", "/api/call/leave") => { calls_leave(hub, u); answer(200, json!({ "ok": true })) }
         ("POST", "/api/call/state") => {
             let conv = s(b, "conv");
-            let found = { let mut cs = c.calls.lock().unwrap(); match cs.calls.iter_mut().find(|(cv, _)| *cv == conv).and_then(|(_, ps)| ps.iter_mut().find(|(x, _)| x == u)) { Some((_, pv)) => { pv["cam"] = json!(flag("cam")); pv["mic"] = json!(flag("mic")); pv["screen"] = json!(flag("screen")); pv["seen"] = json!(now_ms()); true } None => false } };
+            let found = { let mut cs = c.calls.lock().unwrap_or_else(|e| e.into_inner()); match cs.calls.iter_mut().find(|(cv, _)| *cv == conv).and_then(|(_, ps)| ps.iter_mut().find(|(x, _)| x == u)) { Some((_, pv)) => { pv["cam"] = json!(flag("cam")); pv["mic"] = json!(flag("mic")); pv["screen"] = json!(flag("screen")); pv["seen"] = json!(now_ms()); true } None => false } };
             if !found { return answer(409, json!({ "error": "You are not in that call." })); }
             calls_changed(hub, &conv, us); answer(200, json!({ "ok": true }))
         }
         ("POST", "/api/call/signal") => {
             let (to, conv) = (s(b, "to"), s(b, "conv"));
-            let both = { let cs = c.calls.lock().unwrap(); cs.calls.iter().find(|(cv, _)| *cv == conv).map(|(_, ps)| ps.iter().any(|(x, _)| x == u) && ps.iter().any(|(x, _)| *x == to)).unwrap_or(false) };
+            let both = { let cs = c.calls.lock().unwrap_or_else(|e| e.into_inner()); cs.calls.iter().find(|(cv, _)| *cv == conv).map(|(_, ps)| ps.iter().any(|(x, _)| x == u) && ps.iter().any(|(x, _)| *x == to)).unwrap_or(false) };
             if !both || to == u { return answer(409, json!({ "error": "Both people must be in this call." })); }
             if !b64ok(&b["iv"], 64) || !b64ok(&b["ct"], 200000) { return answer(400, json!({ "error": "Bad signal." })); }
-            { let mut cs = c.calls.lock().unwrap(); cs.n += 1; let n = cs.n; let bx = cs.mailbox.entry(to.clone()).or_default(); bx.push(json!({ "n": n, "from": u, "conv": conv, "iv": b["iv"], "ct": b["ct"] })); if bx.len() > 500 { let k = bx.len() - 500; bx.drain(0..k); } }
+            { let mut cs = c.calls.lock().unwrap_or_else(|e| e.into_inner()); cs.n += 1; let n = cs.n; let bx = cs.mailbox.entry(to.clone()).or_default(); bx.push(json!({ "n": n, "from": u, "conv": conv, "iv": b["iv"], "ct": b["ct"] })); if bx.len() > 500 { let k = bx.len() - 500; bx.drain(0..k); } }
             c.call_wake(&[to]); answer(200, json!({ "ok": true }))
         }
         ("GET", "/api/call/poll") => {
             let after: u64 = r.param("after").and_then(|x| x.parse::<f64>().ok()).map(|f| f as u64).unwrap_or(0); let ver: Option<u64> = r.param("ver").and_then(|x| x.parse().ok());
-            { let mut cs = c.calls.lock().unwrap(); if let Some(bx) = cs.mailbox.get_mut(u) { bx.retain(|x| x["n"].as_u64().unwrap_or(0) > after); } }
+            { let mut cs = c.calls.lock().unwrap_or_else(|e| e.into_inner()); if let Some(bx) = cs.mailbox.get_mut(u) { bx.retain(|x| x["n"].as_u64().unwrap_or(0) > after); } }
             let woke = c.call_notify(u); let n = woke.notified(); tokio::pin!(n); n.as_mut().enable();
-            let ready = { let cs = c.calls.lock().unwrap(); cs.mailbox.get(u).map(|bx| bx.iter().any(|x| x["n"].as_u64().unwrap_or(0) > after)).unwrap_or(false) || ver != Some(cs.ver) };
+            let ready = { let cs = c.calls.lock().unwrap_or_else(|e| e.into_inner()); cs.mailbox.get(u).map(|bx| bx.iter().any(|x| x["n"].as_u64().unwrap_or(0) > after)).unwrap_or(false) || ver != Some(cs.ver) };
             if !ready { let _ = tokio::time::timeout(Duration::from_secs(25), n).await; }
-            let (sigs, v) = { let mut cs = c.calls.lock().unwrap(); for (_, ps) in cs.calls.iter_mut() { if let Some((_, pv)) = ps.iter_mut().find(|(x, _)| x == u) { pv["seen"] = json!(now_ms()); } } (cs.mailbox.get(u).map(|bx| bx.iter().filter(|x| x["n"].as_u64().unwrap_or(0) > after).cloned().collect::<Vec<_>>()).unwrap_or_default(), cs.ver) };
+            let (sigs, v) = { let mut cs = c.calls.lock().unwrap_or_else(|e| e.into_inner()); for (_, ps) in cs.calls.iter_mut() { if let Some((_, pv)) = ps.iter_mut().find(|(x, _)| x == u) { pv["seen"] = json!(now_ms()); } } (cs.mailbox.get(u).map(|bx| bx.iter().filter(|x| x["n"].as_u64().unwrap_or(0) > after).cloned().collect::<Vec<_>>()).unwrap_or_default(), cs.ver) };
             let last = sigs.last().and_then(|x| x["n"].as_u64()).unwrap_or(after);
             answer(200, json!({ "signals": sigs, "after": last, "calls": calls_state(hub, u, us), "ver": v }))
         }
@@ -677,7 +677,7 @@ pub fn front(hub: &dyn ChatHost, what: &str, b: &Value) -> Value {
     match what {
         "say" => json!({ "seq": agent_say(hub, &s(b, "text"), &s(b, "to"), &s(b, "as"), &s(b, "via"), &s(b, "conv")) }),
         "agent-prompt" => json!({ "blocks": agent_blocks(hub, &s(b, "target"), &s(b, "conv")) }),
-        "agent-typing" => { *c.agent_busy.lock().unwrap() = if b["on"] == json!(true) { Some((s(b, "target"), s(b, "conv"))) } else { None }; c.room_changed(); json!({ "ok": true }) }
+        "agent-typing" => { *c.agent_busy.lock().unwrap_or_else(|e| e.into_inner()) = if b["on"] == json!(true) { Some((s(b, "target"), s(b, "conv"))) } else { None }; c.room_changed(); json!({ "ok": true }) }
         "has-key" => json!({ "ok": c.has_key(&s(b, "user")) }),
         "changed" => { if b["keys"] == json!(true) { c.keys_changed(); } else { c.room_changed(); } json!({ "ok": true }) }
         _ => json!({ "ok": false, "error": "unknown" }),

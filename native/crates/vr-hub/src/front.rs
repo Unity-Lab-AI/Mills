@@ -53,7 +53,7 @@ pub async fn serve(hub: Arc<Hub>, addr: SocketAddr) -> i32 {
                 let Ok((stream, peer)) = a else { continue };
                 let hub = hub.clone();
                 tokio::spawn(async move {
-                    let svc = hyper::service::service_fn(move |req| { let hub = hub.clone(); async move { Ok::<_, std::convert::Infallible>(handle(hub, req, peer).await) } });
+                    let svc = hyper::service::service_fn(move |req| { let hub = hub.clone(); async move { Ok::<_, std::convert::Infallible>(guarded(hub, req, peer).await) } });
                     let _ = hyper::server::conn::http1::Builder::new().keep_alive(true).serve_connection(TokioIo::new(stream), svc).await;
                 });
             }
@@ -62,6 +62,24 @@ pub async fn serve(hub: Arc<Hub>, addr: SocketAddr) -> i32 {
 }
 
 const MAX_BODY: usize = 32 << 20; // the hub takes files up to 24 MB (+ encryption); anything bigger is refused here
+
+/// One request's failure is that request's alone (FR1, plans/full-rust-hub.md): a panic inside `handle` answers that
+/// request 500 and is logged with its method and path; the hub, its other connections and its locks (every lock
+/// recovers from a poisoning) go on. Before 5.4.0 the release build aborted the whole hub on any panic.
+async fn guarded(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Response<Body> {
+    use futures_util::FutureExt;
+    let (m, p) = (req.method().clone(), req.uri().path().to_string());
+    match std::panic::AssertUnwindSafe(handle(hub, req, peer)).catch_unwind().await {
+        Ok(r) => r,
+        Err(e) => {
+            let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into());
+            eprintln!("[vr-hub] a request failed inside the hub: {m} {p}: {why} (answered 500; the hub goes on)");
+            let mut r = json(500, &serde_json::json!({ "error": "That request failed inside the hub; it was logged." }));
+            r.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust"));
+            with_front(r)
+        }
+    }
+}
 
 async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Response<Body> {
     let (r, parts) = match kit::read(req, peer, MAX_BODY).await { Ok(x) => x, Err(too_big) => return with_front(too_big) };
@@ -77,6 +95,7 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
     match modules::route(&hub, &r).await {
         modules::Routed::Answer(mut resp) => {
             if let Some(o) = &cors { kit::add_cors(&mut resp, o); }
+            resp.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust")); // who answered (FR6's meter: R179)
             // signed-in pages notice a new build on their next call (and every 5 minutes) and update themselves
             if r.path.starts_with("/api/") && !resp.headers().contains_key("x-vr-version") { if let Ok(v) = hyper::header::HeaderValue::from_str(&hub.mods.build.get(&hub).0) { resp.headers_mut().insert("x-vr-version", v); } }
             return with_front(resp);
@@ -87,12 +106,14 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
             crate::modules::unity_routes::signed_in(&hub, &user, client, ip);
             let mut resp = json(200, &serde_json::json!({ "token": token, "username": user }));
             if let Some(o) = &cors { kit::add_cors(&mut resp, o); }
+            resp.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust"));
             return with_front(resp);
         }
         modules::Routed::No => {}
     }
     // who is signed in is the front's word only: a caller's own x-vr-user / x-vr-front-* never reach the JavaScript hub
     let mut resp = hub.backend.proxy(&parts, r.body.clone(), |k| !k.starts_with("x-vr-front-") && k != "x-vr-user", &extra).await;
+    resp.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("node")); // the JavaScript hub answered (what FR6 still has to move: R179)
     // One build per hub: the page compares X-VR-Version with the build /api/check named (this hub's), so an answer of
     // the JavaScript hub behind it must name the same one. Its own (read when IT started) could differ when the two
     // started apart (one restarted alone after a crash, or an older one kept running), and then every page offered an

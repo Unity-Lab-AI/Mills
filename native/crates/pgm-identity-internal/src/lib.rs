@@ -92,7 +92,7 @@ impl Auth {
                 hs["sessions"].as_object().map(|m| m.iter().map(|(k, v)| (if hashed { k.clone() } else { token_key(k) }, v.clone())).collect()).unwrap_or_default()
             }
         };
-        *self.sessions.lock().unwrap() = sessions.into_iter().filter(|(_, s)| s["exp"].as_u64().unwrap_or(0) > now).collect();
+        *self.sessions.lock().unwrap_or_else(|e| e.into_inner()) = sessions.into_iter().filter(|(_, s)| s["exp"].as_u64().unwrap_or(0) > now).collect();
         let locks = match read_json(&self.locks_file()) {
             Some(v) => v.as_object().cloned().unwrap_or_default(),
             None => {
@@ -105,11 +105,11 @@ impl Auth {
                 m
             }
         };
-        *self.locks.lock().unwrap() = locks;
+        *self.locks.lock().unwrap_or_else(|e| e.into_inner()) = locks;
         self.save_sessions(); self.save_locks();
     }
-    fn save_sessions(&self) { write_json(&self.sessions_file(), &json!({ "sessions": Value::Object(self.sessions.lock().unwrap().clone()), "sessionsHashed": true })); }
-    fn save_locks(&self) { write_json(&self.locks_file(), &Value::Object(self.locks.lock().unwrap().clone())); }
+    fn save_sessions(&self) { write_json(&self.sessions_file(), &json!({ "sessions": Value::Object(self.sessions.lock().unwrap_or_else(|e| e.into_inner()).clone()), "sessionsHashed": true })); }
+    fn save_locks(&self) { write_json(&self.locks_file(), &Value::Object(self.locks.lock().unwrap_or_else(|e| e.into_inner()).clone())); }
 
     /// Is that account an admin? (what accounts() says, for one name)
     pub fn is_admin(&self, user: &str) -> bool { admin_in(&self.root, &self.default_user, user) }
@@ -144,21 +144,21 @@ impl Auth {
     pub fn session_user(&self, r: &Req) -> Option<String> {
         let tok = r.header("authorization").and_then(|a| a.strip_prefix("Bearer "))?;
         let k = token_key(tok);
-        let mut s = self.sessions.lock().unwrap();
+        let mut s = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let rec = s.get(&k)?.clone();
         let user = rec["user"].as_str().unwrap_or("").to_string();
         if rec["exp"].as_u64().unwrap_or(0) < now_ms() || self.account(&user).is_none() { s.remove(&k); drop(s); self.save_sessions(); return None; }
         Some(user)
     }
-    pub fn forget_session(&self, key: &str) { if self.sessions.lock().unwrap().remove(key).is_some() { self.save_sessions(); } }
-    pub fn drop_sessions(&self, user: &str) { self.sessions.lock().unwrap().retain(|_, s| s["user"].as_str() != Some(user)); self.save_sessions(); }
-    pub fn signed_in(&self, user: &str) -> usize { let now = now_ms(); self.sessions.lock().unwrap().values().filter(|s| s["user"].as_str() == Some(user) && s["exp"].as_u64().unwrap_or(0) > now).count() }
-    pub fn lock_of(&self, user: &str) -> Option<Value> { self.locks.lock().unwrap().get(user).cloned() }
-    pub fn unlock(&self, user: &str) { self.locks.lock().unwrap().remove(user); self.save_locks(); }
+    pub fn forget_session(&self, key: &str) { if self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(key).is_some() { self.save_sessions(); } }
+    pub fn drop_sessions(&self, user: &str) { self.sessions.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| s["user"].as_str() != Some(user)); self.save_sessions(); }
+    pub fn signed_in(&self, user: &str) -> usize { let now = now_ms(); self.sessions.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|s| s["user"].as_str() == Some(user) && s["exp"].as_u64().unwrap_or(0) > now).count() }
+    pub fn lock_of(&self, user: &str) -> Option<Value> { self.locks.lock().unwrap_or_else(|e| e.into_inner()).get(user).cloned() }
+    pub fn unlock(&self, user: &str) { self.locks.lock().unwrap_or_else(|e| e.into_inner()).remove(user); self.save_locks(); }
     /// The admin's "allow one more device": the next sign-in from a new device joins this account's devices (up to
     /// MAX_DEVICES) instead of being refused. Nothing to do for an account no device has claimed yet.
     pub fn allow_device(&self, user: &str) -> Result<usize, String> {
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         let Some(l) = locks.get_mut(user) else { return Err("No device has claimed this account yet: its next sign-in does.".into()) };
         let n = lock_devices(l).len();
         if n >= MAX_DEVICES { return Err(format!("This account already has {MAX_DEVICES} devices: reset its lock first.")); }
@@ -167,11 +167,11 @@ impl Auth {
     }
 
     fn sweep(&self) { // counters nobody touched for 30 minutes go (never all at once)
-        let mut last = self.last_sweep.lock().unwrap();
+        let mut last = self.last_sweep.lock().unwrap_or_else(|e| e.into_inner());
         if last.elapsed() < Duration::from_secs(300) { return; }
         *last = Instant::now();
         let (now, old) = (now_ms(), now_ms().saturating_sub(30 * 60 * 1000));
-        self.fails.lock().unwrap().retain(|_, f| f.inflight > 0 || f.blocked_until >= now || f.at >= old);
+        self.fails.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, f| f.inflight > 0 || f.blocked_until >= now || f.at >= old);
     }
 
     /// A sign-in: `{ username, password, deviceId, client }`. `refuse`: when Some, nobody may sign in here now (503 with
@@ -193,7 +193,7 @@ impl Auth {
         let acct = acct.expect("checked");
         let dh = pgm_core_internal::crypto::sha256_hex(device.unwrap_or_default().as_bytes());
         {
-            let mut locks = self.locks.lock().unwrap();
+            let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
             match locks.get_mut(&acct.username) {
                 None => { locks.insert(acct.username.clone(), json!({ "device": dh, "at": iso_now() })); drop(locks); self.save_locks(); println!("{} {}: claimed by first sign-in.", self.tag, acct.username); }
                 Some(l) if lock_devices(l).contains(&dh) => {}
@@ -208,7 +208,7 @@ impl Auth {
             }
         }
         let token = pgm_core_internal::crypto::random_hex(32);
-        self.sessions.lock().unwrap().insert(token_key(&token), json!({ "user": acct.username, "exp": now_ms() + SESSION_MS }));
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(token_key(&token), json!({ "user": acct.username, "exp": now_ms() + SESSION_MS }));
         self.save_sessions();
         Login::SignedIn { token, user: acct.username, client: b["client"].clone(), ip: self.outside_ip(r) }
     }
@@ -231,7 +231,7 @@ impl Auth {
     fn attempt_begin(&self, uname: &str, ip: &str) -> Result<(String, String), &'static str> {
         let (fk, gk) = (format!("{uname}|{ip}"), format!("ip|{ip}"));
         let now = now_ms();
-        let mut fails = self.fails.lock().unwrap();
+        let mut fails = self.fails.lock().unwrap_or_else(|e| e.into_inner());
         let (fc, fb, fi) = { let f = fails.entry(fk.clone()).or_insert_with(|| Fail { at: now, ..Default::default() }); (f.count, f.blocked_until, f.inflight) };
         let (gc, gb, gi) = { let g = fails.entry(gk.clone()).or_insert_with(|| Fail { at: now, ..Default::default() }); (g.count, g.blocked_until, g.inflight) };
         if now < fb || now < gb || fc + fi >= 5 || gc + gi >= 20 { return Err("Too many failed attempts. Try again in 15 minutes."); }
@@ -241,7 +241,7 @@ impl Auth {
     }
     /// The attempt ended (`good`: it went through): a failure counts, a success clears that name's counter.
     fn attempt_end(&self, fk: &str, gk: &str, good: bool) -> bool {
-        let mut fails = self.fails.lock().unwrap();
+        let mut fails = self.fails.lock().unwrap_or_else(|e| e.into_inner());
         for k in [fk, gk] { if let Some(f) = fails.get_mut(k) { f.inflight = f.inflight.saturating_sub(1); } }
         if !good {
             let t = now_ms();

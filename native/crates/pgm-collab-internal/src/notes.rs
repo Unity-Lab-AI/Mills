@@ -26,7 +26,7 @@ impl Notes {
     pub fn version(&self) -> u64 { *self.ver.borrow() }
     fn save_meta(&self) {
         let f = self.dir.join(".index.json"); let tmp = self.dir.join(".index.json.tmp");
-        if std::fs::write(&tmp, Value::Object(self.meta.lock().unwrap().clone()).to_string()).is_ok() { let _ = std::fs::rename(&tmp, &f); }
+        if std::fs::write(&tmp, Value::Object(self.meta.lock().unwrap_or_else(|e| e.into_inner()).clone()).to_string()).is_ok() { let _ = std::fs::rename(&tmp, &f); }
         self.ver.send_modify(|v| *v += 1);
     }
     fn segs(&self, p: &str, note: bool, folder: bool) -> Result<Vec<String>, Err> {
@@ -51,7 +51,7 @@ impl Notes {
         let Ok(rd) = std::fs::read_dir(&base) else { return vec![] };
         let mut es: Vec<(String, bool)> = rd.filter_map(|e| e.ok()).map(|e| (e.file_name().to_string_lossy().to_string(), e.path().is_dir())).filter(|(n, d)| !n.starts_with('.') && (*d || n.to_lowercase().ends_with(".md"))).collect();
         es.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| locale_cmp(&a.0, &b.0)));
-        let meta = self.meta.lock().unwrap().clone();
+        let meta = self.meta.lock().unwrap_or_else(|e| e.into_inner()).clone();
         es.into_iter().map(|(name, dir)| {
             let mut sub = folder.to_vec(); sub.push(name.clone());
             let p = sub.join("/");
@@ -67,7 +67,7 @@ impl Notes {
         let hit = self.existing(&parts).ok_or_else(|| e(404, "No such note."))?;
         let f = self.abs(&hit); let rel = hit.join("/");
         let text = std::fs::read_to_string(&f).map_err(|x| e400(x.to_string()))?.replace("\r\n", "\n").replace('\r', "\n");
-        let by = self.meta.lock().unwrap().get(&rel).and_then(|m| m["by"].as_str().map(String::from)).unwrap_or_default();
+        let by = self.meta.lock().unwrap_or_else(|e| e.into_inner()).get(&rel).and_then(|m| m["by"].as_str().map(String::from)).unwrap_or_default();
         Ok(json!({ "path": rel, "text": text, "at": mtime(&f), "by": by }))
     }
     pub fn write(&self, actor: &str, p: &str, text: &str, base_at: Option<f64>) -> Result<Value, Err> {
@@ -82,7 +82,7 @@ impl Notes {
         let tmp = PathBuf::from(format!("{}.tmp", f.display()));
         std::fs::write(&tmp, &body).and_then(|_| std::fs::rename(&tmp, &f)).map_err(|x| e400(x.to_string()))?;
         let rel = parts.join("/");
-        self.meta.lock().unwrap().insert(rel.clone(), json!({ "by": actor, "at": pgm_core_internal::now_ms() }));
+        self.meta.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.clone(), json!({ "by": actor, "at": pgm_core_internal::now_ms() }));
         self.save_meta();
         Ok(json!({ "path": rel, "at": mtime(&f), "by": actor, "created": hit.is_none() }))
     }
@@ -93,7 +93,7 @@ impl Notes {
         if target.is_dir() { if std::fs::read_dir(&target).map(|mut r| r.next().is_some()).unwrap_or(false) { return Err(e400("Empty the folder first.")); } std::fs::remove_dir(&target).map_err(|x| e400(x.to_string()))?; }
         else { std::fs::remove_file(&target).map_err(|x| e400(x.to_string()))?; }
         let rel = hit.join("/");
-        self.meta.lock().unwrap().remove(&rel); self.save_meta();
+        self.meta.lock().unwrap_or_else(|e| e.into_inner()).remove(&rel); self.save_meta();
         Ok(json!({ "removed": rel }))
     }
     pub fn mv(&self, actor: &str, from: &str, to: &str) -> Result<Value, Err> {
@@ -105,7 +105,7 @@ impl Notes {
         std::fs::rename(self.abs(&a), self.abs(&b)).map_err(|x| e400(x.to_string()))?;
         let (ra, rb) = (a.join("/"), b.join("/"));
         {
-            let mut meta = self.meta.lock().unwrap();
+            let mut meta = self.meta.lock().unwrap_or_else(|e| e.into_inner());
             let keys: Vec<String> = meta.keys().filter(|k| **k == ra || k.starts_with(&format!("{ra}/"))).cloned().collect();
             for k in keys { let mut v = meta.remove(&k).unwrap_or(json!({})); v["by"] = json!(actor); v["at"] = json!(pgm_core_internal::now_ms()); meta.insert(format!("{rb}{}", &k[ra.len()..]), v); }
         }

@@ -72,16 +72,16 @@ pub async fn work_job(h: H, job: Job) {
         let (h, events, lock, id, prov) = (h.clone(), events.clone(), lock.clone(), id.clone(), prov.clone());
         async move {
             let _g = lock.lock().await;
-            let batch: Vec<Value> = std::mem::take(&mut *events.lock().unwrap());
+            let batch: Vec<Value> = std::mem::take(&mut *events.lock().unwrap_or_else(|e| e.into_inner()));
             if batch.is_empty() && fin.is_none() { return EventsAnswer::Ok; }
-            let usage = prov.as_ref().and_then(|p| h.usage.lock().unwrap().get(&p.id).cloned()).unwrap_or(Value::Null);
+            let usage = prov.as_ref().and_then(|p| h.usage.lock().unwrap_or_else(|e| e.into_inner()).get(&p.id).cloned()).unwrap_or(Value::Null);
             let mut b = json!({ "events": batch, "usage": usage });
             if let (Some(o), Some(Value::Object(f))) = (b.as_object_mut(), fin) { o.extend(f); }
             h.link.read().await.events(&id, &b).await
         }
     } };
-    macro_rules! fail { ($text:expr) => {{ let t: String = $text; events.lock().unwrap().push(json!({ "type": "bridge_error", "text": t })); flush(Some(json!({ "done": true, "code": 1 }))).await; return; }}; }
-    let nick = h.nickname.lock().unwrap().clone();
+    macro_rules! fail { ($text:expr) => {{ let t: String = $text; events.lock().unwrap_or_else(|e| e.into_inner()).push(json!({ "type": "bridge_error", "text": t })); flush(Some(json!({ "done": true, "code": 1 }))).await; return; }}; }
+    let nick = h.nickname.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let Some(p) = prov.clone().filter(|p| p.kind != "openai") else { fail!("This host no longer offers that provider for Work.".into()); };
     let cap = h.over_cap(&p); if !cap.is_empty() { fail!(format!("{nick}: {cap}. Pick another AI or wait for the window to reset.")); }
     let dir = match work_dir(&h, &payload) { Ok(d) => d, Err(e) => fail!(format!("{nick} could not prepare the folder: {e}")) };
@@ -112,7 +112,7 @@ pub async fn work_job(h: H, job: Job) {
     if !who.is_empty() { for (k, v) in crate::fj::env(&h.folder.f(".fj").join(&who), &pe("FORGEJO_URL"), &pe("FORGEJO_TOKEN"), &pe("FORGEJO_LOGIN")) { c.env(k, v); } } // fj signed in as the person, from the token the hub sent
     log(format!("run {job_id} for {}: {} ({}{})", payload["account"].as_str().unwrap_or(""), if sandbox { "API answer".to_string() } else { format!("{} in {}", payload["project"].as_str().unwrap_or("VibeRoller"), dir.display()) }, p.label, payload["model"].as_str().map(|m| format!(", {m}")).unwrap_or_default()));
     let mut child = match c.spawn() { Ok(ch) => ch, Err(e) => { let _ = std::fs::remove_file(&mcp_file); fail!(format!("{nick} could not start claude: {e}")); } };
-    h.runs.lock().unwrap().insert(job_id.clone(), stop_tx);
+    h.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(job_id.clone(), stop_tx);
     if let Some(mut si) = child.stdin.take() { let m = payload["message"].as_str().unwrap_or("").to_string(); tokio::spawn(async move { let _ = si.write_all(m.as_bytes()).await; }); }
     let (out, mut err) = (child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
     let ev2 = events.clone(); let pid = p.id.clone(); let h2 = h.clone();
@@ -120,11 +120,11 @@ pub async fn work_job(h: H, job: Job) {
         let mut lines = BufReader::new(out).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let line = line.trim().to_string(); if line.is_empty() { continue; }
-            match serde_json::from_str::<Value>(&line) { Ok(ev) => { note_usage(&h2, &pid, &ev); ev2.lock().unwrap().push(ev); } Err(_) => ev2.lock().unwrap().push(json!({ "type": "raw", "text": line })) }
+            match serde_json::from_str::<Value>(&line) { Ok(ev) => { note_usage(&h2, &pid, &ev); ev2.lock().unwrap_or_else(|e| e.into_inner()).push(ev); } Err(_) => ev2.lock().unwrap_or_else(|e| e.into_inner()).push(json!({ "type": "raw", "text": line })) }
         }
     });
     let ev3 = events.clone();
-    let errs = tokio::spawn(async move { let mut buf = [0u8; 4096]; while let Ok(n) = err.read(&mut buf).await { if n == 0 { break; } ev3.lock().unwrap().push(json!({ "type": "stderr", "text": String::from_utf8_lossy(&buf[..n]) })); } });
+    let errs = tokio::spawn(async move { let mut buf = [0u8; 4096]; while let Ok(n) = err.read(&mut buf).await { if n == 0 { break; } ev3.lock().unwrap_or_else(|e| e.into_inner()).push(json!({ "type": "stderr", "text": String::from_utf8_lossy(&buf[..n]) })); } });
     // events go out every 150 ms (or at 40); a cancel / gone answer stops the run
     let status = loop {
         tokio::select! {
@@ -136,7 +136,7 @@ pub async fn work_job(h: H, job: Job) {
         }
     };
     let _ = reader.await; let _ = errs.await;
-    h.runs.lock().unwrap().remove(&job_id);
+    h.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&job_id);
     let _ = std::fs::remove_file(&mcp_file);
     let code = if stopped.load(std::sync::atomic::Ordering::SeqCst) { 130 } else { status.ok().and_then(|s| s.code()).unwrap_or(1) };
     flush(Some(json!({ "done": true, "code": code }))).await;
@@ -149,7 +149,7 @@ fn note_usage(h: &H, pid: &str, ev: &Value) {
     let kind = info["rateLimitType"].as_str().or(info["rate_limit_type"].as_str()).or(info["type"].as_str()).unwrap_or("").to_ascii_lowercase();
     let w = if ["seven", "week", "7d"].iter().any(|k| kind.contains(k)) { "seven_day" } else if ["five", "5h", "session"].iter().any(|k| kind.contains(k)) { "five_hour" } else { return };
     let raw = info.get("utilization").or(info.get("usage")).and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
-    let mut all = h.usage.lock().unwrap();
+    let mut all = h.usage.lock().unwrap_or_else(|e| e.into_inner());
     let u = all.entry(pid.to_string()).or_insert_with(|| json!({}));
     let prev = u[w].clone();
     let util = raw.map(|n| (if n > 1.0 { n / 100.0 } else { n }).clamp(0.0, 1.0)).or(prev["utilization"].as_f64());

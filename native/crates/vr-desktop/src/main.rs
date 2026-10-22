@@ -47,7 +47,7 @@ fn notify(app: AppHandle, title: String, body: String) -> R<()> {
     if SMOKE.load(std::sync::atomic::Ordering::SeqCst) {
         println!("SMOKE {title} {body}");
         // done when the Tools page reported and (with --hub) the hub's page in the main window did too
-        let mut seen = SMOKE_SEEN.lock().unwrap(); seen.insert(title.clone());
+        let mut seen = SMOKE_SEEN.lock().unwrap_or_else(|e| e.into_inner()); seen.insert(title.clone());
         if seen.contains("smoke-ok") && (!SMOKE_MAIN.load(std::sync::atomic::Ordering::SeqCst) || seen.contains("smoke-main")) { app.exit(0); }
         return Ok(());
     }
@@ -117,7 +117,7 @@ async fn proxy_start(st: S<'_>) -> R<Value> { let s = st.store.get(); st.proxy.s
 #[tauri::command]
 fn proxy_stop(st: S) -> Value { st.proxy.stop(); let _ = st.store.patch(json!({ "proxyOn": false })); proxy_status(st) }
 #[tauri::command]
-fn proxy_status(st: S) -> Value { let p = *st.proxy.port.lock().unwrap(); json!({ "running": st.proxy.running(), "port": p, "url": if p > 0 { format!("http://127.0.0.1:{p}/v1") } else { String::new() } }) }
+fn proxy_status(st: S) -> Value { let p = *st.proxy.port.lock().unwrap_or_else(|e| e.into_inner()); json!({ "running": st.proxy.running(), "port": p, "url": if p > 0 { format!("http://127.0.0.1:{p}/v1") } else { String::new() } }) }
 #[tauri::command]
 async fn update_check(st: S<'_>) -> R<Value> { let s = st.store.get(); let mut v = update::check(&s.hub, &s.hub_session).await?; v["installed"] = json!(install::installed_here()); Ok(v) }
 #[tauri::command]
@@ -148,7 +148,7 @@ fn main() {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
             let store = settings::Store::load(dir.clone());
             // --hub <address>: this run only (the build check points it at a test hub)
-            if let Some(h) = std::env::args().skip_while(|a| a != "--hub").nth(1) { store.s.lock().unwrap().hub = h; SMOKE_MAIN.store(SMOKE.load(std::sync::atomic::Ordering::SeqCst), std::sync::atomic::Ordering::SeqCst); }
+            if let Some(h) = std::env::args().skip_while(|a| a != "--hub").nth(1) { store.s.lock().unwrap_or_else(|e| e.into_inner()).hub = h; SMOKE_MAIN.store(SMOKE.load(std::sync::atomic::Ordering::SeqCst), std::sync::atomic::Ordering::SeqCst); }
             let s = store.get();
             let host_dir = if s.host_dir.is_empty() { app.path().app_data_dir().unwrap_or(dir).join("ai-host").display().to_string() } else { s.host_dir.clone() };
             app.manage(App { store, terms: Arc::default(), runs: Arc::default(), proxy: proxy::Proxy::default(), host_dir });
@@ -209,7 +209,7 @@ fn main() {
                     let st = h3.state::<App>();
                     let s = st.store.get();
                     if s.hub_session.is_empty() { continue; } // updates need an account: look again in a minute
-                    let idle = st.terms.map.lock().unwrap().is_empty() && st.runs.map.lock().unwrap().is_empty();
+                    let idle = st.terms.map.lock().unwrap_or_else(|e| e.into_inner()).is_empty() && st.runs.map.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
                     if idle { if let Ok(true) = update::apply(&s.hub, &s.hub_session).await { h3.restart(); } }
                     tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
                 } });

@@ -16,7 +16,7 @@ pub struct Build { at: Mutex<Option<(String, Value, String)>> }
 impl Default for Build { fn default() -> Self { Build { at: Mutex::new(None) } } }
 impl Build {
     fn load(&self, checkout: &Path) -> (String, Value, String) {
-        let mut b = self.at.lock().unwrap();
+        let mut b = self.at.lock().unwrap_or_else(|e| e.into_inner());
         if b.is_none() {
             let (v, c) = release_of(checkout);
             let mods = std::fs::read_to_string(checkout.join("versions.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| v["modules"].clone()).unwrap_or(json!({}));

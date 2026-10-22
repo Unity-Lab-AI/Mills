@@ -129,11 +129,11 @@ impl Board {
         self.ver.send_modify(|v| *v += 1);
     }
     pub fn version(&self) -> u64 { *self.ver.borrow() }
-    pub fn seen(&self, user: &str) { self.viewers.lock().unwrap().insert(user.to_string(), now_ms() as i64); }
+    pub fn seen(&self, user: &str) { self.viewers.lock().unwrap_or_else(|e| e.into_inner()).insert(user.to_string(), now_ms() as i64); }
     /// A board with that id exists after this (made with `name` if it did not; an existing one is renamed to `name`):
     /// a program whose boards stand for something else (a chat's servers) keeps them in step this way.
     pub fn ensure_board(&self, id: &str, name: &str) {
-        let mut db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let changed = match db["boards"].as_array_mut().unwrap().iter_mut().find(|x| x["id"] == json!(id)) {
             Some(x) => { if x["name"] != json!(name) { x["name"] = json!(name); true } else { false } }
             None => { db["boards"].as_array_mut().unwrap().push(json!({ "id": id, "name": name })); true }
@@ -141,15 +141,15 @@ impl Board {
         if changed { self.save(&mut db); }
     }
     /// Which board a live task is on.
-    pub fn board_of(&self, task_id: &str) -> Option<String> { let db = self.db.lock().unwrap(); find(&db, task_id).and_then(|t| t["board"].as_str().map(String::from)) }
+    pub fn board_of(&self, task_id: &str) -> Option<String> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); find(&db, task_id).and_then(|t| t["board"].as_str().map(String::from)) }
 
     /// The board as a page shows it.
     pub fn view(&self, user: &str, name_of: &dyn Fn(&str) -> String, has: &dyn Fn(&str) -> bool, mirror: Value) -> Value {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let now = now_ms() as i64;
         let tasks: Vec<&Value> = db["tasks"].as_array().map(|a| a.iter().filter(|t| live(t)).collect()).unwrap_or_default();
         let mut presence: Vec<Value> = vec![];
-        for (u, t) in self.viewers.lock().unwrap().iter() { if now - t < 60_000 && has(u) { presence.push(json!({ "user": u, "name": name_of(u), "agent": false })); } }
+        for (u, t) in self.viewers.lock().unwrap_or_else(|e| e.into_inner()).iter() { if now - t < 60_000 && has(u) { presence.push(json!({ "user": u, "name": name_of(u), "agent": false })); } }
         for t in &tasks { if claim_active(t, now) && t["claim"]["agent"].as_bool() == Some(true) && !presence.iter().any(|p| p["key"] == t["claim"]["key"]) { presence.push(json!({ "key": t["claim"]["key"], "name": t["claim"]["by"], "agent": true })); } }
         let act: Vec<Value> = db["activity"].as_array().map(|a| a.iter().rev().take(60).cloned().collect()).unwrap_or_default();
         json!({ "ver": self.version(), "statuses": statuses(), "boards": db["boards"], "tasks": tasks.iter().map(|t| card(t, now)).collect::<Vec<_>>(), "presence": presence, "activity": act, "me": user, "mirror": mirror })
@@ -157,7 +157,7 @@ impl Board {
 
     // ---------- the operations shared by people and Claude ----------
     pub fn op(&self, op: &str, a: &Actor, b: &Value, has: &dyn Fn(&str) -> bool, name_of: &dyn Fn(&str) -> String) -> Out {
-        let mut db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let out = self.op_locked(&mut db, op, a, b, has, name_of);
         out
     }
@@ -343,15 +343,15 @@ impl Board {
 
     // ---------- for the Forgejo mirror ----------
     pub fn set_external(&self, id: &str, ext: Option<Value>) {
-        let mut db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(t) = db["tasks"].as_array_mut().and_then(|ts| ts.iter_mut().find(|t| t["id"] == json!(id))) {
             match ext { Some(e) => { t["forgejo"] = e; } None => { if let Some(o) = t.as_object_mut() { o.remove("forgejo"); } } }
             self.save(&mut db);
         }
     }
-    pub fn external(&self, id: &str) -> Option<Value> { let db = self.db.lock().unwrap(); db["tasks"].as_array()?.iter().find(|t| t["id"] == json!(id)).and_then(|t| t.get("forgejo").cloned()).filter(|v| !v.is_null()) }
-    pub fn by_external(&self, number: i64) -> Option<Value> { let db = self.db.lock().unwrap(); db["tasks"].as_array()?.iter().find(|t| live(t) && t["forgejo"]["number"].as_i64() == Some(number)).cloned() }
-    pub fn get(&self, id: &str) -> Option<Value> { let db = self.db.lock().unwrap(); db["tasks"].as_array()?.iter().find(|t| t["id"] == json!(id)).cloned() }
+    pub fn external(&self, id: &str) -> Option<Value> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); db["tasks"].as_array()?.iter().find(|t| t["id"] == json!(id)).and_then(|t| t.get("forgejo").cloned()).filter(|v| !v.is_null()) }
+    pub fn by_external(&self, number: i64) -> Option<Value> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); db["tasks"].as_array()?.iter().find(|t| live(t) && t["forgejo"]["number"].as_i64() == Some(number)).cloned() }
+    pub fn get(&self, id: &str) -> Option<Value> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); db["tasks"].as_array()?.iter().find(|t| t["id"] == json!(id)).cloned() }
 }
 
 fn live(t: &Value) -> bool { t["deleted"].as_bool() != Some(true) }

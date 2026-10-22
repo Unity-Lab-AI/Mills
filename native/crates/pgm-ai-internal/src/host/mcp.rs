@@ -19,7 +19,7 @@ pub async fn serve(which: &str) -> i32 {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     std::thread::spawn(move || { for line in std::io::stdin().lock().lines() { match line { Ok(l) => { if tx.send(l).is_err() { break; } } Err(_) => break } } });
     let out = std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout()));
-    let say = move |v: Value| { let mut o = out.lock().unwrap(); let _ = writeln!(o, "{v}"); let _ = o.flush(); };
+    let say = move |v: Value| { let mut o = out.lock().unwrap_or_else(|e| e.into_inner()); let _ = writeln!(o, "{v}"); let _ = o.flush(); };
     while let Some(line) = rx.recv().await {
         let line = line.trim(); if line.is_empty() { continue; }
         let Ok(msg) = serde_json::from_str::<Value>(line) else { continue };

@@ -71,13 +71,13 @@ impl AiHosts {
         h.restore_sessions();
         h
     }
-    fn save(&self) { let db = self.db.lock().unwrap().clone(); let f = self.root.join("ai-hosts.json"); let tmp = f.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(&db).unwrap_or_default()).is_ok() { pgm_core_internal::fs::private(&tmp); let _ = std::fs::rename(&tmp, &f); } self.changed(); }
-    pub fn record(&self, id: &str) -> Option<Value> { self.db.lock().unwrap()["hosts"].get(id).cloned().or_else(|| self.legacy.iter().find(|r| r["id"] == json!(id)).cloned()) }
-    fn all_records(&self) -> Vec<Value> { let mut v: Vec<Value> = self.db.lock().unwrap()["hosts"].as_object().map(|m| m.values().cloned().collect()).unwrap_or_default(); v.extend(self.legacy.clone()); v }
+    fn save(&self) { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()).clone(); let f = self.root.join("ai-hosts.json"); let tmp = f.with_extension("json.tmp"); if std::fs::write(&tmp, serde_json::to_string_pretty(&db).unwrap_or_default()).is_ok() { pgm_core_internal::fs::private(&tmp); let _ = std::fs::rename(&tmp, &f); } self.changed(); }
+    pub fn record(&self, id: &str) -> Option<Value> { self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).cloned().or_else(|| self.legacy.iter().find(|r| r["id"] == json!(id)).cloned()) }
+    fn all_records(&self) -> Vec<Value> { let mut v: Vec<Value> = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].as_object().map(|m| m.values().cloned().collect()).unwrap_or_default(); v.extend(self.legacy.clone()); v }
     // ---------- sessions, kept across restarts ----------
     fn restore_sessions(&self) {
         let s: Value = std::fs::read_to_string(self.root.join("ai-host-sessions.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
-        let mut live = self.live.lock().unwrap();
+        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         for (id, v) in s.as_object().cloned().unwrap_or_default() {
             if self.record(&id).is_none() || !v["hello"].is_object() { continue; }
             let Some(key) = v["key"].as_str().and_then(HostKey::from_hex) else { continue };
@@ -86,13 +86,13 @@ impl AiHosts {
         }
     }
     fn save_sessions(&self) {
-        let o: Map<String, Value> = self.live.lock().unwrap().iter().filter(|(id, n)| n.hello.is_some() && n.key.is_some() && self.record(id).is_some())
+        let o: Map<String, Value> = self.live.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(id, n)| n.hello.is_some() && n.key.is_some() && self.record(id).is_some())
             .map(|(id, n)| (id.clone(), json!({ "hello": n.hello, "key": n.key.as_ref().map(|k| k.to_hex()), "relayOk": n.relay_ok }))).collect();
         let f = self.root.join("ai-host-sessions.json"); let tmp = f.with_extension("json.tmp");
         if std::fs::write(&tmp, serde_json::to_string_pretty(&Value::Object(o)).unwrap_or_default()).is_ok() { pgm_core_internal::fs::private(&tmp); let _ = std::fs::rename(&tmp, &f); }
         self.changed();
     }
-    pub fn online(&self, id: &str) -> bool { self.live.lock().unwrap().get(id).map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false) }
+    pub fn online(&self, id: &str) -> bool { self.live.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false) }
     pub fn changed(&self) { self.dirty.notify_one(); }
     /// What the JavaScript hub needs to answer without asking (its Work runs, the API, the chat ask these all the time):
     /// each host's state, and what each account may pick. Sent on every change and every 5 s; online is counted there
@@ -101,7 +101,7 @@ impl AiHosts {
         let records = self.all_records();
         let mut hosts = Map::new(); let mut by_id = Map::new();
         {
-            let live = self.live.lock().unwrap();
+            let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
             for r in &records {
                 let id = r["id"].as_str().unwrap_or(""); let n = live.get(id);
                 let owner = { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { u.to_string() } else { n.and_then(|n| n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from))).unwrap_or_default() } };
@@ -126,10 +126,10 @@ impl AiHosts {
             tokio::time::sleep(Duration::from_secs(5)).await;
             for r in h.all_records() {
                 let id = r["id"].as_str().unwrap_or("").to_string(); let up = h.online(&id);
-                let prev = h.was_up.lock().unwrap().get(&id).cloned();
+                let prev = h.was_up.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned();
                 match prev {
-                    None => { if h.live.lock().unwrap().contains_key(&id) { h.was_up.lock().unwrap().insert(id, (up, now_ms())); } }
-                    Some((p, since)) if p != up => { println!("[ai-host] {} is {} ({} for {} s)", r["nickname"].as_str().unwrap_or(&id), if up { "back" } else { "OFFLINE" }, if up { "away" } else { "up" }, (now_ms() - since) / 1000); h.was_up.lock().unwrap().insert(id, (up, now_ms())); }
+                    None => { if h.live.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id) { h.was_up.lock().unwrap_or_else(|e| e.into_inner()).insert(id, (up, now_ms())); } }
+                    Some((p, since)) if p != up => { println!("[ai-host] {} is {} ({} for {} s)", r["nickname"].as_str().unwrap_or(&id), if up { "back" } else { "OFFLINE" }, if up { "away" } else { "up" }, (now_ms() - since) / 1000); h.was_up.lock().unwrap_or_else(|e| e.into_inner()).insert(id, (up, now_ms())); }
                     _ => {}
                 }
             }
@@ -137,7 +137,7 @@ impl AiHosts {
         } });
     }
     // ---------- what hosts offer ----------
-    fn owner_of(&self, r: &Value) -> String { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { return u.into(); } self.live.lock().unwrap().get(r["id"].as_str().unwrap_or("")).and_then(|n| n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from))).unwrap_or_default() }
+    fn owner_of(&self, r: &Value) -> String { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { return u.into(); } self.live.lock().unwrap_or_else(|e| e.into_inner()).get(r["id"].as_str().unwrap_or("")).and_then(|n| n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from))).unwrap_or_default() }
     fn allowed(r: &Value, p: &Value) -> Value { if r["share"][p["id"].as_str().unwrap_or("")].is_array() { r["share"][p["id"].as_str().unwrap_or("")].clone() } else { p["allowedUsers"].clone() } }
     fn usage_of(&self, id: &str, n: &Live, p: &Value) -> Value {
         let pid = p["id"].as_str().unwrap_or("");
@@ -169,7 +169,7 @@ impl AiHosts {
     pub fn providers_for(&self, user: &str) -> Vec<Value> {
         let mut out = vec![];
         let records = self.all_records();
-        let live = self.live.lock().unwrap();
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         for r in records {
             let id = r["id"].as_str().unwrap_or("");
             let Some(n) = live.get(id) else { continue }; let Some(hello) = &n.hello else { continue };
@@ -188,7 +188,7 @@ impl AiHosts {
     /// One provider by id "h:<hostId>/<providerId>" (user "" = whoever may use it).
     pub fn provider(&self, pid: &str, user: &str) -> Option<Value> {
         let rest = pid.strip_prefix("h:")?; let (hid, prov) = rest.split_once('/')?;
-        let r = self.record(hid)?; let live = self.live.lock().unwrap(); let n = live.get(hid)?; let hello = n.hello.as_ref()?;
+        let r = self.record(hid)?; let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(hid)?; let hello = n.hello.as_ref()?;
         let p = hello["providers"].as_array()?.iter().find(|x| x["id"] == json!(prov))?.clone();
         if !user.is_empty() && !self.may_use_locked(&r, &p, user, n) { return None; }
         let mut v = self.prov_view_locked(&r, hid, n, &p); v["id"] = json!(pid); Some(v)
@@ -203,13 +203,13 @@ impl AiHosts {
         if user.is_empty() { return None; }
         for r in self.all_records() {
             let id = r["id"].as_str().unwrap_or("").to_string();
-            let pc = self.live.lock().unwrap().get(&id).and_then(|n| n.hello.as_ref().map(|h| h["pc"] == json!(true))).unwrap_or(false);
+            let pc = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).and_then(|n| n.hello.as_ref().map(|h| h["pc"] == json!(true))).unwrap_or(false);
             if pc && self.owner_of(&r) == user && self.online(&id) { return Some(id); }
         }
         None
     }
     pub fn status(&self) -> Vec<Value> {
-        let live = self.live.lock().unwrap(); let was = self.was_up.lock().unwrap();
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let was = self.was_up.lock().unwrap_or_else(|e| e.into_inner());
         self.all_records().iter().map(|r| {
             let id = r["id"].as_str().unwrap_or(""); let n = live.get(id);
             json!({ "id": id, "name": r["nickname"], "nickname": r["nickname"], "user": r["user"], "online": n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false), "polling": n.map(|n| n.waiters > 0).unwrap_or(false),
@@ -220,10 +220,10 @@ impl AiHosts {
     }
     fn pick_engine_host(&self, engine: &str) -> Option<String> {
         if let Some(want) = self.cfg.get("assistant").and_then(|a| a["node"].as_str()).filter(|s| !s.is_empty()) {
-            let ok = self.online(want) && self.live.lock().unwrap().get(want).map(|n| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).unwrap_or(false);
+            let ok = self.online(want) && self.live.lock().unwrap_or_else(|e| e.into_inner()).get(want).map(|n| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).unwrap_or(false);
             return if ok { Some(want.to_string()) } else { None };
         }
-        let ids: Vec<String> = self.live.lock().unwrap().iter().filter(|(_, n)| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).map(|(id, _)| id.clone()).collect();
+        let ids: Vec<String> = self.live.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, n)| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).map(|(id, _)| id.clone()).collect();
         // Unity's engines see everyone's prompts, voice and pictures: only a host from the hub's config or one of a hub
         // admin's lends them, never just anyone's
         ids.into_iter().find(|id| self.online(id) && self.record(id).map(|r| r["legacy"] == json!(true) || self.owner_is_admin(&r)).unwrap_or(false))
@@ -242,27 +242,27 @@ impl AiHosts {
     fn enqueue(self: &Arc<Self>, host: &str, job: Value, p: Pending) -> Result<(), HostErr> {
         let id = job["id"].as_str().unwrap_or("").to_string();
         let notify = {
-            let mut live = self.live.lock().unwrap();
+            let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
             let n = live.entry(host.to_string()).or_default();
             if n.queue.len() >= MAX_QUEUE { return Err(herr(503, "That AI host is overloaded; try again in a moment.")); }
             n.queue.push(job); n.notify.clone()
         };
         let kind = p.kind.clone();
-        self.pending.lock().unwrap().insert(id.clone(), p);
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), p);
         notify.notify_waiters();
         // not picked up in time: the host is away
         let (h, id2, host2) = (self.clone(), id.clone(), host.to_string());
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(PICKUP_MS)).await;
-            let still = h.live.lock().unwrap().get(&host2).map(|n| n.queue.iter().any(|j| j["id"] == json!(id2))).unwrap_or(false);
+            let still = h.live.lock().unwrap_or_else(|e| e.into_inner()).get(&host2).map(|n| n.queue.iter().any(|j| j["id"] == json!(id2))).unwrap_or(false);
             if still { let nick = h.record(&host2).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(host2.clone()); h.finish(&id2, Some(if kind == "work" { format!("{nick} did not pick the job up: the host is away.") } else { OFFLINE_TEXT.to_string() }), None); }
         });
         Ok(())
     }
     /// Ends a job: its waiter gets the error, the end of its stream, or the run's end.
     fn finish(&self, id: &str, err: Option<String>, done_code: Option<i32>) {
-        let Some(p) = self.pending.lock().unwrap().remove(id) else { return };
-        if let Some(n) = self.live.lock().unwrap().get_mut(&p.host) { n.queue.retain(|j| j["id"] != json!(id)); n.cancel.remove(id); }
+        let Some(p) = self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(id) else { return };
+        if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&p.host) { n.queue.retain(|j| j["id"] != json!(id)); n.cancel.remove(id); }
         match p.waiting {
             Some(Waiting::Whole(tx)) => { let _ = tx.send(Err(herr(503, err.unwrap_or_else(|| "cancelled".into())))); }
             Some(Waiting::Stream(tx)) => { if let Some(e) = err { let _ = tx.try_send(Err(e)); } }
@@ -301,7 +301,7 @@ impl AiHosts {
     /// A model call of this hub's own Claude Code / Codex, carried to the host that adds its login. Usage headers feed its caps.
     pub async fn login_fetch(self: &Arc<Self>, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
         if !self.online(host) { return Err(herr(503, format!("That AI host ({}) is offline right now.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(host.into())))); }
-        let cap = { let live = self.live.lock().unwrap(); live.get(host).and_then(|n| n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned())).map(|p| self.over_cap(host, n, &p))).unwrap_or_default() };
+        let cap = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get(host).and_then(|n| n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned())).map(|p| self.over_cap(host, n, &p))).unwrap_or_default() };
         if !cap.is_empty() { return Err(herr(429, format!("{}: {cap}.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or_default()))); }
         let hs: Vec<(String, String)> = headers.into_iter().filter(|(k, _)| !matches!(k.to_lowercase().as_str(), "authorization" | "x-api-key" | "host" | "content-length" | "connection" | "cookie")).collect();
         let r = self.relay(host, &format!("relay:{pid}"), path, method, hs, body, "provider", true).await?;
@@ -313,13 +313,13 @@ impl AiHosts {
         let w = |name: &str| -> Value { match g(&format!("anthropic-ratelimit-unified-{name}-utilization")) { Some(u) => json!({ "utilization": u.parse::<f64>().ok(), "resetsAt": g(&format!("anthropic-ratelimit-unified-{name}-reset")).and_then(|r| r.parse::<f64>().ok()).map(|r| r * 1000.0), "status": g(&format!("anthropic-ratelimit-unified-{name}-status")).unwrap_or_default() }), None => Value::Null } };
         let (five, seven) = (w("5h"), w("7d"));
         if five.is_null() && seven.is_null() { return; }
-        let prev = self.live.lock().unwrap().get(host).and_then(|n| n.usage.get(pid).cloned()).unwrap_or(json!({}));
+        let prev = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(host).and_then(|n| n.usage.get(pid).cloned()).unwrap_or(json!({}));
         self.note_host_usage(host, pid, &json!({ "five_hour": if five.is_null() { prev["five_hour"].clone() } else { five }, "seven_day": if seven.is_null() { prev["seven_day"].clone() } else { seven } }));
     }
     fn note_host_usage(&self, host: &str, pid: &str, u: &Value) {
         let clean = |w: &Value| -> Value { if !w.is_object() { return Value::Null; } let n = w["utilization"].as_f64().or_else(|| w["utilization"].as_str().and_then(|s| s.parse().ok())); json!({ "utilization": n.map(|x| (if x > 1.0 { x / 100.0 } else { x }).clamp(0.0, 1.0)), "resetsAt": w["resetsAt"].as_f64(), "status": w["status"].as_str().unwrap_or("") }) };
         let rec = json!({ "five_hour": clean(&u["five_hour"]), "seven_day": clean(&u["seven_day"]), "at": now_ms() });
-        if let Some(n) = self.live.lock().unwrap().get_mut(host) { n.usage.insert(pid.to_string(), rec.clone()); }
+        if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(host) { n.usage.insert(pid.to_string(), rec.clone()); }
         self.usage.note_windows(&format!("h:{host}/{pid}"), &rec);
         self.changed();
     }
@@ -332,11 +332,11 @@ impl AiHosts {
     pub fn run_work(self: &Arc<Self>, host: &str, pid: &str, payload: Value) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
         let r = self.record(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?;
         let nick = r["nickname"].as_str().unwrap_or(host).to_string();
-        let (key, prov) = { let live = self.live.lock().unwrap(); let n = live.get(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?; (n.key.clone(), n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned()))) };
+        let (key, prov) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?; (n.key.clone(), n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned()))) };
         let key = key.ok_or_else(|| herr(503, "That AI host has not connected yet."))?;
         if !self.online(host) { let o = self.owner_of(&r); return Err(herr(503, format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if o.is_empty() { " (AI host)".to_string() } else { format!(" ({o}'s AI host)") }))); }
         let prov = prov.ok_or_else(|| herr(503, "That host no longer offers this provider."))?;
-        let cap = { let live = self.live.lock().unwrap(); live.get(host).map(|n| self.over_cap(host, n, &prov)).unwrap_or_default() };
+        let cap = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get(host).map(|n| self.over_cap(host, n, &prov)).unwrap_or_default() };
         if !cap.is_empty() { return Err(herr(429, format!("{nick}: {cap}. Pick another AI or wait for the window to reset."))); }
         let id = job_id(); let token = pgm_core_internal::crypto::random_hex(24);
         let mut p = payload.clone(); p["providerId"] = json!(pid); p["token"] = json!(token); p["mcpBase"] = json!(format!("{}/node/job/{id}", payload["hubUrl"].as_str().unwrap_or("")));
@@ -345,24 +345,24 @@ impl AiHosts {
         self.enqueue(host, json!({ "id": id, "kind": "work", "enc": enc }), Pending { kind: "work".into(), host: host.into(), waiting: Some(Waiting::Work(tx)), token: token.clone(), account: payload["account"].as_str().unwrap_or("").into(), display: payload["display"].as_str().unwrap_or("").into(), provider: pid.into(), last: now_ms(), picked: false })?;
         // no word for ten minutes: given up
         let (h, id2) = (self.clone(), id.clone());
-        tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(30)).await; let last = h.pending.lock().unwrap().get(&id2).map(|p| p.last); match last { Some(l) if now_ms() - l > IDLE_MS => { h.finish(&id2, Some("No word from the AI host for ten minutes; the run was given up.".into()), None); return; } Some(_) => {} None => return } } });
+        tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(30)).await; let last = h.pending.lock().unwrap_or_else(|e| e.into_inner()).get(&id2).map(|p| p.last); match last { Some(l) if now_ms() - l > IDLE_MS => { h.finish(&id2, Some("No word from the AI host for ten minutes; the run was given up.".into()), None); return; } Some(_) => {} None => return } } });
         Ok((id, token, rx))
     }
-    pub fn cancel_work(&self, id: &str) { let host = self.pending.lock().unwrap().get(id).map(|p| p.host.clone()); if let Some(h) = host { let n = { let mut live = self.live.lock().unwrap(); live.get_mut(&h).map(|n| { n.cancel.insert(id.to_string()); n.notify.clone() }) }; if let Some(n) = n { n.notify_waiters(); } } }
+    pub fn cancel_work(&self, id: &str) { let host = self.pending.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|p| p.host.clone()); if let Some(h) = host { let n = { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get_mut(&h).map(|n| { n.cancel.insert(id.to_string()); n.notify.clone() }) }; if let Some(n) = n { n.notify_waiters(); } } }
     /// A host's Work run calling the team tools: its account, when the token is the run's.
-    pub fn job_for(&self, id: &str, token: &str) -> Option<(String, String)> { let p = self.pending.lock().unwrap(); let j = p.get(id)?; if j.kind == "work" && !token.is_empty() && same_secret(token, &j.token) { Some((j.account.clone(), j.display.clone())) } else { None } }
+    pub fn job_for(&self, id: &str, token: &str) -> Option<(String, String)> { let p = self.pending.lock().unwrap_or_else(|e| e.into_inner()); let j = p.get(id)?; if j.kind == "work" && !token.is_empty() && same_secret(token, &j.token) { Some((j.account.clone(), j.display.clone())) } else { None } }
 
     // ---------- older hosts: can this one relay a login, or does its Claude run Work itself (2.x)? ----------
     fn probe_relays(self: &Arc<Self>, id: String) {
         let h = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(1500)).await;
-            let provs: Vec<String> = h.live.lock().unwrap().get(&id).and_then(|n| n.hello.as_ref().map(|hh| hh["providers"].as_array().map(|a| a.iter().filter(|p| p["kind"] == json!("claude-cli") || p["kind"] == json!("claude-relay")).filter_map(|p| p["id"].as_str().map(String::from)).collect()).unwrap_or_default())).unwrap_or_default();
+            let provs: Vec<String> = h.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).and_then(|n| n.hello.as_ref().map(|hh| hh["providers"].as_array().map(|a| a.iter().filter(|p| p["kind"] == json!("claude-cli") || p["kind"] == json!("claude-relay")).filter_map(|p| p["id"].as_str().map(String::from)).collect()).unwrap_or_default())).unwrap_or_default();
             for pid in provs {
                 let Ok(r) = h.relay(&id, &format!("relay:{pid}"), "/v1/__viberoller_probe", "POST", vec![("content-type".into(), "application/json".into())], b"{}".to_vec(), "provider", true).await else { continue };
                 let status = r.status; let text = String::from_utf8_lossy(&r.bytes().await).to_lowercase();
                 let ok = !(status == 404 && text.contains("does not lend"));
-                if let Some(n) = h.live.lock().unwrap().get_mut(&id) { n.relay_ok.insert(pid.clone(), json!(ok)); }
+                if let Some(n) = h.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) { n.relay_ok.insert(pid.clone(), json!(ok)); }
                 h.save_sessions();
                 if !ok { println!("[ai-host] {} is an older host (no login relay): its Claude runs Work on that machine, as it did before", h.record(&id).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(id.clone())); }
             }
@@ -394,7 +394,7 @@ impl AiHosts {
     /// The version and commit this hub runs (looked at again every 30 s: the JavaScript hub restarts onto new code while
     /// this front keeps running).
     pub fn release(&self) -> (String, String) {
-        let mut r = self.release_at.lock().unwrap();
+        let mut r = self.release_at.lock().unwrap_or_else(|e| e.into_inner());
         if now_ms() - r.0 > 30_000 { let (v, c) = release_now(&self.root); *r = (now_ms(), v, c); }
         (r.1.clone(), r.2.clone())
     }
@@ -404,7 +404,7 @@ impl AiHosts {
         let Some(r) = self.who(hs) else { return (401, Ok(json!({ "error": "Unknown AI host." }))) };
         let id = r["id"].as_str().unwrap_or("").to_string();
         let b: Value = serde_json::from_slice(body).unwrap_or(json!({}));
-        let notify = { let mut live = self.live.lock().unwrap(); let n = live.entry(id.clone()).or_default(); n.seen = now_ms(); n.notify.clone() };
+        let notify = { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); n.seen = now_ms(); n.notify.clone() };
         let get = *method == hyper::Method::GET; let post = *method == hyper::Method::POST;
         match path {
             "/node/hello" if post => {
@@ -421,7 +421,7 @@ impl AiHosts {
                 let pc = b["pc"] == json!(true) && !r["user"].as_str().unwrap_or("").is_empty();
                 let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"]), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps });
                 let kid = key.id();
-                { let mut live = self.live.lock().unwrap(); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }
+                { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }
                 self.save_sessions();
                 println!("[ai-host] {} ({}) connected: {} provider(s), engines {}, key {kid}{}", r["nickname"].as_str().unwrap_or(""), if hello["user"].as_str().unwrap_or("").is_empty() { "no owner" } else { hello["user"].as_str().unwrap_or("") }, hello["providers"].as_array().map(|a| a.len()).unwrap_or(0), if hello["engines"].as_array().map(|a| a.is_empty()).unwrap_or(true) { "none".to_string() } else { hello["engines"].as_array().unwrap().iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(", ") }, if caps.is_empty() { ", an older host".to_string() } else { format!(", can {}", caps.join(" ")) });
                 if !caps.iter().any(|c| c == "relay") { self.probe_relays(id.clone()); }
@@ -444,30 +444,30 @@ impl AiHosts {
                 else { match native.file(&app, &target, q.get("name").map(String::as_str).unwrap_or("")) { Some(buf) => (200, Err((buf, "application/octet-stream"))), None => (404, Ok(json!({ "error": "Not a file of that release." }))) } }
             }
             "/node/poll" if get => {
-                let has_hello = self.live.lock().unwrap().get(&id).map(|n| n.hello.is_some()).unwrap_or(false);
+                let has_hello = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).map(|n| n.hello.is_some()).unwrap_or(false);
                 if !has_hello && hs.contains_key("x-vr-host") { return (if hs.contains_key("x-vr-host-version") { 428 } else { 401 }, Ok(json!({ "error": "Say hello again: this hub does not know what you offer yet.", "rehello": true }))); }
                 // listening before looking, so a job queued in between is not missed
                 let woke = notify.notified(); tokio::pin!(woke); woke.as_mut().enable();
-                let ready = { let live = self.live.lock().unwrap(); live.get(&id).map(|n| !n.queue.is_empty() || !n.cancel.is_empty()).unwrap_or(false) };
+                let ready = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get(&id).map(|n| !n.queue.is_empty() || !n.cancel.is_empty()).unwrap_or(false) };
                 if !ready {
                     // counted as polling while it waits, also when the host hangs up halfway (the guard counts it out)
                     struct Waiter<'a>(&'a AiHosts, String);
-                    impl Drop for Waiter<'_> { fn drop(&mut self) { if let Some(n) = self.0.live.lock().unwrap().get_mut(&self.1) { n.waiters = n.waiters.saturating_sub(1); n.seen = now_ms(); } self.0.changed(); } }
-                    { self.live.lock().unwrap().entry(id.clone()).or_default().waiters += 1; }
+                    impl Drop for Waiter<'_> { fn drop(&mut self) { if let Some(n) = self.0.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&self.1) { n.waiters = n.waiters.saturating_sub(1); n.seen = now_ms(); } self.0.changed(); } }
+                    { self.live.lock().unwrap_or_else(|e| e.into_inner()).entry(id.clone()).or_default().waiters += 1; }
                     let _w = Waiter(self, id.clone());
                     let _ = tokio::time::timeout(Duration::from_millis(POLL_MS), woke).await;
                 }
-                let (jobs, cancel) = { let mut live = self.live.lock().unwrap(); let n = live.entry(id.clone()).or_default(); let k = n.queue.len().min(8); let jobs: Vec<Value> = n.queue.drain(0..k).collect(); let cancel: Vec<String> = n.cancel.drain().collect(); (jobs, cancel) };
-                { let mut p = self.pending.lock().unwrap(); for j in &jobs { if let Some(pj) = p.get_mut(j["id"].as_str().unwrap_or("")) { pj.picked = true; } } }
+                let (jobs, cancel) = { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); let k = n.queue.len().min(8); let jobs: Vec<Value> = n.queue.drain(0..k).collect(); let cancel: Vec<String> = n.cancel.drain().collect(); (jobs, cancel) };
+                { let mut p = self.pending.lock().unwrap_or_else(|e| e.into_inner()); for j in &jobs { if let Some(pj) = p.get_mut(j["id"].as_str().unwrap_or("")) { pj.picked = true; } } }
                 (200, Ok(json!({ "jobs": jobs, "cancel": cancel, "beat": self.beat() })))
             }
             "/node/reply" if post => {
                 let jid = b["id"].as_str().unwrap_or("").to_string();
-                let mut pend = self.pending.lock().unwrap();
+                let mut pend = self.pending.lock().unwrap_or_else(|e| e.into_inner());
                 let ok = pend.get(&jid).map(|j| j.host == id && j.kind != "work" && matches!(j.waiting, Some(Waiting::Whole(_)))).unwrap_or(false);
                 if !ok { return (404, Ok(json!({ "error": "No such job." }))); }
                 let j = pend.remove(&jid).unwrap(); drop(pend);
-                if let Some(n) = self.live.lock().unwrap().get_mut(&id) { n.queue.retain(|x| x["id"] != json!(jid)); }
+                if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) { n.queue.retain(|x| x["id"] != json!(jid)); }
                 let body = pgm_core_internal::unb64(b["body"].as_str().unwrap_or("")).unwrap_or_default();
                 let (tx, rx) = mpsc::channel(2); if !body.is_empty() { let _ = tx.try_send(Ok(Bytes::from(body))); } drop(tx);
                 if let Some(Waiting::Whole(w)) = j.waiting { let _ = w.send(Ok(Relayed { status: host_status(&b["status"]), headers: pick_headers(&b["headers"]), body: rx })); }
@@ -476,7 +476,7 @@ impl AiHosts {
             "/node/stream" if post => {
                 let jid = b["id"].as_str().unwrap_or("").to_string();
                 let (sender, first) = {
-                    let mut pend = self.pending.lock().unwrap();
+                    let mut pend = self.pending.lock().unwrap_or_else(|e| e.into_inner());
                     let Some(j) = pend.get_mut(&jid).filter(|j| j.host == id && j.kind != "work") else { return (404, Ok(json!({ "error": "No such job." }))) };
                     match j.waiting.take() {
                         Some(Waiting::Whole(w)) => { let (tx, rx) = mpsc::channel(256); let _ = w.send(Ok(Relayed { status: host_status(&b["status"]), headers: pick_headers(&b["headers"]), body: rx })); j.waiting = Some(Waiting::Stream(tx.clone())); (Some(tx), true) }
@@ -486,21 +486,21 @@ impl AiHosts {
                 };
                 let _ = first;
                 if let (Some(tx), Some(c)) = (&sender, b["chunk"].as_str()) { if tx.send(Ok(Bytes::from(pgm_core_internal::unb64(c).unwrap_or_default()))).await.is_err() { self.finish(&jid, Some("cancelled".into()), None); return (404, Ok(json!({ "error": "No longer wanted." }))); } }
-                if b["done"] == json!(true) { let e = b["error"].as_str().map(String::from); if let Some(p) = self.pending.lock().unwrap().remove(&jid) { if let (Some(Waiting::Stream(tx)), Some(e)) = (p.waiting, e) { let _ = tx.try_send(Err(e)); } } }
+                if b["done"] == json!(true) { let e = b["error"].as_str().map(String::from); if let Some(p) = self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&jid) { if let (Some(Waiting::Stream(tx)), Some(e)) = (p.waiting, e) { let _ = tx.try_send(Err(e)); } } }
                 (200, Ok(json!({ "ok": true })))
             }
             "/node/events" if post => {
                 let jid = b["job"].as_str().unwrap_or("").to_string();
-                let (valid, prov) = { let p = self.pending.lock().unwrap(); p.get(&jid).map(|j| (j.host == id && j.kind == "work", j.provider.clone())).unwrap_or((false, String::new())) };
+                let (valid, prov) = { let p = self.pending.lock().unwrap_or_else(|e| e.into_inner()); p.get(&jid).map(|j| (j.host == id && j.kind == "work", j.provider.clone())).unwrap_or((false, String::new())) };
                 if !valid { return (404, Ok(json!({ "error": "No such job." }))); }
-                let key = self.live.lock().unwrap().get(&id).and_then(|n| n.key.clone());
+                let key = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).and_then(|n| n.key.clone());
                 let env: Option<Envelope> = serde_json::from_value(b["enc"].clone()).ok();
                 let Some(batch) = key.zip(env).and_then(|(k, e)| k.open(&e).ok()) else { return (400, Ok(json!({ "error": "Could not open the envelope (the keys differ: say hello again)." }))) };
-                if let Some(p) = self.pending.lock().unwrap().get_mut(&jid) { p.last = now_ms(); }
+                if let Some(p) = self.pending.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&jid) { p.last = now_ms(); }
                 if batch["usage"].is_object() { self.note_host_usage(&id, &prov, &batch["usage"]); }
-                let tx = { let p = self.pending.lock().unwrap(); p.get(&jid).and_then(|j| if let Some(Waiting::Work(t)) = &j.waiting { Some(t.clone()) } else { None }) };
+                let tx = { let p = self.pending.lock().unwrap_or_else(|e| e.into_inner()); p.get(&jid).and_then(|j| if let Some(Waiting::Work(t)) = &j.waiting { Some(t.clone()) } else { None }) };
                 if let Some(tx) = &tx { for ev in batch["events"].as_array().cloned().unwrap_or_default() { let _ = tx.send(WorkMsg::Event(ev)); } }
-                let cancelled = self.live.lock().unwrap().get(&id).map(|n| n.cancel.contains(&jid)).unwrap_or(false);
+                let cancelled = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).map(|n| n.cancel.contains(&jid)).unwrap_or(false);
                 if batch["done"] == json!(true) { self.finish(&jid, None, Some(batch["code"].as_i64().unwrap_or(0) as i32)); }
                 (200, Ok(json!({ "ok": true, "cancel": cancelled })))
             }
@@ -517,7 +517,7 @@ impl AiHosts {
     // ---------- Settings → My AI hosts ----------
     fn pub_host(&self, r: &Value) -> Value {
         let id = r["id"].as_str().unwrap_or("");
-        let live = self.live.lock().unwrap(); let n = live.get(id);
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(id);
         let providers: Vec<Value> = n.and_then(|n| n.hello.as_ref().map(|h| h["providers"].as_array().cloned().unwrap_or_default().into_iter().map(|p| { let mut x = p.clone(); x["allowedUsers"] = Self::allowed(r, &p); x["declared"] = p["allowedUsers"].clone(); x["usage"] = self.usage_of(id, n, &p); let (c, until) = self.cap_of(id, n, &p); x["capped"] = json!(c); x["cappedUntil"] = json!(until); x }).collect())).unwrap_or_default();
         let online = n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false);
         json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "legacy": r["legacy"].as_bool().unwrap_or(false), "createdAt": r["createdAt"], "online": online,
@@ -525,7 +525,7 @@ impl AiHosts {
             "version": n.and_then(|n| n.hello.as_ref().map(|h| h["version"].clone())).unwrap_or(json!("")), "os": n.and_then(|n| n.hello.as_ref().map(|h| h["os"].clone())).unwrap_or(json!("")),
             "engines": n.and_then(|n| n.hello.as_ref().map(|h| h["engines"].clone())).unwrap_or(json!([])), "providers": providers })
     }
-    pub fn mine(&self, user: &str) -> Vec<Value> { let recs: Vec<Value> = self.db.lock().unwrap()["hosts"].as_object().map(|m| m.values().filter(|r| r["user"] == json!(user)).cloned().collect()).unwrap_or_default(); recs.iter().map(|r| self.pub_host(r)).collect() }
+    pub fn mine(&self, user: &str) -> Vec<Value> { let recs: Vec<Value> = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].as_object().map(|m| m.values().filter(|r| r["user"] == json!(user)).cloned().collect()).unwrap_or_default(); recs.iter().map(|r| self.pub_host(r)).collect() }
     pub fn all(&self) -> Vec<Value> { self.all_records().iter().map(|r| self.pub_host(r)).collect() }
     fn new_nickname(&self) -> String {
         let pick = |n: usize| { let b = pgm_core_internal::crypto::random_bytes(4); (u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize) % n };
@@ -543,39 +543,39 @@ impl AiHosts {
     }
     pub fn create(&self, user: &str, nickname: &str) -> Result<Value, String> {
         if user.is_empty() || user.len() > 32 || !user.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { return Err("Unknown account.".into()); }
-        if self.db.lock().unwrap()["hosts"].as_object().map(|m| m.values().filter(|r| r["user"] == json!(user)).count()).unwrap_or(0) >= 10 { return Err("Ten hosts per person is plenty; remove one first.".into()); }
+        if self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].as_object().map(|m| m.values().filter(|r| r["user"] == json!(user)).count()).unwrap_or(0) >= 10 { return Err("Ten hosts per person is plenty; remove one first.".into()); }
         let nick = if nickname.is_empty() { self.new_nickname() } else { self.check_nick(nickname)? };
         let id = uuid4();
         let r = json!({ "id": id, "user": user, "nickname": nick, "secret": pgm_core_internal::crypto::random_hex(24), "createdAt": pgm_core_internal::time::iso_now(), "share": {} });
-        self.db.lock().unwrap()["hosts"][&id] = r.clone(); self.save();
+        self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"][&id] = r.clone(); self.save();
         Ok(self.pub_host(&r))
     }
     pub fn rename(&self, user: &str, id: &str, nick: &str) -> Result<Value, String> {
-        let owned = self.db.lock().unwrap()["hosts"].get(id).map(|r| r["user"] == json!(user)).unwrap_or(false);
+        let owned = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).map(|r| r["user"] == json!(user)).unwrap_or(false);
         if !owned { return Err("Not your host.".into()); }
         let n = self.check_nick(nick)?;
-        self.db.lock().unwrap()["hosts"][id]["nickname"] = json!(n); self.save();
+        self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"][id]["nickname"] = json!(n); self.save();
         Ok(self.pub_host(&self.record(id).unwrap()))
     }
     pub fn remove(&self, user: &str, id: &str) -> Result<(), String> {
-        let owned = self.db.lock().unwrap()["hosts"].get(id).map(|r| r["user"] == json!(user)).unwrap_or(false);
+        let owned = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).map(|r| r["user"] == json!(user)).unwrap_or(false);
         if !owned { return Err("Not your host.".into()); }
-        if let Some(m) = self.db.lock().unwrap()["hosts"].as_object_mut() { m.remove(id); }
-        self.live.lock().unwrap().remove(id); self.save();
+        if let Some(m) = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].as_object_mut() { m.remove(id); }
+        self.live.lock().unwrap_or_else(|e| e.into_inner()).remove(id); self.save();
         Ok(())
     }
     pub fn set_share(&self, user: &str, id: &str, pid: &str, users: &Value) -> Result<Value, String> {
-        let owned = self.db.lock().unwrap()["hosts"].get(id).map(|r| r["user"] == json!(user)).unwrap_or(false);
+        let owned = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).map(|r| r["user"] == json!(user)).unwrap_or(false);
         if !owned { return Err("Not your host.".into()); }
         if pid.is_empty() || pid.len() > 32 || !pid.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { return Err("Unknown provider.".into()); }
-        { let mut db = self.db.lock().unwrap(); let r = &mut db["hosts"][id]; if !r["share"].is_object() { r["share"] = json!({}); }
+        { let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let r = &mut db["hosts"][id]; if !r["share"].is_object() { r["share"] = json!({}); }
           if users.is_null() { if let Some(m) = r["share"].as_object_mut() { m.remove(pid); } } else { r["share"][pid] = json!(clean_users(users)); } }
         self.save();
         Ok(self.pub_host(&self.record(id).unwrap()))
     }
     /// The host program's config for one of the person's hosts (what the AI Host download carries).
     pub fn config_for(&self, user: &str, id: &str, hub: &str, models: Vec<String>) -> Result<Value, String> {
-        let r = self.db.lock().unwrap()["hosts"].get(id).cloned().filter(|r| r["user"] == json!(user)).ok_or("Not your host.")?;
+        let r = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).cloned().filter(|r| r["user"] == json!(user)).ok_or("Not your host.")?;
         let nick = r["nickname"].as_str().unwrap_or("");
         Ok(json!({ "_": format!("VibeRoller AI Host \"{nick}\" of {user}: made in Settings → My AI hosts. Keep this file private: the token is this host's key to the hub."), "hub": hub, "id": r["id"], "nickname": nick, "user": user, "token": r["secret"],
             "providers": [{ "id": "claude", "kind": "claude-relay", "label": format!("{user}'s Claude"), "models": models, "max5h": 90, "max7d": 90, "shareWithGroup": true, "allowedUsers": [] },

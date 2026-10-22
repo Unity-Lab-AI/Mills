@@ -39,10 +39,10 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let b = r.json();
             let text: String = s(&b, "message").trim().chars().take(8000).collect();
             if text.is_empty() { return Some(answer(400, json!({ "error": "Empty message." }))); }
-            if u.runs.lock().unwrap().contains_key(un) { return Some(answer(409, json!({ "error": "Unity is still answering. Stop her first." }))); }
+            if u.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(un) { return Some(answer(409, json!({ "error": "Unity is still answering. Stop her first." }))); }
             u.learn_client(a, &b["client"], &client_ip(&**hub, r)).await;
             let cancel = Arc::new(crate::openai::Cancel::default());
-            u.runs.lock().unwrap().insert(un.clone(), (cancel.clone(), None)); hub.work().busy_changed.notify_one();
+            u.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(un.clone(), (cancel.clone(), None)); hub.work().busy_changed.notify_one();
             let (tx, rx) = mpsc::unbounded_channel();
             let (h, acc) = (hub.clone(), a.clone());
             tokio::spawn(async move {
@@ -51,7 +51,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                 let pinger = { let tx = tx.clone(); tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(15)).await; if tx.send(json!({ "type": "ping" })).is_err() { return; } } }) };
                 let br = u.brain_of(&acc);
                 let photo = b["photo"].as_str().filter(|x| regex::Regex::new(r"^[a-z0-9-]+/[a-z0-9-]+$").unwrap().is_match(x) && u.read_picture(&acc.username, x).is_some()).unwrap_or("").to_string();
-                if !photo.is_empty() { u.last.lock().unwrap().insert(acc.username.clone(), (photo.clone(), photo.clone())); }
+                if !photo.is_empty() { u.last.lock().unwrap_or_else(|e| e.into_inner()).insert(acc.username.clone(), (photo.clone(), photo.clone())); }
                 let res = if br == "local" { brain::run_local(&h, &acc, &text, &mut ci, &cancel, brain::Opts { photo: photo.clone(), ..Default::default() }).await }
                     else { brain::run_claude(&h, &acc, &if photo.is_empty() { text.clone() } else { format!("{text}\n\n(They sent a photo, id {photo}; use edit_image / inpaint_image with image \"camera\" to work with it.)") }, &mut ci, &br).await };
                 match res {
@@ -62,30 +62,30 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                             h.push(json!({ "role": "assistant", "content": format!("{}{}{}", if reply.is_empty() { "(did it)" } else { &reply }, ci.images.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), ci.media.iter().map(|v| format!("\n[[youtube:{v}]]")).collect::<String>()) }));
                             if h.len() > HISTORY_KEEP * 2 { let k = h.len() - HISTORY_KEEP * 2; h.drain(0..k); }
                         });
-                        let _ = tx.send(json!({ "type": "final", "text": reply, "brain": br, "images": ci.images, "media": ci.media, "pending": u.pending.lock().unwrap().get(&acc.username).cloned().unwrap_or(Value::Null) }));
+                        let _ = tx.send(json!({ "type": "final", "text": reply, "brain": br, "images": ci.images, "media": ci.media, "pending": u.pending.lock().unwrap_or_else(|e| e.into_inner()).get(&acc.username).cloned().unwrap_or(Value::Null) }));
                     }
                     Err(e) => { let _ = tx.send(json!({ "type": "error", "text": if cancel.is() { "Stopped.".to_string() } else { e } })); }
                 }
                 pinger.abort();
-                u.runs.lock().unwrap().remove(&acc.username); h.work().busy_changed.notify_one();
+                u.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&acc.username); h.work().busy_changed.notify_one();
             });
             ndjson(rx)
         }
         "/api/assistant/state" if get => {
-            let checked = u.ollama_state.lock().unwrap().checked;
+            let checked = u.ollama_state.lock().unwrap_or_else(|e| e.into_inner()).checked;
             if pgm_core_internal::now_ms() - checked > if u.via_node { 3000 } else { 30000 } { u.ensure_ollama(hub).await; }
-            let st = u.store(a); let ol = u.ollama_state.lock().unwrap().clone();
+            let st = u.store(a); let ol = u.ollama_state.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let h = st["history"].as_array().cloned().unwrap_or_default();
             let now = pgm_core_internal::now_ms() as i64;
             answer(200, json!({ "brain": u.brain_of(a), "brains": brains(&**hub), "tools": { "pc": u.group_on(a, "pc"), "code": u.group_on(a, "code") }, "local": { "up": ol.up, "model": ol.model, "name": u.local_model },
-                "pending": u.pending.lock().unwrap().get(un).cloned().unwrap_or(Value::Null), "notices": u.notices.lock().unwrap().remove(un).unwrap_or_default(),
+                "pending": u.pending.lock().unwrap_or_else(|e| e.into_inner()).get(un).cloned().unwrap_or(Value::Null), "notices": u.notices.lock().unwrap_or_else(|e| e.into_inner()).remove(un).unwrap_or_default(),
                 "history": h.iter().skip(h.len().saturating_sub(40)).cloned().collect::<Vec<_>>(),
                 "counts": { "tasks": st["tasks"].as_array().map(|t| t.iter().filter(|x| x["status"] == json!("pending")).count()).unwrap_or(0), "reminders": st["reminders"].as_array().map(|t| t.iter().filter(|x| x["fired"] != json!(true)).count()).unwrap_or(0), "events": st["events"].as_array().map(|t| t.iter().filter(|x| x["at"].as_i64().unwrap_or(0) >= now).count()).unwrap_or(0) } }))
         }
         "/api/assistant/brain" if post => {
             let b = s(&r.json(), "brain");
             if !brains(&**hub).iter().any(|x| x["id"] == json!(b)) { return Some(answer(400, json!({ "error": "Unknown brain." }))); }
-            if u.runs.lock().unwrap().contains_key(un) { return Some(answer(409, json!({ "error": "Wait for her to finish first." }))); }
+            if u.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(un) { return Some(answer(409, json!({ "error": "Wait for her to finish first." }))); }
             let changed = b != u.brain_of(a);
             u.set_state(a, |m| { if changed { m.insert("claudeSession".into(), json!("")); } m.insert("brain".into(), json!(b)); });
             answer(200, json!({ "brain": b }))
@@ -93,7 +93,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/assistant/stop" if post => { u.stop(un); answer(200, json!({ "ok": true })) }
         "/api/assistant/answer" if post => {
             let yes = truthy(&r.json()["yes"]);
-            let Some(pnd) = u.pending.lock().unwrap().remove(un) else { return Some(answer(200, json!({ "ok": false, "error": "Nothing is waiting for an answer." }))) };
+            let Some(pnd) = u.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(un) else { return Some(answer(200, json!({ "ok": false, "error": "Nothing is waiting for an answer." }))) };
             let tool = s(&pnd, "tool");
             let group = Unity::tools().into_iter().find(|t| t["name"] == json!(tool)).map(|t| s(&t, "group")).unwrap_or_default();
             if yes && group == "pc" { // a confirmed change on THEIR computer: their page does it (the reply stream is closed by now)
@@ -106,8 +106,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             answer(200, json!({ "ok": true, "tool": tool, "result": res }))
         }
         "/api/assistant/clear" if post => {
-            if u.runs.lock().unwrap().contains_key(un) { return Some(answer(409, json!({ "error": "Wait for her to finish first." }))); }
-            u.with_store(a, |st| st["history"] = json!([])); u.set_state(a, |m| { m.insert("claudeSession".into(), json!("")); }); u.pending.lock().unwrap().remove(un);
+            if u.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(un) { return Some(answer(409, json!({ "error": "Wait for her to finish first." }))); }
+            u.with_store(a, |st| st["history"] = json!([])); u.set_state(a, |m| { m.insert("claudeSession".into(), json!("")); }); u.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(un);
             answer(200, json!({ "ok": true }))
         }
         "/api/assistant/client" if post => { let k = u.learn_client(a, &r.json()["client"], &client_ip(&**hub, r)).await; answer(200, json!({ "ok": true, "tz": k["tz"], "place": s(&k, "place") })) }
@@ -117,7 +117,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         },
         "/api/assistant/pc-result" if post => {
             let b = r.json(); let id = s(&b, "id");
-            let w = { let mut m = u.waiting.lock().unwrap(); if m.get(&id).map(|x| x.0 == *un).unwrap_or(false) { m.remove(&id) } else { None } };
+            let w = { let mut m = u.waiting.lock().unwrap_or_else(|e| e.into_inner()); if m.get(&id).map(|x| x.0 == *un).unwrap_or(false) { m.remove(&id) } else { None } };
             let Some((_, tx)) = w else { return Some(answer(404, json!({ "error": "Nothing is waiting for that." }))) };
             let _ = tx.send(if truthy(&b["ok"]) { json!({ "ok": true, "result": match &b["result"] { Value::String(t) => json!(t.chars().take(20000).collect::<String>()), v => v.clone() } }) } else { json!({ "ok": false, "error": (if b["error"].is_null() { "failed".to_string() } else { s(&b, "error") }).chars().take(2000).collect::<String>() }) });
             answer(200, json!({ "ok": true }))
@@ -164,7 +164,7 @@ pub async fn internal(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
         return answer(200, json!({ "ok": true, "tools": tools.iter().filter(|t| t["name"] != json!("say")).map(|t| json!({ "name": t["name"], "description": t["description"], "inputSchema": { "type": "object", "properties": t["params"], "required": t["required"] } })).collect::<Vec<_>>() }));
     }
     let Some(a) = acc else { return answer(200, json!({ "ok": false, "error": "Unknown account." })) };
-    let mut ci = u.client_info(&json!({}), &a); ci.out = u.claude_out.lock().unwrap().get(&a.username).cloned();
+    let mut ci = u.client_info(&json!({}), &a); ci.out = u.claude_out.lock().unwrap_or_else(|e| e.into_inner()).get(&a.username).cloned();
     let res = brain::call_tool(hub, &a, &s(&b, "name"), &if b["args"].is_object() { b["args"].clone() } else { json!({}) }, &mut ci).await;
     answer(200, json!({ "ok": true, "result": res }))
 }
@@ -190,14 +190,14 @@ fn agent_system(hub: &dyn AiHub) -> String {
      "`node bridge/restart.js` already waits until nobody is busy. Say in the room before you trigger a restart.".into()].join(" ")
 }
 const ROOM_LOCAL: &str = "You are in the VibeRoller team chat room (Unity AI Lab engineers, all adults, your people). Your final answer is posted to the room as one chat message: conversational, no tool narration; pictures you make with generate_image are attached to your message automatically. When told someone just signed in, greet them in a short, sexy Unity way and work in the facts you were given about their local time, weather and news.";
-pub fn room_busy(hub: &dyn AiHub) -> bool { hub.unity_room().lock().unwrap().running }
+pub fn room_busy(hub: &dyn AiHub) -> bool { hub.unity_room().lock().unwrap_or_else(|e| e.into_inner()).running }
 /// Unity is called: target = a private answer to that person ('' = where she was called), caller = whose tools / time /
 /// place she uses, conv = a channel / group. One turn at a time, like any agent: a call while she is busy waits in her
 /// queue, and calls in a conversation that is already waiting are merged into that conversation's next turn.
 pub fn run_agent(hub: &Arc<dyn AiHub>, target: String, caller: String, conv: String) {
     let conv = if target.is_empty() { conv } else { String::new() };
     {
-        let mut rm = hub.unity_room().lock().unwrap();
+        let mut rm = hub.unity_room().lock().unwrap_or_else(|e| e.into_inner());
         if rm.running { if !rm.queued.iter().any(|q| q.0 == target && q.2 == conv) { rm.queued.push_back((target, caller, conv)); } return; }
         rm.running = true;
     }
@@ -207,7 +207,7 @@ pub fn run_agent(hub: &Arc<dyn AiHub>, target: String, caller: String, conv: Str
         h.set_agent_busy(Some((target.clone(), conv.clone())));
         let blocks = h.agent_blocks(&target, &conv);
         // sign-in greetings belong to # Everyone's turn
-        let notes: Vec<String> = if target.is_empty() && conv.is_empty() { std::mem::take(&mut h.unity_room().lock().unwrap().notes) } else { vec![] };
+        let notes: Vec<String> = if target.is_empty() && conv.is_empty() { std::mem::take(&mut h.unity_room().lock().unwrap_or_else(|e| e.into_inner()).notes) } else { vec![] };
         let prompt = format!("You were called in the VibeRoller chat (you only ever see the messages that @-mention you, plus the few before them):\n\n{blocks}\n\n{}Reply now.", if notes.is_empty() { String::new() } else { notes.join("\n") + "\n\n" });
         let text = if h.cfg().get("roomAgentBrain").and_then(Value::as_str).unwrap_or("local") == "local" {
             let accts = h.accounts();
@@ -220,7 +220,7 @@ pub fn run_agent(hub: &Arc<dyn AiHub>, target: String, caller: String, conv: Str
         h.set_agent_busy(None);
         let t = text.trim();
         if !t.is_empty() { h.agent_say(&t.chars().take(20000).collect::<String>(), &target, "", "", &conv); } else { h.chat_room_changed(); }
-        let next = { let mut rm = h.unity_room().lock().unwrap(); rm.running = false; rm.queued.pop_front() };
+        let next = { let mut rm = h.unity_room().lock().unwrap_or_else(|e| e.into_inner()); rm.running = false; rm.queued.pop_front() };
         h.work().busy_changed.notify_one();
         if let Some((t, ca, cv)) = next { run_agent(&h, t, ca, cv); }
     });
@@ -263,10 +263,10 @@ pub fn signed_in(hub: &Arc<dyn AiHub>, user: &str, client: Value, ip: String) {
         h.unity().learn_client(&a, &client, &ip).await;
         let us: Vec<(String, String, bool)> = h.accounts().into_iter().map(|x| (x.username, x.display, x.admin)).collect();
         if !h.chat_agent_on(&us) { return; }
-        { let mut rm = h.unity_room().lock().unwrap(); let last = rm.greeted.get(&a.username).copied().unwrap_or(0); if pgm_core_internal::now_ms() - last < 30 * 60_000 && last > 0 { return; } rm.greeted.insert(a.username.clone(), pgm_core_internal::now_ms()); }
+        { let mut rm = h.unity_room().lock().unwrap_or_else(|e| e.into_inner()); let last = rm.greeted.get(&a.username).copied().unwrap_or(0); if pgm_core_internal::now_ms() - last < 30 * 60_000 && last > 0 { return; } rm.greeted.insert(a.username.clone(), pgm_core_internal::now_ms()); }
         for _ in 0..30 { if h.chat_has_key(&a.username) { break; } tokio::time::sleep(Duration::from_secs(2)).await; }
         let facts = if h.cfg().get("roomAgentBrain").and_then(Value::as_str).unwrap_or("local") == "local" { brain::greeting(&h, &a).await } else { String::new() };
-        h.unity_room().lock().unwrap().notes.push(format!("{} ({}) just signed in to VibeRoller. Say hi to them.{}", a.display, a.username, if facts.is_empty() { String::new() } else { format!("\n{facts}") }));
+        h.unity_room().lock().unwrap_or_else(|e| e.into_inner()).notes.push(format!("{} ({}) just signed in to VibeRoller. Say hi to them.{}", a.display, a.username, if facts.is_empty() { String::new() } else { format!("\n{facts}") }));
         run_agent(&h, String::new(), a.username.clone(), String::new());
     });
 }
