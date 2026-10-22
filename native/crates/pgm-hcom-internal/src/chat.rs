@@ -126,7 +126,8 @@ impl Chat {
         let agent_name = cfg.get("roomAgentName").and_then(Value::as_str).unwrap_or("Unity").to_string();
         let handle: String = agent_name.to_lowercase().split_whitespace().collect();
         let agent_on = !users.iter().any(|u| u.0 == AGENT) && cfg.get("roomAgent") != Some(&json!(false));
-        let g = Guilds::new(&dir, root.join("server-owners.json"), &agent_name, users);
+        let home = cfg.get("homeServerName").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).unwrap_or("VibeRoller");
+        let g = Guilds::new(&dir, root.join("server-owners.json"), &agent_name, home, users);
         Chat { dir, store: Mutex::new(Store { messages, seq, rev }), keys: Mutex::new(keys), seen: Mutex::new(seen), seen_dirty: Notify::new(), guilds: g, room_ver: AtomicU64::new(1), keys_ver: AtomicU64::new(1), room_woke: Notify::new(),
             presence: Mutex::default(), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
     }
@@ -560,7 +561,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             Some(op) => {
                 let ctx = ctx!(hub, us.clone());
                 let (res, ann) = c.guilds.op(op, u, &if b.is_object() { b.clone() } else { json!({}) }, &ctx);
-                for (conv, text) in ann { agent_say(hub, &text, "", "VibeRoller", "", &conv); }
+                for (conv, text) in ann { agent_say(hub, &text, "", &c.guilds.home, "", &conv); }
                 match res {
                     Ok(v) => { c.room_changed(); let view = c.guilds.view(u, &ctx); let mut out = json!({ "ok": true, "result": if v.is_object() && v.get("password").is_some() && v.get("members").is_some() { json!({ "id": v["id"], "name": v["name"] }) } else { v } }); for (k, x) in view.as_object().cloned().unwrap_or_default() { out[k] = x; } answer(200, out) }
                     Err(e) => answer(400, json!({ "error": e })),
@@ -696,7 +697,7 @@ pub fn team_tool(hub: &dyn ChatHost, name: &str, args: &Value, a: &Account) -> V
             let (op, body) = if name == "team_channel_create" { ("createChannel", json!({ "server": if s(args, "server").is_empty() { "mills".to_string() } else { s(args, "server") }, "name": s(args, "name"), "topic": s(args, "topic") })) }
                 else { ("createGroup", json!({ "name": s(args, "name"), "members": if args["members"].is_array() { args["members"].clone() } else { json!(s(args, "members").split(|ch: char| ch == ',' || ch.is_whitespace()).filter(|x| !x.is_empty()).collect::<Vec<_>>()) } })) };
             let (res, ann) = c.guilds.op(op, u, &body, &ctx);
-            for (conv, text) in ann { agent_say(hub, &text, "", "VibeRoller", "", &conv); }
+            for (conv, text) in ann { agent_say(hub, &text, "", &c.guilds.home, "", &conv); }
             match res {
                 Ok(v) => { c.room_changed(); if op == "createChannel" { ok(json!({ "created": true, "conv": format!("ch:{}/{}", s(&body, "server"), s(&v, "id")), "channel": v })) } else { ok(json!({ "created": true, "conv": format!("grp:{}", s(&v, "id")), "group": { "id": v["id"], "name": v["name"], "members": v["members"] } })) } }
                 Err(e) => no(e),

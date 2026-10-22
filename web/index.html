@@ -816,6 +816,8 @@
     <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
   </div>
   <div class="menuFoot menuDl"><button class="ghost" id="goDownloads" data-downloads title="Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux"><svg class="ic lead"><use href="#i-download"/></svg>Download</button></div>
+  <!-- the PGM products this hub serves (PGM Gateway, 5.2.0): each its own program and account, signed in with the same VibeRoller login -->
+  <div class="menuFoot menuProducts" id="menuProducts" hidden><span class="folder">Also here:</span> <a href="/p/prodsuit/" target="_blank" rel="noopener">PGM Prod Suit</a> · <a href="/p/shadowchat/" target="_blank" rel="noopener">PGM ShaDow Chat</a> · <a href="/p/hyperprodman/" target="_blank" rel="noopener">PGM Hyper Prod Man</a></div>
   <div class="menuFoot">
     <button class="ghost" id="goSettings" data-settings><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button>
     <button class="ghost" id="menuLogout"><svg class="ic lead"><use href="#i-logout"/></svg>Sign out</button>
@@ -1253,7 +1255,7 @@ if (PRODUCT) { // a product's page: its name, only its screens on the menu, no D
   for (const [s, id] of Object.entries({ shell: 'goWork', room: 'goChat', board: 'goBoard', cal: 'goCal', notes: 'goNotes', library: 'goFiles', assist: 'goAssist' })) if (!PRODUCT.screens.includes(s)) $(id).hidden = true;
   $('goDownloads').hidden = true;
   for (const t of ['connections', 'downloads']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
-}
+} else if ('__MILLS_SERVED__' === 'hub') $('menuProducts').hidden = false; // the hub's own page (the hub fills this in; SERVED_BY_HUB is defined further down): the products it serves
 $('username').value = (new URLSearchParams(location.search).get('user') || store.get('mills.username') || '').toLowerCase();
 if ($('username').value) $('password').focus();
 

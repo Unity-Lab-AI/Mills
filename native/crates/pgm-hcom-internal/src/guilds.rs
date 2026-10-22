@@ -34,7 +34,8 @@ impl Ctx<'_> {
 /// What an op leaves to do once the servers are saved: welcome-channel lines posted as "VibeRoller".
 pub type Announce = Vec<(String, String)>;
 
-pub struct Guilds { file: PathBuf, db: Mutex<Value>, ver: AtomicU64, last_post: Mutex<HashMap<String, u64>>, pw_tries: Mutex<HashMap<String, Vec<u64>>>, pub agent_name: String }
+pub struct Guilds { file: PathBuf, db: Mutex<Value>, ver: AtomicU64, last_post: Mutex<HashMap<String, u64>>, pw_tries: Mutex<HashMap<String, Vec<u64>>>, pub agent_name: String, /// the everyone-server's name (what welcome lines are posted as)
+    pub home: String }
 fn obj(v: &Value) -> Value { if v.is_object() { v.clone() } else { json!({}) } }
 fn arr(v: &Value) -> Vec<Value> { v.as_array().cloned().unwrap_or_default() }
 fn strs(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() }
@@ -71,20 +72,21 @@ pub fn parse(conv: &str) -> Option<Conv> {
 pub fn is_guild_conv(conv: &str) -> bool { conv.starts_with("ch:") || conv.starts_with("grp:") }
 
 impl Guilds {
-    pub fn new(chat_dir: &std::path::Path, seed: PathBuf, agent_name: &str, users: &[(String, String, bool)]) -> Guilds {
+    /// `home`: the everyone-server's name when it is first made (VibeRoller's hub: "VibeRoller"; a product: its own name).
+    pub fn new(chat_dir: &std::path::Path, seed: PathBuf, agent_name: &str, home: &str, users: &[(String, String, bool)]) -> Guilds {
         let file = chat_dir.join("guilds.json");
         let mut db: Value = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
         if !db["servers"].is_array() { db = json!({ "servers": [], "groups": [] }); }
         if !db["groups"].is_array() { db["groups"] = json!([]); }
         if !db["pins"].is_object() { db["pins"] = json!({}); }
         let has_mills = db["servers"].as_array().unwrap().iter().any(|x| x["id"] == json!("mills"));
-        if !has_mills { db["servers"].as_array_mut().unwrap().insert(0, json!({ "id": "mills", "name": "VibeRoller", "everyone": true, "channels": [{ "id": "general", "name": "general", "topic": "the whole team" }], "createdBy": "" })); }
+        if !has_mills { db["servers"].as_array_mut().unwrap().insert(0, json!({ "id": "mills", "name": home, "everyone": true, "channels": [{ "id": "general", "name": "general", "topic": "the whole team" }], "createdBy": "" })); }
         for sv in db["servers"].as_array_mut().unwrap() {
-            if sv["id"] == json!("mills") { sv["everyone"] = json!(true); if sv["name"] == json!("Mills") { sv["name"] = json!("VibeRoller"); } }
+            if sv["id"] == json!("mills") { sv["everyone"] = json!(true); if sv["name"] == json!("Mills") { sv["name"] = json!(home); } }
             norm_server(sv);
         }
         for g in db["groups"].as_array_mut().unwrap() { if s(g, "owner").is_empty() { g["owner"] = json!(if !s(g, "createdBy").is_empty() { s(g, "createdBy") } else { strs(&g["members"]).first().cloned().unwrap_or_default() }); } }
-        let gl = Guilds { file, db: Mutex::new(db), ver: AtomicU64::new(1), last_post: Mutex::default(), pw_tries: Mutex::default(), agent_name: agent_name.into() };
+        let gl = Guilds { file, db: Mutex::new(db), ver: AtomicU64::new(1), last_post: Mutex::default(), pw_tries: Mutex::default(), agent_name: agent_name.into(), home: home.into() };
         gl.apply_seeds(&seed, users);
         gl
     }
@@ -150,6 +152,14 @@ impl Guilds {
         }
     }
     pub fn is_member(&self, conv: &str, u: &str, ctx: &Ctx) -> bool { self.members(conv, ctx).map(|l| l.iter().any(|x| x == u)).unwrap_or(false) }
+    /// The servers (not the everyone-server) this person is in, with their task rights: (id, name, may see the board,
+    /// may change it). VIEW_TASKS / MANAGE_TASKS by their roles; the owner and administrators may do everything.
+    pub fn task_access(&self, u: &str, ctx: &Ctx) -> Vec<(String, String, bool, bool)> {
+        let db = self.db.lock().unwrap();
+        let p = Perms { hub_admin: &|x| ctx.admin(x) };
+        db["servers"].as_array().map(|a| a.iter().filter(|sv| sv["everyone"] != json!(true) && Self::in_server(sv, u, ctx) && !p.timed_out(sv, u))
+            .map(|sv| (s(sv, "id"), s(sv, "name"), p.can(sv, u, "VIEW_TASKS") || p.can(sv, u, "MANAGE_TASKS"), p.can(sv, u, "MANAGE_TASKS"))).collect()).unwrap_or_default()
+    }
     pub fn allows(&self, conv: &str, u: &str, perm: &str, ctx: &Ctx) -> bool { let db = self.db.lock().unwrap(); let p = Perms { hub_admin: &|x| ctx.admin(x) }; match Self::chan_of(&db, conv) { Some((sv, ch)) => p.can_in(sv, Some(ch), u, perm), None => true } }
     /// '' = may post there; otherwise why not (timeout, permissions, the new-member wait, slowmode).
     pub fn post_check(&self, conv: &str, u: &str, voice: bool, edit: bool, ctx: &Ctx) -> String {

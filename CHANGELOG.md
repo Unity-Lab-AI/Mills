@@ -7,6 +7,20 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.2.1 — 2026-10-22
+
+PATCH: the libraries' copy here is brought level with pgm-libs 5.4.0 (the products' needs; nothing the hub uses
+changed): pgm-hcom-internal gets `profile` (profiles, prefs, pictures), the everyone-server's name from the config
+(`homeServerName`, default "VibeRoller"), a "Tasks" permission category (VIEW_TASKS, MANAGE_TASKS; not given to
+@everyone) and `Guilds::task_access`; pgm-collab-internal gets `Board::ensure_board` / `board_of`. The hub's own
+behaviour is unchanged: the same servers, roles, boards and routes.
+- The menu links to the products served here (`web/index.html` 1.14.1: "Also here: PGM Prod Suit · ShaDow Chat ·
+  Hyper Prod Man"), on the hub's own page only.
+- The desktop app takes its name from the build (`VR_APP_NAME`: the window title, the taskbar count, the tray), so
+  the same app is each product's (native/crates/vr-desktop). `native/build-products.sh` builds the products' Windows
+  apps (the product's address, name and identity built in) and attaches them to the product's release on Forgejo;
+  `native/zip.js` zips them (this server has no zip program).
+
 ## 5.2.0 — 2026-10-22
 
 **MINOR: PGM Gateway serves its products on this site** (board T-147 / T-150). A product registered with its port is
