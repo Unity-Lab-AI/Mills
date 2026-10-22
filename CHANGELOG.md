@@ -7,6 +7,11 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.4.1 — 2026-10-22
+
+PATCH: `bridge/unity.json` (the Rust hub's copy of Unity's state, data) is gitignored. It was untracked in the live
+checkout, which made `worktree.js live` refuse ("main has uncommitted changes") until it was excluded by hand.
+
 ## 5.4.0 — 2026-10-22
 
 MINOR: **the full-Rust hub, step 1 (FR1): a bad request never takes the Rust hub down.** Spec: team note

@@ -46,6 +46,9 @@ Archive/
 # Assistant: persona prompt (host-local) and per-account data
 bridge/assistant-persona.txt
 bridge/assistant.json
+# the Rust hub's copy of Unity's state (5.x): data, never shipped (an untracked data file blocks "live")
+bridge/unity.json
+bridge/unity.json.tmp
 # AI providers people hooked up (API keys / login folders / endpoints) and the empty folder API calls run in
 bridge/providers.json
 Api/
