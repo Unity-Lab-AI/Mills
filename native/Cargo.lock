@@ -3311,6 +3311,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgm-ai-internal"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "chrono-tz",
+ "futures-util",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "pgm-collab-internal",
+ "pgm-core-internal",
+ "pgm-dist-internal",
+ "pgm-identity-internal",
+ "pgm-net-internal",
+ "pgm-platform-internal",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tokio",
+]
+
+[[package]]
 name = "pgm-collab-internal"
 version = "0.1.0"
 dependencies = [
@@ -3354,6 +3382,29 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "pgm-hcom-internal"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "flate2",
+ "hex",
+ "hyper",
+ "libc",
+ "p256",
+ "pgm-core-internal",
+ "pgm-identity-internal",
+ "pgm-net-internal",
+ "rand_core 0.6.4",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "sha1",
+ "subtle",
+ "tokio",
 ]
 
 [[package]]
@@ -5891,6 +5942,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "p256",
+ "pgm-ai-internal",
  "pgm-core-internal",
  "pgm-dist-internal",
  "pgm-net-internal",
@@ -5914,6 +5966,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "pgm-ai-internal",
  "portable-pty",
  "reqwest",
  "serde",
@@ -5934,6 +5987,7 @@ dependencies = [
  "crossterm",
  "futures-util",
  "libc",
+ "pgm-ai-internal",
  "pgm-core-internal",
  "pgm-platform-internal",
  "ratatui",
@@ -5963,9 +6017,11 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "pgm-ai-internal",
  "pgm-collab-internal",
  "pgm-core-internal",
  "pgm-dist-internal",
+ "pgm-hcom-internal",
  "pgm-identity-internal",
  "pgm-net-internal",
  "pgm-platform-internal",

@@ -14,5 +14,7 @@ vr-host, vr-desktop) are built on them. Plan and rules: the team note plans/pgm-
 | PGM_Collab_Internal | PsyGraphMediaCollaborationInternal | `pgm-collab-internal` (`pgm_collab_internal`) | board, notes, projects / worktrees, Forgejo |
 | PGM_Dist_Internal | PsyGraphMediaDistributionInternal | `pgm-dist-internal` (`pgm_dist_internal`) | signed releases, self-update, downloads, version stamps |
 
-Dependency order (a library only uses the ones before it): Core → Platform → Net → Identity → AI / HCom / Collab / Dist.
-`vr-core` is VibeRoller's old shared crate: it now only re-exports from these, so code that names `vr_core::…` keeps working.
+Dependency order (a library only uses the ones before it): Core → Platform, Net → Identity, Collab, Dist → HCom, AI.
+HCom and AI do not use each other: what one needs from the other goes through the program around them (the hub
+implements `ChatHost` and `AiHub`). `vr-core` is VibeRoller's old shared crate: it now only re-exports from these, so
+code that names `vr_core::…` keeps working. How to use a library elsewhere: each crate's README.md.

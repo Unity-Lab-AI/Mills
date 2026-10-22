@@ -83,6 +83,6 @@ pub fn check(hub: &Arc<Hub>, a: &Account) -> Value {
         "project": w.project_of(a), "projects": w.project_list(), "prefs": prefs, "share": w.share_of(&a.username),
         "provider": if s("provider").is_empty() { "host".to_string() } else { s("provider") }, "effectiveProvider": w.effective(ai, &a.username, &s("provider")).map(|p| p["id"].clone()).unwrap_or(json!("")),
         "defaultProvider": w.default_for(ai, &a.username).map(|p| p["id"].clone()).unwrap_or(json!("")), "hubClaude": hub.cfg.get("hubClaude") != Some(&json!(false)),
-        "providers": super::work::providers_list(hub, &a.username), "version": build.split('+').next().unwrap_or(""), "build": build, "versions": mods,
+        "providers": super::work::providers_list(&**hub, &a.username), "version": build.split('+').next().unwrap_or(""), "build": build, "versions": mods,
         "aiHost": !hub.root.join("ai-host.off").exists(), "aiNodes": ai.status(), "pcHost": ai.pc_host_for(&a.username) })
 }

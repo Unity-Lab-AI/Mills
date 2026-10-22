@@ -40,7 +40,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let text: String = s(&b, "message").trim().chars().take(8000).collect();
             if text.is_empty() { return Some(answer(400, json!({ "error": "Empty message." }))); }
             if u.runs.lock().unwrap().contains_key(un) { return Some(answer(409, json!({ "error": "Unity is still answering. Stop her first." }))); }
-            u.learn_client(a, &b["client"], &client_ip(hub, r)).await;
+            u.learn_client(a, &b["client"], &client_ip(&**hub, r)).await;
             let cancel = Arc::new(crate::openai::Cancel::default());
             u.runs.lock().unwrap().insert(un.clone(), (cancel.clone(), None)); hub.work().busy_changed.notify_one();
             let (tx, rx) = mpsc::unbounded_channel();
@@ -69,7 +69,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                 pinger.abort();
                 u.runs.lock().unwrap().remove(&acc.username); h.work().busy_changed.notify_one();
             });
-            (ndjson(rx))
+            ndjson(rx)
         }
         "/api/assistant/state" if get => {
             let checked = u.ollama_state.lock().unwrap().checked;
@@ -77,14 +77,14 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let st = u.store(a); let ol = u.ollama_state.lock().unwrap().clone();
             let h = st["history"].as_array().cloned().unwrap_or_default();
             let now = pgm_core_internal::now_ms() as i64;
-            answer(200, json!({ "brain": u.brain_of(a), "brains": brains(hub), "tools": { "pc": u.group_on(a, "pc"), "code": u.group_on(a, "code") }, "local": { "up": ol.up, "model": ol.model, "name": u.local_model },
+            answer(200, json!({ "brain": u.brain_of(a), "brains": brains(&**hub), "tools": { "pc": u.group_on(a, "pc"), "code": u.group_on(a, "code") }, "local": { "up": ol.up, "model": ol.model, "name": u.local_model },
                 "pending": u.pending.lock().unwrap().get(un).cloned().unwrap_or(Value::Null), "notices": u.notices.lock().unwrap().remove(un).unwrap_or_default(),
                 "history": h.iter().skip(h.len().saturating_sub(40)).cloned().collect::<Vec<_>>(),
                 "counts": { "tasks": st["tasks"].as_array().map(|t| t.iter().filter(|x| x["status"] == json!("pending")).count()).unwrap_or(0), "reminders": st["reminders"].as_array().map(|t| t.iter().filter(|x| x["fired"] != json!(true)).count()).unwrap_or(0), "events": st["events"].as_array().map(|t| t.iter().filter(|x| x["at"].as_i64().unwrap_or(0) >= now).count()).unwrap_or(0) } }))
         }
         "/api/assistant/brain" if post => {
             let b = s(&r.json(), "brain");
-            if !brains(hub).iter().any(|x| x["id"] == json!(b)) { return Some(answer(400, json!({ "error": "Unknown brain." }))); }
+            if !brains(&**hub).iter().any(|x| x["id"] == json!(b)) { return Some(answer(400, json!({ "error": "Unknown brain." }))); }
             if u.runs.lock().unwrap().contains_key(un) { return Some(answer(409, json!({ "error": "Wait for her to finish first." }))); }
             let changed = b != u.brain_of(a);
             u.set_state(a, |m| { if changed { m.insert("claudeSession".into(), json!("")); } m.insert("brain".into(), json!(b)); });
@@ -110,9 +110,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             u.with_store(a, |st| st["history"] = json!([])); u.set_state(a, |m| { m.insert("claudeSession".into(), json!("")); }); u.pending.lock().unwrap().remove(un);
             answer(200, json!({ "ok": true }))
         }
-        "/api/assistant/client" if post => { let k = u.learn_client(a, &r.json()["client"], &client_ip(hub, r)).await; answer(200, json!({ "ok": true, "tz": k["tz"], "place": s(&k, "place") })) }
+        "/api/assistant/client" if post => { let k = u.learn_client(a, &r.json()["client"], &client_ip(&**hub, r)).await; answer(200, json!({ "ok": true, "tz": k["tz"], "place": s(&k, "place") })) }
         "/api/assistant/image" if get => match u.picture_file(un, &r.param("ref").unwrap_or_default()).and_then(|f| std::fs::read(f).ok()) {
-            Some(buf) => (hyper::Response::builder().status(200).header("content-type", "image/png").header("cache-control", "private, max-age=86400").body(pgm_net_internal::http::full(buf)).expect("response")),
+            Some(buf) => hyper::Response::builder().status(200).header("content-type", "image/png").header("cache-control", "private, max-age=86400").body(pgm_net_internal::http::full(buf)).expect("response"),
             None => answer(404, json!({ "error": "No such picture." })),
         },
         "/api/assistant/pc-result" if post => {
@@ -135,7 +135,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let emo = if EMOTIONS.contains(&s(&b, "emotion").as_str()) { s(&b, "emotion") } else { "neutral".into() };
             let act = if ACTS.contains(&s(&b, "act").as_str()) { s(&b, "act") } else if line.ends_with('?') { "yes_no_question".into() } else { "statement".into() };
             match u.engine(hub, &format!("{}/say", u.voice_url), "POST", json!({ "text": line, "emotion": emo, "speech_act": act }).to_string().into_bytes(), 120_000).await {
-                Ok((st, src)) => { let wav = src.all().await; if (200..300).contains(&st) { (hyper::Response::builder().status(200).header("content-type", "audio/wav").header("content-length", wav.len()).body(pgm_net_internal::http::full(wav)).expect("response")) } else { let j: Value = serde_json::from_slice(&wav).unwrap_or(json!({})); answer(502, json!({ "error": format!("Voice: {}", if j["error"].is_null() { st.to_string() } else { s(&j, "error") }) })) } }
+                Ok((st, src)) => { let wav = src.all().await; if (200..300).contains(&st) { hyper::Response::builder().status(200).header("content-type", "audio/wav").header("content-length", wav.len()).body(pgm_net_internal::http::full(wav)).expect("response") } else { let j: Value = serde_json::from_slice(&wav).unwrap_or(json!({})); answer(502, json!({ "error": format!("Voice: {}", if j["error"].is_null() { st.to_string() } else { s(&j, "error") }) })) } }
                 Err(e) => answer(502, json!({ "error": format!("Voice: {e}") })),
             }
         }
@@ -232,7 +232,7 @@ async fn room_claude(hub: &Arc<dyn AiHub>, prompt: &str, thread: &str) -> String
     let f = hub.mills_dir().join("Chat").join("agent-state.json");
     let mut all: Value = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or(json!({}));
     let mut st = if thread.is_empty() { all.clone() } else { json!({ "sessionId": all["threads"][thread].as_str().unwrap_or("") }) };
-    let mut args: Vec<String> = vec!["-p".into(), "--output-format".into(), "json".into(), "--permission-mode".into(), hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into(), "--append-system-prompt".into(), agent_system(hub)];
+    let mut args: Vec<String> = vec!["-p".into(), "--output-format".into(), "json".into(), "--permission-mode".into(), hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into(), "--append-system-prompt".into(), agent_system(&**hub)];
     let tools: Vec<String> = hub.cfg().get("allowedTools").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str()).filter(|t| *t != "mcp__pc" && !t.starts_with("Bash")).map(String::from).collect()).unwrap_or_default();
     if !tools.is_empty() { args.push("--allowedTools".into()); args.push(tools.join(",")); }
     if let Some(m) = hub.cfg().get("roomAgentModel").and_then(Value::as_str) { args.push("--model".into()); args.push(m.into()); }

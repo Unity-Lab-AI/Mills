@@ -307,7 +307,7 @@ fn ndjson(rx: mpsc::UnboundedReceiver<Result<Bytes, String>>) -> hyper::Response
     let st = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|x| (x.map(hyper::body::Frame::data).map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e)), rx)) });
     hyper::Response::builder().status(200).header("content-type", "application/x-ndjson").header("cache-control", "no-cache").header("x-accel-buffering", "no").body(http_body_util::StreamBody::new(st).boxed()).expect("response")
 }
-fn one_line(v: Value) -> Resp { (hyper::Response::builder().status(200).header("content-type", "application/x-ndjson").body(pgm_net_internal::http::full(v.to_string() + "\n")).expect("response")) }
+fn one_line(v: Value) -> Resp { hyper::Response::builder().status(200).header("content-type", "application/x-ndjson").body(pgm_net_internal::http::full(v.to_string() + "\n")).expect("response") }
 
 /// POST /api/chat: one message to Claude in Work.
 async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
@@ -387,7 +387,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
                     let w = h.work();
                     while let Some(m) = events.recv().await {
                         match m {
-                            crate::ai_hosts::WorkMsg::Event(ev) => w.on_event(&h, &a2, ev, &source),
+                            crate::ai_hosts::WorkMsg::Event(ev) => w.on_event(&*h, &a2, ev, &source),
                             crate::ai_hosts::WorkMsg::Done(c) => { w.finish(&a2, &id, json!(c)); return; }
                             crate::ai_hosts::WorkMsg::Error(t) => { w.emit(&a2.username, json!({ "type": "bridge_error", "text": t })); w.finish(&a2, &id, json!(1)); return; }
                         }
@@ -422,7 +422,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
             let mut lines = tokio::io::BufReader::new(out).lines();
             while let Ok(Some(l)) = lines.next_line().await {
                 let l = l.trim(); if l.is_empty() { continue; }
-                match serde_json::from_str::<Value>(l) { Ok(ev) => w.on_event(&h, &a2, ev, &source), Err(_) => w.emit(&a2.username, json!({ "type": "raw", "text": l })) }
+                match serde_json::from_str::<Value>(l) { Ok(ev) => w.on_event(&*h, &a2, ev, &source), Err(_) => w.emit(&a2.username, json!({ "type": "raw", "text": l })) }
             }
         }
         let code = child.wait().await.ok().and_then(|s| s.code()).map(|c| json!(c)).unwrap_or(Value::Null);
@@ -454,7 +454,7 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
             }
             "my_providers" => {
                 let st = w.state(&a);
-                let list: Vec<Value> = providers_list(hub, account).into_iter().map(|p| json!({ "id": p["id"], "label": p["label"], "kind": p["kind"], "owner": if s(&p, "owner").is_empty() { json!("host") } else { p["owner"].clone() }, "shared": p["shared"], "models": p["models"] })).collect();
+                let list: Vec<Value> = providers_list(&**hub, account).into_iter().map(|p| json!({ "id": p["id"], "label": p["label"], "kind": p["kind"], "owner": if s(&p, "owner").is_empty() { json!("host") } else { p["owner"].clone() }, "shared": p["shared"], "models": p["models"] })).collect();
                 return json!({ "ok": true, "result": { "providers": list, "current": if s(&st, "provider").is_empty() { "host".into() } else { s(&st, "provider") }, "model": s(&st, "model") } });
             }
             _ => return hub.team_tool(&name, &args, &a), // the chat, presence, calls, servers
@@ -561,14 +561,14 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let p = r.path.as_str();
     Some(match p {
         "/api/chat" if post => chat(hub, a, r).await,
-        "/api/stop" if post => { w.stop(hub, u); answer(200, json!({ "ok": true })) }
+        "/api/stop" if post => { w.stop(&**hub, u); answer(200, json!({ "ok": true })) }
         "/api/pc-result" if post => {
             let b = r.json();
             let entry = w.runs.lock().unwrap().get_mut(u).and_then(|run| run.pending.remove(&s(&b, "id")));
             if let Some(tx) = entry { let mut v = json!({ "ok": b["ok"].as_bool().unwrap_or(false) || (!b["ok"].is_null() && b["ok"] != json!(false) && b["ok"] != json!(0) && b["ok"] != json!("")) }); for k in ["result", "error"] { if let Some(x) = b.get(k) { v[k] = x.clone(); } } let _ = tx.send(v); }
             answer(200, json!({ "ok": true }))
         }
-        "/api/usage" if get => answer(200, w.usage_status(hub, a)),
+        "/api/usage" if get => answer(200, w.usage_status(&**hub, a)),
         "/api/model" if post => {
             let b = r.json(); let st = w.state(a); let ai = hub.ai();
             let want = if b.get("provider").is_none() { s(&st, "provider") } else { s(&b, "provider") };

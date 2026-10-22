@@ -14,6 +14,7 @@ path = "src/lib.rs"
 pgm-core-internal = { path = "../pgm-core-internal" }
 pgm-net-internal = { path = "../pgm-net-internal" }
 pgm-dist-internal = { path = "../pgm-dist-internal" }
+pgm-ai-internal = { path = "../pgm-ai-internal" }
 aes-gcm = "0.10.3"
 base64 = "0.23.1"
 ed25519-dalek = { version = "2", features = ["rand_core"] }

@@ -205,7 +205,7 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
             let mut all = vec![]; if !system.is_empty() { all.push(json!({ "role": "system", "content": system })); } all.extend(chat_msgs()); body["messages"] = json!(all);
             if let Some(mt) = max_tokens { body["max_tokens"] = json!(mt); }
             let (status, ct, src) = if kind == "openai" {
-                let mut rb = self_http(hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string());
+                let mut rb = self_http(&**hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string());
                 if !s(&p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(&p, "apiKey"))); }
                 let r = rb.send().await.map_err(|e| err(502, e.to_string()))?;
                 (r.status().as_u16(), r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string(), Src::Http(r))
@@ -233,7 +233,7 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
             let mut body = json!({ "model": if m.is_empty() { p["models"][0].clone() } else { json!(m) }, "max_tokens": max_tokens.unwrap_or(4096), "stream": streaming, "messages": ant_msgs() });
             let (status, src) = if kind == "anthropic" {
                 if !system.is_empty() { body["system"] = json!(system); }
-                let r = self_http(hub).post(ANTHROPIC_URL).header("content-type", "application/json").header("x-api-key", s(&p, "apiKey")).header("anthropic-version", "2023-06-01").body(body.to_string()).send().await.map_err(|e| err(502, e.to_string()))?;
+                let r = self_http(&**hub).post(ANTHROPIC_URL).header("content-type", "application/json").header("x-api-key", s(&p, "apiKey")).header("anthropic-version", "2023-06-01").body(body.to_string()).send().await.map_err(|e| err(502, e.to_string()))?;
                 (r.status().as_u16(), Src::Http(r))
             } else {
                 // a subscription login answers only when the system prompt opens as Claude Code
@@ -294,7 +294,7 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
         _ => complete_cli(hub, &p, &m, system, messages, on_token, cancel).await, // this hub's Claude, or a Claude Code login here
     }
 }
-fn self_http(hub: &dyn AiHub) -> &reqwest::Client { hub.api().http }
+fn self_http(hub: &dyn AiHub) -> &reqwest::Client { &hub.api().http }
 async fn next_or_cancel(src: &mut Src, cancel: &Cancel) -> Result<Option<Vec<u8>>, ApiErr> {
     if cancel.is() { return Err(err(502, "cancelled")); }
     tokio::select! { _ = cancel.woke.notified() => Err(err(502, "cancelled")), c = src.next() => Ok(c) }
@@ -429,7 +429,7 @@ pub async fn v1(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
             let Some(run) = start_running(hub, &user) else { return ant_error(429, "One request at a time per key; the previous one is still answering.", "rate_limit_error") };
             let model = pick_model(&prov, &b["model"].as_str().filter(|m| models.iter().any(|x| x == m)).map(String::from).unwrap_or_else(|| s(&a, "model")));
             let max = b["max_tokens"].as_f64().filter(|n| *n > 0.0).map(|n| (n.round() as u64).min(128000));
-            count_use(hub, &user);
+            count_use(&**hub, &user);
             let mid = format!("msg_{}", pgm_core_internal::crypto::random_hex(12));
             let ant_usage = |u: &Value| json!({ "input_tokens": u["prompt_tokens"].as_u64().unwrap_or(0), "output_tokens": u["completion_tokens"].as_u64().unwrap_or(0) });
             let pid = s(&prov, "id");
@@ -470,7 +470,7 @@ pub async fn v1(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
             let asked = b["model"].as_str().filter(|m| (m.starts_with("claude") || (!m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || "_.:-".contains(c)))) && models.iter().any(|x| x == m)).map(String::from);
             let model = pick_model(&prov, &asked.unwrap_or_else(|| s(&a, "model")));
             let max = b["max_tokens"].as_u64();
-            count_use(hub, &user);
+            count_use(&**hub, &user);
             let cid = format!("chatcmpl-{}", pgm_core_internal::crypto::random_hex(12)); let created = now_ms() / 1000;
             let pid = s(&prov, "id");
             if b["stream"].as_bool().unwrap_or(false) {
@@ -512,7 +512,7 @@ pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let api = hub.api(); let u = &a.username; let w = hub.work();
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let b = r.json();
-    let list = || json!(crate::work::providers_list(hub, u));
+    let list = || json!(crate::work::providers_list(&**hub, u));
     Some(match r.path.as_str() {
         "/api/apikey" if get => answer(200, api.status(u)),
         "/api/apikey/rotate" if post => {
@@ -543,9 +543,9 @@ pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         "/api/apikey/revoke" if post => { api.set_key(u, None); answer(200, api.status(u)) }
         "/api/providers" if get => { let p = s(&w.state(a), "provider"); answer(200, json!({ "providers": list(), "provider": if p.is_empty() { "host".to_string() } else { p } })) }
-        "/api/providers/add" if post => match add_provider(hub, u, &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
-        "/api/providers/update" if post => match update_provider(hub, u, &s(&b, "id"), &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
-        "/api/providers/remove" if post => match remove_provider(hub, u, &s(&b, "id")) { Ok(()) => answer(200, json!({ "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
+        "/api/providers/add" if post => match add_provider(&**hub, u, &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
+        "/api/providers/update" if post => match update_provider(&**hub, u, &s(&b, "id"), &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
+        "/api/providers/remove" if post => match remove_provider(&**hub, u, &s(&b, "id")) { Ok(()) => answer(200, json!({ "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
         // Settings → My AI hosts' list (+ the default provider, which this module knows)
         "/api/hosts" if get => {
             let ai = hub.ai();

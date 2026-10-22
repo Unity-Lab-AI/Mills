@@ -18,6 +18,26 @@ VibeRoller's hub, so any other project can use them. Names: native/crates/NAMES.
 - **pgm-core-internal** (PGM_Core_Internal, PsyGraphMediaCoreInternal): errors, base64, time (ISO exactly as
   JavaScript), SHA-256 / HMAC / AES-GCM / HKDF / ids, JSON files written atomically (and privately), file protection
   (Linux mode 600, Windows ACL), text helpers. The hub's five copies of the JSON / time helpers are now this one.
+- **pgm-platform-internal** (PGM_Platform_Internal): starting programs the same way on Windows and Linux, standard
+  folders, the Windows service and systemd units, start at boot, elevation.
+- **pgm-net-internal** (PGM_Net_Internal): the HTTP server kit the hub's front runs on (requests, answers, CORS,
+  hardening, the reverse proxy to the JavaScript hub), HTTP clients, long polls, the encrypted host link.
+- **pgm-identity-internal** (PGM_Identity_Internal): accounts, passwords, sessions, device locks, sign-in limits,
+  admins. The hub keeps only its own sign-in answer.
+- **pgm-collab-internal** (PGM_Collab_Internal): the board, notes, projects / worktrees, Forgejo.
+- **pgm-dist-internal** (PGM_Dist_Internal): signed releases, self-update, zips, version stamps.
+- **pgm-hcom-internal** (PGM_HCom_Internal, PsyGraphMediaHumanCommunicationInternal): the chat and its end-to-end
+  encryption, servers / channels / roles / moderation, calls, attachments, the Files library. What it needs from the
+  hub is one trait (`ChatHost`).
+- **pgm-ai-internal** (PGM_AI_Internal, PsyGraphMediaAIInternal): AI hosts, providers and the `/v1` APIs, Work runs,
+  usage, Unity, the AI host program's job loop and the desktop's local API proxy. What it needs from the hub is one
+  trait (`AiHub`).
+
+### The programs
+- vr-hub, vr-host and vr-desktop are thin around the libraries; vr-core only re-exports, so every older path works.
+- The host link, its messages and its caps are unchanged: hosts that have not updated keep connecting and answering,
+  and an updated host works with an older hub.
+- How to use a library in another project: each crate's README.md and native/crates/NAMES.md.
 
 ## 4.1.4 — 2026-10-22
 

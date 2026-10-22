@@ -13,6 +13,7 @@ pub mod admin;
 pub mod ai_hosts;
 pub mod profile;
 pub mod site;
+mod traits;
 pub mod auth;
 pub mod board;
 pub mod chat;
@@ -83,7 +84,7 @@ impl Modules {
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
-    fn public_url(&self, cfg: &Config) -> String {
+    pub(crate) fn public_url(&self, cfg: &Config) -> String {
         let u = cfg.get("publicUrl").and_then(Value::as_str).unwrap_or("").trim_end_matches('/').to_lowercase();
         let host = u.strip_prefix("https://").unwrap_or("");
         let (name, port) = host.split_once(':').unwrap_or((host, ""));
@@ -447,7 +448,7 @@ async fn files_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
             let id = &p["/api/room/file/".len()..];
             let Some((by, seq)) = m.files.owner_seq(id) else { return answer(404, json!({ "error": "Not found." })) };
             // its uploader always; anyone else while they may read its message: the chat (the JavaScript hub) knows
-            let allowed = by == u || (seq > 0 && chat::may_read(hub, u, seq));
+            let allowed = by == u || (seq > 0 && chat::may_read(&**hub, u, seq));
             match m.files.fetch(id, m.auth.account(&by), allowed) { Some(buf) => serve_file(buf, "file", "application/octet-stream"), None => answer(404, json!({ "error": "Not found." })) }
         }
         "/api/work/file" if post => match m.files.work_upload(&a, &r.body, r.header("x-file-name").unwrap_or(""), r.header("content-type").unwrap_or("")) { Ok(v) => answer(200, v), Err(f) => fail(f) },

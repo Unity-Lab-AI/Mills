@@ -390,10 +390,10 @@ pub fn start(hub: Arc<dyn ChatHost>) {
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(10)).await; let now = now_ms(); let mut changed = vec![];
         { let mut cs = h.chat().calls.lock().unwrap(); for (c, ps) in cs.calls.iter_mut() { let n = ps.len(); ps.retain(|(_, p)| now.saturating_sub(p["seen"].as_u64().unwrap_or(0)) <= 60000); if ps.len() != n { changed.push(c.clone()); } } cs.calls.retain(|(_, ps)| !ps.is_empty()); }
-        if !changed.is_empty() { let us = users(&h); for c in changed { calls_changed(&h, &c, &us); } } } });
+        if !changed.is_empty() { let us = users(&*h); for c in changed { calls_changed(&*h, &c, &us); } } } });
     // temporary members who went offline leave; ended timeouts go
     let h = hub.clone();
-    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(20)).await; let us = users(&h); let on = h.chat().online(&us); if h.chat().guilds.sweep(&|u| on.iter().any(|x| x == u)) { h.chat().room_changed(); } } });
+    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(20)).await; let us = users(&*h); let on = h.chat().online(&us); if h.chat().guilds.sweep(&|u| on.iter().any(|x| x == u)) { h.chat().room_changed(); } } });
     // receipts are saved half a second after a change
     let h = hub.clone();
     tokio::spawn(async move { loop { h.chat().seen_dirty.notified().await; tokio::time::sleep(Duration::from_millis(500)).await; let v = Value::Object(h.chat().seen.lock().unwrap().clone()); write_json(&h.chat().dir.join("seen.json"), &v); } });
@@ -403,7 +403,7 @@ pub fn start(hub: Arc<dyn ChatHost>) {
         tokio::time::sleep(Duration::from_secs(3)).await;
         let f = h.root().join(".rolled-back"); if !f.exists() { return; }
         let text = std::fs::read_to_string(&f).unwrap_or_default().trim().to_string(); let _ = std::fs::remove_file(&f);
-        agent_say(&h, &format!("**VibeRoller rolled itself back.** {} Nothing was lost: deploys never touch data. Whoever shipped it: look at the deploy log, fix, and ship again.", if text.is_empty() { "A new version did not come up, so the hub went back to the last good one." } else { &text }), "", "VibeRoller", "", "");
+        agent_say(&*h, &format!("**VibeRoller rolled itself back.** {} Nothing was lost: deploys never touch data. Whoever shipped it: look at the deploy log, fix, and ship again.", if text.is_empty() { "A new version did not come up, so the hub went back to the last good one." } else { &text }), "", "VibeRoller", "", "");
     });
 }
 

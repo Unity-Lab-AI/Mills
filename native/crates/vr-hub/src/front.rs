@@ -20,13 +20,16 @@ pub struct Hub {
     /// the JavaScript hub behind this one (it trusts this front by the shared secret)
     backend: Backend,
     pub mods: modules::Modules,
+    /// the hub itself, for library work that outlives a call (the chat calling an agent)
+    me: std::sync::Weak<Hub>,
 }
 impl Hub {
     pub fn new(root: PathBuf, cfg: Config, back: SocketAddr) -> Result<Arc<Hub>, String> {
         let mods = modules::Modules::new(&root, &cfg)?;
         let backend = Backend::new(back, "x-vr-front-secret", mods.front_secret.as_str());
-        Ok(Arc::new(Hub { root, cfg, backend, mods }))
+        Ok(Arc::new_cyclic(|me| Hub { root, cfg, backend, mods, me: me.clone() }))
     }
+    pub fn me(&self) -> Option<Arc<dyn pgm_ai_internal::hub::AiHub>> { self.me.upgrade().map(|h| h as Arc<dyn pgm_ai_internal::hub::AiHub>) }
 }
 
 pub async fn serve(hub: Arc<Hub>, addr: SocketAddr) -> i32 {
