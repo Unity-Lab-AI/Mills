@@ -40,31 +40,33 @@ impl Gateway {
         for id in products.keys() { links.insert(id.clone(), read_json(&dir.join("links").join(format!("{id}.json"))).filter(Value::is_object).unwrap_or(json!({}))); }
         Gateway { dir, products: Mutex::new(products), links: Mutex::new(links), verifier: Verifier::default(), backends: Mutex::default() }
     }
+    /// The products lock, held: the regression runner's panic hook panics while holding it (R174 proves it recovers).
+    pub fn hold_for_test(&self) -> std::sync::MutexGuard<'_, Map<String, Value>> { self.products.lock().unwrap_or_else(|e| e.into_inner()) }
     /// A product's port on this machine, when it is served through this hub.
-    fn port_of(&self, id: &str) -> Option<u16> { self.products.lock().unwrap().get(id).and_then(|p| p["port"].as_u64()).filter(|p| (1..=65535).contains(p)).map(|p| p as u16) }
+    fn port_of(&self, id: &str) -> Option<u16> { self.products.lock().unwrap_or_else(|e| e.into_inner()).get(id).and_then(|p| p["port"].as_u64()).filter(|p| (1..=65535).contains(p)).map(|p| p as u16) }
     fn backend(&self, id: &str, port: u16) -> Arc<Backend> {
-        let mut bs = self.backends.lock().unwrap();
+        let mut bs = self.backends.lock().unwrap_or_else(|e| e.into_inner());
         match bs.get(id) { Some(b) if b.addr.port() == port => b.clone(), _ => { let b = Arc::new(Backend::plain(std::net::SocketAddr::from(([127, 0, 0, 1], port)), std::time::Duration::from_secs(5))); bs.insert(id.into(), b.clone()); b } }
     }
     fn save(&self) {
         let _ = pgm_core_internal::fs::private_dir(&self.dir);
-        write_json_private(&self.dir.join("products.json"), &json!({ "products": Value::Object(self.products.lock().unwrap().clone()) }));
+        write_json_private(&self.dir.join("products.json"), &json!({ "products": Value::Object(self.products.lock().unwrap_or_else(|e| e.into_inner()).clone()) }));
     }
     fn save_links(&self, id: &str) {
         let d = self.dir.join("links"); let _ = pgm_core_internal::fs::private_dir(&self.dir); let _ = pgm_core_internal::fs::private_dir(&d);
-        let v = self.links.lock().unwrap().get(id).cloned().unwrap_or(json!({}));
+        let v = self.links.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned().unwrap_or(json!({}));
         write_json_private(&d.join(format!("{id}.json")), &v);
     }
-    fn secret_of(&self, id: &str) -> Option<String> { self.products.lock().unwrap().get(id).and_then(|p| p["secret"].as_str().map(String::from)) }
-    fn linked(&self, id: &str, user: &str) -> bool { !user.is_empty() && self.links.lock().unwrap().get(id).map(|l| l.get(user).is_some()).unwrap_or(false) }
+    fn secret_of(&self, id: &str) -> Option<String> { self.products.lock().unwrap_or_else(|e| e.into_inner()).get(id).and_then(|p| p["secret"].as_str().map(String::from)) }
+    fn linked(&self, id: &str, user: &str) -> bool { !user.is_empty() && self.links.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|l| l.get(user).is_some()).unwrap_or(false) }
     fn link(&self, id: &str, user: &str) {
-        { let mut l = self.links.lock().unwrap(); let e = l.entry(id.to_string()).or_insert(json!({})); e[user] = json!({ "at": pgm_core_internal::time::iso_now() }); }
+        { let mut l = self.links.lock().unwrap_or_else(|e| e.into_inner()); let e = l.entry(id.to_string()).or_insert(json!({})); e[user] = json!({ "at": pgm_core_internal::time::iso_now() }); }
         self.save_links(id);
     }
     /// What an admin sees: no secrets.
     pub fn list(&self) -> Vec<Value> {
-        let links = self.links.lock().unwrap();
-        self.products.lock().unwrap().iter().map(|(id, p)| json!({ "id": id, "name": p["name"], "ai": p["ai"] == json!(true), "port": p["port"], "path": p["port"].as_u64().map(|_| format!("/p/{id}/")), "created": p["created"], "linked": links.get(id).and_then(Value::as_object).map(|m| m.len()).unwrap_or(0), "secretFile": format!("bridge/gateway/{id}.secret") })).collect()
+        let links = self.links.lock().unwrap_or_else(|e| e.into_inner());
+        self.products.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(id, p)| json!({ "id": id, "name": p["name"], "ai": p["ai"] == json!(true), "port": p["port"], "path": p["port"].as_u64().map(|_| format!("/p/{id}/")), "created": p["created"], "linked": links.get(id).and_then(Value::as_object).map(|m| m.len()).unwrap_or(0), "secretFile": format!("bridge/gateway/{id}.secret") })).collect()
     }
     /// A new product, or a new secret for one (the old one stops working at once). Its links stay. `port`: the
     /// product's own port on this machine, to serve it at `/p/<id>/` (0 = not served here).
@@ -73,9 +75,9 @@ impl Gateway {
         let name = name.trim(); if name.is_empty() || name.chars().count() > 64 { return Err("A product needs a name (up to 64 characters).".into()); }
         if port > 65535 { return Err("A port is 1–65535 (0 = not served through this hub).".into()); }
         let secret = pgm_core_internal::crypto::random_hex(32);
-        { let mut ps = self.products.lock().unwrap(); let created = ps.get(id).map(|p| p["created"].clone()).unwrap_or_else(|| json!(pgm_core_internal::time::iso_now()));
+        { let mut ps = self.products.lock().unwrap_or_else(|e| e.into_inner()); let created = ps.get(id).map(|p| p["created"].clone()).unwrap_or_else(|| json!(pgm_core_internal::time::iso_now()));
           let mut v = json!({ "name": name, "secret": secret, "ai": ai, "created": created }); if port > 0 { v["port"] = json!(port); } ps.insert(id.into(), v); }
-        self.links.lock().unwrap().entry(id.to_string()).or_insert(json!({}));
+        self.links.lock().unwrap_or_else(|e| e.into_inner()).entry(id.to_string()).or_insert(json!({}));
         self.save();
         let f = self.dir.join(format!("{id}.secret"));
         std::fs::write(&f, format!("{secret}\n")).map_err(|e| format!("could not write {}: {e}", f.display()))?;
@@ -84,12 +86,12 @@ impl Gateway {
     }
     /// A product goes: its secret and its links with it.
     pub fn remove(&self, id: &str) -> bool {
-        let had = self.products.lock().unwrap().remove(id).is_some();
-        self.links.lock().unwrap().remove(id);
+        let had = self.products.lock().unwrap_or_else(|e| e.into_inner()).remove(id).is_some();
+        self.links.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
         if had { self.save(); let _ = std::fs::remove_file(self.dir.join(format!("{id}.secret"))); let _ = std::fs::remove_file(self.dir.join("links").join(format!("{id}.json"))); }
         had
     }
-    fn ai_on(&self, id: &str) -> bool { self.products.lock().unwrap().get(id).map(|p| p["ai"] == json!(true)).unwrap_or(false) }
+    fn ai_on(&self, id: &str) -> bool { self.products.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|p| p["ai"] == json!(true)).unwrap_or(false) }
 }
 
 fn answer(status: u16, v: Value) -> Routed { Routed::Answer(jresp(status, &v)) }

@@ -97,7 +97,7 @@ impl Guilds {
     fn apply_seeds(&self, seed: &std::path::Path, users: &[(String, String, bool)]) {
         let Some(sd) = std::fs::read_to_string(seed).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return };
         let Some(servers) = sd["servers"].as_object() else { return };
-        let mut db = self.db.lock().unwrap(); if !db["seeds"].is_object() { db["seeds"] = json!({}); }
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner()); if !db["seeds"].is_object() { db["seeds"] = json!({}); }
         let has = |u: &str| users.iter().any(|x| x.0 == u);
         let mut any = false;
         for (id, e) in servers {
@@ -125,7 +125,7 @@ impl Guilds {
         }
         if any { self.write(&db); }
     }
-    pub fn with<T>(&self, f: impl FnOnce(&Value) -> T) -> T { let db = self.db.lock().unwrap(); f(&db) }
+    pub fn with<T>(&self, f: impl FnOnce(&Value) -> T) -> T { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); f(&db) }
 
     // ---------- reading (what the chat and calls ask) ----------
     pub fn chan_of<'v>(db: &'v Value, conv: &str) -> Option<(&'v Value, &'v Value)> {
@@ -138,11 +138,11 @@ impl Guilds {
     fn server_members(sv: &Value, ctx: &Ctx) -> Vec<String> { if sv["everyone"] == json!(true) { ctx.users.iter().map(|x| x.0.clone()).collect() } else { strs(&sv["members"]).into_iter().filter(|u| ctx.has(u)).collect() } }
     fn in_server(sv: &Value, u: &str, ctx: &Ctx) -> bool { Self::server_members(sv, ctx).iter().any(|x| x == u) }
     pub fn exists(&self, conv: &str, ctx: &Ctx) -> bool {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         match parse(conv) { None => false, Some(Conv::Room) => true, Some(Conv::Dm(a, b)) => a < b && ctx.has(&a) && ctx.has(&b), Some(Conv::Ch(..)) => Self::chan_of(&db, conv).is_some(), Some(Conv::Grp(g)) => db["groups"].as_array().unwrap().iter().any(|x| x["id"] == json!(g)) }
     }
     /// The people of a channel / group conversation (None for room / dm / unknown).
-    pub fn members(&self, conv: &str, ctx: &Ctx) -> Option<Vec<String>> { let db = self.db.lock().unwrap(); Self::members_in(&db, conv, ctx) }
+    pub fn members(&self, conv: &str, ctx: &Ctx) -> Option<Vec<String>> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); Self::members_in(&db, conv, ctx) }
     fn members_in(db: &Value, conv: &str, ctx: &Ctx) -> Option<Vec<String>> {
         let p = Perms { hub_admin: &|u| ctx.admin(u) };
         match parse(conv)? {
@@ -155,15 +155,15 @@ impl Guilds {
     /// The servers (not the everyone-server) this person is in, with their task rights: (id, name, may see the board,
     /// may change it). VIEW_TASKS / MANAGE_TASKS by their roles; the owner and administrators may do everything.
     pub fn task_access(&self, u: &str, ctx: &Ctx) -> Vec<(String, String, bool, bool)> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let p = Perms { hub_admin: &|x| ctx.admin(x) };
         db["servers"].as_array().map(|a| a.iter().filter(|sv| sv["everyone"] != json!(true) && Self::in_server(sv, u, ctx) && !p.timed_out(sv, u))
             .map(|sv| (s(sv, "id"), s(sv, "name"), p.can(sv, u, "VIEW_TASKS") || p.can(sv, u, "MANAGE_TASKS"), p.can(sv, u, "MANAGE_TASKS"))).collect()).unwrap_or_default()
     }
-    pub fn allows(&self, conv: &str, u: &str, perm: &str, ctx: &Ctx) -> bool { let db = self.db.lock().unwrap(); let p = Perms { hub_admin: &|x| ctx.admin(x) }; match Self::chan_of(&db, conv) { Some((sv, ch)) => p.can_in(sv, Some(ch), u, perm), None => true } }
+    pub fn allows(&self, conv: &str, u: &str, perm: &str, ctx: &Ctx) -> bool { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let p = Perms { hub_admin: &|x| ctx.admin(x) }; match Self::chan_of(&db, conv) { Some((sv, ch)) => p.can_in(sv, Some(ch), u, perm), None => true } }
     /// '' = may post there; otherwise why not (timeout, permissions, the new-member wait, slowmode).
     pub fn post_check(&self, conv: &str, u: &str, voice: bool, edit: bool, ctx: &Ctx) -> String {
-        let db = self.db.lock().unwrap(); let p = Perms { hub_admin: &|x| ctx.admin(x) };
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let p = Perms { hub_admin: &|x| ctx.admin(x) };
         let Some((sv, ch)) = Self::chan_of(&db, conv) else { return String::new() };
         let perms = p.perms_in(sv, Some(ch), u); let has = |x: &str| perms.iter().any(|y| y == x);
         if p.timed_out(sv, u) { let t = ms_of(&sv["timeouts"][u]).unwrap_or(0); return format!("You are timed out in {} until {}: you can read but not post.", s(sv, "name"), local_time(t)); }
@@ -174,31 +174,31 @@ impl Guilds {
         if wait > 0 && j.is_object() && real_roles(sv, u).is_empty() { let left = wait * 60000 - (now() as i64 - j["at"].as_i64().unwrap_or(0)); if left > 0 { return format!("New members of {} wait {wait} minutes before posting ({} to go).", s(sv, "name"), (left as f64 / 60000.0).ceil() as i64); } }
         let slow = ch["slowmode"].as_i64().unwrap_or(0);
         if slow > 0 && !has("BYPASS_SLOWMODE") && !has("MANAGE_MESSAGES") && !has("MANAGE_CHANNELS") {
-            let last = self.last_post.lock().unwrap().get(&format!("{conv}|{u}")).copied().unwrap_or(0); let left = slow * 1000 - (now() - last) as i64;
+            let last = self.last_post.lock().unwrap_or_else(|e| e.into_inner()).get(&format!("{conv}|{u}")).copied().unwrap_or(0); let left = slow * 1000 - (now() - last) as i64;
             if left > 0 { return format!("Slowmode in #{}: wait {} s.", s(ch, "name"), (left as f64 / 1000.0).ceil() as i64); }
         }
         String::new()
     }
     /// A post went in (slowmode counts from here).
-    pub fn note_post_by(&self, conv: &str, u: &str) { let ok = { let db = self.db.lock().unwrap(); Self::chan_of(&db, conv).is_some() }; if ok { self.last_post.lock().unwrap().insert(format!("{conv}|{u}"), now()); } }
+    pub fn note_post_by(&self, conv: &str, u: &str) { let ok = { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); Self::chan_of(&db, conv).is_some() }; if ok { self.last_post.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("{conv}|{u}"), now()); } }
     /// READ_MESSAGE_HISTORY: without it only what arrived after they joined.
     pub fn can_read(&self, conv: &str, u: &str, seq: i64, ctx: &Ctx) -> bool {
-        let db = self.db.lock().unwrap(); let p = Perms { hub_admin: &|x| ctx.admin(x) };
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let p = Perms { hub_admin: &|x| ctx.admin(x) };
         let Some((sv, ch)) = Self::chan_of(&db, conv) else { return true };
         if p.can_in(sv, Some(ch), u, "READ_MESSAGE_HISTORY") { return true; }
         let j = &sv["joined"][u]; j.is_object() && seq > j["seq"].as_i64().unwrap_or(0)
     }
     /// What a person may do in this conversation's call.
     pub fn media(&self, conv: &str, u: &str, ctx: &Ctx) -> Value {
-        let db = self.db.lock().unwrap(); let p = Perms { hub_admin: &|x| ctx.admin(x) };
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let p = Perms { hub_admin: &|x| ctx.admin(x) };
         let Some((sv, ch)) = Self::chan_of(&db, conv) else { return json!({ "connect": true, "speak": true, "stream": true, "muted": false }) };
         let perms = p.perms_in(sv, Some(ch), u); let has = |x: &str| perms.iter().any(|y| y == x);
         json!({ "connect": has("CONNECT"), "speak": has("SPEAK"), "stream": has("STREAM"), "muted": truthy(&sv["voiceMuted"][u]) })
     }
-    pub fn moderates(&self, conv: &str, u: &str, ctx: &Ctx) -> bool { let ok = { let db = self.db.lock().unwrap(); Self::chan_of(&db, conv).is_some() }; ok && self.allows(conv, u, "MANAGE_MESSAGES", ctx) }
+    pub fn moderates(&self, conv: &str, u: &str, ctx: &Ctx) -> bool { let ok = { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); Self::chan_of(&db, conv).is_some() }; ok && self.allows(conv, u, "MANAGE_MESSAGES", ctx) }
 
     // ---------- what one person sees ----------
-    pub fn view(&self, user: &str, ctx: &Ctx) -> Value { let db = self.db.lock().unwrap(); self.view_in(&db, user, ctx) }
+    pub fn view(&self, user: &str, ctx: &Ctx) -> Value { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); self.view_in(&db, user, ctx) }
     fn view_in(&self, db: &Value, user: &str, ctx: &Ctx) -> Value {
         let p = Perms { hub_admin: &|x| ctx.admin(x) };
         let pins_of = |conv: &str| -> Value { json!(arr(&db["pins"][conv]).into_iter().filter(|pn| (ctx.msg_conv)(pn["seq"].as_i64().unwrap_or(0)).is_some()).collect::<Vec<_>>()) };
@@ -241,7 +241,7 @@ impl Guilds {
 
     /// One op of the /api/guilds/* routes (or a team tool): its result, or why not. Announcements to post afterwards.
     pub fn op(&self, name: &str, user: &str, b: &Value, ctx: &Ctx) -> (R<Value>, Announce) {
-        let mut db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let mut ann: Announce = vec![];
         let before = db.clone();
         let res = self.op_in(&mut db, name, user, b, ctx, &mut ann);
@@ -635,7 +635,7 @@ impl Guilds {
     fn check_password(&self, sv: &Value, user: &str, pw: &Value) -> R<()> {
         if !sv["password"].is_object() { return Ok(()); }
         let k = format!("{user}|{}", s(sv, "id")); let now = now();
-        let mut tries = self.pw_tries.lock().unwrap();
+        let mut tries = self.pw_tries.lock().unwrap_or_else(|e| e.into_inner());
         let list: Vec<u64> = tries.get(&k).cloned().unwrap_or_default().into_iter().filter(|t| now - t < PW_WINDOW).collect();
         if list.len() >= PW_TRIES { return Err(format!("Too many wrong passwords for {}. Try again in a few minutes.", s(sv, "name"))); }
         let pw = match pw { Value::String(t) => t.clone(), Value::Null => String::new(), o => o.to_string() };
@@ -648,7 +648,7 @@ impl Guilds {
     }
     /// An account was deleted: out of every server and group.
     pub fn drop_user(&self, user: &str, ctx: &Ctx) {
-        let mut db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         for sv in db["servers"].as_array_mut().unwrap() {
             if sv["everyone"] == json!(true) { for k in ["memberRoles", "nicks", "timeouts", "voiceMuted", "joined"] { if let Some(m) = sv[k].as_object_mut() { m.remove(user); } } continue; }
             remove_from(sv, user); if let Some(m) = sv["timeouts"].as_object_mut() { m.remove(user); }
@@ -661,7 +661,7 @@ impl Guilds {
     }
     /// Every 20 s: temporary members who went offline leave; ended timeouts go. True when something changed.
     pub fn sweep(&self, online: &dyn Fn(&str) -> bool) -> bool {
-        let mut db = self.db.lock().unwrap(); let mut any = false; let now_ms = now();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let mut any = false; let now_ms = now();
         let mut empty = vec![];
         for (i, sv) in db["servers"].as_array_mut().unwrap().iter_mut().enumerate() {
             for (u, at) in sv["temp"].as_object().cloned().unwrap_or_default() {

@@ -107,11 +107,23 @@ impl Modules {
     }
     fn actor(&self, user: &str, agent: bool) -> board::Actor { board::Actor { user: user.to_string(), agent, name: self.name_of(user) } }
 }
+/// A background loop that outlives a panic inside it (FR1): started again after 5 s, with a log line, never silently
+/// gone. A loop that ends by itself is done.
+pub fn forever<F, Fut>(name: &'static str, f: F)
+where F: Fn() -> Fut + Send + Sync + 'static, Fut: std::future::Future<Output = ()> + Send + 'static {
+    tokio::spawn(async move {
+        loop {
+            if tokio::spawn(f()).await.is_ok() { return; }
+            eprintln!("[vr-hub] background work \"{name}\" failed (a panic inside it); starting it again in 5 s");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+}
 pub fn start_background(hub: &Arc<Hub>) {
     // the Forgejo → board poll
     if let Some(every) = hub.mods.mirror.every() {
         let h = hub.clone();
-        tokio::spawn(async move {
+        forever("Forgejo poll", move || { let h = h.clone(); async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             loop {
                 let h2 = h.clone();
@@ -119,24 +131,24 @@ pub fn start_background(hub: &Arc<Hub>) {
                 h.mods.mirror.poll(&h.mods.board, &ops).await;
                 tokio::time::sleep(every).await;
             }
-        });
+        } });
     }
     // files: the hourly sweep (chat uploads never sent, the old Work layout)
     let hf = hub.clone();
-    tokio::spawn(async move { loop { tokio::time::sleep(std::time::Duration::from_secs(3600)).await; let accts = hf.mods.auth.accounts(); hf.mods.files.chat_sweep(&|u| hf.mods.auth.account(u)); hf.mods.files.work_sweep(&accts); } });
+    forever("files sweep", move || { let hf = hf.clone(); async move { loop { tokio::time::sleep(std::time::Duration::from_secs(3600)).await; let accts = hf.mods.auth.accounts(); hf.mods.files.chat_sweep(&|u| hf.mods.auth.account(u)); hf.mods.files.work_sweep(&accts); } } });
     // AI hosts: the up / down watch, what changed to the JavaScript hub (its snapshot), each host window to its usage
     hub.mods.ai.watch();
     let h = hub.clone();
-    tokio::spawn(async move { loop { h.mods.ai.dirty.notified().await; tokio::time::sleep(std::time::Duration::from_millis(50)).await; push_ai_state(&h).await; } });
+    forever("AI hosts state push", move || { let h = h.clone(); async move { loop { h.mods.ai.dirty.notified().await; tokio::time::sleep(std::time::Duration::from_millis(50)).await; push_ai_state(&h).await; } } });
     work::start(hub);
     chat::start(hub);
     unity_brain::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     let h = hub.clone();
-    tokio::spawn(async move {
+    forever("notes watch", move || { let h = h.clone(); async move {
         let mut rx = h.mods.notes.ver.subscribe();
         while rx.changed().await.is_ok() { h.mods.chat.room_changed(); }
-    });
+    } });
 }
 /// The AI hosts' state to the JavaScript hub (see AiHosts::snapshot).
 pub async fn push_ai_state(hub: &Hub) {
@@ -155,6 +167,13 @@ fn maintenance(hub: &Hub) -> Option<String> { std::fs::read_to_string(hub.root.j
 
 pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     let p = r.path.as_str();
+    // the regression runner's hook (VR_TEST_HOOKS=1 in the environment; nothing but the runner sets it): a panic inside
+    // a request, holding the gateway's products lock when asked. R174 proves the hub goes on and the lock recovers (FR1).
+    if p == "/__vr-test/panic" {
+        if std::env::var("VR_TEST_HOOKS").ok().as_deref() != Some("1") { return answer(404, json!({ "error": "Not found" })); }
+        if r.param("lock").as_deref() == Some("gateway") { let _held = hub.mods.gateway.hold_for_test(); panic!("test panic inside the gateway's products lock"); }
+        panic!("test panic");
+    }
     // the front itself: who answers here (for the tools and the regression suite; nothing private)
     if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules() }))); }
     // the JavaScript hub asking a module of this one (with the front's secret, from this machine only)
@@ -501,7 +520,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
                 acc["signedIn"] = json!(a.signed_in(&u));
                 acc["busy"] = json!(acc["busy"] == json!(true) || w.busy(&u));
                 acc["chatKey"] = json!(hub.mods.chat.has_key(&u));
-                if let Some(x) = a.account(&u) { acc["unityPc"] = json!(hub.mods.unity.group_on(&x, "pc")); acc["unityCode"] = json!(hub.mods.unity.group_on(&x, "code")); acc["busy"] = json!(acc["busy"] == json!(true) || hub.mods.unity.runs.lock().unwrap().contains_key(&u)); }
+                if let Some(x) = a.account(&u) { acc["unityPc"] = json!(hub.mods.unity.group_on(&x, "pc")); acc["unityCode"] = json!(hub.mods.unity.group_on(&x, "code")); acc["busy"] = json!(acc["busy"] == json!(true) || hub.mods.unity.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&u)); }
                 if let Some(x) = a.account(&u) { acc["model"] = json!(w.effective_model(&x)); }
             }
             Some(v.to_string().into_bytes())

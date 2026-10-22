@@ -88,3 +88,7 @@ number should scale less than the third number, however, this is all dependent o
   for the hub to keep working; updates reach hosts by themselves through the hub (a host can switch that off).
 - Before going live: the regression suite reports 0 failed, and afterwards the deploy log is watched until the new
   version is confirmed up.
+- One request's failure is that request's alone (5.4.0): the Rust hub answers it 500 and logs it; it never aborts,
+  every lock recovers from a poisoning, and a background loop that fails is started again. The full-Rust hub (no
+  JavaScript hub behind it) is specified in the team note plans/full-rust-hub.md: each step has spec checks in the
+  suite (`spec()`, R174–R179) that say what the hub SHOULD do before it is built.

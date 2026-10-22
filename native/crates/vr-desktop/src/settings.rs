@@ -49,15 +49,15 @@ impl Store {
         let s = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         Store { path, s: Mutex::new(s) }
     }
-    pub fn get(&self) -> Settings { self.s.lock().unwrap().clone() }
+    pub fn get(&self) -> Settings { self.s.lock().unwrap_or_else(|e| e.into_inner()).clone() }
     pub fn public(&self) -> Public { let s = self.get(); Public { has_forgejo_token: !s.forgejo_token.is_empty(), has_proxy_key: !s.proxy_key.is_empty(), s: Settings { forgejo_token: String::new(), proxy_key: String::new(), hub_session: String::new(), ..s } } }
     /// The hub's page says who is signed in ('' = signed out).
     pub fn set_session(&self, token: &str) -> Result<(), String> {
-        { let mut s = self.s.lock().unwrap(); if s.hub_session == token { return Ok(()); } s.hub_session = token.chars().take(200).collect(); }
+        { let mut s = self.s.lock().unwrap_or_else(|e| e.into_inner()); if s.hub_session == token { return Ok(()); } s.hub_session = token.chars().take(200).collect(); }
         self.save()
     }
     pub fn save(&self) -> Result<(), String> {
-        let text = serde_json::to_string_pretty(&*self.s.lock().unwrap()).map_err(|e| e.to_string())?;
+        let text = serde_json::to_string_pretty(&*self.s.lock().unwrap_or_else(|e| e.into_inner())).map_err(|e| e.to_string())?;
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
         vr_core::settings::private(&tmp);
@@ -69,7 +69,7 @@ impl Store {
     /// Applies a partial update from the Tools window ({ key: value }); empty secrets keep the stored ones.
     pub fn patch(&self, v: serde_json::Value) -> Result<(), String> {
         {
-            let mut s = self.s.lock().unwrap();
+            let mut s = self.s.lock().unwrap_or_else(|e| e.into_inner());
             let mut cur = serde_json::to_value(&*s).map_err(|e| e.to_string())?;
             if let (Some(c), Some(p)) = (cur.as_object_mut(), v.as_object()) {
                 for (k, val) in p {

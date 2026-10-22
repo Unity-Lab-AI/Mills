@@ -42,7 +42,7 @@ impl Mirror {
         Mirror { hub_token: cfg["token"].as_str().unwrap_or("").to_string(), board_id: cfg["board"].as_str().unwrap_or("team").to_string(), last_poll: Mutex::new(cfg["since"].as_str().unwrap_or("1970-01-01T00:00:00.000Z").to_string()),
             busy: Mutex::default(), again: Mutex::default(), http: pgm_net_internal::client::http_client(Duration::from_secs(15)).expect("http"), root, cfg, on, url, base }
     }
-    pub fn status(&self) -> Value { json!({ "on": self.on, "repo": if self.on { self.cfg["repo"].clone() } else { json!("") }, "board": self.board_id, "lastPoll": *self.last_poll.lock().unwrap(), "poll": self.on && !self.hub_token.is_empty() }) }
+    pub fn status(&self) -> Value { json!({ "on": self.on, "repo": if self.on { self.cfg["repo"].clone() } else { json!("") }, "board": self.board_id, "lastPoll": *self.last_poll.lock().unwrap_or_else(|e| e.into_inner()), "poll": self.on && !self.hub_token.is_empty() }) }
     fn token_for(&self, user: &str) -> String {
         std::fs::read_to_string(self.root.join("forgejo-users.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["users"][user]["token"].as_str().map(String::from)).unwrap_or_default()
     }
@@ -67,12 +67,12 @@ impl Mirror {
         Box::pin(async move {
             if t["board"].as_str() != Some(self.board_id.as_str()) { return; }
             let id = t["id"].as_str().unwrap_or("").to_string();
-            if !self.busy.lock().unwrap().insert(id.clone()) { self.again.lock().unwrap().insert(id, actor); return; } // re-synced when the call in flight is done
+            if !self.busy.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone()) { self.again.lock().unwrap_or_else(|e| e.into_inner()).insert(id, actor); return; } // re-synced when the call in flight is done
             let token = actor.as_ref().map(|a| self.token_for(&a.user)).filter(|t| !t.is_empty()).unwrap_or_else(|| self.hub_token.clone());
-            if token.is_empty() { println!("[vr-hub] forgejo: {id} not mirrored: {} has no Forgejo token and the hub has none.", actor.as_ref().map(|a| a.user.as_str()).unwrap_or("nobody")); self.busy.lock().unwrap().remove(&id); return; }
+            if token.is_empty() { println!("[vr-hub] forgejo: {id} not mirrored: {} has no Forgejo token and the hub has none.", actor.as_ref().map(|a| a.user.as_str()).unwrap_or("nobody")); self.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&id); return; }
             if let Err(e) = self.sync(board, &what, &t, &token).await { println!("[vr-hub] forgejo: {e}"); }
-            self.busy.lock().unwrap().remove(&id);
-            let next = self.again.lock().unwrap().remove(&id);
+            self.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            let next = self.again.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
             if let Some(a) = next { if let Some(cur) = board.get(&id) { let w = if cur["deleted"].as_bool() == Some(true) { "deleted" } else { "updated" }; self.outbound(board, w.to_string(), cur, a).await; } }
         })
     }
@@ -107,7 +107,7 @@ impl Mirror {
     /// Forgejo → board, every pollMinutes (at least 3 s), with the hub token. `ops` runs a board operation as "Forgejo".
     pub async fn poll(&self, board: &Board, ops: &(dyn Fn(&str, &Value) -> Value + Send + Sync)) {
         if !self.on || self.hub_token.is_empty() { return; }
-        let since = self.last_poll.lock().unwrap().clone();
+        let since = self.last_poll.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let started = pgm_core_internal::time::iso_now();
         let issues = match self.api("GET", &format!("/issues?state=all&type=issues&since={}&limit=50", pgm_core_internal::text::urlencode(&since)), None, &self.hub_token).await { Ok(v) => v, Err(e) => { println!("[vr-hub] forgejo poll: {e}"); return; } };
         let ts = |s: &Value| chrono::DateTime::parse_from_rfc3339(s.as_str().unwrap_or("")).map(|d| d.timestamp_millis()).unwrap_or(0);
@@ -133,7 +133,7 @@ impl Mirror {
                 if let Some(id) = r["task"]["id"].as_str() { board.set_external(id, Some(json!({ "number": n, "url": is["html_url"], "updatedAt": is["updated_at"], "title": is["title"], "body": is["body"].as_str().unwrap_or(""), "state": "open" }))); }
             }
         }
-        *self.last_poll.lock().unwrap() = started.clone();
+        *self.last_poll.lock().unwrap_or_else(|e| e.into_inner()) = started.clone();
         let mut c = self.cfg.clone(); c["since"] = json!(started);
         let _ = std::fs::write(self.root.join("forgejo.json"), serde_json::to_string_pretty(&c).unwrap_or_default());
     }

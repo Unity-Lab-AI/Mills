@@ -72,28 +72,28 @@ impl Work {
     fn state_file(a: &Account) -> PathBuf { a.dir.join("work.json") }
     /// Their Work state (work.json; the first time, what their state.json held).
     pub fn state(&self, a: &Account) -> Value {
-        if let Some(v) = self.states.lock().unwrap().get(&a.username) { return v.clone(); }
+        if let Some(v) = self.states.lock().unwrap_or_else(|e| e.into_inner()).get(&a.username) { return v.clone(); }
         let v = read_json(&Self::state_file(a)).filter(Value::is_object).unwrap_or_else(|| {
             let old = read_json(&a.dir.join("state.json")).unwrap_or(json!({}));
             let mut m = Map::new(); for k in STATE_KEYS { if !old[k].is_null() { m.insert(k.into(), old[k].clone()); } }
             let v = Value::Object(m); write_json(&Self::state_file(a), &v); v
         });
-        self.states.lock().unwrap().insert(a.username.clone(), v.clone());
+        self.states.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), v.clone());
         v
     }
     fn update(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) -> Value {
         let mut v = self.state(a); if !v.is_object() { v = json!({}); }
         f(v.as_object_mut().unwrap());
         write_json(&Self::state_file(a), &v);
-        self.states.lock().unwrap().insert(a.username.clone(), v.clone());
+        self.states.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), v.clone());
         v
     }
     /// One account's key for its runs' tools: a run can act only as its own person, whatever account it names.
     pub fn secret_for(&self, account: &str) -> String { pgm_core_internal::crypto::hmac_hex(self.secret.as_bytes(), account.as_bytes()) }
-    pub fn forget(&self, u: &str) { self.states.lock().unwrap().remove(u); }
+    pub fn forget(&self, u: &str) { self.states.lock().unwrap_or_else(|e| e.into_inner()).remove(u); }
     pub fn drop_provider(&self, a: &Account, id: &str) { if self.state(a)["provider"] == json!(id) { self.update(a, |m| { m.remove("provider"); }); } }
-    pub fn busy(&self, u: &str) -> bool { self.runs.lock().unwrap().contains_key(u) }
-    pub fn any_busy(&self) -> bool { !self.runs.lock().unwrap().is_empty() }
+    pub fn busy(&self, u: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(u) }
+    pub fn any_busy(&self) -> bool { !self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() }
     pub fn default_model_of(&self, a: &Account) -> String { self.default_model(a) }
     fn default_model(&self, a: &Account) -> String {
         let c = if a.dir == self.root { Value::Object(self.cfg.raw.clone()) } else { read_json(&a.dir.join("config.json")).unwrap_or(Value::Null) };
@@ -102,11 +102,11 @@ impl Work {
     pub fn effective_model(&self, a: &Account) -> String { let m = s(&self.state(a), "model"); if m.is_empty() { self.default_model(a) } else { m } }
     pub fn project_of(&self, a: &Account) -> String { let p = s(&self.state(a), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
     pub fn project_list(&self) -> Value {
-        let mut c = self.projects.lock().unwrap();
+        let mut c = self.projects.lock().unwrap_or_else(|e| e.into_inner());
         if now_ms() - c.0 > 5000 { *c = (now_ms(), json!(self.wt.list())); }
         c.1.clone()
     }
-    pub fn projects_changed(&self) { self.projects.lock().unwrap().0 = 0; }
+    pub fn projects_changed(&self) { self.projects.lock().unwrap_or_else(|e| e.into_inner()).0 = 0; }
     fn model_ids(&self) -> Vec<String> { self.cfg.get("models").and_then(Value::as_array).map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default() }
 
     // ---------- providers (bridge/providers.js, read here) ----------
@@ -157,7 +157,7 @@ impl Work {
     // ---------- worktree freshness (the worktree law): checked in the background, never holding a run up ----------
     pub fn check_fresh(self: &Arc<Self>, a: &Account) {
         let pj = self.project_of(a); let key = format!("{}|{pj}", a.username);
-        { let mut f = self.fresh.lock().unwrap(); let cur = f.get(&key).cloned().unwrap_or_default(); if cur.busy || (cur.at > 0 && now_ms() - cur.at < 60000) { return; } f.insert(key.clone(), Fresh { busy: true, ..cur }); }
+        { let mut f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()); let cur = f.get(&key).cloned().unwrap_or_default(); if cur.busy || (cur.at > 0 && now_ms() - cur.at < 60000) { return; } f.insert(key.clone(), Fresh { busy: true, ..cur }); }
         let (w, user) = (self.clone(), a.username.clone());
         tokio::task::spawn_blocking(move || {
             let mut env = w.work_env(&user); env.push(("GIT_TERMINAL_PROMPT".into(), "0".into()));
@@ -165,14 +165,14 @@ impl Work {
             let raw = if out.trim().is_empty() { err } else { out };
             let lines: Vec<&str> = raw.trim().lines().collect();
             let text: String = lines[lines.len().saturating_sub(2)..].join(" ").chars().take(600).collect();
-            w.fresh.lock().unwrap().insert(key, Fresh { text, at: now_ms(), busy: false });
+            w.fresh.lock().unwrap_or_else(|e| e.into_inner()).insert(key, Fresh { text, at: now_ms(), busy: false });
         });
     }
     fn fresh_law(&self, a: &Account, wd: &Wt) -> String {
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let cmd = if wd.hub { "node bridge/worktree.js".to_string() } else { format!("node {script} --project {}", wd.project) };
         let u = &a.username;
-        let f = self.fresh.lock().unwrap().get(&format!("{u}|{}", wd.project)).cloned();
+        let f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()).get(&format!("{u}|{}", wd.project)).cloned();
         format!("Worktree law: never build on a stale worktree. Before changing anything, check it: {cmd} check {u} (it fetches Forgejo first; exit code 3 = stale). If it is STALE, run {cmd} update {u}: it fast-forwards, merges Forgejo's {} into your own commits, or makes a NEW worktree from Forgejo with your commits, uncommitted changes and untracked files carried over and then deletes just the old one ({cmd} renew {u} does that directly).", wd.main)
             + &f.filter(|f| !f.text.is_empty()).map(|f| format!(" Latest background check ({} min ago): {}", ((now_ms() - f.at) as f64 / 60000.0).round().max(1.0), f.text)).unwrap_or_default()
     }
@@ -232,7 +232,7 @@ impl Work {
     }
     // ---------- the login relay: one token per person + host provider, 12 hours, from this machine only ----------
     fn llm_token(&self, user: &str, host: &str, prov: &str) -> String {
-        let mut m = self.llm.lock().unwrap(); let now = now_ms();
+        let mut m = self.llm.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms();
         m.retain(|_, v| v.3 > now);
         if let Some((t, _)) = m.iter().find(|(_, v)| v.0 == user && v.1 == host && v.2 == prov && v.3 - now > 3_600_000) { return t.clone(); }
         let t = pgm_core_internal::crypto::random_hex(24);
@@ -241,7 +241,7 @@ impl Work {
     }
 
     // ---------- the run's stream ----------
-    fn emit(&self, u: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap().get_mut(u) { let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
+    fn emit(&self, u: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(u) { let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     fn on_event(&self, hub: &dyn AiHub, a: &Account, ev: Value, source: &str) {
         if let Some(sid) = ev["session_id"].as_str().filter(|s| !s.is_empty()) { let sid = sid.to_string(); self.update(a, |m| { m.insert("claudeSessionId".into(), json!(sid)); }); }
         let usage = &hub.ai().usage;
@@ -256,14 +256,14 @@ impl Work {
         self.emit(&a.username, ev);
     }
     fn finish(&self, a: &Account, run_id: &str, code: Value) {
-        let run = { let mut runs = self.runs.lock().unwrap(); if runs.get(&a.username).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&a.username) } else { None } };
+        let run = { let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.get(&a.username).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&a.username) } else { None } };
         let Some(mut r) = run else { return };
         for (_, p) in r.pending { let _ = p.send(json!({ "ok": false, "error": "Run ended" })); }
         let done = json!({ "type": "bridge_done", "code": code });
         let _ = r.tx.send(line(done.clone()));
         r.ev.push(done);
         // a page reloading just now still sees how it ended (for a few minutes)
-        self.ended.lock().unwrap().insert(a.username.clone(), (r.id.clone(), r.ev, now_ms()));
+        self.ended.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), (r.id.clone(), r.ev, now_ms()));
         self.busy_changed.notify_one();
     }
     /// GET /api/work/attach?run=<id>&after=<n>: the person's run so far and as it goes (a long poll, 25 s): the events
@@ -271,13 +271,13 @@ impl Work {
     /// request goes out again only while it still waits for an answer (never run twice).
     async fn attach(&self, u: &str, run: &str, after: usize) -> Value {
         let view = |w: &Work| -> (Value, bool, Option<Arc<tokio::sync::Notify>>) {
-            if let Some(r) = w.runs.lock().unwrap().get(u) {
+            if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get(u) {
                 let from = if r.id == run { after } else { 0 };
                 let evs: Vec<Value> = r.ev.since(from).into_iter().filter(|e| e["type"] != json!("pc_tool") || r.pending.contains_key(e["id"].as_str().unwrap_or(""))).collect();
                 let ready = !evs.is_empty() || r.id != run;
                 return (json!({ "run": r.id, "busy": true, "from": from, "next": r.ev.next(), "events": evs }), ready, Some(r.ev.woke.clone()));
             }
-            let mut ended = w.ended.lock().unwrap();
+            let mut ended = w.ended.lock().unwrap_or_else(|e| e.into_inner());
             ended.retain(|_, x| now_ms() - x.2 < 5 * 60_000);
             match ended.get(u) {
                 Some((id, ev, _)) if id == run => { let evs: Vec<Value> = ev.since(after).into_iter().filter(|e| e["type"] != json!("pc_tool")).collect(); (json!({ "run": id, "busy": false, "from": after, "next": ev.next(), "events": evs }), true, None) }
@@ -294,7 +294,7 @@ impl Work {
     }
     /// Stops the person's run: the process here, or the host is told.
     pub fn stop(&self, hub: &dyn AiHub, u: &str) {
-        let (pid, remote) = match self.runs.lock().unwrap().get(u) { Some(r) => (r.pid, r.remote.clone()), None => return };
+        let (pid, remote) = match self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(u) { Some(r) => (r.pid, r.remote.clone()), None => return };
         if !remote.is_empty() { hub.ai().cancel_work(&remote); return; }
         if let Some(pid) = pid { kill_pid(pid); }
     }
@@ -361,12 +361,12 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap().insert(a.username.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default() });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default() });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&a.username, json!({ "type": "bridge_run", "id": run_id }));
     w.busy_changed.notify_one();
     // the page hears something every 15 s while Claude thinks
-    { let (h, u, id) = (hub.clone(), a.username.clone(), run_id.clone()); tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(15)).await; let alive = h.work().runs.lock().unwrap().get(&u).map(|r| r.id == id).unwrap_or(false); if !alive { return; } h.work().emit(&u, json!({ "type": "ping" })); } }); }
+    { let (h, u, id) = (hub.clone(), a.username.clone(), run_id.clone()); tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(15)).await; let alive = h.work().runs.lock().unwrap_or_else(|e| e.into_inner()).get(&u).map(|r| r.id == id).unwrap_or(false); if !alive { return; } h.work().emit(&u, json!({ "type": "ping" })); } }); }
     let mut relay_env: Vec<(String, String)> = vec![];
     if kind == "host-claude" && s(&prov, "remoteKind") != "claude-cli-work" {
         // a host's Claude login, shared as AI only: Claude Code runs HERE, only its model calls travel to the host
@@ -378,9 +378,9 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         let payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": w.system_prompt(a, &wd), "model": model,
             "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": hub.cfg().get("permissionMode"), "allowedTools": hub.cfg().get("allowedTools"), "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
         match ai.run_work(&host_id, &prov_id, payload) {
-            Err(e) => { w.runs.lock().unwrap().remove(&a.username); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
+            Err(e) => { w.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&a.username); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
             Ok((job, _token, mut events)) => {
-                if let Some(r) = w.runs.lock().unwrap().get_mut(&a.username) { r.remote = job; }
+                if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&a.username) { r.remote = job; }
                 w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Running on {nick}{}.", if owner.is_empty() { " (AI host)".to_string() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }) }));
                 let (h, a2, id) = (hub.clone(), a.clone(), run_id.clone());
                 tokio::spawn(async move {
@@ -417,7 +417,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
             Ok(c) => c,
             Err(e) => { w.emit(&a2.username, json!({ "type": "bridge_error", "text": format!("Could not start claude: {e}") })); w.finish(&a2, &id, json!(-2)); return; }
         };
-        if let Some(r) = w.runs.lock().unwrap().get_mut(&a2.username) { r.pid = child.id(); }
+        if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&a2.username) { r.pid = child.id(); }
         if let Some(mut stdin) = child.stdin.take() { let inp = input.clone(); tokio::spawn(async move { let _ = stdin.write_all(inp.as_bytes()).await; let _ = stdin.shutdown().await; }); }
         let err_task = child.stderr.take().map(|e| { let (h, u) = (h.clone(), a2.username.clone()); tokio::spawn(async move { use tokio::io::AsyncReadExt; let mut e = e; let mut buf = vec![0u8; 8192]; while let Ok(n) = e.read(&mut buf).await { if n == 0 { break; } h.work().emit(&u, json!({ "type": "stderr", "text": String::from_utf8_lossy(&buf[..n]) })); } }) });
         if let Some(out) = child.stdout.take() {
@@ -468,12 +468,12 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
     }
     let id = pgm_core_internal::crypto::random_hex(8);
     let (otx, orx) = oneshot::channel();
-    { let mut runs = w.runs.lock().unwrap(); match runs.get_mut(account) { Some(r) => { r.pending.insert(id.clone(), otx); } None => return json!({ "ok": false, "error": format!("{}'s browser is not connected (and no AI host of theirs offers their computer).", a.display) }) } }
+    { let mut runs = w.runs.lock().unwrap_or_else(|e| e.into_inner()); match runs.get_mut(account) { Some(r) => { r.pending.insert(id.clone(), otx); } None => return json!({ "ok": false, "error": format!("{}'s browser is not connected (and no AI host of theirs offers their computer).", a.display) }) } }
     w.emit(account, json!({ "type": "pc_tool", "id": id, "name": name, "args": args }));
     match tokio::time::timeout(Duration::from_secs(120), orx).await {
         Ok(Ok(v)) => v,
         Ok(Err(_)) => json!({ "ok": false, "error": "Run ended" }),
-        Err(_) => { if let Some(r) = w.runs.lock().unwrap().get_mut(account) { r.pending.remove(&id); } json!({ "ok": false, "error": "Timed out waiting for the browser." }) }
+        Err(_) => { if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(account) { r.pending.remove(&id); } json!({ "ok": false, "error": "Timed out waiting for the browser." }) }
     }
 }
 /// Everything a person may pick (bridge/providers.js list): this hub's Claude, the own / shared ones, the hosts'.
@@ -531,13 +531,13 @@ fn archive_file(dir: &Path, id: &str) -> Option<PathBuf> { if id.len() == 16 && 
 impl Work {
     fn share_line(&self, owner: &str, t: &str, text: &str) {
         if text.is_empty() { return; }
-        let mut sh = self.shares.lock().unwrap(); let Some(s) = sh.get_mut(owner) else { return };
+        let mut sh = self.shares.lock().unwrap_or_else(|e| e.into_inner()); let Some(s) = sh.get_mut(owner) else { return };
         s.n += 1; s.log.push(json!({ "n": s.n, "t": t, "text": text.chars().take(20000).collect::<String>(), "ts": iso() }));
         if s.log.len() > 400 { let k = s.log.len() - 400; s.log.drain(0..k); }
         s.woke.notify_waiters();
     }
     fn share_event(&self, owner: &str, ev: &Value) {
-        if !self.shares.lock().unwrap().contains_key(owner) { return; }
+        if !self.shares.lock().unwrap_or_else(|e| e.into_inner()).contains_key(owner) { return; }
         if ev["type"] == json!("assistant") && ev["message"].is_object() {
             for b in ev["message"]["content"].as_array().cloned().unwrap_or_default() {
                 if b["type"] == json!("text") && !s(&b, "text").trim().is_empty() { self.share_line(owner, "claude", &s(&b, "text")); }
@@ -550,10 +550,10 @@ impl Work {
             }
         } else if ev["type"] == json!("result") { self.share_line(owner, "sys", if ev["is_error"] == json!(true) { "Claude stopped with an error" } else { "Done" }); }
     }
-    pub fn shares_for(&self, user: &str) -> Vec<Value> { self.shares.lock().unwrap().iter().filter(|(o, _)| *o != user).map(|(o, s)| json!({ "user": o, "conv": s.conv, "since": s.since })).collect() }
-    pub fn shares_all(&self) -> Vec<Value> { self.shares.lock().unwrap().iter().map(|(o, s)| json!({ "user": o, "conv": s.conv, "since": s.since })).collect() }
-    pub fn share_of(&self, owner: &str) -> String { self.shares.lock().unwrap().get(owner).map(|s| s.conv.clone()).unwrap_or_default() }
-    pub fn share_stop(&self, owner: &str) { let gone = self.shares.lock().unwrap().remove(owner); if let Some(s) = gone { s.woke.notify_waiters(); self.shares_changed.notify_one(); } }
+    pub fn shares_for(&self, user: &str) -> Vec<Value> { self.shares.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(o, _)| *o != user).map(|(o, s)| json!({ "user": o, "conv": s.conv, "since": s.since })).collect() }
+    pub fn shares_all(&self) -> Vec<Value> { self.shares.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(o, s)| json!({ "user": o, "conv": s.conv, "since": s.since })).collect() }
+    pub fn share_of(&self, owner: &str) -> String { self.shares.lock().unwrap_or_else(|e| e.into_inner()).get(owner).map(|s| s.conv.clone()).unwrap_or_default() }
+    pub fn share_stop(&self, owner: &str) { let gone = self.shares.lock().unwrap_or_else(|e| e.into_inner()).remove(owner); if let Some(s) = gone { s.woke.notify_waiters(); self.shares_changed.notify_one(); } }
 }
 
 /// The Work routes (signed in as `a`); None = not one of them.
@@ -566,7 +566,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/stop" if post => { w.stop(&**hub, u); answer(200, json!({ "ok": true })) }
         "/api/pc-result" if post => {
             let b = r.json();
-            let entry = w.runs.lock().unwrap().get_mut(u).and_then(|run| run.pending.remove(&s(&b, "id")));
+            let entry = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(u).and_then(|run| run.pending.remove(&s(&b, "id")));
             if let Some(tx) = entry { let mut v = json!({ "ok": b["ok"].as_bool().unwrap_or(false) || (!b["ok"].is_null() && b["ok"] != json!(false) && b["ok"] != json!(0) && b["ok"] != json!("")) }); for k in ["result", "error"] { if let Some(x) = b.get(k) { v[k] = x.clone(); } } let _ = tx.send(v); }
             answer(200, json!({ "ok": true }))
         }
@@ -652,14 +652,14 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let mut log = vec![]; let mut n = 0;
             let tr = b["transcript"].as_array().cloned().unwrap_or_default();
             for t in tr.iter().skip(tr.len().saturating_sub(150)) { if let (Some(k), Some(text)) = (kinds(t["cls"].as_str().unwrap_or("")), t["text"].as_str()) { n += 1; log.push(json!({ "n": n, "t": k, "text": text.chars().take(20000).collect::<String>(), "ts": since })); } }
-            { let mut sh = w.shares.lock().unwrap(); let prev = sh.remove(u); let live = prev.as_ref().map(|p| p.live.clone()).unwrap_or(json!({ "typing": "", "queue": [] }));
+            { let mut sh = w.shares.lock().unwrap_or_else(|e| e.into_inner()); let prev = sh.remove(u); let live = prev.as_ref().map(|p| p.live.clone()).unwrap_or(json!({ "typing": "", "queue": [] }));
               if let Some(p) = &prev { p.woke.notify_waiters(); }
               sh.insert(u.clone(), Share { conv: conv.clone(), since, n, log, live, ver: 0, woke: prev.map(|p| p.woke).unwrap_or_default() }); }
             w.shares_changed.notify_one();
             answer(200, json!({ "share": conv }))
         }
         "/api/work/live" if post => {
-            let b = r.json(); let mut sh = w.shares.lock().unwrap();
+            let b = r.json(); let mut sh = w.shares.lock().unwrap_or_else(|e| e.into_inner());
             let Some(sv) = sh.get_mut(u) else { return Some(answer(200, json!({ "ok": false }))) };
             sv.live = json!({ "typing": b["typing"].as_str().map(|t| t.chars().take(4000).collect::<String>()).unwrap_or_default(), "queue": b["queue"].as_array().map(|q| q.iter().take(20).map(|x| json!(match x { Value::String(t) => t.chars().take(2000).collect::<String>(), v => v.to_string() })).collect::<Vec<_>>()).unwrap_or_default() });
             sv.ver += 1; sv.woke.notify_waiters();
@@ -669,13 +669,13 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let owner = r.param("user").unwrap_or_default(); let after: u64 = r.param("after").and_then(|x| x.parse().ok()).unwrap_or(0);
             let ver: Option<u64> = r.param("ver").and_then(|x| x.parse().ok()); let since = r.param("since").unwrap_or_default();
             let view = || -> (Value, bool) {
-                let sh = w.shares.lock().unwrap();
+                let sh = w.shares.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(sv) = sh.get(&owner).filter(|_| owner != *u) else { return (json!({ "stopped": true }), true) };
                 let restart = since != sv.since;
                 let ready = restart || sv.log.iter().any(|e| e["n"].as_u64().unwrap_or(0) > after) || ver != Some(sv.ver);
                 (json!({ "since": sv.since, "conv": sv.conv, "busy": w.busy(&owner), "live": sv.live, "ver": sv.ver, "events": sv.log.iter().filter(|e| restart || e["n"].as_u64().unwrap_or(0) > after).cloned().collect::<Vec<_>>(), "after": sv.n, "restart": restart }), ready)
             };
-            let woke = w.shares.lock().unwrap().get(&owner).map(|s| s.woke.clone());
+            let woke = w.shares.lock().unwrap_or_else(|e| e.into_inner()).get(&owner).map(|s| s.woke.clone());
             if let Some(woke) = woke {
                 let n = woke.notified(); tokio::pin!(n); n.as_mut().enable();
                 let (v, ready) = view(); if ready { return Some(answer(200, v)); }
@@ -740,7 +740,7 @@ pub async fn llm(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
     let (tok, sub) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
     let behind = hub.cfg().get("behindProxy") == Some(&json!(true));
     let outside = r.header("cf-connecting-ip").is_some() || (behind && (r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some()));
-    let ent = if tok.len() == 48 && tok.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) && !sub.is_empty() { hub.work().llm.lock().unwrap().get(tok).cloned() } else { None };
+    let ent = if tok.len() == 48 && tok.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) && !sub.is_empty() { hub.work().llm.lock().unwrap_or_else(|e| e.into_inner()).get(tok).cloned() } else { None };
     let Some((_, host, prov, exp)) = ent.filter(|e| e.3 > now_ms() && r.peer.ip().is_loopback() && !outside) else { return answer(401, json!({ "type": "error", "error": { "type": "authentication_error", "message": "Unknown relay." } })) };
     let _ = exp;
     let path = if r.query.is_empty() { sub.to_string() } else { format!("{sub}?{}", r.query) };

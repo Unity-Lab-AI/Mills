@@ -65,20 +65,20 @@ pub fn term_open(app: &AppHandle, terms: &Arc<Terms>, root: &str, rel: &str, col
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let id = { let mut n = terms.next.lock().unwrap(); *n += 1; *n };
-    terms.map.lock().unwrap().insert(id, Term { writer, master: pair.master, child });
+    let id = { let mut n = terms.next.lock().unwrap_or_else(|e| e.into_inner()); *n += 1; *n };
+    terms.map.lock().unwrap_or_else(|e| e.into_inner()).insert(id, Term { writer, master: pair.master, child });
     let (app2, terms2) = (app.clone(), terms.clone());
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop { match reader.read(&mut buf) { Ok(0) | Err(_) => break, Ok(n) => { let _ = app2.emit_to("tools", "term", json!({ "id": id, "data": String::from_utf8_lossy(&buf[..n]) })); } } }
-        terms2.map.lock().unwrap().remove(&id);
+        terms2.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         let _ = app2.emit_to("tools", "term", json!({ "id": id, "exit": true }));
     });
     Ok(id)
 }
-pub fn term_write(terms: &Terms, id: u32, data: &str) -> Result<(), String> { let mut m = terms.map.lock().unwrap(); let t = m.get_mut(&id).ok_or("That terminal is closed.")?; t.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?; t.writer.flush().map_err(|e| e.to_string()) }
-pub fn term_resize(terms: &Terms, id: u32, cols: u16, rows: u16) -> Result<(), String> { let m = terms.map.lock().unwrap(); let t = m.get(&id).ok_or("That terminal is closed.")?; t.master.resize(PtySize { rows: rows.max(5), cols: cols.max(20), pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string()) }
-pub fn term_close(terms: &Terms, id: u32) { if let Some(mut t) = terms.map.lock().unwrap().remove(&id) { let _ = t.child.kill(); } }
+pub fn term_write(terms: &Terms, id: u32, data: &str) -> Result<(), String> { let mut m = terms.map.lock().unwrap_or_else(|e| e.into_inner()); let t = m.get_mut(&id).ok_or("That terminal is closed.")?; t.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?; t.writer.flush().map_err(|e| e.to_string()) }
+pub fn term_resize(terms: &Terms, id: u32, cols: u16, rows: u16) -> Result<(), String> { let m = terms.map.lock().unwrap_or_else(|e| e.into_inner()); let t = m.get(&id).ok_or("That terminal is closed.")?; t.master.resize(PtySize { rows: rows.max(5), cols: cols.max(20), pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string()) }
+pub fn term_close(terms: &Terms, id: u32) { if let Some(mut t) = terms.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&id) { let _ = t.child.kill(); } }
 
 // ---------- the build / run runner ----------
 #[derive(Default)]
@@ -94,22 +94,22 @@ pub fn run_start(app: &AppHandle, runs: &Arc<Runs>, root: &str, rel: &str, cmdli
     { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
     let mut child = c.spawn().map_err(|e| e.to_string())?;
     let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
-    let id = { let mut n = runs.next.lock().unwrap(); *n += 1; *n };
+    let id = { let mut n = runs.next.lock().unwrap_or_else(|e| e.into_inner()); *n += 1; *n };
     let child = Arc::new(Mutex::new(child));
-    runs.map.lock().unwrap().insert(id, child.clone());
+    runs.map.lock().unwrap_or_else(|e| e.into_inner()).insert(id, child.clone());
     for (stream, is_err) in [(Box::new(out) as Box<dyn Read + Send>, false), (Box::new(err) as Box<dyn Read + Send>, true)] {
         let app2 = app.clone();
         std::thread::spawn(move || { use std::io::BufRead; for line in std::io::BufReader::new(stream).lines().map_while(Result::ok) { let _ = app2.emit_to("tools", "run", json!({ "id": id, "line": line, "err": is_err })); } });
     }
     let (app3, runs3) = (app.clone(), runs.clone());
     std::thread::spawn(move || {
-        let code = loop { if let Ok(Some(s)) = child.lock().unwrap().try_wait() { break s.code().unwrap_or(-1); } std::thread::sleep(std::time::Duration::from_millis(150)); };
-        runs3.map.lock().unwrap().remove(&id);
+        let code = loop { if let Ok(Some(s)) = child.lock().unwrap_or_else(|e| e.into_inner()).try_wait() { break s.code().unwrap_or(-1); } std::thread::sleep(std::time::Duration::from_millis(150)); };
+        runs3.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         let _ = app3.emit_to("tools", "run", json!({ "id": id, "done": true, "code": code }));
     });
     Ok(id)
 }
-pub fn run_stop(runs: &Runs, id: u32) { if let Some(c) = runs.map.lock().unwrap().get(&id) { let _ = c.lock().unwrap().kill(); } }
+pub fn run_stop(runs: &Runs, id: u32) { if let Some(c) = runs.map.lock().unwrap_or_else(|e| e.into_inner()).get(&id) { let _ = c.lock().unwrap_or_else(|e| e.into_inner()).kill(); } }
 
 // ---------- git, with Forgejo sign-in ----------
 /// Runs git in a project folder. For the Forgejo host only, the person's token goes along as an HTTP header for this

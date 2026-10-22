@@ -7,6 +7,30 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.4.1 — 2026-10-22
+
+PATCH: `bridge/unity.json` (the Rust hub's copy of Unity's state, data) is gitignored. It was untracked in the live
+checkout, which made `worktree.js live` refuse ("main has uncommitted changes") until it was excluded by hand.
+
+## 5.4.0 — 2026-10-22
+
+MINOR: **the full-Rust hub, step 1 (FR1): a bad request never takes the Rust hub down.** Spec: team note
+plans/full-rust-hub.md (board T-151 … T-157).
+- `native/Cargo.toml`: the release build unwinds on panic instead of aborting. A panic inside one request answers that
+  request 500 (`That request failed inside the hub; it was logged.`) and is logged with its method and path
+  (`front.rs guarded`); the hub, its other connections and its pid go on. Before this any panic killed the whole hub
+  and only the JavaScript hub taking the port kept the site up.
+- Every std Mutex lock in the crates (690, both trees) recovers from a poisoning: `lock().unwrap()` →
+  `unwrap_or_else(|e| e.into_inner())`. A lock held during a panic keeps working afterwards.
+- Background loops (the Forgejo poll, the files sweep, the AI-hosts push, the notes watch) are started again after a
+  panic, with a log line, never silently gone (`modules::forever`).
+- Every `/api/` answer says who answered: `x-vr-by: rust` or `node` (FR6's progress meter).
+- Test hook `GET /__vr-test/panic[?lock=gateway]`, only with `VR_TEST_HOOKS=1` in the environment (the regression
+  runner's); 404 otherwise.
+- Suite: `spec()` checks, which print `SPEC … not built yet` and never block a release (`--spec-strict` makes them
+  fail): R174 FR1 (passes now), R175 FR2, R176 FR3, R177 FR4, R178 FR5, R179 FR6 (each names today's gap).
+  The summary line counts them as "spec pending".
+
 ## 5.3.1 — 2026-10-22
 
 PATCH: **"VibeRoller 4.1.0 is ready" on 5.x** (Sponge). The page compares the build every answer names (X-VR-Version)

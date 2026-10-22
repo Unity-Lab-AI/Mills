@@ -29,12 +29,12 @@ impl Web {
     }
     /// JSON (or an RSS text) from a URL, kept for `ttl` ms.
     async fn get(&self, url: &str, ttl: u64) -> Result<Value, String> {
-        if let Some((t, v)) = self.cache.lock().unwrap().get(url) { if pgm_core_internal::now_ms() - t < ttl { return Ok(v.clone()); } }
+        if let Some((t, v)) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(url) { if pgm_core_internal::now_ms() - t < ttl { return Ok(v.clone()); } }
         let r = tokio::time::timeout(Duration::from_secs(10), self.http.get(url).send()).await.map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string())?;
         if !r.status().is_success() { return Err(format!("{} answered {}", reqwest::Url::parse(url).map(|u| u.host_str().unwrap_or("").to_string()).unwrap_or_default(), r.status().as_u16())); }
         let text = r.text().await.map_err(|e| e.to_string())?;
         let v = if url.contains("/rss") { json!(text) } else { serde_json::from_str(&text).map_err(|e| e.to_string())? };
-        self.cache.lock().unwrap().insert(url.to_string(), (pgm_core_internal::now_ms(), v.clone()));
+        self.cache.lock().unwrap_or_else(|e| e.into_inner()).insert(url.to_string(), (pgm_core_internal::now_ms(), v.clone()));
         Ok(v)
     }
     /// The rough place of an address someone connects from.

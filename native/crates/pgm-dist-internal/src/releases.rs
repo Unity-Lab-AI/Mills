@@ -31,12 +31,12 @@ impl Releases {
         if present.is_empty() { return None; }
         let stamp = present.iter().map(|n| { let m = std::fs::metadata(dir.join(n)).ok(); format!("{n}:{:?}:{}", m.as_ref().and_then(|m| m.modified().ok()), m.map(|m| m.len()).unwrap_or(0)) }).collect::<Vec<_>>().join("|");
         let ck = format!("{app}|{target}");
-        if let Some((s, t)) = self.cache.lock().unwrap().get(&ck) { if *s == stamp { return Some(t.clone()); } }
+        if let Some((s, t)) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(&ck) { if *s == stamp { return Some(t.clone()); } }
         let build: Value = std::fs::read_to_string(dir.join("BUILD.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
         let pick = |k: &str, d: &str| build[k].as_str().filter(|s| !s.is_empty()).unwrap_or(d).to_string();
         let files: Vec<Value> = present.iter().filter_map(|n| std::fs::read(dir.join(n)).ok().map(|b| json!({ "name": n, "sha256": pgm_core_internal::crypto::sha256_hex(&b), "size": b.len() }))).collect();
         let text = json!({ "app": app, "target": target, "version": pick("version", &rel.0), "commit": pick("commit", &rel.1), "files": files }).to_string();
-        self.cache.lock().unwrap().insert(ck, (stamp, text.clone()));
+        self.cache.lock().unwrap_or_else(|e| e.into_inner()).insert(ck, (stamp, text.clone()));
         Some(text)
     }
     /// { manifest, sig, hmac? } or None while nothing is built for that app + target.

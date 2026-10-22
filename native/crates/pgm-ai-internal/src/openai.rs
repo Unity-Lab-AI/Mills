@@ -54,13 +54,13 @@ impl Api {
         let http = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build().expect("http");
         Api { root: root.to_path_buf(), mills: root.join(".."), keys: Mutex::new(keys), running: Mutex::default(), http }
     }
-    fn save(&self) { write_json(&self.root.join("api-keys.json"), &Value::Object(self.keys.lock().unwrap().clone())); }
-    fn key_of(&self, u: &str) -> Value { self.keys.lock().unwrap().get(u).cloned().unwrap_or(json!({})) }
-    fn set_key(&self, u: &str, v: Option<Value>) { { let mut k = self.keys.lock().unwrap(); match v { Some(v) => { k.insert(u.into(), v); } None => { k.remove(u); } } } self.save(); }
-    pub fn busy(&self) -> bool { !self.running.lock().unwrap().is_empty() }
-    pub fn stop(&self, u: &str) { if let Some(c) = self.running.lock().unwrap().get(u) { c.fire(); } }
+    fn save(&self) { write_json(&self.root.join("api-keys.json"), &Value::Object(self.keys.lock().unwrap_or_else(|e| e.into_inner()).clone())); }
+    fn key_of(&self, u: &str) -> Value { self.keys.lock().unwrap_or_else(|e| e.into_inner()).get(u).cloned().unwrap_or(json!({})) }
+    fn set_key(&self, u: &str, v: Option<Value>) { { let mut k = self.keys.lock().unwrap_or_else(|e| e.into_inner()); match v { Some(v) => { k.insert(u.into(), v); } None => { k.remove(u); } } } self.save(); }
+    pub fn busy(&self) -> bool { !self.running.lock().unwrap_or_else(|e| e.into_inner()).is_empty() }
+    pub fn stop(&self, u: &str) { if let Some(c) = self.running.lock().unwrap_or_else(|e| e.into_inner()).get(u) { c.fire(); } }
     pub fn drop_provider(&self, id: &str) {
-        let changed = { let mut k = self.keys.lock().unwrap(); let mut ch = false; for v in k.values_mut() { if v["provider"] == json!(id) { if let Some(o) = v.as_object_mut() { o.remove("provider"); ch = true; } } } ch };
+        let changed = { let mut k = self.keys.lock().unwrap_or_else(|e| e.into_inner()); let mut ch = false; for v in k.values_mut() { if v["provider"] == json!(id) { if let Some(o) = v.as_object_mut() { o.remove("provider"); ch = true; } } } ch };
         if changed { self.save(); }
     }
     fn status(&self, u: &str) -> Value {
@@ -76,7 +76,7 @@ impl Api {
         let k = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")).map(|v| v.trim().to_string()).unwrap_or_else(|| r.header("x-api-key").unwrap_or("").trim().to_string());
         if !(k.len() == 54 && k.starts_with("mills_") && k[6..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())) { return Err("Missing or malformed API key. Use \"Authorization: Bearer mills_…\" (or \"x-api-key: mills_…\") with the key from Settings → API access.".into()); }
         let h = pgm_core_internal::crypto::sha256_hex(k.as_bytes());
-        let found = self.keys.lock().unwrap().iter().find(|(_, v)| crate::work::same_secret(v["hash"].as_str().unwrap_or(""), &h)).map(|(u, _)| u.clone());
+        let found = self.keys.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(_, v)| crate::work::same_secret(v["hash"].as_str().unwrap_or(""), &h)).map(|(u, _)| u.clone());
         let Some(u) = found else { return Err("Unknown API key (rotated, revoked, or never issued).".into()) };
         if self.status(&u)["expired"] == json!(true) { return Err("This API key has expired; rotate it in Settings → API access.".into()); }
         Ok(u)
@@ -334,7 +334,7 @@ async fn complete_cli(hub: &Arc<dyn AiHub>, p: &Value, model: &str, system: &str
     let mut child = cmd.spawn().map_err(|e| err(502, format!("Could not start claude: {e}")))?;
     if let Some(mut stdin) = child.stdin.take() { let inp = flatten(messages); tokio::spawn(async move { let _ = stdin.write_all(inp.as_bytes()).await; let _ = stdin.shutdown().await; }); }
     let er = Arc::new(Mutex::new(String::new()));
-    let et = child.stderr.take().map(|e| { let er = er.clone(); tokio::spawn(async move { use tokio::io::AsyncReadExt; let mut e = e; let mut b = vec![0u8; 4096]; while let Ok(n) = e.read(&mut b).await { if n == 0 { break; } let mut x = er.lock().unwrap(); x.push_str(&String::from_utf8_lossy(&b[..n])); let k = x.chars().count(); if k > 600 { *x = x.chars().skip(k - 600).collect(); } } }) });
+    let et = child.stderr.take().map(|e| { let er = er.clone(); tokio::spawn(async move { use tokio::io::AsyncReadExt; let mut e = e; let mut b = vec![0u8; 4096]; while let Ok(n) = e.read(&mut b).await { if n == 0 { break; } let mut x = er.lock().unwrap_or_else(|e| e.into_inner()); x.push_str(&String::from_utf8_lossy(&b[..n])); let k = x.chars().count(); if k > 600 { *x = x.chars().skip(k - 600).collect(); } } }) });
     let (mut text, mut used, mut usage, mut rerr) = (String::new(), model.to_string(), Value::Null, String::new());
     let mut killed = false;
     if let Some(out) = child.stdout.take() {
@@ -349,7 +349,7 @@ async fn complete_cli(hub: &Arc<dyn AiHub>, p: &Value, model: &str, system: &str
     let code = child.wait().await.ok().and_then(|s| s.code());
     if let Some(t) = et { let _ = t.await; }
     if killed || cancel.is() { return Err(err(502, "cancelled")); }
-    let e2 = format!("{rerr}{}", er.lock().unwrap());
+    let e2 = format!("{rerr}{}", er.lock().unwrap_or_else(|e| e.into_inner()));
     if text.is_empty() && (code.map(|c| c != 0).unwrap_or(false) || !e2.is_empty()) { return Err(err(502, if e2.trim().is_empty() { format!("claude exited with code {}", code.map(|c| c.to_string()).unwrap_or_else(|| "null".into())) } else { e2.trim().to_string() })); }
     Ok(Answer { text, model: used, usage: cli_usage(&usage) })
 }
@@ -388,9 +388,9 @@ fn from_anthropic(b: &Value) -> (String, Vec<(String, String)>) {
 }
 /// Marks a person's answer as running until dropped; the caller hanging up cancels it.
 struct Running { hub: Arc<dyn AiHub>, user: String, cancel: Arc<Cancel> }
-impl Drop for Running { fn drop(&mut self) { self.cancel.fire(); self.hub.api().running.lock().unwrap().remove(&self.user); self.hub.work().busy_changed.notify_one(); } }
+impl Drop for Running { fn drop(&mut self) { self.cancel.fire(); self.hub.api().running.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.user); self.hub.work().busy_changed.notify_one(); } }
 fn start_running(hub: &Arc<dyn AiHub>, user: &str) -> Option<Running> {
-    let mut r = hub.api().running.lock().unwrap();
+    let mut r = hub.api().running.lock().unwrap_or_else(|e| e.into_inner());
     if r.contains_key(user) { return None; }
     let c = Arc::new(Cancel::default()); r.insert(user.into(), c.clone()); drop(r);
     hub.work().busy_changed.notify_one();

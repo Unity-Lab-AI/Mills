@@ -38,21 +38,21 @@ pub type H = Arc<Host>;
 
 impl Host {
     pub fn set_status(&self, patch: Value) {
-        if let Value::Object(p) = patch { let mut s = self.status.lock().unwrap(); for (k, v) in p { s.insert(k, v); } s.insert("at".into(), json!(now_ms())); }
-        *self.status_dirty.lock().unwrap() = true;
+        if let Value::Object(p) = patch { let mut s = self.status.lock().unwrap_or_else(|e| e.into_inner()); for (k, v) in p { s.insert(k, v); } s.insert("at".into(), json!(now_ms())); }
+        *self.status_dirty.lock().unwrap_or_else(|e| e.into_inner()) = true;
     }
     pub fn write_status_now(&self) {
-        *self.status_dirty.lock().unwrap() = false;
-        let text = serde_json::to_string_pretty(&Value::Object(self.status.lock().unwrap().clone())).unwrap_or_default();
+        *self.status_dirty.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        let text = serde_json::to_string_pretty(&Value::Object(self.status.lock().unwrap_or_else(|e| e.into_inner()).clone())).unwrap_or_default();
         let tmp = self.folder.status().with_extension("json.tmp");
         if std::fs::write(&tmp, text).is_ok() { let _ = std::fs::rename(&tmp, self.folder.status()); }
     }
-    pub fn quiet(&self, ms: u64) -> bool { self.runs.lock().unwrap().is_empty() && self.active.load(Ordering::SeqCst) == 0 && now_ms().saturating_sub(self.last_job_at.load(Ordering::SeqCst)) >= ms }
-    pub fn busy(&self) -> bool { !self.runs.lock().unwrap().is_empty() || self.active.load(Ordering::SeqCst) > 0 }
+    pub fn quiet(&self, ms: u64) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() && self.active.load(Ordering::SeqCst) == 0 && now_ms().saturating_sub(self.last_job_at.load(Ordering::SeqCst)) >= ms }
+    pub fn busy(&self) -> bool { !self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() || self.active.load(Ordering::SeqCst) > 0 }
     pub fn providers(&self) -> Vec<Provider> { self.cfg.providers() }
     /// Is this provider at the usage cap its owner set? The reason, or "".
     pub fn over_cap(&self, p: &Provider) -> String {
-        let u = self.usage.lock().unwrap().get(&p.id).cloned().unwrap_or(Value::Null);
+        let u = self.usage.lock().unwrap_or_else(|e| e.into_inner()).get(&p.id).cloned().unwrap_or(Value::Null);
         let pc = |w: &Value| -> f64 { let ut = w.get("utilization").and_then(Value::as_f64); let rs = w.get("resetsAt").and_then(Value::as_f64); match ut { Some(x) if rs.map(|r| r > now_ms() as f64).unwrap_or(true) => x * 100.0, _ => 0.0 } };
         if let Some(m) = p.max5h { if pc(&u["five_hour"]) >= m { return format!("this host's 5-hour Claude usage is at its {m}% cap"); } }
         if let Some(m) = p.max7d { if pc(&u["seven_day"]) >= m { return format!("this host's weekly Claude usage is at its {m}% cap"); } }
@@ -123,7 +123,7 @@ pub async fn run(folder: Folder, selftest: bool, update_flag: bool) -> i32 {
         _ = shutdown_signal() => 0,
     };
     main.abort();
-    for (_, stop) in h.runs.lock().unwrap().drain() { let _ = stop.send(()); }
+    for (_, stop) in h.runs.lock().unwrap_or_else(|e| e.into_inner()).drain() { let _ = stop.send(()); }
     h.set_status(json!({ "connected": false })); h.write_status_now();
     release_lock(&folder);
     code
@@ -138,13 +138,13 @@ async fn shutdown_signal() {
 /// The status writer, the control requests, the code / config watcher and the update timer.
 fn background(h: H, exit: tokio::sync::mpsc::Sender<i32>) {
     let h1 = h.clone();
-    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_millis(500)).await; if *h1.status_dirty.lock().unwrap() { h1.write_status_now(); } } });
+    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_millis(500)).await; if *h1.status_dirty.lock().unwrap_or_else(|e| e.into_inner()) { h1.write_status_now(); } } });
     let h2 = h.clone(); let e2 = exit.clone();
     tokio::spawn(async move {
         let mut tick = 0u64;
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await; tick += 1;
-            if tick % 3 == 0 { h2.set_status(json!({ "active": h2.active.load(Ordering::SeqCst), "runs": h2.runs.lock().unwrap().len(), "lastJobAt": h2.last_job_at.load(Ordering::SeqCst), "paused": h2.folder.off().exists() })); }
+            if tick % 3 == 0 { h2.set_status(json!({ "active": h2.active.load(Ordering::SeqCst), "runs": h2.runs.lock().unwrap_or_else(|e| e.into_inner()).len(), "lastJobAt": h2.last_job_at.load(Ordering::SeqCst), "paused": h2.folder.off().exists() })); }
             for (file, code, what) in [(h2.folder.stop_now(), 0, "stopping"), (h2.folder.restart_now(), 3, "restarting")] {
                 if !file.exists() { continue; }
                 let how = std::fs::read_to_string(&file).unwrap_or_default();
@@ -191,7 +191,7 @@ async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     let a = h.link.write().await.hello(&body).await?;
     let kid = h.link.read().await.key.as_ref().map(|k| k.id()).unwrap_or_default();
     let nick = if a.nickname.is_empty() { h.cfg.nickname() } else { a.nickname.clone() };
-    *h.nickname.lock().unwrap() = nick.clone();
+    *h.nickname.lock().unwrap_or_else(|e| e.into_inner()) = nick.clone();
     if h.cfg.raw.get("nickname").and_then(Value::as_str) != Some(nick.as_str()) {
         if let Ok(mut c) = HostSettings::load(&h.folder.config) { c.raw.insert("nickname".into(), json!(nick)); let _ = c.save(); }
     }
@@ -230,7 +230,7 @@ async fn main_loop(h: H, exit: tokio::sync::mpsc::Sender<i32>) {
                         if !hub_commit.is_empty() { log(format!("the hub is now on {}", if b.version.is_empty() { &b.commit[..7.min(b.commit.len())] } else { &b.version })); let (h2, e) = (h.clone(), exit.clone()); tokio::spawn(async move { tokio::time::sleep(Duration::from_secs(15)).await; check_update(h2, false, e).await; }); }
                         hub_commit = b.commit.clone();
                     } }
-                    for id in &p.cancel { if let Some(stop) = h.runs.lock().unwrap().remove(id) { log(format!("stopping run {id} (stopped by its person)")); let _ = stop.send(()); } }
+                    for id in &p.cancel { if let Some(stop) = h.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(id) { log(format!("stopping run {id} (stopped by its person)")); let _ = stop.send(()); } }
                     for job in p.jobs { dispatch(h.clone(), job); }
                 }
             }
@@ -264,9 +264,9 @@ async fn relay_job(h: H, job: Job) {
     let out: Result<()> = async {
         if let Some(pid) = job.engine.strip_prefix("relay:") {
             let p = h.providers().into_iter().find(|x| x.id == pid && x.is_relay()).ok_or_else(|| Error::status(404, "This host shares no such login."))?;
-            let cap = h.over_cap(&p); if !cap.is_empty() { return Err(Error::status(429, format!("{}: {cap}.", h.nickname.lock().unwrap()))); }
+            let cap = h.over_cap(&p); if !cap.is_empty() { return Err(Error::status(429, format!("{}: {cap}.", h.nickname.lock().unwrap_or_else(|e| e.into_inner())))); }
             let r = relay::forward(&h, &p, &job).await?;
-            if let Some(u) = relay::usage_from(r.headers()) { let mut all = h.usage.lock().unwrap(); let e = all.entry(p.id.clone()).or_insert_with(|| json!({})); if let (Some(o), Value::Object(n)) = (e.as_object_mut(), u) { o.extend(n); } }
+            if let Some(u) = relay::usage_from(r.headers()) { let mut all = h.usage.lock().unwrap_or_else(|e| e.into_inner()); let e = all.entry(p.id.clone()).or_insert_with(|| json!({})); if let (Some(o), Value::Object(n)) = (e.as_object_mut(), u) { o.extend(n); } }
             let hdrs = relay::pass_headers(r.headers());
             return answer(&h, &job, r, hdrs, true).await;
         }
@@ -356,9 +356,9 @@ async fn pc_job(h: H, job: Job) {
 pub async fn check_update(h: H, now: bool, exit: tokio::sync::mpsc::Sender<i32>) {
     if (!h.cfg.auto_update() && !now) || h.folder.trial().exists() { return; }
     if now { if h.busy() { return; } } else if !h.quiet(h.cfg.update_quiet_ms()) { return; }
-    { let mut u = h.updating.lock().unwrap(); if *u { return; } *u = true; }
+    { let mut u = h.updating.lock().unwrap_or_else(|e| e.into_inner()); if *u { return; } *u = true; }
     let r = do_update(&h).await;
-    *h.updating.lock().unwrap() = false;
+    *h.updating.lock().unwrap_or_else(|e| e.into_inner()) = false;
     match r { Ok(true) => { h.write_status_now(); let _ = exit.send(3).await; } Ok(false) => {} Err(e) => note_update(&h, &format!("update skipped: {e}")) }
 }
 async fn do_update(h: &H) -> Result<bool> {
