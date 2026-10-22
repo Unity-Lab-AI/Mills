@@ -12,9 +12,15 @@ use crate::front::Hub;
 /// version + "+" + the commit's first 7, read once at start (a restart picks up a new one, as the pages expect):
 /// pgm-dist-internal's version stamp (PGM_Dist_Internal) since 5.0.0, of the checkout above bridge/.
 #[derive(Default)]
-pub struct Build(pgm_dist_internal::version::Build);
+pub struct Build(pgm_dist_internal::version::Build, std::sync::Mutex<String>);
 impl Build {
     pub fn get(&self, hub: &Hub) -> (String, Value) { self.0.get(&hub.root.join("..")) }
+    /// The JavaScript hub behind named another build than this one: said once per build it names (the answer gets this
+    /// hub's build either way; a graceful restart brings the two together again).
+    pub fn note_back(&self, theirs: &str, mine: &str) {
+        let mut last = self.1.lock().unwrap();
+        if *last != theirs { *last = theirs.to_string(); println!("[vr-hub] The JavaScript hub behind runs {theirs}, this hub {mine}: pages are told {mine}. A restart (Admin → Restart, or node bridge/restart.js) brings them together."); }
+    }
     /// The commit this hub started from (the auto-deploy's health check compares it with what it deployed).
     pub fn commit(&self, hub: &Hub) -> String { self.0.commit(&hub.root.join("..")) }
 }
