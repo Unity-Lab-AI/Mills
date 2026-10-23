@@ -7,6 +7,77 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.7.1 — 2026-10-23
+
+PATCH (hotfix): **the AI host picks up a local Ollama, says why a Codex login is missing, and the page shows ChatGPT /
+Codex and local models.** Sponge: only Claude showed up anywhere; Ollama (already running, so `ollama serve` said the
+port was taken) and the Codex login were not picked up.
+- **Ollama found by itself** (native host, `host/runner.rs`): at every hello and once a minute the host asks
+  `http://127.0.0.1:11434/api/tags` (or the address `OLLAMA_HOST` names; a listen address `0.0.0.0` is reached at
+  127.0.0.1). When it answers, the host lends it as the engine `ollama` (Unity) if none is configured, and offers a
+  private provider `ollama` (an OpenAI-compatible endpoint at `/v1`, the models Ollama lists) if no endpoint for it is
+  configured. A change (Ollama started later, a model pulled) is told to the hub with a fresh hello when nothing is in
+  flight. Off with `"autoDetect": { "ollama": false }`; what the person configured is never replaced.
+- **Login check at hello** (`host/relay.rs` `login_problem`): a Claude or Codex login the host cannot read is named in
+  its log with the path it looked at. For Codex that includes the keyring case: Codex can keep its login in the
+  system keyring, which the host cannot read; `cli_auth_credentials_store = "file"` in `~/.codex/config.toml` and a
+  new `codex login` fix it (or `codexHome` on the provider).
+- **The page** (`web/index.html`): the Work model menu and Settings → AI source list ChatGPT / Codex and local models
+  too, greyed out and marked "not for Work": Work needs a Claude (or Jcode PGM) harness. They are picked under
+  Settings → API access, where the provider names now read "AI host · ChatGPT / Codex", "AI host · local model",
+  "AI host · Claude" instead of "undefined".
+- The JavaScript host (`bridge/ai-node.js`) is unchanged; it still lends Ollama only when `engines` / `providers` name it.
+- R182 (native host): Ollama found and offered with no configuration, private to its owner, answering the API; a
+  missing Codex login named in the log; the page's greyed-out entries.
+
+## 5.7.0 — 2026-10-22
+
+MINOR: **Jcode PGM as a Work harness** (the first step of Jcode-Mods `EXTENSIBILITY.md` §3 and `ARCHITECTURE.md`:
+a second coding harness next to Claude Code, picked per provider).
+- **A `jcode` provider** (Settings → AI providers, admins only): a `jcodepgm` binary on the hub (a path, or the name
+  on PATH), optional extra args, an optional jcode home, the jcode provider profile to run with (`-p`), and the models
+  it may be asked for (`-m`; empty = jcode's own default). `Work::harness_of` (pgm-ai) says which harness a provider
+  runs: "claude" (host, host-claude, anthropic, claude-cli), "jcode", or none (an endpoint / ChatGPT login: API and
+  Unity only). `/api/model` accepts either harness; the old "not Claude" refusal names both.
+- **A run on it:** `jcodepgm run --ndjson --no-update [-p …] [-m …] [--resume …] <message>` in the person's worktree,
+  with a **private jcode home per person** (`<profile>/jcode-home`; the provider may name one): the hub's three MCP
+  servers (pc, board, team) written as its `mcp.json`, the hub's system prompt (laws included) as its
+  `prompt-overlay.md`, `JCODE_RUNTIME_DIR` inside it, no auto-update, no auto-poke, no telemetry, the person's own
+  Claude Code MCP config kept out (`JCODE_DISABLE_CLAUDE_MCP`). Forgejo and `fj` env as for Claude Code.
+- **One event shape for the page:** jcode's NDJSON (`start`, `text_delta`, `tool_start / tool_input / tool_exec /
+  tool_done`, `tokens`, `done`, `error`) is mapped onto the shape the page renders already (`system/init`,
+  `assistant` text and tool_use blocks, `user` tool_result, `result` with `is_error`), every mapped event tagged
+  `harness: "jcode"`; other jcode events arrive as `{ type: "jcode", event }`. Usage, context and shared Work sessions
+  work unchanged.
+- **Sessions follow their harness:** `sessionHarness` in work.json; a Jcode PGM session id is never handed to Claude
+  Code (`--resume`) and vice versa; switching providers starts fresh.
+- R180 (`--rust-hub` / `--rust-alone`; the JavaScript hub does not learn this): a fake `jcodepgm` (test/fake-jcode.js)
+  proves the add / refuse rules, the command line, the home (MCP answers through it, the overlay is there), the event
+  mapping, resume, a failed run, and that going back to Claude never resumes a jcode session.
+- pgm-libs 5.7.0 carries the same `pgm-ai` (library law).
+- **A cache-stable Work system prompt** (Jcode-Mods `TOKENS.md`): the latest worktree freshness check ("N min ago")
+  used to sit inside `--append-system-prompt`, so every run invalidated the provider's prompt cache for the whole
+  system block. The worktree law stays in the prompt (the same bytes every run); the check result now travels at the
+  end of each message (`fresh_note`). R181 proves the prompt carries no relative time or timestamp (the fake Claude
+  reports `sysvolatile` / `syslaw`).
+- **The session's prompt-cache ledger** (TOKENS.md): every `assistant` event's usage is summed per session (paid
+  input, cache reads, cache writes, turns); `/api/usage` returns it as `context.cache` with the hit ratio, and the
+  context meter shows "cache NN%" with the numbers in its title. R-usage checks the sums.
+- **A proper `Harness` trait** (pgm-ai `harness.rs`, Jcode-Mods WORKPLAN 9a): `kind`, `command(&RunContext) ->
+  CommandSpec` (program, args, env, cwd, stdin), `map_line(&str) -> Vec<HubEvent>`, `session_resume_args`, `banner`,
+  `ended`; `ClaudeHarness` (stream-json passes through unchanged) and `JcodeHarness` (wraps the existing `Mapper`);
+  one `HubEvent` enum (init, system, assistant, user, result, unknown, raw) in the page's shape. `Work::run` no longer
+  branches on the harness: it builds a `RunContext`, asks the harness for the command and feeds each stdout line
+  through `map_line`. A refactor only: no behaviour change, the page receives the same events; 6 unit tests.
+
+## 5.6.1 — 2026-10-22
+
+PATCH: **the library law** (LAWS.md). Sponge: code that two projects need is written once, in a library (pgm-libs and
+what grows next to it: the Jcode PGM plugin SDK and host, the harness interface), and used from there; look for an
+existing crate before writing, extend it rather than copy; copying a function between projects is the signal to move it
+into the library. A library change follows the product release checklist (bump, lock, `--locked` build, tag, bump the
+users). No code change.
+
 ## 5.6.0 — 2026-10-22
 
 MINOR: **the full-Rust hub, step 6 (FR6): the Rust hub stands alone.** With the honest meter (R179 probes every

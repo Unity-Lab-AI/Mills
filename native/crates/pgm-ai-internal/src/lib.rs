@@ -16,11 +16,17 @@
 //! - [`host`]: the AI host program's side (the job loop, relays, Work on the host, its MCP tools, its folder + settings)
 //! - [`local_proxy`]: a local API proxy (127.0.0.1 → a hub's /v1 with a person's key; no web page can use it)
 //! - [`fj`]: `fj` (the Forgejo CLI) signed in as the person in their Work runs (their own keys file + wrapper)
+//! - [`harness`]: the `Harness` trait (Claude Code, Jcode PGM): a run's command, resume arguments and the mapping of
+//!   each stdout line onto the one hub event shape ([`harness::HubEvent`])
+//! - [`jcode`]: Jcode PGM as a Work harness (a `jcode` provider: `jcodepgm run --ndjson` in the worktree, a private
+//!   jcode home per person, its events mapped onto the page's event shape)
 
 pub mod ai_hosts;
 pub mod fj;
+pub mod harness;
 pub mod host;
 pub mod hub;
+pub mod jcode;
 pub mod local_proxy;
 pub mod openai;
 pub mod unity;

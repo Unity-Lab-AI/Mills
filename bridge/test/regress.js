@@ -158,7 +158,7 @@ function startFakeOllama() {
         return res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { model: b.model, usage: { input_tokens: 2, output_tokens: 3 } } }) + '\n\n');
       }
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
-      if (req.url === '/oai/chat/completions') {
+      if (req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') { // /v1: Ollama's own OpenAI-compatible path (R182)
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
         if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
@@ -234,6 +234,7 @@ async function setup() {
     if ((f.endsWith('.js') && f !== 'master-logins.js') || f === 'cloudflared-quick.yml') fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   }
   fs.copyFileSync(path.join(__dirname, 'fake-claude.js'), path.join(SB, 'test', 'fake-claude.js'));
+  fs.copyFileSync(path.join(__dirname, 'fake-jcode.js'), path.join(SB, 'test', 'fake-jcode.js')); // R180: a stand-in `jcodepgm run --ndjson`
   // the JavaScript AI host's launchers, example config and host tools
   for (const f of ['ai-node.example.json', 'start-node.bat', 'start-node.sh']) fs.copyFileSync(path.join(BRIDGE, f), path.join(SB, f));
   fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
@@ -249,7 +250,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -921,6 +922,55 @@ async function run() {
     && otherTouch.status === 400 && shareIt.status === 200 && nowSeenByU.includes(cli.provider.id) && rmOther.status === 400 && rm.status === 200 && ck7b.provider === 'host'
     && /id="provBox"/.test(html) && /\/api\/providers\/add/.test(html) && /o\.value = p\.id \+ '\|' \+ m/.test(html),
     `providers at start ${prov0.providers.map((p) => p.id).join(',')}; refused no-host ${cliNoHost.status} not-admin ${cliNotAdmin.status}/${oaiNotAdmin.status}; cli ${cli.provider ? 'made' : JSON.stringify(cli).slice(0, 120)} ${pickCli.status} run "${texts(cliRun.events).slice(-120)}", oai work ${pickOai.status}, api via oai ${oaiChat.status} "${oaiText.slice(0, 50)}", stream "${oaiStreamed.slice(0, 40)}", share ${otherTouch.status}/${shareIt.status}, remove ${rmOther.status}/${rm.status}`);
+  // Jcode PGM as a Work harness (R180, 5.7.0): an admin adds a `jcode` provider (a jcodepgm binary on the hub; the fake
+  // here), picks it, and a Work run goes through `jcodepgm run --ndjson` in the worktree with a private jcode home that
+  // carries the hub's MCP servers and the system prompt as its overlay; jcode's events reach the page in the shape it
+  // renders; a session resumes with the same harness only; an error ends as a failed result; a non-admin is refused.
+  if (RUST_HUB) {
+    const jNotAdmin = await call('/api/providers/add', U, { kind: 'jcode', label: 'Tuser jcode', command: process.execPath });
+    const jBadHome = await call('/api/providers/add', A, { kind: 'jcode', label: 'bad home', command: process.execPath, home: 'relative/x' });
+    const jc = (await call('/api/providers/add', A, { kind: 'jcode', label: 'Jcode PGM (fake)', command: process.execPath, args: [path.join(SB, 'test', 'fake-jcode.js')], provider: 'viberoller', models: 'claude-haiku-5-5, claude-sonnet-5-5', shared: false })).data;
+    const jView = jc.provider || {};
+    const pickJ = await call('/api/model', A, { provider: jView.id, model: 'claude-haiku-5-5' });
+    const jRun1 = await chat(A, 'hello from r180 MCP TOOL', { fresh: true });
+    const t1 = texts(jRun1.events);
+    const init1 = jRun1.events.find((e) => e.type === 'system' && e.subtype === 'init') || {};
+    const toolUse = jRun1.events.some((e) => e.type === 'assistant' && e.message.content.some((c) => c.type === 'tool_use' && c.name === 'bash' && c.input && c.input.command === 'echo hi'));
+    const toolRes = jRun1.events.some((e) => e.type === 'user' && e.message.content.some((c) => c.type === 'tool_result' && c.tool_use_id === 't1' && c.is_error === false));
+    const res1 = jRun1.events.find((e) => e.type === 'result') || {};
+    const done1 = jRun1.events.find((e) => e.type === 'bridge_done') || {};
+    const jRun2 = await chat(A, 'again r180');
+    const t2 = texts(jRun2.events);
+    const jFail = await chat(A, 'please FAIL r180');
+    const resF = jFail.events.find((e) => e.type === 'result') || {};
+    const doneF = jFail.events.find((e) => e.type === 'bridge_done') || {};
+    const jHome = path.join(SB, 'profiles', 't-admin', 'jcode-home');
+    const jMcp = fs.existsSync(path.join(jHome, 'mcp.json')) ? JSON.parse(fs.readFileSync(path.join(jHome, 'mcp.json'), 'utf8')) : {};
+    const jOverlay = fs.existsSync(path.join(jHome, 'prompt-overlay.md')) ? fs.readFileSync(path.join(jHome, 'prompt-overlay.md'), 'utf8') : '';
+    // back to Claude: a jcode session id is never resumed by Claude Code
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+    const back = await chat(A, 'back to claude r180');
+    const backText = texts(back.events);
+    await call('/api/providers/remove', A, { id: jView.id });
+    check('R180', 'Jcode PGM as a Work harness: an admin adds a jcode provider (a jcodepgm binary on the hub; refused for a non-admin, a relative home refused); picking it runs Work through `jcodepgm run --ndjson` in the worktree with the asked model and provider profile, a private jcode home per person carrying the hub\'s MCP servers (the pc tool answers through them) and the system prompt as the prompt overlay; the events reach the page in its shape (init, assistant text + tool_use, tool_result, result) and the run ends 0; the next message resumes the same jcode session; an error is a failed result and a non-zero end; switching back to Claude never resumes a jcode session',
+      jNotAdmin.status === 400 && jBadHome.status === 400 && !!jView.id && jView.harness === 'jcode' && pickJ.status === 200 && pickJ.data.provider === jView.id
+      && init1.harness === 'jcode' && /^fakej-/.test(init1.session_id || '') && /jcode-answer model=claude-haiku-5-5 provider=viberoller/.test(t1) && /resume=no/.test(t1) && /overlay:yes/.test(t1) && /MCP:\{"ok":true/.test(t1)
+      && toolUse && toolRes && res1.is_error === false && res1.harness === 'jcode' && done1.code === 0
+      && /resume=yes/.test(t2) && resF.is_error === true && /fake failure/.test(resF.result || '') && doneF.code === 1
+      && jMcp.mcpServers && jMcp.mcpServers.pc && jMcp.mcpServers.board && jMcp.mcpServers.team && /Worktree law/.test(jOverlay)
+      && back.status === 200 && !/jcode-answer/.test(backText),
+      `add ${jNotAdmin.status}/${jBadHome.status}/${jc.provider ? 'made' : JSON.stringify(jc).slice(0, 100)}, pick ${pickJ.status}, run1 "${t1.slice(0, 160)}" tool ${toolUse}/${toolRes} result ${res1.is_error} code ${done1.code}; run2 "${t2.slice(-40)}"; fail ${resF.is_error} code ${doneF.code}; home mcp ${Object.keys(jMcp.mcpServers || {}).join(',')} overlay ${jOverlay.length}b; back "${backText.slice(0, 60)}"`);
+  } else skip('R180', 'Jcode PGM as a Work harness (a jcode provider runs Work through jcodepgm run --ndjson)', 'the Rust hub\'s: --rust-hub runs it');
+  // The prompt cache (R181, 5.7.0; Jcode-Mods TOKENS.md): the system prompt a Work run gets is the same bytes every run,
+  // so the provider's prompt cache can hit: no "N min ago" and no timestamp in it; the worktree law stays there, the
+  // latest freshness check travels with the message instead.
+  if (RUST_HUB) {
+    const r181 = await chat(A, 'cache check r181', { fresh: true });
+    const e181 = texts(r181.events);
+    check('R181', 'the Work system prompt is cache-stable: the same bytes every run (no relative time, no timestamp in it); the worktree law stays in it and the volatile freshness check result travels with the message',
+      /sysvolatile=false/.test(e181) && /syslaw=true/.test(e181),
+      `echo "${(e181.match(/sysvolatile=[a-z]+ \| syslaw=[a-z]+/) || [''])[0]}"`);
+  } else skip('R181', 'the Work system prompt is cache-stable', 'the Rust hub\'s Work: --rust-hub runs it');
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });
@@ -1318,7 +1368,8 @@ async function run() {
   check('R52', 'usage: windows estimated before Claude reports them, then Claude\'s utilization + reset time; context 54k/200k per account + session, cleared by a new session',
     uBefore.five_hour && uBefore.five_hour.source === 'estimate' && uBefore.seven_day && uBefore.seven_day.resetsAt > Date.now()
     && uRun.status === 200 && uAfter.five_hour.source === 'claude' && uAfter.five_hour.utilization === 0.42 && in2h > 7000e3 && in2h <= 7200e3
-    && uAfter.context && uAfter.context.tokens === 54000 && uAfter.context.window === 200000 && !uOther.context && !uFresh.context,
+    && uAfter.context && uAfter.context.tokens === 54000 && uAfter.context.window === 200000 && !uOther.context && !uFresh.context
+    && (!RUST_HUB || (uAfter.context.cache && uAfter.context.cache.read === 45000 && uAfter.context.cache.paid === 4000 && uAfter.context.cache.write === 5000 && uAfter.context.cache.turns >= 1 && Math.abs(uAfter.context.cache.hit - 45000 / 54000) < 0.01)), // the session's prompt-cache ledger (5.7.0; the Rust hub's)
     JSON.stringify({ five: uAfter.five_hour, ctx: uAfter.context }).slice(0, 200));
   check('R98', 'usage sync: a limit event without numbers keeps the last utilization + reset time; a percentage (55) is read as 55 %; the page shows the 5h / 7d % from the same number as the fill, re-reads usage live during a reply and every 15 s, and empties a window once it resets',
     uPartial.five_hour && uPartial.five_hour.utilization === 0.42 && uPartial.five_hour.resetsAt === uAfter.five_hour.resetsAt
@@ -3076,6 +3127,33 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && !!up1 && st1.connected === true && st1.native === true && stRun.status === 0 && /CONNECTED/.test(stRun.stdout)
         && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
         `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
+    }
+    // R182: the native host finds a local Ollama by itself (no engine, no provider configured) and offers it; a missing
+    // Codex login is named in its log at hello
+    if (!why) {
+      const L182 = 'the native AI host picks up a local Ollama by itself: with nothing configured for it, a host whose machine runs Ollama (OLLAMA_HOST) offers it as the engine and as a private provider "ollama" with the models Ollama lists; its owner sees it (kind host-openai), others do not; the API answers through it; a Codex login the host cannot read is named in its log with the way to fix it; the page lists ChatGPT / Codex and local models greyed out as not for Work';
+      const odir = path.join(SCRATCH, 'ollama-host'); fs.mkdirSync(odir, { recursive: true });
+      const oexe = path.join(odir, 'vr-host' + (WIN ? '.exe' : '')), ocfg = path.join(odir, 'ai-node.json');
+      fs.copyFileSync(NATIVE_BIN.host, oexe); fs.chmodSync(oexe, 0o755);
+      fs.writeFileSync(ocfg, JSON.stringify({ hub: H, id: 'ollama-node', token: OLD_NODE_SECRET + '-ol', user: 't-admin', autoUpdate: false,
+        providers: [{ id: 'codex', kind: 'codex-relay', label: 'R182 Codex', models: ['gpt-5.5'], codexHome: path.join(odir, 'no-codex-here') }], engines: {} }), { mode: 0o600 });
+      const olog = path.join(odir, 'out.log'), ofd = fs.openSync(olog, 'a');
+      const oproc = spawn(oexe, ['run', '--config', ocfg], { cwd: odir, stdio: ['ignore', ofd, ofd], env: { ...process.env, OLLAMA_HOST: `127.0.0.1:${OLLAMA_PORT}` } });
+      let seen = null; for (let i = 0; i < 80 && !seen; i++) { seen = ((await call('/api/check', A)).data.providers || []).find((p) => p.id === 'h:ollama-node/ollama') || null; if (!seen) await sleep(250); }
+      const otherSees = ((await call('/api/check', U)).data.providers || []).some((p) => p.id === 'h:ollama-node/ollama');
+      const key = (await call('/api/apikey/rotate', A, {})).data.key;
+      await call('/api/apikey/settings', A, { provider: 'h:ollama-node/ollama', model: 'unity-brain:latest' });
+      const ans = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: 'unity-brain:latest', messages: [{ role: 'user', content: 'local r182' }] }) }).then((r) => r.json()).catch(() => ({}));
+      await call('/api/apikey/revoke', A, {});
+      try { oproc.kill(); } catch {}
+      const outText = (() => { try { return fs.readFileSync(olog, 'utf8'); } catch { return ''; } })();
+      const page182 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      check('R182', L182,
+        !!seen && seen.kind === 'host-openai' && (seen.models || []).includes('unity-brain:latest') && !otherSees
+        && /oai says: local r182/.test(((ans.choices || [])[0] || {}).message?.content || '')
+        && /found Ollama at http:\/\/127\.0\.0\.1:\d+ with 1 model/.test(outText) && /no Codex login found at .*no-codex-here.*cli_auth_credentials_store/.test(outText)
+        && /const NOT_WORK = \(p\) =>/.test(page182) && /not for Work: pick it in Settings → API access/.test(page182) && /'host-codex': 'AI host · ChatGPT \/ Codex'/.test(page182),
+        `seen ${seen && seen.kind} ${seen && (seen.models || []).join(',')}; others ${otherSees}; answer ${JSON.stringify(ans).slice(0, 120)}; log ${outText.split('\n').filter((l) => /Ollama|Codex/.test(l)).join(' | ').slice(0, 300)}`);
     }
     // R167: the Downloads hand out the native programs (pre-built), and they install themselves (the Rust hub's alone)
     if (!why && RUST_HUB) {

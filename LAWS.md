@@ -85,6 +85,24 @@ number should scale less than the third number, however, this is all dependent o
   watch `/api/status` come back; vr-run's own fallback (the previous good build; for the first swap also the
   JavaScript hub) covers a bad build without anyone's hand.
 
+## Library law: reused code lives in a library
+
+Sponge, 2026-10-22: *"new libraries (and existing libraries) need to be developed or extended when there is code that
+is going to be re-used amongst projects, to help reduce and re-use when possible."*
+
+- Code that two projects need (the hub, the AI host, a PGM product, Jcode PGM, a plugin) is written once, in a
+  library, and used from there. Before writing it, look for an existing crate or module that already does it or
+  nearly does; extend that one rather than start a copy.
+- The libraries are **pgm-libs** (`pgm-core`, `pgm-identity`, `pgm-hcom`, `pgm-ai`, `pgm-collab`, `pgm-dist`,
+  `pgm-net`, `pgm-product`; mirrored from `native/crates/*-internal`) and what grows next to them (the Jcode PGM
+  plugin SDK and host, the harness interface). A new library is right when the code has no home in those; a new
+  crate inside a product is not (it cannot be reused from outside).
+- Copying a function between projects is the signal: stop, move it into the library, bump the library, use it from
+  both. The JavaScript hub's twin copies were the cost of not doing this (the "4.1.0 is ready" popup was a two-copy
+  bug).
+- A library change follows the product release checklist: bump its version, regenerate the lock, build `--locked`,
+  tag on Forgejo, then bump the users.
+
 ## Nothing breaks, and nothing is lost
 
 - The server's auto-deploy (`deploy/autodeploy.sh`) snapshots the hub's data before every deploy and checks that the new
