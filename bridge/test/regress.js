@@ -3155,6 +3155,32 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && /const NOT_WORK = \(p\) =>/.test(page182) && /not for Work: pick it in Settings → API access/.test(page182) && /'host-codex': 'AI host · ChatGPT \/ Codex'/.test(page182),
         `seen ${seen && seen.kind} ${seen && (seen.models || []).join(',')}; others ${otherSees}; answer ${JSON.stringify(ans).slice(0, 120)}; log ${outText.split('\n').filter((l) => /Ollama|Codex/.test(l)).join(' | ').slice(0, 300)}`);
     }
+    // R183: a second copy waits instead of looping, and a control command from a download reaches the installed host
+    if (!why && !WIN) {
+      const L183 = 'the native host on a machine with two copies: `vr-host run` in a folder whose host already runs waits for it (says so once, does not exit, so systemd does not restart it every 5 s); a control command run from a download that is not running (status, update) acts on the installed host that runs and says so; an automatic update waits at most 30 minutes for quiet minutes (LAWS.md)';
+      const home = path.join(SCRATCH, 'r183-home'), inst = path.join(home, '.local', 'share', 'viberoller', 'ai-host'), dl = path.join(SCRATCH, 'r183-download');
+      fs.mkdirSync(inst, { recursive: true }); fs.mkdirSync(dl, { recursive: true });
+      const cfg183 = JSON.stringify({ hub: H, id: 'r183-node', token: 'r183-token-0123456789abcdef', user: 't-admin', providers: [], engines: {}, autoUpdate: false });
+      for (const d of [inst, dl]) { fs.copyFileSync(NATIVE_BIN.host, path.join(d, 'vr-host')); fs.chmodSync(path.join(d, 'vr-host'), 0o755); fs.writeFileSync(path.join(d, 'ai-node.json'), cfg183, { mode: 0o600 }); }
+      fs.writeFileSync(path.join(inst, 'ai-node.lock'), String(process.pid)); // "a host runs there": this test process holds its lock
+      const env183 = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config') };
+      const runLog = path.join(inst, 'run.out'), fd183 = fs.openSync(runLog, 'a');
+      const sup = spawn(path.join(inst, 'vr-host'), ['run', '--config', path.join(inst, 'ai-node.json')], { cwd: inst, env: env183, stdio: ['ignore', fd183, fd183] });
+      let supExit = null; sup.on('exit', (c) => { supExit = c; });
+      await sleep(4000);
+      const stillUp = supExit === null; try { sup.kill(); } catch {}
+      const supOut = (() => { try { return fs.readFileSync(runLog, 'utf8'); } catch { return ''; } })();
+      const st = spawnSync(path.join(dl, 'vr-host'), ['status'], { cwd: dl, env: env183, encoding: 'utf8', timeout: 30000 });
+      const upd = spawnSync(path.join(dl, 'vr-host'), ['update'], { cwd: dl, env: env183, encoding: 'utf8', timeout: 30000 });
+      const askedInstalled = fs.existsSync(path.join(inst, '.update-now')), askedDownload = fs.existsSync(path.join(dl, '.update-now'));
+      const runner183 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'runner.rs'), 'utf8'), laws183 = fs.readFileSync(path.join(MILLS, 'LAWS.md'), 'utf8');
+      check('R183', L183,
+        stillUp && (supOut.match(/another AI host runs in this folder/g) || []).length === 1 && !/already running \(pid \d+\); nothing to do\.[\s\S]*already running/.test(supOut)
+        && /acting on it/.test(st.stderr) && new RegExp(inst.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(st.stdout) && /RUNNING|running|pid/i.test(st.stdout)
+        && askedInstalled && !askedDownload && /Asked it to look for an update now/.test(upd.stdout)
+        && /UPDATE_MAX_WAIT_MS: u64 = 30 \* 60_000/.test(runner183) && /after an automatic update has waited 30 minutes/.test(laws183),
+        `waits ${stillUp} (${supOut.trim().split('\n').slice(-2).join(' | ').slice(0, 160)}); status ${st.stderr.trim().slice(0, 100)} / ${st.stdout.split('\n')[0]}; update asked installed ${askedInstalled} download ${askedDownload}`);
+    }
     // R167: the Downloads hand out the native programs (pre-built), and they install themselves (the Rust hub's alone)
     if (!why && RUST_HUB) {
       const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target), ext = WIN ? '.exe' : '';

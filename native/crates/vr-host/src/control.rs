@@ -110,7 +110,13 @@ pub fn snapshot(f: &Folder) -> Snapshot {
     let live = pid.is_some() && st["pid"].as_u64() == pid.map(|p| p as u64);
     let connected = live && st["connected"].as_bool() == Some(true) && vr_core::now_ms().saturating_sub(st["lastOkAt"].as_u64().unwrap_or(0)) < 90_000;
     let boot = boot_mode(&svc);
-    let version = std::fs::read_to_string(f.f("VERSION.txt")).map(|s| s.trim().to_string()).unwrap_or_else(|_| crate::runner::VERSION.to_string());
+    // the version of the program in that folder: what its running host says, else this program's own when it is that
+    // program, else VERSION.txt (a download's note, which an update in place does not rewrite: it said 5.6.0 after 5.7.1)
+    let same_exe = std::env::current_exe().ok().and_then(|e| std::fs::canonicalize(e).ok()) == std::fs::canonicalize(f.f(crate::install::exe_name())).ok();
+    let version = st["version"].as_str().filter(|v| live && !v.is_empty()).map(String::from)
+        .or_else(|| same_exe.then(|| crate::runner::VERSION.to_string()))
+        .or_else(|| std::fs::read_to_string(f.f("VERSION.txt")).ok().map(|s| s.trim().to_string()))
+        .unwrap_or_else(|| crate::runner::VERSION.to_string());
     Snapshot { paused: f.off().exists(), cfg, st, pid, svc, live, connected, boot, version }
 }
 pub fn ago(t: u64) -> String { if t == 0 { return "never".into(); } let s = vr_core::now_ms().saturating_sub(t) / 1000; if s < 60 { format!("{s} s ago") } else if s < 3600 { format!("{} min ago", s / 60) } else { format!("{} h ago", s / 3600) } }

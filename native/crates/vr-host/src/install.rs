@@ -57,7 +57,11 @@ fn old_shortcuts() -> usize {
 pub fn install(args: &[&str]) -> i32 {
     let me = std::env::current_exe().unwrap_or_default();
     let here = me.parent().map(Path::to_path_buf).unwrap_or_default();
-    let target = earlier().into_iter().find(|d| !in_git(d)).unwrap_or_else(standard);
+    // the install whose host is running wins (that is the one people use), then the first one found, then the standard
+    // folder: two copies on one machine otherwise got the update in the one nobody ran
+    let found = earlier();
+    let running = |d: &PathBuf| Folder { dir: d.clone(), config: d.join("ai-node.json") }.host_pid().is_some();
+    let target = found.iter().find(|d| !in_git(d) && running(d)).or_else(|| found.iter().find(|d| !in_git(d))).cloned().unwrap_or_else(standard);
     if in_git(&target) { println!("The AI host at {} runs from a git checkout: it updates itself from there; nothing done.", target.display()); return 0; }
     let same = std::fs::canonicalize(&target).ok() == std::fs::canonicalize(&here).ok();
     if same { println!("This is the installed AI host ({}).", target.display()); return 0; }

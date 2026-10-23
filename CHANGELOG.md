@@ -7,6 +7,23 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.7.2 — 2026-10-23
+
+PATCH (hotfix): **the native AI host's update and install behave on a machine with two copies.** Found on Sponge's
+Linux PC: the user service ran the installed host in `~/.local/share/viberoller/ai-host`, a second copy sat in the
+Downloads folder, and the automatic update to 5.7.1 never came.
+- **A control command reaches the host that runs** (`vr-host` main): `status`, `update`, `stop`, `log`, `set` … run
+  from a copy that is not running (a download) act on the installed host that is (found the way `install` finds it) and
+  say so. Before, `./vr-host update` in the Downloads folder asked a copy that was not running, and nothing happened.
+- **A second copy waits instead of looping** (`vr-host run`): when a host already runs in the folder, the supervisor
+  waits for it to end and takes over then, saying so once. Before, it ended, and systemd (`Restart=always`) started it
+  again every 5 s with "already running" in the log each time.
+- **An update in steady use** (`host/runner.rs`): an automatic update that has waited 30 minutes for 3 quiet minutes
+  takes the next moment with nothing in flight. A host its owner works through all evening never got 3 quiet minutes,
+  so it never updated. LAWS.md says so next to the 3-minute rule.
+- **`vr-host install` updates the install that runs** first (then the first one found, then the standard folder).
+- R183 (Linux): the waiting supervisor, the control commands from a download, the 30-minute cap.
+
 ## 5.7.1 — 2026-10-23
 
 PATCH (hotfix): **the AI host picks up a local Ollama, says why a Codex login is missing, and the page shows ChatGPT /

@@ -34,6 +34,13 @@ fn main() {
     let rt = || tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
     if args.iter().any(|a| a == "--selftest") { std::process::exit(rt().block_on(runner::run(folder, true, false))); }
     let words: Vec<&str> = { let mut skip = false; args.iter().filter(|a| { if skip { skip = false; return false; } if *a == "--config" || *a == "--home" { skip = true; return false; } !a.starts_with("--") }).map(String::as_str).collect() };
+    // A control command run from a download (or any copy that is not the running host) acts on the host that runs: the
+    // installed one, found the way `install` finds it. Without this, `./vr-host update` in the Downloads folder asked a
+    // copy that was not running and nothing happened.
+    let control = matches!(words.first().copied(), None | Some("status" | "start" | "stop" | "restart" | "pause" | "resume" | "update" | "log" | "settings" | "set" | "lockdown"));
+    let folder = if control && config.is_none() && std::env::var_os("VR_HOST_DIR").is_none() && folder.host_pid().is_none() && !args.iter().any(|a| a == "--update") {
+        match running_install(&folder) { Some(f) => { eprintln!("(the AI host that runs is the installed one in {}: acting on it)", f.dir.display()); f } None => folder }
+    } else { folder };
     let now = args.iter().any(|a| a == "--now");
     let code = match words.first().copied() {
         None if args.iter().any(|a| a == "--update") => rt().block_on(runner::run(folder, false, true)),
@@ -46,6 +53,13 @@ fn main() {
         Some(_) => command(&folder, &words, now),
     };
     std::process::exit(code);
+}
+
+/// Another folder on this machine whose host is running (the service's, the standard install …), if this one is not it.
+fn running_install(here: &Folder) -> Option<Folder> {
+    let me = std::fs::canonicalize(&here.dir).unwrap_or(here.dir.clone());
+    install::earlier().into_iter().filter(|d| std::fs::canonicalize(d).unwrap_or(d.clone()) != me)
+        .map(|d| Folder { config: d.join("ai-node.json"), dir: d }).find(|f| f.host_pid().is_some())
 }
 
 fn command(f: &Folder, w: &[&str], now: bool) -> i32 {
@@ -96,6 +110,7 @@ pub fn supervise(f: &Folder, stop: Option<std::sync::Arc<std::sync::atomic::Atom
     let exe = std::env::current_exe().unwrap_or_else(|_| "vr-host".into());
     let stopped = stop.unwrap_or_else(|| { let s = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)); let s2 = s.clone(); let _ = ctrlc_hook(move || s2.store(true, Ordering::SeqCst)); s });
     let mut fast_fails = 0u32;
+    let mut waiting_for: Option<u32> = None;
     loop {
         if stopped.load(Ordering::SeqCst) { return 0; }
         let started = std::time::Instant::now();
@@ -116,7 +131,15 @@ pub fn supervise(f: &Folder, stop: Option<std::sync::Arc<std::sync::atomic::Atom
             std::thread::sleep(std::time::Duration::from_millis(200));
         };
         match code {
-            0 | 2 => return 0,
+            0 => return 0,
+            // another host already runs in this folder (one started by hand next to the service): wait for it to end and
+            // take over then, instead of ending, which made systemd start this one again every 5 s, for ever
+            2 => {
+                let pid = f.host_pid();
+                if pid.is_some() && pid != waiting_for { eprintln!("[vr-host] another AI host runs in this folder (pid {}): waiting for it to end, then this one takes over", pid.unwrap_or(0)); }
+                waiting_for = pid;
+                sleep_unless(&stopped, 30);
+            }
             3 => { fast_fails = 0; continue; }
             1 => { eprintln!("[vr-host] the host cannot start with these settings; trying again in 30 s"); sleep_unless(&stopped, 30); }
             _ => {
