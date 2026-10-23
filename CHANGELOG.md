@@ -37,6 +37,9 @@ a second coding harness next to Claude Code, picked per provider).
   system block. The worktree law stays in the prompt (the same bytes every run); the check result now travels at the
   end of each message (`fresh_note`). R181 proves the prompt carries no relative time or timestamp (the fake Claude
   reports `sysvolatile` / `syslaw`).
+- **The session's prompt-cache ledger** (TOKENS.md): every `assistant` event's usage is summed per session (paid
+  input, cache reads, cache writes, turns); `/api/usage` returns it as `context.cache` with the hit ratio, and the
+  context meter shows "cache NN%" with the numbers in its title. R-usage checks the sums.
 
 ## 5.6.1 — 2026-10-22
 

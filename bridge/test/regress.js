@@ -1368,7 +1368,8 @@ async function run() {
   check('R52', 'usage: windows estimated before Claude reports them, then Claude\'s utilization + reset time; context 54k/200k per account + session, cleared by a new session',
     uBefore.five_hour && uBefore.five_hour.source === 'estimate' && uBefore.seven_day && uBefore.seven_day.resetsAt > Date.now()
     && uRun.status === 200 && uAfter.five_hour.source === 'claude' && uAfter.five_hour.utilization === 0.42 && in2h > 7000e3 && in2h <= 7200e3
-    && uAfter.context && uAfter.context.tokens === 54000 && uAfter.context.window === 200000 && !uOther.context && !uFresh.context,
+    && uAfter.context && uAfter.context.tokens === 54000 && uAfter.context.window === 200000 && !uOther.context && !uFresh.context
+    && (!RUST_HUB || (uAfter.context.cache && uAfter.context.cache.read === 45000 && uAfter.context.cache.paid === 4000 && uAfter.context.cache.write === 5000 && uAfter.context.cache.turns >= 1 && Math.abs(uAfter.context.cache.hit - 45000 / 54000) < 0.01)), // the session's prompt-cache ledger (5.7.0; the Rust hub's)
     JSON.stringify({ five: uAfter.five_hour, ctx: uAfter.context }).slice(0, 200));
   check('R98', 'usage sync: a limit event without numbers keeps the last utilization + reset time; a percentage (55) is read as 55 %; the page shows the 5h / 7d % from the same number as the fill, re-reads usage live during a reply and every 15 s, and empties a window once it resets',
     uPartial.five_hour && uPartial.five_hour.utilization === 0.42 && uPartial.five_hour.resetsAt === uAfter.five_hour.resetsAt

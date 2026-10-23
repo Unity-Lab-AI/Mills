@@ -2358,8 +2358,10 @@ function paintUsage() {
   bar.style.backgroundColor = out ? OUT_COLOR : usageColor(pct);
   bar.style.boxShadow = c ? '0 0 10px ' + (out ? OUT_COLOR : usageColor(pct)) : 'none';
   const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : Math.round(n / 1000) + 'k');
-  el.querySelector('.uPct').textContent = c ? Math.round(pct) + '% · ' + k(c.tokens) + '/' + k(c.window) : 'new session';
-  el.title = c ? `Context window: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens used in this session (${c.model || 'model'})${out ? ' — full: start a New chat' : ''}` : 'Context window: fills up as this session goes on';
+  const cache = c && c.cache && c.cache.turns ? c.cache : null; // the session's prompt-cache ledger (paid vs cached input)
+  el.querySelector('.uPct').textContent = c ? Math.round(pct) + '% · ' + k(c.tokens) + '/' + k(c.window) + (cache ? ' · cache ' + Math.round(cache.hit * 100) + '%' : '') : 'new session';
+  el.title = c ? `Context window: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens used in this session (${c.model || 'model'})${out ? ' — full: start a New chat' : ''}`
+    + (cache ? `\nPrompt cache over ${cache.turns} turn${cache.turns === 1 ? '' : 's'}: ${Math.round(cache.hit * 100)}% of the input came from the cache (${cache.read.toLocaleString()} cached, ${cache.paid.toLocaleString()} paid, ${cache.write.toLocaleString()} written)` : '') : 'Context window: fills up as this session goes on';
 }
 setInterval(paintUsage, 1000);            // countdowns tick every second
 setInterval(() => { if (!$('shell').hidden) refreshUsage(); }, 15000); // the limits are shared by everyone: other people's runs move them too
