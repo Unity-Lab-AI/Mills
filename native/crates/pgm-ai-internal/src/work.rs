@@ -142,6 +142,7 @@ impl Work {
     }
     /// Which coding harness runs Work for that provider: "claude" (Claude Code), "jcode" (Jcode PGM), None (neither:
     /// an OpenAI endpoint or a ChatGPT login answers the API and the Unity section, not Work).
+    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
     pub fn harness_of(p: &Value) -> Option<&'static str> {
         if p["kind"] == json!(crate::jcode::KIND) { return Some(crate::jcode::HARNESS); }
         Self::claude_env(p).map(|_| crate::jcode::CLAUDE_HARNESS)
@@ -341,14 +342,12 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     w.update(a, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
     w.check_fresh(a);
     let st = w.state(a);
-    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode"].iter().map(|x| x.to_string()).collect();
-    args.push(hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into());
-    args.extend(["--mcp-config".into(), w.mcp_config(a).display().to_string(), "--strict-mcp-config".into(), "--append-system-prompt".into(), w.system_prompt(a, &wd)]);
+    let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
+    let mcp_config = w.mcp_config(a);
+    let system_prompt = w.system_prompt(a, &wd);
     let mut tools: Vec<String> = hub.cfg().get("allowedTools").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     if !wd.hub { tools.push(format!("Bash(node {}:*)", w.wt.script.display().to_string().replace('\\', "/"))); }
-    if !tools.is_empty() { args.push("--allowedTools".into()); args.push(tools.join(",")); }
     let model = w.effective_model(a);
-    if !model.is_empty() { args.push("--model".into()); args.push(model.clone()); }
     let ai = hub.ai();
     let Some(prov) = w.effective(ai, &a.username, &s(&st, "provider")) else { return one_line(json!({ "type": "bridge_error", "text": "No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings." })) };
     let Some(harness) = Work::harness_of(&prov) else { return one_line(json!({ "type": "bridge_error", "text": "Your chosen AI provider can run neither Claude Code nor Jcode PGM, so it cannot run Work. Pick a Claude or a Jcode PGM model in the dropdown." })) };
@@ -369,11 +368,10 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // a session is resumed only where it ran and by the harness that made it (a Jcode PGM session id means nothing to Claude Code)
     let resume = !fresh && !s(&st, "claudeSessionId").is_empty() && { let w0 = s(&st, "claudeSessionWhere"); (if w0.is_empty() { "hub".to_string() } else { w0 }) == wher }
         && { let h0 = s(&st, "sessionHarness"); (if h0.is_empty() { crate::jcode::CLAUDE_HARNESS.to_string() } else { h0 }) == harness };
-    if resume { args.push("--resume".into()); args.push(s(&st, "claudeSessionId")); }
     { let wh = wher.clone(); w.update(a, |m| { m.insert("claudeSessionWhere".into(), json!(wh)); m.insert("sessionHarness".into(), json!(harness)); if !resume { m.remove("claudeSessionId"); } }); }
     // attached files (the marker block at the end of the message): Claude gets their paths and may read that folder
     let wm = hub.work_message(a, &message, json!({ "project": wd.project }));
-    for d in wm["dirs"].as_array().cloned().unwrap_or_default() { if let Some(d) = d.as_str() { args.push("--add-dir".into()); args.push(d.into()); } }
+    let add_dirs: Vec<String> = wm["dirs"].as_array().cloned().unwrap_or_default().iter().filter_map(|d| d.as_str().map(String::from)).collect();
     let text = wm["text"].as_str().unwrap_or(&message).to_string();
     let mut input = if context.is_empty() { text } else { format!("{text}\n\n---\n{context}") };
     { let note = w.fresh_note(a, &wd); if !note.is_empty() { input.push_str("\n\n"); input.push_str(&note); } }
@@ -421,26 +419,22 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // ---- here: Claude Code (claudeCommand / claudeArgs only for the regression runner's fake Claude; else the real
     // `claude`, the message on stdin), or Jcode PGM (the provider's binary, `run --ndjson`, the message as the last
     // argument, a private jcode home with the hub's MCP servers and the system prompt as its overlay)
-    let (command, pre, args, harness_env, input) = if harness == crate::jcode::HARNESS {
-        let home = crate::jcode::home_for(&a.dir, &prov);
-        let henv = crate::jcode::prepare_home(&home, &w.mcp_json(a), &w.system_prompt(a, &wd));
-        let ids: Vec<String> = prov["models"].as_array().map(|m| m.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-        let m0 = s(&st, "model"); let jmodel = if ids.contains(&m0) || (ids.is_empty() && !m0.is_empty()) { m0 } else { ids.first().cloned().unwrap_or_default() };
-        let sid = s(&st, "claudeSessionId");
-        let (c, ar) = crate::jcode::command(&prov, &jmodel, if resume { Some(sid.as_str()) } else { None }, &input);
-        w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Using Jcode PGM ({}){}.", s(&prov, "label"), if jmodel.is_empty() { String::new() } else { format!(", model {jmodel}") }) }));
-        (c, Vec::<String>::new(), ar, henv, String::new())
-    } else {
-        let command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
-        let pre: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
-        (command, pre, args, vec![], input)
-    };
+    let hkind = Work::harness_kind(&prov);
+    let mut hx = crate::harness::harness_for(hkind, &prov, &s(&st, "model"));
+    let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a) } else { Value::Null };
+    let sid = s(&st, "claudeSessionId");
+    let claude_command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
+    let claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    let state_model = s(&st, "model");
+    let spec = hx.command(&crate::harness::RunContext { prov: &prov, input: &input, resume: if resume { Some(sid.as_str()) } else { None }, model: &model, state_model: &state_model, acct_dir: &a.dir, cwd: &wd.dir,
+        system_prompt: &system_prompt, mcp_json: &mcp_json, mcp_config: &mcp_config, permission_mode: &permission_mode, allowed_tools: &tools, add_dirs: &add_dirs, claude_command: &claude_command, claude_args: &claude_args });
+    if let Some(b) = hx.banner() { w.emit(&a.username, json!({ "type": "bridge_info", "text": b })); }
+    let (command, harness_env, input) = (spec.program.clone(), spec.env.clone(), spec.stdin.clone());
     let mut cmd = tokio::process::Command::new(&command);
-    cmd.args(&pre).args(&args).current_dir(&wd.dir).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(false);
+    cmd.args(&spec.args).current_dir(&spec.cwd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(false);
     let fe = w.work_env(&a.username); let get = |k: &str| fe.iter().find(|(x, _)| x == k).map(|(_, v)| v.clone()).unwrap_or_default();
     let fj_env = crate::fj::env(&a.dir.join(".fj"), &get("FORGEJO_URL"), &get("FORGEJO_TOKEN"), &get("FORGEJO_LOGIN")); // fj signed in as them
     for (k, v) in prov_env.iter().chain(relay_env.iter()).chain(harness_env.iter()).chain(fe.iter()).chain(fj_env.iter()) { cmd.env(k, v); }
-    let mut mapper = if harness == crate::jcode::HARNESS { Some(crate::jcode::Mapper::new(&s(&st, "model"))) } else { None };
     #[cfg(windows)]
     { cmd.creation_flags(0x0800_0000); }
     let (h, a2, id) = (hub.clone(), a.clone(), run_id.clone());
@@ -457,10 +451,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         if let Some(out) = child.stdout.take() {
             let mut lines = tokio::io::BufReader::new(out).lines();
             while let Ok(Some(l)) = lines.next_line().await {
-                let l = l.trim(); if l.is_empty() { continue; }
-                match serde_json::from_str::<Value>(l) {
-                    Ok(ev) => match mapper.as_mut() { Some(m) => { for e in m.map(ev) { w.on_event(&*h, &a2, e, &source); } } None => w.on_event(&*h, &a2, ev, &source) },
-                    Err(_) => w.emit(&a2.username, json!({ "type": "raw", "text": l })),
+                for e in hx.map_line(&l) {
+                    match e { crate::harness::HubEvent::Raw(_) => w.emit(&a2.username, e.into_value()), e => w.on_event(&*h, &a2, e.into_value(), &source) }
                 }
             }
         }

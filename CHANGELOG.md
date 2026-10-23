@@ -40,6 +40,12 @@ a second coding harness next to Claude Code, picked per provider).
 - **The session's prompt-cache ledger** (TOKENS.md): every `assistant` event's usage is summed per session (paid
   input, cache reads, cache writes, turns); `/api/usage` returns it as `context.cache` with the hit ratio, and the
   context meter shows "cache NN%" with the numbers in its title. R-usage checks the sums.
+- **A proper `Harness` trait** (pgm-ai `harness.rs`, Jcode-Mods WORKPLAN 9a): `kind`, `command(&RunContext) ->
+  CommandSpec` (program, args, env, cwd, stdin), `map_line(&str) -> Vec<HubEvent>`, `session_resume_args`, `banner`,
+  `ended`; `ClaudeHarness` (stream-json passes through unchanged) and `JcodeHarness` (wraps the existing `Mapper`);
+  one `HubEvent` enum (init, system, assistant, user, result, unknown, raw) in the page's shape. `Work::run` no longer
+  branches on the harness: it builds a `RunContext`, asks the harness for the command and feeds each stdout line
+  through `map_line`. A refactor only: no behaviour change, the page receives the same events; 6 unit tests.
 
 ## 5.6.1 — 2026-10-22
 
