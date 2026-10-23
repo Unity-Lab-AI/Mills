@@ -100,7 +100,9 @@ impl Usage {
             let rejected = l["status"] == json!("rejected") && l["at"].as_u64().map(|a| now - a < len).unwrap_or(false);
             json!({ "source": "estimate", "status": if rejected { "rejected" } else { "allowed" }, "utilization": Value::Null, "resetsAt": s.map(|s| s + len) })
         };
-        let c = if ctx.is_object() && ctx["session"].as_str().unwrap_or("") == session { json!({ "tokens": ctx["tokens"], "window": ctx["window"].as_u64().unwrap_or(self.context_window), "model": ctx["model"] }) } else { Value::Null };
+        // the session's cache ledger (TOKENS.md): paid vs cached input over its turns, and the hit ratio
+        let cache = if ctx["cache"].is_object() { let k = &ctx["cache"]; let g = |n: &str| k[n].as_u64().unwrap_or(0); let total = g("paid") + g("read") + g("write"); json!({ "turns": g("turns"), "paid": g("paid"), "read": g("read"), "write": g("write"), "hit": if total == 0 { 0.0 } else { g("read") as f64 / total as f64 } }) } else { Value::Null };
+        let c = if ctx.is_object() && ctx["session"].as_str().unwrap_or("") == session { json!({ "tokens": ctx["tokens"], "window": ctx["window"].as_u64().unwrap_or(self.context_window), "model": ctx["model"], "cache": cache }) } else { Value::Null };
         json!({ "now": now, "of": if source.is_empty() { "hub" } else { source }, "five_hour": win("five_hour", &b["fiveStart"], FIVE_H), "seven_day": win("seven_day", &b["weekStart"], SEVEN_D), "context": c })
     }
 }
@@ -110,7 +112,12 @@ pub fn note_context(ctx: &mut Value, ev: &Value, session: &str) {
         let u = &ev["message"]["usage"];
         let tokens = u["input_tokens"].as_u64().unwrap_or(0) + u["cache_read_input_tokens"].as_u64().unwrap_or(0) + u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
         let mut c = if ctx.is_object() { ctx.clone() } else { json!({}) };
-        c["session"] = json!(if session.is_empty() { ev["session_id"].as_str().unwrap_or("") } else { session }); c["tokens"] = json!(tokens); c["model"] = json!(ev["message"]["model"].as_str().unwrap_or("")); c["at"] = json!(now_ms());
+        let sid = if session.is_empty() { ev["session_id"].as_str().unwrap_or("") } else { session };
+        // the cache ledger of this session: paid input, cache reads, cache writes, turns (a new session starts it again)
+        let mut k = if c["session"].as_str() == Some(sid) && c["cache"].is_object() { c["cache"].clone() } else { json!({ "turns": 0, "paid": 0, "read": 0, "write": 0 }) };
+        let add = |k: &mut Value, n: &str, v: u64| { let cur = k[n].as_u64().unwrap_or(0); k[n] = json!(cur + v); };
+        add(&mut k, "turns", 1); add(&mut k, "paid", u["input_tokens"].as_u64().unwrap_or(0)); add(&mut k, "read", u["cache_read_input_tokens"].as_u64().unwrap_or(0)); add(&mut k, "write", u["cache_creation_input_tokens"].as_u64().unwrap_or(0));
+        c["session"] = json!(sid); c["tokens"] = json!(tokens); c["model"] = json!(ev["message"]["model"].as_str().unwrap_or("")); c["at"] = json!(now_ms()); c["cache"] = k;
         *ctx = c;
     }
     if ev["type"] == "result" { if let Some(m) = ev["modelUsage"].as_object() { let w = m.values().filter_map(|x| x["contextWindow"].as_u64()).max(); if let (Some(w), true) = (w, ctx.is_object()) { ctx["window"] = json!(w); } } }

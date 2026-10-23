@@ -1986,6 +1986,8 @@ async function runPcTool(ev) {
 // The bridge stores the choice per person, so it applies from the next message on (after the
 // current turn, if Claude is busy), to every new conversation, and after the bridge restarts.
 let modelLabels = {};
+// providers that answer the API but cannot run Work (no Claude / Jcode PGM harness): endpoints, a host's local model, ChatGPT / Codex
+const NOT_WORK = (p) => p.kind === 'openai' || p.kind === 'host-openai' || p.kind === 'host-codex';
 const modelName = (id) => (id ? modelLabels[id] || id : 'Claude Code default');
 // The dropdown lists the host's Claude models, then every Claude-capable provider the person may use
 // (their own, or one a teammate shared): option value = "<provider id>|<model>" ("" = the host default).
@@ -2000,9 +2002,16 @@ function showModels(d) {
   def.value = ''; def.textContent = 'Default' + (defProv && defProv.id !== 'host' ? ' (' + provName(defProv) + ')' : d.defaultModel ? ' (' + modelName(d.defaultModel) + ')' : '');
   sel.append(def);
   if (d.hubClaude !== false) for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
-  for (const p of provs.filter((x) => x.id !== 'host' && x.kind !== 'openai' && x.kind !== 'host-openai' && x.kind !== 'host-codex')) {
+  for (const p of provs.filter((x) => x.id !== 'host' && !NOT_WORK(x))) {
     const g = document.createElement('optgroup'); g.label = provName(p) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
     for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); o.disabled = p.online === false; g.append(o); }
+    sel.append(g);
+  }
+  // ChatGPT / Codex and local models (Ollama …) are listed too, so people see what their hosts offer, but greyed out:
+  // Work runs a coding harness that needs Claude; these answer the API (Settings → API access) and other apps.
+  for (const p of provs.filter(NOT_WORK)) {
+    const g = document.createElement('optgroup'); g.label = provName(p) + ' · not for Work: pick it in Settings → API access';
+    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); o.disabled = true; g.append(o); }
     sel.append(g);
   }
   sel.value = d.provider && d.provider !== 'host' ? d.provider + '|' + (d.model || '') : d.model || '';
@@ -2358,8 +2367,10 @@ function paintUsage() {
   bar.style.backgroundColor = out ? OUT_COLOR : usageColor(pct);
   bar.style.boxShadow = c ? '0 0 10px ' + (out ? OUT_COLOR : usageColor(pct)) : 'none';
   const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : Math.round(n / 1000) + 'k');
-  el.querySelector('.uPct').textContent = c ? Math.round(pct) + '% · ' + k(c.tokens) + '/' + k(c.window) : 'new session';
-  el.title = c ? `Context window: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens used in this session (${c.model || 'model'})${out ? ' — full: start a New chat' : ''}` : 'Context window: fills up as this session goes on';
+  const cache = c && c.cache && c.cache.turns ? c.cache : null; // the session's prompt-cache ledger (paid vs cached input)
+  el.querySelector('.uPct').textContent = c ? Math.round(pct) + '% · ' + k(c.tokens) + '/' + k(c.window) + (cache ? ' · cache ' + Math.round(cache.hit * 100) + '%' : '') : 'new session';
+  el.title = c ? `Context window: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens used in this session (${c.model || 'model'})${out ? ' — full: start a New chat' : ''}`
+    + (cache ? `\nPrompt cache over ${cache.turns} turn${cache.turns === 1 ? '' : 's'}: ${Math.round(cache.hit * 100)}% of the input came from the cache (${cache.read.toLocaleString()} cached, ${cache.paid.toLocaleString()} paid, ${cache.write.toLocaleString()} written)` : '') : 'Context window: fills up as this session goes on';
 }
 setInterval(paintUsage, 1000);            // countdowns tick every second
 setInterval(() => { if (!$('shell').hidden) refreshUsage(); }, 15000); // the limits are shared by everyone: other people's runs move them too
@@ -3788,7 +3799,7 @@ async function renderForgejo() {
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
-const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint' };
+const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
 async function renderApiAccess(freshKey) {
   const box = $('apiBox'); if (!box) return;
   let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
@@ -3849,28 +3860,34 @@ async function renderProviders() {
   // add one
   const form = document.createElement('div'); form.className = 'row';
   const kind = document.createElement('select');
-  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
+  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)'], ['jcode', 'Jcode PGM on the host (jcodepgm binary; runs Work)']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
   const label = document.createElement('input'); label.placeholder = 'label, e.g. "Sponge\'s Claude"'; label.maxLength = 60;
   const secret = document.createElement('input'); secret.type = 'password'; secret.placeholder = 'API key'; secret.autocomplete = 'off';
   const where = document.createElement('input'); where.placeholder = 'base URL, e.g. https://api.example.com/v1';
+  const jprov = document.createElement('input'); jprov.placeholder = 'jcode provider profile to run with (-p), e.g. viberoller (optional)'; jprov.maxLength = 80;
   const models = document.createElement('input'); models.placeholder = 'model ids, comma separated (optional for Claude)';
   const shared = document.createElement('label'); shared.className = 'chk'; const shc = document.createElement('input'); shc.type = 'checkbox'; shared.append(shc, ' share with the team');
   const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add';
   const msg = document.createElement('span'); msg.className = 'status';
-  const sync = () => { secret.hidden = kind.value === 'claude-cli'; where.hidden = kind.value !== 'claude-cli' && kind.value !== 'openai'; where.placeholder = kind.value === 'openai' ? 'base URL, e.g. https://api.example.com/v1' : 'folder on the host, e.g. D:\\claude-logins\\sponge or /home/host/claude-logins/sponge (the host runs `claude login` once with CLAUDE_CONFIG_DIR set to it)'; };
+  const sync = () => {
+    secret.hidden = kind.value === 'claude-cli' || kind.value === 'jcode'; where.hidden = kind.value === 'anthropic'; jprov.hidden = kind.value !== 'jcode';
+    where.placeholder = kind.value === 'openai' ? 'base URL, e.g. https://api.example.com/v1' : kind.value === 'jcode' ? 'the jcodepgm binary on the host: a path, or just jcodepgm when it is on PATH' : 'folder on the host, e.g. D:\\claude-logins\\sponge or /home/host/claude-logins/sponge (the host runs `claude login` once with CLAUDE_CONFIG_DIR set to it)';
+    models.placeholder = kind.value === 'jcode' ? 'model ids jcode may be asked for, comma separated (empty = jcode\'s own default)' : 'model ids, comma separated (optional for Claude)';
+  };
   kind.onchange = sync; sync();
   add.onclick = async () => {
     const body = { kind: kind.value, label: label.value, shared: shc.checked, models: models.value };
-    if (kind.value !== 'claude-cli') body.apiKey = secret.value;
+    if (kind.value !== 'claude-cli' && kind.value !== 'jcode') body.apiKey = secret.value;
     if (kind.value === 'openai') body.baseUrl = where.value; if (kind.value === 'claude-cli') body.configDir = where.value;
-    try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify(body) }); label.value = secret.value = where.value = models.value = ''; msg.textContent = 'Added.'; renderProviders(); renderApiAccess(); refreshProviders(); }
+    if (kind.value === 'jcode') { body.command = where.value; body.provider = jprov.value; }
+    try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify(body) }); label.value = secret.value = where.value = jprov.value = models.value = ''; msg.textContent = 'Added.'; renderProviders(); renderApiAccess(); refreshProviders(); }
     catch (e) { msg.textContent = e.message; }
   };
-  form.append(kind, label, secret, where, models, shared, add, msg); box.append(form);
+  form.append(kind, label, secret, where, jprov, models, shared, add, msg); box.append(form);
 }
 function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
 // ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
-const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint' };
+const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM' };
 async function renderSource() {
   const box = $('srcBox'); if (!box) return;
   let d; try { d = await json('/api/check'); } catch (e) { box.textContent = e.message; return; }
@@ -3880,7 +3897,8 @@ async function renderSource() {
   const defP = (d.providers || []).find((p) => p.id === d.defaultProvider);
   const sel = document.createElement('select');
   const o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'Default' + (defP ? ': ' + provName(defP) : ': none available'); sel.append(o0);
-  for (const p of (d.providers || []).filter((p) => p.kind !== 'openai' && p.kind !== 'host-openai' && p.kind !== 'host-codex')) { const o = document.createElement('option'); o.value = p.id; o.textContent = provName(p); sel.append(o); }
+  for (const p of (d.providers || []).filter((p) => !NOT_WORK(p))) { const o = document.createElement('option'); o.value = p.id; o.textContent = provName(p); sel.append(o); }
+  for (const p of (d.providers || []).filter(NOT_WORK)) { const o = document.createElement('option'); o.value = p.id; o.textContent = provName(p) + ' (not for Work: pick it under API access)'; o.disabled = true; sel.append(o); }
   sel.value = d.provider && d.provider !== 'host' ? d.provider : ''; if (sel.selectedIndex < 0) sel.value = '';
   const mdl = document.createElement('select');
   const fill = () => { mdl.textContent = ''; const p = (d.providers || []).find((x) => x.id === (sel.value || d.defaultProvider)) || { models: (d.models || []).map((m) => m.id) }; const m0 = document.createElement('option'); m0.value = ''; m0.textContent = 'model: the provider\'s first / default'; mdl.append(m0); for (const m of p.models || []) { const o = document.createElement('option'); o.value = m; o.textContent = modelName(m); mdl.append(o); } mdl.value = d.model || ''; if (mdl.selectedIndex < 0) mdl.value = ''; };
