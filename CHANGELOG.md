@@ -32,6 +32,11 @@ a second coding harness next to Claude Code, picked per provider).
   proves the add / refuse rules, the command line, the home (MCP answers through it, the overlay is there), the event
   mapping, resume, a failed run, and that going back to Claude never resumes a jcode session.
 - pgm-libs 5.7.0 carries the same `pgm-ai` (library law).
+- **A cache-stable Work system prompt** (Jcode-Mods `TOKENS.md`): the latest worktree freshness check ("N min ago")
+  used to sit inside `--append-system-prompt`, so every run invalidated the provider's prompt cache for the whole
+  system block. The worktree law stays in the prompt (the same bytes every run); the check result now travels at the
+  end of each message (`fresh_note`). R181 proves the prompt carries no relative time or timestamp (the fake Claude
+  reports `sysvolatile` / `syslaw`).
 
 ## 5.6.1 — 2026-10-22
 

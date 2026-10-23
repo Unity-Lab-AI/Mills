@@ -961,6 +961,16 @@ async function run() {
       && back.status === 200 && !/jcode-answer/.test(backText),
       `add ${jNotAdmin.status}/${jBadHome.status}/${jc.provider ? 'made' : JSON.stringify(jc).slice(0, 100)}, pick ${pickJ.status}, run1 "${t1.slice(0, 160)}" tool ${toolUse}/${toolRes} result ${res1.is_error} code ${done1.code}; run2 "${t2.slice(-40)}"; fail ${resF.is_error} code ${doneF.code}; home mcp ${Object.keys(jMcp.mcpServers || {}).join(',')} overlay ${jOverlay.length}b; back "${backText.slice(0, 60)}"`);
   } else skip('R180', 'Jcode PGM as a Work harness (a jcode provider runs Work through jcodepgm run --ndjson)', 'the Rust hub\'s: --rust-hub runs it');
+  // The prompt cache (R181, 5.7.0; Jcode-Mods TOKENS.md): the system prompt a Work run gets is the same bytes every run,
+  // so the provider's prompt cache can hit: no "N min ago" and no timestamp in it; the worktree law stays there, the
+  // latest freshness check travels with the message instead.
+  if (RUST_HUB) {
+    const r181 = await chat(A, 'cache check r181', { fresh: true });
+    const e181 = texts(r181.events);
+    check('R181', 'the Work system prompt is cache-stable: the same bytes every run (no relative time, no timestamp in it); the worktree law stays in it and the volatile freshness check result travels with the message',
+      /sysvolatile=false/.test(e181) && /syslaw=true/.test(e181),
+      `echo "${(e181.match(/sysvolatile=[a-z]+ \| syslaw=[a-z]+/) || [''])[0]}"`);
+  } else skip('R181', 'the Work system prompt is cache-stable', 'the Rust hub\'s Work: --rust-hub runs it');
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });

@@ -178,9 +178,15 @@ impl Work {
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let cmd = if wd.hub { "node bridge/worktree.js".to_string() } else { format!("node {script} --project {}", wd.project) };
         let u = &a.username;
-        let f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()).get(&format!("{u}|{}", wd.project)).cloned();
-        format!("Worktree law: never build on a stale worktree. Before changing anything, check it: {cmd} check {u} (it fetches Forgejo first; exit code 3 = stale). If it is STALE, run {cmd} update {u}: it fast-forwards, merges Forgejo's {} into your own commits, or makes a NEW worktree from Forgejo with your commits, uncommitted changes and untracked files carried over and then deletes just the old one ({cmd} renew {u} does that directly).", wd.main)
-            + &f.filter(|f| !f.text.is_empty()).map(|f| format!(" Latest background check ({} min ago): {}", ((now_ms() - f.at) as f64 / 60000.0).round().max(1.0), f.text)).unwrap_or_default()
+        // the law itself is the same every run (it stays in the cached system prefix); the latest check result is
+        // volatile ("N min ago") and travels with the turn (fresh_note), so it never busts the prompt cache
+        format!("Worktree law: never build on a stale worktree. Before changing anything, check it: {cmd} check {u} (it fetches Forgejo first; exit code 3 = stale). If it is STALE, run {cmd} update {u}: it fast-forwards, merges Forgejo's {} into your own commits, or makes a NEW worktree from Forgejo with your commits, uncommitted changes and untracked files carried over and then deletes just the old one ({cmd} renew {u} does that directly). The latest background check of this worktree is at the end of each message.", wd.main)
+    }
+    /// The latest background freshness check, for the turn (not the system prompt: pgm-context's lint would flag the
+    /// "N min ago" there, and every run would pay the whole system prompt again).
+    fn fresh_note(&self, a: &Account, wd: &Wt) -> String {
+        let f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()).get(&format!("{}|{}", a.username, wd.project)).cloned();
+        f.filter(|f| !f.text.is_empty()).map(|f| format!("[Worktree: latest background check ({} min ago): {}]", ((now_ms() - f.at) as f64 / 60000.0).round().max(1.0), f.text)).unwrap_or_default()
     }
     fn hub_laws(&self) -> String { ["LAWS.md", "CLAUDE.md"].iter().filter_map(|f| std::fs::read_to_string(self.mills.join(f)).ok().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n") }
     fn system_prompt(&self, a: &Account, wd: &Wt) -> String {
@@ -369,7 +375,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let wm = hub.work_message(a, &message, json!({ "project": wd.project }));
     for d in wm["dirs"].as_array().cloned().unwrap_or_default() { if let Some(d) = d.as_str() { args.push("--add-dir".into()); args.push(d.into()); } }
     let text = wm["text"].as_str().unwrap_or(&message).to_string();
-    let input = if context.is_empty() { text } else { format!("{text}\n\n---\n{context}") };
+    let mut input = if context.is_empty() { text } else { format!("{text}\n\n---\n{context}") };
+    { let note = w.fresh_note(a, &wd); if !note.is_empty() { input.push_str("\n\n"); input.push_str(&note); } }
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
