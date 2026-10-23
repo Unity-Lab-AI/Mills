@@ -158,7 +158,7 @@ function startFakeOllama() {
         return res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { model: b.model, usage: { input_tokens: 2, output_tokens: 3 } } }) + '\n\n');
       }
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
-      if (req.url === '/oai/chat/completions') {
+      if (req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') { // /v1: Ollama's own OpenAI-compatible path (R182)
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
         if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
@@ -250,7 +250,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -3127,6 +3127,33 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && !!up1 && st1.connected === true && st1.native === true && stRun.status === 0 && /CONNECTED/.test(stRun.stdout)
         && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
         `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
+    }
+    // R182: the native host finds a local Ollama by itself (no engine, no provider configured) and offers it; a missing
+    // Codex login is named in its log at hello
+    if (!why) {
+      const L182 = 'the native AI host picks up a local Ollama by itself: with nothing configured for it, a host whose machine runs Ollama (OLLAMA_HOST) offers it as the engine and as a private provider "ollama" with the models Ollama lists; its owner sees it (kind host-openai), others do not; the API answers through it; a Codex login the host cannot read is named in its log with the way to fix it; the page lists ChatGPT / Codex and local models greyed out as not for Work';
+      const odir = path.join(SCRATCH, 'ollama-host'); fs.mkdirSync(odir, { recursive: true });
+      const oexe = path.join(odir, 'vr-host' + (WIN ? '.exe' : '')), ocfg = path.join(odir, 'ai-node.json');
+      fs.copyFileSync(NATIVE_BIN.host, oexe); fs.chmodSync(oexe, 0o755);
+      fs.writeFileSync(ocfg, JSON.stringify({ hub: H, id: 'ollama-node', token: OLD_NODE_SECRET + '-ol', user: 't-admin', autoUpdate: false,
+        providers: [{ id: 'codex', kind: 'codex-relay', label: 'R182 Codex', models: ['gpt-5.5'], codexHome: path.join(odir, 'no-codex-here') }], engines: {} }), { mode: 0o600 });
+      const olog = path.join(odir, 'out.log'), ofd = fs.openSync(olog, 'a');
+      const oproc = spawn(oexe, ['run', '--config', ocfg], { cwd: odir, stdio: ['ignore', ofd, ofd], env: { ...process.env, OLLAMA_HOST: `127.0.0.1:${OLLAMA_PORT}` } });
+      let seen = null; for (let i = 0; i < 80 && !seen; i++) { seen = ((await call('/api/check', A)).data.providers || []).find((p) => p.id === 'h:ollama-node/ollama') || null; if (!seen) await sleep(250); }
+      const otherSees = ((await call('/api/check', U)).data.providers || []).some((p) => p.id === 'h:ollama-node/ollama');
+      const key = (await call('/api/apikey/rotate', A, {})).data.key;
+      await call('/api/apikey/settings', A, { provider: 'h:ollama-node/ollama', model: 'unity-brain:latest' });
+      const ans = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: 'unity-brain:latest', messages: [{ role: 'user', content: 'local r182' }] }) }).then((r) => r.json()).catch(() => ({}));
+      await call('/api/apikey/revoke', A, {});
+      try { oproc.kill(); } catch {}
+      const outText = (() => { try { return fs.readFileSync(olog, 'utf8'); } catch { return ''; } })();
+      const page182 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      check('R182', L182,
+        !!seen && seen.kind === 'host-openai' && (seen.models || []).includes('unity-brain:latest') && !otherSees
+        && /oai says: local r182/.test(((ans.choices || [])[0] || {}).message?.content || '')
+        && /found Ollama at http:\/\/127\.0\.0\.1:\d+ with 1 model/.test(outText) && /no Codex login found at .*no-codex-here.*cli_auth_credentials_store/.test(outText)
+        && /const NOT_WORK = \(p\) =>/.test(page182) && /not for Work: pick it in Settings → API access/.test(page182) && /'host-codex': 'AI host · ChatGPT \/ Codex'/.test(page182),
+        `seen ${seen && seen.kind} ${seen && (seen.models || []).join(',')}; others ${otherSees}; answer ${JSON.stringify(ans).slice(0, 120)}; log ${outText.split('\n').filter((l) => /Ollama|Codex/.test(l)).join(' | ').slice(0, 300)}`);
     }
     // R167: the Downloads hand out the native programs (pre-built), and they install themselves (the Rust hub's alone)
     if (!why && RUST_HUB) {

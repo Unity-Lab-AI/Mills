@@ -7,6 +7,29 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.7.1 — 2026-10-23
+
+PATCH (hotfix): **the AI host picks up a local Ollama, says why a Codex login is missing, and the page shows ChatGPT /
+Codex and local models.** Sponge: only Claude showed up anywhere; Ollama (already running, so `ollama serve` said the
+port was taken) and the Codex login were not picked up.
+- **Ollama found by itself** (native host, `host/runner.rs`): at every hello and once a minute the host asks
+  `http://127.0.0.1:11434/api/tags` (or the address `OLLAMA_HOST` names; a listen address `0.0.0.0` is reached at
+  127.0.0.1). When it answers, the host lends it as the engine `ollama` (Unity) if none is configured, and offers a
+  private provider `ollama` (an OpenAI-compatible endpoint at `/v1`, the models Ollama lists) if no endpoint for it is
+  configured. A change (Ollama started later, a model pulled) is told to the hub with a fresh hello when nothing is in
+  flight. Off with `"autoDetect": { "ollama": false }`; what the person configured is never replaced.
+- **Login check at hello** (`host/relay.rs` `login_problem`): a Claude or Codex login the host cannot read is named in
+  its log with the path it looked at. For Codex that includes the keyring case: Codex can keep its login in the
+  system keyring, which the host cannot read; `cli_auth_credentials_store = "file"` in `~/.codex/config.toml` and a
+  new `codex login` fix it (or `codexHome` on the provider).
+- **The page** (`web/index.html`): the Work model menu and Settings → AI source list ChatGPT / Codex and local models
+  too, greyed out and marked "not for Work": Work needs a Claude (or Jcode PGM) harness. They are picked under
+  Settings → API access, where the provider names now read "AI host · ChatGPT / Codex", "AI host · local model",
+  "AI host · Claude" instead of "undefined".
+- The JavaScript host (`bridge/ai-node.js`) is unchanged; it still lends Ollama only when `engines` / `providers` name it.
+- R182 (native host): Ollama found and offered with no configuration, private to its owner, answering the API; a
+  missing Codex login named in the log; the page's greyed-out entries.
+
 ## 5.7.0 — 2026-10-22
 
 MINOR: **Jcode PGM as a Work harness** (the first step of Jcode-Mods `EXTENSIBILITY.md` §3 and `ARCHITECTURE.md`:

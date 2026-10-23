@@ -68,6 +68,17 @@ fn login_token(p: &Provider) -> Result<Login> {
     let j: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("auth.json")).map_err(|_| Error::status(503, "This host has no Codex login (sign in to it on this machine once)."))?)?;
     Ok(Login { token: j["tokens"]["access_token"].as_str().unwrap_or("").into(), expires_at: 0, account: j["tokens"]["account_id"].as_str().unwrap_or("").into(), api_key: j["OPENAI_API_KEY"].as_str().unwrap_or("").into() })
 }
+/// Why this relay cannot answer right now, said in plain words (None = a login is there). Checked at hello so the host's
+/// log names the problem before anyone's request runs into it.
+pub fn login_problem(p: &Provider) -> Option<String> {
+    let dir = dir_of(p);
+    match login_token(p) {
+        Ok(t) if !t.token.is_empty() || !t.api_key.is_empty() => None,
+        Ok(_) => Some(format!("the login file in {} holds no token: sign in again on this machine", dir.display())),
+        Err(_) if p.relay_kind() == "codex-relay" => Some(format!("no Codex login found at {}. Sign in with `codex login` on this machine. If Codex keeps its login in the system keyring, set cli_auth_credentials_store = \"file\" in {} and sign in again, so the host can read it (or set codexHome on this provider to the folder that holds auth.json)", dir.join("auth.json").display(), dir.join("config.toml").display())),
+        Err(_) => Some(format!("no Claude login found at {}: sign in with `claude` on this machine once (or set configDir on this provider)", dir.join(".credentials.json").display())),
+    }
+}
 static REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// Lets the provider's own CLI refresh its login (it does when it runs and finds the token old), in an empty folder.
 async fn refresh_login(h: &H, p: &Provider) {

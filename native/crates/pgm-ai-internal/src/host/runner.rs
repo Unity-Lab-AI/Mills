@@ -33,8 +33,74 @@ pub struct Host {
     /// provider id → { five_hour, seven_day } (this host's own view of its Claude windows)
     pub usage: Mutex<HashMap<String, Value>>,
     updating: Mutex<bool>,
+    /// What the host found running on this machine by itself (a local Ollama): offered next to the configured ones.
+    pub detected: Mutex<Detected>,
 }
 pub type H = Arc<Host>;
+
+/// What the host found on this machine without being told: an Ollama that answers on its usual address.
+#[derive(Default, Clone)]
+pub struct Detected { pub ollama_engine: Option<String>, pub ollama_provider: Option<Provider> }
+
+pub const OLLAMA_URL: &str = "http://127.0.0.1:11434";
+
+/// Where to reach Ollama from its OLLAMA_HOST setting, which is the address it LISTENS on: "0.0.0.0" / "[::]" (every
+/// interface) is reached at 127.0.0.1, a missing port is Ollama's 11434, a missing scheme is http.
+pub fn ollama_url_of(v: &str) -> String {
+    let v = v.trim().trim_end_matches('/');
+    if v.is_empty() { return OLLAMA_URL.to_string(); }
+    let (scheme, rest) = match v.split_once("://") { Some((s, r)) => (s.to_string(), r.to_string()), None => ("http".to_string(), v.to_string()) };
+    let (host, port) = match rest.rsplit_once(':') { Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) && !h.ends_with('[') => (h.to_string(), p.to_string()), _ => (rest.clone(), "11434".to_string()) };
+    let host = match host.as_str() { "" | "0.0.0.0" | "[::]" | "::" => "127.0.0.1".to_string(), h => h.to_string() };
+    format!("{scheme}://{host}:{port}")
+}
+
+/// The model names of an Ollama /api/tags answer, in the order it gave them (empty when it is not that).
+pub fn ollama_models(tags: &Value) -> Vec<String> {
+    tags["models"].as_array().map(|a| a.iter().filter_map(|m| m["name"].as_str().or(m["model"].as_str()).map(String::from)).take(40).collect()).unwrap_or_default()
+}
+
+/// Is there an Ollama here that answers, and which models does it have? Offered without any configuration: the engine
+/// "ollama" (Unity) when none is configured, and a private provider "ollama" (an OpenAI-compatible endpoint at /v1) the
+/// person can pick for the API and Unity. Off with "autoDetect": { "ollama": false } in ai-node.json; a provider or engine
+/// the person configured themselves is never replaced. Runs at every hello, so an Ollama started later is found on the
+/// next reconnect and one that went away is dropped.
+pub async fn detect_local(h: &H) {
+    let off = h.cfg.raw.get("autoDetect").and_then(|o| o.get("ollama")).and_then(Value::as_bool) == Some(false);
+    let url = std::env::var("OLLAMA_HOST").ok().map(|u| ollama_url_of(&u)).unwrap_or_else(|| OLLAMA_URL.to_string());
+    let mut d = Detected::default();
+    if !off {
+        let tags: Option<Value> = match h.http.get(format!("{url}/api/tags")).timeout(Duration::from_millis(1500)).send().await { Ok(r) if r.status().is_success() => r.json().await.ok(), _ => None };
+        if let Some(tags) = tags {
+            let models = ollama_models(&tags);
+            let configured_engine = h.cfg.engines().iter().any(|(k, _)| k == "ollama");
+            let configured_endpoint = h.cfg.all_providers().iter().any(|p| p.kind == "openai" && (p.base_url.contains(":11434") || p.id == "ollama"));
+            if !configured_engine { d.ollama_engine = Some(url.clone()); }
+            if !configured_endpoint && !models.is_empty() {
+                d.ollama_provider = Some(Provider { id: "ollama".into(), kind: "openai".into(), label: format!("{}'s Ollama (this machine)", if h.cfg.user().is_empty() { "this host".to_string() } else { h.cfg.user() }), models, enabled: true,
+                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new() });
+            }
+        }
+    }
+    let was = h.detected.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let (a, b) = (was.ollama_engine.is_some(), d.ollama_engine.is_some());
+    if a != b || was.ollama_provider.as_ref().map(|p| &p.models) != d.ollama_provider.as_ref().map(|p| &p.models) {
+        match &d.ollama_provider { Some(p) => log(format!("found Ollama at {url} with {} model(s): offered as the engine \"ollama\" and as a private provider \"ollama\" ({})", p.models.len(), p.models.iter().take(5).cloned().collect::<Vec<_>>().join(", "))),
+            None if b => log(format!("found Ollama at {url} (no models pulled yet): offered as the engine \"ollama\"")),
+            None => log("no Ollama answers on this machine (start it, or set engines.ollama in ai-node.json)") }
+    }
+    *h.detected.lock().unwrap_or_else(|e| e.into_inner()) = d;
+}
+
+/// The logins this host lends, checked where the relay will look for them, so a missing one is said here and not only as
+/// a 503 on someone's request. Codex keeps its login in the system keyring by default on some systems; the host can only
+/// read the auth.json file, so that case gets its own explanation.
+pub fn check_logins(h: &H) {
+    for p in h.providers() {
+        if !p.is_relay() { continue; }
+        if let Some(msg) = relay::login_problem(&p) { log(format!("provider \"{}\": {msg}", p.id)); }
+    }
+}
 
 impl Host {
     pub fn set_status(&self, patch: Value) {
@@ -49,7 +115,20 @@ impl Host {
     }
     pub fn quiet(&self, ms: u64) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() && self.active.load(Ordering::SeqCst) == 0 && now_ms().saturating_sub(self.last_job_at.load(Ordering::SeqCst)) >= ms }
     pub fn busy(&self) -> bool { !self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() || self.active.load(Ordering::SeqCst) > 0 }
-    pub fn providers(&self) -> Vec<Provider> { self.cfg.providers() }
+    /// The configured providers plus a local Ollama the host found by itself (see detect_local).
+    pub fn providers(&self) -> Vec<Provider> {
+        let mut v = self.cfg.providers();
+        let d = self.detected.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(p) = &d.ollama_provider { if !v.iter().any(|x| x.id == p.id) { v.push(p.clone()); } }
+        v
+    }
+    /// The engines lent to the hub by name: the configured ones, plus "ollama" when one answers here and none is set.
+    pub fn engines(&self) -> Vec<(String, String)> {
+        let mut v = self.cfg.engines();
+        let d = self.detected.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(u) = &d.ollama_engine { if !v.iter().any(|(k, _)| k == "ollama") { v.push(("ollama".into(), u.clone())); } }
+        v
+    }
     /// Is this provider at the usage cap its owner set? The reason, or "".
     pub fn over_cap(&self, p: &Provider) -> String {
         let u = self.usage.lock().unwrap_or_else(|e| e.into_inner()).get(&p.id).cloned().unwrap_or(Value::Null);
@@ -113,7 +192,7 @@ pub async fn run(folder: Folder, selftest: bool, update_flag: bool) -> i32 {
     let http = match pgm_net_internal::client::http_client(Duration::from_secs(20)) { Ok(c) => c, Err(e) => { eprintln!("[ai-host] {e}"); release_lock(&folder); return 1; } };
     let status = json!({ "pid": std::process::id(), "version": VERSION, "native": true, "target": TARGET, "hub": cfg.hub(), "id": cfg.id(), "startedAt": now_ms(), "connected": false, "connectedAt": 0, "lastOkAt": 0, "downSince": 0, "lastError": "", "active": 0, "runs": 0, "lastJobAt": 0, "paused": false, "lastUpdate": "", "lastUpdateAt": 0 });
     let h: H = Arc::new(Host { nickname: Mutex::new(cfg.nickname()), folder: folder.clone(), cfg, link: RwLock::new(link), http, status: Mutex::new(status.as_object().cloned().unwrap_or_default()), status_dirty: Mutex::new(true),
-        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false) });
+        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()) });
     h.write_status_now();
     let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<i32>(4);
     background(h.clone(), exit_tx.clone());
@@ -169,7 +248,18 @@ fn background(h: H, exit: tokio::sync::mpsc::Sender<i32>) {
     });
     let h4 = h.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_millis(h4.cfg.update_check_ms())).await; check_update(h4.clone(), false, exit.clone()).await; } });
+    // an Ollama started (or stopped, or given new models) after the host came up: looked for every minute, and a change
+    // is told to the hub with a fresh hello (the session key is renewed with it; nothing in flight is cut off)
+    let h5 = h.clone();
+    tokio::spawn(async move { loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let before = offered(&h5);
+        detect_local(&h5).await;
+        if offered(&h5) != before && h5.link.read().await.key.is_some() && !h5.busy() { log("what this host offers changed: saying hello again"); h5.link.write().await.key = None; }
+    } });
 }
+/// What a hello would offer (provider ids + models, engine names): a change means a new hello.
+fn offered(h: &Host) -> String { format!("{:?}|{:?}", h.providers().iter().map(|p| (p.id.clone(), p.models.clone())).collect::<Vec<_>>(), h.engines().iter().map(|e| e.0.clone()).collect::<Vec<_>>()) }
 /// The host writes its own nickname into the config after hello: not a change to restart on.
 fn own_config_write(h: &Host) -> bool {
     let Ok(now) = HostSettings::load(&h.folder.config) else { return false };
@@ -183,10 +273,12 @@ fn hello_body(h: &Host) -> Hello {
         let mut allowed = p.allowed_users.clone(); if p.share_with_group { allowed.push("@group".into()); }
         OfferedProvider { id: p.id.clone(), kind: p.relay_kind().to_string(), label: p.label.clone(), models: p.models.clone(), allowed_users: allowed, max5h: p.max5h, max7d: p.max7d }
     }).collect();
-    Hello { nonce: pgm_core_internal::crypto::random_hex(16), user: h.cfg.user(), providers, engines: h.cfg.engines().into_iter().map(|(k, _)| k).collect(), pc: h.cfg.pc_folder().is_some(),
+    Hello { nonce: pgm_core_internal::crypto::random_hex(16), user: h.cfg.user(), providers, engines: h.engines().into_iter().map(|(k, _)| k).collect(), pc: h.cfg.pc_folder().is_some(),
         version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::CAPS.iter().map(|s| s.to_string()).collect() }
 }
 async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
+    detect_local(h).await;
+    check_logins(h);
     let body = hello_body(h);
     let a = h.link.write().await.hello(&body).await?;
     let kid = h.link.read().await.key.as_ref().map(|k| k.id()).unwrap_or_default();
@@ -195,7 +287,7 @@ async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     if h.cfg.raw.get("nickname").and_then(Value::as_str) != Some(nick.as_str()) {
         if let Ok(mut c) = HostSettings::load(&h.folder.config) { c.raw.insert("nickname".into(), json!(nick)); let _ = c.save(); }
     }
-    let engines: Vec<String> = h.cfg.engines().into_iter().map(|(k, _)| k).collect();
+    let engines: Vec<String> = h.engines().into_iter().map(|(k, _)| k).collect();
     log(format!("connected to {} as \"{nick}\"{}: {} provider(s) [{}], engines {}{}, key {kid}", h.cfg.hub(), if h.cfg.user().is_empty() { String::new() } else { format!(" ({})", h.cfg.user()) },
         body.providers.len(), body.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(", "), if engines.is_empty() { "none".into() } else { engines.join(", ") },
         h.cfg.pc_folder().map(|p| format!(", computer access to {}", p.display())).unwrap_or_default()));
@@ -274,7 +366,7 @@ async fn relay_job(h: H, job: Job) {
             let p = h.providers().into_iter().find(|x| x.id == pid && x.kind == "openai").ok_or_else(|| Error::status(404, "This host offers no such endpoint."))?;
             (p.base_url.clone(), if p.api_key.is_empty() { None } else { Some(format!("Bearer {}", p.api_key)) })
         } else {
-            let base = h.cfg.engines().into_iter().find(|(k, _)| *k == job.engine).map(|(_, u)| u).ok_or_else(|| Error::status(404, format!("This host does not lend the {} engine.", job.engine)))?;
+            let base = h.engines().into_iter().find(|(k, _)| *k == job.engine).map(|(_, u)| u).ok_or_else(|| Error::status(404, format!("This host does not lend the {} engine.", job.engine)))?;
             // the hub may ask the engines for answers, never manage them (security.engineGuard: false lifts this)
             let m = if job.method.is_empty() { "GET".to_string() } else { job.method.to_ascii_uppercase() };
             let managed = ["delete", "pull", "push", "create", "copy", "blobs"].iter().any(|w| { let p = job.path.to_ascii_lowercase(); p.strip_prefix("/api/").map(|r| r.starts_with(w) && r[w.len()..].chars().next().map(|c| !c.is_alphanumeric() && c != '_').unwrap_or(true)).unwrap_or(false) });
@@ -402,5 +494,14 @@ mod tests {
         assert!(!super::path_ok("/a/../b"));
         assert!(!super::path_ok("//evil"));
         assert!(!super::path_ok("/a b"));
+    }
+    #[test]
+    fn ollama_tags_give_the_model_names() {
+        let t = serde_json::json!({ "models": [{ "name": "llama3.2:latest", "model": "llama3.2:latest" }, { "model": "qwen3:8b" }, { "size": 1 }] });
+        assert_eq!(super::ollama_models(&t), vec!["llama3.2:latest".to_string(), "qwen3:8b".to_string()]);
+        assert!(super::ollama_models(&serde_json::json!({ "error": "x" })).is_empty());
+        for (v, want) in [("", "http://127.0.0.1:11434"), ("0.0.0.0", "http://127.0.0.1:11434"), ("0.0.0.0:11435", "http://127.0.0.1:11435"), ("127.0.0.1:5000", "http://127.0.0.1:5000"), ("http://box.lan:11434/", "http://box.lan:11434"), ("localhost", "http://localhost:11434"), ("[::]:11434", "http://127.0.0.1:11434")] {
+            assert_eq!(super::ollama_url_of(v), want, "{v}");
+        }
     }
 }
