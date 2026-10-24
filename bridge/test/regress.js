@@ -1761,6 +1761,19 @@ async function run() {
   const fjRunU2Ev = (await chat(U, 'forgejo env r122 after', { fresh: true })).events;
   const fjRunU2 = fjEnvOf(fjRunU2Ev), fjwU2 = fjwOf(fjRunU2Ev);
   const fjwHost = `127.0.0.1:${OLLAMA_PORT}`, fjwLeak = JSON.stringify(fjwKeys).includes('fake-personal-token-1') && !JSON.stringify(fjwKeys).includes('fake-personal-token-1'); // (the file is the person's own: their token belongs there)
+  { // R193: a merge never pushes to "upstream" (a project's original, often someone else's public repo)
+    const d193 = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-r193-')), g193 = (cwd, ...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+    for (const r of ['upstream', 'mirror']) g193(d193, 'init', '-q', '--bare', r + '.git');
+    const w193 = path.join(d193, 'w'); fs.mkdirSync(w193); g193(w193, 'init', '-q', '-b', 'main');
+    g193(w193, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x');
+    for (const r of ['upstream', 'mirror']) g193(w193, 'remote', 'add', r, path.join(d193, r + '.git'));
+    const out193 = require(path.join(MILLS, 'bridge', 'worktree.js')).pushAll(w193, 'main', ['origin']).join(' | ');
+    const has193 = (r) => g193(path.join(d193, r + '.git'), 'rev-parse', '-q', '--verify', 'refs/heads/main').status === 0;
+    const up193 = has193('upstream'), mir193 = has193('mirror');
+    fs.rmSync(d193, { recursive: true, force: true });
+    check('R193', 'a merge never pushes to "upstream" (publish keeps a project\'s original there only to pull from, fetch-only; our work stays private): pushAll skips it and still pushes to another mirror',
+      !up193 && mir193 && /fetch-only/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'worktree.js'), 'utf8')), `upstream got main ${up193}, mirror got main ${mir193} (${out193})`);
+  }
   check('R172', 'fj (the Forgejo CLI) signed in as the person in their Work run: the `fj` first on the PATH is a wrapper of theirs over the real fj, pointing it at their own keys file (their token for the Forgejo host, owner-only, under their profile here / the host\'s .fj/<account>); no token → no wrapper (nobody else\'s); gone when they disconnect; [static] bridge/.fj/ never ships, worktree.js repos / repo-create / publish',
     process.platform === 'win32' || (fjwU === `wrapper:${fjwHost}=Application` && fjwA === '' && fjwFiles.length === 1 && ((fjwKeys.hosts || {})[fjwHost] || {}).token === 'fake-personal-token-1' && fjwMode === '600/700' && fjwRuns === 'fake fj whoami --host x' && fjwU2 === '' && !fjwLeak
       && /^bridge\/\.fj\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /cmd === 'repos'/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'worktree.js'), 'utf8')) && /async function publish\(/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'worktree.js'), 'utf8'))),
