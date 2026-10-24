@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.11.2 — 2026-10-24
+
+PATCH: **a new law in LAWS.md: finish the whole job, test it in throw-away hubs, go live once.** Changes accumulate on
+the work branches until every part of a job is done; tries happen only in the suite's scratch hubs; one merge and one
+go-live at the end. And a Work run never ends while background agents it started are still working: a run is one
+Claude process per message, and its agents die with it (that, not the live hub, cut agents off all day on
+2026-10-24). No code changed.
+
 ## 5.11.1 — 2026-10-24
 
 PATCH: **notification sounds with a pattern of their own** (board T-177). Sponge: "rather than simply being a ding, I

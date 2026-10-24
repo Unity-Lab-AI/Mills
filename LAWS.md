@@ -88,6 +88,30 @@ number should scale less than the third number, however, this is all dependent o
   watch `/api/status` come back; vr-run's own fallback (the previous good build; for the first swap also the
   JavaScript hub) covers a bad build without anyone's hand.
 
+## Finish the whole job, test it in throw-away hubs, go live once
+
+Sponge, 2026-10-24: *"we dont restart vibe roller, and use throw-away tests, until ALL sub agents are done, and all work
+is done … it's better for us to accumulate changes until everything is done and complete, in all parts … we should go
+live with more changes at once, that have been tested in throwaway, compared to going live a bunch of times during the
+middle of development."*
+
+- **Accumulate, then go live once.** Work in progress is committed on `work/<username>` (and the work branches of the
+  other projects) and stays there. Nothing is merged into develop or taken live while any part of the job is still
+  being built: not "most of it is done", all of it. Then one merge, one go-live, with every part in it.
+- **Test in throw-away hubs only.** The regression suite (`node bridge/test/regress.js --no-prod`, normal and
+  `--rust-hub`) runs its own scratch hub on its own ports with its own data, and is the place to try a change. The
+  live hub is never restarted to try something, and nothing is shipped to see whether it works.
+- **A run never ends while its agents work.** A Work run is one Claude process per message; it ends when the reply is
+  sent, and every background agent it started dies with it, mid-edit (2026-10-24: this, not the hub, cut the agents
+  off again and again all day — the live hub ran without a restart from 04:46). So a run that has started agents keeps
+  working until each of them has reported, has been reviewed, tested and committed, before it sends its last message.
+  It tells the person it is still going (a short progress line is fine) instead of ending the turn. When an agent is
+  cut off anyway, the next run resumes it from its transcript first, before anything new.
+- **One go-live at a time, at a quiet moment.** When the whole job is done and both suite modes are 0 failed on the
+  final tree: announce it, merge, go live, and stay in the run until the deploy log says the new version is verified
+  (the graceful restart waits for the shipping run to end, so the check is the next run's first step if it has not
+  happened yet). Then the AI hosts update by themselves.
+
 ## Library law: reused code lives in a library
 
 Sponge, 2026-10-22: *"new libraries (and existing libraries) need to be developed or extended when there is code that
