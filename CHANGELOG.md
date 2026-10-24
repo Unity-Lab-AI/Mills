@@ -7,6 +7,15 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.1 — 2026-10-24
+
+PATCH: **a merge never pushes to "upstream"**. `worktree.js merge` pushed the integration branch to every remote but
+origin, so merging Jcode-PGM tried to push our private develop to github.com/1jehuang/jcode (it failed only for want of
+GitHub credentials). `pushAll` now skips `upstream` (the original `publish` keeps to pull updates from), and `publish`
+makes that remote fetch-only (`no-push://fetch-only`); the existing Jcode-PGM repo was set the same way by hand. R193
+(a real push into two bare remotes: the mirror gets it, upstream does not). bridge/worktree.js 2.3.1. Also: the host log redaction test (host/control.rs) builds its fake token instead of
+spelling a 48-character hex string, which R31 (no hashes in tracked files) caught once the file was tracked.
+
 ## 5.13.0 — 2026-10-24
 
 MINOR: **hosting controls on the hub page** (board T-160; gee: how can I look at what my AI host is doing now that the
