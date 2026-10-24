@@ -221,7 +221,7 @@ function startFakeOllama() {
       } else {
         line({ content: `final sys-has-name=${/(VibeRoller|Mills) username "t-(user|admin)"/.test(sys)} tz=${(/\(([A-Za-z_]+\/[A-Za-z_]+)\)/.exec(sys) || [])[1] || ''}` });
       }
-      res.end(JSON.stringify({ done: true }) + '\n');
+      res.end(JSON.stringify({ done: true, prompt_eval_count: 100, eval_count: 10 }) + '\n'); // Ollama's counts on the final chunk (R186)
     });
   });
   return new Promise((r) => ollamaSrv.listen(0, '127.0.0.1', () => { OLLAMA_PORT = ollamaSrv.address().port; r(); }));
@@ -2749,7 +2749,14 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   }
   const us = (await call('/api/assistant/state', U)).data;
   check('R61', 'Unity section state: local brain default and loaded, Claude models offered', us.brain === 'local' && us.local && us.local.model === true && us.brains.some((b) => b.id === 'local') && us.brains.some((b) => b.id === 'claude-opus-5-5'), JSON.stringify(us.local || us));
+  const ua0 = ((await call('/api/usage', U)).data.answers || {});
   const t1 = await uchat(U, 'TASK buy regress milk');
+  const ua1 = ((await call('/api/usage', U)).data.answers || {});
+  if (RUST_HUB) { // R186: Unity's local-brain answer (three model rounds: the tool call, the spoken line, the closing text) is one turn in the ledger under `ollama`
+    const o0 = (ua0.by && ua0.by.ollama) || {}, o1 = (ua1.by && ua1.by.ollama) || {};
+    check('R186', 'Unity\'s answers in the same ledger: the local brain\'s answer (Ollama\'s prompt_eval_count / eval_count summed over its rounds) is noted once under `answers.by.ollama` (no cache numbers), next to the API answers',
+      (o1.turns || 0) - (o0.turns || 0) === 1 && (o1.input || 0) - (o0.input || 0) === 300 && (o1.output || 0) - (o0.output || 0) === 30 && (o1.cached || 0) === (o0.cached || 0), `ollama ${JSON.stringify(o0)} -> ${JSON.stringify(o1)}`);
+  } else skip('R186', 'Unity answers through the usage ledger', 'the Rust hub\'s: --rust-hub runs it');
   const dataU = (await call('/api/assistant/data', U)).data, dataA = (await call('/api/assistant/data', A)).data;
   const said = t1.events.find((e) => e.type === 'say');
   check('R62', 'local brain: tool call adds a task for that person only; reply spoken via say; name + their time zone in the prompt', t1.events.some((e) => e.type === 'tool' && e.name === 'add_task')

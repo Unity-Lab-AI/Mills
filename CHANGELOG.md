@@ -12,7 +12,14 @@ logged here in the same commit, newest first (hub law 15).
 MINOR: **the token library is in the hub** (board T-167; Jcode-Mods TOKENS.md §4). The hub now shows the cache hit
 ratio for API / product answers too, not only for Work, and the Work system prompt is checked by the library's lint so
 a volatile part can never creep back into the cached prefix.
-- **`pgm-context-internal` 5.15.0 mirrored** into `native/crates/` (LAWS.md library law: pgm-libs holds the original, the
+- **Unity's answers in the same ledger** (`unity_brain.rs`): the local brain's answer notes Ollama's `prompt_eval_count`
+  / `eval_count` (final chunk of each round, summed over the tool rounds, normalised by `ollama_usage`; no cache numbers,
+  Ollama does not report its KV prefix cache) under kind `ollama`, and the Claude brain (`claude -p`) the `result`
+  event's Anthropic usage through the library's `parse_usage` (cache read / written kept) under `claude-cli`; one note
+  per answer, never per chunk, shown in `/api/usage` `answers.by`. R186 (--rust-hub). (`parse_usage` could learn the
+  Ollama shape in pgm-libs.)
+- **`pgm-context-internal` 5.15.1 mirrored** (was 5.15.0; `shape.rs` gained `ShaperState` / `SeenEntry` / `state()` /
+  `restore()` / `with_handle_prefix`) into `native/crates/` (LAWS.md library law: pgm-libs holds the original, the
   consumer copies it; `src/` identical, tree-sitter feature optional and off). Workspace member, listed in `NAMES.md`
   with the mirrored version; `pgm-ai-internal` depends on it.
 - **Answers outside Work through the ledger** (`openai.rs` `complete`): every provider kind (openai, host-openai,

@@ -9,6 +9,7 @@
 //! Whatever they fold is stashed first, so it stays fetchable; [`Shaped::passes`] says which pass ran.
 use crate::short_hash;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -56,14 +57,44 @@ pub struct Shaper {
     /// key (a tool + its target, e.g. "read:/src/main.rs") → (hash of the shaped output, turn it was shown)
     seen: HashMap<String, (String, usize)>,
     next_handle: usize,
+    /// Namespace of the handles (`stash-<prefix>-<turn>-<n>`); empty = the plain `stash-<turn>-<n>`.
+    handle_prefix: String,
     /// Simulation: stash writes are skipped but reported as successful (see [`Shaper::dry`]).
     dry: bool,
 }
 
+/// One remembered read: what [`Shaper`] keeps per key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeenEntry { pub key: String, pub hash: String, pub turn: usize }
+
+/// What a [`Shaper`] remembers between calls, in a form that can be written to disk: the reads seen (key, hash of the
+/// shaped output, turn) and the next stash number.
+///
+/// Why: VibeRoller runs the agent as one PROCESS per turn, so a `Shaper` that lives only in memory starts empty in every
+/// process and never recognises a repeated read. A host persists this state PER SESSION (one file per session) and
+/// restores it at the session's first call. It must never be shared across sessions: a session that never saw a file
+/// would be told "unchanged since turn N; it is already in the conversation" and the model would lose information.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShaperState { pub seen: Vec<SeenEntry>, pub next_handle: usize }
+
 fn ansi() -> &'static Regex { static R: OnceLock<Regex> = OnceLock::new(); R.get_or_init(|| Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\r").unwrap()) }
 
 impl Shaper {
-    pub fn new(limits: Limits, stash_dir: Option<&Path>) -> Shaper { Shaper { limits, stash_dir: stash_dir.map(Path::to_path_buf), seen: HashMap::new(), next_handle: 1, dry: false } }
+    pub fn new(limits: Limits, stash_dir: Option<&Path>) -> Shaper { Shaper { limits, stash_dir: stash_dir.map(Path::to_path_buf), seen: HashMap::new(), next_handle: 1, handle_prefix: String::new(), dry: false } }
+    /// Namespace the stash handles (`stash-<p>-<turn>-<n>`), so two shapers sharing a folder, or two processes, cannot
+    /// hand out the same name. An empty prefix keeps the plain `stash-<turn>-<n>`. Keep it to letters, digits and `-`.
+    pub fn with_handle_prefix(mut self, p: &str) -> Shaper { self.handle_prefix = p.to_string(); self }
+    /// The state to persist (see [`ShaperState`]); entries sorted by key so the file is stable.
+    pub fn state(&self) -> ShaperState {
+        let mut seen: Vec<SeenEntry> = self.seen.iter().map(|(k, (h, t))| SeenEntry { key: k.clone(), hash: h.clone(), turn: *t }).collect();
+        seen.sort_by(|a, b| a.key.cmp(&b.key));
+        ShaperState { seen, next_handle: self.next_handle }
+    }
+    /// Load a persisted state: the reads seen are REPLACED, the handle counter only moves forward.
+    pub fn restore(&mut self, s: ShaperState) {
+        self.seen = s.seen.into_iter().map(|e| (e.key, (e.hash, e.turn))).collect();
+        self.next_handle = self.next_handle.max(s.next_handle);
+    }
     /// A shaper for the offline simulator: it shapes exactly as one with a stash directory would (lossy structured
     /// passes included) but writes nothing, so `fetch` finds nothing. Never use it where the model may call back.
     pub fn dry(limits: Limits) -> Shaper { Shaper { dry: true, ..Shaper::new(limits, None) } }
@@ -162,7 +193,8 @@ impl Shaper {
     /// Hands out a handle and writes `full` under it; the bool says the file was written (false: no stash directory
     /// or the write failed, the handle is then only a name).
     fn write_stash(&mut self, full: &str, turn: usize) -> (Handle, bool) {
-        let handle = Handle { id: format!("stash-{}-{}", turn, self.next_handle), bytes: full.len(), lines: full.lines().count() };
+        let id = if self.handle_prefix.is_empty() { format!("stash-{}-{}", turn, self.next_handle) } else { format!("stash-{}-{}-{}", self.handle_prefix, turn, self.next_handle) };
+        let handle = Handle { id, bytes: full.len(), lines: full.lines().count() };
         self.next_handle += 1;
         let mut ok = self.dry;
         if let Some(dir) = &self.stash_dir { let _ = std::fs::create_dir_all(dir); ok = std::fs::write(dir.join(format!("{}.txt", handle.id)), full).is_ok(); }
@@ -191,7 +223,8 @@ impl Shaper {
         let from = from.max(1); let to = to.max(from);
         Some(text.lines().skip(from - 1).take(to - from + 1).collect::<Vec<_>>().join("\n"))
     }
-    /// Forget what was seen (a new session).
+    /// Forget what was seen (a new session). The handle counter is kept on purpose: stashes already on disk are never
+    /// overwritten by later ones.
     pub fn reset(&mut self) { self.seen.clear(); }
 }
 
@@ -461,6 +494,48 @@ mod tests {
         assert!(later.unchanged && later.text.contains("since turn 5"));
         s.reset();
         assert!(!s.shape(Some("read:/src/main.rs"), "fn main() { run() }\n", 7).unchanged);
+    }
+
+    #[test]
+    fn state_round_trips_through_json_and_a_restored_shaper_recognises_a_repeat() {
+        let mut a = Shaper::new(Limits::default(), None);
+        a.shape(Some("read:/src/b.rs"), "fn b() {}\n", 2);
+        a.shape(Some("read:/src/a.rs"), "fn a() {}\n", 3);
+        let st = a.state();
+        assert_eq!(st.seen.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), vec!["read:/src/a.rs", "read:/src/b.rs"], "sorted by key");
+        let back: ShaperState = serde_json::from_str(&serde_json::to_string(&st).unwrap()).unwrap();
+        assert_eq!(back, st);
+        let mut b = Shaper::new(Limits::default(), None); // a fresh process
+        b.restore(back);
+        let again = b.shape(Some("read:/src/a.rs"), "fn a() {}\n", 9);
+        assert!(again.unchanged && again.text.contains("unchanged since turn 3"), "{}", again.text);
+        assert!(!b.shape(Some("read:/src/a.rs"), "fn a() { 1 }\n", 10).unchanged);
+        // a shaper that did not restore knows nothing
+        assert!(!Shaper::new(Limits::default(), None).shape(Some("read:/src/a.rs"), "fn a() {}\n", 9).unchanged);
+    }
+
+    #[test]
+    fn next_handle_continues_after_restore_and_reset_keeps_it() {
+        let dir = tmp("handles");
+        let lim = Limits { cap_bytes: 100, head_bytes: 40, tail_bytes: 20, fold_at: 3 };
+        let long: String = (1..=30).map(|i| format!("line {i:03} padding padding\n")).collect();
+        let mut a = Shaper::new(lim, Some(&dir));
+        assert_eq!(a.shape(Some("bash:x"), &long, 1).stashed.unwrap().id, "stash-1-1");
+        let mut b = Shaper::new(lim, Some(&dir));
+        b.restore(a.state());
+        assert_eq!(b.shape(Some("bash:y"), &long, 1).stashed.unwrap().id, "stash-1-2", "no collision with the first process");
+        // restore never moves the counter back
+        b.restore(ShaperState::default());
+        assert_eq!(b.state().next_handle, 3);
+        // reset clears the reads, keeps the counter
+        b.reset();
+        assert!(b.state().seen.is_empty() && b.state().next_handle == 3);
+        // a prefix namespaces the handle
+        let mut c = Shaper::new(lim, Some(&dir)).with_handle_prefix("ab12");
+        let h = c.shape(Some("bash:z"), &long, 4).stashed.unwrap();
+        assert_eq!(h.id, "stash-ab12-4-1");
+        assert!(c.fetch(&h.id, 1, 2).is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

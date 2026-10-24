@@ -136,6 +136,13 @@ pub async fn call_tool(hub: &Arc<dyn AiHub>, a: &Account, name: &str, args: &Val
 }
 #[derive(Default)]
 pub struct Opts { pub extra_system: String, pub no_history: bool, pub photo: String, pub no_pictures: bool }
+/// Ollama's `/api/chat` final chunk (`prompt_eval_count`, `eval_count`; no cache numbers, its KV prefix cache is not
+/// reported) as the ledger's shape. The library's `parse_usage` does not know this shape yet (it could learn it in pgm-libs).
+pub fn ollama_usage(ev: &Value) -> Option<pgm_context_internal::ledger::Usage> {
+    if ev.get("prompt_eval_count").is_none() && ev.get("eval_count").is_none() { return None; }
+    let n = |k: &str| ev[k].as_u64().or_else(|| ev[k].as_f64().map(|f| f.max(0.0) as u64)).unwrap_or(0);
+    Some(pgm_context_internal::ledger::Usage { input: n("prompt_eval_count"), output: n("eval_count"), cache_read: 0, cache_write: 0 })
+}
 /// One answer with the local brain.
 pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut Ci, cancel: &crate::openai::Cancel, opts: Opts) -> Result<String, String> {
     let u = hub.unity();
@@ -159,6 +166,7 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
     let schemas: Vec<Value> = tools.iter().map(|t| json!({ "type": "function", "function": { "name": t["name"], "description": t["description"], "parameters": { "type": "object", "properties": t["params"], "required": t["required"] } } })).collect();
     let (mut said, mut seen, mut fin) = (vec![], std::collections::HashSet::new(), String::new());
     let num_ctx = u.a["numCtx"].as_u64().unwrap_or(16384);
+    let (mut used, mut counted) = (pgm_context_internal::ledger::Usage::default(), false);
     for round in 0..MAX_ROUNDS {
         if cancel.is() { return Err("cancelled".into()); }
         let mut body = json!({ "model": model, "messages": messages, "stream": true, "think": false, "keep_alive": "30m", "options": { "num_ctx": num_ctx } });
@@ -175,6 +183,7 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
                 if line.is_empty() { continue; }
                 let ev: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
                 if !ev["error"].is_null() { return Err(s(&ev, "error")); }
+                if ev["done"] == json!(true) { if let Some(x) = ollama_usage(&ev) { used.add(&x); counted = true; } }
                 let m = &ev["message"];
                 if let Some(t) = m["content"].as_str().filter(|t| !t.is_empty()) { content.push_str(t); if calls.is_empty() { ci.send(json!({ "type": "token", "text": t })); } }
                 for c in m["tool_calls"].as_array().cloned().unwrap_or_default() { calls.push((s(&c["function"], "name"), if c["function"]["arguments"].is_null() { json!({}) } else { c["function"]["arguments"].clone() })); }
@@ -196,6 +205,7 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
         }
         if deferred && round == MAX_ROUNDS - 1 { break; }
     }
+    if counted { hub.ai().usage.note_answer(&a.username, "ollama", &model, &used); } // one note per answer, the rounds summed
     // backstop: they clearly asked for a picture and none was made this turn: made from their words
     if !opts.no_pictures && wants_picture(text) && ci.images.is_empty() {
         let prompt = regex::Regex::new(r"^\s*@\w+\s*").unwrap().replace(text, "").to_string();
@@ -229,18 +239,22 @@ pub async fn run_claude(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     if let Some(r) = u.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&a.username) { r.1 = child.id(); }
     if let Some(mut stdin) = child.stdin.take() { let inp = if note.is_empty() { text.to_string() } else { format!("{text}\n\n(system note: {note})") }; tokio::spawn(async move { let _ = stdin.write_all(inp.as_bytes()).await; let _ = stdin.shutdown().await; }); }
-    let mut fin = String::new();
+    let (mut fin, mut cli_usage, mut cli_model, mut cli_done) = (String::new(), Value::Null, model.to_string(), false);
     if let Some(out) = child.stdout.take() {
         let mut lines = tokio::io::BufReader::new(out).lines();
         while let Ok(Some(l)) = lines.next_line().await {
             let Ok(ev) = serde_json::from_str::<Value>(l.trim()) else { continue };
             if let Some(sid) = ev["session_id"].as_str() { let sid = sid.to_string(); u.set_state(a, |m| { m.insert("claudeSession".into(), json!(sid)); }); }
+            // the `result` event's usage is the whole run's; an assistant message's is the fallback (last one wins)
+            if ev["type"] == json!("assistant") && !cli_done && ev["message"]["usage"].is_object() { cli_usage = ev["message"]["usage"].clone(); if let Some(m) = ev["message"]["model"].as_str().filter(|m| !m.is_empty() && !m.starts_with('<')) { cli_model = m.to_string(); } }
+            if ev["type"] == json!("result") && ev["usage"].is_object() { cli_usage = ev["usage"].clone(); cli_done = true; }
             if ev["type"] == json!("assistant") { for c in ev["message"]["content"].as_array().cloned().unwrap_or_default() { if c["type"] == json!("text") { if let Some(t) = c["text"].as_str().filter(|t| !t.is_empty()) { ci.send(json!({ "type": "token", "text": format!("{t}\n") })); } } } }
             if ev["type"] == json!("result") { if let Some(r) = ev["result"].as_str() { fin = r.to_string(); } }
         }
     }
     let _ = child.wait().await;
     u.claude_out.lock().unwrap_or_else(|e| e.into_inner()).remove(&a.username);
+    if let Some(l) = crate::openai::normalise(&cli_usage) { hub.ai().usage.note_answer(&a.username, "claude-cli", &cli_model, &l); } // Anthropic's shape: the cache numbers kept
     Ok(fin.trim().to_string())
 }
 
@@ -281,5 +295,32 @@ pub fn start(hub: &Arc<dyn AiHub>) {
     if hub.cfg().get("assistant") != Some(&json!(false)) && hub.cfg().get("claudeCommand").is_none() {
         let h = hub.clone();
         tokio::spawn(async move { let u = h.unity(); u.ensure_ollama(&h).await; tokio::join!(u.ensure_image(&h), u.ensure_voice(&h), u.ensure_ears(&h)); });
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+    use pgm_context_internal::ledger::{parse_usage, Usage as L};
+
+    #[test]
+    fn ollamas_final_chunk_is_normalised_and_lands_in_answers_under_ollama() {
+        assert_eq!(ollama_usage(&json!({ "done": true, "prompt_eval_count": 120, "eval_count": 30, "total_duration": 5 })), Some(L { input: 120, output: 30, cache_read: 0, cache_write: 0 }));
+        assert_eq!(ollama_usage(&json!({ "done": true, "eval_count": 7 })).map(|u| (u.input, u.output)), Some((0, 7)));
+        assert_eq!(ollama_usage(&json!({ "done": true })), None, "no counts, no note");
+        assert_eq!(ollama_usage(&json!({ "message": { "content": "x" }, "done": false })), None);
+        let root = std::env::temp_dir().join(format!("vr-unity-usage-{}", std::process::id())); let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(&root).unwrap();
+        let u = crate::usage::Usage::new(&root, &pgm_core_internal::config::Config { raw: Default::default(), port: 0 }, false);
+        // a tool round and the spoken round: summed, then noted once
+        let mut used = L::default(); for ev in [json!({ "done": true, "prompt_eval_count": 100, "eval_count": 10 }), json!({ "done": true, "prompt_eval_count": 150, "eval_count": 20 })] { used.add(&ollama_usage(&ev).unwrap()); }
+        u.note_answer("sponge", "ollama", "unity-brain", &used);
+        // the Claude brain: Anthropic's usage object through parse_usage keeps the cache numbers
+        let c = parse_usage(&json!({ "input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 90 })).unwrap();
+        u.note_answer("sponge", "claude-cli", "claude-x", &c);
+        let a = u.answers("sponge");
+        assert_eq!((a["by"]["ollama"]["turns"].as_u64(), a["by"]["ollama"]["input"].as_u64(), a["by"]["ollama"]["output"].as_u64(), a["by"]["ollama"]["cached"].as_u64()), (Some(1), Some(250), Some(30), Some(0)));
+        assert_eq!(a["by"]["claude-cli"]["cached"], json!(900)); assert_eq!(a["by"]["claude-cli"]["written"], json!(90));
+        assert_eq!(a["turns"], json!(2));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

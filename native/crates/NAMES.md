@@ -25,5 +25,5 @@ Since 5.1.0 the libraries also have a repository of their own, https://git.unity
 `vX.Y.Z`, with the web kit), which the PGM products build from. Until VibeRoller builds from it too, this copy and
 that one are kept identical: a change to a crate here goes there as well, with a new tag.
 
-Mirrored from pgm-libs by copy (LAWS.md, library law): `pgm-context-internal` = pgm-libs 5.15.0 (the `src/` identical; the
+Mirrored from pgm-libs by copy (LAWS.md, library law): `pgm-context-internal` = pgm-libs 5.15.1 (the `src/` identical; the
 tree-sitter feature is optional and OFF here, so the repomap uses its text scanner). A change goes to pgm-libs first.
