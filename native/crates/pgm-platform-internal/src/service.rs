@@ -58,6 +58,28 @@ pub fn status(name: &str) -> Service {
     }
     Service::default()
 }
+/// The program a systemd unit's ExecStart= starts (the first word; the `-@:+!` prefixes are dropped).
+pub fn exec_start_program(unit_text: &str) -> Option<String> {
+    let line = unit_text.lines().map(str::trim).find(|l| l.starts_with("ExecStart="))?;
+    let v = line["ExecStart=".len()..].trim_start_matches(|c| "-@:+!".contains(c)).trim();
+    let w = if let Some(r) = v.strip_prefix('"') { r.split('"').next().unwrap_or("") } else { v.split_whitespace().next().unwrap_or("") };
+    if w.is_empty() { None } else { Some(w.to_string()) }
+}
+/// The program a Windows service runs (`sc qc` text: BINARY_PATH_NAME, the first quoted part or the first word).
+pub fn sc_binary_program(qc_text: &str) -> Option<String> {
+    let line = qc_text.lines().find(|l| l.contains("BINARY_PATH_NAME"))?;
+    let v = line.split_once(':')?.1.trim();
+    let w = if let Some(r) = v.strip_prefix('"') { r.split('"').next().unwrap_or("").to_string() } else { v.split(" service-run").next().unwrap_or("").split_whitespace().next().unwrap_or("").to_string() };
+    if w.is_empty() { None } else { Some(w) }
+}
+/// The program the installed service / unit starts (None when it is not installed or cannot be read).
+pub fn program(name: &str, s: &Service) -> Option<PathBuf> {
+    if !s.exists { return None; }
+    if WIN { return sc_binary_program(&run("sc", &["qc", name]).1).map(PathBuf::from); }
+    let unit = format!("{name}.service");
+    let mut a: Vec<&str> = vec![]; if s.scope == "user" { a.push("--user"); } a.extend(["cat", unit.as_str()]);
+    exec_start_program(&run("systemctl", &a).1).map(PathBuf::from)
+}
 /// How it starts now: "service", "user" (Linux), "sign-in" (Windows) or "off".
 pub fn boot_mode(spec: &ServiceSpec, s: &Service) -> &'static str {
     if s.exists && s.auto { return if !WIN && s.scope == "user" { "user" } else { "service" }; }
@@ -159,3 +181,14 @@ pub fn remove_windows_service(name: &str) {
 /// Starts / stops the installed service: (worked, what the system said).
 pub fn start(name: &str, s: &Service) -> (bool, String) { if WIN { run("sc", &["start", name]) } else if s.scope == "user" { run("systemctl", &["--user", "start", name]) } else { run("systemctl", &["start", name]) } }
 pub fn stop(name: &str, s: &Service) -> (bool, String) { if WIN { run("sc", &["stop", name]) } else if s.scope == "user" { run("systemctl", &["--user", "stop", name]) } else { run("systemctl", &["stop", name]) } }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reads_the_program_of_a_unit_and_a_service() {
+        assert_eq!(super::exec_start_program("[Service]\nExecStart=/home/a/ai-host/vr-host run --config /x/ai-node.json\nRestart=always\n").as_deref(), Some("/home/a/ai-host/vr-host"));
+        assert_eq!(super::exec_start_program("ExecStart=\"/a b/vr-host\" run").as_deref(), Some("/a b/vr-host"));
+        assert_eq!(super::exec_start_program("[Unit]\n"), None);
+        assert_eq!(super::sc_binary_program("        BINARY_PATH_NAME   : \"D:\\Apps\\vr-host.exe\" service-run --config x\n").as_deref(), Some("D:\\Apps\\vr-host.exe"));
+    }
+}
