@@ -36,7 +36,9 @@ impl Cancel {
     /// Resolves once cancelled.
     pub async fn woke(&self) { let n = self.woke.notified(); tokio::pin!(n); n.as_mut().enable(); if self.is() { return; } n.await }
 }
-pub struct Answer { text: String, model: String, usage: Value }
+/// `usage` = the OpenAI-style numbers callers see (unchanged); `native` = the provider's own usage object with its cache
+/// fields (Anthropic cache_read / cache_creation, OpenAI cached_tokens), which the usage ledger normalises.
+pub struct Answer { text: String, model: String, usage: Value, native: Value }
 
 pub struct Api { root: PathBuf, mills: PathBuf, keys: Mutex<Map<String, Value>>, running: Mutex<HashMap<String, Arc<Cancel>>>, http: reqwest::Client }
 use pgm_core_internal::json::{read_json, s, write_json_private as write_json};
@@ -213,7 +215,25 @@ fn tok(t: &Tok, x: &str) { if let Some(t) = t { let _ = t.send(x.to_string()); }
 enum Src { Http(reqwest::Response), Host(mpsc::Receiver<Result<Bytes, String>>) }
 impl Src { async fn next(&mut self) -> Option<Vec<u8>> { match self { Src::Http(r) => r.chunk().await.ok().flatten().map(|b| b.to_vec()), Src::Host(rx) => match rx.recv().await { Some(Ok(b)) => Some(b.to_vec()), _ => None } } } async fn all(mut self) -> Vec<u8> { let mut v = vec![]; while let Some(c) = self.next().await { v.extend(c); } v } }
 
+/// The provider's own usage object, in whatever shape its kind gives, as the ledger's one shape (input paid, output,
+/// cache read, cache written). None when the answer carried no usage.
+pub fn normalise(native: &Value) -> Option<pgm_context_internal::ledger::Usage> { pgm_context_internal::ledger::parse_usage(native) }
+/// The Responses API (Codex) counts `input_tokens` with the cached ones included: as OpenAI chat's shape for the ledger.
+fn responses_native(u: &Value) -> Value {
+    json!({ "prompt_tokens": u["input_tokens"].as_u64().unwrap_or(0), "completion_tokens": u["output_tokens"].as_u64().unwrap_or(0), "prompt_tokens_details": { "cached_tokens": u["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) } })
+}
+/// One answer for a person, through whichever provider they use; what it used goes to the usage ledger (`answers` in
+/// /api/usage: per person and provider kind, with the cache hit ratio).
 async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, system: &str, messages: &[(String, String)], on_token: Tok, cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<Answer, ApiErr> {
+    let an = complete_inner(hub, user, provider, model, system, messages, on_token, cancel, max_tokens).await?;
+    if let Some(u) = normalise(&an.native) {
+        let (w, ai) = (hub.work(), hub.ai());
+        let kind = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).map(|p| s(&p, "kind")).unwrap_or_default();
+        ai.usage.note_answer(user, &kind, &an.model, &u);
+    }
+    Ok(an)
+}
+async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, system: &str, messages: &[(String, String)], on_token: Tok, cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<Answer, ApiErr> {
     let w = hub.work(); let ai = hub.ai();
     let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, NO_AI))?;
     let kind = s(&p, "kind");
@@ -245,14 +265,14 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
                 let j: Value = serde_json::from_slice(&src.all().await).unwrap_or(Value::Null);
                 let text = j["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
                 if streaming && !text.is_empty() { tok(&on_token, &text); }
-                return Ok(Answer { text, model: j["model"].as_str().map(String::from).unwrap_or(used), usage: j["usage"].clone() });
+                return Ok(Answer { text, model: j["model"].as_str().map(String::from).unwrap_or(used), usage: j["usage"].clone(), native: j["usage"].clone() });
             }
             let (mut text, mut used, mut usage, mut sse, mut src) = (String::new(), used, Value::Null, Sse::default(), src);
             while let Some(c) = next_or_cancel(&mut src, &cancel).await? { for ev in sse.push(&c) {
                 if let Some(d) = ev["choices"][0]["delta"]["content"].as_str() { text.push_str(d); tok(&on_token, d); }
                 if let Some(x) = ev["model"].as_str() { used = x.into(); } if !ev["usage"].is_null() { usage = ev["usage"].clone(); }
             } if sse.done { break; } }
-            Ok(Answer { text, model: used, usage })
+            Ok(Answer { text, model: used, native: usage.clone(), usage })
         }
         "anthropic" | "host-claude" if !(kind == "host-claude" && s(&p, "remoteKind") == "claude-cli-work") => {
             let mut body = json!({ "model": if m.is_empty() { p["models"][0].clone() } else { json!(m) }, "max_tokens": max_tokens.unwrap_or(4096), "stream": streaming, "messages": ant_msgs() });
@@ -272,18 +292,19 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
                 let j: Value = serde_json::from_slice(&src.all().await).unwrap_or(Value::Null);
                 let text = j["content"].as_array().map(|c| c.iter().filter_map(|b| b["text"].as_str()).collect::<String>()).unwrap_or_default();
                 let usage = if j["usage"].is_object() { json!({ "prompt_tokens": j["usage"]["input_tokens"], "completion_tokens": j["usage"]["output_tokens"] }) } else { Value::Null };
-                return Ok(Answer { text, model: s(&j, "model"), usage });
+                return Ok(Answer { text, model: s(&j, "model"), usage, native: j["usage"].clone() });
             }
             let (mut text, mut used, mut usage, mut sse, mut src) = (String::new(), s(&body, "model"), Value::Null, Sse::default(), src);
+            let mut native = json!({}); // Anthropic's own: message_start carries the input and cache numbers, message_delta the output
             while let Some(c) = next_or_cancel(&mut src, &cancel).await? { for ev in sse.push(&c) {
                 match ev["type"].as_str().unwrap_or("") {
                     "content_block_delta" => if let Some(t) = ev["delta"]["text"].as_str() { text.push_str(t); tok(&on_token, t); },
-                    "message_start" => { if let Some(x) = ev["message"]["model"].as_str() { used = x.into(); } usage = json!({ "prompt_tokens": ev["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0), "completion_tokens": 0 }); }
-                    "message_delta" => if usage.is_object() && ev["usage"].is_object() { usage["completion_tokens"] = json!(ev["usage"]["output_tokens"].as_u64().unwrap_or(0)); },
+                    "message_start" => { if let Some(x) = ev["message"]["model"].as_str() { used = x.into(); } usage = json!({ "prompt_tokens": ev["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0), "completion_tokens": 0 }); if ev["message"]["usage"].is_object() { native = ev["message"]["usage"].clone(); } }
+                    "message_delta" => if usage.is_object() && ev["usage"].is_object() { usage["completion_tokens"] = json!(ev["usage"]["output_tokens"].as_u64().unwrap_or(0)); native["output_tokens"] = json!(ev["usage"]["output_tokens"].as_u64().unwrap_or(0)); },
                     _ => {}
                 }
             } if sse.done { break; } }
-            Ok(Answer { text, model: used, usage })
+            Ok(Answer { text, model: used, usage, native })
         }
         "host-codex" => {
             let input: Vec<Value> = messages.iter().filter(|x| x.0 != "system").map(|x| { let asst = x.0 == "assistant"; json!({ "role": if asst { "assistant" } else { "user" }, "content": [{ "type": if asst { "output_text" } else { "input_text" }, "text": x.1 }] }) }).collect();
@@ -291,14 +312,15 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
             let r = ai.login_fetch(&host, &pid, "/responses", "POST", vec![("content-type".into(), "application/json".into()), ("accept".into(), "text/event-stream".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
             if !(200..300).contains(&r.status) { let st = r.status; return Err(fail_text(format!("{nick}'s Codex"), st, Src::Host(r.body).all().await, true)); }
             let (mut text, mut used, mut usage, mut sse, mut src) = (String::new(), s(&body, "model"), Value::Null, Sse::default(), Src::Host(r.body));
+            let mut native = Value::Null;
             while let Some(c) = next_or_cancel(&mut src, &cancel).await? { for ev in sse.push(&c) {
                 match ev["type"].as_str().unwrap_or("") {
                     "response.output_text.delta" => if let Some(d) = ev["delta"].as_str().filter(|d| !d.is_empty()) { text.push_str(d); tok(&on_token, d); },
-                    "response.completed" => { if let Some(x) = ev["response"]["model"].as_str() { used = x.into(); } let u = &ev["response"]["usage"]; if u.is_object() { usage = json!({ "prompt_tokens": u["input_tokens"].as_u64().unwrap_or(0), "completion_tokens": u["output_tokens"].as_u64().unwrap_or(0) }); } }
+                    "response.completed" => { if let Some(x) = ev["response"]["model"].as_str() { used = x.into(); } let u = &ev["response"]["usage"]; if u.is_object() { usage = json!({ "prompt_tokens": u["input_tokens"].as_u64().unwrap_or(0), "completion_tokens": u["output_tokens"].as_u64().unwrap_or(0) }); native = responses_native(u); } }
                     _ => {}
                 }
             } if sse.done { break; } }
-            Ok(Answer { text, model: used, usage })
+            Ok(Answer { text, model: used, usage, native })
         }
         "host-claude" => { // legacy: a host that allows work runs a sandboxed `claude -p` there
             let (id, _t, mut rx) = ai.run_work(&host, &pid, json!({ "sandbox": true, "account": "api", "display": "API", "message": flatten(messages), "systemPrompt": system, "model": m, "hubUrl": "" })).map_err(|e| err(503, e.msg))?;
@@ -314,7 +336,7 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
                 }
             }
             if text.is_empty() { return Err(err(502, if er.trim().is_empty() { "the host's Claude gave no answer".to_string() } else { er.trim().to_string() })); }
-            Ok(Answer { text, model: used, usage: cli_usage(&usage) })
+            Ok(Answer { text, model: used, native: usage.clone(), usage: cli_usage(&usage) })
         }
         _ => complete_cli(hub, &p, &m, system, messages, on_token, cancel).await, // this hub's Claude, or a Claude Code login here
     }
@@ -376,7 +398,7 @@ async fn complete_cli(hub: &Arc<dyn AiHub>, p: &Value, model: &str, system: &str
     if killed || cancel.is() { return Err(err(502, "cancelled")); }
     let e2 = format!("{rerr}{}", er.lock().unwrap_or_else(|e| e.into_inner()));
     if text.is_empty() && (code.map(|c| c != 0).unwrap_or(false) || !e2.is_empty()) { return Err(err(502, if e2.trim().is_empty() { format!("claude exited with code {}", code.map(|c| c.to_string()).unwrap_or_else(|| "null".into())) } else { e2.trim().to_string() })); }
-    Ok(Answer { text, model: used, usage: cli_usage(&usage) })
+    Ok(Answer { text, model: used, native: usage.clone(), usage: cli_usage(&usage) })
 }
 
 // ---------- the API's answers ----------
@@ -588,4 +610,33 @@ pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pgm_context_internal::ledger::Usage as L;
+
+    /// One sample of each provider kind's usage, as `complete` leaves it in `Answer.native`: the same ledger shape.
+    #[test]
+    fn every_provider_kinds_usage_normalises_to_the_ledger_shape() {
+        // openai / host-openai: prompt_tokens includes the cached ones
+        assert_eq!(normalise(&json!({ "prompt_tokens": 1000, "completion_tokens": 20, "total_tokens": 1020, "prompt_tokens_details": { "cached_tokens": 900 } })), Some(L { input: 100, output: 20, cache_read: 900, cache_write: 0 }));
+        // OpenAI-compatible without cache details (Ollama and friends)
+        assert_eq!(normalise(&json!({ "prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7 })), Some(L { input: 3, output: 4, cache_read: 0, cache_write: 0 }));
+        // anthropic / host-claude: input_tokens is the uncached part, cache read / creation are apart
+        assert_eq!(normalise(&json!({ "input_tokens": 12, "output_tokens": 30, "cache_read_input_tokens": 4000, "cache_creation_input_tokens": 250 })), Some(L { input: 12, output: 30, cache_read: 4000, cache_write: 250 }));
+        // host-claude (legacy) and the cli: the Claude Code assistant message's usage is Anthropic's shape too
+        assert_eq!(normalise(&json!({ "input_tokens": 5, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 0, "output_tokens": 8, "service_tier": "standard" })), Some(L { input: 5, output: 8, cache_read: 0, cache_write: 100 }));
+        // host-codex: the Responses API counts input_tokens with the cached ones inside
+        let codex = responses_native(&json!({ "input_tokens": 2000, "output_tokens": 50, "input_tokens_details": { "cached_tokens": 1536 } }));
+        assert_eq!(normalise(&codex), Some(L { input: 464, output: 50, cache_read: 1536, cache_write: 0 }));
+        assert_eq!(normalise(&responses_native(&json!({ "input_tokens": 2, "output_tokens": 3 }))), Some(L { input: 2, output: 3, cache_read: 0, cache_write: 0 }));
+        // Gemini / OpenRouter shapes come through the same ledger
+        assert_eq!(normalise(&json!({ "promptTokenCount": 1000, "candidatesTokenCount": 20, "cachedContentTokenCount": 900 })), Some(L { input: 100, output: 20, cache_read: 900, cache_write: 0 }));
+        assert_eq!(normalise(&json!({ "prompt_tokens": 500, "completion_tokens": 5, "prompt_tokens_details": { "cached_tokens": 100 }, "cache_discount": 0.002 })), Some(L { input: 400, output: 5, cache_read: 100, cache_write: 0 }));
+        // no usage → nothing noted
+        assert_eq!(normalise(&Value::Null), None);
+        assert_eq!(normalise(&json!({})), None);
+    }
 }

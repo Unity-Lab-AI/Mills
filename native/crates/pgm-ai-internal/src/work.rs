@@ -10,8 +10,10 @@ use bytes::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use pgm_context_internal::assembly::{lint, Class, LintHit, Segment};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Notify};
 
@@ -148,7 +150,14 @@ impl Work {
         Self::claude_env(p).map(|_| crate::jcode::CLAUDE_HARNESS)
     }
     fn usage_source(&self, ai: &crate::ai_hosts::AiHosts, a: &Account) -> String { match self.effective(ai, &a.username, &s(&self.state(a), "provider")) { Some(p) if p["kind"] == json!("host-claude") => s(&p, "id"), _ => "hub".into() } }
-    pub fn usage_status(&self, hub: &dyn AiHub, a: &Account) -> Value { let st = self.state(a); hub.ai().usage.status(&self.usage_source(hub.ai(), a), &st["ctx"], st["claudeSessionId"].as_str().unwrap_or("")) }
+    pub fn usage_status(&self, hub: &dyn AiHub, a: &Account) -> Value {
+        let st = self.state(a);
+        let mut v = hub.ai().usage.status(&self.usage_source(hub.ai(), a), &st["ctx"], st["claudeSessionId"].as_str().unwrap_or(""));
+        // answers outside Work (API, Unity, products): the cache ledger of this person's answers; absent until there is one
+        let ans = hub.ai().usage.answers(&a.username);
+        if ans.is_object() { v["answers"] = ans; }
+        v
+    }
 
     // ---------- the person's Forgejo token (bridge/forgejo.js keeps it) ----------
     fn forgejo_url(&self) -> String { read_json(&self.root.join("forgejo.json")).and_then(|c| c["url"].as_str().map(String::from)).or_else(|| self.cfg.get("forgejoUrl").and_then(Value::as_str).map(String::from)).unwrap_or_else(|| "https://git.unityailab.com".into()).trim_end_matches('/').to_string() }
@@ -190,7 +199,9 @@ impl Work {
         f.filter(|f| !f.text.is_empty()).map(|f| format!("[Worktree: latest background check ({} min ago): {}]", ((now_ms() - f.at) as f64 / 60000.0).round().max(1.0), f.text)).unwrap_or_default()
     }
     fn hub_laws(&self) -> String { ["LAWS.md", "CLAUDE.md"].iter().filter_map(|f| std::fs::read_to_string(self.mills.join(f)).ok().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n") }
-    fn system_prompt(&self, a: &Account, wd: &Wt) -> String {
+    /// The stable segments of the Work system prompt (pgm-context assembly): the person's own lines are the same for the
+    /// whole session (Session), the laws the same for everyone (Static). Nothing volatile may be in them (the lint).
+    pub fn system_segments(&self, a: &Account, wd: &Wt) -> Vec<Segment> {
         let (name, u) = (&a.display, &a.username);
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let dir = wd.dir.display(); let b = &wd.branch;
@@ -209,11 +220,11 @@ impl Work {
             format!("(that merges into {} and pushes it when the project has a remote; on a conflict run \"node {script} --project {pj} sync {u}\", resolve, commit, merge again). The hub's own tooling (regression suite, live) is for VibeRoller only.", wd.main),
             self.fresh_law(a, wd),
         ] };
-        let mut parts = vec![
+        let intro = vec![
             format!("You are talking with {name} (username \"{u}\"{}, Unity AI Lab engineer) through the VibeRoller web interface, running on the host's Claude account.", if a.admin { ", admin" } else { "" }),
             format!("Every message in this conversation comes from {name}; address them by name and keep their work separate from everyone else's."),
         ];
-        parts.extend(wher);
+        let mut parts: Vec<String> = vec![];
         parts.extend([
             format!("{name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools"),
             format!("(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's VibeRoller folder, not {name}'s PC."),
@@ -226,8 +237,22 @@ impl Work {
         if self.forgejo_rec(u).map(|r| !s(&r, "token").is_empty()).unwrap_or(false) { parts.push(format!("Forgejo ({}): {name} saved their own token, so git pushes / fetches to that host authenticate as them, FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token), and fj (the Forgejo CLI) is signed in as them in this run. node bridge/worktree.js repos [words] lists the repos they can see (private ones too), repo-create <owner/name> makes one, publish <owner/name> --project <name> puts a project on Forgejo (a GitHub origin kept as upstream).", self.forgejo_url())); }
         parts.push("Team notes (markdown files in folders, shared by everyone): notes_list (with a search), notes_read, notes_write (path like \"plans/next-week.md\"; whole text), notes_delete (only when asked). Good for plans, meeting notes, decisions, how-tos.".into());
         parts.push(format!("The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as \"{name} · Claude\", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about."));
-        let laws = self.hub_laws();
-        parts.join(" ") + &if laws.is_empty() { String::new() } else { format!("\n\n{laws}") }
+        vec![
+            Segment::new("1-intro", Class::Session, intro.join(" ")),
+            Segment::new("2-where", Class::Session, wher.join(" ")),
+            Segment::new("3-tools", Class::Session, parts.join(" ")),
+            Segment::new("4-laws", Class::Static, self.hub_laws()),
+        ]
+    }
+    /// The system prompt a run gets: the segments joined (the person's lines with a space, the laws after a blank line).
+    /// The same bytes every run, so the provider's prompt cache can hit (R181); logs any lint hit once per hub process.
+    fn system_prompt(&self, a: &Account, wd: &Wt) -> String {
+        let segs = self.system_segments(a, wd);
+        static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !DONE.swap(true, Ordering::SeqCst) {
+            for h in lint_segments(&segs) { eprintln!("[work] system prompt segment \"{}\" ({:?}) has {}: \"{}\"; it busts the prompt cache, move it to the turn (R181)", h.segment, h.class, h.pattern, h.snippet); }
+        }
+        render_prompt(&segs)
     }
     /// The MCP servers of a run here: PC files, the board, the team chat (bridge/*-mcp.js), with this hub's secret.
     fn mcp_json(&self, a: &Account) -> Value {
@@ -808,5 +833,58 @@ pub fn start(hub: &Arc<dyn AiHub>) {
         let busy = h.work().any_busy() || h.api().busy() || h.unity().busy() || crate::unity_routes::room_busy(&*h);
         h.internal("/internal/front/work-busy", json!({ "busy": busy }).to_string()).await;
     } });
+}
+/// The prompt a run sends: the person's segments joined with a space, the Static laws after a blank line.
+pub fn render_prompt(segs: &[Segment]) -> String {
+    let own: Vec<&str> = segs.iter().filter(|s| s.class != Class::Static).map(|s| s.text.as_str()).collect();
+    let laws: Vec<&str> = segs.iter().filter(|s| s.class == Class::Static && !s.text.is_empty()).map(|s| s.text.as_str()).collect();
+    own.join(" ") + &if laws.is_empty() { String::new() } else { format!("\n\n{}", laws.join("\n\n")) }
+}
+/// Every volatile part (relative time, timestamp, random id, live counter) in the stable segments, by segment name.
+pub fn lint_segments(segs: &[Segment]) -> Vec<LintHit> { segs.iter().flat_map(|s| lint(&s.id, s.class, &s.text)).collect() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn work_here() -> (Work, std::path::PathBuf) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bridge");
+        let cfg = Config::load(&root);
+        (Work::new(&root, &cfg), root)
+    }
+    fn wt(hub: bool, dir: &std::path::Path) -> Wt {
+        Wt { dir: dir.to_path_buf(), branch: "work/sponge".into(), project: if hub { HUB_PROJECT.into() } else { "demo".into() }, repo: dir.join("_repo"), root: dir.to_path_buf(), main: "main".into(), hub }
+    }
+
+    /// The prompt's stable segments carry nothing volatile (no "N min ago", no timestamp, no random id, no counter) and
+    /// the prompt is the same bytes when built again; the freshness result travels with the message, not here.
+    #[test]
+    fn the_work_system_prompt_segments_pass_the_cache_lint() {
+        let (w, _) = work_here();
+        let tmp = std::env::temp_dir().join(format!("vr-prompt-lint-{}", std::process::id())); let _ = std::fs::create_dir_all(&tmp);
+        for hub in [true, false] {
+            for admin in [true, false] {
+                let a = Account { username: "sponge".into(), dir: tmp.clone(), admin, display: "Sponge".into() };
+                let wd = wt(hub, &tmp);
+                let segs = w.system_segments(&a, &wd);
+                assert_eq!(segs.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["1-intro", "2-where", "3-tools", "4-laws"]);
+                assert!(segs.iter().all(|s| matches!(s.class, Class::Static | Class::Session)));
+                assert!(!segs[3].text.is_empty(),"the hub's laws are in the prompt");
+                let hits = lint_segments(&segs);
+                assert!(hits.is_empty(), "the Work system prompt has volatile text: {:?}", hits.iter().map(|h| format!("{} / {}: {}", h.segment, h.pattern, h.snippet)).collect::<Vec<_>>());
+                let p = render_prompt(&segs);
+                assert_eq!(p, w.system_prompt(&a, &wd), "built twice: the same bytes");
+                assert!(p.starts_with("You are talking with Sponge") && p.contains("OWN git worktree") && p.contains("\n\n"));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+    #[test]
+    fn the_lint_names_the_segment_when_volatile_text_creeps_in() {
+        let segs = vec![Segment::new("2-where", Class::Session, "latest check (3 min ago): FRESH"), Segment::new("4-laws", Class::Static, "calm")];
+        let hits = lint_segments(&segs);
+        assert_eq!(hits.len(), 1); assert_eq!(hits[0].segment, "2-where");
+        assert_eq!(render_prompt(&segs), "latest check (3 min ago): FRESH\n\ncalm");
+    }
 }
 pub fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; bool::from(pgm_core_internal::crypto::sha256(a.as_bytes()).ct_eq(&pgm_core_internal::crypto::sha256(b.as_bytes()))) }

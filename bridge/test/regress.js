@@ -162,7 +162,8 @@ function startFakeOllama() {
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
         if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
-        return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
+        const cached = /r185/.test(String(last.content)) ? { prompt_tokens: 2000, completion_tokens: 40, total_tokens: 2040, prompt_tokens_details: { cached_tokens: 1500 } } : null; // R185: a cache hit the hub must count
+        return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: cached || { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
       }
       // fake Forgejo (issue mirroring): in-memory issues under the repo path; /fake/forgejo/* lets the runner act as a person on Forgejo
       const FJ = '/api/v1/repos/UnityAILab/Mills/issues';
@@ -971,6 +972,26 @@ async function run() {
       /sysvolatile=false/.test(e181) && /syslaw=true/.test(e181),
       `echo "${(e181.match(/sysvolatile=[a-z]+ \| syslaw=[a-z]+/) || [''])[0]}"`);
   } else skip('R181', 'the Work system prompt is cache-stable', 'the Rust hub\'s Work: --rust-hub runs it');
+  // The token library in the hub (R185, 5.9.0): an answer outside Work (the /v1 API) goes through the usage ledger, the
+  // provider's cached tokens normalised, and /api/usage shows them as `answers` with the cache hit ratio.
+  if (RUST_HUB) {
+    const h185 = (await call('/api/hosts/new', A, {})).data.host || {}, c185 = (await call('/api/hosts/config', A, { id: h185.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': h185.id, 'X-VR-Host-Token': c185.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const p185 = (await call('/api/providers/add', A, { kind: 'openai', label: 'R185 endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt', shared: false })).data;
+    const k185 = (await call('/api/apikey/rotate', A, {})).data;
+    await call('/api/apikey/settings', A, { provider: p185.provider && p185.provider.id, model: 'fake-gpt' });
+    const u0 = (await call('/api/usage', A)).data;
+    const a1 = await v1('/v1/chat/completions', k185.key, { model: 'fake-gpt', messages: [{ role: 'user', content: 'cache r185' }] });
+    const a2 = await v1('/v1/chat/completions', k185.key, { model: 'fake-gpt', messages: [{ role: 'user', content: 'cache r185 again' }] });
+    const u1 = (await call('/api/usage', A)).data, ans = u1.answers || {};
+    const b0 = (u0.answers && u0.answers.turns) || 0;
+    const body185 = (() => { try { return JSON.parse(a1.text); } catch { return {}; } })();
+    await call('/api/providers/remove', A, { id: p185.provider && p185.provider.id }); await call('/api/apikey/revoke', A, {}); await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' }); await call('/api/hosts/remove', A, { id: h185.id });
+    check('R185', 'the token library in the hub: an answer outside Work (a /v1 call through an OpenAI-compatible endpoint whose usage has prompt_tokens_details.cached_tokens) is normalised by the usage ledger and /api/usage shows it under `answers` (turns, input paid, cached, written, hit ratio, per provider kind) while every existing key stays; the caller still gets the endpoint\'s own OpenAI-style usage',
+      p185.provider && a1.status === 200 && a2.status === 200 && ans.turns === b0 + 2 && ans.cached >= 3000 && ans.input >= 1000 && ans.hit > 0.5 && ans.hit < 0.8 && ans.by && ans.by.openai && ans.by.openai.cached >= 3000
+      && body185.usage && body185.usage.prompt_tokens === 2000 && 'five_hour' in u1 && 'seven_day' in u1 && 'context' in u1,
+      `answers ${JSON.stringify(ans).slice(0, 260)}; call ${a1.status}/${a2.status}; usage ${JSON.stringify(body185.usage || {})}`);
+  } else skip('R185', 'answers outside Work through the usage ledger', 'the Rust hub\'s: --rust-hub runs it');
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });

@@ -7,6 +7,30 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.9.0 — 2026-10-24
+
+MINOR: **the token library is in the hub** (board T-167; Jcode-Mods TOKENS.md §4). The hub now shows the cache hit
+ratio for API / product answers too, not only for Work, and the Work system prompt is checked by the library's lint so
+a volatile part can never creep back into the cached prefix.
+- **`pgm-context-internal` 5.15.0 mirrored** into `native/crates/` (LAWS.md library law: pgm-libs holds the original, the
+  consumer copies it; `src/` identical, tree-sitter feature optional and off). Workspace member, listed in `NAMES.md`
+  with the mirrored version; `pgm-ai-internal` depends on it.
+- **Answers outside Work through the ledger** (`openai.rs` `complete`): every provider kind (openai, host-openai,
+  anthropic, host-claude, host-codex, the Claude Code login / cli) now keeps the provider's own usage object next to the
+  OpenAI-style numbers callers get (those are unchanged), carries Anthropic's `cache_read_input_tokens` /
+  `cache_creation_input_tokens` and OpenAI's `prompt_tokens_details.cached_tokens` (Codex's Responses
+  `input_tokens_details`) through `pgm_context_internal::ledger` into one shape (input paid, output, cache read, cache
+  written), and adds it per person and provider kind to usage.json (`answers`, `Usage::note_answer`).
+- **`/api/usage`** gets an optional key `answers: { turns, input, output, cached, written, hit, by: { <kind>: … } }`
+  (hit = cached / (input + cached + written)); present once the person has had an answer, every existing key as it was
+  (older pages ignore it).
+- **The Work system prompt through the lint** (`work.rs` `system_segments`, `render_prompt`, `lint_segments`): the prompt
+  is built as segments (the person's lines Session, the laws Static) and joined to the same bytes as before (R181 holds);
+  a unit test builds it for hub and project worktrees and asserts the library's lint finds nothing, and the first prompt
+  a hub builds is linted once with any hit named (segment, pattern) in the hub log.
+- Tests: ledger normalisation for each provider shape, the answers sum and its persistence, the prompt lint; R185 (a /v1
+  answer through the fake OpenAI-compatible endpoint with `cached_tokens` shows in `/api/usage` `answers`).
+
 ## 5.8.0 — 2026-10-24
 
 MINOR: **`vr-host` is one place for everything.** Sponge, on a Linux PC: a Downloads copy and the real host in
