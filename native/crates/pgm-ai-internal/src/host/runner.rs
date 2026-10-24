@@ -100,7 +100,7 @@ pub async fn detect_local(h: &H) {
             if !configured_engine { d.ollama_engine = Some(url.clone()); }
             if !configured_endpoint && !models.is_empty() {
                 d.ollama_provider = Some(Provider { id: "ollama".into(), kind: "openai".into(), label: format!("{}'s Ollama (this machine)", if h.cfg.user().is_empty() { "this host".to_string() } else { h.cfg.user() }), models, enabled: true,
-                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new() });
+                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new(), jcode_command: String::new(), jcode_provider: String::new(), jcode_args: vec![] });
             }
         }
     }
@@ -292,12 +292,16 @@ fn own_config_write(h: &Host) -> bool {
 }
 
 fn hello_body(h: &Host) -> Hello {
-    let providers = h.providers().iter().map(|p| {
+    // a `jcode` provider runs Work, so it is offered (and `work-jcode` announced) only by a host that allows Work; a host
+    // with no such provider says hello exactly as it always did
+    let offered: Vec<Provider> = h.providers().into_iter().filter(|p| !p.is_jcode() || h.cfg.allow_work()).collect();
+    let work_jcode = offered.iter().any(|p| p.is_jcode());
+    let providers = offered.iter().map(|p| {
         let mut allowed = p.allowed_users.clone(); if p.share_with_group { allowed.push("@group".into()); }
         OfferedProvider { id: p.id.clone(), kind: p.relay_kind().to_string(), label: p.label.clone(), models: p.models.clone(), allowed_users: allowed, max5h: p.max5h, max7d: p.max7d }
     }).collect();
     Hello { nonce: pgm_core_internal::crypto::random_hex(16), user: h.cfg.user(), providers, engines: h.engines().into_iter().map(|(k, _)| k).collect(), pc: h.cfg.pc_folder().is_some(),
-        version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::CAPS.iter().map(|s| s.to_string()).collect() }
+        version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::caps_for(work_jcode) }
 }
 async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     detect_local(h).await;

@@ -25,6 +25,8 @@ use pgm_identity_internal::Account;
 use pgm_net_internal::http::Req;
 
 const AI_OFF_TEXT: &str = "The host's AI is switched off right now (its host paused it). Chat, the board and your own AI keep working; pick your own AI in the model dropdown, or try again once it is back.";
+/// The kind a host's `jcode` provider has on the hub: Work runs ON that host through `jcodepgm run --ndjson` (WORKPLAN 9c).
+const HOST_JCODE: &str = "host-jcode";
 const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSessionWhere", "ctx", "project", "lastRunAt"];
 
 struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog }
@@ -144,9 +146,9 @@ impl Work {
     }
     /// Which coding harness runs Work for that provider: "claude" (Claude Code), "jcode" (Jcode PGM), None (neither:
     /// an OpenAI endpoint or a ChatGPT login answers the API and the Unity section, not Work).
-    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
+    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
     pub fn harness_of(p: &Value) -> Option<&'static str> {
-        if p["kind"] == json!(crate::jcode::KIND) { return Some(crate::jcode::HARNESS); }
+        if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) { return Some(crate::jcode::HARNESS); }
         Self::claude_env(p).map(|_| crate::jcode::CLAUDE_HARNESS)
     }
     fn usage_source(&self, ai: &crate::ai_hosts::AiHosts, a: &Account) -> String { match self.effective(ai, &a.username, &s(&self.state(a), "provider")) { Some(p) if p["kind"] == json!("host-claude") => s(&p, "id"), _ => "hub".into() } }
@@ -284,6 +286,9 @@ impl Work {
     // ---------- the run's stream ----------
     fn emit(&self, u: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(u) { let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     fn on_event(&self, hub: &dyn AiHub, a: &Account, ev: Value, source: &str) {
+        // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
+        // fields as they came plus the `hub` object the page reads first (harness.rs, WORKPLAN 9b)
+        let ev = crate::harness::wire(ev);
         if let Some(sid) = ev["session_id"].as_str().filter(|s| !s.is_empty()) { let sid = sid.to_string(); self.update(a, |m| { m.insert("claudeSessionId".into(), json!(sid)); }); }
         let usage = &hub.ai().usage;
         let t = ev["type"].as_str().unwrap_or("");
@@ -381,15 +386,20 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return one_line(json!({ "type": "bridge_error", "text": AI_OFF_TEXT })); }
     let owner = s(&prov, "owner"); let nick = s(&prov, "nickname");
     let host_id = s(&prov, "hostId"); let prov_id = s(&prov, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default();
-    if kind == "host-claude" && !ai.online(&host_id) { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }) })); }
-    if kind == "host-claude" && !s(&prov, "capped").is_empty() { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}: {}. Pick another AI or wait for the window to reset.", s(&prov, "capped")) })); }
+    let hjcode = kind == HOST_JCODE;
+    if (kind == "host-claude" || hjcode) && !ai.online(&host_id) { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }) })); }
+    if (kind == "host-claude" || hjcode) && !s(&prov, "capped").is_empty() { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}: {}. Pick another AI or wait for the window to reset.", s(&prov, "capped")) })); }
     // an older host (no relay) would run the whole Work run on its own computer: only its owner may touch that computer
     if kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work" && owner != a.username {
         return one_line(json!({ "type": "bridge_error", "text": format!("{nick} is an older AI host that would run Work on {} computer, and only its owner may work on that computer. Pick another AI in the dropdown, or ask them to update the host (then Work runs here and only its AI is used).", if owner.is_empty() { "its own".to_string() } else { format!("{}'s", hub.name_of(&owner)) }) }));
     }
+    // Jcode PGM on a host runs Work on that host's computer, like the legacy case above: only its owner may
+    if hjcode && owner != a.username {
+        return one_line(json!({ "type": "bridge_error", "text": format!("{nick} runs Work through Jcode PGM on {} computer, and only its owner may work on that computer. Pick another AI in the dropdown.", if owner.is_empty() { "its own".to_string() } else { format!("{}'s", hub.name_of(&owner)) }) }));
+    }
     let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else { String::new() };
-    // a Claude session lives where it ran (relayed runs run here, on this hub)
-    let wher = if kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work" { host_id.clone() } else { "hub".to_string() };
+    // a Claude session lives where it ran (relayed runs run here, on this hub); a Jcode PGM host's, on that host
+    let wher = if (kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work") || hjcode { host_id.clone() } else { "hub".to_string() };
     // a session is resumed only where it ran and by the harness that made it (a Jcode PGM session id means nothing to Claude Code)
     let resume = !fresh && !s(&st, "claudeSessionId").is_empty() && { let w0 = s(&st, "claudeSessionWhere"); (if w0.is_empty() { "hub".to_string() } else { w0 }) == wher }
         && { let h0 = s(&st, "sessionHarness"); (if h0.is_empty() { crate::jcode::CLAUDE_HARNESS.to_string() } else { h0 }) == harness };
@@ -415,15 +425,17 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         let tok = w.llm_token(&a.username, &host_id, &prov_id);
         relay_env = vec![("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{}/llm/{tok}", hub.cfg().port)), ("ANTHROPIC_AUTH_TOKEN".into(), "viberoller-relay".into()), ("ANTHROPIC_API_KEY".into(), String::new()), ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into())];
         w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Using {nick}{}; the work happens here on the server.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI)", hub.name_of(&owner)) }) }));
-    } else if kind == "host-claude" {
-        // legacy: Claude Code runs on the host (only for a host that allows work)
-        let payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": w.system_prompt(a, &wd), "model": model,
+    } else if kind == "host-claude" || hjcode {
+        // legacy: Claude Code runs on the host (only for a host that allows work); or Jcode PGM there (hjcode, the host
+        // announced work-jcode: `harness` and `stateModel` are the optional fields it reads)
+        let mut payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": w.system_prompt(a, &wd), "model": model,
             "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": hub.cfg().get("permissionMode"), "allowedTools": hub.cfg().get("allowedTools"), "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
+        if hjcode { payload["harness"] = json!(harness); payload["stateModel"] = json!(s(&st, "model")); }
         match ai.run_work(&host_id, &prov_id, payload) {
             Err(e) => { w.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&a.username); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
             Ok((job, _token, mut events)) => {
                 if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&a.username) { r.remote = job; }
-                w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Running on {nick}{}.", if owner.is_empty() { " (AI host)".to_string() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }) }));
+                w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Running on {nick}{}{}.", if owner.is_empty() { " (AI host)".to_string() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }, if hjcode { ", through Jcode PGM" } else { "" }) }));
                 let (h, a2, id) = (hub.clone(), a.clone(), run_id.clone());
                 tokio::spawn(async move {
                     let w = h.work();

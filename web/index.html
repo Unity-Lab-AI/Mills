@@ -2201,23 +2201,40 @@ async function followRun(saved, inSend) {
   if (joined) { hideThinking(); setBusy(false); refreshUsage(); }
   return joined;
 }
+// The hub's one event schema (HubEvent, native/crates/pgm-ai-internal/src/harness.rs): a Work event the hub classified
+// carries `hub` { v: 1, kind: init | system | assistant | tool_results | result, blocks, results, ... }, the same for Claude
+// Code and for Jcode PGM. An event without it (a hub or an AI host that predates it) is read from the Claude-shaped alias
+// fields into the same view, so both ways render identically. null = not a harness event (bridge_*, stderr, ...).
+function hubView(ev) {
+  if (ev && ev.hub && ev.hub.v === 1 && ev.hub.kind) return ev.hub;
+  const m = (ev && ev.message) || {}, content = Array.isArray(m.content) ? m.content : [];
+  switch (ev && ev.type) {
+    case 'system': return ev.subtype === 'init' ? { v: 1, kind: 'init', model: ev.model || '', session: ev.session_id || '' } : { v: 1, kind: 'system', subtype: ev.subtype || '' };
+    case 'assistant': return { v: 1, kind: 'assistant', model: m.model || '', usage: m.usage && typeof m.usage === 'object' ? m.usage : undefined,
+      blocks: content.filter((b) => b && (b.type === 'text' || b.type === 'tool_use')).map((b) => (b.type === 'text' ? { type: 'text', text: b.text || '' } : { type: 'tool_use', id: b.id || '', name: b.name, input: b.input || {} })) };
+    case 'user': return { v: 1, kind: 'tool_results', results: content.filter((b) => b && b.type === 'tool_result').map((b) => ({ id: b.tool_use_id || '', content: b.content, error: b.is_error === true })) };
+    case 'result': return { v: 1, kind: 'result', error: ev.is_error === true, text: typeof ev.result === 'string' ? ev.result : '', subtype: ev.subtype || '', durationMs: ev.duration_ms || 0 };
+    default: return null;
+  }
+}
 function handleEvent(ev) {
   if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; return; }
   if (ev.type === 'bridge_done') runEnded = true;
   if (ev.type === 'pc_tool') return runPcTool(ev);
+  const hv = hubView(ev), hk = hv ? hv.kind : '';
   // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
-  if ((ev.type === 'assistant' && ev.message && ev.message.usage) || /rate_limit/.test(String(ev.type || '')) || ev.type === 'result') refreshUsageSoon();
-  if (ev.type === 'assistant' || ev.type === 'bridge_error' || ev.type === 'result') hideThinking();
-  if (ev.type === 'assistant' && ev.message) {
-    for (const block of ev.message.content || []) {
+  if ((hk === 'assistant' && hv.usage) || /rate_limit/.test(String(ev.type || '')) || hk === 'result') refreshUsageSoon();
+  if (hk === 'assistant' || ev.type === 'bridge_error' || hk === 'result') hideThinking();
+  if (hk === 'assistant') {
+    for (const block of hv.blocks || []) {
       if (block.type === 'text' && block.text.trim()) { renderText(bubble('claude'), block.text); record('claude', block.text); }
       else if (block.type === 'tool_use') { const t = describeTool(block); line('tool', t); record('tool', t); }
     }
-  } else if (ev.type === 'system' && ev.subtype === 'init') { if (ev.model) runModel = ev.model; }
-  else if (ev.type === 'result') {
-    runOutcome = ev.is_error ? { state: 'failed', text: 'Stopped with an error' } : { state: 'done', text: 'Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + ' s' : '') };
-    if (ev.is_error) sys('Claude stopped with an error: ' + (ev.result || ev.subtype), true);
-    else sys('Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
+  } else if (hk === 'init') { if (hv.model) runModel = hv.model; }
+  else if (hk === 'result') {
+    runOutcome = hv.error ? { state: 'failed', text: 'Stopped with an error' } : { state: 'done', text: 'Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + ' s' : '') };
+    if (hv.error) sys('Claude stopped with an error: ' + (hv.text || hv.subtype), true);
+    else sys('Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
   } else if (ev.type === 'stderr') stderrText = (stderrText + ev.text).slice(-600);
   else if (ev.type === 'bridge_error') { sys(ev.text, true); runOutcome = { state: 'failed', text: 'Failed: ' + ev.text }; }
   else if (ev.type === 'bridge_info') sys(ev.text); // e.g. which AI host runs this reply
@@ -3799,7 +3816,7 @@ async function renderForgejo() {
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
-const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
+const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host · Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
 async function renderApiAccess(freshKey) {
   const box = $('apiBox'); if (!box) return;
   let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
@@ -3887,7 +3904,7 @@ async function renderProviders() {
 }
 function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
 // ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
-const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM' };
+const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host, Jcode PGM' };
 async function renderSource() {
   const box = $('srcBox'); if (!box) return;
   let d; try { d = await json('/api/check'); } catch (e) { box.textContent = e.message; return; }

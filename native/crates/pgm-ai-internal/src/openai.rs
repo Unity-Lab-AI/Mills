@@ -237,6 +237,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
     let w = hub.work(); let ai = hub.ai();
     let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, NO_AI))?;
     let kind = s(&p, "kind");
+    if kind == "host-jcode" { return Err(err(400, "That AI is a Jcode PGM host: it runs Work, not API answers. Pick a Claude, API or local-model provider for answers.")); }
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return Err(err(503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     let m = pick_model(&p, model);
     let streaming = on_token.is_some();

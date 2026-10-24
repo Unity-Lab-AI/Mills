@@ -8,9 +8,40 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
+use crate::harness::{self, CommandSpec, Harness, RunContext};
 use crate::host::folder::log;
 use crate::host::runner::H;
+use crate::host::settings::Provider;
 use pgm_net_internal::hostlink::{EventsAnswer, Job};
+
+/// The hub's three team tools as MCP servers this program serves (`vr-host mcp pc|board|team`), relayed to the hub with the
+/// run's own token: `{ "mcpServers": { pc, board, team } }`, the config Claude Code is pointed at and Jcode PGM's mcp.json.
+fn mcp_servers(payload: &Value) -> Value {
+    let me = std::env::current_exe().unwrap_or_default().display().to_string();
+    let env = json!({ "MILLS_BRIDGE": payload["mcpBase"].as_str().unwrap_or(""), "MILLS_INTERNAL": payload["token"].as_str().unwrap_or(""), "MILLS_USER": payload["display"].as_str().or(payload["account"].as_str()).unwrap_or(""), "MILLS_ACCOUNT": payload["account"].as_str().unwrap_or("") });
+    let srv = |which: &str| json!({ "command": me, "args": ["mcp", which], "env": env });
+    json!({ "mcpServers": { "pc": srv("pc"), "board": srv("board"), "team": srv("team") } })
+}
+/// The provider as the jcode harness takes it (jcode.rs `command`). No `home` key on purpose: the home is always the
+/// person's own under this host's `jcode/` folder, never one a provider entry could share between people.
+fn jcode_prov(p: &Provider) -> Value {
+    json!({ "kind": crate::jcode::KIND, "label": p.label, "models": p.models, "command": p.jcode_command, "provider": p.jcode_provider, "args": p.jcode_args })
+}
+/// How a Jcode PGM Work turn starts on this host (WORKPLAN 9c): `jcodepgm run --ndjson --no-update [-p profile] [-m model]
+/// [--resume id] <message>` in the person's worktree, with a private jcode home per person at
+/// `<jcode_root>/<account>/jcode-home` (the same layout as the hub's jcode harness: the team MCP servers as mcp.json, the hub's
+/// system prompt as the prompt overlay; no auto-update, no auto-poke, no telemetry). The model is the person's pick
+/// (`stateModel`) when the provider lists it, else its first.
+pub fn jcode_spec(p: &Provider, payload: &Value, dir: &Path, jcode_root: &Path, mcp: &Value) -> CommandSpec {
+    let who: String = payload["account"].as_str().unwrap_or("").chars().filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-').collect();
+    let who = if who.is_empty() { "_".to_string() } else { who };
+    let (prov, acct_dir) = (jcode_prov(p), jcode_root.join(who));
+    let hx = harness::JcodeHarness::new(&prov, payload["stateModel"].as_str().unwrap_or(""));
+    let resume = payload["resume"].as_str().filter(|s| !s.is_empty());
+    let input = payload["message"].as_str().unwrap_or("");
+    hx.command(&RunContext { prov: &prov, input, resume, model: "", state_model: payload["stateModel"].as_str().unwrap_or(""), acct_dir: &acct_dir, cwd: dir,
+        system_prompt: payload["systemPrompt"].as_str().unwrap_or(""), mcp_json: mcp, mcp_config: Path::new(""), permission_mode: "", allowed_tools: &[], add_dirs: &[], claude_command: "", claude_args: &[] })
+}
 
 fn valid_user(u: &str) -> bool { !u.is_empty() && u.len() <= 32 && u.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') }
 fn valid_project(n: &str) -> bool { !n.is_empty() && n.len() <= 64 && n.chars().next().map(|c| c.is_ascii_alphanumeric()).unwrap_or(false) && n.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) && !n.contains("..") && !n.eq_ignore_ascii_case("_repo") }
@@ -87,23 +118,32 @@ pub async fn work_job(h: H, job: Job) {
     let dir = match work_dir(&h, &payload) { Ok(d) => d, Err(e) => fail!(format!("{nick} could not prepare the folder: {e}")) };
     let sandbox = payload["sandbox"].as_bool() == Some(true);
     let mcp_file = h.folder.f(&format!(".mcp-host-{}.json", job_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect::<String>()));
-    let mut args: Vec<String> = vec!["-p".into(), "--output-format".into(), "stream-json".into(), "--verbose".into(), "--permission-mode".into(), if sandbox { "default".into() } else { payload["permissionMode"].as_str().unwrap_or("acceptEdits").to_string() }];
-    if sandbox { args.push("--strict-mcp-config".into()); } else {
-        let me = std::env::current_exe().unwrap_or_default().display().to_string();
-        let env = json!({ "MILLS_BRIDGE": payload["mcpBase"].as_str().unwrap_or(""), "MILLS_INTERNAL": payload["token"].as_str().unwrap_or(""), "MILLS_USER": payload["display"].as_str().or(payload["account"].as_str()).unwrap_or(""), "MILLS_ACCOUNT": payload["account"].as_str().unwrap_or("") });
-        let srv = |which: &str| json!({ "command": me, "args": ["mcp", which], "env": env });
-        let _ = std::fs::write(&mcp_file, json!({ "mcpServers": { "pc": srv("pc"), "board": srv("board"), "team": srv("team") } }).to_string());
-        pgm_core_internal::fs::private(&mcp_file);
-        args.extend(["--mcp-config".into(), mcp_file.display().to_string(), "--strict-mcp-config".into()]);
-        let tools: Vec<String> = payload["allowedTools"].as_array().map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect()).unwrap_or_default();
-        if !tools.is_empty() { args.extend(["--allowedTools".into(), tools.join(",")]); }
+    // Jcode PGM instead of Claude Code (opt-in, a provider of kind "jcode"): its command, home and events are in jcode_spec
+    let jspec: Option<CommandSpec> = if p.is_jcode() {
+        if sandbox { fail!(format!("{nick}: a Jcode PGM provider runs Work only, not API answers.")); }
+        Some(jcode_spec(&p, &payload, &dir, &h.folder.f("jcode"), &mcp_servers(&payload)))
+    } else { None };
+    let mut args: Vec<String> = vec![];
+    if jspec.is_none() {
+        args = vec!["-p".into(), "--output-format".into(), "stream-json".into(), "--verbose".into(), "--permission-mode".into(), if sandbox { "default".into() } else { payload["permissionMode"].as_str().unwrap_or("acceptEdits").to_string() }];
+        if sandbox { args.push("--strict-mcp-config".into()); } else {
+            let _ = std::fs::write(&mcp_file, mcp_servers(&payload).to_string());
+            pgm_core_internal::fs::private(&mcp_file);
+            args.extend(["--mcp-config".into(), mcp_file.display().to_string(), "--strict-mcp-config".into()]);
+            let tools: Vec<String> = payload["allowedTools"].as_array().map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect()).unwrap_or_default();
+            if !tools.is_empty() { args.extend(["--allowedTools".into(), tools.join(",")]); }
+        }
+        for (flag, key) in [("--append-system-prompt", "systemPrompt"), ("--model", "model"), ("--resume", "resume")] { if let Some(v) = payload[key].as_str().filter(|s| !s.is_empty()) { args.extend([flag.to_string(), v.to_string()]); } }
     }
-    for (flag, key) in [("--append-system-prompt", "systemPrompt"), ("--model", "model"), ("--resume", "resume")] { if let Some(v) = payload[key].as_str().filter(|s| !s.is_empty()) { args.extend([flag.to_string(), v.to_string()]); } }
     let w = h.cfg.work();
-    let command = w.get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
-    let pre: Vec<String> = w.get("claudeArgs").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    let command = match &jspec { Some(sp) => sp.program.clone(), None => w.get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string() };
+    let pre: Vec<String> = if jspec.is_some() { vec![] } else { w.get("claudeArgs").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() };
     let mut c = pgm_platform_internal::proc::command(&command);
-    c.args(&pre).args(&args).current_dir(&dir).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    match &jspec {
+        Some(sp) => { c.args(&sp.args).current_dir(&sp.cwd); for (k, v) in &sp.env { c.env(k, v); } }
+        None => { c.args(&pre).args(&args).current_dir(&dir); }
+    }
+    c.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     if p.kind == "claude-cli" && !p.config_dir.is_empty() { c.env("CLAUDE_CONFIG_DIR", &p.config_dir); }
     if p.kind == "anthropic" && !p.api_key.is_empty() { c.env("ANTHROPIC_API_KEY", &p.api_key); }
     if let Some(env) = payload["env"].as_object() { for (k, v) in env { if let Some(v) = v.as_str() { c.env(k, v); } } }
@@ -111,15 +151,21 @@ pub async fn work_job(h: H, job: Job) {
     let who: String = payload["account"].as_str().unwrap_or("").chars().filter(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '-').collect();
     if !who.is_empty() { for (k, v) in crate::fj::env(&h.folder.f(".fj").join(&who), &pe("FORGEJO_URL"), &pe("FORGEJO_TOKEN"), &pe("FORGEJO_LOGIN")) { c.env(k, v); } } // fj signed in as the person, from the token the hub sent
     log(format!("run {job_id} for {}: {} ({}{})", payload["account"].as_str().unwrap_or(""), if sandbox { "API answer".to_string() } else { format!("{} in {}", payload["project"].as_str().unwrap_or("VibeRoller"), dir.display()) }, p.label, payload["model"].as_str().map(|m| format!(", {m}")).unwrap_or_default()));
-    let mut child = match c.spawn() { Ok(ch) => ch, Err(e) => { let _ = std::fs::remove_file(&mcp_file); fail!(format!("{nick} could not start claude: {e}")); } };
+    let mut child = match c.spawn() { Ok(ch) => ch, Err(e) => { let _ = std::fs::remove_file(&mcp_file); fail!(format!("{nick} could not start {}: {e}", if jspec.is_some() { "jcodepgm" } else { "claude" })); } };
     h.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(job_id.clone(), stop_tx);
-    if let Some(mut si) = child.stdin.take() { let m = payload["message"].as_str().unwrap_or("").to_string(); tokio::spawn(async move { let _ = si.write_all(m.as_bytes()).await; }); }
+    // Claude Code reads the message on stdin; Jcode PGM gets it as its last argument (nothing on stdin)
+    if let Some(mut si) = child.stdin.take() { let m = if jspec.is_some() { String::new() } else { payload["message"].as_str().unwrap_or("").to_string() }; tokio::spawn(async move { let _ = si.write_all(m.as_bytes()).await; }); }
     let (out, mut err) = (child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
     let ev2 = events.clone(); let pid = p.id.clone(); let h2 = h.clone();
+    let mut jh = jspec.as_ref().map(|_| harness::JcodeHarness::new(&jcode_prov(&p), payload["stateModel"].as_str().unwrap_or("")));
     let reader = tokio::spawn(async move {
         let mut lines = BufReader::new(out).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let line = line.trim().to_string(); if line.is_empty() { continue; }
+            if let Some(jh) = jh.as_mut() { // jcode's events, mapped onto the hub's (the alias; the hub adds `hub`)
+                for e in harness::Harness::map_line(jh, &line) { ev2.lock().unwrap_or_else(|e| e.into_inner()).push(e.into_value()); }
+                continue;
+            }
             match serde_json::from_str::<Value>(&line) { Ok(ev) => { note_usage(&h2, &pid, &ev); ev2.lock().unwrap_or_else(|e| e.into_inner()).push(ev); } Err(_) => ev2.lock().unwrap_or_else(|e| e.into_inner()).push(json!({ "type": "raw", "text": line })) }
         }
     });
@@ -142,6 +188,46 @@ pub async fn work_job(h: H, job: Job) {
     flush(Some(json!({ "done": true, "code": code }))).await;
     log(format!("run {job_id} ended (code {code})"));
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::settings::HostSettings;
+
+    fn provider(v: Value) -> Provider { let mut s = HostSettings::new("x.json"); s.raw.insert("providers".into(), json!([v])); s.all_providers().remove(0) }
+
+    #[test]
+    fn a_jcode_turn_is_jcodepgm_run_in_the_persons_own_home() {
+        let p = provider(json!({ "id": "jcode", "kind": "jcode", "label": "Gee's jcode", "models": ["m1", "m2"], "jcodeCommand": "/opt/jcodepgm", "jcodeProvider": "viberoller", "jcodeArgs": ["--socket", "/tmp/j.sock"] }));
+        let root = std::env::temp_dir().join(format!("pgm-hostjcode-{}", pgm_core_internal::crypto::random_hex(4)));
+        let mcp = json!({ "mcpServers": { "pc": { "command": "vr-host" } } });
+        let payload = json!({ "account": "sponge", "message": "do it", "systemPrompt": "LAWS", "stateModel": "m2", "model": "claude-opus-5-5", "resume": "sess-1" });
+        let sp = jcode_spec(&p, &payload, Path::new("/wt/sponge"), &root, &mcp);
+        assert_eq!(sp.program, "/opt/jcodepgm");
+        assert_eq!(sp.args, ["--socket", "/tmp/j.sock", "run", "--ndjson", "--no-update", "-p", "viberoller", "-m", "m2", "--resume", "sess-1", "do it"]);
+        assert_eq!(sp.stdin, ""); assert_eq!(sp.cwd, PathBuf::from("/wt/sponge"));
+        let home = root.join("sponge").join("jcode-home");
+        let get = |k: &str| sp.env.iter().find(|(x, _)| x == k).map(|(_, v)| v.clone()).unwrap_or_default();
+        assert_eq!(get("JCODE_HOME"), home.display().to_string()); assert_eq!(get("JCODE_NO_AUTO_UPDATE"), "1"); assert_eq!(get("JCODE_RUN_AUTO_POKE"), "0"); assert_eq!(get("JCODE_NO_TELEMETRY"), "1");
+        assert_eq!(std::fs::read_to_string(home.join("prompt-overlay.md")).unwrap(), "LAWS");
+        assert!(std::fs::read_to_string(home.join("mcp.json")).unwrap().contains("vr-host"));
+        // another person gets another home; no resume, a model the provider does not list falls back to its first, default binary
+        let q = provider(json!({ "id": "j2", "harness": "jcode", "models": ["only"] }));
+        assert!(q.is_jcode());
+        let sp2 = jcode_spec(&q, &json!({ "account": "gee", "message": "hi", "stateModel": "claude-opus-5-5" }), Path::new("/wt/gee"), &root, &mcp);
+        assert_eq!(sp2.program, "jcodepgm"); assert_eq!(sp2.args, ["run", "--ndjson", "--no-update", "-m", "only", "hi"]);
+        assert_ne!(sp2.env.iter().find(|(k, _)| k == "JCODE_HOME").unwrap().1, get("JCODE_HOME"));
+        assert!(root.join("gee").join("jcode-home").join("mcp.json").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn only_a_host_that_allows_work_with_a_jcode_provider_announces_it() {
+        let p = provider(json!({ "id": "claude", "kind": "claude-cli" }));
+        assert!(!p.is_jcode());
+        assert_eq!(pgm_net_internal::hostlink::caps_for(false), pgm_net_internal::hostlink::CAPS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    }
+}
+
 /// The usage windows Claude Code reports in its rate-limit events.
 fn note_usage(h: &H, pid: &str, ev: &Value) {
     if !ev["type"].as_str().unwrap_or("").contains("rate_limit") { return; }

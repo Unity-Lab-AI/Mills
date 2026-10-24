@@ -38,9 +38,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha = (f) => (fs.existsSync(f) ? crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') : 'missing');
 
 const results = [];
+// --stop-after R188: a development shortcut, the run ends cleanly after that check (the checks after it do not run)
+const STOP_AFTER = (() => { const i = process.argv.indexOf('--stop-after'); return i >= 0 ? process.argv[i + 1] || '' : ''; })();
 function check(id, label, pass, detail = '') {
   results.push({ id, label, status: pass ? 'PASS' : 'FAIL', detail });
   console.log(`${pass ? 'PASS' : 'FAIL'} ${id.padEnd(4)} ${label}${detail ? '  — ' + detail : ''}`);
+  if (STOP_AFTER && id === STOP_AFTER) { const e = new Error('stopped after ' + id); e.stopAfter = true; throw e; }
 }
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
@@ -251,7 +254,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -962,6 +965,104 @@ async function run() {
       && back.status === 200 && !/jcode-answer/.test(backText),
       `add ${jNotAdmin.status}/${jBadHome.status}/${jc.provider ? 'made' : JSON.stringify(jc).slice(0, 100)}, pick ${pickJ.status}, run1 "${t1.slice(0, 160)}" tool ${toolUse}/${toolRes} result ${res1.is_error} code ${done1.code}; run2 "${t2.slice(-40)}"; fail ${resF.is_error} code ${doneF.code}; home mcp ${Object.keys(jMcp.mcpServers || {}).join(',')} overlay ${jOverlay.length}b; back "${backText.slice(0, 60)}"`);
   } else skip('R180', 'Jcode PGM as a Work harness (a jcode provider runs Work through jcodepgm run --ndjson)', 'the Rust hub\'s: --rust-hub runs it');
+  // HubEvent in the page (R187, 5.10.0; Jcode-Mods WORKPLAN 9b): the hub's Work events carry one schema, the `hub` object
+  // (harness.rs HubEvent::into_wire) next to the Claude-shaped alias fields; the page's Work renderer reads it first
+  // (hubView) and falls back to the alias for an event without it, so an older hub or host renders the same. Static +
+  // the page's own hubView run on sample events (both modes), and with the Rust hub a Claude run (the fake claude) and a
+  // Jcode PGM run (the fake jcodepgm) of the same shape give the same HubEvent structure.
+  {
+    const L187 = 'HubEvent is the one schema the page consumes: the hub adds a `hub` object (kind init / assistant{blocks text, tool_use} / tool_results / result, harness, session) to every harness event while the alias fields stay; the page\'s handleEvent reads hubView(ev) (the hub object first, else derived from the alias, the same view) and no longer reads the alias fields itself; a Claude run and a Jcode PGM run of the same shape (text, tool use, tool result, result) have the same structure through HubEvent and both keep the alias';
+    const page187 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), harness187 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'harness.rs'), 'utf8');
+    const hvSrc = (/function hubView\(ev\) \{[\s\S]*?\n\}\n(?=function handleEvent)/.exec(page187) || [''])[0];
+    const heSrc = (/function handleEvent\(ev\) \{[\s\S]*?\n\}\n(?=\n\/\/ ── Slash commands)/.exec(page187) || [''])[0];
+    let hubView = null; try { hubView = require('vm').runInNewContext(hvSrc + '; hubView'); } catch {}
+    const aliasEvs = hubView ? [
+      { type: 'system', subtype: 'init', session_id: 'a1', model: 'm1' },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'T' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }], usage: { input_tokens: 2 } } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x', is_error: true }] } },
+      { type: 'result', is_error: false, result: 'ok', duration_ms: 2000, subtype: 'success' }].map((e) => JSON.parse(JSON.stringify(hubView(e)))) : [];
+    const hubFirst = hubView ? hubView({ type: 'assistant', hub: { v: 1, kind: 'assistant', blocks: [{ type: 'text', text: 'HUB' }] }, message: { content: [{ type: 'text', text: 'ALIAS' }] } }) : null;
+    const fromAlias = aliasEvs.length === 4 && aliasEvs[0].kind === 'init' && aliasEvs[0].model === 'm1' && aliasEvs[1].kind === 'assistant' && aliasEvs[1].blocks.map((b) => b.type).join() === 'text,tool_use' && aliasEvs[1].blocks[1].input.command === 'ls' && aliasEvs[1].usage.input_tokens === 2
+      && aliasEvs[2].kind === 'tool_results' && aliasEvs[2].results[0].id === 't1' && aliasEvs[2].results[0].error === true && aliasEvs[3].kind === 'result' && aliasEvs[3].error === false && aliasEvs[3].text === 'ok' && aliasEvs[3].durationMs === 2000 && hubView({ type: 'rate_limit_event' }) === null;
+    const stat = !!hubView && fromAlias && !!hubFirst && hubFirst.blocks[0].text === 'HUB' && /const hv = hubView\(ev\), hk = hv \? hv\.kind : ''/.test(heSrc) && !/ev\.message|ev\.is_error|ev\.duration_ms|ev\.subtype|ev\.result/.test(heSrc)
+      && /pub fn into_wire\(self\)/.test(harness187) && /HUB_SCHEMA/.test(harness187) && /crate::harness::wire\(ev\)/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'work.rs'), 'utf8'));
+    if (RUST_HUB) {
+      const shape = (evs) => evs.filter((e) => e.hub).map((e) => e.hub.kind + '[' + (e.hub.kind === 'assistant' ? e.hub.blocks.map((b) => b.type) : e.hub.kind === 'tool_results' ? e.hub.results.map((r) => 'result:' + r.error) : e.hub.kind === 'result' ? ['error:' + e.hub.error] : []).join(',') + ']').join(' ');
+      await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+      const cRun = await chat(A, 'claude run CLAUDETOOL r187', { fresh: true });
+      const jp = (await call('/api/providers/add', A, { kind: 'jcode', label: 'Jcode PGM (fake, r187)', command: process.execPath, args: [path.join(SB, 'test', 'fake-jcode.js')], provider: 'viberoller', models: 'claude-haiku-5-5', shared: false })).data.provider || {};
+      await call('/api/model', A, { provider: jp.id, model: 'claude-haiku-5-5' });
+      const jRun = await chat(A, 'jcode run TOOL r187', { fresh: true });
+      await call('/api/providers/remove', A, { id: jp.id });
+      await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+      const sc = shape(cRun.events), sj = shape(jRun.events), want = 'init[] assistant[tool_use] tool_results[result:false] assistant[text] result[error:false]';
+      const aliasKept = (evs) => evs.some((e) => e.type === 'assistant' && e.message.content.some((c) => c.type === 'tool_use' && c.input.command === 'echo hi')) && evs.some((e) => e.type === 'user' && e.message.content.some((c) => c.type === 'tool_result' && c.tool_use_id === 't1')) && evs.some((e) => e.type === 'result' && e.is_error === false);
+      const hubOf = (evs, k) => (evs.find((e) => e.hub && e.hub.kind === k) || {}).hub || {};
+      check('R187', L187,
+        stat && sc === want && sj === want && hubOf(cRun.events, 'init').harness === 'claude' && hubOf(jRun.events, 'init').harness === 'jcode' && /^fake-/.test(hubOf(cRun.events, 'init').session) && /^fakej-/.test(hubOf(jRun.events, 'init').session)
+        && hubOf(cRun.events, 'result').error === false && hubOf(jRun.events, 'result').harness === 'jcode' && /jcode-answer/.test(hubOf(jRun.events, 'result').text) && aliasKept(cRun.events) && aliasKept(jRun.events)
+        && cRun.events.some((e) => e.type === 'bridge_done' && e.code === 0) && jRun.events.some((e) => e.type === 'bridge_done' && e.code === 0),
+        `static ${stat} (alias view ${fromAlias}); claude "${sc}" jcode "${sj}"`);
+    } else {
+      check('R187', L187, stat, `static ${stat} (alias view ${fromAlias}); the runs through both harnesses: --rust-hub`);
+    }
+  }
+  // Jcode PGM on the AI host (R188, 5.10.0; Jcode-Mods WORKPLAN 9c): opt-in. A native host with allowWork and a provider of
+  // kind "jcode" (jcodeCommand: the fake jcodepgm) announces the cap `work-jcode`, the hub lists that provider (kind
+  // host-jcode) and sends it a Work job: jcodepgm runs ON the host in its worktree with a private jcode home per person
+  // (the team MCP servers as mcp.json, the hub's system prompt as the overlay); the events come back as HubEvents and a
+  // second message resumes the session. A host that allows no Work says hello with exactly the old caps and offers no
+  // jcode provider: the hub never lists one, so never sends it a job.
+  if (RUST_HUB) {
+    const L188 = 'Jcode PGM on the AI host, opt-in: a native host with allowWork and a "jcode" provider announces the cap work-jcode and the hub lists it (host-jcode) and sends it a Work job; jcodepgm run --ndjson runs ON the host in its worktree with a private jcode home per person (mcp.json with the team servers, the system prompt as the prompt overlay), its events reach the page as HubEvents (init, tool use, tool result, text, result), the next message resumes the same jcode session; a host with the provider but no allowWork says hello with exactly the old caps, offers no jcode provider and cannot be picked; only the host\'s owner can run Work on it; it answers no API calls';
+    const jdir = path.join(SCRATCH, 'jcode-host'), pdir = path.join(SCRATCH, 'plain-host'), repo = path.join(jdir, 'repo');
+    fs.mkdirSync(repo, { recursive: true }); fs.mkdirSync(pdir, { recursive: true });
+    const gitj = (...a) => execFileSync('git', ['-c', 'user.email=r188@example.invalid', '-c', 'user.name=r188', ...a], { cwd: repo, stdio: 'ignore', windowsHide: true });
+    gitj('init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'README.md'), 'r188\n'); gitj('add', '-A'); gitj('commit', '-q', '-m', 'r188'); gitj('branch', 'develop');
+    const provJ = { id: 'jcode', kind: 'jcode', label: 'R188 jcode', models: ['claude-haiku-5-5', 'claude-sonnet-5-5'], jcodeCommand: process.execPath, jcodeArgs: [path.join(SB, 'test', 'fake-jcode.js')], jcodeProvider: 'viberoller' };
+    const jcfg = path.join(jdir, 'ai-node.json'), pcfg = path.join(pdir, 'ai-node.json');
+    fs.writeFileSync(jcfg, JSON.stringify({ hub: H, id: 'jcode-node', token: OLD_NODE_SECRET + '-jc', user: 't-admin', autoUpdate: false, allowWork: true, providers: [provJ], engines: {}, work: { hubRepo: repo, worktreeRoot: path.join(jdir, 'worktrees') } }), { mode: 0o600 });
+    fs.writeFileSync(pcfg, JSON.stringify({ hub: H, id: 'plain-node', token: OLD_NODE_SECRET + '-pl', user: 't-admin', autoUpdate: false, providers: [{ ...provJ }], engines: {} }), { mode: 0o600 });
+    const hostBin = NATIVE_BIN.host;
+    const procs = [[jcfg, jdir], [pcfg, pdir]].map(([cfg, dir]) => { const fd = fs.openSync(path.join(dir, 'out.log'), 'a'); return spawn(hostBin, ['run', '--config', cfg], { cwd: dir, stdio: ['ignore', fd, fd], windowsHide: true }); });
+    const nodes = async (id) => { for (let i = 0; i < 80; i++) { const n = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === id); if (n && n.online && (n.caps || []).length) return n; await sleep(250); } return null; };
+    const jn = await nodes('jcode-node'), pn = await nodes('plain-node');
+    const provs = async () => (await call('/api/check', A)).data.providers || [];
+    let jprov = null; for (let i = 0; i < 40 && !jprov; i++) { jprov = (await provs()).find((p) => p.id === 'h:jcode-node/jcode') || null; if (!jprov) await sleep(250); }
+    const plainListed = (await provs()).some((p) => p.id === 'h:plain-node/jcode');
+    const pickPlain = await call('/api/model', A, { provider: 'h:plain-node/jcode', model: 'claude-haiku-5-5' });
+    const otherSees = (((await call('/api/check', U)).data.providers) || []).some((p) => p.id === 'h:jcode-node/jcode');
+    const pick = await call('/api/model', A, { provider: 'h:jcode-node/jcode', model: 'claude-sonnet-5-5' });
+    await call('/api/workspace', A, { project: 'VibeRoller' }); // the host's repo here is the hub project's (R141 uses demo-app on a host that clones it)
+    const r1 = await chat(A, 'host jcode TOOL r188', { fresh: true });
+    const r1t = texts(r1.events), r1init = (r1.events.find((e) => e.hub && e.hub.kind === 'init') || {}).hub || {}, r1res = (r1.events.find((e) => e.hub && e.hub.kind === 'result') || {}).hub || {};
+    const r2 = await chat(A, 'host jcode again r188'), r2t = texts(r2.events);
+    const rF = await chat(A, 'host jcode FAIL r188'), rFres = (rF.events.find((e) => e.hub && e.hub.kind === 'result') || {}).hub || {};
+    const jhome = path.join(jdir, 'jcode', 't-admin', 'jcode-home');
+    const jmcp = fs.existsSync(path.join(jhome, 'mcp.json')) ? JSON.parse(fs.readFileSync(path.join(jhome, 'mcp.json'), 'utf8')) : {};
+    const joverlay = fs.existsSync(path.join(jhome, 'prompt-overlay.md')) ? fs.readFileSync(path.join(jhome, 'prompt-overlay.md'), 'utf8') : '';
+    await call('/api/workspace', A, { project: 'demo-app' });
+    // the API answers through that provider are refused (it runs Work, not answers); back to Claude afterwards
+    const key = (await call('/api/apikey/rotate', A, {})).data.key;
+    await call('/api/apikey/settings', A, { provider: 'h:jcode-node/jcode' });
+    const apiTry = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'x' }] }) });
+    await call('/api/apikey/revoke', A, {});
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+    const hostLog = (() => { try { return fs.readFileSync(path.join(jdir, 'out.log'), 'utf8'); } catch { return ''; } })();
+    for (const p of procs) { try { p.kill(); } catch {} }
+    const hostRs = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'work.rs'), 'utf8');
+    check('R188', L188,
+      !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin' && (pn.providers || []).length === 0
+      && !!jprov && jprov.kind === 'host-jcode' && jprov.owner === 't-admin' && !otherSees && !plainListed && pickPlain.status !== 200 && pick.status === 200 && pick.data.provider === 'h:jcode-node/jcode'
+      && r1.events.some((e) => e.type === 'bridge_info' && /through Jcode PGM/.test(e.text)) && r1init.harness === 'jcode' && /^fakej-/.test(r1init.session)
+      && /jcode-answer model=claude-sonnet-5-5 provider=viberoller/.test(r1t) && /cwd=\S*jcode-host\S*worktrees\S*t-admin/.test(r1t) && /resume=no/.test(r1t) && /overlay:yes/.test(r1t)
+      && r1.events.some((e) => e.type === 'assistant' && e.hub && e.hub.blocks.some((b) => b.type === 'tool_use' && b.input.command === 'echo hi')) && r1.events.some((e) => e.type === 'user' && e.hub && e.hub.results[0].id === 't1')
+      && r1res.harness === 'jcode' && r1res.error === false && r1.events.some((e) => e.type === 'bridge_done' && e.code === 0)
+      && /resume=yes/.test(r2t) && rFres.error === true && rF.events.some((e) => e.type === 'bridge_done' && e.code === 1)
+      && jmcp.mcpServers && jmcp.mcpServers.pc && jmcp.mcpServers.board && jmcp.mcpServers.team && /Worktree law/.test(joverlay)
+      && apiTry.status >= 400 && /pub fn jcode_spec/.test(hostRs),
+      `caps ${jn && jn.caps.join(',')} / plain ${pn && pn.caps.join(',')} providers ${pn && (pn.providers || []).join(',')}; listed ${jprov && jprov.kind} other ${otherSees} plain ${plainListed}/${pickPlain.status}; pick ${pick.status}; run1 ${r1.status} [${r1.events.map((e) => e.type).join(' ')}] errors "${r1.events.filter((e) => e.type === 'bridge_error' || e.type === 'stderr' || e.type === 'bridge_info').map((e) => e.text).join(' | ').slice(0, 300)}" "${r1t.slice(0, 200)}" init ${JSON.stringify(r1init).slice(0, 80)}; run2 "${r2t.slice(-40)}"; fail ${rFres.error}; home ${Object.keys(jmcp.mcpServers || {}).join(',')} overlay ${joverlay.length}b; api ${apiTry.status}; log "${hostLog.replace(/\s+/g, ' ').slice(-200)}"`);
+  } else skip('R188', 'Jcode PGM on the AI host, opt-in (a native host with allowWork and a jcode provider announces work-jcode and runs Work through jcodepgm)', 'the Rust hub\'s: --rust-hub runs it');
   // The prompt cache (R181, 5.7.0; Jcode-Mods TOKENS.md): the system prompt a Work run gets is the same bytes every run,
   // so the provider's prompt cache can hit: no "N min ago" and no timestamp in it; the worktree law stays there, the
   // latest freshness check travels with the message instead.
@@ -3393,7 +3494,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     console.log(`Throwaway hub: ${SCRATCH} on port ${PORT} (no tunnel). Production is only read.\n`);
     if (!(await startHub())) throw new Error('throwaway hub did not start; see ' + path.join(SCRATCH, 'hub.log'));
     await run();
-  } catch (e) { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); }
+  } catch (e) { if (e.stopAfter) console.log(e.message); else { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); } }
   stopHub();
   if (ollamaSrv) ollamaSrv.close();
   await sleep(800);

@@ -7,6 +7,42 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.10.0 — 2026-10-24
+
+MINOR: **VibeRoller as the gateway** (board T-176; Jcode-Mods WORKPLAN 9b and 9c). MINOR rather than a patch or a
+second part of 5.9.0 because it adds a hello capability, a new provider kind on the hub and a second event schema the
+page reads (all additive, but new protocol surface); 5.9.0 is a different feature (the token ledger).
+- **9b. HubEvent is the schema the page consumes** (`harness.rs` `HubEvent::into_wire`, `wire`, `HUB_SCHEMA`;
+  `work.rs` `on_event`; `web/index.html` `hubView`, `handleEvent`). Every harness event the hub passes on (its own Claude
+  Code or Jcode PGM run, an AI host's Work run) now leaves as the Claude-shaped alias it always was plus ONE added object
+  `hub` `{ v:1, kind: init | system | assistant | tool_results | result, harness, session, … }` (assistant: `blocks` of
+  `text` / `tool_use`, `usage`; tool_results: `results` of `{ id, content, error }`; result: `error`, `text`,
+  `durationMs`). The page's Work renderer reads `hubView(ev)`: the `hub` object first, else the same view derived from the
+  alias (an older hub or host sends no `hub`), and no longer reads the alias fields itself. Nothing a person sees
+  changes; an older page ignores `hub` and renders the alias. Unit test (both harnesses give the same structure for the
+  same run, alias untouched); R187 (static + the page's own `hubView` on sample events in both modes; with `--rust-hub`
+  a Claude run and a Jcode PGM run of the same shape give the same HubEvent structure).
+- **9c. Jcode PGM on the AI host, opt-in** (native host only). A provider in `ai-node.json` of kind `jcode` (or
+  `"harness": "jcode"`) with `jcodeCommand`, `jcodeProvider`, `jcodeArgs`, plus `"allowWork": true`: the host announces the
+  new hello capability **`work-jcode`** (`pgm-net-internal` `CAP_WORK_JCODE`, `caps_for`) and offers the provider; the hub
+  lists a `jcode` provider of a host only when that cap was announced (`clean_providers`), shows it as kind `host-jcode`
+  ("AI host · Jcode PGM"), refuses to build a job for one without the cap (`run_work`), and sends the Work job (the legacy
+  host payload plus the optional `harness` and `stateModel`) only to the owner (Work runs on the host's own computer);
+  `/v1` and Unity answers through it are refused (it runs Work). On the host `jcode_spec` (host/work.rs) starts
+  `jcodepgm run --ndjson --no-update [-p] [-m] [--resume] <message>` in the person's worktree with a private jcode home per
+  person at `<host folder>/jcode/<person>/jcode-home` (the team MCP servers as `mcp.json`, the system prompt as the prompt
+  overlay, no auto-update / telemetry / auto-poke: the hub's own jcode harness code), maps its events with the same
+  `JcodeHarness`, and sessions resume (`claudeSessionWhere` = the host). **Default off:** a host without such a provider,
+  or without `allowWork`, says hello with exactly `relay update update-bin` as before and its Claude path is unchanged
+  (Gee's host is untouched). An older hub drops the unknown kind; an older host never announces the cap. `/api/check`
+  `aiNodes[].caps` (optional) shows what each host announced. The control app lists `provider.<id>.jcodeCommand` /
+  `jcodeProvider`. Unit tests (the host's command, home, per-person homes; the hub's cap filter; the cap list); R188
+  (`--rust-hub`, the native host with the fake jcodepgm: a host with the cap runs a Work turn through jcode on the host,
+  resumes it, a failure ends the run, mcp.json and overlay in its private home; a host without allowWork is never listed
+  or pickable and says the old caps).
+- Not done: 9d (per-provider scopes for sharing) is left for the next increment; sharing a jcode host to others is
+  refused for now (only the owner may run Work on a host's computer).
+
 ## 5.9.0 — 2026-10-24
 
 MINOR: **the token library is in the hub** (board T-167; Jcode-Mods TOKENS.md §4). The hub now shows the cache hit

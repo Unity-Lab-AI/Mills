@@ -157,7 +157,7 @@ impl AiHosts {
         else if pc(&u["seven_day"]) >= m7 { (format!("its weekly usage is at the {m7}% cap its host set"), until(&u["seven_day"])) }
         else { (String::new(), 0) }
     }
-    fn hub_kind(k: &str) -> &'static str { match k { "openai" => "host-openai", "codex-relay" => "host-codex", _ => "host-claude" } }
+    fn hub_kind(k: &str) -> &'static str { match k { "openai" => "host-openai", "codex-relay" => "host-codex", "jcode" => "host-jcode", _ => "host-claude" } }
     fn remote_kind(n: &Live, p: &Value) -> String { let k = p["kind"].as_str().unwrap_or(""); let pid = p["id"].as_str().unwrap_or(""); if k == "claude-cli" && n.relay_ok.get(pid) == Some(&json!(false)) { "claude-cli-work".into() } else { k.into() } }
     /// A provider as people see it (the live map is held by the caller).
     fn prov_view_locked(&self, r: &Value, id: &str, n: &Live, p: &Value) -> Value {
@@ -215,7 +215,7 @@ impl AiHosts {
             json!({ "id": id, "name": r["nickname"], "nickname": r["nickname"], "user": r["user"], "online": n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false), "polling": n.map(|n| n.waiters > 0).unwrap_or(false),
                 "seen": n.filter(|n| n.seen > 0).map(|n| json!(pgm_core_internal::time::iso_at(n.seen as i64))).unwrap_or(Value::Null), "queued": n.map(|n| n.queue.len()).unwrap_or(0),
                 "engines": n.and_then(|n| n.hello.as_ref().map(|h| h["engines"].clone())).unwrap_or(json!([])), "providers": n.and_then(|n| n.hello.as_ref().map(|h| json!(h["providers"].as_array().map(|a| a.iter().map(|p| p["id"].clone()).collect::<Vec<_>>()).unwrap_or_default()))).unwrap_or(json!([])),
-                "kid": n.map(|n| n.kid.clone()).unwrap_or_default(), "version": n.and_then(|n| n.hello.as_ref().map(|h| h["version"].clone())).unwrap_or(json!("")), "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null) })
+                "caps": n.and_then(|n| n.hello.as_ref().map(|h| h["caps"].clone())).unwrap_or(json!([])), "kid": n.map(|n| n.kid.clone()).unwrap_or_default(), "version": n.and_then(|n| n.hello.as_ref().map(|h| h["version"].clone())).unwrap_or(json!("")), "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null) })
         }).collect()
     }
     fn pick_engine_host(&self, engine: &str) -> Option<String> {
@@ -332,8 +332,12 @@ impl AiHosts {
     pub fn run_work(self: &Arc<Self>, host: &str, pid: &str, payload: Value) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
         let r = self.record(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?;
         let nick = r["nickname"].as_str().unwrap_or(host).to_string();
-        let (key, prov) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?; (n.key.clone(), n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned()))) };
+        let (key, prov, caps) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?; (n.key.clone(), n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned())), n.hello.as_ref().map(|h| h["caps"].clone()).unwrap_or(Value::Null)) };
         let key = key.ok_or_else(|| herr(503, "That AI host has not connected yet."))?;
+        // a jcode Work job goes only to a host that announced it can run one
+        if prov.as_ref().map(|p| p["kind"] == json!("jcode")).unwrap_or(false) && !caps.as_array().map(|c| c.iter().any(|x| x == pgm_net_internal::hostlink::CAP_WORK_JCODE)).unwrap_or(false) {
+            return Err(herr(400, "That AI host did not announce that it runs Work through Jcode PGM (work-jcode); update it or pick another AI."));
+        }
         if !self.online(host) { let o = self.owner_of(&r); return Err(herr(503, format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if o.is_empty() { " (AI host)".to_string() } else { format!(" ({o}'s AI host)") }))); }
         let prov = prov.ok_or_else(|| herr(503, "That host no longer offers this provider."))?;
         let cap = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get(host).map(|n| self.over_cap(host, n, &prov)).unwrap_or_default() };
@@ -377,12 +381,15 @@ impl AiHosts {
         if tok.is_empty() || !same_secret(&tok, r["secret"].as_str().unwrap_or("")) { return None; }
         Some(r)
     }
-    fn clean_providers(list: &Value) -> Vec<Value> {
+    /// What a host offered, cleaned. A `jcode` provider (Work through Jcode PGM on the host) is kept only when the host
+    /// announced `work-jcode` in its caps: without it the hub never lists one, so never sends it a jcode job.
+    fn clean_providers(list: &Value, caps: &[String]) -> Vec<Value> {
         let mut out: Vec<Value> = vec![];
         let pct = |v: &Value, d: i64| v.as_f64().filter(|n| *n > 0.0 && *n <= 100.0).map(|n| n.round() as i64).unwrap_or(d);
+        let work_jcode = caps.iter().any(|c| c == pgm_net_internal::hostlink::CAP_WORK_JCODE);
         for p in list.as_array().cloned().unwrap_or_default().into_iter().take(20) {
             let id = p["id"].as_str().unwrap_or("").trim().to_string(); let kind = p["kind"].as_str().unwrap_or("");
-            if id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') || !["claude-cli", "claude-relay", "codex-relay", "anthropic", "openai"].contains(&kind) || out.iter().any(|x| x["id"] == json!(id)) { continue; }
+            if id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') || !["claude-cli", "claude-relay", "codex-relay", "anthropic", "openai"].contains(&kind) && !(kind == "jcode" && work_jcode) || out.iter().any(|x| x["id"] == json!(id)) { continue; }
             let models: Vec<String> = p["models"].as_array().map(|a| a.iter().filter_map(|m| m.as_str()).map(|m| m.trim().to_string()).filter(|m| !m.is_empty() && m.len() <= 80 && m.chars().all(|c| c.is_ascii_alphanumeric() || "_.:/-".contains(c))).take(30).collect()).unwrap_or_default();
             let mut users: Vec<Value> = clean_users(&p["allowedUsers"]).into_iter().map(Value::String).collect();
             if p["allowedUsers"].as_array().map(|a| a.iter().any(|x| x == "@group")).unwrap_or(false) { users.push(json!("@group")); }
@@ -419,7 +426,7 @@ impl AiHosts {
                 // its computer (PC tools) only for the owner the hub registered it to (Settings → My AI hosts / "Run on
                 // this PC"), never for a name a host says it belongs to: only Gee works on Gee's computer
                 let pc = b["pc"] == json!(true) && !r["user"].as_str().unwrap_or("").is_empty();
-                let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"]), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps });
+                let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"], &caps), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps });
                 let kid = key.id();
                 { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }
                 self.save_sessions();
@@ -593,5 +600,18 @@ fn host_status(v: &Value) -> u16 { v.as_u64().filter(|s| (100..=599).contains(s)
 fn pick_headers(v: &Value) -> Vec<(String, String)> {
     let ok = |k: &str| { let k = k.to_lowercase(); matches!(k.as_str(), "content-type" | "request-id" | "retry-after") || k.starts_with("anthropic-ratelimit-") || k.starts_with("x-codex-") || k.starts_with("openai-") };
     v.as_object().map(|m| m.iter().filter(|(k, v)| ok(k) && v.as_str().map(|s| hyper::header::HeaderValue::from_str(s).is_ok()).unwrap_or(false) && hyper::header::HeaderName::from_bytes(k.to_lowercase().as_bytes()).is_ok()).map(|(k, v)| (k.to_lowercase(), v.as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_jcode_provider_is_listed_only_for_a_host_that_announced_work_jcode() {
+        let list = json!([{ "id": "claude", "kind": "claude-relay", "models": ["m"] }, { "id": "jcode", "kind": "jcode", "label": "J", "models": ["m1"] }]);
+        let ids = |caps: &[&str]| AiHosts::clean_providers(&list, &caps.iter().map(|c| c.to_string()).collect::<Vec<_>>()).into_iter().map(|p| p["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(ids(&["relay", "update", "update-bin"]), ["claude"]);
+        assert_eq!(ids(&[]), ["claude"]);
+        assert_eq!(ids(&["relay", "work-jcode"]), ["claude", "jcode"]);
+        assert_eq!(AiHosts::hub_kind("jcode"), "host-jcode"); assert_eq!(AiHosts::hub_kind("claude-relay"), "host-claude");
+    }
 }
 fn uuid4() -> String { let b = pgm_core_internal::crypto::random_bytes(16); let mut b: [u8; 16] = b.try_into().expect("16"); b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80; let h = hex::encode(b); format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32]) }
