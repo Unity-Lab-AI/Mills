@@ -1,6 +1,9 @@
 //! vr-host: the VibeRoller AI Host, native (Windows + Linux), and its heart & knife control app in one program.
 //!
-//!   vr-host                         the control app (a terminal dashboard); without a terminal: the status
+//!   vr-host                         the control app, one place for everything (a terminal app: first-time setup, the
+//!                                   dashboard, providers, settings, doctor, install, updates); without a terminal: the status
+//!   vr-host doctor [--json]         checks that everything is in place (config, private, which copy, boot, PATH, hub, logins, Ollama)
+//!   vr-host path                    puts `vr-host` on the PATH (install does it too)
 //!   vr-host run [--config <file>]   the host, supervised: restarted on new code / an update (exit 3) and after a crash
 //!   vr-host status | start | stop [--now] | restart [--now] | pause | resume | update | log [n] | lockdown
 //!           boot service | sign-in | user | off      settings      set <setting> <value>      version
@@ -37,16 +40,25 @@ fn main() {
     // A control command run from a download (or any copy that is not the running host) acts on the host that runs: the
     // installed one, found the way `install` finds it. Without this, `./vr-host update` in the Downloads folder asked a
     // copy that was not running and nothing happened.
-    let control = matches!(words.first().copied(), None | Some("status" | "start" | "stop" | "restart" | "pause" | "resume" | "update" | "log" | "settings" | "set" | "lockdown"));
+    let control = matches!(words.first().copied(), None | Some("status" | "start" | "stop" | "restart" | "pause" | "resume" | "update" | "log" | "settings" | "set" | "lockdown" | "doctor"));
     let folder = if control && config.is_none() && std::env::var_os("VR_HOST_DIR").is_none() && folder.host_pid().is_none() && !args.iter().any(|a| a == "--update") {
-        match running_install(&folder) { Some(f) => { eprintln!("(the AI host that runs is the installed one in {}: acting on it)", f.dir.display()); f } None => folder }
+        match running_install(&folder) {
+            Some(f) => { eprintln!("(the AI host that runs is the installed one in {}: acting on it)", f.dir.display()); f }
+            // a download without an ai-node.json next to an installed host that has one: that one is meant
+            None if !folder.config.exists() => match configured_install(&folder) { Some(f) => { eprintln!("(there is no ai-node.json in {}; the installed AI host in {} has one: acting on it)", folder.dir.display(), f.dir.display()); f } None => folder },
+            None => folder,
+        }
     } else { folder };
     let now = args.iter().any(|a| a == "--now");
     let code = match words.first().copied() {
         None if args.iter().any(|a| a == "--update") => rt().block_on(runner::run(folder, false, true)),
         None => { if std::io::IsTerminal::is_terminal(&std::io::stdin()) { tui::run(&folder) } else { command(&folder, &["status"], now) } }
         Some("run") => supervise(&folder, None),
-        Some("host") => rt().block_on(runner::run(folder, false, args.iter().any(|a| a == "--update"))),
+        Some("host") => {
+            // an installed program completes its own setup at every start, so an update that needs more setup gets it
+            for l in install::ensure_setup(&folder) { files::log(format!("setup: {l}")); }
+            rt().block_on(runner::run(folder, false, args.iter().any(|a| a == "--update")))
+        }
         Some("mcp") => rt().block_on(mcp::serve(words.get(1).copied().unwrap_or(""))),
         #[cfg(windows)]
         Some("service-run") => winservice::dispatch(folder),
@@ -60,6 +72,13 @@ fn running_install(here: &Folder) -> Option<Folder> {
     let me = std::fs::canonicalize(&here.dir).unwrap_or(here.dir.clone());
     install::earlier().into_iter().filter(|d| std::fs::canonicalize(d).unwrap_or(d.clone()) != me)
         .map(|d| Folder { config: d.join("ai-node.json"), dir: d }).find(|f| f.host_pid().is_some())
+}
+
+/// An installed host folder (not this one) that has an ai-node.json.
+fn configured_install(here: &Folder) -> Option<Folder> {
+    let me = std::fs::canonicalize(&here.dir).unwrap_or(here.dir.clone());
+    install::earlier().into_iter().filter(|d| std::fs::canonicalize(d).unwrap_or(d.clone()) != me)
+        .map(|d| Folder { config: d.join("ai-node.json"), dir: d }).find(|f| f.config.exists())
 }
 
 fn command(f: &Folder, w: &[&str], now: bool) -> i32 {
@@ -95,9 +114,21 @@ fn command(f: &Folder, w: &[&str], now: bool) -> i32 {
             }
         }
         "version" => { out(format!("{} {} {}", runner::VERSION, runner::COMMIT, runner::TARGET)); 0 }
+        "doctor" => {
+            let checks = control::doctor(f);
+            if std::env::args().any(|a| a == "--json") { out(serde_json::Value::Array(checks.iter().map(control::Check::json).collect()).to_string()); }
+            else { for c in &checks { out(format!("{} {}", c.tag(), c.text)); } }
+            0
+        }
+        "path" => match std::env::current_exe().map(|e| std::fs::canonicalize(&e).unwrap_or(e)) {
+            Ok(exe) => match pgm_platform_internal::path::ensure_on_path(&exe, "vr-host") { Ok(m) => { out(format!("vr-host: {m}")); 0 } Err(e) => { out(format!("Could not put vr-host on the PATH: {e}")); 1 } },
+            Err(e) => { out(format!("Cannot tell where this program is: {e}")); 1 }
+        },
+        // what the installed program does at every start (see install::ensure_setup), by hand
+        "setup" => { let l = install::ensure_setup(f); if l.is_empty() { out("Nothing to set up: everything is in place (or this is not the installed copy; `vr-host install` installs it).".into()); } for x in l { out(x); } 0 }
         "install" => { let all: Vec<String> = std::env::args().collect(); install::install(&all.iter().map(String::as_str).collect::<Vec<_>>()) }
         "tools" => { out(mcp::tool_names().to_string()); 0 }
-        _ => { out("vr-host [run | status | start | stop [--now] | restart [--now] | pause | resume | update | log [n] | lockdown | boot <mode> | settings | set <setting> <value> | version]".into()); 1 }
+        _ => { out("vr-host [run | status | start | stop [--now] | restart [--now] | pause | resume | update | log [n] | lockdown | boot <mode> | settings | set <setting> <value> | doctor [--json] | path | install | version]   (no word: the control app)".into()); 1 }
     }
 }
 

@@ -47,6 +47,7 @@ pub fn yes(v: &str) -> bool { matches!(v.trim().to_ascii_lowercase().as_str(), "
 fn user_list(v: &str) -> Vec<Value> {
     v.split(|c: char| c == ',' || c.is_whitespace()).map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty() && s.len() <= 32 && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')).map(Value::String).collect()
 }
+fn csv(v: &str) -> Vec<String> { v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() }
 fn is_local_http(hub: &str) -> bool {
     let rest = match hub.strip_prefix("http://") { Some(r) => r, None => return false };
     let host = rest.split(':').next().unwrap_or("");
@@ -132,6 +133,75 @@ impl HostSettings {
         out
     }
 
+    /// A settings object from its JSON text (a pasted ai-node.json), to be saved at `path`. Not checked: call check().
+    pub fn from_text(path: impl AsRef<Path>, text: &str) -> Result<Self> {
+        let v: Value = serde_json::from_str(text.trim()).map_err(|e| Error::msg(format!("that is not valid JSON: {e}")))?;
+        match v { Value::Object(raw) => Ok(HostSettings { path: path.as_ref().to_path_buf(), raw }), _ => Err(Error::msg("that must be a JSON object ({ \"hub\": …, \"id\": …, \"token\": … })")) }
+    }
+    /// A fresh settings object from the three values every host needs (each checked like `set` checks it).
+    pub fn from_parts(path: impl AsRef<Path>, hub: &str, id: &str, token: &str) -> Result<Self> {
+        let mut s = HostSettings::new(path);
+        s.set("hub", hub)?; s.set("id", id)?; s.set("token", token)?;
+        Ok(s)
+    }
+    /// Is this setting a switch (on / off, yes / no) the control app flips instead of asking for text?
+    pub fn is_switch(key: &str) -> bool {
+        matches!(key, "autoUpdate" | "allowWork" | "security.allowInsecureHub" | "security.engineGuard")
+            || (key.starts_with("provider.") && (key.ends_with(".enabled") || key.ends_with(".shareWithGroup"))) || (key.starts_with("engine.") && key.ends_with(".enabled"))
+    }
+    /// One line saying what a setting does (shown under the list in the control app).
+    pub fn explain(key: &str) -> &'static str {
+        match key {
+            "hub" => "The VibeRoller address this host connects out to. Must be https:// (or this machine).",
+            "token" => "The host's secret key to the hub. Never shown; type a new one (24+ characters) to replace it.",
+            "autoUpdate" => "The host fetches new versions of itself from the hub (signed, tried first, put back if they fail) between answers.",
+            "update.quietMinutes" => "An update or restart waits for this many minutes with nothing in flight (after 30 minutes of waiting it takes any gap).",
+            "update.checkMinutes" => "How often the host asks the hub whether there is a newer version.",
+            "reconnect.maxDelaySeconds" => "When the hub cannot be reached the host retries with growing waits, at most this long.",
+            "allowWork" => "SECURITY: lets Work runs from VibeRoller execute their tools on THIS machine. Off = only AI answers are shared.",
+            "pc.folder" => "SECURITY: one folder your own Work runs may read and write directly. Empty = off.",
+            "security.allowInsecureHub" => "SECURITY: lets the host use a plain-http hub on another machine (the token would travel unencrypted). Keep off.",
+            "security.engineGuard" => "SECURITY: the hub may use your engines (e.g. Ollama) but never manage them (pull / delete models). Keep on.",
+            k if k.starts_with("provider.") && k.ends_with(".enabled") => "Whether this provider is offered to the hub at all.",
+            k if k.starts_with("provider.") && k.ends_with(".shareWithGroup") => "Lets everyone in your VibeRoller team group use this provider through your host.",
+            k if k.starts_with("provider.") && k.ends_with(".allowedUsers") => "VibeRoller user names (comma list) who may use this provider besides you.",
+            k if k.starts_with("provider.") && k.ends_with(".max5h") => "This host stops lending the login once its 5-hour usage reaches this percent.",
+            k if k.starts_with("provider.") && k.ends_with(".max7d") => "This host stops lending the login once its 7-day usage reaches this percent.",
+            k if k.starts_with("engine.") => "An engine (a local AI server such as Ollama) lent to Unity; off keeps the address but stops lending it.",
+            _ => "",
+        }
+    }
+    /// Adds an OpenAI-compatible endpoint as a provider (kept at the end; every other key stays). Not saved.
+    pub fn add_endpoint(&mut self, id: &str, label: &str, base_url: &str, api_key: &str, models: &str) -> Result<()> {
+        let id = id.trim().to_ascii_lowercase();
+        if id.is_empty() || id.len() > 32 || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') { return Err(Error::msg("The id is letters, digits and dashes (up to 32), e.g. lmstudio.")); }
+        if self.all_providers().iter().any(|p| p.id == id) { return Err(Error::msg(format!("There is a provider \"{id}\" already."))); }
+        let base = base_url.trim().trim_end_matches('/');
+        if !(base.starts_with("http://") || base.starts_with("https://")) || base.len() < 9 || base.contains(char::is_whitespace) { return Err(Error::msg("The base URL starts with http:// or https:// (e.g. http://127.0.0.1:1234/v1).")); }
+        let models: Vec<Value> = csv(models).into_iter().map(Value::String).collect();
+        let mut o = Map::new();
+        o.insert("id".into(), json!(id)); o.insert("kind".into(), json!("openai")); o.insert("label".into(), json!(if label.trim().is_empty() { id.clone() } else { label.trim().to_string() }));
+        o.insert("baseUrl".into(), json!(base)); if !api_key.trim().is_empty() { o.insert("apiKey".into(), json!(api_key.trim())); }
+        o.insert("models".into(), Value::Array(models)); o.insert("enabled".into(), json!(true)); o.insert("shareWithGroup".into(), json!(false));
+        let e = self.raw.entry("providers").or_insert_with(|| json!([]));
+        if !e.is_array() { *e = json!([]); }
+        e.as_array_mut().expect("array").push(Value::Object(o));
+        Ok(())
+    }
+    /// Takes a local Ollama into the settings as a provider "ollama" (an OpenAI-compatible endpoint at `<url>/v1`), so it can
+    /// be shared like any other. Not saved.
+    pub fn adopt_ollama(&mut self, url: &str, models: &[String]) -> Result<()> {
+        let label = if self.user().is_empty() { "Ollama (this machine)".to_string() } else { format!("{}'s Ollama (this machine)", self.user()) };
+        self.add_endpoint("ollama", &label, &format!("{}/v1", url.trim_end_matches('/')), "", &models.join(","))
+    }
+    /// Removes a provider by id; false when there is none. Not saved.
+    pub fn remove_provider(&mut self, id: &str) -> bool {
+        let Some(a) = self.raw.get_mut("providers").and_then(Value::as_array_mut) else { return false };
+        let n = a.len();
+        a.retain(|p| p.get("id").and_then(Value::as_str) != Some(id));
+        a.len() != n
+    }
+
     /// Changes one setting by its key (as listed), checked like the control app checks it. Not saved: call save().
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let v = value.trim();
@@ -143,6 +213,10 @@ impl HostSettings {
                 let https_ok = h.strip_prefix("https://").map(|r| !r.is_empty() && !r.contains('/') && !r.contains(char::is_whitespace)).unwrap_or(false);
                 if !https_ok && !is_local_http(h) { return Err(Error::msg("Give the hub's https:// address (e.g. https://portal.unityailab.com).")); }
                 self.raw.insert("hub".into(), json!(h));
+            }
+            "id" => {
+                if v.is_empty() || v.len() > 64 || !v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') { return Err(Error::msg("The host id is letters, digits, - _ . (the one VibeRoller → Settings → My AI hosts shows).")); }
+                self.raw.insert("id".into(), json!(v));
             }
             "token" => { if v.len() < 24 { return Err(Error::msg("A token is at least 24 characters (VibeRoller → Settings → My AI hosts).")); } self.raw.insert("token".into(), json!(v)); }
             "autoUpdate" => { self.raw.insert("autoUpdate".into(), json!(yes(v))); }
@@ -162,6 +236,8 @@ impl HostSettings {
                 let val = match field {
                     "enabled" | "shareWithGroup" => json!(yes(v)),
                     "allowedUsers" => Value::Array(user_list(v)),
+                    "label" => json!(v),
+                    "models" => Value::Array(csv(v).into_iter().map(Value::String).collect()),
                     "max5h" | "max7d" => json!(range(1.0, 100.0)?),
                     _ => return Err(Error::msg(format!("No setting \"{k}\"."))),
                 };
@@ -211,6 +287,41 @@ mod tests {
         assert!(t.check().is_err());
         t.raw.insert("hub".into(), json!("http://127.0.0.1:7777"));
         assert!(t.check().is_ok());
+    }
+    #[test]
+    fn providers_added_adopted_removed_and_edited_keep_the_rest() {
+        let mut s = sample();
+        s.raw.insert("zzz".into(), json!(1));
+        assert!(s.add_endpoint("Bad Id", "", "http://127.0.0.1:1/v1", "", "").is_err());
+        assert!(s.add_endpoint("claude", "", "http://127.0.0.1:1/v1", "", "").is_err());
+        assert!(s.add_endpoint("lm", "", "ftp://x", "", "").is_err());
+        s.add_endpoint("LM", "LM Studio", "http://127.0.0.1:1234/v1/", "sk-x", "a, b,,c").unwrap();
+        let lm = s.all_providers().into_iter().find(|p| p.id == "lm").unwrap();
+        assert_eq!((lm.kind.as_str(), lm.base_url.as_str(), lm.api_key.as_str(), lm.models.len(), lm.enabled), ("openai", "http://127.0.0.1:1234/v1", "sk-x", 3, true));
+        s.adopt_ollama("http://127.0.0.1:11434", &["llama3".to_string()]).unwrap();
+        assert!(s.adopt_ollama("http://127.0.0.1:11434", &[]).is_err());
+        let o = s.all_providers().into_iter().find(|p| p.id == "ollama").unwrap();
+        assert_eq!((o.base_url.as_str(), o.models.clone()), ("http://127.0.0.1:11434/v1", vec!["llama3".to_string()]));
+        s.set("provider.lm.label", "Mine").unwrap(); s.set("provider.lm.models", "x,y").unwrap();
+        let lm = s.all_providers().into_iter().find(|p| p.id == "lm").unwrap();
+        assert_eq!((lm.label.as_str(), lm.models.clone()), ("Mine", vec!["x".to_string(), "y".to_string()]));
+        assert!(s.remove_provider("lm") && !s.remove_provider("lm"));
+        assert_eq!(s.raw["custom"], json!({ "kept": true })); assert_eq!(s.raw["zzz"], json!(1));
+        assert_eq!(s.raw.keys().map(String::as_str).collect::<Vec<_>>(), vec!["hub", "id", "token", "custom", "providers", "engines", "zzz"]);
+        assert!(HostSettings::is_switch("autoUpdate") && HostSettings::is_switch("provider.x.enabled") && !HostSettings::is_switch("hub") && !HostSettings::is_switch("provider.x.allowedUsers"));
+        assert!(!HostSettings::explain("provider.x.max5h").is_empty() && HostSettings::explain("nope").is_empty());
+    }
+    #[test]
+    fn a_new_host_from_three_values_or_pasted_text() {
+        let p = std::env::temp_dir().join("vr-core-never-written.json");
+        assert!(HostSettings::from_parts(&p, "https://portal.example.org/", "my-host", "short").is_err());
+        assert!(HostSettings::from_parts(&p, "http://evil.example", "my-host", &"t".repeat(30)).is_err());
+        let s = HostSettings::from_parts(&p, "https://portal.example.org/", "my-host", &"t".repeat(30)).unwrap();
+        assert!(s.check().is_ok() && s.hub() == "https://portal.example.org" && s.id() == "my-host");
+        let t = HostSettings::from_text(&p, &format!("{{ \"hub\": \"https://h.example\", \"id\": \"a\", \"token\": \"{}\", \"extra\": 2 }}", "k".repeat(30))).unwrap();
+        assert!(t.check().is_ok() && t.raw.contains_key("extra"));
+        assert!(HostSettings::from_text(&p, "[1]").is_err() && HostSettings::from_text(&p, "{ nope").is_err());
+        assert!(HostSettings::from_text(&p, "{}").unwrap().check().is_err());
     }
     #[test]
     fn set_validates_like_the_control_app_and_keeps_unknown_keys() {

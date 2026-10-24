@@ -64,6 +64,24 @@ pub fn ollama_models(tags: &Value) -> Vec<String> {
     tags["models"].as_array().map(|a| a.iter().filter_map(|m| m["name"].as_str().or(m["model"].as_str()).map(String::from)).take(40).collect()).unwrap_or_default()
 }
 
+/// Where this machine's Ollama would be (OLLAMA_HOST, else the usual address).
+pub fn ollama_address() -> String { std::env::var("OLLAMA_HOST").ok().map(|u| ollama_url_of(&u)).unwrap_or_else(|| OLLAMA_URL.to_string()) }
+/// Asks Ollama at `url` for its models (1.5 s at most): Some(model names) when it answers, else None.
+pub async fn probe_ollama(http: &reqwest::Client, url: &str) -> Option<Vec<String>> {
+    let r = http.get(format!("{url}/api/tags")).timeout(Duration::from_millis(1500)).send().await.ok().filter(|r| r.status().is_success())?;
+    let tags: Value = r.json().await.ok()?;
+    Some(ollama_models(&tags))
+}
+
+/// For a control app (no async runtime running): the Ollama on this machine, as (address, models), if it answers (1.5 s).
+pub fn probe_ollama_blocking() -> Option<(String, Vec<String>)> {
+    let url = ollama_address();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+    let http = pgm_net_internal::client::http_client(Duration::from_millis(1500)).ok()?;
+    let models = rt.block_on(probe_ollama(&http, &url))?;
+    Some((url, models))
+}
+
 /// Is there an Ollama here that answers, and which models does it have? Offered without any configuration: the engine
 /// "ollama" (Unity) when none is configured, and a private provider "ollama" (an OpenAI-compatible endpoint at /v1) the
 /// person can pick for the API and Unity. Off with "autoDetect": { "ollama": false } in ai-node.json; a provider or engine
@@ -71,12 +89,12 @@ pub fn ollama_models(tags: &Value) -> Vec<String> {
 /// next reconnect and one that went away is dropped.
 pub async fn detect_local(h: &H) {
     let off = h.cfg.raw.get("autoDetect").and_then(|o| o.get("ollama")).and_then(Value::as_bool) == Some(false);
-    let url = std::env::var("OLLAMA_HOST").ok().map(|u| ollama_url_of(&u)).unwrap_or_else(|| OLLAMA_URL.to_string());
+    let url = ollama_address();
     let mut d = Detected::default();
+    let mut seen = json!({});
     if !off {
-        let tags: Option<Value> = match h.http.get(format!("{url}/api/tags")).timeout(Duration::from_millis(1500)).send().await { Ok(r) if r.status().is_success() => r.json().await.ok(), _ => None };
-        if let Some(tags) = tags {
-            let models = ollama_models(&tags);
+        if let Some(models) = probe_ollama(&h.http, &url).await {
+            seen = json!({ "ollama": url, "models": models });
             let configured_engine = h.cfg.engines().iter().any(|(k, _)| k == "ollama");
             let configured_endpoint = h.cfg.all_providers().iter().any(|p| p.kind == "openai" && (p.base_url.contains(":11434") || p.id == "ollama"));
             if !configured_engine { d.ollama_engine = Some(url.clone()); }
@@ -94,6 +112,7 @@ pub async fn detect_local(h: &H) {
             None => log("no Ollama answers on this machine (start it, or set engines.ollama in ai-node.json)") }
     }
     *h.detected.lock().unwrap_or_else(|e| e.into_inner()) = d;
+    h.set_status(json!({ "detected": seen })); // for the control app: what this host found on the machine by itself
 }
 
 /// The logins this host lends, checked where the relay will look for them, so a missing one is said here and not only as

@@ -7,6 +7,39 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.8.0 — 2026-10-24
+
+MINOR: **`vr-host` is one place for everything.** Sponge, on a Linux PC: a Downloads copy and the real host in
+`~/.local/share/viberoller/ai-host` ran side by side, `vr-host` was not on the PATH, settings meant typing on/off, and the
+Codex login and Ollama were invisible. Now: run `vr-host` and set up, configure, check, update and start at boot from
+inside it; install puts it on the PATH and updates keep the setup complete by themselves.
+- **On the PATH, Windows and Linux** (new `pgm-platform-internal::path`): `ensure_on_path` / `ensure_on_path_in` /
+  `path_status` / `on_path`. Linux: a link `~/.local/bin/vr-host` to the installed program (a stale link is replaced, a
+  file that is not ours never) and, when `~/.local/bin` is not on the PATH, ONE block marked
+  `# added by VibeRoller AI Host (vr-host)` in `~/.profile` (and `~/.bash_profile` / `~/.zprofile` when they exist), never
+  twice. Windows: the program's folder added to the USER Path (PowerShell `SetEnvironmentVariable`, case and trailing
+  backslash insensitive; the machine Path is never touched). `vr-host path` does it by hand.
+- **Setup follows updates** (`vr-host` install.rs `ensure_setup`): `vr-host host` from an installed folder completes the
+  setup at every start (PATH, VERSION.txt, the previous version's file removed once no update is on trial, a boot entry
+  that runs another copy is named); hosts update in place and restart through it, so a step added there reaches every
+  machine at its next update. `install` also puts vr-host on the PATH and, with no boot mode set and a config present,
+  sets the default (Linux user service, Windows sign-in) and starts the host. `VR_HOST_NO_BOOT=1` / `VR_HOST_NO_PATH=1`
+  keep a run off systemd / the PATH (tests). Hidden `vr-host setup` runs the same by hand.
+- **`vr-host doctor [--json]`**: config valid and private, which copy is this (download or installed, both versions), the
+  boot entry points at the installed program, vr-host on the PATH, the hub (from the host's status file), each login
+  (Claude / Codex, with the fix text), Ollama (asked at OLLAMA_HOST, models counted; the host's status file now carries
+  `detected: { ollama, models }`), updates (running vs hub version). `control::fix` repairs lockdown, path, boot, install.
+- **The terminal app** (`tui.rs`): a first-run setup wizard (hub, id, masked token, or paste an ai-node.json / its path);
+  a dashboard with a download-copy banner, an Updates row (running / hub / automatic / last) and a Providers row with a
+  login mark per provider and the Ollama found; keys for start, stop, restart, pause, update now (shows the result), providers,
+  settings, doctor, boot, install, log, help. Providers: switches, edit label / models / allowed users, add an
+  OpenAI-compatible endpoint, remove (twice), adopt the found Ollama. Settings: switches flip with Space, text opens a
+  prefilled editor (the token never shown), a line explains the setting. Doctor: Enter repairs a FIX row. Log: End = newest.
+  The terminal is handed back around sudo / administrator prompts.
+- A download without an ai-node.json acts on an installed host that has one. README.txt and the page describe the above.
+- R184 (Linux): install from a scratch download into a scratch HOME, the PATH link and the profile block once, doctor,
+  path, setup.
+
 ## 5.7.2 — 2026-10-23
 
 PATCH (hotfix): **the native AI host's update and install behave on a machine with two copies.** Found on Sponge's
