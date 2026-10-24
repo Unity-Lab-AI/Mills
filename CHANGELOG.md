@@ -7,6 +7,25 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.11.1 — 2026-10-24
+
+PATCH: **notification sounds with a pattern of their own** (board T-177). Sponge: "rather than simply being a ding, I
+would like more of a pattern of some kind, with distinct sound patterns."
+- **Patterns** (the new default, `web/index.html` `PATTERNS`): each kind is a motif told apart by rhythm and timbre as
+  much as by pitch: a message is a soft two-note chime (falling), an @mention / private message a quick rising run, a
+  reply to you a call-and-answer phrase, an incoming call a ringing trill played twice, a board reminder a tick-tock
+  with a closing note. Every note has a soft attack and decay, a quiet overtone an octave up and a low-pass, so it
+  sounds like a small bell rather than a beep; all under two seconds. Still Web Audio only, no sound files.
+- **Classic** (the short beeps of before) stays as a choice: Settings → Sound style. The test buttons play the style
+  picked in the menu right now, so the two can be compared before saving.
+- **Two new volumes**: Incoming call and Board reminder (they followed the @mention volume before and still start from
+  it). Calls ring with the `call` pattern (`web/calls.js`), board reminders tick with `board` (`web/board.js`).
+- The hub keeps the new keys: `sound.set` (only `classic` / `patterns`) and `sound.call` / `sound.board` (0–100), in
+  both hubs (`bridge/server.js`, `vr-hub` `modules/profile.rs`, and `pgm-hcom-internal` `profile.rs`, mirrored to
+  pgm-libs). An older page ignores them; this page on an older hub falls back to the @mention volume.
+- R190: a distinct pattern per kind, Classic kept, the style and the volumes stored and clamped, the call and board
+  call sites.
+
 ## 5.11.0 — 2026-10-24
 
 MINOR: **sharing with scopes** (board T-176 part 9d; Jcode-Mods ARCHITECTURE.md §4). MINOR rather than a patch because it

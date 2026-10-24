@@ -60,7 +60,7 @@ async function onCallState(state) {
 }
 function callNotify(conv, user) {
   const P = prefs();
-  if (P.sound.on) playTone('mention', P.sound.mention);
+  if (P.sound.on) playTone('call', P.sound.call ?? P.sound.mention); // the ringing pattern (5.11.0); an older page's prefs fall back to mention
   const t = document.createElement('div'); t.className = 'toast mention'; t.style.borderLeftColor = colorOf(user);
   const b = document.createElement('b'); b.style.color = colorOf(user); label(b, 'phone', nickOf(user));
   t.append(b, ' is in a ' + (conv === 'room' ? 'call in # Everyone' : 'private call with you') + ' — click to join');

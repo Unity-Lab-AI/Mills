@@ -923,6 +923,9 @@
       <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <label class="row">Sound style <select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
       <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
       <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
@@ -2729,7 +2732,7 @@ const snippet = (rec) => (rec.m.deleted ? 'message deleted'
 function prefs() {
   const p = (me && me.prefs) || {};
   return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
-    sound: { on: true, message: 50, mention: 70, reply: 70, ...(p.sound || {}) },
+    sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70 },
     tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) }, // all = master switch
     clips: { volume: 90, autoplay: false, ...(p.clips || {}) },
     audio: { noise: true, echo: true, agc: true, ...(p.audio || {}) }, // noise suppression on by default
@@ -3110,20 +3113,49 @@ document.addEventListener('visibilitychange', markSeen);
 // Notifications: a different tone for a normal message, an @mention / private message, and a reply
 // to you; plus optional pop-ups that float up and fade while you are in Work.
 let audioCtx = null;
-const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]] };
-function playTone(kind, volume) {
+// Two sound sets (Settings → Sound style). Classic: the short sine blips VibeRoller always had. Patterns (default):
+// each kind its own motif, told apart by rhythm and timbre as much as by pitch, so you know what happened without
+// looking: a soft two-note chime for a message, a quick rising run for an @mention, a call-and-answer phrase for a reply
+// to you, a ringing trill that repeats for an incoming call, a tick-tock for a board reminder. Notes are
+// [frequency Hz, start s, length s, wave, loudness 0..1]; every note gets a soft attack, a long-ish decay, a quiet
+// overtone an octave up (bell-like, never harsh) and a low-pass so nothing is shrill. All under two seconds.
+const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]], call: [[880, 0, 0.12], [1100, 0.14, 0.12], [880, 0.5, 0.12], [1100, 0.64, 0.12]], board: [[988, 0, 0.12], [740, 0.16, 0.16]] };
+const PATTERNS = {
+  message: [[784, 0, 0.32, 'triangle', 1], [587, 0.13, 0.5, 'triangle', 0.85]],
+  mention: [[659, 0, 0.12, 'triangle', 0.8], [784, 0.07, 0.12, 'triangle', 0.85], [988, 0.14, 0.12, 'triangle', 0.9], [1319, 0.21, 0.42, 'triangle', 1]],
+  reply: [[784, 0, 0.14, 'sine', 0.9], [988, 0.13, 0.22, 'sine', 1], [659, 0.46, 0.14, 'triangle', 0.75], [784, 0.59, 0.36, 'triangle', 0.85]],
+  call: [0, 0.82].flatMap((t) => [[1047, t, 0.09, 'sine', 0.9], [1319, t + 0.09, 0.09, 'sine', 0.9], [1047, t + 0.18, 0.09, 'sine', 0.9], [1319, t + 0.27, 0.22, 'sine', 1]]),
+  board: [[1568, 0, 0.06, 'square', 0.35], [1175, 0.2, 0.06, 'square', 0.3], [1568, 0.4, 0.06, 'square', 0.35], [880, 0.58, 0.4, 'triangle', 0.8]],
+};
+function soundSet() { try { return prefs().sound.set === 'classic' ? 'classic' : 'patterns'; } catch { return 'patterns'; } }
+function playTone(kind, volume, set = soundSet()) {
   if (!volume) return;
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
     const now = audioCtx.currentTime, peak = (volume / 100) * 0.35;
-    for (const [f, at, dur] of TONES[kind]) {
-      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.type = 'sine'; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, now + at);
-      g.gain.exponentialRampToValueAtTime(peak, now + at + 0.015);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + at + dur);
-      o.connect(g).connect(audioCtx.destination); o.start(now + at); o.stop(now + at + dur + 0.03);
+    if (set === 'classic') {
+      for (const [f, at, dur] of TONES[kind] || TONES.mention) {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = 'sine'; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, now + at);
+        g.gain.exponentialRampToValueAtTime(peak, now + at + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + at + dur);
+        o.connect(g).connect(audioCtx.destination); o.start(now + at); o.stop(now + at + dur + 0.03);
+      }
+      return;
+    }
+    const out = audioCtx.createBiquadFilter(); out.type = 'lowpass'; out.frequency.value = 4200; out.Q.value = 0.3; out.connect(audioCtx.destination);
+    for (const [f, at, dur, wave, loud] of PATTERNS[kind] || PATTERNS.mention) {
+      const t0 = now + at, top = peak * loud;
+      for (const [mult, share, type] of [[1, 1, wave], [2, 0.18, 'sine']]) { // the note and a quiet octave overtone
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = type; o.frequency.value = f * mult;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(Math.max(top * share, 0.0002), t0 + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        o.connect(g).connect(out); o.start(t0); o.stop(t0 + dur + 0.05);
+      }
     }
   } catch {}
 }
@@ -3766,6 +3798,7 @@ function openSettings() {
   sw.querySelectorAll('button').forEach((b) => { b.onclick = () => { pickedColor = b.dataset.idx === '' ? null : Number(b.dataset.idx); mark(); }; });
   mark();
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
+  $('volCall').value = P.sound.call; $('volBoard').value = P.sound.board; $('soundSet').value = P.sound.set === 'classic' ? 'classic' : 'patterns';
   $('setToasts').checked = P.toasts; $('setAutoScroll').checked = P.autoScroll;
   $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
@@ -4009,12 +4042,13 @@ $('ttsTest').onclick = () => { // test with the values on screen, before saving
   if (v) u.voice = v;
   speechSynthesis.speak(u);
 };
-document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply' }[b.dataset.test]).value)); });
+// a test plays in the style picked right now (before saving), so the two can be compared
+document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply', call: 'volCall', board: 'volBoard' }[b.dataset.test]).value), $('soundSet').value); });
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
       nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
-      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value) },
+      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), set: $('soundSet').value },
       tts: { all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
       clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },
       audio: { noise: $('audNoise').checked, echo: $('audEcho').checked, agc: $('audAgc').checked },

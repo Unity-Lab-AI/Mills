@@ -1188,6 +1188,21 @@ async function run() {
     && pr.data.prefs.clips && pr.data.prefs.clips.volume === 0 && pr.data.prefs.clips.autoplay === true
     && pr.data.prefs.audio && pr.data.prefs.audio.noise === false && pr.data.prefs.audio.echo === true
     && pr.data.prefs.call && pr.data.prefs.call.volume === 100 && pr.data.prefs.call.quality === 'medium' && pr.data.prefs.autosave === 120;
+  // R190: the notification sound patterns (T-177): each kind its own motif, a style choice kept by the hub
+  {
+    const sp = await call('/api/prefs', U, { sound: { set: 'classic', call: 33, board: 140 } });
+    const sp2 = await call('/api/prefs', U, { sound: { set: 'loud-and-weird' } });
+    const s1 = (sp.data.prefs || {}).sound || {}, s2 = (sp2.data.prefs || {}).sound || {};
+    const block = (/const PATTERNS = \{([\s\S]*?)\n\};/.exec(html) || [])[1] || '';
+    const kinds = ['message', 'mention', 'reply', 'call', 'board'];
+    const bodies = kinds.map((k) => ((new RegExp('\\n  ' + k + ': (.+),?\\n').exec(block + '\n') || [])[1] || ''));
+    check('R190', 'notification sounds: a distinct pattern per kind (message, mention, reply, call, board; no two the same), Classic kept as a choice; the hub keeps the style (only classic / patterns) and the call / board volumes (clamped); calls ring with `call`, board reminders tick with `board`',
+      kinds.every((k, i) => bodies[i].length > 10) && new Set(bodies).size === kinds.length && /id="soundSet"/.test(html) && /id="volCall"/.test(html) && /id="volBoard"/.test(html)
+      && /set === 'classic'/.test(html) && s1.set === 'classic' && s1.call === 33 && s1.board === 100 && s2.set === 'classic'
+      && /playTone\('call'/.test(fs.readFileSync(path.join(MILLS, 'web', 'calls.js'), 'utf8')) && /playTone\('board'/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8')),
+      `kinds ${bodies.map((b) => b.length).join('/')}; saved ${JSON.stringify(s1)} then ${JSON.stringify(s2)}`);
+    await call('/api/prefs', U, { sound: { set: 'patterns' } });
+  }
   const prBad = await call('/api/prefs', A, { color: 99 });
   const memP = ((await call('/api/room/members', A)).data.members || []).find((m) => m.username === 't-user');
   check('R42', 'settings: nickname cleaned, colour kept, volumes / speech settings clamped, text-to-speech master switch + Unity voice stored as booleans on the account, bad colour → none; others see nick + colour; [static] both switches in Settings, speak() and the Voice button obey the master switch', pr.status === 200 && ttsOk && pr.data.prefs.nick === 'Tee Nick'

@@ -457,7 +457,8 @@ function cleanPrefs(p, prev = {}) {
   if (p.sound && typeof p.sound === 'object') {
     const s = { ...(prev.sound || {}) };
     if (p.sound.on !== undefined) s.on = !!p.sound.on;
-    for (const k of ['message', 'mention', 'reply']) if (p.sound[k] !== undefined) s[k] = Math.max(0, Math.min(100, Math.round(Number(p.sound[k]) || 0)));
+    for (const k of ['message', 'mention', 'reply', 'call', 'board']) if (p.sound[k] !== undefined) s[k] = Math.max(0, Math.min(100, Math.round(Number(p.sound[k]) || 0)));
+    if (p.sound.set === 'classic' || p.sound.set === 'patterns') s.set = p.sound.set; // the sound style (5.11.0)
     out.sound = s;
   }
   if (p.tts && typeof p.tts === 'object') { // text to speech: `all` = master switch (chat read-aloud AND Unity's voice), `on` = chat read-aloud, `unity` = Unity speaks her replies
