@@ -923,6 +923,9 @@
       <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <label class="row">Sound style <select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
       <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
       <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
@@ -2201,23 +2204,40 @@ async function followRun(saved, inSend) {
   if (joined) { hideThinking(); setBusy(false); refreshUsage(); }
   return joined;
 }
+// The hub's one event schema (HubEvent, native/crates/pgm-ai-internal/src/harness.rs): a Work event the hub classified
+// carries `hub` { v: 1, kind: init | system | assistant | tool_results | result, blocks, results, ... }, the same for Claude
+// Code and for Jcode PGM. An event without it (a hub or an AI host that predates it) is read from the Claude-shaped alias
+// fields into the same view, so both ways render identically. null = not a harness event (bridge_*, stderr, ...).
+function hubView(ev) {
+  if (ev && ev.hub && ev.hub.v === 1 && ev.hub.kind) return ev.hub;
+  const m = (ev && ev.message) || {}, content = Array.isArray(m.content) ? m.content : [];
+  switch (ev && ev.type) {
+    case 'system': return ev.subtype === 'init' ? { v: 1, kind: 'init', model: ev.model || '', session: ev.session_id || '' } : { v: 1, kind: 'system', subtype: ev.subtype || '' };
+    case 'assistant': return { v: 1, kind: 'assistant', model: m.model || '', usage: m.usage && typeof m.usage === 'object' ? m.usage : undefined,
+      blocks: content.filter((b) => b && (b.type === 'text' || b.type === 'tool_use')).map((b) => (b.type === 'text' ? { type: 'text', text: b.text || '' } : { type: 'tool_use', id: b.id || '', name: b.name, input: b.input || {} })) };
+    case 'user': return { v: 1, kind: 'tool_results', results: content.filter((b) => b && b.type === 'tool_result').map((b) => ({ id: b.tool_use_id || '', content: b.content, error: b.is_error === true })) };
+    case 'result': return { v: 1, kind: 'result', error: ev.is_error === true, text: typeof ev.result === 'string' ? ev.result : '', subtype: ev.subtype || '', durationMs: ev.duration_ms || 0 };
+    default: return null;
+  }
+}
 function handleEvent(ev) {
   if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; return; }
   if (ev.type === 'bridge_done') runEnded = true;
   if (ev.type === 'pc_tool') return runPcTool(ev);
+  const hv = hubView(ev), hk = hv ? hv.kind : '';
   // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
-  if ((ev.type === 'assistant' && ev.message && ev.message.usage) || /rate_limit/.test(String(ev.type || '')) || ev.type === 'result') refreshUsageSoon();
-  if (ev.type === 'assistant' || ev.type === 'bridge_error' || ev.type === 'result') hideThinking();
-  if (ev.type === 'assistant' && ev.message) {
-    for (const block of ev.message.content || []) {
+  if ((hk === 'assistant' && hv.usage) || /rate_limit/.test(String(ev.type || '')) || hk === 'result') refreshUsageSoon();
+  if (hk === 'assistant' || ev.type === 'bridge_error' || hk === 'result') hideThinking();
+  if (hk === 'assistant') {
+    for (const block of hv.blocks || []) {
       if (block.type === 'text' && block.text.trim()) { renderText(bubble('claude'), block.text); record('claude', block.text); }
       else if (block.type === 'tool_use') { const t = describeTool(block); line('tool', t); record('tool', t); }
     }
-  } else if (ev.type === 'system' && ev.subtype === 'init') { if (ev.model) runModel = ev.model; }
-  else if (ev.type === 'result') {
-    runOutcome = ev.is_error ? { state: 'failed', text: 'Stopped with an error' } : { state: 'done', text: 'Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + ' s' : '') };
-    if (ev.is_error) sys('Claude stopped with an error: ' + (ev.result || ev.subtype), true);
-    else sys('Done' + (ev.duration_ms ? ' in ' + Math.round(ev.duration_ms / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
+  } else if (hk === 'init') { if (hv.model) runModel = hv.model; }
+  else if (hk === 'result') {
+    runOutcome = hv.error ? { state: 'failed', text: 'Stopped with an error' } : { state: 'done', text: 'Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + ' s' : '') };
+    if (hv.error) sys('Claude stopped with an error: ' + (hv.text || hv.subtype), true);
+    else sys('Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
   } else if (ev.type === 'stderr') stderrText = (stderrText + ev.text).slice(-600);
   else if (ev.type === 'bridge_error') { sys(ev.text, true); runOutcome = { state: 'failed', text: 'Failed: ' + ev.text }; }
   else if (ev.type === 'bridge_info') sys(ev.text); // e.g. which AI host runs this reply
@@ -2712,7 +2732,7 @@ const snippet = (rec) => (rec.m.deleted ? 'message deleted'
 function prefs() {
   const p = (me && me.prefs) || {};
   return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
-    sound: { on: true, message: 50, mention: 70, reply: 70, ...(p.sound || {}) },
+    sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70 },
     tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) }, // all = master switch
     clips: { volume: 90, autoplay: false, ...(p.clips || {}) },
     audio: { noise: true, echo: true, agc: true, ...(p.audio || {}) }, // noise suppression on by default
@@ -3093,20 +3113,49 @@ document.addEventListener('visibilitychange', markSeen);
 // Notifications: a different tone for a normal message, an @mention / private message, and a reply
 // to you; plus optional pop-ups that float up and fade while you are in Work.
 let audioCtx = null;
-const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]] };
-function playTone(kind, volume) {
+// Two sound sets (Settings → Sound style). Classic: the short sine blips VibeRoller always had. Patterns (default):
+// each kind its own motif, told apart by rhythm and timbre as much as by pitch, so you know what happened without
+// looking: a soft two-note chime for a message, a quick rising run for an @mention, a call-and-answer phrase for a reply
+// to you, a ringing trill that repeats for an incoming call, a tick-tock for a board reminder. Notes are
+// [frequency Hz, start s, length s, wave, loudness 0..1]; every note gets a soft attack, a long-ish decay, a quiet
+// overtone an octave up (bell-like, never harsh) and a low-pass so nothing is shrill. All under two seconds.
+const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]], call: [[880, 0, 0.12], [1100, 0.14, 0.12], [880, 0.5, 0.12], [1100, 0.64, 0.12]], board: [[988, 0, 0.12], [740, 0.16, 0.16]] };
+const PATTERNS = {
+  message: [[784, 0, 0.32, 'triangle', 1], [587, 0.13, 0.5, 'triangle', 0.85]],
+  mention: [[659, 0, 0.12, 'triangle', 0.8], [784, 0.07, 0.12, 'triangle', 0.85], [988, 0.14, 0.12, 'triangle', 0.9], [1319, 0.21, 0.42, 'triangle', 1]],
+  reply: [[784, 0, 0.14, 'sine', 0.9], [988, 0.13, 0.22, 'sine', 1], [659, 0.46, 0.14, 'triangle', 0.75], [784, 0.59, 0.36, 'triangle', 0.85]],
+  call: [0, 0.82].flatMap((t) => [[1047, t, 0.09, 'sine', 0.9], [1319, t + 0.09, 0.09, 'sine', 0.9], [1047, t + 0.18, 0.09, 'sine', 0.9], [1319, t + 0.27, 0.22, 'sine', 1]]),
+  board: [[1568, 0, 0.06, 'square', 0.35], [1175, 0.2, 0.06, 'square', 0.3], [1568, 0.4, 0.06, 'square', 0.35], [880, 0.58, 0.4, 'triangle', 0.8]],
+};
+function soundSet() { try { return prefs().sound.set === 'classic' ? 'classic' : 'patterns'; } catch { return 'patterns'; } }
+function playTone(kind, volume, set = soundSet()) {
   if (!volume) return;
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
     const now = audioCtx.currentTime, peak = (volume / 100) * 0.35;
-    for (const [f, at, dur] of TONES[kind]) {
-      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.type = 'sine'; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, now + at);
-      g.gain.exponentialRampToValueAtTime(peak, now + at + 0.015);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + at + dur);
-      o.connect(g).connect(audioCtx.destination); o.start(now + at); o.stop(now + at + dur + 0.03);
+    if (set === 'classic') {
+      for (const [f, at, dur] of TONES[kind] || TONES.mention) {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = 'sine'; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, now + at);
+        g.gain.exponentialRampToValueAtTime(peak, now + at + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + at + dur);
+        o.connect(g).connect(audioCtx.destination); o.start(now + at); o.stop(now + at + dur + 0.03);
+      }
+      return;
+    }
+    const out = audioCtx.createBiquadFilter(); out.type = 'lowpass'; out.frequency.value = 4200; out.Q.value = 0.3; out.connect(audioCtx.destination);
+    for (const [f, at, dur, wave, loud] of PATTERNS[kind] || PATTERNS.mention) {
+      const t0 = now + at, top = peak * loud;
+      for (const [mult, share, type] of [[1, 1, wave], [2, 0.18, 'sine']]) { // the note and a quiet octave overtone
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = type; o.frequency.value = f * mult;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(Math.max(top * share, 0.0002), t0 + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        o.connect(g).connect(out); o.start(t0); o.stop(t0 + dur + 0.05);
+      }
     }
   } catch {}
 }
@@ -3749,6 +3798,7 @@ function openSettings() {
   sw.querySelectorAll('button').forEach((b) => { b.onclick = () => { pickedColor = b.dataset.idx === '' ? null : Number(b.dataset.idx); mark(); }; });
   mark();
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
+  $('volCall').value = P.sound.call; $('volBoard').value = P.sound.board; $('soundSet').value = P.sound.set === 'classic' ? 'classic' : 'patterns';
   $('setToasts').checked = P.toasts; $('setAutoScroll').checked = P.autoScroll;
   $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
@@ -3799,7 +3849,7 @@ async function renderForgejo() {
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
-const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
+const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host · Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
 async function renderApiAccess(freshKey) {
   const box = $('apiBox'); if (!box) return;
   let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
@@ -3887,7 +3937,7 @@ async function renderProviders() {
 }
 function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
 // ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
-const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM' };
+const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host, Jcode PGM' };
 async function renderSource() {
   const box = $('srcBox'); if (!box) return;
   let d; try { d = await json('/api/check'); } catch (e) { box.textContent = e.message; return; }
@@ -3911,6 +3961,61 @@ async function renderSource() {
   note.textContent = (d.hubClaude === false ? 'This hub has no Claude of its own: Work and the API run on an AI host. ' : '') + 'AI hosts show up here when they are connected; their owners choose who may use them (My AI hosts).';
   box.append(note);
 }
+// ── Settings → My AI hosts, monitor and control (5.12.0): a live line per host (refreshed every 10 s while the panel is open) and Pause / Resume / Restart / Update now / Show log; an older host shows what the hub knows and a note ──
+const hostAgo = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : s < 172800 ? Math.round(s / 3600) + ' h' : Math.round(s / 86400) + ' days'; };
+function hostLiveText(h, now) {
+  const st = h.status || {}, bits = [];
+  bits.push(h.paused ? 'paused ' + (st.pausedBy === 'hub' ? 'from here (it lends nothing until you resume it)' : 'on its machine') : h.online ? 'online' + (h.since ? ' since ' + new Date(h.since).toLocaleTimeString() : '') : h.seen ? 'offline (last seen ' + new Date(h.seen).toLocaleString() + ')' : 'never connected yet');
+  if (h.version) bits.push('host ' + h.version + (st.startedAt && h.online ? ', up ' + hostAgo(now - st.startedAt) : ''));
+  const use = (h.inUse || []).map((u) => u.kind === 'work' ? (u.person ? nickOf(u.person) : 'someone') + ' (Work' + (u.project ? ', ' + u.project : '') + ')' : u.what);
+  if (h.online || h.paused) bits.push(use.length ? 'in use: ' + use.join(', ') : 'idle' + (st.lastJobAt ? ' (last job ' + hostAgo(now - st.lastJobAt) + ' ago)' : ''));
+  const pc = (w) => !w || w.utilization == null ? null : (w.resetsAt && w.resetsAt < now ? 0 : Math.round(w.utilization * 100));
+  for (const p of h.providers || []) { const a = pc(p.usage && p.usage.five_hour), b = pc(p.usage && p.usage.seven_day); if (a != null || b != null) bits.push(p.label + ': 5 h ' + (a == null ? '?' : a + '%') + ' · 7 d ' + (b == null ? '?' : b + '%') + (p.capped ? ' (capped)' : '')); }
+  for (const [pid, msg] of Object.entries(st.logins || {})) if (msg) bits.push('login ' + pid + ': ' + msg);
+  if (st.lastUpdate) bits.push('last update: ' + st.lastUpdate + (st.lastUpdateAt ? ' (' + hostAgo(now - st.lastUpdateAt) + ' ago)' : ''));
+  if (st.pending) bits.push(st.pending);
+  if (h.control && h.online && !h.statusFresh && h.statusAgeMs) bits.push('status ' + hostAgo(h.statusAgeMs) + ' old');
+  return bits.join(' · ');
+}
+function hostLiveBox(h) {
+  const box = document.createElement('div'); box.className = 'hostLive'; box.dataset.host = h.id;
+  const line = document.createElement('small'); line.className = 'hostLiveLine'; line.style.display = 'block'; line.textContent = 'Looking …';
+  const row = document.createElement('div'); row.className = 'row hostLiveBtns'; row.hidden = true;
+  const note = document.createElement('small'); note.className = 'hostLiveNote'; note.style.display = 'block';
+  const logbox = document.createElement('pre'); logbox.className = 'hostLog'; logbox.hidden = true; logbox.style.cssText = 'max-height:14em;overflow:auto;font-size:11px;white-space:pre-wrap;margin:4px 0';
+  const mk = (action, text, title) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.action = action; b.textContent = text; b.title = title;
+    b.onclick = async () => {
+      if (action === 'restart' && b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Click again to restart'; setTimeout(() => { b.dataset.armed = ''; b.textContent = text; }, 4000); return; }
+      b.dataset.armed = ''; b.textContent = text; b.disabled = true; note.textContent = '…';
+      try { const r = await json('/api/hosts/control', { method: 'POST', body: JSON.stringify({ id: h.id, action }) }); note.textContent = r.result || 'Done.';
+        if (action === 'logs') { logbox.textContent = (r.lines || []).join('\n') || '(the log is empty)'; logbox.hidden = false; logbox.scrollTop = logbox.scrollHeight; }
+        if (action === 'pause' || action === 'resume') refreshProviders(); }
+      catch (e) { note.textContent = e.message; }
+      b.disabled = false; setTimeout(refreshHostLive, 1200); };
+    row.append(b); return b; };
+  mk('pause', 'Pause', 'Stop lending this host\'s AI to anyone until you resume it (jobs already running finish; the host stays up and you can resume it from here)');
+  mk('resume', 'Resume', 'Lend this host\'s AI again');
+  mk('restart', 'Restart', 'Restart the host program once nothing is in flight');
+  mk('update', 'Update now', 'Look for a new host program now and restart on it once nothing is in flight');
+  mk('logs', 'Show log', 'The last 50 lines of the host\'s log, with tokens and keys removed');
+  box.append(line, row, note, logbox); return box;
+}
+async function refreshHostLive() {
+  const boxes = document.querySelectorAll('#hostBox .hostLive'); if (!boxes.length) return;
+  let d; try { d = await json('/api/hosts/status'); } catch { return; }
+  const by = {}; for (const h of d.hosts || []) by[h.id] = h;
+  for (const box of boxes) {
+    const h = by[box.dataset.host]; if (!h) continue;
+    box.querySelector('.hostLiveLine').textContent = hostLiveText(h, d.now);
+    const row = box.querySelector('.hostLiveBtns'), note = box.querySelector('.hostLiveNote'), reach = h.online || h.paused;
+    row.hidden = !h.control;
+    for (const b of row.querySelectorAll('button')) { const a = b.dataset.action; if (b.disabled && b.textContent === '…') continue; b.disabled = !reach || (a === 'pause' && h.paused) || (a === 'resume' && !h.paused); }
+    if (!h.control && reach) note.textContent = 'This host is older than 5.13: update it to control it from here (on that machine: run vr-host and press u, or install the newest AI Host package). What is shown above is what the hub knows.';
+    else if (!h.control) note.textContent = '';
+    else if (!reach && !note.textContent.startsWith('…')) note.textContent = 'Offline: the controls work again when the host connects.';
+  }
+}
+setInterval(() => { const b = $('hostBox'); if (b && b.offsetParent !== null) refreshHostLive(); }, 10000);
 // ── Settings → My AI hosts: this person's own hosts (UUID + nickname), their providers and who may use them ──
 async function renderHosts() {
   const box = $('hostBox'); if (!box) return;
@@ -3923,7 +4028,7 @@ async function renderHosts() {
   for (const h of d.mine || []) {
     const it = document.createElement('div'); it.className = 'provItem';
     const b = document.createElement('b'); b.textContent = h.nickname; const dot = document.createElement('span'); dot.textContent = h.online ? ' · online' : h.seen ? ' · offline (last seen ' + new Date(h.seen).toLocaleString() + ')' : ' · never connected yet'; dot.style.color = h.online ? 'var(--ok, #3ddc84)' : 'var(--muted)'; b.append(dot); it.append(b);
-    const s = document.createElement('small'); s.textContent = 'id ' + h.id + (h.kid ? ' · key ' + h.kid : '') + (h.version ? ' · host app ' + h.version + (h.os ? ' on ' + h.os : '') : '') + (h.engines && h.engines.length ? ' · engines: ' + h.engines.join(', ') : ''); it.append(s);
+    const s = document.createElement('small'); s.textContent = 'id ' + h.id + (h.kid ? ' · key ' + h.kid : '') + (h.version ? ' · host app ' + h.version + (h.os ? ' on ' + h.os : '') : '') + (h.engines && h.engines.length ? ' · engines: ' + h.engines.join(', ') : ''); it.append(s, hostLiveBox(h));
     for (const p of h.providers || []) {
       const pr = document.createElement('div'); pr.className = 'row';
       const pl = document.createElement('span'); pl.textContent = `${p.label} (${p.kind}${p.models.length ? ': ' + p.models.map(modelName).join(', ') : ''}${p.max5h ? `; caps ${p.max5h}% / ${p.max7d}%` : ''}${p.capped ? '; ' + p.capped : ''}) · shared with:`;
@@ -3932,6 +4037,24 @@ async function renderHosts() {
       const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'ghost'; reset.textContent = 'as the host says'; reset.title = 'Forget this override and use the list in the host\'s own config';
       reset.onclick = () => json('/api/hosts/share', { method: 'POST', body: JSON.stringify({ id: h.id, provider: p.id, users: null }) }).then(() => { renderHosts(); refreshProviders(); }).catch((e) => sysSettings(e.message));
       pr.append(pl, users, reset); it.append(pr);
+      // per person (and "@group"): which models of this provider, and what for (Work, the API, Unity); default all of it
+      if ((p.allowedUsers || []).length) {
+        const sc = document.createElement('details'); sc.className = 'hostScopes';
+        const sum = document.createElement('summary'); sum.textContent = 'What each person may use of ' + p.label + ' (default: every model, every use)'; sc.append(sum);
+        for (const who of p.allowedUsers) {
+          const cur = (p.scopes || {})[who] || {}, mset = Array.isArray(cur.models) ? cur.models : null, uset = Array.isArray(cur.uses) ? cur.uses : null;
+          const row = document.createElement('div'); row.className = 'row'; row.dataset.scopeFor = who;
+          const nm = document.createElement('b'); nm.textContent = who === '@group' ? 'the team group' : nickOf(who); row.append(nm);
+          const box = (kind, val, on, text) => { const l = document.createElement('label'); l.style.marginLeft = '8px'; const c = document.createElement('input'); c.type = 'checkbox'; c.checked = on; c.dataset.kind = kind; c.value = val; l.append(c, document.createTextNode(' ' + text)); row.append(l); return c; };
+          const mb = (p.models || []).map((m) => box('model', m, !mset || mset.includes(m), modelName(m)));
+          const ub = [['work', 'Work'], ['api', 'API'], ['unity', 'Unity']].map(([u, t]) => box('use', u, !uset || uset.includes(u), t));
+          const save = () => { const ms = mb.filter((c) => c.checked).map((c) => c.value), us = ub.filter((c) => c.checked).map((c) => c.value);
+            json('/api/hosts/scope', { method: 'POST', body: JSON.stringify({ id: h.id, provider: p.id, user: who, models: ms.length === mb.length ? '*' : ms, uses: us.length === ub.length ? '*' : us }) }).then(() => refreshProviders()).catch((e) => { sysSettings(e.message); renderHosts(); }); };
+          for (const c of [...mb, ...ub]) c.onchange = save;
+          sc.append(row);
+        }
+        it.append(sc);
+      }
     }
     if (!(h.providers || []).length) { const n = document.createElement('small'); n.textContent = h.online ? 'This host offers no providers yet (its ai-node.json providers list is empty).' : 'Download the package below, unzip it on that computer and run it (host-tools\\build.cmd on Windows, say Y to the service; sh host-tools/install-ai-host-service.sh on Linux). Its providers appear here once it connects.'; it.append(n); }
     const ren = document.createElement('button'); ren.type = 'button'; ren.className = 'ghost'; ren.textContent = 'Rename';
@@ -3951,6 +4074,7 @@ async function renderHosts() {
   const info = document.createElement('div'); info.className = 'status';
   info.textContent = others.length ? 'Hosts you may use: ' + others.map((h) => `${h.nickname} (${nickOf(h.user)}${h.online ? '' : ', offline'}: ${h.providers.map((p) => p.label).join(', ')})`).join('; ') + '.' : 'No teammate\'s host is shared with you right now.';
   box.append(line(add), info);
+  refreshHostLive();
 }
 async function refreshProviders() { try { const d = await json('/api/check'); me.providers = d.providers; me.provider = d.provider; showModels(me); } catch {} }
 $('setTheme').onchange = () => applyTheme($('setTheme').value);
@@ -3974,12 +4098,13 @@ $('ttsTest').onclick = () => { // test with the values on screen, before saving
   if (v) u.voice = v;
   speechSynthesis.speak(u);
 };
-document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply' }[b.dataset.test]).value)); });
+// a test plays in the style picked right now (before saving), so the two can be compared
+document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply', call: 'volCall', board: 'volBoard' }[b.dataset.test]).value), $('soundSet').value); });
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
       nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
-      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value) },
+      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), set: $('soundSet').value },
       tts: { all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
       clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },
       audio: { noise: $('audNoise').checked, echo: $('audEcho').checked, agc: $('audAgc').checked },

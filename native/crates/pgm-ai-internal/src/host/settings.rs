@@ -26,20 +26,30 @@ pub struct Provider {
     pub config_dir: String,
     pub codex_home: String,
     pub command: String,
+    /// Work through Jcode PGM (WORKPLAN 9c, opt-in): the `jcodepgm` binary on this machine ("" = `jcodepgm` on the PATH),
+    /// its provider profile (`-p`), and arguments before `run`. Only a provider of kind "jcode" uses them.
+    pub jcode_command: String,
+    pub jcode_provider: String,
+    pub jcode_args: Vec<String>,
 }
 impl Provider {
     fn from(v: &Value) -> Option<Self> {
         let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let id = s("id"); if id.is_empty() { return None; }
         let list = |k: &str| v.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-        Some(Provider { id, kind: s("kind"), label: s("label"), models: list("models"), enabled: v.get("enabled").and_then(Value::as_bool) != Some(false),
+        // `"harness": "jcode"` is the flag form of `"kind": "jcode"`
+        let kind = if s("harness") == "jcode" { "jcode".to_string() } else { s("kind") };
+        Some(Provider { id, kind, label: s("label"), models: list("models"), enabled: v.get("enabled").and_then(Value::as_bool) != Some(false),
             share_with_group: v.get("shareWithGroup").and_then(Value::as_bool) == Some(true), allowed_users: list("allowedUsers"),
             max5h: v.get("max5h").and_then(Value::as_f64), max7d: v.get("max7d").and_then(Value::as_f64),
-            base_url: s("baseUrl"), api_key: s("apiKey"), config_dir: s("configDir"), codex_home: s("codexHome"), command: s("command") })
+            base_url: s("baseUrl"), api_key: s("apiKey"), config_dir: s("configDir"), codex_home: s("codexHome"), command: s("command"),
+            jcode_command: s("jcodeCommand"), jcode_provider: s("jcodeProvider"), jcode_args: list("jcodeArgs") })
     }
     /// The kind told to the hub: a Claude Code login is lent as a relay, never as a computer (host-relay.js relayKind).
     pub fn relay_kind(&self) -> &str { if self.kind == "claude-cli" { "claude-relay" } else { &self.kind } }
     pub fn is_relay(&self) -> bool { matches!(self.relay_kind(), "claude-relay" | "codex-relay") }
+    /// Does this provider run Work through Jcode PGM?
+    pub fn is_jcode(&self) -> bool { self.kind == "jcode" }
 }
 
 fn clamp(v: Option<&Value>, lo: f64, hi: f64, d: f64) -> f64 { v.and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.parse().ok()))).filter(|n| n.is_finite() && *n >= lo && *n <= hi).unwrap_or(d) }
@@ -122,6 +132,10 @@ impl HostSettings {
             out.push((format!("provider.{}.allowedUsers", p.id), format!("{name}: shared with these users (comma list)"), if p.allowed_users.is_empty() { "(none)".into() } else { p.allowed_users.join(", ") }));
             out.push((format!("provider.{}.max5h", p.id), format!("{name}: 5-hour usage cap (%)"), p.max5h.unwrap_or(90.0).to_string()));
             out.push((format!("provider.{}.max7d", p.id), format!("{name}: 7-day usage cap (%)"), p.max7d.unwrap_or(90.0).to_string()));
+            if p.is_jcode() {
+                out.push((format!("provider.{}.jcodeCommand", p.id), format!("{name}: the jcodepgm program that runs Work (empty = jcodepgm on the PATH)"), if p.jcode_command.is_empty() { "(jcodepgm)".into() } else { p.jcode_command.clone() }));
+                out.push((format!("provider.{}.jcodeProvider", p.id), format!("{name}: jcode provider profile (-p; empty = jcode's own)"), if p.jcode_provider.is_empty() { "(none)".into() } else { p.jcode_provider.clone() }));
+            }
         }
         let off: Vec<String> = self.obj("enginesOff").map(|o| o.keys().cloned().collect()).unwrap_or_default();
         for (name, _) in self.engines() { out.push((format!("engine.{name}.enabled"), format!("Engine {name} (Unity)"), "on".into())); }
@@ -165,6 +179,8 @@ impl HostSettings {
             k if k.starts_with("provider.") && k.ends_with(".enabled") => "Whether this provider is offered to the hub at all.",
             k if k.starts_with("provider.") && k.ends_with(".shareWithGroup") => "Lets everyone in your VibeRoller team group use this provider through your host.",
             k if k.starts_with("provider.") && k.ends_with(".allowedUsers") => "VibeRoller user names (comma list) who may use this provider besides you.",
+            k if k.starts_with("provider.") && k.ends_with(".jcodeCommand") => "Work through Jcode PGM (needs allowWork): the jcodepgm program this host runs for each Work turn, in the person's own jcode home on this machine.",
+            k if k.starts_with("provider.") && k.ends_with(".jcodeProvider") => "The jcode provider profile (jcodepgm -p) its Work turns use. Empty = jcode's own default.",
             k if k.starts_with("provider.") && k.ends_with(".max5h") => "This host stops lending the login once its 5-hour usage reaches this percent.",
             k if k.starts_with("provider.") && k.ends_with(".max7d") => "This host stops lending the login once its 7-day usage reaches this percent.",
             k if k.starts_with("engine.") => "An engine (a local AI server such as Ollama) lent to Unity; off keeps the address but stops lending it.",
@@ -237,6 +253,7 @@ impl HostSettings {
                     "enabled" | "shareWithGroup" => json!(yes(v)),
                     "allowedUsers" => Value::Array(user_list(v)),
                     "label" => json!(v),
+                    "jcodeCommand" | "jcodeProvider" => json!(if v == "(jcodepgm)" || v == "(none)" { "" } else { v }),
                     "models" => Value::Array(csv(v).into_iter().map(Value::String).collect()),
                     "max5h" | "max7d" => json!(range(1.0, 100.0)?),
                     _ => return Err(Error::msg(format!("No setting \"{k}\"."))),
@@ -311,6 +328,21 @@ mod tests {
         assert!(HostSettings::is_switch("autoUpdate") && HostSettings::is_switch("provider.x.enabled") && !HostSettings::is_switch("hub") && !HostSettings::is_switch("provider.x.allowedUsers"));
         assert!(!HostSettings::explain("provider.x.max5h").is_empty() && HostSettings::explain("nope").is_empty());
     }
+    #[test]
+    fn a_jcode_provider_is_set_and_listed_with_its_program_and_profile() {
+        let mut s = sample();
+        s.raw.insert("providers".into(), json!([{ "id": "jc", "harness": "jcode", "label": "J" }]));
+        assert!(s.all_providers()[0].is_jcode() && s.all_providers()[0].jcode_command.is_empty());
+        s.set("provider.jc.jcodeCommand", "/opt/jcodepgm").unwrap(); s.set("provider.jc.jcodeProvider", "viberoller").unwrap();
+        let p = &s.all_providers()[0];
+        assert_eq!((p.jcode_command.as_str(), p.jcode_provider.as_str()), ("/opt/jcodepgm", "viberoller"));
+        let keys: Vec<String> = s.list().into_iter().map(|x| x.0).collect();
+        assert!(keys.contains(&"provider.jc.jcodeCommand".to_string()) && keys.contains(&"provider.jc.jcodeProvider".to_string()));
+        assert!(!HostSettings::explain("provider.jc.jcodeCommand").is_empty());
+        s.set("provider.jc.jcodeCommand", "(jcodepgm)").unwrap();
+        assert!(s.all_providers()[0].jcode_command.is_empty());
+    }
+
     #[test]
     fn a_new_host_from_three_values_or_pasted_text() {
         let p = std::env::temp_dir().join("vr-core-never-written.json");

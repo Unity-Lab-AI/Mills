@@ -205,10 +205,12 @@ function ensure(username, projectName) {
   return { dir, branch, created: true, project: p.name, repo: p.repo, root: p.root, main: p.main, hub: p.hub };
 }
 
+// "upstream" is never pushed to: publish keeps a project's original (often someone else's public repo) there only to
+// pull its updates from, and our work stays private (5.13.1: a merge of Jcode-PGM tried to push to github.com/1jehuang/jcode)
 function pushAll(dir, branch, skip = []) {
   const results = [];
   for (const remote of git(dir, 'remote').split(/\s+/).filter(Boolean)) {
-    if (skip.includes(remote)) continue;
+    if (skip.includes(remote) || remote === 'upstream') continue;
     const r = tryGit(dir, 'push', remote, branch);
     results.push(`${remote}: ${r.ok ? 'pushed' : 'push failed (' + lastLine(r.out) + ')'}`);
   }
@@ -563,7 +565,8 @@ async function publish(full, pj, opts = {}) {
   const origin = tryGit(p.repo, 'remote', 'get-url', 'origin');
   if (origin.ok && origin.out.trim() !== url && !origin.out.trim().startsWith(FJ_URL + '/')) {
     if (tryGit(p.repo, 'remote', 'get-url', 'upstream').ok) throw new Error('This project already has an "upstream" remote: sort its remotes out by hand.');
-    git(p.repo, 'remote', 'rename', 'origin', 'upstream'); lines.push(`origin (${origin.out.trim()}) kept as "upstream".`);
+    git(p.repo, 'remote', 'rename', 'origin', 'upstream'); git(p.repo, 'remote', 'set-url', '--push', 'upstream', 'no-push://fetch-only');
+    lines.push(`origin (${origin.out.trim()}) kept as "upstream" (fetch only: nothing is ever pushed there).`);
   }
   if (tryGit(p.repo, 'remote', 'get-url', 'origin').ok) git(p.repo, 'remote', 'set-url', 'origin', url); else git(p.repo, 'remote', 'add', 'origin', url);
   if (!branchExists(p.repo, DEVELOP)) { git(p.repo, 'branch', DEVELOP); lines.push(`Made ${DEVELOP} from ${git(p.repo, 'rev-parse', '--abbrev-ref', 'HEAD').trim()}.`); }
@@ -590,7 +593,7 @@ async function tag(name, pj, message = '') {
   return `Tagged ${m[1]}/${m[2]} ${t.name || name} at ${target.slice(0, 7)} (${p.main} on Forgejo).`;
 }
 
-module.exports = { ensure, repair, project, listProjects, create, clone, freshness, describe, update, renew, fjRepos, fjCreate, publish, tag, WT_ROOT, REPO, PROJECTS_ROOT, HUB_PROJECT };
+module.exports = { ensure, repair, project, listProjects, create, clone, freshness, describe, update, renew, fjRepos, fjCreate, publish, tag, pushAll, WT_ROOT, REPO, PROJECTS_ROOT, HUB_PROJECT };
 
 if (require.main === module) {
   const argv = process.argv.slice(2);

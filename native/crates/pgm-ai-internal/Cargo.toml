@@ -17,6 +17,7 @@ pgm-identity-internal = { path = "../pgm-identity-internal" }
 pgm-dist-internal = { path = "../pgm-dist-internal" }
 pgm-collab-internal = { path = "../pgm-collab-internal" }
 pgm-platform-internal = { path = "../pgm-platform-internal" }
+pgm-context-internal = { path = "../pgm-context-internal" }
 base64 = "0.23.1"
 futures-util = "0.3.34"
 http-body-util = "0.1.5"

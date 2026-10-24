@@ -38,9 +38,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha = (f) => (fs.existsSync(f) ? crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') : 'missing');
 
 const results = [];
+// --stop-after R188: a development shortcut, the run ends cleanly after that check (the checks after it do not run)
+const STOP_AFTER = (() => { const i = process.argv.indexOf('--stop-after'); return i >= 0 ? process.argv[i + 1] || '' : ''; })();
 function check(id, label, pass, detail = '') {
   results.push({ id, label, status: pass ? 'PASS' : 'FAIL', detail });
   console.log(`${pass ? 'PASS' : 'FAIL'} ${id.padEnd(4)} ${label}${detail ? '  — ' + detail : ''}`);
+  if (STOP_AFTER && id === STOP_AFTER) { const e = new Error('stopped after ' + id); e.stopAfter = true; throw e; }
 }
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
@@ -162,7 +165,8 @@ function startFakeOllama() {
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
         if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
-        return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
+        const cached = /r185/.test(String(last.content)) ? { prompt_tokens: 2000, completion_tokens: 40, total_tokens: 2040, prompt_tokens_details: { cached_tokens: 1500 } } : null; // R185: a cache hit the hub must count
+        return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: cached || { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
       }
       // fake Forgejo (issue mirroring): in-memory issues under the repo path; /fake/forgejo/* lets the runner act as a person on Forgejo
       const FJ = '/api/v1/repos/UnityAILab/Mills/issues';
@@ -220,7 +224,7 @@ function startFakeOllama() {
       } else {
         line({ content: `final sys-has-name=${/(VibeRoller|Mills) username "t-(user|admin)"/.test(sys)} tz=${(/\(([A-Za-z_]+\/[A-Za-z_]+)\)/.exec(sys) || [])[1] || ''}` });
       }
-      res.end(JSON.stringify({ done: true }) + '\n');
+      res.end(JSON.stringify({ done: true, prompt_eval_count: 100, eval_count: 10 }) + '\n'); // Ollama's counts on the final chunk (R186)
     });
   });
   return new Promise((r) => ollamaSrv.listen(0, '127.0.0.1', () => { OLLAMA_PORT = ollamaSrv.address().port; r(); }));
@@ -250,7 +254,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -434,7 +438,7 @@ async function run() {
   const devA = 'device-aaaaaaaaaaaaaaaa', devB = 'device-bbbbbbbbbbbbbbbb', devC = 'device-cccccccccccccccc';
 
   // Hub & sign-in
-  const scripts = fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => path.join(BRIDGE, f)).concat(fs.readdirSync(__dirname).map((f) => path.join(__dirname, f)));
+  const scripts = fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => path.join(BRIDGE, f)).concat(fs.readdirSync(__dirname).filter((f) => f.endsWith('.js')).map((f) => path.join(__dirname, f)));
   const bad = scripts.filter((f) => spawnSync(process.execPath, ['--check', f]).status !== 0);
   let pageOk = true, pageErr = '';
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
@@ -961,6 +965,104 @@ async function run() {
       && back.status === 200 && !/jcode-answer/.test(backText),
       `add ${jNotAdmin.status}/${jBadHome.status}/${jc.provider ? 'made' : JSON.stringify(jc).slice(0, 100)}, pick ${pickJ.status}, run1 "${t1.slice(0, 160)}" tool ${toolUse}/${toolRes} result ${res1.is_error} code ${done1.code}; run2 "${t2.slice(-40)}"; fail ${resF.is_error} code ${doneF.code}; home mcp ${Object.keys(jMcp.mcpServers || {}).join(',')} overlay ${jOverlay.length}b; back "${backText.slice(0, 60)}"`);
   } else skip('R180', 'Jcode PGM as a Work harness (a jcode provider runs Work through jcodepgm run --ndjson)', 'the Rust hub\'s: --rust-hub runs it');
+  // HubEvent in the page (R187, 5.10.0; Jcode-Mods WORKPLAN 9b): the hub's Work events carry one schema, the `hub` object
+  // (harness.rs HubEvent::into_wire) next to the Claude-shaped alias fields; the page's Work renderer reads it first
+  // (hubView) and falls back to the alias for an event without it, so an older hub or host renders the same. Static +
+  // the page's own hubView run on sample events (both modes), and with the Rust hub a Claude run (the fake claude) and a
+  // Jcode PGM run (the fake jcodepgm) of the same shape give the same HubEvent structure.
+  {
+    const L187 = 'HubEvent is the one schema the page consumes: the hub adds a `hub` object (kind init / assistant{blocks text, tool_use} / tool_results / result, harness, session) to every harness event while the alias fields stay; the page\'s handleEvent reads hubView(ev) (the hub object first, else derived from the alias, the same view) and no longer reads the alias fields itself; a Claude run and a Jcode PGM run of the same shape (text, tool use, tool result, result) have the same structure through HubEvent and both keep the alias';
+    const page187 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), harness187 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'harness.rs'), 'utf8');
+    const hvSrc = (/function hubView\(ev\) \{[\s\S]*?\n\}\n(?=function handleEvent)/.exec(page187) || [''])[0];
+    const heSrc = (/function handleEvent\(ev\) \{[\s\S]*?\n\}\n(?=\n\/\/ ── Slash commands)/.exec(page187) || [''])[0];
+    let hubView = null; try { hubView = require('vm').runInNewContext(hvSrc + '; hubView'); } catch {}
+    const aliasEvs = hubView ? [
+      { type: 'system', subtype: 'init', session_id: 'a1', model: 'm1' },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'T' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }], usage: { input_tokens: 2 } } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x', is_error: true }] } },
+      { type: 'result', is_error: false, result: 'ok', duration_ms: 2000, subtype: 'success' }].map((e) => JSON.parse(JSON.stringify(hubView(e)))) : [];
+    const hubFirst = hubView ? hubView({ type: 'assistant', hub: { v: 1, kind: 'assistant', blocks: [{ type: 'text', text: 'HUB' }] }, message: { content: [{ type: 'text', text: 'ALIAS' }] } }) : null;
+    const fromAlias = aliasEvs.length === 4 && aliasEvs[0].kind === 'init' && aliasEvs[0].model === 'm1' && aliasEvs[1].kind === 'assistant' && aliasEvs[1].blocks.map((b) => b.type).join() === 'text,tool_use' && aliasEvs[1].blocks[1].input.command === 'ls' && aliasEvs[1].usage.input_tokens === 2
+      && aliasEvs[2].kind === 'tool_results' && aliasEvs[2].results[0].id === 't1' && aliasEvs[2].results[0].error === true && aliasEvs[3].kind === 'result' && aliasEvs[3].error === false && aliasEvs[3].text === 'ok' && aliasEvs[3].durationMs === 2000 && hubView({ type: 'rate_limit_event' }) === null;
+    const stat = !!hubView && fromAlias && !!hubFirst && hubFirst.blocks[0].text === 'HUB' && /const hv = hubView\(ev\), hk = hv \? hv\.kind : ''/.test(heSrc) && !/ev\.message|ev\.is_error|ev\.duration_ms|ev\.subtype|ev\.result/.test(heSrc)
+      && /pub fn into_wire\(self\)/.test(harness187) && /HUB_SCHEMA/.test(harness187) && /crate::harness::wire\(ev\)/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'work.rs'), 'utf8'));
+    if (RUST_HUB) {
+      const shape = (evs) => evs.filter((e) => e.hub).map((e) => e.hub.kind + '[' + (e.hub.kind === 'assistant' ? e.hub.blocks.map((b) => b.type) : e.hub.kind === 'tool_results' ? e.hub.results.map((r) => 'result:' + r.error) : e.hub.kind === 'result' ? ['error:' + e.hub.error] : []).join(',') + ']').join(' ');
+      await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+      const cRun = await chat(A, 'claude run CLAUDETOOL r187', { fresh: true });
+      const jp = (await call('/api/providers/add', A, { kind: 'jcode', label: 'Jcode PGM (fake, r187)', command: process.execPath, args: [path.join(SB, 'test', 'fake-jcode.js')], provider: 'viberoller', models: 'claude-haiku-5-5', shared: false })).data.provider || {};
+      await call('/api/model', A, { provider: jp.id, model: 'claude-haiku-5-5' });
+      const jRun = await chat(A, 'jcode run TOOL r187', { fresh: true });
+      await call('/api/providers/remove', A, { id: jp.id });
+      await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+      const sc = shape(cRun.events), sj = shape(jRun.events), want = 'init[] assistant[tool_use] tool_results[result:false] assistant[text] result[error:false]';
+      const aliasKept = (evs) => evs.some((e) => e.type === 'assistant' && e.message.content.some((c) => c.type === 'tool_use' && c.input.command === 'echo hi')) && evs.some((e) => e.type === 'user' && e.message.content.some((c) => c.type === 'tool_result' && c.tool_use_id === 't1')) && evs.some((e) => e.type === 'result' && e.is_error === false);
+      const hubOf = (evs, k) => (evs.find((e) => e.hub && e.hub.kind === k) || {}).hub || {};
+      check('R187', L187,
+        stat && sc === want && sj === want && hubOf(cRun.events, 'init').harness === 'claude' && hubOf(jRun.events, 'init').harness === 'jcode' && /^fake-/.test(hubOf(cRun.events, 'init').session) && /^fakej-/.test(hubOf(jRun.events, 'init').session)
+        && hubOf(cRun.events, 'result').error === false && hubOf(jRun.events, 'result').harness === 'jcode' && /jcode-answer/.test(hubOf(jRun.events, 'result').text) && aliasKept(cRun.events) && aliasKept(jRun.events)
+        && cRun.events.some((e) => e.type === 'bridge_done' && e.code === 0) && jRun.events.some((e) => e.type === 'bridge_done' && e.code === 0),
+        `static ${stat} (alias view ${fromAlias}); claude "${sc}" jcode "${sj}"`);
+    } else {
+      check('R187', L187, stat, `static ${stat} (alias view ${fromAlias}); the runs through both harnesses: --rust-hub`);
+    }
+  }
+  // Jcode PGM on the AI host (R188, 5.10.0; Jcode-Mods WORKPLAN 9c): opt-in. A native host with allowWork and a provider of
+  // kind "jcode" (jcodeCommand: the fake jcodepgm) announces the cap `work-jcode`, the hub lists that provider (kind
+  // host-jcode) and sends it a Work job: jcodepgm runs ON the host in its worktree with a private jcode home per person
+  // (the team MCP servers as mcp.json, the hub's system prompt as the overlay); the events come back as HubEvents and a
+  // second message resumes the session. A host that allows no Work says hello with exactly the old caps and offers no
+  // jcode provider: the hub never lists one, so never sends it a job.
+  if (RUST_HUB) {
+    const L188 = 'Jcode PGM on the AI host, opt-in: a native host with allowWork and a "jcode" provider announces the cap work-jcode and the hub lists it (host-jcode) and sends it a Work job; jcodepgm run --ndjson runs ON the host in its worktree with a private jcode home per person (mcp.json with the team servers, the system prompt as the prompt overlay), its events reach the page as HubEvents (init, tool use, tool result, text, result), the next message resumes the same jcode session; a host with the provider but no allowWork says hello with exactly the old caps, offers no jcode provider and cannot be picked; only the host\'s owner can run Work on it; it answers no API calls';
+    const jdir = path.join(SCRATCH, 'jcode-host'), pdir = path.join(SCRATCH, 'plain-host'), repo = path.join(jdir, 'repo');
+    fs.mkdirSync(repo, { recursive: true }); fs.mkdirSync(pdir, { recursive: true });
+    const gitj = (...a) => execFileSync('git', ['-c', 'user.email=r188@example.invalid', '-c', 'user.name=r188', ...a], { cwd: repo, stdio: 'ignore', windowsHide: true });
+    gitj('init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'README.md'), 'r188\n'); gitj('add', '-A'); gitj('commit', '-q', '-m', 'r188'); gitj('branch', 'develop');
+    const provJ = { id: 'jcode', kind: 'jcode', label: 'R188 jcode', models: ['claude-haiku-5-5', 'claude-sonnet-5-5'], jcodeCommand: process.execPath, jcodeArgs: [path.join(SB, 'test', 'fake-jcode.js')], jcodeProvider: 'viberoller' };
+    const jcfg = path.join(jdir, 'ai-node.json'), pcfg = path.join(pdir, 'ai-node.json');
+    fs.writeFileSync(jcfg, JSON.stringify({ hub: H, id: 'jcode-node', token: OLD_NODE_SECRET + '-jc', user: 't-admin', autoUpdate: false, allowWork: true, providers: [provJ], engines: {}, work: { hubRepo: repo, worktreeRoot: path.join(jdir, 'worktrees') } }), { mode: 0o600 });
+    fs.writeFileSync(pcfg, JSON.stringify({ hub: H, id: 'plain-node', token: OLD_NODE_SECRET + '-pl', user: 't-admin', autoUpdate: false, providers: [{ ...provJ }], engines: {} }), { mode: 0o600 });
+    const hostBin = NATIVE_BIN.host;
+    const procs = [[jcfg, jdir], [pcfg, pdir]].map(([cfg, dir]) => { const fd = fs.openSync(path.join(dir, 'out.log'), 'a'); return spawn(hostBin, ['run', '--config', cfg], { cwd: dir, stdio: ['ignore', fd, fd], windowsHide: true }); });
+    const nodes = async (id) => { for (let i = 0; i < 80; i++) { const n = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === id); if (n && n.online && (n.caps || []).length) return n; await sleep(250); } return null; };
+    const jn = await nodes('jcode-node'), pn = await nodes('plain-node');
+    const provs = async () => (await call('/api/check', A)).data.providers || [];
+    let jprov = null; for (let i = 0; i < 40 && !jprov; i++) { jprov = (await provs()).find((p) => p.id === 'h:jcode-node/jcode') || null; if (!jprov) await sleep(250); }
+    const plainListed = (await provs()).some((p) => p.id === 'h:plain-node/jcode');
+    const pickPlain = await call('/api/model', A, { provider: 'h:plain-node/jcode', model: 'claude-haiku-5-5' });
+    const otherSees = (((await call('/api/check', U)).data.providers) || []).some((p) => p.id === 'h:jcode-node/jcode');
+    const pick = await call('/api/model', A, { provider: 'h:jcode-node/jcode', model: 'claude-sonnet-5-5' });
+    await call('/api/workspace', A, { project: 'VibeRoller' }); // the host's repo here is the hub project's (R141 uses demo-app on a host that clones it)
+    const r1 = await chat(A, 'host jcode TOOL r188', { fresh: true });
+    const r1t = texts(r1.events), r1init = (r1.events.find((e) => e.hub && e.hub.kind === 'init') || {}).hub || {}, r1res = (r1.events.find((e) => e.hub && e.hub.kind === 'result') || {}).hub || {};
+    const r2 = await chat(A, 'host jcode again r188'), r2t = texts(r2.events);
+    const rF = await chat(A, 'host jcode FAIL r188'), rFres = (rF.events.find((e) => e.hub && e.hub.kind === 'result') || {}).hub || {};
+    const jhome = path.join(jdir, 'jcode', 't-admin', 'jcode-home');
+    const jmcp = fs.existsSync(path.join(jhome, 'mcp.json')) ? JSON.parse(fs.readFileSync(path.join(jhome, 'mcp.json'), 'utf8')) : {};
+    const joverlay = fs.existsSync(path.join(jhome, 'prompt-overlay.md')) ? fs.readFileSync(path.join(jhome, 'prompt-overlay.md'), 'utf8') : '';
+    await call('/api/workspace', A, { project: 'demo-app' });
+    // the API answers through that provider are refused (it runs Work, not answers); back to Claude afterwards
+    const key = (await call('/api/apikey/rotate', A, {})).data.key;
+    await call('/api/apikey/settings', A, { provider: 'h:jcode-node/jcode' });
+    const apiTry = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: 'claude-haiku-5-5', messages: [{ role: 'user', content: 'x' }] }) });
+    await call('/api/apikey/revoke', A, {});
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+    const hostLog = (() => { try { return fs.readFileSync(path.join(jdir, 'out.log'), 'utf8'); } catch { return ''; } })();
+    for (const p of procs) { try { p.kill(); } catch {} }
+    const hostRs = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'work.rs'), 'utf8');
+    check('R188', L188,
+      !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin,control' && (pn.providers || []).length === 0
+      && !!jprov && jprov.kind === 'host-jcode' && jprov.owner === 't-admin' && !otherSees && !plainListed && pickPlain.status !== 200 && pick.status === 200 && pick.data.provider === 'h:jcode-node/jcode'
+      && r1.events.some((e) => e.type === 'bridge_info' && /through Jcode PGM/.test(e.text)) && r1init.harness === 'jcode' && /^fakej-/.test(r1init.session)
+      && /jcode-answer model=claude-sonnet-5-5 provider=viberoller/.test(r1t) && /cwd=\S*jcode-host\S*worktrees\S*t-admin/.test(r1t) && /resume=no/.test(r1t) && /overlay:yes/.test(r1t)
+      && r1.events.some((e) => e.type === 'assistant' && e.hub && e.hub.blocks.some((b) => b.type === 'tool_use' && b.input.command === 'echo hi')) && r1.events.some((e) => e.type === 'user' && e.hub && e.hub.results[0].id === 't1')
+      && r1res.harness === 'jcode' && r1res.error === false && r1.events.some((e) => e.type === 'bridge_done' && e.code === 0)
+      && /resume=yes/.test(r2t) && rFres.error === true && rF.events.some((e) => e.type === 'bridge_done' && e.code === 1)
+      && jmcp.mcpServers && jmcp.mcpServers.pc && jmcp.mcpServers.board && jmcp.mcpServers.team && /Worktree law/.test(joverlay)
+      && apiTry.status >= 400 && /pub fn jcode_spec/.test(hostRs),
+      `caps ${jn && jn.caps.join(',')} / plain ${pn && pn.caps.join(',')} providers ${pn && (pn.providers || []).join(',')}; listed ${jprov && jprov.kind} other ${otherSees} plain ${plainListed}/${pickPlain.status}; pick ${pick.status}; run1 ${r1.status} [${r1.events.map((e) => e.type).join(' ')}] errors "${r1.events.filter((e) => e.type === 'bridge_error' || e.type === 'stderr' || e.type === 'bridge_info').map((e) => e.text).join(' | ').slice(0, 300)}" "${r1t.slice(0, 200)}" init ${JSON.stringify(r1init).slice(0, 80)}; run2 "${r2t.slice(-40)}"; fail ${rFres.error}; home ${Object.keys(jmcp.mcpServers || {}).join(',')} overlay ${joverlay.length}b; api ${apiTry.status}; log "${hostLog.replace(/\s+/g, ' ').slice(-200)}"`);
+  } else skip('R188', 'Jcode PGM on the AI host, opt-in (a native host with allowWork and a jcode provider announces work-jcode and runs Work through jcodepgm)', 'the Rust hub\'s: --rust-hub runs it');
   // The prompt cache (R181, 5.7.0; Jcode-Mods TOKENS.md): the system prompt a Work run gets is the same bytes every run,
   // so the provider's prompt cache can hit: no "N min ago" and no timestamp in it; the worktree law stays there, the
   // latest freshness check travels with the message instead.
@@ -971,6 +1073,131 @@ async function run() {
       /sysvolatile=false/.test(e181) && /syslaw=true/.test(e181),
       `echo "${(e181.match(/sysvolatile=[a-z]+ \| syslaw=[a-z]+/) || [''])[0]}"`);
   } else skip('R181', 'the Work system prompt is cache-stable', 'the Rust hub\'s Work: --rust-hub runs it');
+  // The token library in the hub (R185, 5.9.0): an answer outside Work (the /v1 API) goes through the usage ledger, the
+  // provider's cached tokens normalised, and /api/usage shows them as `answers` with the cache hit ratio.
+  if (RUST_HUB) {
+    const h185 = (await call('/api/hosts/new', A, {})).data.host || {}, c185 = (await call('/api/hosts/config', A, { id: h185.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': h185.id, 'X-VR-Host-Token': c185.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const p185 = (await call('/api/providers/add', A, { kind: 'openai', label: 'R185 endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt', shared: false })).data;
+    const k185 = (await call('/api/apikey/rotate', A, {})).data;
+    await call('/api/apikey/settings', A, { provider: p185.provider && p185.provider.id, model: 'fake-gpt' });
+    const u0 = (await call('/api/usage', A)).data;
+    const a1 = await v1('/v1/chat/completions', k185.key, { model: 'fake-gpt', messages: [{ role: 'user', content: 'cache r185' }] });
+    const a2 = await v1('/v1/chat/completions', k185.key, { model: 'fake-gpt', messages: [{ role: 'user', content: 'cache r185 again' }] });
+    const u1 = (await call('/api/usage', A)).data, ans = u1.answers || {};
+    const b0 = (u0.answers && u0.answers.turns) || 0;
+    const body185 = (() => { try { return JSON.parse(a1.text); } catch { return {}; } })();
+    await call('/api/providers/remove', A, { id: p185.provider && p185.provider.id }); await call('/api/apikey/revoke', A, {}); await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' }); await call('/api/hosts/remove', A, { id: h185.id });
+    check('R185', 'the token library in the hub: an answer outside Work (a /v1 call through an OpenAI-compatible endpoint whose usage has prompt_tokens_details.cached_tokens) is normalised by the usage ledger and /api/usage shows it under `answers` (turns, input paid, cached, written, hit ratio, per provider kind) while every existing key stays; the caller still gets the endpoint\'s own OpenAI-style usage',
+      p185.provider && a1.status === 200 && a2.status === 200 && ans.turns === b0 + 2 && ans.cached >= 3000 && ans.input >= 1000 && ans.hit > 0.5 && ans.hit < 0.8 && ans.by && ans.by.openai && ans.by.openai.cached >= 3000
+      && body185.usage && body185.usage.prompt_tokens === 2000 && 'five_hour' in u1 && 'seven_day' in u1 && 'context' in u1,
+      `answers ${JSON.stringify(ans).slice(0, 260)}; call ${a1.status}/${a2.status}; usage ${JSON.stringify(body185.usage || {})}`);
+  } else skip('R185', 'answers outside Work through the usage ledger', 'the Rust hub\'s: --rust-hub runs it');
+  // Sharing with scopes (R189, 5.11.0; Jcode-Mods ARCHITECTURE.md §4): the owner of a shared provider picks, per person (and
+  // per "@group"), which of its models they may use and what for (Work, the API, Unity); stored on the hub, never on the host.
+  if (RUST_HUB) {
+    const L189 = 'sharing with scopes: the owner picks per person (or @group) which models of a shared provider they may use and what for (work / api / unity), stored on the hub in the host record next to share (the host config is untouched); the person sees only those models in /api/check, a /v1 answer on another model or without the api use is refused naming the owner, so is a Work run without the work use; the person\'s own scope wins over the group\'s; default (no entry) is everything; only the owner sets it, models must be the provider\'s own; [static] the Settings editor';
+    const h189 = (await call('/api/hosts/new', A, {})).data.host || {}, c189 = (await call('/api/hosts/config', A, { id: h189.id })).data.config || {};
+    const dir189 = path.join(SCRATCH, 'r189-host'); fs.mkdirSync(dir189, { recursive: true });
+    for (const f of ['ai-node.js', 'host-relay.js']) fs.copyFileSync(path.join(SB, f), path.join(dir189, f)); // its own folder: the host keeps one instance per folder
+    const base189 = `http://127.0.0.1:${OLLAMA_PORT}`, f189 = path.join(dir189, 'ai-node.json');
+    fs.writeFileSync(f189, JSON.stringify({ hub: H, id: h189.id, token: c189.token, user: 't-admin', autoUpdate: false, engines: {}, providers: [
+      { id: 'sc-claude', kind: 'claude-relay', label: 'R189 Claude', models: ['claude-fable-5-1', 'claude-haiku-5-5'], allowedUsers: ['t-user'], configDir: path.join(SCRATCH, 'host-claude-login'), baseUrl: base189 + '/anthropic' },
+      { id: 'sc-local', kind: 'openai', label: 'R189 local', baseUrl: base189 + '/oai', models: ['tiny-a', 'tiny-b'], allowedUsers: ['t-user'] }] }), { mode: 0o600 });
+    const log189 = fs.openSync(path.join(dir189, 'out.log'), 'a');
+    const proc189 = RUST_HOST ? spawn(RUST_HOST, ['host', '--config', f189], { cwd: dir189, stdio: ['ignore', log189, log189], windowsHide: true }) : spawn(process.execPath, [path.join(dir189, 'ai-node.js'), '--config', f189], { cwd: dir189, stdio: ['ignore', log189, log189], windowsHide: true });
+    const sees = async (pid) => ((await call('/api/check', U)).data.providers || []).find((p) => p.id === 'h:' + h189.id + '/' + pid) || null;
+    let loc = null; for (let i = 0; i < 80 && !(loc && loc.models.length === 2); i++) { loc = await sees('sc-local'); if (!loc || loc.models.length !== 2) await sleep(250); }
+    const scope = (provider, user, models, uses, tok = A) => call('/api/hosts/scope', tok, { id: h189.id, provider, user, models, uses });
+    const k189 = (await call('/api/apikey/rotate', U, {})).data.key;
+    const ask = (model) => v1('/v1/chat/completions', k189, { model, messages: [{ role: 'user', content: 'scope r189' }] });
+    await call('/api/apikey/settings', U, { provider: 'h:' + h189.id + '/sc-local', model: 'tiny-a' });
+    const unscopedB = await ask('tiny-b'); // the default: every model, every use
+    const notOwner = await scope('sc-local', 't-user', ['tiny-a'], ['api'], U), badModel = await scope('sc-local', 't-user', ['nope'], '*'), badUse = await scope('sc-local', 't-user', '*', ['root']), forOwner = await scope('sc-local', 't-admin', ['tiny-a'], '*'), badWho = await scope('sc-local', 'Bad Name!', ['tiny-a'], '*');
+    // t-user: one model and the API only, on both providers
+    const s1 = await scope('sc-local', 't-user', ['tiny-a'], ['api']), s2 = await scope('sc-claude', 't-user', ['claude-haiku-5-5'], ['api']);
+    const locU = await sees('sc-local'), claU = await sees('sc-claude');
+    const ownerSees = ((await call('/api/check', A)).data.providers || []).find((p) => p.id === 'h:' + h189.id + '/sc-local');
+    const okA = await ask('tiny-a'), noB = await ask('tiny-b'), noBBody = (() => { try { return JSON.parse(noB.text); } catch { return {}; } })();
+    // Work on the Claude without the work use: refused naming the owner, nothing started
+    await call('/api/model', U, { provider: 'h:' + h189.id + '/sc-claude', model: 'claude-haiku-5-5' });
+    const wNo = await chat(U, 'scope work r189', { fresh: true }), wNoText = wNo.events.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ');
+    // the use switched on: the scope no longer stops it
+    await scope('sc-claude', 't-user', ['claude-haiku-5-5'], ['api', 'work']);
+    const wYes = await chat(U, 'scope work again r189', { fresh: true }), wYesText = wYes.events.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ');
+    // the API without the api use
+    await scope('sc-local', 't-user', ['tiny-a'], ['work']);
+    const noApi = await ask('tiny-a'), noApiBody = (() => { try { return JSON.parse(noApi.text); } catch { return {}; } })();
+    // "@group" (t-user is the hub's team group): applies once t-user has no entry of its own; the own entry wins again after
+    await scope('sc-local', '@group', ['tiny-b'], '*'); await scope('sc-local', 't-user', '*', '*');
+    const viaGroup = await sees('sc-local'), groupAsk = await ask('tiny-b'), groupNoA = await ask('tiny-a');
+    await scope('sc-local', 't-user', ['tiny-a'], '*');
+    const ownWins = await sees('sc-local'), ownAsk = await ask('tiny-a'), ownNoB = await ask('tiny-b');
+    const db189 = (() => { try { return JSON.parse(fs.readFileSync(path.join(SB, 'ai-hosts.json'), 'utf8')).hosts[h189.id] || {}; } catch { return {}; } })();
+    const hostCfg189 = JSON.parse(fs.readFileSync(f189, 'utf8'));
+    const mine189 = (await call('/api/hosts', A)).data.mine || [], shown = ((mine189.find((h) => h.id === h189.id) || {}).providers || []).find((p) => p.id === 'sc-local') || {};
+    const html189 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    try { proc189.kill(); } catch {}
+    await call('/api/apikey/revoke', U, {}); await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' }); await call('/api/hosts/remove', A, { id: h189.id });
+    check('R189', L189,
+      !!loc && loc.models.join() === 'tiny-a,tiny-b' && !loc.scope && unscopedB.status === 200
+      && notOwner.status === 400 && badModel.status === 400 && /not a model/.test(JSON.stringify(badModel.data)) && badUse.status === 400 && forOwner.status === 400 && badWho.status === 400 && s1.status === 200 && s2.status === 200
+      && !!locU && locU.models.join() === 'tiny-a' && locU.scope && locU.scope.uses.join() === 'api' && !!claU && claU.models.join() === 'claude-haiku-5-5' && !!ownerSees && ownerSees.models.join() === 'tiny-a,tiny-b'
+      && okA.status === 200 && noB.status === 403 && /t-admin/.test(noBBody.error && noBBody.error.message) && /tiny-b/.test(noBBody.error && noBBody.error.message)
+      && /t-admin/.test(wNoText) && /Work runs/.test(wNoText) && !/shares R189/.test(wYesText)
+      && noApi.status === 403 && /t-admin/.test(noApiBody.error && noApiBody.error.message) && /the API/.test(noApiBody.error && noApiBody.error.message)
+      && !!viaGroup && viaGroup.models.join() === 'tiny-b' && groupAsk.status === 200 && groupNoA.status === 403
+      && !!ownWins && ownWins.models.join() === 'tiny-a' && ownAsk.status === 200 && ownNoB.status === 403
+      && db189.scopes && db189.scopes['sc-local'] && db189.scopes['sc-local']['t-user'].models.join() === 'tiny-a' && db189.scopes['sc-local']['t-user'].uses === '*' && db189.scopes['sc-local']['@group'].models.join() === 'tiny-b' && !hostCfg189.scopes && !JSON.stringify(hostCfg189).includes('scope')
+      && shown.scopes && shown.scopes['t-user'] && shown.scopes['t-user'].models.join() === 'tiny-a'
+      && /\/api\/hosts\/scope/.test(html189) && /hostScopes/.test(html189) && /What each person may use/.test(html189),
+      `unscoped ${unscopedB.status}; refused ${[notOwner, badModel, badUse, forOwner, badWho].map((r) => r.status).join('/')}; t-user sees local ${locU && locU.models.join()} claude ${claU && claU.models.join()} owner ${ownerSees && ownerSees.models.join()}; api ${okA.status}/${noB.status} "${String(noBBody.error && noBBody.error.message).slice(0, 120)}"; work "${wNoText.slice(0, 140)}" then "${wYesText.slice(0, 80)}"; no api ${noApi.status}; group ${viaGroup && viaGroup.models.join()} ${groupAsk.status}/${groupNoA.status}; own ${ownWins && ownWins.models.join()} ${ownAsk.status}/${ownNoB.status}; stored ${JSON.stringify(db189.scopes || {}).slice(0, 200)}`);
+  } else skip('R189', 'sharing with scopes (per person: models and work / api / unity)', 'the Rust hub\'s: --rust-hub runs it');
+  // Hosting controls on the hub page (R191, 5.12.0; T-160): the person who runs a host monitors it (status the host reports),
+  // controls it (pause / resume / restart / update / log) and sees who is using it, from Settings → My AI hosts. The cap `control`.
+  if (RUST_HUB && NATIVE_BIN.host) {
+    const L191 = 'hosting controls on the hub page: a native host announces the cap `control` and reports its status (version, uptime, paused, in flight, usage windows, logins), GET /api/hosts/status lists the person\'s own hosts with it (and nobody else\'s); POST /api/hosts/control pauses it from the hub (it keeps listening, shows paused and is not offered for work), resumes it, returns its log redacted of the token, asks a restart (the host ends once nothing is in flight); refused for a non-owner (403), an unknown action (400) and a host that did not announce the cap ("older than 5.13"); [static] the page has the buttons';
+    const h191 = (await call('/api/hosts/new', A, {})).data.host || {}, c191 = (await call('/api/hosts/config', A, { id: h191.id })).data.config || {};
+    const old191 = (await call('/api/hosts/new', A, {})).data.host || {}, oc191 = (await call('/api/hosts/config', A, { id: old191.id })).data.config || {};
+    const dir191 = path.join(SCRATCH, 'r191-host'); fs.mkdirSync(dir191, { recursive: true });
+    const f191 = path.join(dir191, 'ai-node.json');
+    fs.writeFileSync(f191, JSON.stringify({ hub: H, id: h191.id, token: c191.token, user: 't-admin', autoUpdate: false, engines: {}, providers: [{ id: 'r191', kind: 'claude-relay', label: 'R191 Claude', models: ['claude-haiku-5-5'], allowedUsers: [], configDir: path.join(SCRATCH, 'host-claude-login'), baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/anthropic` }] }), { mode: 0o600 });
+    fs.writeFileSync(path.join(dir191, 'ai-node.log'), Array.from({ length: 60 }, (_, i) => `12:00:${String(i).padStart(2, '0')} [ai-host] line ${i + 1}${i === 58 ? ' token=' + c191.token : ''}`).join('\n') + '\n');
+    const out191 = fs.openSync(path.join(dir191, 'out.log'), 'a');
+    const proc191 = spawn(NATIVE_BIN.host, ['host', '--config', f191], { cwd: dir191, stdio: ['ignore', out191, out191], windowsHide: true });
+    let exit191 = null; proc191.on('exit', (c) => { exit191 = c; });
+    const mine191 = async () => (((await call('/api/hosts/status', A)).data || {}).hosts || []).find((x) => x.id === h191.id) || null;
+    const until191 = async (pred) => { let x = null; for (let i = 0; i < 80; i++) { x = await mine191(); if (x && pred(x)) return x; await sleep(250); } return x; };
+    const ctl = (action, tok = A, id = h191.id) => call('/api/hosts/control', tok, { id, action });
+    const s0 = await until191((x) => x.online && x.control && x.status && x.status.version);
+    const otherSees = (((await call('/api/hosts/status', U)).data || {}).hosts || []).length;
+    const bad = await ctl('format-disk'), nonOwner = await ctl('pause', U), noHost = await ctl('pause', A, 'no-such-host');
+    // a host that did not announce the cap (an older one: hello without caps) is refused with the clear message
+    const hh = { 'Content-Type': 'application/json', 'X-VR-Host': old191.id, 'X-VR-Host-Token': oc191.token, 'X-VR-Host-Version': '3.6.0' };
+    await fetch(H + '/node/hello', { method: 'POST', headers: hh, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex'), user: 't-admin', providers: [], engines: {}, version: '3.6.0' }) });
+    const olderRes = await ctl('pause', A, old191.id), olderSt = (((await call('/api/hosts/status', A)).data || {}).hosts || []).find((x) => x.id === old191.id) || {};
+    const pa = await ctl('pause');
+    const s1 = await until191((x) => x.paused);
+    const offFile = fs.existsSync(path.join(dir191, 'ai-host.off'));
+    const re = await ctl('resume');
+    const s2 = await until191((x) => !x.paused && x.online);
+    const lg = await ctl('logs'), lines191 = (lg.data || {}).lines || [];
+    const html191 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const rs = await ctl('restart');
+    for (let i = 0; i < 60 && exit191 === null; i++) await sleep(250);
+    try { proc191.kill(); } catch {}
+    await call('/api/hosts/remove', A, { id: h191.id }); await call('/api/hosts/remove', A, { id: old191.id });
+    check('R191', L191,
+      !!s0 && s0.online && s0.control === true && s0.caps.includes('control') && typeof s0.status.version === 'string' && s0.status.startedAt > 0 && s0.status.paused === false && Array.isArray(s0.inUse) && s0.providers.some((p) => p.id === 'r191') && otherSees === 0
+      && bad.status === 400 && nonOwner.status === 403 && noHost.status === 403
+      && olderRes.status === 400 && /older than 5\.13/.test(JSON.stringify(olderRes.data)) && olderSt.control === false
+      && pa.status === 200 && !!s1 && s1.paused === true && s1.online === false && s1.status.pausedBy === 'hub' && offFile
+      && re.status === 200 && !!s2 && s2.paused === false && !fs.existsSync(path.join(dir191, 'ai-host.off'))
+      && lg.status === 200 && lines191.length === 50 && /line 60$/.test(lines191[49]) && !JSON.stringify(lines191).includes(c191.token) && lines191.some((l) => /token=\*\*\*/.test(l))
+      && rs.status === 200 && exit191 === 3
+      && /\/api\/hosts\/control/.test(html191) && /hostLiveBox/.test(html191) && /Show log/.test(html191) && /Update now/.test(html191),
+      `status ${s0 && JSON.stringify(s0.status).slice(0, 160)} control ${s0 && s0.control} other ${otherSees}; refused ${bad.status}/${nonOwner.status}/${noHost.status}; older ${olderRes.status} "${JSON.stringify(olderRes.data).slice(0, 100)}"; pause ${pa.status} paused ${s1 && s1.paused}/${s1 && s1.online} by ${s1 && s1.status && s1.status.pausedBy} off ${offFile}; resume ${re.status} ${s2 && s2.paused}; logs ${lg.status} ${lines191.length} lines; restart ${rs.status} exit ${exit191}; host log "${(() => { try { return fs.readFileSync(path.join(dir191, 'out.log'), 'utf8').replace(/\s+/g, ' ').slice(-160); } catch { return ''; } })()}"`);
+  } else skip('R191', 'hosting controls on the hub page (status, pause / resume / restart / log from Settings → My AI hosts)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });
@@ -1006,6 +1233,21 @@ async function run() {
     && pr.data.prefs.clips && pr.data.prefs.clips.volume === 0 && pr.data.prefs.clips.autoplay === true
     && pr.data.prefs.audio && pr.data.prefs.audio.noise === false && pr.data.prefs.audio.echo === true
     && pr.data.prefs.call && pr.data.prefs.call.volume === 100 && pr.data.prefs.call.quality === 'medium' && pr.data.prefs.autosave === 120;
+  // R190: the notification sound patterns (T-177): each kind its own motif, a style choice kept by the hub
+  {
+    const sp = await call('/api/prefs', U, { sound: { set: 'classic', call: 33, board: 140 } });
+    const sp2 = await call('/api/prefs', U, { sound: { set: 'loud-and-weird' } });
+    const s1 = (sp.data.prefs || {}).sound || {}, s2 = (sp2.data.prefs || {}).sound || {};
+    const block = (/const PATTERNS = \{([\s\S]*?)\n\};/.exec(html) || [])[1] || '';
+    const kinds = ['message', 'mention', 'reply', 'call', 'board'];
+    const bodies = kinds.map((k) => ((new RegExp('\\n  ' + k + ': (.+),?\\n').exec(block + '\n') || [])[1] || ''));
+    check('R190', 'notification sounds: a distinct pattern per kind (message, mention, reply, call, board; no two the same), Classic kept as a choice; the hub keeps the style (only classic / patterns) and the call / board volumes (clamped); calls ring with `call`, board reminders tick with `board`',
+      kinds.every((k, i) => bodies[i].length > 10) && new Set(bodies).size === kinds.length && /id="soundSet"/.test(html) && /id="volCall"/.test(html) && /id="volBoard"/.test(html)
+      && /set === 'classic'/.test(html) && s1.set === 'classic' && s1.call === 33 && s1.board === 100 && s2.set === 'classic'
+      && /playTone\('call'/.test(fs.readFileSync(path.join(MILLS, 'web', 'calls.js'), 'utf8')) && /playTone\('board'/.test(fs.readFileSync(path.join(MILLS, 'web', 'board.js'), 'utf8')),
+      `kinds ${bodies.map((b) => b.length).join('/')}; saved ${JSON.stringify(s1)} then ${JSON.stringify(s2)}`);
+    await call('/api/prefs', U, { sound: { set: 'patterns' } });
+  }
   const prBad = await call('/api/prefs', A, { color: 99 });
   const memP = ((await call('/api/room/members', A)).data.members || []).find((m) => m.username === 't-user');
   check('R42', 'settings: nickname cleaned, colour kept, volumes / speech settings clamped, text-to-speech master switch + Unity voice stored as booleans on the account, bad colour → none; others see nick + colour; [static] both switches in Settings, speak() and the Voice button obey the master switch', pr.status === 200 && ttsOk && pr.data.prefs.nick === 'Tee Nick'
@@ -1519,6 +1761,19 @@ async function run() {
   const fjRunU2Ev = (await chat(U, 'forgejo env r122 after', { fresh: true })).events;
   const fjRunU2 = fjEnvOf(fjRunU2Ev), fjwU2 = fjwOf(fjRunU2Ev);
   const fjwHost = `127.0.0.1:${OLLAMA_PORT}`, fjwLeak = JSON.stringify(fjwKeys).includes('fake-personal-token-1') && !JSON.stringify(fjwKeys).includes('fake-personal-token-1'); // (the file is the person's own: their token belongs there)
+  { // R193: a merge never pushes to "upstream" (a project's original, often someone else's public repo)
+    const d193 = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-r193-')), g193 = (cwd, ...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+    for (const r of ['upstream', 'mirror']) g193(d193, 'init', '-q', '--bare', r + '.git');
+    const w193 = path.join(d193, 'w'); fs.mkdirSync(w193); g193(w193, 'init', '-q', '-b', 'main');
+    g193(w193, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x');
+    for (const r of ['upstream', 'mirror']) g193(w193, 'remote', 'add', r, path.join(d193, r + '.git'));
+    const out193 = require(path.join(MILLS, 'bridge', 'worktree.js')).pushAll(w193, 'main', ['origin']).join(' | ');
+    const has193 = (r) => g193(path.join(d193, r + '.git'), 'rev-parse', '-q', '--verify', 'refs/heads/main').status === 0;
+    const up193 = has193('upstream'), mir193 = has193('mirror');
+    fs.rmSync(d193, { recursive: true, force: true });
+    check('R193', 'a merge never pushes to "upstream" (publish keeps a project\'s original there only to pull from, fetch-only; our work stays private): pushAll skips it and still pushes to another mirror',
+      !up193 && mir193 && /fetch-only/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'worktree.js'), 'utf8')), `upstream got main ${up193}, mirror got main ${mir193} (${out193})`);
+  }
   check('R172', 'fj (the Forgejo CLI) signed in as the person in their Work run: the `fj` first on the PATH is a wrapper of theirs over the real fj, pointing it at their own keys file (their token for the Forgejo host, owner-only, under their profile here / the host\'s .fj/<account>); no token → no wrapper (nobody else\'s); gone when they disconnect; [static] bridge/.fj/ never ships, worktree.js repos / repo-create / publish',
     process.platform === 'win32' || (fjwU === `wrapper:${fjwHost}=Application` && fjwA === '' && fjwFiles.length === 1 && ((fjwKeys.hosts || {})[fjwHost] || {}).token === 'fake-personal-token-1' && fjwMode === '600/700' && fjwRuns === 'fake fj whoami --host x' && fjwU2 === '' && !fjwLeak
       && /^bridge\/\.fj\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')) && /cmd === 'repos'/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'worktree.js'), 'utf8')) && /async function publish\(/.test(fs.readFileSync(path.join(MILLS, 'bridge', 'worktree.js'), 'utf8'))),
@@ -2518,25 +2773,26 @@ async function run() {
     fs.writeFileSync(fakeHub, `const http = require('http'), fs = require('fs'); const commit = process.argv[2], port = Number(process.argv[process.argv.indexOf('--port') + 1]);
 const mode = () => { try { return fs.readFileSync(process.argv[3], 'utf8').trim(); } catch { return 'ok'; } };
 if (mode() === 'crash') process.exit(1);
-http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit })); }).listen(port, '127.0.0.1');\n`);
-    const scenario = async (name, builds, cur, good, expect, change, withJs) => { // builds: commit → mode; cur = the newest; good = the good list newest first; withJs: a stand-in bridge/server.js (the JavaScript hub) in the root
+http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit, serving: process.env.VR_SERVING || '' })); }).listen(port, '127.0.0.1');\n`);
+    const scenario = async (name, builds, cur, good, expect, change, withJs, extraArgs = []) => { // builds: commit → mode; cur = the newest; good = the good list newest first; withJs: a stand-in bridge/server.js (the JavaScript hub) in the root
       if (built177.status !== 0) return { name, ok: false, why: 'vr-run not built' };
       const dir = path.join(SCRATCH, 'dist177-' + name); fs.mkdirSync(dir, { recursive: true });
       const root0 = path.join(SCRATCH, 'root177-' + name, 'bridge'); fs.mkdirSync(root0, { recursive: true });
       if (withJs) fs.writeFileSync(path.join(root0, 'server.js'), `const http = require('http'); const port = Number(process.env.VR_BACK_PORT || process.env.MILLS_PORT || 0); if (!port) process.exit(1);
-http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit: process.env.VR_BACK_PORT ? 'js-behind' : 'js-alone' })); }).listen(port, '127.0.0.1');\n`);
+http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit: process.env.VR_BACK_PORT ? 'js-behind' : 'js-alone', serving: process.env.VR_SERVING || '' })); }).listen(port, '127.0.0.1');\n`);
       for (const [c, m] of Object.entries(builds)) { fs.mkdirSync(path.join(dir, c), { recursive: true }); fs.writeFileSync(path.join(dir, c, 'mode'), m); fs.writeFileSync(path.join(dir, c, 'vr-hub'), `#!/bin/sh\nexec "${process.execPath}" "${fakeHub}" ${c} "${path.join(dir, c, 'mode')}" "$@"\n`, { mode: 0o755 }); }
       fs.writeFileSync(path.join(dir, 'current'), cur + '\n'); fs.writeFileSync(path.join(dir, 'good'), good.join('\n') + '\n'); // current: a plain file naming the commit (keep-builds.sh writes it so)
       const port = await freePort(PORT + 300), root = root0;
       const log = fs.openSync(path.join(SCRATCH, `vr-run-${name}.log`), 'a');
-      const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
-      const who = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); return (await r.json()).commit || ''; } catch { return ''; } };
+      const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--builds', dir, '--health-every', '1', '--health-timeout', '1', ...extraArgs], { stdio: ['ignore', log, log] });
+      let serving = '';
+      const who = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); const j = await r.json(); serving = j.serving || ''; return j.commit || ''; } catch { return ''; } };
       let seen = '', pid1 = 0; const t0 = Date.now();
       for (let i = 0; i < 100 && seen !== expect; i++) { await sleep(300); seen = await who(); }
       if (change) { const r0 = await fetch(`http://127.0.0.1:${port}/api/status`).then((r) => r.json()).catch(() => ({})); pid1 = r0.pid || 0; await change(dir); let again = ''; for (let i = 0; i < 100 && (!again || again === String(pid1)); i++) { await sleep(300); try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); const j = await r.json(); again = String(j.pid || ''); seen = j.commit || ''; } catch { again = ''; } } }
       const fell = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, '.fell-back'), 'utf8')); } catch { return null; } })();
       proc.kill('SIGTERM'); await sleep(500); try { proc.kill('SIGKILL'); } catch { /* gone */ }
-      return { name, ok: seen === expect, seen, ms: Date.now() - t0, fell };
+      return { name, ok: seen === expect, seen, serving, ms: Date.now() - t0, fell };
     };
     const crash = await scenario('crash', { n1: 'crash', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const hang = await scenario('hang', { n1: 'hang', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
@@ -2548,6 +2804,18 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R177', 'FR4 the Rust supervisor vr-run (replacing run.js): starts the newest build ("current"); a build that crashes 3 times within a minute is marked bad and the previous good build takes over (bridge/.fell-back names both); a build that accepts connections but never answers the health check (/api/status every --health-every s, --health-timeout s, 3 misses) is killed and the previous good build takes over; a healthy build stays; exit 75 = the build is started again (restart on new code); while bridge/server.js still exists, every kept build failing hands the port to the JavaScript hub alone (the first swap\'s last net), said in .announce',
       built177.status === 0 && crash.ok && crash.fell && crash.fell.from === 'n1' && crash.fell.to === 'g1' && hang.ok && hang.fell && hang.fell.to === 'g1' && fine.ok && !fine.fell && again.ok && !again.fell && jsAlone.ok && jsAloneNote,
       built177.status !== 0 ? `vr-run does not build: ${String(built177.stderr || '').trim().split('\n').slice(-2).join(' ').slice(0, 160)}` : `crash → ${crash.seen || 'nobody'} in ${crash.ms} ms fell ${JSON.stringify(crash.fell)} · hang → ${hang.seen || 'nobody'} in ${hang.ms} ms fell ${JSON.stringify(hang.fell)} · fine → ${fine.seen} fell ${!!fine.fell} · exit 75 → ${again.seen} fell ${!!again.fell} · all bad + server.js → ${jsAlone.seen || 'nobody'} in ${jsAlone.ms} ms, said ${jsAloneNote}`);
+    // R192 (T-157): the fallback chain and the frozen JavaScript hub. vr-run serves the newest build ("rust"), then the
+    // previous good builds ("rust-fallback-1", "rust-fallback-2"), and only when all fail the JavaScript hub alone
+    // ("javascript-fallback", also with --alone); /api/status says which. The real bridge/server.js, started alone like
+    // the last resort starts it, still boots and serves the basics on the current tree (bridge/test/js-fallback.js).
+    const deep192 = await scenario('deep', { n1: 'crash', g1: 'crash', g2: 'ok' }, 'n1', ['g1', 'g2'], 'g2');
+    const aloneJs192 = await scenario('alonejs', { n1: 'crash', g1: 'crash' }, 'n1', ['g1'], 'js-alone', null, true, ['--alone']);
+    const aloneOk192 = await scenario('alonefine', { n1: 'ok' }, 'n1', [], 'n1', null, true, ['--alone']);
+    const js192 = await require('./js-fallback.js').probe({ portFrom: PORT + 340 });
+    const keep192 = fs.readFileSync(path.join(MILLS, 'native', 'keep-builds.sh'), 'utf8');
+    check('R192', 'T-157 the fallback chain: /api/status names what serves (rust → rust-fallback-1 → rust-fallback-2 → javascript-fallback, also with --alone); two previous good builds are kept (keep-builds.sh); the real JavaScript hub started alone boots and serves the basics (status, page, sign-in gate + sign-in, chat room, board, one Work run with the fake Claude, the AI host link)',
+      built177.status === 0 && fine.serving === 'rust' && crash.serving === 'rust-fallback-1' && deep192.ok && deep192.serving === 'rust-fallback-2' && aloneJs192.ok && aloneJs192.serving === 'javascript-fallback' && aloneOk192.ok && aloneOk192.serving === 'rust' && /-ge 2/.test(keep192) && js192.ok,
+      `serving: fine ${fine.serving} · crash ${crash.serving} · 3 deep ${deep192.seen}/${deep192.serving} · --alone all bad ${aloneJs192.seen}/${aloneJs192.serving} · --alone fine ${aloneOk192.serving} · JavaScript hub alone: ${js192.why}`);
   }
   if (RUST_HUB && !WIN) { // R178 (FR5): deploy/trial.sh tries a build on a side port against a copy of the data before it is swapped in
     const tr = path.join(MILLS, 'deploy', 'trial.sh');
@@ -2728,7 +2996,14 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   }
   const us = (await call('/api/assistant/state', U)).data;
   check('R61', 'Unity section state: local brain default and loaded, Claude models offered', us.brain === 'local' && us.local && us.local.model === true && us.brains.some((b) => b.id === 'local') && us.brains.some((b) => b.id === 'claude-opus-5-5'), JSON.stringify(us.local || us));
+  const ua0 = ((await call('/api/usage', U)).data.answers || {});
   const t1 = await uchat(U, 'TASK buy regress milk');
+  const ua1 = ((await call('/api/usage', U)).data.answers || {});
+  if (RUST_HUB) { // R186: Unity's local-brain answer (three model rounds: the tool call, the spoken line, the closing text) is one turn in the ledger under `ollama`
+    const o0 = (ua0.by && ua0.by.ollama) || {}, o1 = (ua1.by && ua1.by.ollama) || {};
+    check('R186', 'Unity\'s answers in the same ledger: the local brain\'s answer (Ollama\'s prompt_eval_count / eval_count summed over its rounds) is noted once under `answers.by.ollama` (no cache numbers), next to the API answers',
+      (o1.turns || 0) - (o0.turns || 0) === 1 && (o1.input || 0) - (o0.input || 0) === 300 && (o1.output || 0) - (o0.output || 0) === 30 && (o1.cached || 0) === (o0.cached || 0), `ollama ${JSON.stringify(o0)} -> ${JSON.stringify(o1)}`);
+  } else skip('R186', 'Unity answers through the usage ledger', 'the Rust hub\'s: --rust-hub runs it');
   const dataU = (await call('/api/assistant/data', U)).data, dataA = (await call('/api/assistant/data', A)).data;
   const said = t1.events.find((e) => e.type === 'say');
   check('R62', 'local brain: tool call adds a task for that person only; reply spoken via say; name + their time zone in the prompt', t1.events.some((e) => e.type === 'tool' && e.name === 'add_task')
@@ -3365,7 +3640,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     console.log(`Throwaway hub: ${SCRATCH} on port ${PORT} (no tunnel). Production is only read.\n`);
     if (!(await startHub())) throw new Error('throwaway hub did not start; see ' + path.join(SCRATCH, 'hub.log'));
     await run();
-  } catch (e) { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); }
+  } catch (e) { if (e.stopAfter) console.log(e.message); else { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); } }
   stopHub();
   if (ollamaSrv) ollamaSrv.close();
   await sleep(800);

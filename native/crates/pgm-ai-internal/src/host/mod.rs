@@ -7,6 +7,7 @@
 //! - [`folder`]: the host folder and the files in it (settings, status, lock, log, switches)
 //! - [`settings`]: ai-node.json, read and written with the control app's keys, defaults and checks
 
+pub mod control;
 pub mod folder;
 pub mod mcp;
 pub mod relay;

@@ -52,7 +52,7 @@
       tt.addEventListener('animationend', () => tt.remove()); $('toasts').append(tt);
       try { if (window.Notification && Notification.permission === 'granted') new Notification((over ? 'Overdue task: ' : 'Due today: ') + t.title, { body: t.id + ' on the ' + OPT.product + ' board' }); } catch {}
     }
-    const P = typeof prefs === 'function' ? prefs() : null; if (P && P.sound.on && typeof playTone === 'function') playTone('mention', P.sound.mention);
+    const P = typeof prefs === 'function' ? prefs() : null; if (P && P.sound.on && typeof playTone === 'function') playTone('board', P.sound.board ?? P.sound.mention); // the tick-tock pattern (5.11.0)
     store.set(key, JSON.stringify(seen));
   }
   async function loop(gen) {

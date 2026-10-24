@@ -45,7 +45,20 @@ impl HostKey {
 }
 
 /// What a host can do, told to the hub in hello (older hosts send none). "update-bin": it updates its own binary.
-pub const CAPS: &[&str] = &["relay", "update", "update-bin"];
+pub const CAPS: &[&str] = &["relay", "update", "update-bin", "control"];
+/// "control": the host answers `control` jobs from the hub (pause, resume, restart, update, logs) for its owner and
+/// reports its status (`POST /node/status`). The hub sends a control job only to a host that announced it (5.12.0).
+pub const CAP_CONTROL: &str = "control";
+/// "work-jcode": this host runs Work turns through `jcodepgm run --ndjson` for its `jcode` providers (opt-in, WORKPLAN 9c).
+/// Announced only by a host that has such a provider AND allows Work; the hub lists a `jcode` provider of a host and
+/// sends it a jcode Work job only when this was announced, so a host without it behaves exactly as before.
+pub const CAP_WORK_JCODE: &str = "work-jcode";
+/// The caps a host says hello with: always [`CAPS`], plus `work-jcode` when it runs Work through jcode.
+pub fn caps_for(work_jcode: bool) -> Vec<String> {
+    let mut v: Vec<String> = CAPS.iter().map(|s| s.to_string()).collect();
+    if work_jcode { v.push(CAP_WORK_JCODE.to_string()); }
+    v
+}
 
 /// One provider as hello offers it.
 #[derive(Clone, Debug, Serialize)]
@@ -164,6 +177,10 @@ impl HubLink {
         let mut b = json!({ "id": job_id }); if let (Some(o), Value::Object(p)) = (b.as_object_mut(), part) { o.extend(p); }
         match self.post("/node/stream").json(&b).timeout(Duration::from_secs(60)).send().await { Ok(r) => r.status().as_u16() != 404, Err(_) => true }
     }
+    /// How this host is doing (cap `control`): small, no messages; a hub that does not know the route just answers 404.
+    pub async fn status(&self, report: &Value) {
+        let _ = self.post("/node/status").json(report).timeout(Duration::from_secs(10)).send().await;
+    }
     /// A batch of a run's events, sealed with the session key.
     pub async fn events(&self, job_id: &str, batch: &Value) -> EventsAnswer {
         let Some(key) = &self.key else { return EventsAnswer::Ok };
@@ -187,6 +204,13 @@ mod tests {
         assert_eq!(p.beat.unwrap().version, "3.10.0");
         let empty: PollAnswer = serde_json::from_value(json!({})).unwrap();
         assert!(empty.jobs.is_empty() && empty.beat.is_none());
+    }
+    #[test]
+    fn work_jcode_is_announced_only_on_request() {
+        assert_eq!(caps_for(false), ["relay", "update", "update-bin", "control"]);
+        assert_eq!(caps_for(true), ["relay", "update", "update-bin", "control", "work-jcode"]);
+        assert!(CAPS.contains(&CAP_CONTROL));
+        assert!(CAP_WORK_JCODE.len() <= 20 && CAP_WORK_JCODE.bytes().all(|x| x.is_ascii_lowercase() || x == b'-')); // what the hub's hello accepts
     }
     #[test]
     fn host_key_round_trip() {

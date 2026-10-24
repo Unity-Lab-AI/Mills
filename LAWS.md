@@ -88,6 +88,53 @@ number should scale less than the third number, however, this is all dependent o
   watch `/api/status` come back; vr-run's own fallback (the previous good build; for the first swap also the
   JavaScript hub) covers a bad build without anyone's hand.
 
+## The JavaScript hub stays as the last fallback
+
+Sponge, 2026-10-24: *"we leave JavaScript as a fallback … so that while a lot of newer stuff might not work if it falls
+back to JavaScript, we still have something that works enough to fix it and keep working. Moving forward we need at
+least 1 if not 2 Rust fallbacks when we get to stable versions, so that we only use the non-updated JavaScript version
+if all else fails."*
+
+- **The order of service** (vr-run with `rustHub.alone`; `/api/status` shows it as `serving`): the newest Rust build
+  (`rust`), the previous good build (`rust-fallback-1`), the one before (`rust-fallback-2`), and only when all of those
+  fail the JavaScript hub alone (`javascript-fallback`), said loudly in the log, the chat and /api/status. The Rust hub
+  serves alone; keep-builds.sh keeps the current build + 2 good ones, always.
+- **JavaScript is frozen, not removed.** bridge/server.js (and what it needs) is the last resort. A new feature is built
+  in Rust and does not have to exist in JavaScript. But the JavaScript hub must keep booting and serving the basics on
+  every tree we ship: sign-in, chat, the board, Work with Claude, the AI host link, so a broken release can be fixed
+  from it. The suite keeps the check (R192, `node bridge/test/js-fallback.js`); it must stay green.
+- **Shared data stays readable by it.** Every change that touches a data file both hubs read (accounts, sessions, chat,
+  board, notes, work.json, ai-hosts.json …) keeps the JavaScript hub able to read it: add fields, never rename or
+  re-shape what is there; a Rust-only file is fine, a changed shared file is not.
+- **Before every go-live the run checks the fallback chain** (two good Rust builds kept, the JavaScript hub boots), and
+  it never removes the JavaScript hub without Sponge's explicit word.
+- Going back from `alone` to the JavaScript hub behind the Rust one is one config flip and a graceful restart
+  (deploy/full-rust-swap.md).
+
+## Finish the whole job, test it in throw-away hubs, go live once
+
+Sponge, 2026-10-24: *"we dont restart vibe roller, and use throw-away tests, until ALL sub agents are done, and all work
+is done … it's better for us to accumulate changes until everything is done and complete, in all parts … we should go
+live with more changes at once, that have been tested in throwaway, compared to going live a bunch of times during the
+middle of development."*
+
+- **Accumulate, then go live once.** Work in progress is committed on `work/<username>` (and the work branches of the
+  other projects) and stays there. Nothing is merged into develop or taken live while any part of the job is still
+  being built: not "most of it is done", all of it. Then one merge, one go-live, with every part in it.
+- **Test in throw-away hubs only.** The regression suite (`node bridge/test/regress.js --no-prod`, normal and
+  `--rust-hub`) runs its own scratch hub on its own ports with its own data, and is the place to try a change. The
+  live hub is never restarted to try something, and nothing is shipped to see whether it works.
+- **A run never ends while its agents work.** A Work run is one Claude process per message; it ends when the reply is
+  sent, and every background agent it started dies with it, mid-edit (2026-10-24: this, not the hub, cut the agents
+  off again and again all day — the live hub ran without a restart from 04:46). So a run that has started agents keeps
+  working until each of them has reported, has been reviewed, tested and committed, before it sends its last message.
+  It tells the person it is still going (a short progress line is fine) instead of ending the turn. When an agent is
+  cut off anyway, the next run resumes it from its transcript first, before anything new.
+- **One go-live at a time, at a quiet moment.** When the whole job is done and both suite modes are 0 failed on the
+  final tree: announce it, merge, go live, and stay in the run until the deploy log says the new version is verified
+  (the graceful restart waits for the shipping run to end, so the check is the next run's first step if it has not
+  happened yet). Then the AI hosts update by themselves.
+
 ## Library law: reused code lives in a library
 
 Sponge, 2026-10-22: *"new libraries (and existing libraries) need to be developed or extended when there is code that

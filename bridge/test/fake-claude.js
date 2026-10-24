@@ -4,6 +4,7 @@
 //   message contains "SLOW"   → waits 4 s before answering (busy / 409 / stop / deferred restart)
 //   message contains "ASSISTTOOL" → adds a task through the Unity section's tool relay
 //   message contains "PCTOOL" → calls the pc "list" tool through the hub, like the real MCP relay
+//   message contains "CLAUDETOOL" → runs one fake tool (Bash) before answering
 //   message contains "USAGE"  → reports token usage (54,000 of a 200,000 context window) and a
 //                               5-hour rate-limit event (42% used, resets in 2 h), like the real stream
 // The answer echoes the model and the working folder (cwd) so the runner can check both.
@@ -140,6 +141,11 @@ process.stdin.on('end', async () => {
       body: JSON.stringify({ name: 'add_task', args: { title: 'from claude brain' } }),
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'TOOL:' + JSON.stringify(r) }] } });
+  }
+  // "CLAUDETOOL": one tool call and its result before the answer, like a real run (R187 compares its structure with jcode's)
+  if (input.includes('CLAUDETOOL')) {
+    out({ type: 'assistant', session_id: session, message: { role: 'assistant', model, content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'echo hi' } }] } });
+    out({ type: 'user', session_id: session, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'hi\n', is_error: false }] } });
   }
   // cfg / key: which Claude login / API key this run was handed (a person's own provider), '' = the host's
   // wt: the allowed-tools entries that name worktree.js (a run in another project may call the hub's copy by its full path)

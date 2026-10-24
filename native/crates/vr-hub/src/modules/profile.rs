@@ -48,7 +48,7 @@ pub fn clean_prefs(p: &Value, prev: &Value) -> Value {
     if has("autoScroll") { out["autoScroll"] = json!(p["autoScroll"] == json!(true)); }
     if has("theme") { let t = match &p["theme"] { Value::String(x) => x.clone(), o => o.to_string() }; out["theme"] = json!(if t.len() <= 40 && t.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') { t } else { String::new() }); }
     if has("autosave") { out["autosave"] = json!(clamp(&p["autosave"], 0.0, 120.0, 0.0) as i64); }
-    if p["sound"].is_object() { let mut s = if out["sound"].is_object() { out["sound"].clone() } else { json!({}) }; let q = &p["sound"]; if q.get("on").is_some() { s["on"] = json!(b(&q["on"])); } for k in ["message", "mention", "reply"] { if q.get(k).is_some() { s[k] = json!(clamp(&q[k], 0.0, 100.0, 0.0) as i64); } } out["sound"] = s; }
+    if p["sound"].is_object() { let mut s = if out["sound"].is_object() { out["sound"].clone() } else { json!({}) }; let q = &p["sound"]; if q.get("on").is_some() { s["on"] = json!(b(&q["on"])); } for k in ["message", "mention", "reply", "call", "board"] { if q.get(k).is_some() { s[k] = json!(clamp(&q[k], 0.0, 100.0, 0.0) as i64); } } if let Some(v) = q["set"].as_str().filter(|v| *v == "classic" || *v == "patterns") { s["set"] = json!(v); } out["sound"] = s; }
     if p["tts"].is_object() {
         let mut t = if out["tts"].is_object() { out["tts"].clone() } else { json!({}) }; let q = &p["tts"];
         for k in ["all", "unity", "on"] { if q.get(k).is_some() { t[k] = json!(b(&q[k])); } }

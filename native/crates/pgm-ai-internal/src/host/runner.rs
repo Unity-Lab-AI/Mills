@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::host::folder::{log, Folder};
-use crate::host::{relay, work};
+use crate::host::{control, relay, work};
 use crate::host::settings::{HostSettings, Provider};
 use pgm_core_internal::{now_ms, Error, Result};
 use pgm_net_internal::hostlink::{Hello, HubLink, Job, OfferedProvider, Poll};
@@ -37,6 +37,8 @@ pub struct Host {
     pub detected: Mutex<Detected>,
     /// When an automatic update check first had to wait for a quiet moment (0 = not waiting).
     pub update_deferred_since: Mutex<u64>,
+    /// Wakes the status reporter now (a control changed something the hub should hear about at once).
+    pub nudge: tokio::sync::Notify,
 }
 /// The longest an automatic update waits for quiet minutes before it takes any moment with nothing in flight.
 pub const UPDATE_MAX_WAIT_MS: u64 = 30 * 60_000;
@@ -100,7 +102,7 @@ pub async fn detect_local(h: &H) {
             if !configured_engine { d.ollama_engine = Some(url.clone()); }
             if !configured_endpoint && !models.is_empty() {
                 d.ollama_provider = Some(Provider { id: "ollama".into(), kind: "openai".into(), label: format!("{}'s Ollama (this machine)", if h.cfg.user().is_empty() { "this host".to_string() } else { h.cfg.user() }), models, enabled: true,
-                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new() });
+                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new(), jcode_command: String::new(), jcode_provider: String::new(), jcode_args: vec![] });
             }
         }
     }
@@ -215,7 +217,7 @@ pub async fn run(folder: Folder, selftest: bool, update_flag: bool) -> i32 {
     let http = match pgm_net_internal::client::http_client(Duration::from_secs(20)) { Ok(c) => c, Err(e) => { eprintln!("[ai-host] {e}"); release_lock(&folder); return 1; } };
     let status = json!({ "pid": std::process::id(), "version": VERSION, "native": true, "target": TARGET, "hub": cfg.hub(), "id": cfg.id(), "startedAt": now_ms(), "connected": false, "connectedAt": 0, "lastOkAt": 0, "downSince": 0, "lastError": "", "active": 0, "runs": 0, "lastJobAt": 0, "paused": false, "lastUpdate": "", "lastUpdateAt": 0 });
     let h: H = Arc::new(Host { nickname: Mutex::new(cfg.nickname()), folder: folder.clone(), cfg, link: RwLock::new(link), http, status: Mutex::new(status.as_object().cloned().unwrap_or_default()), status_dirty: Mutex::new(true),
-        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0) });
+        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0), nudge: tokio::sync::Notify::new() });
     h.write_status_now();
     let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<i32>(4);
     background(h.clone(), exit_tx.clone());
@@ -246,7 +248,7 @@ fn background(h: H, exit: tokio::sync::mpsc::Sender<i32>) {
         let mut tick = 0u64;
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await; tick += 1;
-            if tick % 3 == 0 { h2.set_status(json!({ "active": h2.active.load(Ordering::SeqCst), "runs": h2.runs.lock().unwrap_or_else(|e| e.into_inner()).len(), "lastJobAt": h2.last_job_at.load(Ordering::SeqCst), "paused": h2.folder.off().exists() })); }
+            if tick % 3 == 0 { h2.set_status(json!({ "active": h2.active.load(Ordering::SeqCst), "runs": h2.runs.lock().unwrap_or_else(|e| e.into_inner()).len(), "lastJobAt": h2.last_job_at.load(Ordering::SeqCst), "paused": h2.folder.off().exists(), "pausedBy": if !h2.folder.off().exists() { "" } else if control::held(&h2.folder) { "hub" } else { "machine" } })); }
             for (file, code, what) in [(h2.folder.stop_now(), 0, "stopping"), (h2.folder.restart_now(), 3, "restarting")] {
                 if !file.exists() { continue; }
                 let how = std::fs::read_to_string(&file).unwrap_or_default();
@@ -257,6 +259,13 @@ fn background(h: H, exit: tokio::sync::mpsc::Sender<i32>) {
             }
         }
     });
+    // how this host is doing, told to the hub every ~15 s and at once after a control (the hub only shows it)
+    let h6 = h.clone();
+    tokio::spawn(async move { loop {
+        let off = h6.folder.off().exists() && !control::held(&h6.folder);
+        if !off && h6.link.read().await.key.is_some() { h6.link.read().await.status(&control::report(&h6)).await; }
+        tokio::select! { _ = tokio::time::sleep(Duration::from_secs(15)) => {}, _ = h6.nudge.notified() => { tokio::time::sleep(Duration::from_millis(300)).await; } }
+    } });
     // new code (the binary was replaced by hand) or new settings: restart on them at a quiet moment
     let h3 = h.clone(); let e3 = exit.clone();
     tokio::spawn(async move {
@@ -292,12 +301,16 @@ fn own_config_write(h: &Host) -> bool {
 }
 
 fn hello_body(h: &Host) -> Hello {
-    let providers = h.providers().iter().map(|p| {
+    // a `jcode` provider runs Work, so it is offered (and `work-jcode` announced) only by a host that allows Work; a host
+    // with no such provider says hello exactly as it always did
+    let offered: Vec<Provider> = h.providers().into_iter().filter(|p| !p.is_jcode() || h.cfg.allow_work()).collect();
+    let work_jcode = offered.iter().any(|p| p.is_jcode());
+    let providers = offered.iter().map(|p| {
         let mut allowed = p.allowed_users.clone(); if p.share_with_group { allowed.push("@group".into()); }
         OfferedProvider { id: p.id.clone(), kind: p.relay_kind().to_string(), label: p.label.clone(), models: p.models.clone(), allowed_users: allowed, max5h: p.max5h, max7d: p.max7d }
     }).collect();
     Hello { nonce: pgm_core_internal::crypto::random_hex(16), user: h.cfg.user(), providers, engines: h.engines().into_iter().map(|(k, _)| k).collect(), pc: h.cfg.pc_folder().is_some(),
-        version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::CAPS.iter().map(|s| s.to_string()).collect() }
+        version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::caps_for(work_jcode) }
 }
 async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     detect_local(h).await;
@@ -317,6 +330,7 @@ async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     let hv = a.update.as_ref().map(|u| u.version.clone()).unwrap_or_default();
     h.set_status(json!({ "connected": true, "connectedAt": now_ms(), "lastOkAt": now_ms(), "nickname": nick, "kid": kid, "owner": h.cfg.user(), "group": a.group, "hubVersion": hv, "lastError": "" }));
     update_confirmed(h);
+    h.nudge.notify_one();
     if a.update.map(|u| !u.commit.is_empty()).unwrap_or(false) { let h2 = h.clone(); let e = exit.clone(); tokio::spawn(async move { tokio::time::sleep(Duration::from_secs(5)).await; check_update(h2, false, e).await; }); }
     Ok(())
 }
@@ -324,7 +338,9 @@ async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
 async fn main_loop(h: H, exit: tokio::sync::mpsc::Sender<i32>) {
     let (mut paused, mut misses, mut down_since, mut hub_commit) = (false, 0u64, 0u64, String::new());
     loop {
-        if h.folder.off().exists() {
+        // paused on this machine: not even listening. Paused from the hub (control): it keeps listening, so the hub can
+        // resume it, but lends nothing (dispatch refuses) and the hub sees it as paused
+        if h.folder.off().exists() && !control::held(&h.folder) {
             if !paused { paused = true; log("paused by this machine's host (ai-host.off)"); h.set_status(json!({ "paused": true, "connected": false })); }
             tokio::time::sleep(Duration::from_secs(3)).await; continue;
         }
@@ -364,7 +380,9 @@ async fn main_loop(h: H, exit: tokio::sync::mpsc::Sender<i32>) {
 
 fn dispatch(h: H, job: Job) {
     tokio::spawn(async move {
-        if job.kind == "work" {
+        if job.kind == "control" { control::control_job(h, job).await; }
+        else if control::held(&h.folder) { h.link.read().await.reply(&job.id, 503, &ct_json(), &err_body("This AI host is paused by its owner.")).await; }
+        else if job.kind == "work" {
             if h.cfg.allow_work() { work::work_job(h, job).await; }
             else { h.link.read().await.reply(&job.id, 403, &ct_json(), br#"{"error":"This host shares its AI only, not its computer."}"#).await; }
         } else if job.engine == "pc" { let h2 = h.clone(); h.track(pc_job(h2, job)).await; }

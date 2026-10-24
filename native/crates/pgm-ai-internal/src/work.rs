@@ -10,8 +10,10 @@ use bytes::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use pgm_context_internal::assembly::{lint, Class, LintHit, Segment};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Notify};
 
@@ -23,6 +25,8 @@ use pgm_identity_internal::Account;
 use pgm_net_internal::http::Req;
 
 const AI_OFF_TEXT: &str = "The host's AI is switched off right now (its host paused it). Chat, the board and your own AI keep working; pick your own AI in the model dropdown, or try again once it is back.";
+/// The kind a host's `jcode` provider has on the hub: Work runs ON that host through `jcodepgm run --ndjson` (WORKPLAN 9c).
+const HOST_JCODE: &str = "host-jcode";
 const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSessionWhere", "ctx", "project", "lastRunAt"];
 
 struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog }
@@ -142,13 +146,20 @@ impl Work {
     }
     /// Which coding harness runs Work for that provider: "claude" (Claude Code), "jcode" (Jcode PGM), None (neither:
     /// an OpenAI endpoint or a ChatGPT login answers the API and the Unity section, not Work).
-    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
+    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
     pub fn harness_of(p: &Value) -> Option<&'static str> {
-        if p["kind"] == json!(crate::jcode::KIND) { return Some(crate::jcode::HARNESS); }
+        if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) { return Some(crate::jcode::HARNESS); }
         Self::claude_env(p).map(|_| crate::jcode::CLAUDE_HARNESS)
     }
     fn usage_source(&self, ai: &crate::ai_hosts::AiHosts, a: &Account) -> String { match self.effective(ai, &a.username, &s(&self.state(a), "provider")) { Some(p) if p["kind"] == json!("host-claude") => s(&p, "id"), _ => "hub".into() } }
-    pub fn usage_status(&self, hub: &dyn AiHub, a: &Account) -> Value { let st = self.state(a); hub.ai().usage.status(&self.usage_source(hub.ai(), a), &st["ctx"], st["claudeSessionId"].as_str().unwrap_or("")) }
+    pub fn usage_status(&self, hub: &dyn AiHub, a: &Account) -> Value {
+        let st = self.state(a);
+        let mut v = hub.ai().usage.status(&self.usage_source(hub.ai(), a), &st["ctx"], st["claudeSessionId"].as_str().unwrap_or(""));
+        // answers outside Work (API, Unity, products): the cache ledger of this person's answers; absent until there is one
+        let ans = hub.ai().usage.answers(&a.username);
+        if ans.is_object() { v["answers"] = ans; }
+        v
+    }
 
     // ---------- the person's Forgejo token (bridge/forgejo.js keeps it) ----------
     fn forgejo_url(&self) -> String { read_json(&self.root.join("forgejo.json")).and_then(|c| c["url"].as_str().map(String::from)).or_else(|| self.cfg.get("forgejoUrl").and_then(Value::as_str).map(String::from)).unwrap_or_else(|| "https://git.unityailab.com".into()).trim_end_matches('/').to_string() }
@@ -190,7 +201,9 @@ impl Work {
         f.filter(|f| !f.text.is_empty()).map(|f| format!("[Worktree: latest background check ({} min ago): {}]", ((now_ms() - f.at) as f64 / 60000.0).round().max(1.0), f.text)).unwrap_or_default()
     }
     fn hub_laws(&self) -> String { ["LAWS.md", "CLAUDE.md"].iter().filter_map(|f| std::fs::read_to_string(self.mills.join(f)).ok().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n") }
-    fn system_prompt(&self, a: &Account, wd: &Wt) -> String {
+    /// The stable segments of the Work system prompt (pgm-context assembly): the person's own lines are the same for the
+    /// whole session (Session), the laws the same for everyone (Static). Nothing volatile may be in them (the lint).
+    pub fn system_segments(&self, a: &Account, wd: &Wt) -> Vec<Segment> {
         let (name, u) = (&a.display, &a.username);
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let dir = wd.dir.display(); let b = &wd.branch;
@@ -209,11 +222,11 @@ impl Work {
             format!("(that merges into {} and pushes it when the project has a remote; on a conflict run \"node {script} --project {pj} sync {u}\", resolve, commit, merge again). The hub's own tooling (regression suite, live) is for VibeRoller only.", wd.main),
             self.fresh_law(a, wd),
         ] };
-        let mut parts = vec![
+        let intro = vec![
             format!("You are talking with {name} (username \"{u}\"{}, Unity AI Lab engineer) through the VibeRoller web interface, running on the host's Claude account.", if a.admin { ", admin" } else { "" }),
             format!("Every message in this conversation comes from {name}; address them by name and keep their work separate from everyone else's."),
         ];
-        parts.extend(wher);
+        let mut parts: Vec<String> = vec![];
         parts.extend([
             format!("{name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools"),
             format!("(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's VibeRoller folder, not {name}'s PC."),
@@ -226,8 +239,22 @@ impl Work {
         if self.forgejo_rec(u).map(|r| !s(&r, "token").is_empty()).unwrap_or(false) { parts.push(format!("Forgejo ({}): {name} saved their own token, so git pushes / fetches to that host authenticate as them, FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token), and fj (the Forgejo CLI) is signed in as them in this run. node bridge/worktree.js repos [words] lists the repos they can see (private ones too), repo-create <owner/name> makes one, publish <owner/name> --project <name> puts a project on Forgejo (a GitHub origin kept as upstream).", self.forgejo_url())); }
         parts.push("Team notes (markdown files in folders, shared by everyone): notes_list (with a search), notes_read, notes_write (path like \"plans/next-week.md\"; whole text), notes_delete (only when asked). Good for plans, meeting notes, decisions, how-tos.".into());
         parts.push(format!("The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as \"{name} · Claude\", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about."));
-        let laws = self.hub_laws();
-        parts.join(" ") + &if laws.is_empty() { String::new() } else { format!("\n\n{laws}") }
+        vec![
+            Segment::new("1-intro", Class::Session, intro.join(" ")),
+            Segment::new("2-where", Class::Session, wher.join(" ")),
+            Segment::new("3-tools", Class::Session, parts.join(" ")),
+            Segment::new("4-laws", Class::Static, self.hub_laws()),
+        ]
+    }
+    /// The system prompt a run gets: the segments joined (the person's lines with a space, the laws after a blank line).
+    /// The same bytes every run, so the provider's prompt cache can hit (R181); logs any lint hit once per hub process.
+    fn system_prompt(&self, a: &Account, wd: &Wt) -> String {
+        let segs = self.system_segments(a, wd);
+        static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !DONE.swap(true, Ordering::SeqCst) {
+            for h in lint_segments(&segs) { eprintln!("[work] system prompt segment \"{}\" ({:?}) has {}: \"{}\"; it busts the prompt cache, move it to the turn (R181)", h.segment, h.class, h.pattern, h.snippet); }
+        }
+        render_prompt(&segs)
     }
     /// The MCP servers of a run here: PC files, the board, the team chat (bridge/*-mcp.js), with this hub's secret.
     fn mcp_json(&self, a: &Account) -> Value {
@@ -259,6 +286,9 @@ impl Work {
     // ---------- the run's stream ----------
     fn emit(&self, u: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(u) { let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     fn on_event(&self, hub: &dyn AiHub, a: &Account, ev: Value, source: &str) {
+        // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
+        // fields as they came plus the `hub` object the page reads first (harness.rs, WORKPLAN 9b)
+        let ev = crate::harness::wire(ev);
         if let Some(sid) = ev["session_id"].as_str().filter(|s| !s.is_empty()) { let sid = sid.to_string(); self.update(a, |m| { m.insert("claudeSessionId".into(), json!(sid)); }); }
         let usage = &hub.ai().usage;
         let t = ev["type"].as_str().unwrap_or("");
@@ -354,17 +384,24 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let prov_env = Work::claude_env(&prov).unwrap_or_default();
     let kind = s(&prov, "kind");
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return one_line(json!({ "type": "bridge_error", "text": AI_OFF_TEXT })); }
+    // a provider shared with a scope: Work must be among its uses and the model among its models (the owner names what is allowed)
+    if let Err(m) = ai.scope_check(&a.username, &s(&prov, "id"), "work", &model) { return one_line(json!({ "type": "bridge_error", "text": format!("{m} Pick another AI or model in the dropdown.") })); }
     let owner = s(&prov, "owner"); let nick = s(&prov, "nickname");
     let host_id = s(&prov, "hostId"); let prov_id = s(&prov, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default();
-    if kind == "host-claude" && !ai.online(&host_id) { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }) })); }
-    if kind == "host-claude" && !s(&prov, "capped").is_empty() { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}: {}. Pick another AI or wait for the window to reset.", s(&prov, "capped")) })); }
+    let hjcode = kind == HOST_JCODE;
+    if (kind == "host-claude" || hjcode) && !ai.online(&host_id) { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }) })); }
+    if (kind == "host-claude" || hjcode) && !s(&prov, "capped").is_empty() { return one_line(json!({ "type": "bridge_error", "text": format!("{nick}: {}. Pick another AI or wait for the window to reset.", s(&prov, "capped")) })); }
     // an older host (no relay) would run the whole Work run on its own computer: only its owner may touch that computer
     if kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work" && owner != a.username {
         return one_line(json!({ "type": "bridge_error", "text": format!("{nick} is an older AI host that would run Work on {} computer, and only its owner may work on that computer. Pick another AI in the dropdown, or ask them to update the host (then Work runs here and only its AI is used).", if owner.is_empty() { "its own".to_string() } else { format!("{}'s", hub.name_of(&owner)) }) }));
     }
+    // Jcode PGM on a host runs Work on that host's computer, like the legacy case above: only its owner may
+    if hjcode && owner != a.username {
+        return one_line(json!({ "type": "bridge_error", "text": format!("{nick} runs Work through Jcode PGM on {} computer, and only its owner may work on that computer. Pick another AI in the dropdown.", if owner.is_empty() { "its own".to_string() } else { format!("{}'s", hub.name_of(&owner)) }) }));
+    }
     let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else { String::new() };
-    // a Claude session lives where it ran (relayed runs run here, on this hub)
-    let wher = if kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work" { host_id.clone() } else { "hub".to_string() };
+    // a Claude session lives where it ran (relayed runs run here, on this hub); a Jcode PGM host's, on that host
+    let wher = if (kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work") || hjcode { host_id.clone() } else { "hub".to_string() };
     // a session is resumed only where it ran and by the harness that made it (a Jcode PGM session id means nothing to Claude Code)
     let resume = !fresh && !s(&st, "claudeSessionId").is_empty() && { let w0 = s(&st, "claudeSessionWhere"); (if w0.is_empty() { "hub".to_string() } else { w0 }) == wher }
         && { let h0 = s(&st, "sessionHarness"); (if h0.is_empty() { crate::jcode::CLAUDE_HARNESS.to_string() } else { h0 }) == harness };
@@ -390,15 +427,17 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         let tok = w.llm_token(&a.username, &host_id, &prov_id);
         relay_env = vec![("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{}/llm/{tok}", hub.cfg().port)), ("ANTHROPIC_AUTH_TOKEN".into(), "viberoller-relay".into()), ("ANTHROPIC_API_KEY".into(), String::new()), ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into())];
         w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Using {nick}{}; the work happens here on the server.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI)", hub.name_of(&owner)) }) }));
-    } else if kind == "host-claude" {
-        // legacy: Claude Code runs on the host (only for a host that allows work)
-        let payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": w.system_prompt(a, &wd), "model": model,
+    } else if kind == "host-claude" || hjcode {
+        // legacy: Claude Code runs on the host (only for a host that allows work); or Jcode PGM there (hjcode, the host
+        // announced work-jcode: `harness` and `stateModel` are the optional fields it reads)
+        let mut payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": w.system_prompt(a, &wd), "model": model,
             "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": hub.cfg().get("permissionMode"), "allowedTools": hub.cfg().get("allowedTools"), "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
+        if hjcode { payload["harness"] = json!(harness); payload["stateModel"] = json!(s(&st, "model")); }
         match ai.run_work(&host_id, &prov_id, payload) {
             Err(e) => { w.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&a.username); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
             Ok((job, _token, mut events)) => {
                 if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&a.username) { r.remote = job; }
-                w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Running on {nick}{}.", if owner.is_empty() { " (AI host)".to_string() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }) }));
+                w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Running on {nick}{}{}.", if owner.is_empty() { " (AI host)".to_string() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }, if hjcode { ", through Jcode PGM" } else { "" }) }));
                 let (h, a2, id) = (hub.clone(), a.clone(), run_id.clone());
                 tokio::spawn(async move {
                     let w = h.work();
@@ -808,5 +847,58 @@ pub fn start(hub: &Arc<dyn AiHub>) {
         let busy = h.work().any_busy() || h.api().busy() || h.unity().busy() || crate::unity_routes::room_busy(&*h);
         h.internal("/internal/front/work-busy", json!({ "busy": busy }).to_string()).await;
     } });
+}
+/// The prompt a run sends: the person's segments joined with a space, the Static laws after a blank line.
+pub fn render_prompt(segs: &[Segment]) -> String {
+    let own: Vec<&str> = segs.iter().filter(|s| s.class != Class::Static).map(|s| s.text.as_str()).collect();
+    let laws: Vec<&str> = segs.iter().filter(|s| s.class == Class::Static && !s.text.is_empty()).map(|s| s.text.as_str()).collect();
+    own.join(" ") + &if laws.is_empty() { String::new() } else { format!("\n\n{}", laws.join("\n\n")) }
+}
+/// Every volatile part (relative time, timestamp, random id, live counter) in the stable segments, by segment name.
+pub fn lint_segments(segs: &[Segment]) -> Vec<LintHit> { segs.iter().flat_map(|s| lint(&s.id, s.class, &s.text)).collect() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn work_here() -> (Work, std::path::PathBuf) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bridge");
+        let cfg = Config::load(&root);
+        (Work::new(&root, &cfg), root)
+    }
+    fn wt(hub: bool, dir: &std::path::Path) -> Wt {
+        Wt { dir: dir.to_path_buf(), branch: "work/sponge".into(), project: if hub { HUB_PROJECT.into() } else { "demo".into() }, repo: dir.join("_repo"), root: dir.to_path_buf(), main: "main".into(), hub }
+    }
+
+    /// The prompt's stable segments carry nothing volatile (no "N min ago", no timestamp, no random id, no counter) and
+    /// the prompt is the same bytes when built again; the freshness result travels with the message, not here.
+    #[test]
+    fn the_work_system_prompt_segments_pass_the_cache_lint() {
+        let (w, _) = work_here();
+        let tmp = std::env::temp_dir().join(format!("vr-prompt-lint-{}", std::process::id())); let _ = std::fs::create_dir_all(&tmp);
+        for hub in [true, false] {
+            for admin in [true, false] {
+                let a = Account { username: "sponge".into(), dir: tmp.clone(), admin, display: "Sponge".into() };
+                let wd = wt(hub, &tmp);
+                let segs = w.system_segments(&a, &wd);
+                assert_eq!(segs.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["1-intro", "2-where", "3-tools", "4-laws"]);
+                assert!(segs.iter().all(|s| matches!(s.class, Class::Static | Class::Session)));
+                assert!(!segs[3].text.is_empty(),"the hub's laws are in the prompt");
+                let hits = lint_segments(&segs);
+                assert!(hits.is_empty(), "the Work system prompt has volatile text: {:?}", hits.iter().map(|h| format!("{} / {}: {}", h.segment, h.pattern, h.snippet)).collect::<Vec<_>>());
+                let p = render_prompt(&segs);
+                assert_eq!(p, w.system_prompt(&a, &wd), "built twice: the same bytes");
+                assert!(p.starts_with("You are talking with Sponge") && p.contains("OWN git worktree") && p.contains("\n\n"));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+    #[test]
+    fn the_lint_names_the_segment_when_volatile_text_creeps_in() {
+        let segs = vec![Segment::new("2-where", Class::Session, "latest check (3 min ago): FRESH"), Segment::new("4-laws", Class::Static, "calm")];
+        let hits = lint_segments(&segs);
+        assert_eq!(hits.len(), 1); assert_eq!(hits[0].segment, "2-where");
+        assert_eq!(render_prompt(&segs), "latest check (3 min ago): FRESH\n\ncalm");
+    }
 }
 pub fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; bool::from(pgm_core_internal::crypto::sha256(a.as_bytes()).ct_eq(&pgm_core_internal::crypto::sha256(b.as_bytes()))) }
