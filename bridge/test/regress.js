@@ -3155,6 +3155,66 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && /const NOT_WORK = \(p\) =>/.test(page182) && /not for Work: pick it in Settings → API access/.test(page182) && /'host-codex': 'AI host · ChatGPT \/ Codex'/.test(page182),
         `seen ${seen && seen.kind} ${seen && (seen.models || []).join(',')}; others ${otherSees}; answer ${JSON.stringify(ans).slice(0, 120)}; log ${outText.split('\n').filter((l) => /Ollama|Codex/.test(l)).join(' | ').slice(0, 300)}`);
     }
+    // R183: a second copy waits instead of looping, and a control command from a download reaches the installed host
+    if (!why && !WIN) {
+      const L183 = 'the native host on a machine with two copies: `vr-host run` in a folder whose host already runs waits for it (says so once, does not exit, so systemd does not restart it every 5 s); a control command run from a download that is not running (status, update) acts on the installed host that runs and says so; an automatic update waits at most 30 minutes for quiet minutes (LAWS.md)';
+      const home = path.join(SCRATCH, 'r183-home'), inst = path.join(home, '.local', 'share', 'viberoller', 'ai-host'), dl = path.join(SCRATCH, 'r183-download');
+      fs.mkdirSync(inst, { recursive: true }); fs.mkdirSync(dl, { recursive: true });
+      const cfg183 = JSON.stringify({ hub: H, id: 'r183-node', token: 'r183-token-0123456789abcdef', user: 't-admin', providers: [], engines: {}, autoUpdate: false });
+      for (const d of [inst, dl]) { fs.copyFileSync(NATIVE_BIN.host, path.join(d, 'vr-host')); fs.chmodSync(path.join(d, 'vr-host'), 0o755); fs.writeFileSync(path.join(d, 'ai-node.json'), cfg183, { mode: 0o600 }); }
+      fs.writeFileSync(path.join(inst, 'ai-node.lock'), String(process.pid)); // "a host runs there": this test process holds its lock
+      const env183 = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config') };
+      const runLog = path.join(inst, 'run.out'), fd183 = fs.openSync(runLog, 'a');
+      const sup = spawn(path.join(inst, 'vr-host'), ['run', '--config', path.join(inst, 'ai-node.json')], { cwd: inst, env: env183, stdio: ['ignore', fd183, fd183] });
+      let supExit = null; sup.on('exit', (c) => { supExit = c; });
+      await sleep(4000);
+      const stillUp = supExit === null; try { sup.kill(); } catch {}
+      const supOut = (() => { try { return fs.readFileSync(runLog, 'utf8'); } catch { return ''; } })();
+      const st = spawnSync(path.join(dl, 'vr-host'), ['status'], { cwd: dl, env: env183, encoding: 'utf8', timeout: 30000 });
+      const upd = spawnSync(path.join(dl, 'vr-host'), ['update'], { cwd: dl, env: env183, encoding: 'utf8', timeout: 30000 });
+      const askedInstalled = fs.existsSync(path.join(inst, '.update-now')), askedDownload = fs.existsSync(path.join(dl, '.update-now'));
+      const runner183 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'runner.rs'), 'utf8'), laws183 = fs.readFileSync(path.join(MILLS, 'LAWS.md'), 'utf8');
+      check('R183', L183,
+        stillUp && (supOut.match(/another AI host runs in this folder/g) || []).length === 1 && !/already running \(pid \d+\); nothing to do\.[\s\S]*already running/.test(supOut)
+        && /acting on it/.test(st.stderr) && new RegExp(inst.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(st.stdout) && /RUNNING|running|pid/i.test(st.stdout)
+        && askedInstalled && !askedDownload && /Asked it to look for an update now/.test(upd.stdout)
+        && /UPDATE_MAX_WAIT_MS: u64 = 30 \* 60_000/.test(runner183) && /after an automatic update has waited 30 minutes/.test(laws183),
+        `waits ${stillUp} (${supOut.trim().split('\n').slice(-2).join(' | ').slice(0, 160)}); status ${st.stderr.trim().slice(0, 100)} / ${st.stdout.split('\n')[0]}; update asked installed ${askedInstalled} download ${askedDownload}`);
+    }
+    // R184: vr-host is one place for everything: install puts it on the PATH (once), doctor lists the checks, setup follows
+    if (!why && !WIN) {
+      const L184 = 'vr-host install from a download (a scratch HOME, systemd untouched) installs into ~/.local/share/viberoller/ai-host, links ~/.local/bin/vr-host to it and writes the ~/.profile block once (a second install still once); `vr-host doctor --json` lists the checks (config, private, copy, boot, path ok, hub, updates); `vr-host path` says it is already on the PATH; `vr-host setup` brings VERSION.txt to the program\'s version; the control app has its wizard, providers, doctor screens (static)';
+      const home = path.join(SCRATCH, 'r184-home'), dl = path.join(SCRATCH, 'r184-download'), inst = path.join(home, '.local', 'share', 'viberoller', 'ai-host');
+      fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(dl, { recursive: true });
+      fs.copyFileSync(NATIVE_BIN.host, path.join(dl, 'vr-host')); fs.chmodSync(path.join(dl, 'vr-host'), 0o755);
+      fs.writeFileSync(path.join(dl, 'ai-node.json'), JSON.stringify({ hub: H, id: 'r184-node', token: 'r184-token-0123456789abcdef', user: 't-admin', providers: [], engines: {}, autoUpdate: false }), { mode: 0o600 });
+      fs.writeFileSync(path.join(dl, 'VERSION.txt'), '0.0.1-old\n');
+      const env184 = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), VR_HOST_NO_BOOT: '1' };
+      const run184 = (exe, args, env = env184) => spawnSync(exe, args, { cwd: path.dirname(exe), env, encoding: 'utf8', timeout: 60000 });
+      const i1 = run184(path.join(dl, 'vr-host'), ['install']);
+      const i2 = run184(path.join(dl, 'vr-host'), ['install']);
+      const link = path.join(home, '.local', 'bin', 'vr-host');
+      const linkTarget = (() => { try { return fs.realpathSync(link); } catch { return ''; } })();
+      const profile = (() => { try { return fs.readFileSync(path.join(home, '.profile'), 'utf8'); } catch { return ''; } })();
+      const onPath = { ...env184, PATH: path.join(home, '.local', 'bin') + path.delimiter + process.env.PATH };
+      const doc = run184(path.join(inst, 'vr-host'), ['doctor', '--json'], onPath);
+      const checks = (() => { try { return JSON.parse(doc.stdout); } catch { return []; } })();
+      const byId = (id) => checks.find((c) => c.id === id) || {};
+      const pth = run184(path.join(inst, 'vr-host'), ['path'], onPath);
+      fs.writeFileSync(path.join(inst, 'VERSION.txt'), '0.0.1-old\n');
+      const ver = run184(path.join(inst, 'vr-host'), ['version']).stdout.trim().split(/\s+/)[0];
+      const setup = run184(path.join(inst, 'vr-host'), ['setup'], onPath);
+      const verTxt = (() => { try { return fs.readFileSync(path.join(inst, 'VERSION.txt'), 'utf8').trim(); } catch { return ''; } })();
+      const tui184 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-host', 'src', 'tui.rs'), 'utf8');
+      check('R184', L184,
+        i1.status === 0 && i2.status === 0 && fs.existsSync(path.join(inst, 'vr-host')) && linkTarget === fs.realpathSync(path.join(inst, 'vr-host'))
+        && (profile.match(/# added by VibeRoller AI Host \(vr-host\)/g) || []).length === 1 && /vr-host: linked/.test(i1.stdout)
+        && doc.status === 0 && ['config', 'private', 'copy', 'boot', 'path', 'hub', 'updates'].every((id) => checks.some((c) => c.id === id))
+        && byId('config').ok === true && byId('private').ok === true && byId('path').ok === true && byId('copy').ok === true
+        && /already on PATH/.test(pth.stdout) && ver && verTxt === ver && /VERSION\.txt now says/.test(setup.stdout)
+        && /Screen::Setup/.test(tui184) && /Screen::Providers/.test(tui184) && /Screen::Doctor/.test(tui184),
+        `install ${i1.status}/${i2.status} "${(i1.stdout + i1.stderr).replace(/\s+/g, ' ').slice(0, 260)}"; link ${linkTarget}; blocks ${(profile.match(/added by VibeRoller/g) || []).length}; doctor ${doc.status} ${checks.map((c) => c.id + ':' + c.ok).join(',')}; path "${pth.stdout.trim()}"; version ${ver} txt ${verTxt}; setup "${setup.stdout.trim().slice(0, 160)}"`);
+    }
     // R167: the Downloads hand out the native programs (pre-built), and they install themselves (the Rust hub's alone)
     if (!why && RUST_HUB) {
       const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target), ext = WIN ? '.exe' : '';
@@ -3176,11 +3236,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const unz = path.join(SCRATCH, 'r167-download'); fs.mkdirSync(unz, { recursive: true });
       for (const e of hostEntries) { const f = path.join(unz, e.name.split('/').slice(1).join('/')); fs.writeFileSync(f, e.data); if (/vr-host/.test(e.name)) fs.chmodSync(f, 0o755); }
       const home167 = path.join(SCRATCH, 'r167-home'); fs.mkdirSync(home167, { recursive: true });
-      const inst = spawnSync(path.join(unz, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
+      const inst = spawnSync(path.join(unz, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, VR_HOST_NO_BOOT: '1', HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
       const instDir = WIN ? path.join(home167, 'AppData', 'Local', 'VibeRoller', 'AIHost') : path.join(home167, '.local', 'share', 'viberoller', 'ai-host');
       const instCfg = (() => { try { return JSON.parse(fs.readFileSync(path.join(instDir, 'ai-node.json'), 'utf8')); } catch { return {}; } })();
       const instMode = WIN ? 0o600 : (() => { try { return fs.statSync(path.join(instDir, 'ai-node.json')).mode & 0o777; } catch { return 0; } })();
-      const again = spawnSync(path.join(instDir, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
+      const again = spawnSync(path.join(instDir, 'vr-host' + ext), ['install'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, VR_HOST_NO_BOOT: '1', HOME: home167, LOCALAPPDATA: path.join(home167, 'AppData', 'Local'), USERPROFILE: home167 } });
       check('R167', 'the Downloads hand out the native programs, pre-built: the native app (vr-desktop + the AI host) and the native AI host (with that person\'s own host config inside when asked) for this machine\'s system, to people with an account only (anonymous → 401, the old public route → 410); the list names the native releases, and the desktop app\'s signed release is there for a signed-in app; the downloaded AI host installs itself ("vr-host install": the standard folder, its config kept and private) and an installed copy knows it is the installed one',
         dl.some((i) => i.id === `app-${osName}` && i.native && i.group === 'native') && dl.some((i) => i.id === `host-${osName}` && i.group === 'native-host')
         && appEntries.some((e) => e.name === 'VibeRoller/vr-desktop' + ext) && appEntries.some((e) => e.name === 'VibeRoller/vr-host' + ext) && appEntries.some((e) => /VibeRoller\/README\.txt$/.test(e.name))

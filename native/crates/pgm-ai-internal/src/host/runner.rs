@@ -35,7 +35,11 @@ pub struct Host {
     updating: Mutex<bool>,
     /// What the host found running on this machine by itself (a local Ollama): offered next to the configured ones.
     pub detected: Mutex<Detected>,
+    /// When an automatic update check first had to wait for a quiet moment (0 = not waiting).
+    pub update_deferred_since: Mutex<u64>,
 }
+/// The longest an automatic update waits for quiet minutes before it takes any moment with nothing in flight.
+pub const UPDATE_MAX_WAIT_MS: u64 = 30 * 60_000;
 pub type H = Arc<Host>;
 
 /// What the host found on this machine without being told: an Ollama that answers on its usual address.
@@ -60,6 +64,24 @@ pub fn ollama_models(tags: &Value) -> Vec<String> {
     tags["models"].as_array().map(|a| a.iter().filter_map(|m| m["name"].as_str().or(m["model"].as_str()).map(String::from)).take(40).collect()).unwrap_or_default()
 }
 
+/// Where this machine's Ollama would be (OLLAMA_HOST, else the usual address).
+pub fn ollama_address() -> String { std::env::var("OLLAMA_HOST").ok().map(|u| ollama_url_of(&u)).unwrap_or_else(|| OLLAMA_URL.to_string()) }
+/// Asks Ollama at `url` for its models (1.5 s at most): Some(model names) when it answers, else None.
+pub async fn probe_ollama(http: &reqwest::Client, url: &str) -> Option<Vec<String>> {
+    let r = http.get(format!("{url}/api/tags")).timeout(Duration::from_millis(1500)).send().await.ok().filter(|r| r.status().is_success())?;
+    let tags: Value = r.json().await.ok()?;
+    Some(ollama_models(&tags))
+}
+
+/// For a control app (no async runtime running): the Ollama on this machine, as (address, models), if it answers (1.5 s).
+pub fn probe_ollama_blocking() -> Option<(String, Vec<String>)> {
+    let url = ollama_address();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+    let http = pgm_net_internal::client::http_client(Duration::from_millis(1500)).ok()?;
+    let models = rt.block_on(probe_ollama(&http, &url))?;
+    Some((url, models))
+}
+
 /// Is there an Ollama here that answers, and which models does it have? Offered without any configuration: the engine
 /// "ollama" (Unity) when none is configured, and a private provider "ollama" (an OpenAI-compatible endpoint at /v1) the
 /// person can pick for the API and Unity. Off with "autoDetect": { "ollama": false } in ai-node.json; a provider or engine
@@ -67,12 +89,12 @@ pub fn ollama_models(tags: &Value) -> Vec<String> {
 /// next reconnect and one that went away is dropped.
 pub async fn detect_local(h: &H) {
     let off = h.cfg.raw.get("autoDetect").and_then(|o| o.get("ollama")).and_then(Value::as_bool) == Some(false);
-    let url = std::env::var("OLLAMA_HOST").ok().map(|u| ollama_url_of(&u)).unwrap_or_else(|| OLLAMA_URL.to_string());
+    let url = ollama_address();
     let mut d = Detected::default();
+    let mut seen = json!({});
     if !off {
-        let tags: Option<Value> = match h.http.get(format!("{url}/api/tags")).timeout(Duration::from_millis(1500)).send().await { Ok(r) if r.status().is_success() => r.json().await.ok(), _ => None };
-        if let Some(tags) = tags {
-            let models = ollama_models(&tags);
+        if let Some(models) = probe_ollama(&h.http, &url).await {
+            seen = json!({ "ollama": url, "models": models });
             let configured_engine = h.cfg.engines().iter().any(|(k, _)| k == "ollama");
             let configured_endpoint = h.cfg.all_providers().iter().any(|p| p.kind == "openai" && (p.base_url.contains(":11434") || p.id == "ollama"));
             if !configured_engine { d.ollama_engine = Some(url.clone()); }
@@ -90,6 +112,7 @@ pub async fn detect_local(h: &H) {
             None => log("no Ollama answers on this machine (start it, or set engines.ollama in ai-node.json)") }
     }
     *h.detected.lock().unwrap_or_else(|e| e.into_inner()) = d;
+    h.set_status(json!({ "detected": seen })); // for the control app: what this host found on the machine by itself
 }
 
 /// The logins this host lends, checked where the relay will look for them, so a missing one is said here and not only as
@@ -192,7 +215,7 @@ pub async fn run(folder: Folder, selftest: bool, update_flag: bool) -> i32 {
     let http = match pgm_net_internal::client::http_client(Duration::from_secs(20)) { Ok(c) => c, Err(e) => { eprintln!("[ai-host] {e}"); release_lock(&folder); return 1; } };
     let status = json!({ "pid": std::process::id(), "version": VERSION, "native": true, "target": TARGET, "hub": cfg.hub(), "id": cfg.id(), "startedAt": now_ms(), "connected": false, "connectedAt": 0, "lastOkAt": 0, "downSince": 0, "lastError": "", "active": 0, "runs": 0, "lastJobAt": 0, "paused": false, "lastUpdate": "", "lastUpdateAt": 0 });
     let h: H = Arc::new(Host { nickname: Mutex::new(cfg.nickname()), folder: folder.clone(), cfg, link: RwLock::new(link), http, status: Mutex::new(status.as_object().cloned().unwrap_or_default()), status_dirty: Mutex::new(true),
-        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()) });
+        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0) });
     h.write_status_now();
     let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<i32>(4);
     background(h.clone(), exit_tx.clone());
@@ -447,10 +470,19 @@ async fn pc_job(h: H, job: Job) {
 /// this program and target, the file checked against it, a --selftest of the new one, the swap, a restart (exit 3).
 pub async fn check_update(h: H, now: bool, exit: tokio::sync::mpsc::Sender<i32>) {
     if (!h.cfg.auto_update() && !now) || h.folder.trial().exists() { return; }
-    if now { if h.busy() { return; } } else if !h.quiet(h.cfg.update_quiet_ms()) { return; }
+    // Normally an update waits for quiet minutes. A host in steady use (its owner working through it) never gets them, so
+    // after UPDATE_MAX_WAIT_MS of waiting "nothing in flight right now" is enough: the restart takes a second or two and
+    // the hub keeps the session (R154).
+    if now { if h.busy() { return; } }
+    else if !h.quiet(h.cfg.update_quiet_ms()) {
+        let since = { let mut d = h.update_deferred_since.lock().unwrap_or_else(|e| e.into_inner()); if *d == 0 { *d = now_ms(); } *d };
+        if h.busy() || now_ms().saturating_sub(since) < UPDATE_MAX_WAIT_MS { return; }
+        log("an update has waited 30 minutes for a quiet moment: taking it now, between calls");
+    }
     { let mut u = h.updating.lock().unwrap_or_else(|e| e.into_inner()); if *u { return; } *u = true; }
     let r = do_update(&h).await;
     *h.updating.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    *h.update_deferred_since.lock().unwrap_or_else(|e| e.into_inner()) = 0; // looked: the next wait starts again
     match r { Ok(true) => { h.write_status_now(); let _ = exit.send(3).await; } Ok(false) => {} Err(e) => note_update(&h, &format!("update skipped: {e}")) }
 }
 async fn do_update(h: &H) -> Result<bool> {
@@ -479,6 +511,7 @@ async fn do_update(h: &H) -> Result<bool> {
     st?;
     if h.busy() { return Ok(false); } // a job came in meanwhile: next time
     pgm_dist_internal::update::swap_in(&exe, &bytes, &f.sha256)?;
+    if h.folder.f("VERSION.txt").exists() && !m.version.is_empty() { let _ = std::fs::write(h.folder.f("VERSION.txt"), format!("{}\n", m.version)); } // the download's note follows the program
     let _ = std::fs::write(h.folder.trial(), json!({ "bin": true, "from": VERSION, "to": if m.version.is_empty() { m.commit.clone() } else { m.version.clone() }, "starts": 0 }).to_string());
     note_update(h, &format!("updated from the hub to {} ({}): restarting on it", m.version, f.name));
     Ok(true)

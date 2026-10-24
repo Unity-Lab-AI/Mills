@@ -4029,7 +4029,7 @@ async function renderDownloads() {
   if (!d.items.length) note.textContent = 'Nothing is built on this hub yet (the admin runs sh native/build.sh).';
   const GROUPS = {
     native: ['VibeRoller: the native app', 'VibeRoller in its own window, plus what only an app on your computer can do: the Tools window (your projects folder, a real terminal, build & run, git with your Forgejo token, a local API proxy for tools on your computer) and the switch to share this computer\'s AI. Pre-built for Windows and Linux; runs from its folder or installs itself, and updates itself (signed releases).'],
-    'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too), "vr-host" is the heart & knife control app, start at boot is one setting. Updates itself from this hub. For your own host with its config inside: Settings → My AI hosts.'],
+    'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too) and puts vr-host on your PATH; run `vr-host` and everything is in there (setup, providers, settings, doctor, updates, start at boot). Updates itself from this hub. For your own host with its config inside: Settings → My AI hosts.'],
   };
   for (const group of Object.keys(GROUPS)) {
     if (!d.items.some((i) => i.group === group)) continue;

@@ -35,9 +35,11 @@ Pre-built: one program, nothing else to install (no Node.js).
   - {exe} install          installs it ({}) or updates an earlier install
                              (the JavaScript host's folder too: it takes over its ai-node.json and settings).
     {exe} install --boot {}   … and starts it at boot ({}).
-  - {exe}                  the heart & knife control app: whether it runs, is connected, in use, up to date; start /
-                             stop / restart / pause / update / log / every setting / start at boot.
-  - {exe} status | start | stop | set <setting> <value> | settings | log   for scripts.
+  - {exe}                  run this and everything is in there: first-time setup, whether it runs / is connected / is up
+                             to date, start / stop / restart / pause / update, your providers (Claude, Codex, Ollama,
+                             other endpoints: who may use them), every setting as a switch, a doctor that fixes what is
+                             missing, start at boot. After install, `vr-host` is on your PATH: run it from anywhere.
+  - {exe} doctor | status | start | stop | set <setting> <value> | settings | log   for scripts.
   - {}
   - It updates itself from the hub (signed with VibeRoller's release key and your host's token), between answers.
 ",

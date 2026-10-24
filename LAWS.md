@@ -77,7 +77,10 @@ number should scale less than the third number, however, this is all dependent o
 - Hosts and hub watch each other: the host's poll is a heartbeat both ways (the hub's answer carries its own beat). Both
   log when the other went away and for how long, and reconnect within seconds as if nothing happened; `hub_status`
   shows each AI host up or down and since when.
-- A host only restarts or updates when nothing is in flight and nothing came for 3 minutes.
+- A host only restarts or updates when nothing is in flight and nothing came for 3 minutes. A host in steady use never
+  gets those 3 minutes, so after an automatic update has waited 30 minutes it takes the next moment with nothing in
+  flight (5.7.2): the restart takes seconds, the hub keeps the session (R154) and holds a job that arrives meanwhile for
+  up to 40 s until the host picks it up.
 - Swapping what runs the hub (run.js → vr-run, the JavaScript hub behind → the Rust hub alone, 5.6.0) is one hub
   restart and nothing else for a host: the host link (`/node/*`) has been the Rust hub's since 4.0, every host keeps
   its session across a restart (R154), and a host that has not updated keeps working (R152). Do it at a quiet moment
