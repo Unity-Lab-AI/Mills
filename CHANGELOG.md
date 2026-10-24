@@ -7,6 +7,54 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.0 — 2026-10-24
+
+MINOR: **hosting controls on the hub page** (board T-160; gee: how can I look at what my AI host is doing now that the
+hub changed?). The person who runs an AI host monitors, controls and configures it from Settings → My AI hosts, not only
+locally through the `vr-host` TUI.
+- **New host capability `control`** (announced in hello with the others; a host without it keeps working exactly as
+  before and shows no buttons). The native host reports a small status (`POST /node/status`, on hello, every ~15 s and
+  right after a control: version, start time, paused (and by whom), in flight, last job, last update line, the usage
+  windows, the providers' login problems; never a message or a path) and answers `control` jobs: `pause`, `resume`
+  (the off file; a host paused from the hub keeps listening so the hub can resume it, lends nothing, and the hub counts
+  it offline for work), `restart` and `update` (the same request files as the local control app: they wait until nothing
+  is in flight), `logs` (the last 50 lines of its log, redacted of the token, provider keys and key-like words).
+- **Routes** (owner only, an admin is not the owner): `GET /api/hosts/status` (the person's own hosts: the latest status,
+  online / since, windows, who is using it now: the hub knows its jobs in flight, listed as kind, and for a Work run the
+  person and project, never content) and `POST /api/hosts/control { id, action }` (refused with "This host is older than
+  5.13: update it to control it from here." for a host without the cap, 403 for anybody else's host, 400 for an unknown
+  action).
+- **Page** (web/index.html 1.18.0): per host a live line (online since, version and uptime, paused, in use by whom,
+  the 5 h / 7 d windows, last update, login problems) refreshed every 10 s while the panel is open; Pause / Resume /
+  Restart (two clicks) / Update now / Show log; an older host shows what the hub knows and a note instead of buttons.
+- **Tests:** unit (job parsing, cap check, status cleaning, redaction, log tail); R191 (a native host in the scratch
+  setup: status arrives, pause from the hub pauses it and the page list says so, resume, the log lacks the token, a host
+  without the cap, a non-owner and an unknown action are refused, restart ends the host); R188 expects the new cap.
+
+## 5.12.0 — 2026-10-24
+
+MINOR: **the fallback chain: Rust alone, two Rust fallbacks, JavaScript only as the last resort** (board T-157 step one;
+Sponge: "step one now [the server on the Rust hub alone], tested thoroughly via automated tests … we leave JavaScript as
+a fallback … at least 1 if not 2 Rust fallbacks … we only use the non-updated JavaScript version if all else fails").
+- **vr-run** now serves, in this order: the newest build (`rust`), the previous good build (`rust-fallback-1`), the one
+  before (`rust-fallback-2`), and only when every Rust build fails (or none exists) the JavaScript hub alone
+  (`javascript-fallback`). Until now `--alone` / `rustHub.alone` removed the JavaScript hub completely, so there was no
+  last resort; it is kept again, started only as that last resort, loudly (log, chat, status), kept up while it serves
+  (a crash restarts it after 5 s; its exit 75 tries the Rust builds again at once). The decision order is a pure,
+  unit-tested function (`decide`, `serving_label`).
+- **/api/status** (from this machine) shows `serving` in both hubs (vr-run hands it down as `VR_SERVING`).
+- **bridge/server.js 4.2.2:** honours `MILLS_PORT` (vr-run's last resort named the port, the hub ignored it and took
+  `config.port`).
+- **Two good builds always kept:** native/keep-builds.sh (current + the 2 newest good, unchanged and now checked by
+  R192); the auto-deploy also records `last-good-2` next to `last-good`.
+- **The law** (LAWS.md "The JavaScript hub stays as the last fallback"): frozen, not removed; new features are Rust-only,
+  but the JavaScript hub must keep booting and serving the basics and keep reading every shared data file; the run checks
+  the chain before every go-live and never removes the JavaScript hub without Sponge's word.
+- **Suite:** R192 (the chain names itself in 4 situations incl. `--alone`; keep-builds keeps two good builds; the real
+  JavaScript hub started alone boots and serves status, the page, the sign-in gate and sign-in, the chat room, the
+  board, one Work run with the fake Claude and the AI host link: `bridge/test/js-fallback.js`, also runnable alone).
+- Config the go-live sets and how to roll back: team note deploy/full-rust-swap.md.
+
 ## 5.11.3 — 2026-10-24
 
 PATCH: **the proving ground** (board T-183; Sponge: "drive a fake version that talks to the hub … separately

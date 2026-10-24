@@ -42,6 +42,9 @@ if [ -f "$ST/pending" ]; then
   read -r NEW OLD SINCE RESTARTED FAILS < "$ST/pending" || true
   RESTARTED=${RESTARTED:-0}; FAILS=${FAILS:-0}
   if [ "$(running)" = "$NEW" ]; then
+    # the good versions are recorded newest first: last-good, last-good-2 (the one before). The Rust builds of the last two
+    # good versions are kept besides the current one (native/keep-builds.sh), so the fallback chain is two deep (T-157)
+    [ -f "$ST/last-good" ] && [ "$(cat "$ST/last-good")" != "$NEW" ] && cp "$ST/last-good" "$ST/last-good-2"
     echo "$NEW" > "$ST/last-good"; rm -f "$ST/pending"
     # the kept builds (FR3): a verified version's build is a good one (newest first; native/keep-builds.sh keeps the 2 newest)
     for T in x86_64-unknown-linux-gnu x86_64-pc-windows-gnu; do

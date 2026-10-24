@@ -1052,7 +1052,7 @@ async function run() {
     for (const p of procs) { try { p.kill(); } catch {} }
     const hostRs = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'work.rs'), 'utf8');
     check('R188', L188,
-      !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin' && (pn.providers || []).length === 0
+      !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin,control' && (pn.providers || []).length === 0
       && !!jprov && jprov.kind === 'host-jcode' && jprov.owner === 't-admin' && !otherSees && !plainListed && pickPlain.status !== 200 && pick.status === 200 && pick.data.provider === 'h:jcode-node/jcode'
       && r1.events.some((e) => e.type === 'bridge_info' && /through Jcode PGM/.test(e.text)) && r1init.harness === 'jcode' && /^fakej-/.test(r1init.session)
       && /jcode-answer model=claude-sonnet-5-5 provider=viberoller/.test(r1t) && /cwd=\S*jcode-host\S*worktrees\S*t-admin/.test(r1t) && /resume=no/.test(r1t) && /overlay:yes/.test(r1t)
@@ -1153,6 +1153,51 @@ async function run() {
       && /\/api\/hosts\/scope/.test(html189) && /hostScopes/.test(html189) && /What each person may use/.test(html189),
       `unscoped ${unscopedB.status}; refused ${[notOwner, badModel, badUse, forOwner, badWho].map((r) => r.status).join('/')}; t-user sees local ${locU && locU.models.join()} claude ${claU && claU.models.join()} owner ${ownerSees && ownerSees.models.join()}; api ${okA.status}/${noB.status} "${String(noBBody.error && noBBody.error.message).slice(0, 120)}"; work "${wNoText.slice(0, 140)}" then "${wYesText.slice(0, 80)}"; no api ${noApi.status}; group ${viaGroup && viaGroup.models.join()} ${groupAsk.status}/${groupNoA.status}; own ${ownWins && ownWins.models.join()} ${ownAsk.status}/${ownNoB.status}; stored ${JSON.stringify(db189.scopes || {}).slice(0, 200)}`);
   } else skip('R189', 'sharing with scopes (per person: models and work / api / unity)', 'the Rust hub\'s: --rust-hub runs it');
+  // Hosting controls on the hub page (R191, 5.12.0; T-160): the person who runs a host monitors it (status the host reports),
+  // controls it (pause / resume / restart / update / log) and sees who is using it, from Settings → My AI hosts. The cap `control`.
+  if (RUST_HUB && NATIVE_BIN.host) {
+    const L191 = 'hosting controls on the hub page: a native host announces the cap `control` and reports its status (version, uptime, paused, in flight, usage windows, logins), GET /api/hosts/status lists the person\'s own hosts with it (and nobody else\'s); POST /api/hosts/control pauses it from the hub (it keeps listening, shows paused and is not offered for work), resumes it, returns its log redacted of the token, asks a restart (the host ends once nothing is in flight); refused for a non-owner (403), an unknown action (400) and a host that did not announce the cap ("older than 5.13"); [static] the page has the buttons';
+    const h191 = (await call('/api/hosts/new', A, {})).data.host || {}, c191 = (await call('/api/hosts/config', A, { id: h191.id })).data.config || {};
+    const old191 = (await call('/api/hosts/new', A, {})).data.host || {}, oc191 = (await call('/api/hosts/config', A, { id: old191.id })).data.config || {};
+    const dir191 = path.join(SCRATCH, 'r191-host'); fs.mkdirSync(dir191, { recursive: true });
+    const f191 = path.join(dir191, 'ai-node.json');
+    fs.writeFileSync(f191, JSON.stringify({ hub: H, id: h191.id, token: c191.token, user: 't-admin', autoUpdate: false, engines: {}, providers: [{ id: 'r191', kind: 'claude-relay', label: 'R191 Claude', models: ['claude-haiku-5-5'], allowedUsers: [], configDir: path.join(SCRATCH, 'host-claude-login'), baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/anthropic` }] }), { mode: 0o600 });
+    fs.writeFileSync(path.join(dir191, 'ai-node.log'), Array.from({ length: 60 }, (_, i) => `12:00:${String(i).padStart(2, '0')} [ai-host] line ${i + 1}${i === 58 ? ' token=' + c191.token : ''}`).join('\n') + '\n');
+    const out191 = fs.openSync(path.join(dir191, 'out.log'), 'a');
+    const proc191 = spawn(NATIVE_BIN.host, ['host', '--config', f191], { cwd: dir191, stdio: ['ignore', out191, out191], windowsHide: true });
+    let exit191 = null; proc191.on('exit', (c) => { exit191 = c; });
+    const mine191 = async () => (((await call('/api/hosts/status', A)).data || {}).hosts || []).find((x) => x.id === h191.id) || null;
+    const until191 = async (pred) => { let x = null; for (let i = 0; i < 80; i++) { x = await mine191(); if (x && pred(x)) return x; await sleep(250); } return x; };
+    const ctl = (action, tok = A, id = h191.id) => call('/api/hosts/control', tok, { id, action });
+    const s0 = await until191((x) => x.online && x.control && x.status && x.status.version);
+    const otherSees = (((await call('/api/hosts/status', U)).data || {}).hosts || []).length;
+    const bad = await ctl('format-disk'), nonOwner = await ctl('pause', U), noHost = await ctl('pause', A, 'no-such-host');
+    // a host that did not announce the cap (an older one: hello without caps) is refused with the clear message
+    const hh = { 'Content-Type': 'application/json', 'X-VR-Host': old191.id, 'X-VR-Host-Token': oc191.token, 'X-VR-Host-Version': '3.6.0' };
+    await fetch(H + '/node/hello', { method: 'POST', headers: hh, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex'), user: 't-admin', providers: [], engines: {}, version: '3.6.0' }) });
+    const olderRes = await ctl('pause', A, old191.id), olderSt = (((await call('/api/hosts/status', A)).data || {}).hosts || []).find((x) => x.id === old191.id) || {};
+    const pa = await ctl('pause');
+    const s1 = await until191((x) => x.paused);
+    const offFile = fs.existsSync(path.join(dir191, 'ai-host.off'));
+    const re = await ctl('resume');
+    const s2 = await until191((x) => !x.paused && x.online);
+    const lg = await ctl('logs'), lines191 = (lg.data || {}).lines || [];
+    const html191 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const rs = await ctl('restart');
+    for (let i = 0; i < 60 && exit191 === null; i++) await sleep(250);
+    try { proc191.kill(); } catch {}
+    await call('/api/hosts/remove', A, { id: h191.id }); await call('/api/hosts/remove', A, { id: old191.id });
+    check('R191', L191,
+      !!s0 && s0.online && s0.control === true && s0.caps.includes('control') && typeof s0.status.version === 'string' && s0.status.startedAt > 0 && s0.status.paused === false && Array.isArray(s0.inUse) && s0.providers.some((p) => p.id === 'r191') && otherSees === 0
+      && bad.status === 400 && nonOwner.status === 403 && noHost.status === 403
+      && olderRes.status === 400 && /older than 5\.13/.test(JSON.stringify(olderRes.data)) && olderSt.control === false
+      && pa.status === 200 && !!s1 && s1.paused === true && s1.online === false && s1.status.pausedBy === 'hub' && offFile
+      && re.status === 200 && !!s2 && s2.paused === false && !fs.existsSync(path.join(dir191, 'ai-host.off'))
+      && lg.status === 200 && lines191.length === 50 && /line 60$/.test(lines191[49]) && !JSON.stringify(lines191).includes(c191.token) && lines191.some((l) => /token=\*\*\*/.test(l))
+      && rs.status === 200 && exit191 === 3
+      && /\/api\/hosts\/control/.test(html191) && /hostLiveBox/.test(html191) && /Show log/.test(html191) && /Update now/.test(html191),
+      `status ${s0 && JSON.stringify(s0.status).slice(0, 160)} control ${s0 && s0.control} other ${otherSees}; refused ${bad.status}/${nonOwner.status}/${noHost.status}; older ${olderRes.status} "${JSON.stringify(olderRes.data).slice(0, 100)}"; pause ${pa.status} paused ${s1 && s1.paused}/${s1 && s1.online} by ${s1 && s1.status && s1.status.pausedBy} off ${offFile}; resume ${re.status} ${s2 && s2.paused}; logs ${lg.status} ${lines191.length} lines; restart ${rs.status} exit ${exit191}; host log "${(() => { try { return fs.readFileSync(path.join(dir191, 'out.log'), 'utf8').replace(/\s+/g, ' ').slice(-160); } catch { return ''; } })()}"`);
+  } else skip('R191', 'hosting controls on the hub page (status, pause / resume / restart / log from Settings → My AI hosts)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });
@@ -2715,25 +2760,26 @@ async function run() {
     fs.writeFileSync(fakeHub, `const http = require('http'), fs = require('fs'); const commit = process.argv[2], port = Number(process.argv[process.argv.indexOf('--port') + 1]);
 const mode = () => { try { return fs.readFileSync(process.argv[3], 'utf8').trim(); } catch { return 'ok'; } };
 if (mode() === 'crash') process.exit(1);
-http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit })); }).listen(port, '127.0.0.1');\n`);
-    const scenario = async (name, builds, cur, good, expect, change, withJs) => { // builds: commit → mode; cur = the newest; good = the good list newest first; withJs: a stand-in bridge/server.js (the JavaScript hub) in the root
+http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit, serving: process.env.VR_SERVING || '' })); }).listen(port, '127.0.0.1');\n`);
+    const scenario = async (name, builds, cur, good, expect, change, withJs, extraArgs = []) => { // builds: commit → mode; cur = the newest; good = the good list newest first; withJs: a stand-in bridge/server.js (the JavaScript hub) in the root
       if (built177.status !== 0) return { name, ok: false, why: 'vr-run not built' };
       const dir = path.join(SCRATCH, 'dist177-' + name); fs.mkdirSync(dir, { recursive: true });
       const root0 = path.join(SCRATCH, 'root177-' + name, 'bridge'); fs.mkdirSync(root0, { recursive: true });
       if (withJs) fs.writeFileSync(path.join(root0, 'server.js'), `const http = require('http'); const port = Number(process.env.VR_BACK_PORT || process.env.MILLS_PORT || 0); if (!port) process.exit(1);
-http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit: process.env.VR_BACK_PORT ? 'js-behind' : 'js-alone' })); }).listen(port, '127.0.0.1');\n`);
+http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit: process.env.VR_BACK_PORT ? 'js-behind' : 'js-alone', serving: process.env.VR_SERVING || '' })); }).listen(port, '127.0.0.1');\n`);
       for (const [c, m] of Object.entries(builds)) { fs.mkdirSync(path.join(dir, c), { recursive: true }); fs.writeFileSync(path.join(dir, c, 'mode'), m); fs.writeFileSync(path.join(dir, c, 'vr-hub'), `#!/bin/sh\nexec "${process.execPath}" "${fakeHub}" ${c} "${path.join(dir, c, 'mode')}" "$@"\n`, { mode: 0o755 }); }
       fs.writeFileSync(path.join(dir, 'current'), cur + '\n'); fs.writeFileSync(path.join(dir, 'good'), good.join('\n') + '\n'); // current: a plain file naming the commit (keep-builds.sh writes it so)
       const port = await freePort(PORT + 300), root = root0;
       const log = fs.openSync(path.join(SCRATCH, `vr-run-${name}.log`), 'a');
-      const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
-      const who = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); return (await r.json()).commit || ''; } catch { return ''; } };
+      const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--builds', dir, '--health-every', '1', '--health-timeout', '1', ...extraArgs], { stdio: ['ignore', log, log] });
+      let serving = '';
+      const who = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); const j = await r.json(); serving = j.serving || ''; return j.commit || ''; } catch { return ''; } };
       let seen = '', pid1 = 0; const t0 = Date.now();
       for (let i = 0; i < 100 && seen !== expect; i++) { await sleep(300); seen = await who(); }
       if (change) { const r0 = await fetch(`http://127.0.0.1:${port}/api/status`).then((r) => r.json()).catch(() => ({})); pid1 = r0.pid || 0; await change(dir); let again = ''; for (let i = 0; i < 100 && (!again || again === String(pid1)); i++) { await sleep(300); try { const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) }); const j = await r.json(); again = String(j.pid || ''); seen = j.commit || ''; } catch { again = ''; } } }
       const fell = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, '.fell-back'), 'utf8')); } catch { return null; } })();
       proc.kill('SIGTERM'); await sleep(500); try { proc.kill('SIGKILL'); } catch { /* gone */ }
-      return { name, ok: seen === expect, seen, ms: Date.now() - t0, fell };
+      return { name, ok: seen === expect, seen, serving, ms: Date.now() - t0, fell };
     };
     const crash = await scenario('crash', { n1: 'crash', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const hang = await scenario('hang', { n1: 'hang', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
@@ -2745,6 +2791,18 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R177', 'FR4 the Rust supervisor vr-run (replacing run.js): starts the newest build ("current"); a build that crashes 3 times within a minute is marked bad and the previous good build takes over (bridge/.fell-back names both); a build that accepts connections but never answers the health check (/api/status every --health-every s, --health-timeout s, 3 misses) is killed and the previous good build takes over; a healthy build stays; exit 75 = the build is started again (restart on new code); while bridge/server.js still exists, every kept build failing hands the port to the JavaScript hub alone (the first swap\'s last net), said in .announce',
       built177.status === 0 && crash.ok && crash.fell && crash.fell.from === 'n1' && crash.fell.to === 'g1' && hang.ok && hang.fell && hang.fell.to === 'g1' && fine.ok && !fine.fell && again.ok && !again.fell && jsAlone.ok && jsAloneNote,
       built177.status !== 0 ? `vr-run does not build: ${String(built177.stderr || '').trim().split('\n').slice(-2).join(' ').slice(0, 160)}` : `crash → ${crash.seen || 'nobody'} in ${crash.ms} ms fell ${JSON.stringify(crash.fell)} · hang → ${hang.seen || 'nobody'} in ${hang.ms} ms fell ${JSON.stringify(hang.fell)} · fine → ${fine.seen} fell ${!!fine.fell} · exit 75 → ${again.seen} fell ${!!again.fell} · all bad + server.js → ${jsAlone.seen || 'nobody'} in ${jsAlone.ms} ms, said ${jsAloneNote}`);
+    // R192 (T-157): the fallback chain and the frozen JavaScript hub. vr-run serves the newest build ("rust"), then the
+    // previous good builds ("rust-fallback-1", "rust-fallback-2"), and only when all fail the JavaScript hub alone
+    // ("javascript-fallback", also with --alone); /api/status says which. The real bridge/server.js, started alone like
+    // the last resort starts it, still boots and serves the basics on the current tree (bridge/test/js-fallback.js).
+    const deep192 = await scenario('deep', { n1: 'crash', g1: 'crash', g2: 'ok' }, 'n1', ['g1', 'g2'], 'g2');
+    const aloneJs192 = await scenario('alonejs', { n1: 'crash', g1: 'crash' }, 'n1', ['g1'], 'js-alone', null, true, ['--alone']);
+    const aloneOk192 = await scenario('alonefine', { n1: 'ok' }, 'n1', [], 'n1', null, true, ['--alone']);
+    const js192 = await require('./js-fallback.js').probe({ portFrom: PORT + 340 });
+    const keep192 = fs.readFileSync(path.join(MILLS, 'native', 'keep-builds.sh'), 'utf8');
+    check('R192', 'T-157 the fallback chain: /api/status names what serves (rust → rust-fallback-1 → rust-fallback-2 → javascript-fallback, also with --alone); two previous good builds are kept (keep-builds.sh); the real JavaScript hub started alone boots and serves the basics (status, page, sign-in gate + sign-in, chat room, board, one Work run with the fake Claude, the AI host link)',
+      built177.status === 0 && fine.serving === 'rust' && crash.serving === 'rust-fallback-1' && deep192.ok && deep192.serving === 'rust-fallback-2' && aloneJs192.ok && aloneJs192.serving === 'javascript-fallback' && aloneOk192.ok && aloneOk192.serving === 'rust' && /-ge 2/.test(keep192) && js192.ok,
+      `serving: fine ${fine.serving} · crash ${crash.serving} · 3 deep ${deep192.seen}/${deep192.serving} · --alone all bad ${aloneJs192.seen}/${aloneJs192.serving} · --alone fine ${aloneOk192.serving} · JavaScript hub alone: ${js192.why}`);
   }
   if (RUST_HUB && !WIN) { // R178 (FR5): deploy/trial.sh tries a build on a side port against a copy of the data before it is swapped in
     const tr = path.join(MILLS, 'deploy', 'trial.sh');

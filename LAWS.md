@@ -88,6 +88,29 @@ number should scale less than the third number, however, this is all dependent o
   watch `/api/status` come back; vr-run's own fallback (the previous good build; for the first swap also the
   JavaScript hub) covers a bad build without anyone's hand.
 
+## The JavaScript hub stays as the last fallback
+
+Sponge, 2026-10-24: *"we leave JavaScript as a fallback … so that while a lot of newer stuff might not work if it falls
+back to JavaScript, we still have something that works enough to fix it and keep working. Moving forward we need at
+least 1 if not 2 Rust fallbacks when we get to stable versions, so that we only use the non-updated JavaScript version
+if all else fails."*
+
+- **The order of service** (vr-run with `rustHub.alone`; `/api/status` shows it as `serving`): the newest Rust build
+  (`rust`), the previous good build (`rust-fallback-1`), the one before (`rust-fallback-2`), and only when all of those
+  fail the JavaScript hub alone (`javascript-fallback`), said loudly in the log, the chat and /api/status. The Rust hub
+  serves alone; keep-builds.sh keeps the current build + 2 good ones, always.
+- **JavaScript is frozen, not removed.** bridge/server.js (and what it needs) is the last resort. A new feature is built
+  in Rust and does not have to exist in JavaScript. But the JavaScript hub must keep booting and serving the basics on
+  every tree we ship: sign-in, chat, the board, Work with Claude, the AI host link, so a broken release can be fixed
+  from it. The suite keeps the check (R192, `node bridge/test/js-fallback.js`); it must stay green.
+- **Shared data stays readable by it.** Every change that touches a data file both hubs read (accounts, sessions, chat,
+  board, notes, work.json, ai-hosts.json …) keeps the JavaScript hub able to read it: add fields, never rename or
+  re-shape what is there; a Rust-only file is fine, a changed shared file is not.
+- **Before every go-live the run checks the fallback chain** (two good Rust builds kept, the JavaScript hub boots), and
+  it never removes the JavaScript hub without Sponge's explicit word.
+- Going back from `alone` to the JavaScript hub behind the Rust one is one config flip and a graceful restart
+  (deploy/full-rust-swap.md).
+
 ## Finish the whole job, test it in throw-away hubs, go live once
 
 Sponge, 2026-10-24: *"we dont restart vibe roller, and use throw-away tests, until ALL sub agents are done, and all work

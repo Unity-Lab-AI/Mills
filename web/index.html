@@ -3961,6 +3961,61 @@ async function renderSource() {
   note.textContent = (d.hubClaude === false ? 'This hub has no Claude of its own: Work and the API run on an AI host. ' : '') + 'AI hosts show up here when they are connected; their owners choose who may use them (My AI hosts).';
   box.append(note);
 }
+// ── Settings → My AI hosts, monitor and control (5.12.0): a live line per host (refreshed every 10 s while the panel is open) and Pause / Resume / Restart / Update now / Show log; an older host shows what the hub knows and a note ──
+const hostAgo = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : s < 172800 ? Math.round(s / 3600) + ' h' : Math.round(s / 86400) + ' days'; };
+function hostLiveText(h, now) {
+  const st = h.status || {}, bits = [];
+  bits.push(h.paused ? 'paused ' + (st.pausedBy === 'hub' ? 'from here (it lends nothing until you resume it)' : 'on its machine') : h.online ? 'online' + (h.since ? ' since ' + new Date(h.since).toLocaleTimeString() : '') : h.seen ? 'offline (last seen ' + new Date(h.seen).toLocaleString() + ')' : 'never connected yet');
+  if (h.version) bits.push('host ' + h.version + (st.startedAt && h.online ? ', up ' + hostAgo(now - st.startedAt) : ''));
+  const use = (h.inUse || []).map((u) => u.kind === 'work' ? (u.person ? nickOf(u.person) : 'someone') + ' (Work' + (u.project ? ', ' + u.project : '') + ')' : u.what);
+  if (h.online || h.paused) bits.push(use.length ? 'in use: ' + use.join(', ') : 'idle' + (st.lastJobAt ? ' (last job ' + hostAgo(now - st.lastJobAt) + ' ago)' : ''));
+  const pc = (w) => !w || w.utilization == null ? null : (w.resetsAt && w.resetsAt < now ? 0 : Math.round(w.utilization * 100));
+  for (const p of h.providers || []) { const a = pc(p.usage && p.usage.five_hour), b = pc(p.usage && p.usage.seven_day); if (a != null || b != null) bits.push(p.label + ': 5 h ' + (a == null ? '?' : a + '%') + ' · 7 d ' + (b == null ? '?' : b + '%') + (p.capped ? ' (capped)' : '')); }
+  for (const [pid, msg] of Object.entries(st.logins || {})) if (msg) bits.push('login ' + pid + ': ' + msg);
+  if (st.lastUpdate) bits.push('last update: ' + st.lastUpdate + (st.lastUpdateAt ? ' (' + hostAgo(now - st.lastUpdateAt) + ' ago)' : ''));
+  if (st.pending) bits.push(st.pending);
+  if (h.control && h.online && !h.statusFresh && h.statusAgeMs) bits.push('status ' + hostAgo(h.statusAgeMs) + ' old');
+  return bits.join(' · ');
+}
+function hostLiveBox(h) {
+  const box = document.createElement('div'); box.className = 'hostLive'; box.dataset.host = h.id;
+  const line = document.createElement('small'); line.className = 'hostLiveLine'; line.style.display = 'block'; line.textContent = 'Looking …';
+  const row = document.createElement('div'); row.className = 'row hostLiveBtns'; row.hidden = true;
+  const note = document.createElement('small'); note.className = 'hostLiveNote'; note.style.display = 'block';
+  const logbox = document.createElement('pre'); logbox.className = 'hostLog'; logbox.hidden = true; logbox.style.cssText = 'max-height:14em;overflow:auto;font-size:11px;white-space:pre-wrap;margin:4px 0';
+  const mk = (action, text, title) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.action = action; b.textContent = text; b.title = title;
+    b.onclick = async () => {
+      if (action === 'restart' && b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Click again to restart'; setTimeout(() => { b.dataset.armed = ''; b.textContent = text; }, 4000); return; }
+      b.dataset.armed = ''; b.textContent = text; b.disabled = true; note.textContent = '…';
+      try { const r = await json('/api/hosts/control', { method: 'POST', body: JSON.stringify({ id: h.id, action }) }); note.textContent = r.result || 'Done.';
+        if (action === 'logs') { logbox.textContent = (r.lines || []).join('\n') || '(the log is empty)'; logbox.hidden = false; logbox.scrollTop = logbox.scrollHeight; }
+        if (action === 'pause' || action === 'resume') refreshProviders(); }
+      catch (e) { note.textContent = e.message; }
+      b.disabled = false; setTimeout(refreshHostLive, 1200); };
+    row.append(b); return b; };
+  mk('pause', 'Pause', 'Stop lending this host\'s AI to anyone until you resume it (jobs already running finish; the host stays up and you can resume it from here)');
+  mk('resume', 'Resume', 'Lend this host\'s AI again');
+  mk('restart', 'Restart', 'Restart the host program once nothing is in flight');
+  mk('update', 'Update now', 'Look for a new host program now and restart on it once nothing is in flight');
+  mk('logs', 'Show log', 'The last 50 lines of the host\'s log, with tokens and keys removed');
+  box.append(line, row, note, logbox); return box;
+}
+async function refreshHostLive() {
+  const boxes = document.querySelectorAll('#hostBox .hostLive'); if (!boxes.length) return;
+  let d; try { d = await json('/api/hosts/status'); } catch { return; }
+  const by = {}; for (const h of d.hosts || []) by[h.id] = h;
+  for (const box of boxes) {
+    const h = by[box.dataset.host]; if (!h) continue;
+    box.querySelector('.hostLiveLine').textContent = hostLiveText(h, d.now);
+    const row = box.querySelector('.hostLiveBtns'), note = box.querySelector('.hostLiveNote'), reach = h.online || h.paused;
+    row.hidden = !h.control;
+    for (const b of row.querySelectorAll('button')) { const a = b.dataset.action; if (b.disabled && b.textContent === '…') continue; b.disabled = !reach || (a === 'pause' && h.paused) || (a === 'resume' && !h.paused); }
+    if (!h.control && reach) note.textContent = 'This host is older than 5.13: update it to control it from here (on that machine: run vr-host and press u, or install the newest AI Host package). What is shown above is what the hub knows.';
+    else if (!h.control) note.textContent = '';
+    else if (!reach && !note.textContent.startsWith('…')) note.textContent = 'Offline: the controls work again when the host connects.';
+  }
+}
+setInterval(() => { const b = $('hostBox'); if (b && b.offsetParent !== null) refreshHostLive(); }, 10000);
 // ── Settings → My AI hosts: this person's own hosts (UUID + nickname), their providers and who may use them ──
 async function renderHosts() {
   const box = $('hostBox'); if (!box) return;
@@ -3973,7 +4028,7 @@ async function renderHosts() {
   for (const h of d.mine || []) {
     const it = document.createElement('div'); it.className = 'provItem';
     const b = document.createElement('b'); b.textContent = h.nickname; const dot = document.createElement('span'); dot.textContent = h.online ? ' · online' : h.seen ? ' · offline (last seen ' + new Date(h.seen).toLocaleString() + ')' : ' · never connected yet'; dot.style.color = h.online ? 'var(--ok, #3ddc84)' : 'var(--muted)'; b.append(dot); it.append(b);
-    const s = document.createElement('small'); s.textContent = 'id ' + h.id + (h.kid ? ' · key ' + h.kid : '') + (h.version ? ' · host app ' + h.version + (h.os ? ' on ' + h.os : '') : '') + (h.engines && h.engines.length ? ' · engines: ' + h.engines.join(', ') : ''); it.append(s);
+    const s = document.createElement('small'); s.textContent = 'id ' + h.id + (h.kid ? ' · key ' + h.kid : '') + (h.version ? ' · host app ' + h.version + (h.os ? ' on ' + h.os : '') : '') + (h.engines && h.engines.length ? ' · engines: ' + h.engines.join(', ') : ''); it.append(s, hostLiveBox(h));
     for (const p of h.providers || []) {
       const pr = document.createElement('div'); pr.className = 'row';
       const pl = document.createElement('span'); pl.textContent = `${p.label} (${p.kind}${p.models.length ? ': ' + p.models.map(modelName).join(', ') : ''}${p.max5h ? `; caps ${p.max5h}% / ${p.max7d}%` : ''}${p.capped ? '; ' + p.capped : ''}) · shared with:`;
@@ -4019,6 +4074,7 @@ async function renderHosts() {
   const info = document.createElement('div'); info.className = 'status';
   info.textContent = others.length ? 'Hosts you may use: ' + others.map((h) => `${h.nickname} (${nickOf(h.user)}${h.online ? '' : ', offline'}: ${h.providers.map((p) => p.label).join(', ')})`).join('; ') + '.' : 'No teammate\'s host is shared with you right now.';
   box.append(line(add), info);
+  refreshHostLive();
 }
 async function refreshProviders() { try { const d = await json('/api/check'); me.providers = d.providers; me.provider = d.provider; showModels(me); } catch {} }
 $('setTheme').onchange = () => applyTheme($('setTheme').value);

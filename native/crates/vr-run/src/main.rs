@@ -15,6 +15,10 @@
 //!   starts (then the one before). `<root>/.fell-back` says {from, to, why, at} and `<root>/.announce/` carries a line
 //!   the hub posts to the team chat. The newest build is tried again after `--retry-after` s (then every hour): a fix
 //!   that lands reaches people without anyone restarting anything.
+//! - The order of service (T-157; `decide`, `serving_label`): the newest build ("rust"), then the previous good builds
+//!   ("rust-fallback-1", "rust-fallback-2": native/keep-builds.sh keeps the current + 2 good ones), and only when every
+//!   Rust build fails the frozen JavaScript hub alone ("javascript-fallback", kept even with `--alone`). Each hub gets
+//!   VR_SERVING and shows it as `serving` in /api/status from this machine.
 //! - Ctrl-C / SIGTERM stop everything (exit 0). systemd keeps vr-run itself alive (deploy/viberoller-hub.service).
 //! Windows and Linux alike (std::process; no shell).
 use serde_json::json;
@@ -48,17 +52,38 @@ fn candidates(builds: &Path) -> Vec<String> {
     out
 }
 
+/// What serves the port. Rust(i) = the i-th candidate build (0 = the newest, 1 and 2 = the previous good builds);
+/// Javascript = the frozen last resort; Nothing = no build and no JavaScript hub (vr-run keeps trying).
+#[derive(Debug, PartialEq, Clone)]
+enum Serving { Rust(usize), Javascript, Nothing }
+
+/// The name /api/status shows as `serving`.
+fn serving_label(s: &Serving) -> String {
+    match s { Serving::Rust(0) => "rust".into(), Serving::Rust(i) => format!("rust-fallback-{i}"), Serving::Javascript => "javascript-fallback".into(), Serving::Nothing => "none".into() }
+}
+
+/// The decision order, pure: the first candidate build that starts serves; when none does, the JavaScript hub (if it
+/// can run at all); else nothing. `starts` says whether a build starts and passes its health check.
+fn decide(cands: &[String], starts: &dyn Fn(&str) -> bool, js_available: bool) -> Serving {
+    for (i, c) in cands.iter().enumerate() { if starts(c) { return Serving::Rust(i); } }
+    if js_available { Serving::Javascript } else { Serving::Nothing }
+}
+
 /// The JavaScript hub behind the Rust one (while bridge/server.js exists): started with what run.js gave it; started
 /// again when it exits (75 = its own restart; anything else after 5 s).
-struct Back { child: Option<Child>, node: Option<PathBuf>, script: PathBuf, secret: String, port: u16 }
+struct Back { child: Option<Child>, node: Option<PathBuf>, script: PathBuf, secret: String, port: u16, behind: bool }
 impl Back {
-    fn new(root: &Path, back: u16, secret: &str) -> Back {
+    fn new(root: &Path, back: u16, secret: &str, behind: bool) -> Back {
         let script = root.join("server.js");
         let node = std::env::var_os("VR_NODE").map(PathBuf::from).filter(|p| p.is_file()).or_else(|| which("node"));
-        Back { child: None, node: if script.is_file() { node } else { None }, script, secret: secret.into(), port: back }
+        Back { child: None, node: if script.is_file() { node } else { None }, script, secret: secret.into(), port: back, behind }
     }
-    fn wanted(&self) -> bool { self.node.is_some() }
+    /// Is the JavaScript hub run behind the Rust one? (Not when the Rust hub serves alone.)
+    fn wanted(&self) -> bool { self.behind && self.node.is_some() }
+    /// Can the JavaScript hub take the port alone, as the last resort? (Alone mode keeps it for exactly this.)
+    fn can_fallback(&self) -> bool { self.node.is_some() }
     async fn start(&mut self, mods: &str) {
+        if !self.behind { return; }
         let Some(node) = self.node.clone() else { return };
         self.stop().await;
         let mut c = Command::new(&node);
@@ -73,7 +98,7 @@ impl Back {
         let Some(node) = self.node.clone() else { return };
         self.stop().await;
         let mut c = Command::new(&node);
-        c.arg(&self.script).arg("--no-tunnel").current_dir(self.script.parent().unwrap_or(Path::new("."))).env("MILLS_SUPERVISED", "1").env("MILLS_PORT", self.port.to_string()).stdin(Stdio::null()).kill_on_drop(true);
+        c.arg(&self.script).arg("--no-tunnel").current_dir(self.script.parent().unwrap_or(Path::new("."))).env("MILLS_SUPERVISED", "1").env("MILLS_PORT", self.port.to_string()).env("VR_SERVING", serving_label(&Serving::Javascript)).stdin(Stdio::null()).kill_on_drop(true);
         match c.spawn() { Ok(ch) => { log(&format!("the JavaScript hub alone on port {} (pid {})", self.port, ch.id().unwrap_or(0))); self.child = Some(ch); } Err(e) => log(&format!("could not start the JavaScript hub alone: {e}")) }
     }
     /// Started again if it is gone (run.js: 75 at once, a crash after 5 s).
@@ -114,17 +139,20 @@ async fn health(port: u16, timeout: u64) -> Result<(), String> {
 enum Outcome { Restart, Stop, Bad(String), Retry }
 
 /// One build in service until it asks for a restart, stops, or proves bad.
-async fn run_build(o: &Opts, commit: &str, is_newest: bool, back: Arc<Mutex<Back>>, stop: &tokio::sync::watch::Receiver<bool>) -> Outcome {
+async fn run_build(o: &Opts, commit: &str, idx: usize, back: Arc<Mutex<Back>>, stop: &tokio::sync::watch::Receiver<bool>) -> Outcome {
     let exe = o.builds.join(commit).join(if cfg!(windows) { "vr-hub.exe" } else { "vr-hub" });
     let mods = modules_of(&exe);
     let secret = back.lock().await.secret.clone();
+    let is_newest = idx == 0;
+    let serving = serving_label(&Serving::Rust(idx));
+    if !is_newest { log(&format!("SERVING {serving}: build {commit} (an older good build; the newer ones failed)")); }
     let mut crashes: VecDeque<Instant> = VecDeque::new();
     let started_fallback = Instant::now();
     loop {
         let mut c = Command::new(&exe);
         c.args(["--port", &o.port.to_string()]);
         if o.alone { c.arg("--alone"); } else { c.args(["--back", &o.back.to_string()]); }
-        c.args(["--root", &o.root.display().to_string()]).env("MILLS_SUPERVISED", "1").env("VR_FRONT_SECRET", &secret).stdin(Stdio::null()).kill_on_drop(true);
+        c.args(["--root", &o.root.display().to_string()]).env("MILLS_SUPERVISED", "1").env("VR_FRONT_SECRET", &secret).env("VR_SERVING", &serving).stdin(Stdio::null()).kill_on_drop(true);
         if let Some(n) = std::env::var_os("VR_NODE").or_else(|| which("node").map(|p| p.into_os_string())) { c.env("VR_NODE", n); }
         let mut child = match c.spawn() { Ok(ch) => ch, Err(e) => return Outcome::Bad(format!("could not start {}: {e}", exe.display())) };
         log(&format!("vr-hub build {} on 127.0.0.1:{} (pid {})", commit, o.port, child.id().unwrap_or(0)));
@@ -185,8 +213,8 @@ async fn main() {
         retry_after: arg(&args, "--retry-after").and_then(|p| p.parse().ok()).unwrap_or(600),
     };
     let secret = pgm_core_internal::crypto::random_hex(24);
-    let mut b = Back::new(&o.root, o.back, &secret);
-    if o.alone { b.node = None; }
+    // alone: the JavaScript hub is not run behind the Rust one, but it stays known as the last resort (bridge/server.js)
+    let b = Back::new(&o.root, o.back, &secret, !o.alone);
     let back = Arc::new(Mutex::new(b));
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
@@ -202,14 +230,14 @@ async fn main() {
         // after the first retry the newest build is only tried hourly: a fallback that works is not bounced every 10 minutes
         let o = { let mut oo = o.clone(); if retries > 1 { oo.retry_after = oo.retry_after.max(3600); } oo };
         let cands = candidates(&o.builds);
-        if cands.is_empty() { log(&format!("no build under {} (native/build.sh makes one); waiting", o.builds.display())); tokio::time::sleep(Duration::from_secs(10)).await; if *stop_rx.borrow() { return; } continue; }
-        let newest = cands[0].clone();
+        if cands.is_empty() && !back.lock().await.can_fallback() { log(&format!("no build under {} (native/build.sh makes one); waiting", o.builds.display())); tokio::time::sleep(Duration::from_secs(10)).await; if *stop_rx.borrow() { return; } continue; }
+        let newest = cands.first().cloned().unwrap_or_default();
         let mut ran_any = false;
         for (i, c) in cands.iter().enumerate() {
             if bad.contains(c) { continue; }
             ran_any = true;
             let next = cands.iter().skip(i + 1).find(|x| !bad.contains(x)).cloned();
-            match run_build(&o, c, i == 0, back.clone(), &stop_rx).await {
+            match run_build(&o, c, i, back.clone(), &stop_rx).await {
                 Outcome::Stop => { log("stopping"); return; }
                 Outcome::Restart => { bad.clear(); retries = 0; continue 'chain; }
                 Outcome::Retry => { log(&format!("trying the newest build {newest} again")); bad.clear(); retries += 1; continue 'chain; }
@@ -220,17 +248,31 @@ async fn main() {
             }
         }
         if !ran_any || cands.iter().all(|c| bad.contains(c)) {
-            // every kept Rust build failed. While the JavaScript hub still exists (bridge/server.js: the first swap to
-            // vr-run keeps it as the last net, as run.js did), it takes the port alone until the newest build is tried
-            // again; once FR6 has retired it, vr-run simply tries the builds again later.
+            // every kept Rust build failed (or none exists). The JavaScript hub (bridge/server.js, frozen as the last
+            // resort and kept even when the Rust hub serves alone) takes the port alone until the newest build is
+            // tried again. It is said loudly: in this log, in the team chat, and in /api/status ("serving").
             let wait = if retries == 0 { o.retry_after.min(600) } else { 3600 };
-            if back.lock().await.wanted() {
-                log(&format!("every kept build failed: the JavaScript hub takes port {} alone (as run.js did); the newest build is tried again in {wait} s", o.port));
+            if back.lock().await.can_fallback() {
+                log(&format!("!!! SERVING javascript-fallback: every kept Rust build failed; the JavaScript hub takes port {} alone (the last resort); the newest build is tried again in {wait} s", o.port));
                 let dir = o.root.join(".announce"); let _ = std::fs::create_dir_all(&dir);
-                let _ = std::fs::write(dir.join(format!("js-alone-{}.txt", now_s())), format!("**VibeRoller runs on its JavaScript hub alone.** Every kept Rust build failed ({}), so the JavaScript hub took the port by itself, as before 5.5.0. Everything works; the newest Rust build is tried again in {wait} s. Whoever shipped it: look at the server's log.\n", cands.iter().map(|c| c[..c.len().min(7)].to_string()).collect::<Vec<_>>().join(", ")));
+                let _ = std::fs::write(dir.join(format!("js-alone-{}.txt", now_s())), format!("**VibeRoller runs on its JavaScript hub alone (the last fallback).** Every kept Rust build failed ({}), so the frozen JavaScript hub took the port by itself. The basics work (sign-in, chat, the board, Work with Claude, the AI host link); newer features need the Rust hub. The newest Rust build is tried again in {wait} s. Whoever shipped it: look at the server's log, fix, and ship again.\n", cands.iter().map(|c| c[..c.len().min(7)].to_string()).collect::<Vec<_>>().join(", ")));
                 let mut b = back.lock().await;
                 b.port = o.port; b.start_alone().await;
-                let stopped = tokio::select! { _ = tokio::time::sleep(Duration::from_secs(wait)) => false, _ = async { let mut s = stop_rx.clone(); let _ = s.changed().await; } => true };
+                let deadline = Instant::now() + Duration::from_secs(wait);
+                let mut stopped = false;
+                while Instant::now() < deadline {
+                    let gone = tokio::select! { _ = tokio::time::sleep(Duration::from_secs(1)) => false, _ = async { let mut s = stop_rx.clone(); let _ = s.changed().await; } => { stopped = true; true } };
+                    if gone { break; }
+                    // the JavaScript hub keeps itself up here: 75 (a restart was asked for) means new code may be waiting, so the
+                    // chain is tried again at once; a crash is started again after 5 s
+                    let code = match b.child.as_mut() { Some(ch) => ch.try_wait().ok().flatten().map(|s| s.code().unwrap_or(-1)), None => Some(-1) };
+                    if let Some(code) = code {
+                        if code == 75 { log("the JavaScript hub asked for a restart: trying the Rust builds again"); break; }
+                        log(&format!("the JavaScript hub (last resort) exited with {code}; starting it again in 5 s"));
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        b.start_alone().await;
+                    }
+                }
                 b.stop().await; b.port = o.back;
                 if stopped { return; }
             } else {
@@ -239,5 +281,31 @@ async fn main() {
             }
             bad.clear(); retries += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn v(a: &[&str]) -> Vec<String> { a.iter().map(|s| s.to_string()).collect() }
+    #[test]
+    fn the_newest_build_serves_when_it_starts() { assert_eq!(decide(&v(&["a", "b", "c"]), &|_| true, true), Serving::Rust(0)); }
+    #[test]
+    fn the_previous_good_builds_come_in_order() {
+        assert_eq!(decide(&v(&["a", "b", "c"]), &|c| c != "a", true), Serving::Rust(1));
+        assert_eq!(decide(&v(&["a", "b", "c"]), &|c| c == "c", true), Serving::Rust(2));
+    }
+    #[test]
+    fn javascript_only_when_every_rust_build_fails() {
+        assert_eq!(decide(&v(&["a", "b", "c"]), &|_| false, true), Serving::Javascript);
+        assert_eq!(decide(&[], &|_| true, true), Serving::Javascript);
+        assert_eq!(decide(&v(&["a"]), &|_| false, false), Serving::Nothing);
+    }
+    #[test]
+    fn the_labels_status_shows() {
+        assert_eq!(serving_label(&Serving::Rust(0)), "rust");
+        assert_eq!(serving_label(&Serving::Rust(1)), "rust-fallback-1");
+        assert_eq!(serving_label(&Serving::Rust(2)), "rust-fallback-2");
+        assert_eq!(serving_label(&Serving::Javascript), "javascript-fallback");
     }
 }

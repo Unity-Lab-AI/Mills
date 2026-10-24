@@ -304,6 +304,17 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             }
         }
     }
+    // ----- Settings → My AI hosts, monitor and control (5.12.0): the person's own hosts, how they are doing, pause / resume / restart / update / log -----
+    if p == "/api/hosts/status" && r.method == hyper::Method::GET {
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        return answer(200, json!({ "hosts": hub.mods.ai.status_for(&u), "now": pgm_core_internal::now_ms() }));
+    }
+    if p == "/api/hosts/control" && r.method == hyper::Method::POST {
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        let b = r.json();
+        let (id, action) = (b["id"].as_str().unwrap_or("").to_string(), b["action"].as_str().unwrap_or("").to_string());
+        return match hub.mods.ai.control(&u, &id, &action).await { Ok(v) => answer(200, v), Err(e) => answer(e.status, json!({ "error": e.msg })) };
+    }
     // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
     if r.method == hyper::Method::POST && matches!(p, "/api/hosts/new" | "/api/hosts/rename" | "/api/hosts/remove" | "/api/hosts/share" | "/api/hosts/scope" | "/api/hosts/config") {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
