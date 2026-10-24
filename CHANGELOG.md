@@ -7,6 +7,15 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.3 — 2026-10-24
+
+PATCH: **the Rust fallback chain actually fills up** (T-157). The auto-deploy marked a version's native build good only
+when it verified the hub, but the native build of a version runs after that verify, so no build was ever on the good
+list and every `use-build.sh` let `keep-builds.sh` delete all previous builds: after 5.13.2 went live only its own build
+was left. New `native/mark-good.sh <dist> <commit>` puts a build first in `<dist>/good`; the auto-deploy calls it once a
+build passed its trial, before putting it in service (both targets). R194 runs four deploys through mark-good + use-build
+and checks the current build plus the two before it stay.
+
 ## 5.13.2 — 2026-10-24
 
 PATCH: `bridge/work-current.json` (the default account's Work state, hub data like work.json) is gitignored; on the

@@ -2817,6 +2817,20 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       built177.status === 0 && fine.serving === 'rust' && crash.serving === 'rust-fallback-1' && deep192.ok && deep192.serving === 'rust-fallback-2' && aloneJs192.ok && aloneJs192.serving === 'javascript-fallback' && aloneOk192.ok && aloneOk192.serving === 'rust' && /-ge 2/.test(keep192) && js192.ok,
       `serving: fine ${fine.serving} · crash ${crash.serving} · 3 deep ${deep192.seen}/${deep192.serving} · --alone all bad ${aloneJs192.seen}/${aloneJs192.serving} · --alone fine ${aloneOk192.serving} · JavaScript hub alone: ${js192.why}`);
   }
+  if (!WIN) { // R194: the chain fills up the way the auto-deploy runs it (5.13.3: no build was ever marked good, so every deploy deleted the previous builds)
+    const dist194 = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-r194-')), nat194 = path.join(MILLS, 'native'), seen194 = [];
+    for (const c of ['c1', 'c2', 'c3', 'c4']) { // one deploy each: staged, tried, marked good, put in service
+      fs.mkdirSync(path.join(dist194, c)); fs.writeFileSync(path.join(dist194, c, 'BUILD.json'), '{}'); fs.writeFileSync(path.join(dist194, c, 'vr-hub'), c);
+      for (const s of ['mark-good.sh', 'use-build.sh']) spawnSync('sh', [path.join(nat194, s), dist194, c], { encoding: 'utf8', timeout: 30000 });
+      seen194.push(fs.readdirSync(dist194).filter((d) => /^c\d$/.test(d)).sort().join(','));
+    }
+    const serves194 = fs.readFileSync(path.join(dist194, 'vr-hub'), 'utf8');
+    fs.rmSync(dist194, { recursive: true, force: true });
+    const ad194 = fs.readFileSync(path.join(MILLS, 'deploy', 'autodeploy.sh'), 'utf8');
+    check('R194', 'the fallback chain fills up as deploys come: each tried build is marked good (native/mark-good.sh) before it goes in service, so after 4 deploys the current build and the 2 before it are kept; [static] the auto-deploy marks a build good after its trial, before use-build.sh',
+      seen194.join(' / ') === 'c1 / c1,c2 / c1,c2,c3 / c2,c3,c4' && serves194 === 'c4' && /trial\.sh[^\n]*then sh '\$APP\/native\/mark-good\.sh'[^\n]*use-build\.sh/.test(ad194),
+      `builds after each deploy: ${seen194.join(' / ')} · in service ${serves194}`);
+  }
   if (RUST_HUB && !WIN) { // R178 (FR5): deploy/trial.sh tries a build on a side port against a copy of the data before it is swapped in
     const tr = path.join(MILLS, 'deploy', 'trial.sh');
     const before178 = fs.readdirSync(require('os').tmpdir()).filter((d) => /^vr-trial-/.test(d)).length;
