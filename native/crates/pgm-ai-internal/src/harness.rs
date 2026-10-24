@@ -2,8 +2,9 @@
 //! (`claude -p --output-format stream-json`, the message on stdin) and Jcode PGM (`jcodepgm run --ndjson`, the message
 //! as the last argument). A harness says how its process is started ([`Harness::command`]), how to resume one of its
 //! sessions ([`Harness::session_resume_args`]) and turns each stdout line into the hub's one event shape
-//! ([`Harness::map_line`] -> [`HubEvent`]). The shape is Claude Code's stream-json (the alias the page renders), so
-//! Claude's lines pass through unchanged and Jcode's are mapped onto it. Work (work.rs) holds no `if harness == …`.
+//! ([`Harness::map_line`] -> [`HubEvent`]). The alias is Claude Code's stream-json, so Claude's lines pass through
+//! unchanged and Jcode's are mapped onto it; on the wire every event also carries the `hub` object ([`HubEvent::into_wire`],
+//! 9b) that the page's Work renderer reads first. Work (work.rs) holds no `if harness == …`.
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -20,8 +21,23 @@ impl HarnessKind {
     pub fn parse(name: &str) -> Option<HarnessKind> { match name { jcode::CLAUDE_HARNESS => Some(HarnessKind::Claude), jcode::HARNESS => Some(HarnessKind::Jcode), _ => None } }
 }
 
-/// One event of the hub's schema, the shape the page consumes (Claude Code's stream-json names are the alias). Each
-/// variant carries the whole JSON event, so nothing a harness sent is lost on the way.
+/// The version of the `hub` object every classified event carries (see [`HubEvent::into_wire`]).
+pub const HUB_SCHEMA: u32 = 1;
+
+/// One event of the hub's schema, the shape the page consumes. Each variant carries the whole JSON event (Claude
+/// Code's stream-json names are the alias), so nothing a harness sent is lost on the way.
+///
+/// On the wire ([`HubEvent::into_wire`], WORKPLAN 9b) the event is the alias plus ONE added object, `hub`, which is the
+/// schema the page's Work renderer reads first (an older page ignores it and renders the alias; a page that finds no
+/// `hub`, because the hub or the host is older, derives the same view from the alias):
+/// ```text
+/// init       { v:1, kind:"init",      harness, session, model }
+/// system     { v:1, kind:"system",    harness, session, subtype }
+/// assistant  { v:1, kind:"assistant", harness, session, model, blocks:[{type:"text",text} | {type:"tool_use",id,name,input}], usage? }
+/// user       { v:1, kind:"tool_results", harness, session, results:[{id, content, error}] }
+/// result     { v:1, kind:"result",    harness, session, error, text, subtype, durationMs, usage? }
+/// ```
+/// `harness` is "claude" | "jcode". Unknown events and raw lines carry no `hub` (the page shows them as it always did).
 #[derive(Clone, Debug, PartialEq)]
 pub enum HubEvent {
     /// `system` / `init`: the session started (session id, model).
@@ -51,14 +67,55 @@ impl HubEvent {
             _ => HubEvent::Unknown(v),
         }
     }
-    /// The JSON the page receives.
+    /// The alias JSON only (Claude Code's stream-json names), as it came.
     pub fn into_value(self) -> Value {
         match self {
             HubEvent::Init(v) | HubEvent::System(v) | HubEvent::Assistant(v) | HubEvent::User(v) | HubEvent::Result(v) | HubEvent::Unknown(v) => v,
             HubEvent::Raw(t) => json!({ "type": "raw", "text": t }),
         }
     }
+    /// The `hub` object of this event (None for unknown events and raw lines).
+    pub fn hub_object(&self) -> Option<Value> {
+        let (v, kind) = match self { HubEvent::Init(v) => (v, "init"), HubEvent::System(v) => (v, "system"), HubEvent::Assistant(v) => (v, "assistant"), HubEvent::User(v) => (v, "tool_results"), HubEvent::Result(v) => (v, "result"), _ => return None };
+        let harness = { let h = s(v, "harness"); if h.is_empty() { jcode::CLAUDE_HARNESS.to_string() } else { h } };
+        let mut o = json!({ "v": HUB_SCHEMA, "kind": kind, "harness": harness, "session": s(v, "session_id") });
+        let content = v["message"]["content"].as_array().cloned().unwrap_or_default();
+        match self {
+            HubEvent::Init(_) => { o["model"] = json!(s(v, "model")); }
+            HubEvent::System(_) => { o["subtype"] = json!(s(v, "subtype")); }
+            HubEvent::Assistant(_) => {
+                o["model"] = json!(s(&v["message"], "model"));
+                o["blocks"] = Value::Array(content.iter().filter_map(|b| match b["type"].as_str() {
+                    Some("text") => Some(json!({ "type": "text", "text": s(b, "text") })),
+                    Some("tool_use") => Some(json!({ "type": "tool_use", "id": s(b, "id"), "name": s(b, "name"), "input": if b["input"].is_null() { json!({}) } else { b["input"].clone() } })),
+                    _ => None,
+                }).collect());
+                if v["message"]["usage"].is_object() { o["usage"] = v["message"]["usage"].clone(); }
+            }
+            HubEvent::User(_) => {
+                o["results"] = Value::Array(content.iter().filter(|b| b["type"] == json!("tool_result")).map(|b| json!({ "id": s(b, "tool_use_id"), "content": b["content"].clone(), "error": b["is_error"] == json!(true) })).collect());
+            }
+            HubEvent::Result(_) => {
+                o["error"] = json!(v["is_error"] == json!(true)); o["text"] = json!(s(v, "result")); o["subtype"] = json!(s(v, "subtype"));
+                o["durationMs"] = json!(v["duration_ms"].as_u64().unwrap_or(0));
+                if v["usage"].is_object() { o["usage"] = v["usage"].clone(); }
+            }
+            _ => {}
+        }
+        Some(o)
+    }
+    /// The JSON the page receives: the alias plus the `hub` object (everything the alias had stays, so an older page
+    /// renders it as before).
+    pub fn into_wire(self) -> Value {
+        let hub = self.hub_object();
+        let mut v = self.into_value();
+        if let (Some(h), Some(o)) = (hub, v.as_object_mut()) { o.insert("hub".into(), h); }
+        v
+    }
 }
+
+/// Classifies an event from anywhere (a harness here, an AI host's Work run) and adds its `hub` object.
+pub fn wire(v: Value) -> Value { HubEvent::from_value(v).into_wire() }
 
 /// Everything a harness needs to start one run (borrowed from Work; no I/O to build it).
 pub struct RunContext<'a> {
@@ -247,6 +304,63 @@ mod tests {
         assert_eq!(r["type"], "result"); assert_eq!(r["is_error"], true); assert_eq!(r["result"], "boom"); assert_eq!(r["harness"], "jcode");
         assert!(h.map_line("").is_empty());
         assert!(h.ended());
+    }
+
+    /// The structure of a run as the page's renderer sees it: (kind, block / result types) per event.
+    fn shape(events: Vec<Value>) -> Vec<String> {
+        events.iter().filter_map(|e| e["hub"].as_object().map(|h| {
+            let k = h["kind"].as_str().unwrap_or("");
+            let inner: Vec<String> = match k {
+                "assistant" => h["blocks"].as_array().unwrap().iter().map(|b| b["type"].as_str().unwrap().to_string()).collect(),
+                "tool_results" => h["results"].as_array().unwrap().iter().map(|r| format!("result:{}", r["error"])).collect(),
+                "result" => vec![format!("error:{}", h["error"])],
+                _ => vec![],
+            };
+            format!("{k}[{}]", inner.join(","))
+        })).collect()
+    }
+
+    #[test]
+    fn both_harnesses_give_the_same_hub_structure_and_keep_the_alias() {
+        let mut c = ClaudeHarness;
+        let claude: Vec<Value> = all(&mut c, &[
+            r#"{"type":"system","subtype":"init","session_id":"c1","model":"claude-haiku-5-5"}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me look."}],"usage":{"input_tokens":3,"output_tokens":1}}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a","is_error":false}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Two files."}]}}"#,
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"Two files.","duration_ms":5}"#,
+            r#"{"type":"rate_limit_event","info":{"x":1}}"#,
+        ]).into_iter().map(HubEvent::into_wire).collect();
+        let mut j = JcodeHarness::new(&json!({ "kind": "jcode", "label": "J" }), "");
+        let jcode: Vec<Value> = all(&mut j, &[
+            r#"{"type":"start","session_id":"s1","provider":"viberoller","model":"claude-haiku-5-5"}"#,
+            r#"{"type":"text_delta","text":"Let me look."}"#,
+            r#"{"type":"tool_start","id":"t1","name":"bash"}"#,
+            r#"{"type":"tool_input","delta":"{\"command\":\"ls\"}"}"#,
+            r#"{"type":"tool_exec","id":"t1","name":"bash"}"#,
+            r#"{"type":"tool_done","id":"t1","name":"bash","output":"a\nb\n","error":null}"#,
+            r#"{"type":"connection_type","connection":"direct"}"#,
+            r#"{"type":"done","session_id":"s1","text":"Two files."}"#,
+        ]).into_iter().map(HubEvent::into_wire).collect();
+        let (sc, sj) = (shape(claude.clone()), shape(jcode.clone()));
+        assert_eq!(sc, ["init[]", "assistant[text]", "assistant[tool_use]", "tool_results[result:false]", "assistant[text]", "result[error:false]"]);
+        assert_eq!(sc, sj, "the same run, the same structure, whichever harness ran it");
+        assert_eq!(claude[0]["hub"]["harness"], "claude"); assert_eq!(jcode[0]["hub"]["harness"], "jcode");
+        assert_eq!(claude[0]["hub"]["session"], "c1"); assert_eq!(jcode[0]["hub"]["model"], "claude-haiku-5-5");
+        assert_eq!(claude[1]["hub"]["usage"]["input_tokens"], 3);
+        assert_eq!(claude[2]["hub"]["blocks"][0]["input"]["command"], "ls"); assert_eq!(jcode[2]["hub"]["blocks"][0]["input"]["command"], "ls");
+        assert_eq!(claude[3]["hub"]["results"][0]["id"], "t1"); assert_eq!(jcode[3]["hub"]["results"][0]["content"], "a\nb\n");
+        assert_eq!(claude[5]["hub"]["text"], "Two files."); assert_eq!(jcode[6]["hub"]["text"], "Two files."); assert!(jcode[6]["hub"]["durationMs"].is_u64());
+        // the alias is untouched: an older page renders the same
+        assert_eq!(claude[1]["message"]["content"][0]["text"], "Let me look."); assert_eq!(jcode[1]["message"]["content"][0]["text"], "Let me look.");
+        assert_eq!(jcode[3]["message"]["content"][0]["tool_use_id"], "t1"); assert_eq!(jcode[6]["result"], "Two files.");
+        // events the page does not render carry no hub object
+        assert!(claude[6].get("hub").is_none()); assert!(jcode[4].get("hub").is_none());
+        // a failed result
+        let err = wire(json!({ "type": "result", "subtype": "error", "is_error": true, "result": "boom" }));
+        assert_eq!(err["hub"]["error"], true); assert_eq!(err["hub"]["text"], "boom"); assert_eq!(err["is_error"], true);
+        assert_eq!(HubEvent::Raw("x".into()).into_wire(), json!({ "type": "raw", "text": "x" }));
     }
 
     #[test]

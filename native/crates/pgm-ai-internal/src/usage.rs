@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use pgm_context_internal::ledger::Usage as LedgerUsage;
 use pgm_core_internal::now_ms;
 
 const FIVE_H: u64 = 5 * 3600 * 1000;
@@ -72,6 +73,35 @@ impl Usage {
             self.with_bucket(source, |b| { if !b["limits"].is_object() { b["limits"] = json!({}); } let mut f = b["limits"]["five_hour"].clone(); if !f.is_object() { f = json!({}); } f["status"] = json!("rejected"); f["at"] = json!(now_ms()); b["limits"]["five_hour"] = f; });
         }
     }
+    /// One answer outside Work (the /v1 API, Unity, a product's AI), normalised by pgm-context's ledger: added to that
+    /// person's total for the provider kind (usage.json "answers": { person: { kind: { turns, input, output, cached,
+    /// written, model, at } } }). `/api/usage` shows the person's sum as `answers`.
+    pub fn note_answer(&self, person: &str, kind: &str, model: &str, u: &LedgerUsage) {
+        let (person, kind) = (if person.is_empty() { "hub" } else { person }, if kind.is_empty() { "unknown" } else { kind });
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        if !db["answers"].is_object() { db["answers"] = json!({}); }
+        if !db["answers"][person].is_object() { db["answers"][person] = json!({}); }
+        let mut t = db["answers"][person][kind].clone(); if !t.is_object() { t = json!({}); }
+        let add = |t: &mut Value, n: &str, v: u64| { let cur = t[n].as_u64().unwrap_or(0); t[n] = json!(cur + v); };
+        add(&mut t, "turns", 1); add(&mut t, "input", u.input); add(&mut t, "output", u.output); add(&mut t, "cached", u.cache_read); add(&mut t, "written", u.cache_write);
+        t["model"] = json!(model); t["at"] = json!(now_ms());
+        db["answers"][person][kind] = t;
+        self.save(&db);
+    }
+    /// A person's answers outside Work, summed over their providers (Null when none yet): turns, input (paid), output,
+    /// cached (read from the cache), written (into it), hit = cached / (input + cached + written), and `by` per kind.
+    pub fn answers(&self, person: &str) -> Value {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(kinds) = db["answers"][person].as_object().filter(|k| !k.is_empty()) else { return Value::Null };
+        let mut sum = LedgerUsage::default(); let mut turns = 0u64; let mut by = serde_json::Map::new();
+        for (k, t) in kinds {
+            let g = |n: &str| t[n].as_u64().unwrap_or(0);
+            let u = LedgerUsage { input: g("input"), output: g("output"), cache_read: g("cached"), cache_write: g("written") };
+            sum.add(&u); turns += g("turns");
+            by.insert(k.clone(), json!({ "turns": g("turns"), "input": u.input, "output": u.output, "cached": u.cache_read, "written": u.cache_write, "hit": u.hit_ratio(), "model": t["model"] }));
+        }
+        json!({ "turns": turns, "input": sum.input, "output": sum.output, "cached": sum.cache_read, "written": sum.cache_write, "hit": sum.hit_ratio(), "by": Value::Object(by) })
+    }
     /// Anthropic's own numbers for one source (the relayed calls' headers): exact, kept, they win.
     pub fn note_windows(&self, source: &str, w: &Value) {
         self.with_bucket(source, |b| {
@@ -121,4 +151,30 @@ pub fn note_context(ctx: &mut Value, ev: &Value, session: &str) {
         *ctx = c;
     }
     if ev["type"] == "result" { if let Some(m) = ev["modelUsage"].as_object() { let w = m.values().filter_map(|x| x["contextWindow"].as_u64()).max(); if let (Some(w), true) = (w, ctx.is_object()) { ctx["window"] = json!(w); } } }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pgm_context_internal::ledger::parse_usage;
+
+    #[test]
+    fn answers_are_summed_per_person_and_provider_and_survive_a_restart() {
+        let root = std::env::temp_dir().join(format!("vr-usage-answers-{}", std::process::id())); let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(&root).unwrap();
+        let cfg = pgm_core_internal::config::Config { raw: Default::default(), port: 0 };
+        let u = Usage::new(&root, &cfg, true);
+        assert!(u.answers("sponge").is_null(), "no answers yet: the key is left out of /api/usage");
+        let a = parse_usage(&json!({ "prompt_tokens": 1000, "completion_tokens": 20, "prompt_tokens_details": { "cached_tokens": 900 } })).unwrap();
+        let b = parse_usage(&json!({ "input_tokens": 100, "output_tokens": 10, "cache_read_input_tokens": 600, "cache_creation_input_tokens": 300 })).unwrap();
+        u.note_answer("sponge", "openai", "gpt-x", &a); u.note_answer("sponge", "anthropic", "claude-y", &b); u.note_answer("sponge", "openai", "gpt-x", &a); u.note_answer("other", "openai", "gpt-x", &a);
+        let s = u.answers("sponge");
+        assert_eq!((s["turns"].as_u64(), s["input"].as_u64(), s["output"].as_u64(), s["cached"].as_u64(), s["written"].as_u64()), (Some(3), Some(300), Some(50), Some(2400), Some(300)));
+        assert!((s["hit"].as_f64().unwrap() - 2400.0 / 3000.0).abs() < 1e-9);
+        assert_eq!(s["by"]["openai"]["turns"], json!(2)); assert!((s["by"]["openai"]["hit"].as_f64().unwrap() - 0.9).abs() < 1e-9);
+        assert_eq!(s["by"]["anthropic"]["written"], json!(300)); assert_eq!(s["by"]["anthropic"]["model"], json!("claude-y"));
+        assert_eq!(u.answers("other")["turns"], json!(1));
+        let again = Usage::new(&root, &cfg, true);
+        assert_eq!(again.answers("sponge")["cached"], json!(2400), "kept in usage.json");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

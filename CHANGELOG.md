@@ -7,6 +7,194 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.0 — 2026-10-24
+
+MINOR: **hosting controls on the hub page** (board T-160; gee: how can I look at what my AI host is doing now that the
+hub changed?). The person who runs an AI host monitors, controls and configures it from Settings → My AI hosts, not only
+locally through the `vr-host` TUI.
+- **New host capability `control`** (announced in hello with the others; a host without it keeps working exactly as
+  before and shows no buttons). The native host reports a small status (`POST /node/status`, on hello, every ~15 s and
+  right after a control: version, start time, paused (and by whom), in flight, last job, last update line, the usage
+  windows, the providers' login problems; never a message or a path) and answers `control` jobs: `pause`, `resume`
+  (the off file; a host paused from the hub keeps listening so the hub can resume it, lends nothing, and the hub counts
+  it offline for work), `restart` and `update` (the same request files as the local control app: they wait until nothing
+  is in flight), `logs` (the last 50 lines of its log, redacted of the token, provider keys and key-like words).
+- **Routes** (owner only, an admin is not the owner): `GET /api/hosts/status` (the person's own hosts: the latest status,
+  online / since, windows, who is using it now: the hub knows its jobs in flight, listed as kind, and for a Work run the
+  person and project, never content) and `POST /api/hosts/control { id, action }` (refused with "This host is older than
+  5.13: update it to control it from here." for a host without the cap, 403 for anybody else's host, 400 for an unknown
+  action).
+- **Page** (web/index.html 1.18.0): per host a live line (online since, version and uptime, paused, in use by whom,
+  the 5 h / 7 d windows, last update, login problems) refreshed every 10 s while the panel is open; Pause / Resume /
+  Restart (two clicks) / Update now / Show log; an older host shows what the hub knows and a note instead of buttons.
+- **Tests:** unit (job parsing, cap check, status cleaning, redaction, log tail); R191 (a native host in the scratch
+  setup: status arrives, pause from the hub pauses it and the page list says so, resume, the log lacks the token, a host
+  without the cap, a non-owner and an unknown action are refused, restart ends the host); R188 expects the new cap.
+
+## 5.12.0 — 2026-10-24
+
+MINOR: **the fallback chain: Rust alone, two Rust fallbacks, JavaScript only as the last resort** (board T-157 step one;
+Sponge: "step one now [the server on the Rust hub alone], tested thoroughly via automated tests … we leave JavaScript as
+a fallback … at least 1 if not 2 Rust fallbacks … we only use the non-updated JavaScript version if all else fails").
+- **vr-run** now serves, in this order: the newest build (`rust`), the previous good build (`rust-fallback-1`), the one
+  before (`rust-fallback-2`), and only when every Rust build fails (or none exists) the JavaScript hub alone
+  (`javascript-fallback`). Until now `--alone` / `rustHub.alone` removed the JavaScript hub completely, so there was no
+  last resort; it is kept again, started only as that last resort, loudly (log, chat, status), kept up while it serves
+  (a crash restarts it after 5 s; its exit 75 tries the Rust builds again at once). The decision order is a pure,
+  unit-tested function (`decide`, `serving_label`).
+- **/api/status** (from this machine) shows `serving` in both hubs (vr-run hands it down as `VR_SERVING`).
+- **bridge/server.js 4.2.2:** honours `MILLS_PORT` (vr-run's last resort named the port, the hub ignored it and took
+  `config.port`).
+- **Two good builds always kept:** native/keep-builds.sh (current + the 2 newest good, unchanged and now checked by
+  R192); the auto-deploy also records `last-good-2` next to `last-good`.
+- **The law** (LAWS.md "The JavaScript hub stays as the last fallback"): frozen, not removed; new features are Rust-only,
+  but the JavaScript hub must keep booting and serving the basics and keep reading every shared data file; the run checks
+  the chain before every go-live and never removes the JavaScript hub without Sponge's word.
+- **Suite:** R192 (the chain names itself in 4 situations incl. `--alone`; keep-builds keeps two good builds; the real
+  JavaScript hub started alone boots and serves status, the page, the sign-in gate and sign-in, the chat room, the
+  board, one Work run with the fake Claude and the AI host link: `bridge/test/js-fallback.js`, also runnable alone).
+- Config the go-live sets and how to roll back: team note deploy/full-rust-swap.md.
+
+## 5.11.3 — 2026-10-24
+
+PATCH: **the proving ground** (board T-183; Sponge: "drive a fake version that talks to the hub … separately
+isolatable from the main running systems … a spongetest or a geetest account … a separate database … a random project
+that gets small changes done to it as we run tests"). `node bridge/test/proving.js start|stop|status|reset|login|work|
+hosts` (`bridge/test/PROVING.md`): a persistent sandbox hub from the worktree's own code on port 7795 (7796 behind
+with `--rust-hub`), its data under /srv/apps/sharedwork/_proving (outside every repo), accounts spongetest (admin) and
+geetest, the chip-away project `Sponge/proving-ground` (private on Forgejo), real Claude through the driving Work run's
+own relay (refuses to start without it), test AI hosts on demand for routing scenarios. Never touches the live hub, its
+data, accounts or hosts. First results (T-183): a real Work turn as spongetest edited, tested, committed and pushed a
+branch to the chip-away repo; three real jcode sessions decided the retrieval filter and replay (Jcode-Mods TOKENS.md).
+R1 now syntax-checks only the `.js` files in bridge/test (PROVING.md lives there).
+
+## 5.11.2 — 2026-10-24
+
+PATCH: **a new law in LAWS.md: finish the whole job, test it in throw-away hubs, go live once.** Changes accumulate on
+the work branches until every part of a job is done; tries happen only in the suite's scratch hubs; one merge and one
+go-live at the end. And a Work run never ends while background agents it started are still working: a run is one
+Claude process per message, and its agents die with it (that, not the live hub, cut agents off all day on
+2026-10-24). No code changed.
+
+## 5.11.1 — 2026-10-24
+
+PATCH: **notification sounds with a pattern of their own** (board T-177). Sponge: "rather than simply being a ding, I
+would like more of a pattern of some kind, with distinct sound patterns."
+- **Patterns** (the new default, `web/index.html` `PATTERNS`): each kind is a motif told apart by rhythm and timbre as
+  much as by pitch: a message is a soft two-note chime (falling), an @mention / private message a quick rising run, a
+  reply to you a call-and-answer phrase, an incoming call a ringing trill played twice, a board reminder a tick-tock
+  with a closing note. Every note has a soft attack and decay, a quiet overtone an octave up and a low-pass, so it
+  sounds like a small bell rather than a beep; all under two seconds. Still Web Audio only, no sound files.
+- **Classic** (the short beeps of before) stays as a choice: Settings → Sound style. The test buttons play the style
+  picked in the menu right now, so the two can be compared before saving.
+- **Two new volumes**: Incoming call and Board reminder (they followed the @mention volume before and still start from
+  it). Calls ring with the `call` pattern (`web/calls.js`), board reminders tick with `board` (`web/board.js`).
+- The hub keeps the new keys: `sound.set` (only `classic` / `patterns`) and `sound.call` / `sound.board` (0–100), in
+  both hubs (`bridge/server.js`, `vr-hub` `modules/profile.rs`, and `pgm-hcom-internal` `profile.rs`, mirrored to
+  pgm-libs). An older page ignores them; this page on an older hub falls back to the @mention volume.
+- R190: a distinct pattern per kind, Classic kept, the style and the volumes stored and clamped, the call and board
+  call sites.
+
+## 5.11.0 — 2026-10-24
+
+MINOR: **sharing with scopes** (board T-176 part 9d; Jcode-Mods ARCHITECTURE.md §4). MINOR rather than a patch because it
+adds a stored field, a route and enforcement in three places (Work, the API / products, Unity's use) and a Settings
+editor; a separate version from 5.10.0 (9b / 9c), which is a different, already complete increment. Sharing a provider
+used to be all or nothing; the default is unchanged (no entry = every model, every use), so nothing that works today
+changes.
+- **Scopes** (`ai_hosts.rs`: `Scope`, `scope_of`, `check_scope`, `AiHosts::set_scope`, `scope_check`). Per shared person
+  and per `@group` the owner picks which models of that provider they may use and what for: `work` (Work runs), `api`
+  (the /v1 API and the gateway products behind it) and `unity` (Unity's brain). Stored on the hub only, in the host
+  record next to `share`: `scopes[providerId][user | "@group"] = { models: "*" | [..], uses: "*" | [..] }` in
+  `ai-hosts.json`; the host never sees it and keeps announcing `allowedUsers`, so an older host works as before. All
+  models ticked / all three uses stored as `"*"` (a model the host adds later comes along); both `"*"` removes the entry.
+  The person's own entry wins over their group's; the owner always has everything.
+- **Enforcement where the hub picks a provider.** `providers_for` and `provider` list only the allowed models for that
+  person (`scope` on the view says what is limited; a provider with no allowed model left is not listed). A Work run
+  (`work.rs` `run`) and every /v1 call (`openai.rs` `v1_as`, so products too) call `scope_check` and refuse with a message
+  naming the owner and what they allow ("t-admin shares R189 Claude with you, but not the model x (they allow y)" / "...
+  not for Work runs (they allow it for the API and products)"); /v1 answers 403 `permission_error`. A /v1 call that names
+  a model the person may not use is refused rather than quietly answered by another model.
+- **Settings → My AI hosts**: under each provider a "What each person may use" editor, per person and `@group`: the
+  provider's models as checkboxes and Work / API / Unity as toggles, saved at once through the new owner-only
+  `POST /api/hosts/scope { id, provider, user, models, uses }` (validated: models must be the provider's own, uses work /
+  api / unity, not the owner; `/api/hosts` carries `providers[].scopes`).
+- Unit tests (default all, a model outside refused, a use outside refused, the owner unaffected via `scope_locked`, the
+  group's scope for its members, the person's own scope wins, unknown uses dropped, the narrowed view); R189
+  (`--rust-hub`, a registered host with two providers: t-user limited to one model and the API sees only that model in
+  `/api/check`, is refused another model on /v1 and a Work run without `work`, then allowed once it is switched on; the
+  group scope and the own-wins rule; the stored shape; the host's config untouched).
+- Not done: Unity's brain does not pick a shared provider yet (it uses the hub's own `claude` and the hosts' engines), so
+  `unity` is stored, validated and checked by `scope_check(.., "unity", ..)` but has no call site until it does.
+  JavaScript hub: no mirror (the Rust hub answers `/api/hosts/scope`).
+
+## 5.10.0 — 2026-10-24
+
+MINOR: **VibeRoller as the gateway** (board T-176; Jcode-Mods WORKPLAN 9b and 9c). MINOR rather than a patch or a
+second part of 5.9.0 because it adds a hello capability, a new provider kind on the hub and a second event schema the
+page reads (all additive, but new protocol surface); 5.9.0 is a different feature (the token ledger).
+- **9b. HubEvent is the schema the page consumes** (`harness.rs` `HubEvent::into_wire`, `wire`, `HUB_SCHEMA`;
+  `work.rs` `on_event`; `web/index.html` `hubView`, `handleEvent`). Every harness event the hub passes on (its own Claude
+  Code or Jcode PGM run, an AI host's Work run) now leaves as the Claude-shaped alias it always was plus ONE added object
+  `hub` `{ v:1, kind: init | system | assistant | tool_results | result, harness, session, … }` (assistant: `blocks` of
+  `text` / `tool_use`, `usage`; tool_results: `results` of `{ id, content, error }`; result: `error`, `text`,
+  `durationMs`). The page's Work renderer reads `hubView(ev)`: the `hub` object first, else the same view derived from the
+  alias (an older hub or host sends no `hub`), and no longer reads the alias fields itself. Nothing a person sees
+  changes; an older page ignores `hub` and renders the alias. Unit test (both harnesses give the same structure for the
+  same run, alias untouched); R187 (static + the page's own `hubView` on sample events in both modes; with `--rust-hub`
+  a Claude run and a Jcode PGM run of the same shape give the same HubEvent structure).
+- **9c. Jcode PGM on the AI host, opt-in** (native host only). A provider in `ai-node.json` of kind `jcode` (or
+  `"harness": "jcode"`) with `jcodeCommand`, `jcodeProvider`, `jcodeArgs`, plus `"allowWork": true`: the host announces the
+  new hello capability **`work-jcode`** (`pgm-net-internal` `CAP_WORK_JCODE`, `caps_for`) and offers the provider; the hub
+  lists a `jcode` provider of a host only when that cap was announced (`clean_providers`), shows it as kind `host-jcode`
+  ("AI host · Jcode PGM"), refuses to build a job for one without the cap (`run_work`), and sends the Work job (the legacy
+  host payload plus the optional `harness` and `stateModel`) only to the owner (Work runs on the host's own computer);
+  `/v1` and Unity answers through it are refused (it runs Work). On the host `jcode_spec` (host/work.rs) starts
+  `jcodepgm run --ndjson --no-update [-p] [-m] [--resume] <message>` in the person's worktree with a private jcode home per
+  person at `<host folder>/jcode/<person>/jcode-home` (the team MCP servers as `mcp.json`, the system prompt as the prompt
+  overlay, no auto-update / telemetry / auto-poke: the hub's own jcode harness code), maps its events with the same
+  `JcodeHarness`, and sessions resume (`claudeSessionWhere` = the host). **Default off:** a host without such a provider,
+  or without `allowWork`, says hello with exactly `relay update update-bin` as before and its Claude path is unchanged
+  (Gee's host is untouched). An older hub drops the unknown kind; an older host never announces the cap. `/api/check`
+  `aiNodes[].caps` (optional) shows what each host announced. The control app lists `provider.<id>.jcodeCommand` /
+  `jcodeProvider`. Unit tests (the host's command, home, per-person homes; the hub's cap filter; the cap list); R188
+  (`--rust-hub`, the native host with the fake jcodepgm: a host with the cap runs a Work turn through jcode on the host,
+  resumes it, a failure ends the run, mcp.json and overlay in its private home; a host without allowWork is never listed
+  or pickable and says the old caps).
+- Not done: 9d (per-provider scopes for sharing) is left for the next increment; sharing a jcode host to others is
+  refused for now (only the owner may run Work on a host's computer).
+
+## 5.9.0 — 2026-10-24
+
+MINOR: **the token library is in the hub** (board T-167; Jcode-Mods TOKENS.md §4). The hub now shows the cache hit
+ratio for API / product answers too, not only for Work, and the Work system prompt is checked by the library's lint so
+a volatile part can never creep back into the cached prefix.
+- **Unity's answers in the same ledger** (`unity_brain.rs`): the local brain's answer notes Ollama's `prompt_eval_count`
+  / `eval_count` (final chunk of each round, summed over the tool rounds, normalised by `ollama_usage`; no cache numbers,
+  Ollama does not report its KV prefix cache) under kind `ollama`, and the Claude brain (`claude -p`) the `result`
+  event's Anthropic usage through the library's `parse_usage` (cache read / written kept) under `claude-cli`; one note
+  per answer, never per chunk, shown in `/api/usage` `answers.by`. R186 (--rust-hub). (`parse_usage` could learn the
+  Ollama shape in pgm-libs.)
+- **`pgm-context-internal` 5.15.1 mirrored** (was 5.15.0; `shape.rs` gained `ShaperState` / `SeenEntry` / `state()` /
+  `restore()` / `with_handle_prefix`) into `native/crates/` (LAWS.md library law: pgm-libs holds the original, the
+  consumer copies it; `src/` identical, tree-sitter feature optional and off). Workspace member, listed in `NAMES.md`
+  with the mirrored version; `pgm-ai-internal` depends on it.
+- **Answers outside Work through the ledger** (`openai.rs` `complete`): every provider kind (openai, host-openai,
+  anthropic, host-claude, host-codex, the Claude Code login / cli) now keeps the provider's own usage object next to the
+  OpenAI-style numbers callers get (those are unchanged), carries Anthropic's `cache_read_input_tokens` /
+  `cache_creation_input_tokens` and OpenAI's `prompt_tokens_details.cached_tokens` (Codex's Responses
+  `input_tokens_details`) through `pgm_context_internal::ledger` into one shape (input paid, output, cache read, cache
+  written), and adds it per person and provider kind to usage.json (`answers`, `Usage::note_answer`).
+- **`/api/usage`** gets an optional key `answers: { turns, input, output, cached, written, hit, by: { <kind>: … } }`
+  (hit = cached / (input + cached + written)); present once the person has had an answer, every existing key as it was
+  (older pages ignore it).
+- **The Work system prompt through the lint** (`work.rs` `system_segments`, `render_prompt`, `lint_segments`): the prompt
+  is built as segments (the person's lines Session, the laws Static) and joined to the same bytes as before (R181 holds);
+  a unit test builds it for hub and project worktrees and asserts the library's lint finds nothing, and the first prompt
+  a hub builds is linted once with any hit named (segment, pattern) in the hub log.
+- Tests: ledger normalisation for each provider shape, the answers sum and its persistence, the prompt lint; R185 (a /v1
+  answer through the fake OpenAI-compatible endpoint with `cached_tokens` shows in `/api/usage` `answers`).
+
 ## 5.8.0 — 2026-10-24
 
 MINOR: **`vr-host` is one place for everything.** Sponge, on a Linux PC: a Downloads copy and the real host in

@@ -36,10 +36,10 @@ fn herr(status: u16, m: impl Into<String>) -> HostErr { HostErr { status, msg: m
 pub enum WorkMsg { Event(Value), Done(i32), Error(String) }
 
 enum Waiting { Whole(oneshot::Sender<Result<Relayed, HostErr>>), Stream(mpsc::Sender<Result<Bytes, String>>), Work(mpsc::UnboundedSender<WorkMsg>) }
-struct Pending { kind: String, host: String, waiting: Option<Waiting>, token: String, account: String, display: String, provider: String, last: u64, picked: bool }
+struct Pending { kind: String, host: String, waiting: Option<Waiting>, token: String, account: String, display: String, provider: String, last: u64, picked: bool, project: String, started: u64 }
 
 #[derive(Default)]
-struct Live { seen: u64, queue: Vec<Value>, waiters: usize, cancel: HashSet<String>, hello: Option<Value>, key: Option<HostKey>, kid: String, usage: Map<String, Value>, relay_ok: Map<String, Value>, notify: Arc<Notify> }
+struct Live { status: Value, status_at: u64, seen: u64, queue: Vec<Value>, waiters: usize, cancel: HashSet<String>, hello: Option<Value>, key: Option<HostKey>, kid: String, usage: Map<String, Value>, relay_ok: Map<String, Value>, notify: Arc<Notify> }
 
 pub struct AiHosts {
     root: PathBuf,
@@ -57,6 +57,45 @@ pub struct AiHosts {
 }
 fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; let (x, y) = (pgm_core_internal::crypto::sha256(a.as_bytes()), pgm_core_internal::crypto::sha256(b.as_bytes())); bool::from(x.ct_eq(&y)) }
 fn clean_users(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')).take(50).collect()).unwrap_or_default() }
+/// What a shared provider is used for: Work runs, the /v1 API (and the products behind it), Unity's brain.
+pub const USES: [&str; 3] = ["work", "api", "unity"];
+/// What one person may use of a provider shared with them (5.11.0). `None` = everything (what sharing always meant).
+/// Stored by the hub in the host record, `scopes[providerId][user | "@group"] = { models: "*" | [..], uses: "*" | [..] }`,
+/// never on the host.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Scope { pub models: Option<Vec<String>>, pub uses: Option<Vec<String>> }
+impl Scope {
+    pub fn restricted(&self) -> bool { self.models.is_some() || self.uses.is_some() }
+    pub fn allows_use(&self, u: &str) -> bool { self.uses.as_ref().map(|l| l.iter().any(|x| x == u)).unwrap_or(true) }
+    pub fn allows_model(&self, m: &str) -> bool { self.models.as_ref().map(|l| l.iter().any(|x| x == m)).unwrap_or(true) }
+    /// One stored entry; a missing or "*" field means all.
+    pub fn from_value(v: &Value) -> Scope {
+        let list = |k: &str, only: Option<&[&str]>| v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).filter(|x| only.map(|o| o.contains(x)).unwrap_or(true)).map(String::from).collect::<Vec<_>>());
+        Scope { models: list("models", None), uses: list("uses", Some(&USES)) }
+    }
+    pub fn to_value(&self) -> Value { json!({ "models": self.models.as_ref().map(|m| json!(m)).unwrap_or(json!("*")), "uses": self.uses.as_ref().map(|m| json!(m)).unwrap_or(json!("*")) }) }
+}
+/// The scope of `user` among one provider's stored scopes: the person's own entry wins over their group's ("@group", for
+/// members of the hub's team group); nobody listed = everything.
+pub fn scope_of(scopes: &Value, user: &str, in_group: bool) -> Scope {
+    if scopes[user].is_object() { return Scope::from_value(&scopes[user]); }
+    if in_group && scopes["@group"].is_object() { return Scope::from_value(&scopes["@group"]); }
+    Scope::default()
+}
+/// Is this use of this model allowed? The error names the owner and what they allow.
+pub fn check_scope(scope: &Scope, owner: &str, label: &str, use_: &str, model: &str) -> Result<(), String> {
+    let who = if owner.is_empty() { "The owner".to_string() } else { owner.to_string() };
+    if !scope.allows_use(use_) {
+        let what = |u: &str| match u { "work" => "Work runs", "api" => "the API and products", "unity" => "Unity", o => o }.to_string();
+        let ok: Vec<String> = scope.uses.clone().unwrap_or_default().iter().map(|u| what(u)).collect();
+        return Err(format!("{who} shares {label} with you, but not for {}{}.", what(use_), if ok.is_empty() { String::new() } else { format!(" (they allow it for {})", ok.join(", ")) }));
+    }
+    if let Some(ms) = &scope.models {
+        if ms.is_empty() { return Err(format!("{who} shares {label} with you with no model switched on.")); }
+        if !model.is_empty() && !ms.iter().any(|m| m == model) { return Err(format!("{who} shares {label} with you, but not the model {model} (they allow {}).", ms.join(", "))); }
+    }
+    Ok(())
+}
 fn job_id() -> String { use base64::Engine; base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pgm_core_internal::crypto::random_bytes(9)) }
 
 impl AiHosts {
@@ -92,7 +131,10 @@ impl AiHosts {
         if std::fs::write(&tmp, serde_json::to_string_pretty(&Value::Object(o)).unwrap_or_default()).is_ok() { pgm_core_internal::fs::private(&tmp); let _ = std::fs::rename(&tmp, &f); }
         self.changed();
     }
-    pub fn online(&self, id: &str) -> bool { self.live.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false) }
+    /// Online for jobs: connected and not paused by its owner (a host paused from the hub keeps listening, so only its
+    /// status tells; the status is trusted for a minute).
+    pub fn online(&self, id: &str) -> bool { self.live.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|n| (n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms) && !Self::paused_by_hub(n)).unwrap_or(false) }
+    fn paused_by_hub(n: &Live) -> bool { n.status["paused"] == json!(true) && n.status["pausedBy"] == json!("hub") && now_ms().saturating_sub(n.status_at) < 60_000 }
     pub fn changed(&self) { self.dirty.notify_one(); }
     /// What the JavaScript hub needs to answer without asking (its Work runs, the API, the chat ask these all the time):
     /// each host's state, and what each account may pick. Sent on every change and every 5 s; online is counted there
@@ -157,13 +199,13 @@ impl AiHosts {
         else if pc(&u["seven_day"]) >= m7 { (format!("its weekly usage is at the {m7}% cap its host set"), until(&u["seven_day"])) }
         else { (String::new(), 0) }
     }
-    fn hub_kind(k: &str) -> &'static str { match k { "openai" => "host-openai", "codex-relay" => "host-codex", _ => "host-claude" } }
+    fn hub_kind(k: &str) -> &'static str { match k { "openai" => "host-openai", "codex-relay" => "host-codex", "jcode" => "host-jcode", _ => "host-claude" } }
     fn remote_kind(n: &Live, p: &Value) -> String { let k = p["kind"].as_str().unwrap_or(""); let pid = p["id"].as_str().unwrap_or(""); if k == "claude-cli" && n.relay_ok.get(pid) == Some(&json!(false)) { "claude-cli-work".into() } else { k.into() } }
     /// A provider as people see it (the live map is held by the caller).
     fn prov_view_locked(&self, r: &Value, id: &str, n: &Live, p: &Value) -> Value {
         let owner = { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { u.to_string() } else { n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from)).unwrap_or_default() } };
         json!({ "id": format!("h:{id}/{}", p["id"].as_str().unwrap_or("")), "kind": Self::hub_kind(p["kind"].as_str().unwrap_or("")), "remoteKind": Self::remote_kind(n, p), "label": p["label"], "owner": owner, "shared": true, "models": p["models"],
-            "hostId": id, "providerId": p["id"], "nickname": r["nickname"], "online": n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms, "max5h": p["max5h"], "max7d": p["max7d"], "usage": self.usage_of(id, n, p), "capped": self.over_cap(id, n, p), "cappedUntil": self.cap_of(id, n, p).1 })
+            "hostId": id, "providerId": p["id"], "nickname": r["nickname"], "online": (n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms) && !Self::paused_by_hub(n), "max5h": p["max5h"], "max7d": p["max7d"], "usage": self.usage_of(id, n, p), "capped": self.over_cap(id, n, p), "cappedUntil": self.cap_of(id, n, p).1 })
     }
     /// The providers a person may pick from the hosts: "h:<hostId>/<providerId>".
     pub fn providers_for(&self, user: &str) -> Vec<Value> {
@@ -173,9 +215,45 @@ impl AiHosts {
         for r in records {
             let id = r["id"].as_str().unwrap_or("");
             let Some(n) = live.get(id) else { continue }; let Some(hello) = &n.hello else { continue };
-            for p in hello["providers"].as_array().cloned().unwrap_or_default() { if self.may_use_locked(&r, &p, user, n) { let mut v = self.prov_view_locked(&r, id, n, &p); if let Some(o) = v.as_object_mut() { o.remove("providerId"); } out.push(v); } }
+            for p in hello["providers"].as_array().cloned().unwrap_or_default() { if self.may_use_locked(&r, &p, user, n) {
+                let mut v = self.prov_view_locked(&r, id, n, &p);
+                // only the models the owner allows this person; a provider with none left is not offered at all
+                if !Self::scope_view(&mut v, &self.scope_locked(&r, &p, user, n)) { continue; }
+                if let Some(o) = v.as_object_mut() { o.remove("providerId"); } out.push(v);
+            } }
         }
         out
+    }
+    /// What the owner allows this person of that provider (the owner: everything).
+    fn scope_locked(&self, r: &Value, p: &Value, user: &str, n: &Live) -> Scope {
+        let owner = { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { u.to_string() } else { n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from)).unwrap_or_default() } };
+        if user == owner { return Scope::default(); }
+        let in_group = clean_users(self.cfg.get("hostGroup").unwrap_or(&Value::Null)).iter().any(|x| x == user);
+        scope_of(&r["scopes"][p["id"].as_str().unwrap_or("")], user, in_group)
+    }
+    /// Narrows a provider view to a scope (`models` cut to the allowed ones, `scope` says what is limited). False when no
+    /// model is left.
+    fn scope_view(v: &mut Value, sc: &Scope) -> bool {
+        if !sc.restricted() { return true; }
+        if let Some(ms) = &sc.models {
+            let kept: Vec<Value> = v["models"].as_array().map(|a| a.iter().filter(|m| m.as_str().map(|m| ms.iter().any(|x| x == m)).unwrap_or(false)).cloned().collect()).unwrap_or_default();
+            if kept.is_empty() { return false; }
+            v["models"] = json!(kept);
+        }
+        v["scope"] = sc.to_value();
+        true
+    }
+    /// May this person use this host provider ("h:<hostId>/<providerId>") for that use (work | api | unity) and model
+    /// (empty = whichever the provider picks)? Anything that is not a host provider passes. The error names the owner.
+    pub fn scope_check(&self, user: &str, pid: &str, use_: &str, model: &str) -> Result<(), String> {
+        let Some((hid, prov)) = pid.strip_prefix("h:").and_then(|r| r.split_once('/')) else { return Ok(()) };
+        if user.is_empty() { return Ok(()); }
+        let Some(r) = self.record(hid) else { return Ok(()) };
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(n) = live.get(hid) else { return Ok(()) };
+        let Some(p) = n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|x| x["id"] == json!(prov)).cloned())) else { return Ok(()) };
+        let owner = { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { u.to_string() } else { n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from)).unwrap_or_default() } };
+        check_scope(&self.scope_locked(&r, &p, user, n), &owner, p["label"].as_str().unwrap_or(prov), use_, model)
     }
     /// May this person use that provider (the owner always; who the owner shares it with; "@group" = config hostGroup).
     fn may_use_locked(&self, r: &Value, p: &Value, user: &str, n: &Live) -> bool {
@@ -191,7 +269,10 @@ impl AiHosts {
         let r = self.record(hid)?; let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(hid)?; let hello = n.hello.as_ref()?;
         let p = hello["providers"].as_array()?.iter().find(|x| x["id"] == json!(prov))?.clone();
         if !user.is_empty() && !self.may_use_locked(&r, &p, user, n) { return None; }
-        let mut v = self.prov_view_locked(&r, hid, n, &p); v["id"] = json!(pid); Some(v)
+        let mut v = self.prov_view_locked(&r, hid, n, &p); v["id"] = json!(pid);
+        // narrowed to the person's scope; one with no model left stays (empty), so the use is refused with the owner's name
+        if !user.is_empty() { let sc = self.scope_locked(&r, &p, user, n); if !Self::scope_view(&mut v, &sc) { v["models"] = json!([]); v["scope"] = sc.to_value(); } }
+        Some(v)
     }
     /// The person's own AI host that offers their computer (the native app's "pc"), when it is online.
     /// Is one of this person's own AI hosts connected right now? (registered to them by the hub, as for PC tools: never
@@ -215,7 +296,7 @@ impl AiHosts {
             json!({ "id": id, "name": r["nickname"], "nickname": r["nickname"], "user": r["user"], "online": n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false), "polling": n.map(|n| n.waiters > 0).unwrap_or(false),
                 "seen": n.filter(|n| n.seen > 0).map(|n| json!(pgm_core_internal::time::iso_at(n.seen as i64))).unwrap_or(Value::Null), "queued": n.map(|n| n.queue.len()).unwrap_or(0),
                 "engines": n.and_then(|n| n.hello.as_ref().map(|h| h["engines"].clone())).unwrap_or(json!([])), "providers": n.and_then(|n| n.hello.as_ref().map(|h| json!(h["providers"].as_array().map(|a| a.iter().map(|p| p["id"].clone()).collect::<Vec<_>>()).unwrap_or_default()))).unwrap_or(json!([])),
-                "kid": n.map(|n| n.kid.clone()).unwrap_or_default(), "version": n.and_then(|n| n.hello.as_ref().map(|h| h["version"].clone())).unwrap_or(json!("")), "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null) })
+                "caps": n.and_then(|n| n.hello.as_ref().map(|h| h["caps"].clone())).unwrap_or(json!([])), "kid": n.map(|n| n.kid.clone()).unwrap_or_default(), "version": n.and_then(|n| n.hello.as_ref().map(|h| h["version"].clone())).unwrap_or(json!("")), "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null) })
         }).collect()
     }
     fn pick_engine_host(&self, engine: &str) -> Option<String> {
@@ -279,7 +360,7 @@ impl AiHosts {
         for (k, v) in headers { let k = k.to_lowercase(); if all_headers || k == "content-type" { h.insert(k, json!(v)); } }
         let job = json!({ "id": id, "kind": kind, "engine": engine, "path": path, "method": method, "headers": h, "body": if body.is_empty() { String::new() } else { pgm_core_internal::b64(&body) } });
         let (tx, rx) = oneshot::channel();
-        self.enqueue(host, job, Pending { kind: kind.into(), host: host.into(), waiting: Some(Waiting::Whole(tx)), token: String::new(), account: String::new(), display: String::new(), provider: String::new(), last: now_ms(), picked: false })?;
+        self.enqueue(host, job, Pending { kind: kind.into(), host: host.into(), waiting: Some(Waiting::Whole(tx)), token: String::new(), account: String::new(), display: String::new(), provider: String::new(), last: now_ms(), picked: false, project: String::new(), started: now_ms() })?;
         let (hh, id2) = (self.clone(), id.clone());
         tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(JOB_MS)).await; hh.finish(&id2, Some("The AI host did not answer in time.".into()), None); });
         // the caller went away before the answer came (the page or the JavaScript hub hung up): the job ends with it
@@ -332,8 +413,12 @@ impl AiHosts {
     pub fn run_work(self: &Arc<Self>, host: &str, pid: &str, payload: Value) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
         let r = self.record(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?;
         let nick = r["nickname"].as_str().unwrap_or(host).to_string();
-        let (key, prov) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?; (n.key.clone(), n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned()))) };
+        let (key, prov, caps) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?; (n.key.clone(), n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned())), n.hello.as_ref().map(|h| h["caps"].clone()).unwrap_or(Value::Null)) };
         let key = key.ok_or_else(|| herr(503, "That AI host has not connected yet."))?;
+        // a jcode Work job goes only to a host that announced it can run one
+        if prov.as_ref().map(|p| p["kind"] == json!("jcode")).unwrap_or(false) && !caps.as_array().map(|c| c.iter().any(|x| x == pgm_net_internal::hostlink::CAP_WORK_JCODE)).unwrap_or(false) {
+            return Err(herr(400, "That AI host did not announce that it runs Work through Jcode PGM (work-jcode); update it or pick another AI."));
+        }
         if !self.online(host) { let o = self.owner_of(&r); return Err(herr(503, format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if o.is_empty() { " (AI host)".to_string() } else { format!(" ({o}'s AI host)") }))); }
         let prov = prov.ok_or_else(|| herr(503, "That host no longer offers this provider."))?;
         let cap = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get(host).map(|n| self.over_cap(host, n, &prov)).unwrap_or_default() };
@@ -342,7 +427,7 @@ impl AiHosts {
         let mut p = payload.clone(); p["providerId"] = json!(pid); p["token"] = json!(token); p["mcpBase"] = json!(format!("{}/node/job/{id}", payload["hubUrl"].as_str().unwrap_or("")));
         let enc = key.seal(&p).map_err(|e| herr(500, e.to_string()))?;
         let (tx, rx) = mpsc::unbounded_channel();
-        self.enqueue(host, json!({ "id": id, "kind": "work", "enc": enc }), Pending { kind: "work".into(), host: host.into(), waiting: Some(Waiting::Work(tx)), token: token.clone(), account: payload["account"].as_str().unwrap_or("").into(), display: payload["display"].as_str().unwrap_or("").into(), provider: pid.into(), last: now_ms(), picked: false })?;
+        self.enqueue(host, json!({ "id": id, "kind": "work", "enc": enc }), Pending { kind: "work".into(), host: host.into(), waiting: Some(Waiting::Work(tx)), token: token.clone(), account: payload["account"].as_str().unwrap_or("").into(), display: payload["display"].as_str().unwrap_or("").into(), provider: pid.into(), last: now_ms(), picked: false, project: payload["project"].as_str().unwrap_or("").chars().take(64).collect(), started: now_ms() })?;
         // no word for ten minutes: given up
         let (h, id2) = (self.clone(), id.clone());
         tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(30)).await; let last = h.pending.lock().unwrap_or_else(|e| e.into_inner()).get(&id2).map(|p| p.last); match last { Some(l) if now_ms() - l > IDLE_MS => { h.finish(&id2, Some("No word from the AI host for ten minutes; the run was given up.".into()), None); return; } Some(_) => {} None => return } } });
@@ -377,12 +462,15 @@ impl AiHosts {
         if tok.is_empty() || !same_secret(&tok, r["secret"].as_str().unwrap_or("")) { return None; }
         Some(r)
     }
-    fn clean_providers(list: &Value) -> Vec<Value> {
+    /// What a host offered, cleaned. A `jcode` provider (Work through Jcode PGM on the host) is kept only when the host
+    /// announced `work-jcode` in its caps: without it the hub never lists one, so never sends it a jcode job.
+    fn clean_providers(list: &Value, caps: &[String]) -> Vec<Value> {
         let mut out: Vec<Value> = vec![];
         let pct = |v: &Value, d: i64| v.as_f64().filter(|n| *n > 0.0 && *n <= 100.0).map(|n| n.round() as i64).unwrap_or(d);
+        let work_jcode = caps.iter().any(|c| c == pgm_net_internal::hostlink::CAP_WORK_JCODE);
         for p in list.as_array().cloned().unwrap_or_default().into_iter().take(20) {
             let id = p["id"].as_str().unwrap_or("").trim().to_string(); let kind = p["kind"].as_str().unwrap_or("");
-            if id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') || !["claude-cli", "claude-relay", "codex-relay", "anthropic", "openai"].contains(&kind) || out.iter().any(|x| x["id"] == json!(id)) { continue; }
+            if id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') || !["claude-cli", "claude-relay", "codex-relay", "anthropic", "openai"].contains(&kind) && !(kind == "jcode" && work_jcode) || out.iter().any(|x| x["id"] == json!(id)) { continue; }
             let models: Vec<String> = p["models"].as_array().map(|a| a.iter().filter_map(|m| m.as_str()).map(|m| m.trim().to_string()).filter(|m| !m.is_empty() && m.len() <= 80 && m.chars().all(|c| c.is_ascii_alphanumeric() || "_.:/-".contains(c))).take(30).collect()).unwrap_or_default();
             let mut users: Vec<Value> = clean_users(&p["allowedUsers"]).into_iter().map(Value::String).collect();
             if p["allowedUsers"].as_array().map(|a| a.iter().any(|x| x == "@group")).unwrap_or(false) { users.push(json!("@group")); }
@@ -419,13 +507,20 @@ impl AiHosts {
                 // its computer (PC tools) only for the owner the hub registered it to (Settings → My AI hosts / "Run on
                 // this PC"), never for a name a host says it belongs to: only Gee works on Gee's computer
                 let pc = b["pc"] == json!(true) && !r["user"].as_str().unwrap_or("").is_empty();
-                let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"]), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps });
+                let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"], &caps), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps });
                 let kid = key.id();
                 { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }
                 self.save_sessions();
                 println!("[ai-host] {} ({}) connected: {} provider(s), engines {}, key {kid}{}", r["nickname"].as_str().unwrap_or(""), if hello["user"].as_str().unwrap_or("").is_empty() { "no owner" } else { hello["user"].as_str().unwrap_or("") }, hello["providers"].as_array().map(|a| a.len()).unwrap_or(0), if hello["engines"].as_array().map(|a| a.is_empty()).unwrap_or(true) { "none".to_string() } else { hello["engines"].as_array().unwrap().iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(", ") }, if caps.is_empty() { ", an older host".to_string() } else { format!(", can {}", caps.join(" ")) });
                 if !caps.iter().any(|c| c == "relay") { self.probe_relays(id.clone()); }
                 (200, Ok(json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "serverNonce": server_nonce, "kid": kid, "pollMs": POLL_MS, "offlineMs": self.offline_ms, "group": clean_users(self.cfg.get("hostGroup").unwrap_or(&Value::Null)), "update": { "version": self.release().0, "commit": self.release().1 } })))
+            }
+            // how the host is doing (cap `control`): kept for the owner's page, nothing more
+            "/node/status" if post => {
+                let st = clean_status(&b);
+                if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) { n.status = st; n.status_at = now_ms(); }
+                self.changed();
+                (200, Ok(json!({ "ok": true })))
             }
             "/node/update" if get => match self.host_files_manifest() {
                 Some(m) => { let sig = pgm_core_internal::crypto::hmac_hex(r["secret"].as_str().unwrap_or("").as_bytes(), m.to_string().as_bytes()); let mut out = m.clone(); out["sig"] = json!(sig); (200, Ok(out)) }
@@ -518,9 +613,11 @@ impl AiHosts {
     fn pub_host(&self, r: &Value) -> Value {
         let id = r["id"].as_str().unwrap_or("");
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(id);
-        let providers: Vec<Value> = n.and_then(|n| n.hello.as_ref().map(|h| h["providers"].as_array().cloned().unwrap_or_default().into_iter().map(|p| { let mut x = p.clone(); x["allowedUsers"] = Self::allowed(r, &p); x["declared"] = p["allowedUsers"].clone(); x["usage"] = self.usage_of(id, n, &p); let (c, until) = self.cap_of(id, n, &p); x["capped"] = json!(c); x["cappedUntil"] = json!(until); x }).collect())).unwrap_or_default();
-        let online = n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false);
-        json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "legacy": r["legacy"].as_bool().unwrap_or(false), "createdAt": r["createdAt"], "online": online,
+        let providers: Vec<Value> = n.and_then(|n| n.hello.as_ref().map(|h| h["providers"].as_array().cloned().unwrap_or_default().into_iter().map(|p| { let mut x = p.clone(); x["allowedUsers"] = Self::allowed(r, &p); x["declared"] = p["allowedUsers"].clone(); x["scopes"] = if r["scopes"][p["id"].as_str().unwrap_or("")].is_object() { r["scopes"][p["id"].as_str().unwrap_or("")].clone() } else { json!({}) }; x["usage"] = self.usage_of(id, n, &p); let (c, until) = self.cap_of(id, n, &p); x["capped"] = json!(c); x["cappedUntil"] = json!(until); x }).collect())).unwrap_or_default();
+        let connected = n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false);
+        let paused = n.map(Self::paused_by_hub).unwrap_or(false);
+        let online = connected && !paused;
+        json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "paused": paused, "connected": connected, "legacy": r["legacy"].as_bool().unwrap_or(false), "createdAt": r["createdAt"], "online": online,
             "seen": n.filter(|n| n.seen > 0).map(|n| json!(pgm_core_internal::time::iso_at(n.seen as i64))).unwrap_or(Value::Null), "kid": n.map(|n| n.kid.clone()).unwrap_or_default(),
             "version": n.and_then(|n| n.hello.as_ref().map(|h| h["version"].clone())).unwrap_or(json!("")), "os": n.and_then(|n| n.hello.as_ref().map(|h| h["os"].clone())).unwrap_or(json!("")),
             "engines": n.and_then(|n| n.hello.as_ref().map(|h| h["engines"].clone())).unwrap_or(json!([])), "providers": providers })
@@ -573,6 +670,40 @@ impl AiHosts {
         self.save();
         Ok(self.pub_host(&self.record(id).unwrap()))
     }
+    /// The owner picks what one person (or "@group") may use of a provider: `models` ("*" or some of the provider's
+    /// models) and `uses` ("*" or some of work / api / unity). Both "*" = back to everything (the entry goes). Kept on
+    /// the hub next to `share`, never sent to the host.
+    pub fn set_scope(&self, user: &str, id: &str, pid: &str, who: &str, models: &Value, uses: &Value) -> Result<Value, String> {
+        let owned = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).map(|r| r["user"] == json!(user)).unwrap_or(false);
+        if !owned { return Err("Not your host.".into()); }
+        if pid.is_empty() || pid.len() > 32 || !pid.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { return Err("Unknown provider.".into()); }
+        let who = who.trim().to_lowercase();
+        if who != "@group" && clean_users(&json!([who])).is_empty() { return Err("Say which person (a user name) or @group.".into()); }
+        if who == user { return Err("You are the owner: you always have everything.".into()); }
+        let offered: Vec<String> = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(id).and_then(|n| n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned())))
+            .ok_or("That host has not announced this provider (it must be connected to pick models).")?["models"].as_array().map(|a| a.iter().filter_map(|m| m.as_str().map(String::from)).collect()).unwrap_or_default();
+        let models = match models { Value::Null => Scope::default().models, Value::String(s) if s == "*" => None, Value::Array(a) => {
+            let l: Vec<String> = a.iter().filter_map(|m| m.as_str().map(String::from)).collect();
+            if l.len() != a.len() { return Err("models must be names.".into()); }
+            if let Some(bad) = l.iter().find(|m| !offered.contains(m)) { return Err(format!("{bad} is not a model of this provider (it offers: {}).", offered.join(", "))); }
+            // every model ticked = all, so a model the host adds later comes with it
+            if offered.iter().all(|m| l.contains(m)) { None } else { let mut u: Vec<String> = vec![]; for m in &offered { if l.contains(m) { u.push(m.clone()); } } Some(u) }
+        } _ => return Err("models is \"*\" or a list of the provider's models.".into()) };
+        let uses = match uses { Value::Null => None, Value::String(s) if s == "*" => None, Value::Array(a) => {
+            let l: Vec<String> = a.iter().filter_map(|m| m.as_str().map(String::from)).collect();
+            if l.len() != a.len() || l.iter().any(|u| !USES.contains(&u.as_str())) { return Err("uses are work, api and unity.".into()); }
+            if USES.iter().all(|u| l.iter().any(|x| x == u)) { None } else { Some(USES.iter().filter(|u| l.iter().any(|x| x == *u)).map(|u| u.to_string()).collect()) }
+        } _ => return Err("uses is \"*\" or a list of work, api, unity.".into()) };
+        let sc = Scope { models, uses };
+        { let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let r = &mut db["hosts"][id]; if !r["scopes"].is_object() { r["scopes"] = json!({}); }
+          if !r["scopes"][pid].is_object() { r["scopes"][pid] = json!({}); }
+          if !sc.restricted() { if let Some(m) = r["scopes"][pid].as_object_mut() { m.remove(&who); } }
+          else if r["scopes"][pid].as_object().map(|m| m.len() >= 50 && !m.contains_key(&who)).unwrap_or(false) { return Err("Fifty scopes per provider is plenty.".into()); }
+          else { r["scopes"][pid][&who] = sc.to_value(); }
+          if r["scopes"][pid].as_object().map(|m| m.is_empty()).unwrap_or(false) { if let Some(m) = r["scopes"].as_object_mut() { m.remove(pid); } } }
+        self.save();
+        Ok(self.pub_host(&self.record(id).unwrap()))
+    }
     /// The host program's config for one of the person's hosts (what the AI Host download carries).
     pub fn config_for(&self, user: &str, id: &str, hub: &str, models: Vec<String>) -> Result<Value, String> {
         let r = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).cloned().filter(|r| r["user"] == json!(user)).ok_or("Not your host.")?;
@@ -584,6 +715,72 @@ impl AiHosts {
             "autoUpdate": true, "update": { "quietMinutes": 3, "checkMinutes": 5 }, "reconnect": { "maxDelaySeconds": 5 }, "security": { "engineGuard": true, "allowInsecureHub": false } }))
     }
     pub fn enabled(&self) -> bool { !self.all_records().is_empty() }
+
+    // ---------- monitor and control from the hub page (5.12.0; cap `control`) ----------
+    /// The person's own hosts as the monitoring panel shows them: the latest status the host reported, online / since,
+    /// the usage windows, and who is using it now (the hub knows its jobs in flight: the kind, and for a Work run the
+    /// person and project; never what was asked).
+    pub fn status_for(&self, user: &str) -> Vec<Value> {
+        let recs: Vec<Value> = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].as_object().map(|m| m.values().filter(|r| r["user"] == json!(user) && !user.is_empty()).cloned().collect()).unwrap_or_default();
+        let pend: Vec<(String, Value)> = self.pending.lock().unwrap_or_else(|e| e.into_inner()).values().map(|p| (p.host.clone(), use_of(&p.kind, &p.account, &p.display, &p.project, p.started, p.picked))).collect();
+        let was = self.was_up.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        recs.iter().map(|r| {
+            let id = r["id"].as_str().unwrap_or("");
+            let base = self.pub_host(r);
+            let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(id);
+            let caps: Vec<Value> = n.and_then(|n| n.hello.as_ref().and_then(|h| h["caps"].as_array().cloned())).unwrap_or_default();
+            let fresh = n.map(|n| now_ms().saturating_sub(n.status_at) < 60_000).unwrap_or(false);
+            json!({ "id": id, "nickname": r["nickname"], "online": base["online"], "paused": base["paused"], "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null),
+                "seen": base["seen"], "version": base["version"], "os": base["os"], "caps": caps, "control": can_control(&caps),
+                "status": n.map(|n| n.status.clone()).filter(|s| s.is_object()).unwrap_or(Value::Null), "statusAgeMs": n.filter(|n| n.status_at > 0).map(|n| now_ms().saturating_sub(n.status_at)).unwrap_or(0), "statusFresh": fresh,
+                "queued": n.map(|n| n.queue.len()).unwrap_or(0), "inUse": pend.iter().filter(|(h, _)| h == id).map(|(_, v)| v.clone()).collect::<Vec<_>>(),
+                "providers": base["providers"].as_array().map(|a| a.iter().map(|p| json!({ "id": p["id"], "label": p["label"], "kind": p["kind"], "usage": p["usage"], "max5h": p["max5h"], "max7d": p["max7d"], "capped": p["capped"] })).collect::<Vec<_>>()).unwrap_or_default() })
+        }).collect()
+    }
+    /// Asks one of the person's own hosts to pause / resume / restart / update / send its log. Owner only (an admin is
+    /// not the owner), only for a host that announced `control`, and only while it is connected.
+    pub async fn control(self: &Arc<Self>, user: &str, id: &str, action: &str) -> Result<Value, HostErr> {
+        let r = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).cloned().filter(|r| !user.is_empty() && r["user"] == json!(user)).ok_or_else(|| herr(403, "Not your host: only the person who owns an AI host can control it (admins too)."))?;
+        let (caps, connected) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(id); (n.and_then(|n| n.hello.as_ref().and_then(|h| h["caps"].as_array().cloned())).unwrap_or_default(), n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false)) };
+        check_control(&caps, action).map_err(|(s, m)| herr(s, m))?;
+        let nick = r["nickname"].as_str().unwrap_or(id).to_string();
+        if !connected { return Err(herr(503, format!("{nick} is offline right now: it cannot be controlled from here until it connects."))); }
+        let body = json!({ "action": action }).to_string().into_bytes();
+        let ans = tokio::time::timeout(Duration::from_secs(20), self.relay(id, "control", "/control", "POST", vec![("content-type".into(), "application/json".into())], body, "control", false)).await
+            .map_err(|_| herr(504, format!("{nick} did not answer in time.")))??;
+        let status = ans.status;
+        let out: Value = serde_json::from_slice(&ans.bytes().await).unwrap_or(json!({}));
+        if status >= 400 || out["ok"] != json!(true) { return Err(herr(if status >= 400 { status } else { 502 }, out["result"].as_str().or(out["error"]["message"].as_str()).unwrap_or("The host refused.").to_string())); }
+        // pause / resume are visible at once; the host's own report follows
+        if action == "pause" || action == "resume" { if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(id) { if !n.status.is_object() { n.status = json!({}); } n.status["paused"] = json!(action == "pause"); n.status["pausedBy"] = json!(if action == "pause" { "hub" } else { "" }); n.status_at = now_ms(); } }
+        println!("[ai-host] {} ({user}) asked {nick} to {action} from the page", id);
+        self.changed();
+        Ok(json!({ "ok": true, "result": out["result"], "lines": out["lines"] }))
+    }
+}
+/// Does a host's hello say it takes control jobs?
+pub fn can_control(caps: &[Value]) -> bool { caps.iter().any(|c| c == pgm_net_internal::hostlink::CAP_CONTROL) }
+/// May this action go to a host with these caps? An older host gets a clear message, not a job it cannot read.
+pub fn check_control(caps: &[Value], action: &str) -> Result<(), (u16, String)> {
+    if !["pause", "resume", "restart", "update", "logs"].contains(&action) { return Err((400, format!("Unknown action {action:?}: pause, resume, restart, update or logs."))); }
+    if !can_control(caps) { return Err((400, "This host is older than 5.13: update it to control it from here.".into())); }
+    Ok(())
+}
+/// One job in flight as the owner sees it: what kind, and for a Work run who and which project (never content).
+fn use_of(kind: &str, account: &str, display: &str, project: &str, started: u64, picked: bool) -> Value {
+    let (k, what) = match kind { "work" => ("work", "a Work run"), "provider" => ("answer", "an answer (chat / API)"), "engine" => ("engine", "one of Unity's engines"), "pc" => ("computer", "a computer tool"), "control" => ("control", "a control"), o => (o, "a job") };
+    json!({ "kind": k, "what": what, "person": if kind == "work" { if display.is_empty() { account } else { display } } else { "" }, "project": project, "since": started, "running": picked })
+}
+/// The status a host reported, cleaned: known keys only, bounded text, numbers as numbers (a hub ignores what it does not know).
+pub fn clean_status(b: &Value) -> Value {
+    let text = |k: &str, n: usize| json!(b[k].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(n).collect::<String>());
+    let num = |k: &str| json!(b[k].as_u64().unwrap_or(0));
+    let window = |w: &Value| if w.is_object() { json!({ "utilization": w["utilization"].as_f64().map(|x| x.clamp(0.0, 1.0)), "resetsAt": w["resetsAt"].as_f64() }) } else { Value::Null };
+    let usage: Map<String, Value> = b["usage"].as_object().map(|m| m.iter().take(20).map(|(k, v)| (k.chars().take(32).collect::<String>(), json!({ "five_hour": window(&v["five_hour"]), "seven_day": window(&v["seven_day"]) }))).collect()).unwrap_or_default();
+    let logins: Map<String, Value> = b["logins"].as_object().map(|m| m.iter().take(20).map(|(k, v)| (k.chars().take(32).collect::<String>(), match v.as_str() { Some(s) => json!(s.chars().filter(|c| !c.is_control()).take(200).collect::<String>()), None => Value::Null })).collect()).unwrap_or_default();
+    json!({ "version": text("version", 20), "target": text("target", 40), "startedAt": num("startedAt"), "paused": b["paused"] == json!(true), "pausedBy": text("pausedBy", 10),
+        "active": num("active"), "runs": num("runs"), "lastJobAt": num("lastJobAt"), "lastUpdate": text("lastUpdate", 200), "lastUpdateAt": num("lastUpdateAt"), "pending": text("pending", 100),
+        "usage": usage, "logins": logins })
 }
 /// What the checkout above `root` runs: (version, commit) (pgm-dist-internal's version stamp).
 pub fn release_now(root: &std::path::Path) -> (String, String) { pgm_dist_internal::version::release_of(&root.join("..")) }
@@ -593,5 +790,85 @@ fn host_status(v: &Value) -> u16 { v.as_u64().filter(|s| (100..=599).contains(s)
 fn pick_headers(v: &Value) -> Vec<(String, String)> {
     let ok = |k: &str| { let k = k.to_lowercase(); matches!(k.as_str(), "content-type" | "request-id" | "retry-after") || k.starts_with("anthropic-ratelimit-") || k.starts_with("x-codex-") || k.starts_with("openai-") };
     v.as_object().map(|m| m.iter().filter(|(k, v)| ok(k) && v.as_str().map(|s| hyper::header::HeaderValue::from_str(s).is_ok()).unwrap_or(false) && hyper::header::HeaderName::from_bytes(k.to_lowercase().as_bytes()).is_ok()).map(|(k, v)| (k.to_lowercase(), v.as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_scope_limits_models_and_uses_and_defaults_to_everything() {
+        let scopes = json!({ "t-user": { "models": ["m1"], "uses": ["api"] }, "@group": { "models": ["m1", "m2"], "uses": "*" }, "partial": { "uses": ["work"] } });
+        // nobody listed, or a person outside the group: everything (today's sharing)
+        let all = scope_of(&scopes, "stranger", false);
+        assert_eq!(all, Scope::default()); assert!(!all.restricted());
+        assert!(check_scope(&all, "gee", "Claude", "unity", "anything").is_ok());
+        // a model outside the scope is refused, the error names the owner and what is allowed
+        let own = scope_of(&scopes, "t-user", true);
+        assert!(check_scope(&own, "gee", "Gee's Claude", "api", "m1").is_ok());
+        let e = check_scope(&own, "gee", "Gee's Claude", "api", "m2").unwrap_err();
+        assert!(e.contains("gee") && e.contains("m2") && e.contains("m1"), "{e}");
+        // an empty model means "whichever the provider picks": allowed
+        assert!(check_scope(&own, "gee", "Gee's Claude", "api", "").is_ok());
+        // a use outside the scope is refused
+        let e = check_scope(&own, "gee", "Gee's Claude", "work", "m1").unwrap_err();
+        assert!(e.contains("gee") && e.contains("Work runs") && e.contains("the API"), "{e}");
+        assert!(check_scope(&own, "gee", "Gee's Claude", "unity", "m1").is_err());
+        // "@group" applies to members of the group; the person's own entry wins over it
+        let member = scope_of(&scopes, "somebody", true);
+        assert_eq!(member.models, Some(vec!["m1".to_string(), "m2".to_string()])); assert!(member.uses.is_none());
+        assert!(check_scope(&member, "gee", "C", "unity", "m2").is_ok() && check_scope(&member, "gee", "C", "work", "m3").is_err());
+        assert_ne!(own, member); assert_eq!(own.uses, Some(vec!["api".to_string()]));
+        assert_eq!(scope_of(&scopes, "somebody", false), Scope::default()); // not in the group: the group's scope does not apply
+        // a field left out means all of it
+        let part = scope_of(&scopes, "partial", true);
+        assert!(part.models.is_none() && check_scope(&part, "gee", "C", "work", "x").is_ok() && check_scope(&part, "gee", "C", "api", "x").is_err());
+        // no model switched on at all is refused whatever is asked
+        let none = Scope::from_value(&json!({ "models": [], "uses": "*" }));
+        assert!(check_scope(&none, "gee", "C", "work", "").is_err());
+        // unknown uses in a stored entry are dropped, not trusted
+        assert_eq!(Scope::from_value(&json!({ "uses": ["api", "root"] })).uses, Some(vec!["api".to_string()]));
+    }
+    #[test]
+    fn a_scope_narrows_the_view_a_person_gets() {
+        let mut v = json!({ "id": "h:x/claude", "models": ["m1", "m2", "m3"] });
+        assert!(AiHosts::scope_view(&mut v, &Scope::default())); assert_eq!(v["models"], json!(["m1", "m2", "m3"])); assert!(v.get("scope").is_none());
+        let sc = Scope { models: Some(vec!["m3".into(), "m1".into()]), uses: Some(vec!["work".into()]) };
+        assert!(AiHosts::scope_view(&mut v, &sc));
+        assert_eq!(v["models"], json!(["m1", "m3"])); // the provider's own order
+        assert_eq!(v["scope"], json!({ "models": ["m3", "m1"], "uses": ["work"] }));
+        let mut gone = json!({ "models": ["m1"] });
+        assert!(!AiHosts::scope_view(&mut gone, &Scope { models: Some(vec!["m9".into()]), uses: None }));
+    }
+    #[test]
+    fn a_control_goes_only_to_a_host_that_announced_it() {
+        let new = vec![json!("relay"), json!("control")]; let old = vec![json!("relay"), json!("update-bin")];
+        for a in ["pause", "resume", "restart", "update", "logs"] { assert!(check_control(&new, a).is_ok()); }
+        let (s, m) = check_control(&old, "pause").unwrap_err();
+        assert_eq!(s, 400); assert!(m.contains("older than 5.13") && m.contains("update it"), "{m}");
+        assert!(check_control(&[], "pause").is_err());
+        assert_eq!(check_control(&new, "format-disk").unwrap_err().0, 400);
+        assert!(!can_control(&[json!("controls")]) && can_control(&new));
+    }
+    #[test]
+    fn a_reported_status_is_cleaned_and_a_use_shows_no_content() {
+        let st = clean_status(&json!({ "version": "5.12.0", "paused": true, "pausedBy": "hub", "active": 2, "runs": 1, "lastUpdate": "updated\nto 5.12.0", "evil": "x", "message": "secret text",
+            "usage": { "claude": { "five_hour": { "utilization": 7.5, "resetsAt": 1.0 }, "seven_day": { "utilization": 0.25 } } }, "logins": { "claude": null, "codex": "no login" } }));
+        assert_eq!(st["paused"], json!(true)); assert_eq!(st["active"], json!(2)); assert!(st.get("evil").is_none() && st.get("message").is_none());
+        assert_eq!(st["lastUpdate"], json!("updatedto 5.12.0")); // control characters dropped
+        assert_eq!(st["usage"]["claude"]["five_hour"]["utilization"], json!(1.0)); // clamped to a fraction
+        assert_eq!(st["usage"]["claude"]["seven_day"]["utilization"], json!(0.25)); assert!(st["logins"]["claude"].is_null() && st["logins"]["codex"] == json!("no login"));
+        assert!(clean_status(&json!(null))["usage"].as_object().unwrap().is_empty());
+        let u = use_of("work", "gee", "Gee", "demo-app", 5, true);
+        assert_eq!(u["person"], json!("Gee")); assert_eq!(u["project"], json!("demo-app")); assert_eq!(u["kind"], json!("work"));
+        assert_eq!(use_of("provider", "someone", "Someone", "", 5, true)["person"], json!(""));
+    }
+    #[test]
+    fn a_jcode_provider_is_listed_only_for_a_host_that_announced_work_jcode() {
+        let list = json!([{ "id": "claude", "kind": "claude-relay", "models": ["m"] }, { "id": "jcode", "kind": "jcode", "label": "J", "models": ["m1"] }]);
+        let ids = |caps: &[&str]| AiHosts::clean_providers(&list, &caps.iter().map(|c| c.to_string()).collect::<Vec<_>>()).into_iter().map(|p| p["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(ids(&["relay", "update", "update-bin"]), ["claude"]);
+        assert_eq!(ids(&[]), ["claude"]);
+        assert_eq!(ids(&["relay", "work-jcode"]), ["claude", "jcode"]);
+        assert_eq!(AiHosts::hub_kind("jcode"), "host-jcode"); assert_eq!(AiHosts::hub_kind("claude-relay"), "host-claude");
+    }
 }
 fn uuid4() -> String { let b = pgm_core_internal::crypto::random_bytes(16); let mut b: [u8; 16] = b.try_into().expect("16"); b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80; let h = hex::encode(b); format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32]) }

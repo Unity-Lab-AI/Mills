@@ -457,7 +457,8 @@ function cleanPrefs(p, prev = {}) {
   if (p.sound && typeof p.sound === 'object') {
     const s = { ...(prev.sound || {}) };
     if (p.sound.on !== undefined) s.on = !!p.sound.on;
-    for (const k of ['message', 'mention', 'reply']) if (p.sound[k] !== undefined) s[k] = Math.max(0, Math.min(100, Math.round(Number(p.sound[k]) || 0)));
+    for (const k of ['message', 'mention', 'reply', 'call', 'board']) if (p.sound[k] !== undefined) s[k] = Math.max(0, Math.min(100, Math.round(Number(p.sound[k]) || 0)));
+    if (p.sound.set === 'classic' || p.sound.set === 'patterns') s.set = p.sound.set; // the sound style (5.11.0)
     out.sound = s;
   }
   if (p.tts && typeof p.tts === 'object') { // text to speech: `all` = master switch (chat read-aloud AND Unity's voice), `on` = chat read-aloud, `unity` = Unity speaks her replies
@@ -965,7 +966,7 @@ async function handleRequest(req, res) {
       // that to show the sign-in form). pid / busy / supervised are for the host's own tools (restart.js,
       // the regression runner), which call from this machine, never through the tunnel.
       const viaTunnel = viaOutside(req); // the tunnel, or nginx in server mode
-      return send(res, 200, viaTunnel ? { ok: true, hub: true } : { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, busy: anyBusy(), version: VERSIONS.project || '', commit: RUNNING_COMMIT });
+      return send(res, 200, viaTunnel ? { ok: true, hub: true } : { ok: true, hub: true, pid: process.pid, supervised: SUPERVISED, serving: process.env.VR_SERVING || 'javascript', busy: anyBusy(), version: VERSIONS.project || '', commit: RUNNING_COMMIT });
     }
 
     // Moving house (bridge/handoff.js pack): while bridge/.maintenance exists this hub's data belongs to the server, so
@@ -1421,9 +1422,10 @@ async function handleRequest(req, res) {
 }
 
 // behind the Rust hub (bridge/run.js, config rustHub): this hub listens on its own port and the Rust one takes config.port
-const LISTEN_PORT = Number(process.env.VR_BACK_PORT) || config.port;
+// MILLS_PORT: vr-run's last-resort fallback (the JavaScript hub alone) names the port it must take, whatever config says
+const LISTEN_PORT = Number(process.env.VR_BACK_PORT) || Number(process.env.MILLS_PORT) || config.port;
 server.listen(LISTEN_PORT, '127.0.0.1', () => {
-  console.log(`[mills] Hub running at http://localhost:${LISTEN_PORT}${LISTEN_PORT !== config.port ? ` behind the Rust hub on ${config.port}` : ''}  (Claude works in ${MILLS_DIR})`);
+  console.log(`[mills] Hub running at http://localhost:${LISTEN_PORT}${process.env.VR_BACK_PORT && LISTEN_PORT !== config.port ? ` behind the Rust hub on ${config.port}` : ''}  (Claude works in ${MILLS_DIR})`);
   for (const a of accounts.values()) {
     console.log(`[mills]   ${a.username.padEnd(10)} ${a.display}${a.admin ? ' (admin)' : ''} · lock ${a.state.lockedDevice ? 'claimed' : 'unclaimed'} · model ${effectiveModel(a) || 'default'}${fs.existsSync(a.files.AUTH_FILE) ? '' : ' · NO PASSWORD SET'}`);
   }
