@@ -468,6 +468,12 @@ pub async fn v1_as(hub: &Arc<dyn AiHub>, r: &Req, user: String) -> Resp {
     let Some(prov) = hub.work().effective(hub.ai(), &user, &s(&a, "provider")) else { return fail(503, "No AI is available: this hub has no Claude of its own and no AI host offering one is connected.", "service_unavailable") };
     let models: Vec<String> = prov["models"].as_array().map(|m| m.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     let body: Option<Value> = if r.body.is_empty() { Some(json!({})) } else { serde_json::from_slice(&r.body).ok() };
+    // a provider shared with a scope: the API must be among its uses, and a model asked for among its models (the error
+    // names the owner); without a model asked, the first model the person may use answers
+    if s(&prov, "id").starts_with("h:") {
+        let asked = if r.method == hyper::Method::GET { "" } else { body.as_ref().and_then(|b| b["model"].as_str()).unwrap_or("") };
+        if let Err(m) = hub.ai().scope_check(&user, &s(&prov, "id"), "api", asked) { return fail(403, &m, "permission_error"); }
+    }
     match (r.method.as_str(), p) {
         ("GET", "/v1/models") => {
             if anthropic { return jout(200, json!({ "data": models.iter().map(|m| json!({ "type": "model", "id": m, "display_name": m, "created_at": "1970-01-01T00:00:00Z" })).collect::<Vec<_>>(), "has_more": false, "first_id": models.first(), "last_id": models.last() })); }

@@ -3949,6 +3949,24 @@ async function renderHosts() {
       const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'ghost'; reset.textContent = 'as the host says'; reset.title = 'Forget this override and use the list in the host\'s own config';
       reset.onclick = () => json('/api/hosts/share', { method: 'POST', body: JSON.stringify({ id: h.id, provider: p.id, users: null }) }).then(() => { renderHosts(); refreshProviders(); }).catch((e) => sysSettings(e.message));
       pr.append(pl, users, reset); it.append(pr);
+      // per person (and "@group"): which models of this provider, and what for (Work, the API, Unity); default all of it
+      if ((p.allowedUsers || []).length) {
+        const sc = document.createElement('details'); sc.className = 'hostScopes';
+        const sum = document.createElement('summary'); sum.textContent = 'What each person may use of ' + p.label + ' (default: every model, every use)'; sc.append(sum);
+        for (const who of p.allowedUsers) {
+          const cur = (p.scopes || {})[who] || {}, mset = Array.isArray(cur.models) ? cur.models : null, uset = Array.isArray(cur.uses) ? cur.uses : null;
+          const row = document.createElement('div'); row.className = 'row'; row.dataset.scopeFor = who;
+          const nm = document.createElement('b'); nm.textContent = who === '@group' ? 'the team group' : nickOf(who); row.append(nm);
+          const box = (kind, val, on, text) => { const l = document.createElement('label'); l.style.marginLeft = '8px'; const c = document.createElement('input'); c.type = 'checkbox'; c.checked = on; c.dataset.kind = kind; c.value = val; l.append(c, document.createTextNode(' ' + text)); row.append(l); return c; };
+          const mb = (p.models || []).map((m) => box('model', m, !mset || mset.includes(m), modelName(m)));
+          const ub = [['work', 'Work'], ['api', 'API'], ['unity', 'Unity']].map(([u, t]) => box('use', u, !uset || uset.includes(u), t));
+          const save = () => { const ms = mb.filter((c) => c.checked).map((c) => c.value), us = ub.filter((c) => c.checked).map((c) => c.value);
+            json('/api/hosts/scope', { method: 'POST', body: JSON.stringify({ id: h.id, provider: p.id, user: who, models: ms.length === mb.length ? '*' : ms, uses: us.length === ub.length ? '*' : us }) }).then(() => refreshProviders()).catch((e) => { sysSettings(e.message); renderHosts(); }); };
+          for (const c of [...mb, ...ub]) c.onchange = save;
+          sc.append(row);
+        }
+        it.append(sc);
+      }
     }
     if (!(h.providers || []).length) { const n = document.createElement('small'); n.textContent = h.online ? 'This host offers no providers yet (its ai-node.json providers list is empty).' : 'Download the package below, unzip it on that computer and run it (host-tools\\build.cmd on Windows, say Y to the service; sh host-tools/install-ai-host-service.sh on Linux). Its providers appear here once it connects.'; it.append(n); }
     const ren = document.createElement('button'); ren.type = 'button'; ren.className = 'ghost'; ren.textContent = 'Rename';

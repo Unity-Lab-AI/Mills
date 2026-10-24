@@ -57,6 +57,45 @@ pub struct AiHosts {
 }
 fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; let (x, y) = (pgm_core_internal::crypto::sha256(a.as_bytes()), pgm_core_internal::crypto::sha256(b.as_bytes())); bool::from(x.ct_eq(&y)) }
 fn clean_users(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')).take(50).collect()).unwrap_or_default() }
+/// What a shared provider is used for: Work runs, the /v1 API (and the products behind it), Unity's brain.
+pub const USES: [&str; 3] = ["work", "api", "unity"];
+/// What one person may use of a provider shared with them (5.11.0). `None` = everything (what sharing always meant).
+/// Stored by the hub in the host record, `scopes[providerId][user | "@group"] = { models: "*" | [..], uses: "*" | [..] }`,
+/// never on the host.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Scope { pub models: Option<Vec<String>>, pub uses: Option<Vec<String>> }
+impl Scope {
+    pub fn restricted(&self) -> bool { self.models.is_some() || self.uses.is_some() }
+    pub fn allows_use(&self, u: &str) -> bool { self.uses.as_ref().map(|l| l.iter().any(|x| x == u)).unwrap_or(true) }
+    pub fn allows_model(&self, m: &str) -> bool { self.models.as_ref().map(|l| l.iter().any(|x| x == m)).unwrap_or(true) }
+    /// One stored entry; a missing or "*" field means all.
+    pub fn from_value(v: &Value) -> Scope {
+        let list = |k: &str, only: Option<&[&str]>| v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).filter(|x| only.map(|o| o.contains(x)).unwrap_or(true)).map(String::from).collect::<Vec<_>>());
+        Scope { models: list("models", None), uses: list("uses", Some(&USES)) }
+    }
+    pub fn to_value(&self) -> Value { json!({ "models": self.models.as_ref().map(|m| json!(m)).unwrap_or(json!("*")), "uses": self.uses.as_ref().map(|m| json!(m)).unwrap_or(json!("*")) }) }
+}
+/// The scope of `user` among one provider's stored scopes: the person's own entry wins over their group's ("@group", for
+/// members of the hub's team group); nobody listed = everything.
+pub fn scope_of(scopes: &Value, user: &str, in_group: bool) -> Scope {
+    if scopes[user].is_object() { return Scope::from_value(&scopes[user]); }
+    if in_group && scopes["@group"].is_object() { return Scope::from_value(&scopes["@group"]); }
+    Scope::default()
+}
+/// Is this use of this model allowed? The error names the owner and what they allow.
+pub fn check_scope(scope: &Scope, owner: &str, label: &str, use_: &str, model: &str) -> Result<(), String> {
+    let who = if owner.is_empty() { "The owner".to_string() } else { owner.to_string() };
+    if !scope.allows_use(use_) {
+        let what = |u: &str| match u { "work" => "Work runs", "api" => "the API and products", "unity" => "Unity", o => o }.to_string();
+        let ok: Vec<String> = scope.uses.clone().unwrap_or_default().iter().map(|u| what(u)).collect();
+        return Err(format!("{who} shares {label} with you, but not for {}{}.", what(use_), if ok.is_empty() { String::new() } else { format!(" (they allow it for {})", ok.join(", ")) }));
+    }
+    if let Some(ms) = &scope.models {
+        if ms.is_empty() { return Err(format!("{who} shares {label} with you with no model switched on.")); }
+        if !model.is_empty() && !ms.iter().any(|m| m == model) { return Err(format!("{who} shares {label} with you, but not the model {model} (they allow {}).", ms.join(", "))); }
+    }
+    Ok(())
+}
 fn job_id() -> String { use base64::Engine; base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pgm_core_internal::crypto::random_bytes(9)) }
 
 impl AiHosts {
@@ -173,9 +212,45 @@ impl AiHosts {
         for r in records {
             let id = r["id"].as_str().unwrap_or("");
             let Some(n) = live.get(id) else { continue }; let Some(hello) = &n.hello else { continue };
-            for p in hello["providers"].as_array().cloned().unwrap_or_default() { if self.may_use_locked(&r, &p, user, n) { let mut v = self.prov_view_locked(&r, id, n, &p); if let Some(o) = v.as_object_mut() { o.remove("providerId"); } out.push(v); } }
+            for p in hello["providers"].as_array().cloned().unwrap_or_default() { if self.may_use_locked(&r, &p, user, n) {
+                let mut v = self.prov_view_locked(&r, id, n, &p);
+                // only the models the owner allows this person; a provider with none left is not offered at all
+                if !Self::scope_view(&mut v, &self.scope_locked(&r, &p, user, n)) { continue; }
+                if let Some(o) = v.as_object_mut() { o.remove("providerId"); } out.push(v);
+            } }
         }
         out
+    }
+    /// What the owner allows this person of that provider (the owner: everything).
+    fn scope_locked(&self, r: &Value, p: &Value, user: &str, n: &Live) -> Scope {
+        let owner = { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { u.to_string() } else { n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from)).unwrap_or_default() } };
+        if user == owner { return Scope::default(); }
+        let in_group = clean_users(self.cfg.get("hostGroup").unwrap_or(&Value::Null)).iter().any(|x| x == user);
+        scope_of(&r["scopes"][p["id"].as_str().unwrap_or("")], user, in_group)
+    }
+    /// Narrows a provider view to a scope (`models` cut to the allowed ones, `scope` says what is limited). False when no
+    /// model is left.
+    fn scope_view(v: &mut Value, sc: &Scope) -> bool {
+        if !sc.restricted() { return true; }
+        if let Some(ms) = &sc.models {
+            let kept: Vec<Value> = v["models"].as_array().map(|a| a.iter().filter(|m| m.as_str().map(|m| ms.iter().any(|x| x == m)).unwrap_or(false)).cloned().collect()).unwrap_or_default();
+            if kept.is_empty() { return false; }
+            v["models"] = json!(kept);
+        }
+        v["scope"] = sc.to_value();
+        true
+    }
+    /// May this person use this host provider ("h:<hostId>/<providerId>") for that use (work | api | unity) and model
+    /// (empty = whichever the provider picks)? Anything that is not a host provider passes. The error names the owner.
+    pub fn scope_check(&self, user: &str, pid: &str, use_: &str, model: &str) -> Result<(), String> {
+        let Some((hid, prov)) = pid.strip_prefix("h:").and_then(|r| r.split_once('/')) else { return Ok(()) };
+        if user.is_empty() { return Ok(()); }
+        let Some(r) = self.record(hid) else { return Ok(()) };
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(n) = live.get(hid) else { return Ok(()) };
+        let Some(p) = n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|x| x["id"] == json!(prov)).cloned())) else { return Ok(()) };
+        let owner = { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { u.to_string() } else { n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from)).unwrap_or_default() } };
+        check_scope(&self.scope_locked(&r, &p, user, n), &owner, p["label"].as_str().unwrap_or(prov), use_, model)
     }
     /// May this person use that provider (the owner always; who the owner shares it with; "@group" = config hostGroup).
     fn may_use_locked(&self, r: &Value, p: &Value, user: &str, n: &Live) -> bool {
@@ -191,7 +266,10 @@ impl AiHosts {
         let r = self.record(hid)?; let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(hid)?; let hello = n.hello.as_ref()?;
         let p = hello["providers"].as_array()?.iter().find(|x| x["id"] == json!(prov))?.clone();
         if !user.is_empty() && !self.may_use_locked(&r, &p, user, n) { return None; }
-        let mut v = self.prov_view_locked(&r, hid, n, &p); v["id"] = json!(pid); Some(v)
+        let mut v = self.prov_view_locked(&r, hid, n, &p); v["id"] = json!(pid);
+        // narrowed to the person's scope; one with no model left stays (empty), so the use is refused with the owner's name
+        if !user.is_empty() { let sc = self.scope_locked(&r, &p, user, n); if !Self::scope_view(&mut v, &sc) { v["models"] = json!([]); v["scope"] = sc.to_value(); } }
+        Some(v)
     }
     /// The person's own AI host that offers their computer (the native app's "pc"), when it is online.
     /// Is one of this person's own AI hosts connected right now? (registered to them by the hub, as for PC tools: never
@@ -525,7 +603,7 @@ impl AiHosts {
     fn pub_host(&self, r: &Value) -> Value {
         let id = r["id"].as_str().unwrap_or("");
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(id);
-        let providers: Vec<Value> = n.and_then(|n| n.hello.as_ref().map(|h| h["providers"].as_array().cloned().unwrap_or_default().into_iter().map(|p| { let mut x = p.clone(); x["allowedUsers"] = Self::allowed(r, &p); x["declared"] = p["allowedUsers"].clone(); x["usage"] = self.usage_of(id, n, &p); let (c, until) = self.cap_of(id, n, &p); x["capped"] = json!(c); x["cappedUntil"] = json!(until); x }).collect())).unwrap_or_default();
+        let providers: Vec<Value> = n.and_then(|n| n.hello.as_ref().map(|h| h["providers"].as_array().cloned().unwrap_or_default().into_iter().map(|p| { let mut x = p.clone(); x["allowedUsers"] = Self::allowed(r, &p); x["declared"] = p["allowedUsers"].clone(); x["scopes"] = if r["scopes"][p["id"].as_str().unwrap_or("")].is_object() { r["scopes"][p["id"].as_str().unwrap_or("")].clone() } else { json!({}) }; x["usage"] = self.usage_of(id, n, &p); let (c, until) = self.cap_of(id, n, &p); x["capped"] = json!(c); x["cappedUntil"] = json!(until); x }).collect())).unwrap_or_default();
         let online = n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false);
         json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "legacy": r["legacy"].as_bool().unwrap_or(false), "createdAt": r["createdAt"], "online": online,
             "seen": n.filter(|n| n.seen > 0).map(|n| json!(pgm_core_internal::time::iso_at(n.seen as i64))).unwrap_or(Value::Null), "kid": n.map(|n| n.kid.clone()).unwrap_or_default(),
@@ -580,6 +658,40 @@ impl AiHosts {
         self.save();
         Ok(self.pub_host(&self.record(id).unwrap()))
     }
+    /// The owner picks what one person (or "@group") may use of a provider: `models` ("*" or some of the provider's
+    /// models) and `uses` ("*" or some of work / api / unity). Both "*" = back to everything (the entry goes). Kept on
+    /// the hub next to `share`, never sent to the host.
+    pub fn set_scope(&self, user: &str, id: &str, pid: &str, who: &str, models: &Value, uses: &Value) -> Result<Value, String> {
+        let owned = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).map(|r| r["user"] == json!(user)).unwrap_or(false);
+        if !owned { return Err("Not your host.".into()); }
+        if pid.is_empty() || pid.len() > 32 || !pid.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { return Err("Unknown provider.".into()); }
+        let who = who.trim().to_lowercase();
+        if who != "@group" && clean_users(&json!([who])).is_empty() { return Err("Say which person (a user name) or @group.".into()); }
+        if who == user { return Err("You are the owner: you always have everything.".into()); }
+        let offered: Vec<String> = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(id).and_then(|n| n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned())))
+            .ok_or("That host has not announced this provider (it must be connected to pick models).")?["models"].as_array().map(|a| a.iter().filter_map(|m| m.as_str().map(String::from)).collect()).unwrap_or_default();
+        let models = match models { Value::Null => Scope::default().models, Value::String(s) if s == "*" => None, Value::Array(a) => {
+            let l: Vec<String> = a.iter().filter_map(|m| m.as_str().map(String::from)).collect();
+            if l.len() != a.len() { return Err("models must be names.".into()); }
+            if let Some(bad) = l.iter().find(|m| !offered.contains(m)) { return Err(format!("{bad} is not a model of this provider (it offers: {}).", offered.join(", "))); }
+            // every model ticked = all, so a model the host adds later comes with it
+            if offered.iter().all(|m| l.contains(m)) { None } else { let mut u: Vec<String> = vec![]; for m in &offered { if l.contains(m) { u.push(m.clone()); } } Some(u) }
+        } _ => return Err("models is \"*\" or a list of the provider's models.".into()) };
+        let uses = match uses { Value::Null => None, Value::String(s) if s == "*" => None, Value::Array(a) => {
+            let l: Vec<String> = a.iter().filter_map(|m| m.as_str().map(String::from)).collect();
+            if l.len() != a.len() || l.iter().any(|u| !USES.contains(&u.as_str())) { return Err("uses are work, api and unity.".into()); }
+            if USES.iter().all(|u| l.iter().any(|x| x == u)) { None } else { Some(USES.iter().filter(|u| l.iter().any(|x| x == *u)).map(|u| u.to_string()).collect()) }
+        } _ => return Err("uses is \"*\" or a list of work, api, unity.".into()) };
+        let sc = Scope { models, uses };
+        { let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let r = &mut db["hosts"][id]; if !r["scopes"].is_object() { r["scopes"] = json!({}); }
+          if !r["scopes"][pid].is_object() { r["scopes"][pid] = json!({}); }
+          if !sc.restricted() { if let Some(m) = r["scopes"][pid].as_object_mut() { m.remove(&who); } }
+          else if r["scopes"][pid].as_object().map(|m| m.len() >= 50 && !m.contains_key(&who)).unwrap_or(false) { return Err("Fifty scopes per provider is plenty.".into()); }
+          else { r["scopes"][pid][&who] = sc.to_value(); }
+          if r["scopes"][pid].as_object().map(|m| m.is_empty()).unwrap_or(false) { if let Some(m) = r["scopes"].as_object_mut() { m.remove(pid); } } }
+        self.save();
+        Ok(self.pub_host(&self.record(id).unwrap()))
+    }
     /// The host program's config for one of the person's hosts (what the AI Host download carries).
     pub fn config_for(&self, user: &str, id: &str, hub: &str, models: Vec<String>) -> Result<Value, String> {
         let r = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).cloned().filter(|r| r["user"] == json!(user)).ok_or("Not your host.")?;
@@ -604,6 +716,50 @@ fn pick_headers(v: &Value) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_scope_limits_models_and_uses_and_defaults_to_everything() {
+        let scopes = json!({ "t-user": { "models": ["m1"], "uses": ["api"] }, "@group": { "models": ["m1", "m2"], "uses": "*" }, "partial": { "uses": ["work"] } });
+        // nobody listed, or a person outside the group: everything (today's sharing)
+        let all = scope_of(&scopes, "stranger", false);
+        assert_eq!(all, Scope::default()); assert!(!all.restricted());
+        assert!(check_scope(&all, "gee", "Claude", "unity", "anything").is_ok());
+        // a model outside the scope is refused, the error names the owner and what is allowed
+        let own = scope_of(&scopes, "t-user", true);
+        assert!(check_scope(&own, "gee", "Gee's Claude", "api", "m1").is_ok());
+        let e = check_scope(&own, "gee", "Gee's Claude", "api", "m2").unwrap_err();
+        assert!(e.contains("gee") && e.contains("m2") && e.contains("m1"), "{e}");
+        // an empty model means "whichever the provider picks": allowed
+        assert!(check_scope(&own, "gee", "Gee's Claude", "api", "").is_ok());
+        // a use outside the scope is refused
+        let e = check_scope(&own, "gee", "Gee's Claude", "work", "m1").unwrap_err();
+        assert!(e.contains("gee") && e.contains("Work runs") && e.contains("the API"), "{e}");
+        assert!(check_scope(&own, "gee", "Gee's Claude", "unity", "m1").is_err());
+        // "@group" applies to members of the group; the person's own entry wins over it
+        let member = scope_of(&scopes, "somebody", true);
+        assert_eq!(member.models, Some(vec!["m1".to_string(), "m2".to_string()])); assert!(member.uses.is_none());
+        assert!(check_scope(&member, "gee", "C", "unity", "m2").is_ok() && check_scope(&member, "gee", "C", "work", "m3").is_err());
+        assert_ne!(own, member); assert_eq!(own.uses, Some(vec!["api".to_string()]));
+        assert_eq!(scope_of(&scopes, "somebody", false), Scope::default()); // not in the group: the group's scope does not apply
+        // a field left out means all of it
+        let part = scope_of(&scopes, "partial", true);
+        assert!(part.models.is_none() && check_scope(&part, "gee", "C", "work", "x").is_ok() && check_scope(&part, "gee", "C", "api", "x").is_err());
+        // no model switched on at all is refused whatever is asked
+        let none = Scope::from_value(&json!({ "models": [], "uses": "*" }));
+        assert!(check_scope(&none, "gee", "C", "work", "").is_err());
+        // unknown uses in a stored entry are dropped, not trusted
+        assert_eq!(Scope::from_value(&json!({ "uses": ["api", "root"] })).uses, Some(vec!["api".to_string()]));
+    }
+    #[test]
+    fn a_scope_narrows_the_view_a_person_gets() {
+        let mut v = json!({ "id": "h:x/claude", "models": ["m1", "m2", "m3"] });
+        assert!(AiHosts::scope_view(&mut v, &Scope::default())); assert_eq!(v["models"], json!(["m1", "m2", "m3"])); assert!(v.get("scope").is_none());
+        let sc = Scope { models: Some(vec!["m3".into(), "m1".into()]), uses: Some(vec!["work".into()]) };
+        assert!(AiHosts::scope_view(&mut v, &sc));
+        assert_eq!(v["models"], json!(["m1", "m3"])); // the provider's own order
+        assert_eq!(v["scope"], json!({ "models": ["m3", "m1"], "uses": ["work"] }));
+        let mut gone = json!({ "models": ["m1"] });
+        assert!(!AiHosts::scope_view(&mut gone, &Scope { models: Some(vec!["m9".into()]), uses: None }));
+    }
     #[test]
     fn a_jcode_provider_is_listed_only_for_a_host_that_announced_work_jcode() {
         let list = json!([{ "id": "claude", "kind": "claude-relay", "models": ["m"] }, { "id": "jcode", "kind": "jcode", "label": "J", "models": ["m1"] }]);

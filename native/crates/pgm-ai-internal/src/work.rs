@@ -384,6 +384,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let prov_env = Work::claude_env(&prov).unwrap_or_default();
     let kind = s(&prov, "kind");
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return one_line(json!({ "type": "bridge_error", "text": AI_OFF_TEXT })); }
+    // a provider shared with a scope: Work must be among its uses and the model among its models (the owner names what is allowed)
+    if let Err(m) = ai.scope_check(&a.username, &s(&prov, "id"), "work", &model) { return one_line(json!({ "type": "bridge_error", "text": format!("{m} Pick another AI or model in the dropdown.") })); }
     let owner = s(&prov, "owner"); let nick = s(&prov, "nickname");
     let host_id = s(&prov, "hostId"); let prov_id = s(&prov, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default();
     let hjcode = kind == HOST_JCODE;

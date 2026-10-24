@@ -1093,6 +1093,66 @@ async function run() {
       && body185.usage && body185.usage.prompt_tokens === 2000 && 'five_hour' in u1 && 'seven_day' in u1 && 'context' in u1,
       `answers ${JSON.stringify(ans).slice(0, 260)}; call ${a1.status}/${a2.status}; usage ${JSON.stringify(body185.usage || {})}`);
   } else skip('R185', 'answers outside Work through the usage ledger', 'the Rust hub\'s: --rust-hub runs it');
+  // Sharing with scopes (R189, 5.11.0; Jcode-Mods ARCHITECTURE.md §4): the owner of a shared provider picks, per person (and
+  // per "@group"), which of its models they may use and what for (Work, the API, Unity); stored on the hub, never on the host.
+  if (RUST_HUB) {
+    const L189 = 'sharing with scopes: the owner picks per person (or @group) which models of a shared provider they may use and what for (work / api / unity), stored on the hub in the host record next to share (the host config is untouched); the person sees only those models in /api/check, a /v1 answer on another model or without the api use is refused naming the owner, so is a Work run without the work use; the person\'s own scope wins over the group\'s; default (no entry) is everything; only the owner sets it, models must be the provider\'s own; [static] the Settings editor';
+    const h189 = (await call('/api/hosts/new', A, {})).data.host || {}, c189 = (await call('/api/hosts/config', A, { id: h189.id })).data.config || {};
+    const dir189 = path.join(SCRATCH, 'r189-host'); fs.mkdirSync(dir189, { recursive: true });
+    for (const f of ['ai-node.js', 'host-relay.js']) fs.copyFileSync(path.join(SB, f), path.join(dir189, f)); // its own folder: the host keeps one instance per folder
+    const base189 = `http://127.0.0.1:${OLLAMA_PORT}`, f189 = path.join(dir189, 'ai-node.json');
+    fs.writeFileSync(f189, JSON.stringify({ hub: H, id: h189.id, token: c189.token, user: 't-admin', autoUpdate: false, engines: {}, providers: [
+      { id: 'sc-claude', kind: 'claude-relay', label: 'R189 Claude', models: ['claude-fable-5-1', 'claude-haiku-5-5'], allowedUsers: ['t-user'], configDir: path.join(SCRATCH, 'host-claude-login'), baseUrl: base189 + '/anthropic' },
+      { id: 'sc-local', kind: 'openai', label: 'R189 local', baseUrl: base189 + '/oai', models: ['tiny-a', 'tiny-b'], allowedUsers: ['t-user'] }] }), { mode: 0o600 });
+    const log189 = fs.openSync(path.join(dir189, 'out.log'), 'a');
+    const proc189 = RUST_HOST ? spawn(RUST_HOST, ['host', '--config', f189], { cwd: dir189, stdio: ['ignore', log189, log189], windowsHide: true }) : spawn(process.execPath, [path.join(dir189, 'ai-node.js'), '--config', f189], { cwd: dir189, stdio: ['ignore', log189, log189], windowsHide: true });
+    const sees = async (pid) => ((await call('/api/check', U)).data.providers || []).find((p) => p.id === 'h:' + h189.id + '/' + pid) || null;
+    let loc = null; for (let i = 0; i < 80 && !(loc && loc.models.length === 2); i++) { loc = await sees('sc-local'); if (!loc || loc.models.length !== 2) await sleep(250); }
+    const scope = (provider, user, models, uses, tok = A) => call('/api/hosts/scope', tok, { id: h189.id, provider, user, models, uses });
+    const k189 = (await call('/api/apikey/rotate', U, {})).data.key;
+    const ask = (model) => v1('/v1/chat/completions', k189, { model, messages: [{ role: 'user', content: 'scope r189' }] });
+    await call('/api/apikey/settings', U, { provider: 'h:' + h189.id + '/sc-local', model: 'tiny-a' });
+    const unscopedB = await ask('tiny-b'); // the default: every model, every use
+    const notOwner = await scope('sc-local', 't-user', ['tiny-a'], ['api'], U), badModel = await scope('sc-local', 't-user', ['nope'], '*'), badUse = await scope('sc-local', 't-user', '*', ['root']), forOwner = await scope('sc-local', 't-admin', ['tiny-a'], '*'), badWho = await scope('sc-local', 'Bad Name!', ['tiny-a'], '*');
+    // t-user: one model and the API only, on both providers
+    const s1 = await scope('sc-local', 't-user', ['tiny-a'], ['api']), s2 = await scope('sc-claude', 't-user', ['claude-haiku-5-5'], ['api']);
+    const locU = await sees('sc-local'), claU = await sees('sc-claude');
+    const ownerSees = ((await call('/api/check', A)).data.providers || []).find((p) => p.id === 'h:' + h189.id + '/sc-local');
+    const okA = await ask('tiny-a'), noB = await ask('tiny-b'), noBBody = (() => { try { return JSON.parse(noB.text); } catch { return {}; } })();
+    // Work on the Claude without the work use: refused naming the owner, nothing started
+    await call('/api/model', U, { provider: 'h:' + h189.id + '/sc-claude', model: 'claude-haiku-5-5' });
+    const wNo = await chat(U, 'scope work r189', { fresh: true }), wNoText = wNo.events.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ');
+    // the use switched on: the scope no longer stops it
+    await scope('sc-claude', 't-user', ['claude-haiku-5-5'], ['api', 'work']);
+    const wYes = await chat(U, 'scope work again r189', { fresh: true }), wYesText = wYes.events.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ');
+    // the API without the api use
+    await scope('sc-local', 't-user', ['tiny-a'], ['work']);
+    const noApi = await ask('tiny-a'), noApiBody = (() => { try { return JSON.parse(noApi.text); } catch { return {}; } })();
+    // "@group" (t-user is the hub's team group): applies once t-user has no entry of its own; the own entry wins again after
+    await scope('sc-local', '@group', ['tiny-b'], '*'); await scope('sc-local', 't-user', '*', '*');
+    const viaGroup = await sees('sc-local'), groupAsk = await ask('tiny-b'), groupNoA = await ask('tiny-a');
+    await scope('sc-local', 't-user', ['tiny-a'], '*');
+    const ownWins = await sees('sc-local'), ownAsk = await ask('tiny-a'), ownNoB = await ask('tiny-b');
+    const db189 = (() => { try { return JSON.parse(fs.readFileSync(path.join(SB, 'ai-hosts.json'), 'utf8')).hosts[h189.id] || {}; } catch { return {}; } })();
+    const hostCfg189 = JSON.parse(fs.readFileSync(f189, 'utf8'));
+    const mine189 = (await call('/api/hosts', A)).data.mine || [], shown = ((mine189.find((h) => h.id === h189.id) || {}).providers || []).find((p) => p.id === 'sc-local') || {};
+    const html189 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    try { proc189.kill(); } catch {}
+    await call('/api/apikey/revoke', U, {}); await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' }); await call('/api/hosts/remove', A, { id: h189.id });
+    check('R189', L189,
+      !!loc && loc.models.join() === 'tiny-a,tiny-b' && !loc.scope && unscopedB.status === 200
+      && notOwner.status === 400 && badModel.status === 400 && /not a model/.test(JSON.stringify(badModel.data)) && badUse.status === 400 && forOwner.status === 400 && badWho.status === 400 && s1.status === 200 && s2.status === 200
+      && !!locU && locU.models.join() === 'tiny-a' && locU.scope && locU.scope.uses.join() === 'api' && !!claU && claU.models.join() === 'claude-haiku-5-5' && !!ownerSees && ownerSees.models.join() === 'tiny-a,tiny-b'
+      && okA.status === 200 && noB.status === 403 && /t-admin/.test(noBBody.error && noBBody.error.message) && /tiny-b/.test(noBBody.error && noBBody.error.message)
+      && /t-admin/.test(wNoText) && /Work runs/.test(wNoText) && !/shares R189/.test(wYesText)
+      && noApi.status === 403 && /t-admin/.test(noApiBody.error && noApiBody.error.message) && /the API/.test(noApiBody.error && noApiBody.error.message)
+      && !!viaGroup && viaGroup.models.join() === 'tiny-b' && groupAsk.status === 200 && groupNoA.status === 403
+      && !!ownWins && ownWins.models.join() === 'tiny-a' && ownAsk.status === 200 && ownNoB.status === 403
+      && db189.scopes && db189.scopes['sc-local'] && db189.scopes['sc-local']['t-user'].models.join() === 'tiny-a' && db189.scopes['sc-local']['t-user'].uses === '*' && db189.scopes['sc-local']['@group'].models.join() === 'tiny-b' && !hostCfg189.scopes && !JSON.stringify(hostCfg189).includes('scope')
+      && shown.scopes && shown.scopes['t-user'] && shown.scopes['t-user'].models.join() === 'tiny-a'
+      && /\/api\/hosts\/scope/.test(html189) && /hostScopes/.test(html189) && /What each person may use/.test(html189),
+      `unscoped ${unscopedB.status}; refused ${[notOwner, badModel, badUse, forOwner, badWho].map((r) => r.status).join('/')}; t-user sees local ${locU && locU.models.join()} claude ${claU && claU.models.join()} owner ${ownerSees && ownerSees.models.join()}; api ${okA.status}/${noB.status} "${String(noBBody.error && noBBody.error.message).slice(0, 120)}"; work "${wNoText.slice(0, 140)}" then "${wYesText.slice(0, 80)}"; no api ${noApi.status}; group ${viaGroup && viaGroup.models.join()} ${groupAsk.status}/${groupNoA.status}; own ${ownWins && ownWins.models.join()} ${ownAsk.status}/${ownNoB.status}; stored ${JSON.stringify(db189.scopes || {}).slice(0, 200)}`);
+  } else skip('R189', 'sharing with scopes (per person: models and work / api / unity)', 'the Rust hub\'s: --rust-hub runs it');
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });

@@ -7,6 +7,39 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.11.0 — 2026-10-24
+
+MINOR: **sharing with scopes** (board T-176 part 9d; Jcode-Mods ARCHITECTURE.md §4). MINOR rather than a patch because it
+adds a stored field, a route and enforcement in three places (Work, the API / products, Unity's use) and a Settings
+editor; a separate version from 5.10.0 (9b / 9c), which is a different, already complete increment. Sharing a provider
+used to be all or nothing; the default is unchanged (no entry = every model, every use), so nothing that works today
+changes.
+- **Scopes** (`ai_hosts.rs`: `Scope`, `scope_of`, `check_scope`, `AiHosts::set_scope`, `scope_check`). Per shared person
+  and per `@group` the owner picks which models of that provider they may use and what for: `work` (Work runs), `api`
+  (the /v1 API and the gateway products behind it) and `unity` (Unity's brain). Stored on the hub only, in the host
+  record next to `share`: `scopes[providerId][user | "@group"] = { models: "*" | [..], uses: "*" | [..] }` in
+  `ai-hosts.json`; the host never sees it and keeps announcing `allowedUsers`, so an older host works as before. All
+  models ticked / all three uses stored as `"*"` (a model the host adds later comes along); both `"*"` removes the entry.
+  The person's own entry wins over their group's; the owner always has everything.
+- **Enforcement where the hub picks a provider.** `providers_for` and `provider` list only the allowed models for that
+  person (`scope` on the view says what is limited; a provider with no allowed model left is not listed). A Work run
+  (`work.rs` `run`) and every /v1 call (`openai.rs` `v1_as`, so products too) call `scope_check` and refuse with a message
+  naming the owner and what they allow ("t-admin shares R189 Claude with you, but not the model x (they allow y)" / "...
+  not for Work runs (they allow it for the API and products)"); /v1 answers 403 `permission_error`. A /v1 call that names
+  a model the person may not use is refused rather than quietly answered by another model.
+- **Settings → My AI hosts**: under each provider a "What each person may use" editor, per person and `@group`: the
+  provider's models as checkboxes and Work / API / Unity as toggles, saved at once through the new owner-only
+  `POST /api/hosts/scope { id, provider, user, models, uses }` (validated: models must be the provider's own, uses work /
+  api / unity, not the owner; `/api/hosts` carries `providers[].scopes`).
+- Unit tests (default all, a model outside refused, a use outside refused, the owner unaffected via `scope_locked`, the
+  group's scope for its members, the person's own scope wins, unknown uses dropped, the narrowed view); R189
+  (`--rust-hub`, a registered host with two providers: t-user limited to one model and the API sees only that model in
+  `/api/check`, is refused another model on /v1 and a Work run without `work`, then allowed once it is switched on; the
+  group scope and the own-wins rule; the stored shape; the host's config untouched).
+- Not done: Unity's brain does not pick a shared provider yet (it uses the hub's own `claude` and the hosts' engines), so
+  `unity` is stored, validated and checked by `scope_check(.., "unity", ..)` but has no call site until it does.
+  JavaScript hub: no mirror (the Rust hub answers `/api/hosts/scope`).
+
 ## 5.10.0 — 2026-10-24
 
 MINOR: **VibeRoller as the gateway** (board T-176; Jcode-Mods WORKPLAN 9b and 9c). MINOR rather than a patch or a
