@@ -7,6 +7,11 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.2 — 2026-10-24
+
+PATCH: `bridge/work-current.json` (the default account's Work state, hub data like work.json) is gitignored; on the
+server it showed as an untracked change and `worktree.js live` refused to go live ("main has uncommitted changes").
+
 ## 5.13.1 — 2026-10-24
 
 PATCH: **a merge never pushes to "upstream"**. `worktree.js merge` pushed the integration branch to every remote but
