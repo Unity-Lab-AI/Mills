@@ -438,7 +438,7 @@ async function run() {
   const devA = 'device-aaaaaaaaaaaaaaaa', devB = 'device-bbbbbbbbbbbbbbbb', devC = 'device-cccccccccccccccc';
 
   // Hub & sign-in
-  const scripts = fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => path.join(BRIDGE, f)).concat(fs.readdirSync(__dirname).map((f) => path.join(__dirname, f)));
+  const scripts = fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => path.join(BRIDGE, f)).concat(fs.readdirSync(__dirname).filter((f) => f.endsWith('.js')).map((f) => path.join(__dirname, f)));
   const bad = scripts.filter((f) => spawnSync(process.execPath, ['--check', f]).status !== 0);
   let pageOk = true, pageErr = '';
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep

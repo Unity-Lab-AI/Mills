@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.11.3 — 2026-10-24
+
+PATCH: **the proving ground** (board T-183; Sponge: "drive a fake version that talks to the hub … separately
+isolatable from the main running systems … a spongetest or a geetest account … a separate database … a random project
+that gets small changes done to it as we run tests"). `node bridge/test/proving.js start|stop|status|reset|login|work|
+hosts` (`bridge/test/PROVING.md`): a persistent sandbox hub from the worktree's own code on port 7795 (7796 behind
+with `--rust-hub`), its data under /srv/apps/sharedwork/_proving (outside every repo), accounts spongetest (admin) and
+geetest, the chip-away project `Sponge/proving-ground` (private on Forgejo), real Claude through the driving Work run's
+own relay (refuses to start without it), test AI hosts on demand for routing scenarios. Never touches the live hub, its
+data, accounts or hosts. First results (T-183): a real Work turn as spongetest edited, tested, committed and pushed a
+branch to the chip-away repo; three real jcode sessions decided the retrieval filter and replay (Jcode-Mods TOKENS.md).
+R1 now syntax-checks only the `.js` files in bridge/test (PROVING.md lives there).
+
 ## 5.11.2 — 2026-10-24
 
 PATCH: **a new law in LAWS.md: finish the whole job, test it in throw-away hubs, go live once.** Changes accumulate on
