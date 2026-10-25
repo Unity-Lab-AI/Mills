@@ -16,11 +16,13 @@
 
 pub mod cancel;
 pub mod command;
+pub mod custom;
 mod engine;
 pub mod fake;
 pub mod host;
 pub mod kinds;
 pub mod log;
+pub mod patch;
 mod plan;
 mod run;
 pub mod service;

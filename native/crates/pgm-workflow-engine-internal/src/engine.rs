@@ -103,16 +103,45 @@ impl NodeKind for Manifested {
 pub struct Engine {
     registry: Arc<DefaultRegistry>,
     kinds: Arc<HashMap<String, Arc<dyn NodeKind>>>,
+    /// The graphs of installed `graph` kinds (custom nodes, T-203), by kind.
+    graphs: Arc<HashMap<String, Value>>,
 }
 
 impl Default for Engine {
     fn default() -> Self { Engine::new() }
 }
 
+/// The sub-graph key a `graph` kind's graph runs under.
+pub(crate) fn kind_graph_key(kind: &str) -> String { format!("kind:{kind}") }
+
 impl Engine {
     /// The built-in kinds' shapes and the flow-control kinds' behaviour. The AI, tool, script and agent kinds have no
     /// behaviour until [`Engine::implement`] gives them one (T-201); a document using one is refused before it starts.
-    pub fn new() -> Engine { Engine { registry: Arc::new(DefaultRegistry::new()), kinds: Arc::new(HashMap::new()) } }
+    pub fn new() -> Engine { Engine { registry: Arc::new(DefaultRegistry::new()), kinds: Arc::new(HashMap::new()), graphs: Arc::new(HashMap::new()) } }
+
+    /// A custom kind (a newer version replaces the one installed); see [`Engine::install`].
+    pub(crate) fn register_custom(&mut self, m: KindManifest, k: Arc<dyn NodeKind>) -> Result<(), Vec<String>> { self.register(m, k) }
+    pub(crate) fn set_graph(&mut self, kind: &str, g: Value) { Arc::make_mut(&mut self.graphs).insert(kind.to_string(), g); }
+    /// The graph of an installed `graph` kind.
+    pub fn custom_graph(&self, kind: &str) -> Option<&Value> { self.graphs.get(kind) }
+
+    /// The document with the graphs of the `graph` kinds it uses (and they use) as sub-graphs, under
+    /// [`kind_graph_key`]: what a run of it plans and runs.
+    fn expanded(&self, doc: &Document) -> Document {
+        if self.graphs.is_empty() { return doc.clone(); }
+        let mut d = doc.clone();
+        let mut todo: Vec<String> = doc.nodes.iter().chain(doc.subgraphs.iter().flat_map(|m| m.values().flat_map(|s| s.nodes.iter()))).map(|n| n.kind.clone()).collect();
+        let mut subs = d.subgraphs.take().unwrap_or_default();
+        while let Some(k) = todo.pop() {
+            let key = kind_graph_key(&k);
+            if subs.contains_key(&key) { continue; }
+            let Some(g) = self.graphs.get(&k).and_then(|g| serde_json::from_value::<pgm_workflow_internal::Subgraph>(g.clone()).ok()) else { continue };
+            todo.extend(g.nodes.iter().map(|n| n.kind.clone()));
+            subs.insert(key, g);
+        }
+        d.subgraphs = if subs.is_empty() { None } else { Some(subs) };
+        d
+    }
 
     /// An engine with every built-in kind (T-201): `prompt`, `chat`, `summarise`, `jev`, `tool`, `script`, `agent`,
     /// `orchestrate`, besides the engine's own flow-control kinds and `sub-workflow`.
@@ -147,9 +176,11 @@ impl Engine {
     /// Can this engine run nodes of that kind (its own, or one given to it)?
     pub fn can_run(&self, kind: &str) -> bool { runnable(&self.kinds, kind) }
 
-    fn prepare(&self, doc: &Document) -> (Vec<Value>, HashMap<Option<String>, Arc<Plan>>) {
-        let mut problems: Vec<Value> = validate(doc, &Options::new(&*self.registry)).issues.into_iter().filter(|i| i.level == Level::Error)
+    fn prepare(&self, original: &Document) -> (Vec<Value>, HashMap<Option<String>, Arc<Plan>>) {
+        let mut problems: Vec<Value> = validate(original, &Options::new(&*self.registry)).issues.into_iter().filter(|i| i.level == Level::Error)
             .map(|i| json!({ "code": i.code, "message": i.message, "node": i.node, "graph": i.graph })).collect();
+        let expanded = self.expanded(original);
+        let doc = &expanded;
         let graphs: Vec<(Option<String>, &[Node])> = std::iter::once((None, doc.nodes.as_slice()))
             .chain(doc.subgraphs.iter().flat_map(|m| m.iter().map(|(k, s)| (Some(k.clone()), s.nodes.as_slice())))).collect();
         for (g, nodes) in &graphs {
@@ -250,7 +281,7 @@ impl Engine {
         }
         let resumed = mode == Mode::Resume;
         let run = Arc::new(Run {
-            id: id.clone(), doc: doc.clone(), kinds: self.kinds.clone(), host: host.clone(), plans: plans.clone(), log,
+            id: id.clone(), doc: Arc::new(self.expanded(&doc)), kinds: self.kinds.clone(), host: host.clone(), plans: plans.clone(), log,
             mode, cancel: Cancel::new(), stop: Mutex::new(None), sem: Arc::new(Semaphore::new(limits.max_parallel.max(1))),
             node_runs: (if resumed { prior.node_starts } else { 0 }).into(), cost: Mutex::new(if resumed { prior.cost } else { 0.0 }),
             limits: limits.clone(), prior: prior.clone(), state: Mutex::new(Map::new()), input: input_v, waiting: Mutex::new(vec![]),

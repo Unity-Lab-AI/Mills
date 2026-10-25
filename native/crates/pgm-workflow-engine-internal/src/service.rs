@@ -14,7 +14,7 @@
 use crate::cancel::Cancel;
 use crate::engine::{Engine, RunInput, RunOptions, RunReport};
 use crate::host::{Ask, BoxFut, HttpAnswer, HttpRequest, ModelAnswer, ModelRequest, NodeError, ToolCtx, WorkflowHost};
-use pgm_workflow_internal::{diff, doc, validate, Document, Options};
+use pgm_workflow_internal::{diff, doc, validate, Document, KindManifest, KindRegistry, Options};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -54,6 +54,25 @@ pub trait Directory: Send + Sync {
     fn secret_values(&self) -> Vec<String> { vec![] }
     /// The tools a run may use when its scope's policy names none (spec 9.3). None by default.
     fn default_tools(&self) -> Vec<String> { vec![] }
+    /// A timer's next time after a fire at `ms` (T-211): `daily`, `nightly`, `weekly`, `biweekly`, `monthly`,
+    /// `quarterly`, `half_year`, `yearly`. The hub answers with the board's own repeats (month ends, local time); the
+    /// default knows the fixed ones.
+    fn next_due(&self, ms: u64, recur: &str) -> Option<u64> {
+        const DAY: u64 = 86_400_000;
+        Some(ms + match recur { "daily" | "nightly" => DAY, "weekly" => 7 * DAY, "biweekly" => 14 * DAY, _ => return None })
+    }
+    /// The first time of day `at` ("HH:MM") after `ms`: the hub's in its local time, the default in UTC.
+    fn first_time(&self, ms: u64, at: &str) -> Option<u64> {
+        let (h, m) = at.split_once(':')?;
+        let (h, m): (u64, u64) = (h.trim().parse().ok()?, m.trim().parse().ok()?);
+        if h > 23 || m > 59 { return None; }
+        let day = ms - ms % 86_400_000;
+        let t = day + (h * 60 + m) * 60_000;
+        Some(if t > ms { t } else { t + 86_400_000 })
+    }
+    /// Tells a person something that went wrong while they were not looking (a triggered run failed, T-213): the hub
+    /// sends it as a private chat message.
+    fn alert(&self, _user: &str, _text: &str) {}
 }
 
 /// Who asks: a person, through a full client (the page, the apps) or a run-only one (jcode: list, view, run only).
@@ -102,7 +121,11 @@ pub struct Service {
     me: Weak<Service>,
     /// writes of one workflow's files never interleave
     write: Mutex<()>,
+    /// this service's own id, for the scheduler's lease (one hub fires the timers of a store)
+    instance: String,
 }
+
+mod triggers;
 
 fn read(p: &Path) -> Option<Value> {
     let t = std::fs::read_to_string(p).ok()?;
@@ -131,6 +154,7 @@ fn read_lines(p: &Path) -> Vec<Value> {
     std::fs::read_to_string(p).map(|t| t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()).unwrap_or_default()
 }
 
+fn semver(v: &str) -> (u32, u32, u32) { pgm_workflow_internal::kinds::parse_semver(v).unwrap_or((0, 0, 0)) }
 fn safe(id: &str) -> bool { !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) && !id.starts_with('.') }
 fn s<'a>(v: &'a Value, k: &str) -> &'a str { v.get(k).and_then(Value::as_str).unwrap_or("") }
 
@@ -146,7 +170,7 @@ fn rank(name: &str, q: &str) -> Option<u8> {
 impl Service {
     pub fn new(root: PathBuf, engine: Engine, dir: Arc<dyn Directory>) -> Arc<Service> {
         let rev = read(&root.join("state.json")).and_then(|v| v["rev"].as_u64()).unwrap_or(0);
-        Arc::new_cyclic(|me| Service { root, engine, dir, runs: Mutex::new(HashMap::new()), rev: AtomicU64::new(rev), me: me.clone(), write: Mutex::new(()) })
+        Arc::new_cyclic(|me| Service { root, engine, dir, runs: Mutex::new(HashMap::new()), rev: AtomicU64::new(rev), me: me.clone(), write: Mutex::new(()), instance: pgm_core_internal::crypto::random_hex(8) })
     }
 
     pub fn engine(&self) -> &Engine { &self.engine }
@@ -260,9 +284,11 @@ impl Service {
         if !self.dir.exists(&c.user) { return bad(401, "Not signed in."); }
         let q = |k: &str| query.get(k).map(String::as_str).filter(|x| !x.is_empty());
         let b = |k: &str| body.get(k).and_then(Value::as_str).filter(|x| !x.is_empty());
-        let writes = matches!(path, "save" | "publish" | "promote" | "delete" | "restore" | "perms" | "import" | "policy" | "kind") || ["law", "prompt", "group"].iter().any(|k| path == *k || path.starts_with(&format!("{k}/")));
+        let writes = matches!(path, "save" | "publish" | "promote" | "delete" | "restore" | "perms" | "import" | "policy" | "selection" | "ask") || ["law", "prompt", "group", "kind", "trigger"].iter().any(|k| path == *k || path.starts_with(&format!("{k}/")));
         if c.run_only && method == "POST" && writes { return bad(403, "This client may list, view and run workflows, not change them."); }
         match (method, path) {
+            ("GET", "triggers") | ("POST", "trigger") | ("POST", "trigger/pause") | ("POST", "trigger/resume") | ("POST", "trigger/delete") => self.triggers_route(c, method, path, query, body),
+            ("POST", "ask") => self.ask(c, b("id"), &body["doc"], b("message").unwrap_or(""), &body["selection"]).await,
             ("GET", "laws") | ("GET", "prompts") | ("GET", "groups") => self.shelf_get(c, Shelf::of(path), q("scope"), q("id"), q("version").and_then(|v| v.parse().ok())),
             ("POST", "law") | ("POST", "prompt") | ("POST", "group") => self.shelf_save(c, Shelf::of(path), body.get("item").unwrap_or(body), b("scope")),
             ("POST", "law/delete") | ("POST", "prompt/delete") | ("POST", "group/delete") => self.shelf_delete(c, Shelf::of(path), b("id")),
@@ -270,7 +296,21 @@ impl Service {
             ("GET", "get") => self.get(c, q("id"), q("name"), q("scope"), q("version").or(q("channel"))),
             ("GET", "versions") => self.with(c, q("id"), |r| r.view, |m| j(200, json!({ "versions": m["versions"], "published": m["published"], "tags": m["tags"] }))),
             ("GET", "diff") => self.diff(c, q("id"), q("a"), q("b")),
-            ("GET", "kinds") => j(200, json!({ "kinds": self.engine.registry().kinds().map(|k| { let mut v = serde_json::to_value(k).unwrap_or(Value::Null); v["trust"] = json!("built-in"); v["runnable"] = json!(self.engine.can_run(&k.kind)); v }).collect::<Vec<_>>() })),
+            ("GET", "kinds") => {
+                let mut kinds: Vec<Value> = self.engine.registry().kinds().map(|k| { let mut v = serde_json::to_value(k).unwrap_or(Value::Null); v["trust"] = json!("built-in"); v["runnable"] = json!(self.engine.can_run(&k.kind)); v }).collect();
+                let scopes: Vec<String> = self.dir.scopes_of(&c.user).into_iter().filter(|x| q("scope").is_none_or(|w| w == x)).collect();
+                for r in self.kind_records(&scopes) {
+                    let mut v = r["manifest"].clone();
+                    for k in ["trust", "hash", "author", "scope", "reviewers", "at"] { v[k] = r[k].clone(); }
+                    v["runnable"] = json!(self.trust_ok(&r, &c.user).is_ok());
+                    kinds.push(v);
+                }
+                j(200, json!({ "kinds": kinds }))
+            }
+            ("POST", "kind") => self.kind_publish(c, &body["manifest"], b("scope")).await,
+            ("POST", "kind/review") => self.kind_review(c, b("kind").unwrap_or(""), b("version").unwrap_or(""), b("scope")),
+            ("POST", "kind/block") => self.kind_block(c, b("kind").unwrap_or(""), b("scope")),
+            ("POST", "selection") => self.selection(c, &body["doc"], &body["nodes"], b("name").unwrap_or(""), b("title").unwrap_or("")).await,
             ("GET", "runs") => self.runs(c, q("workflow"), q("mine") == Some("1"), q("status")),
             ("GET", "run") => match self.run_meta_for(c, q("id").unwrap_or("")) { Ok(m) => j(200, m), Err(e) => e },
             ("GET", "log") => self.log(c, q("id").unwrap_or(""), q("from").and_then(|x| x.parse().ok()).unwrap_or(0), q("follow") == Some("1")),
@@ -597,8 +637,11 @@ impl Service {
     /// cannot run.
     fn problems_in(&self, d: &Document, owner: &str) -> Vec<Value> {
         let info = StoreScope { svc: self, owner };
-        let mut out: Vec<Value> = validate(d, &Options::new(self.engine.registry()).scope(&info)).issues.into_iter().map(|i| serde_json::to_value(i).unwrap_or(Value::Null)).collect();
-        for p in self.engine.preflight(d) { if !out.iter().any(|x| x["code"] == p["code"] && x["message"] == p["message"]) { let mut p = p; p["level"] = json!("error"); out.push(p); } }
+        let (eng, kind_problems) = self.engine_for(owner, d);
+        // a custom kind that may not run here first (it is the reason validation then calls the kind unknown)
+        let mut out: Vec<Value> = kind_problems.into_iter().map(|mut p| { p["level"] = json!("error"); p }).collect();
+        out.extend(validate(d, &Options::new(eng.registry()).scope(&info)).issues.into_iter().map(|i| serde_json::to_value(i).unwrap_or(Value::Null)));
+        for p in eng.preflight(d) { if !out.iter().any(|x| x["code"] == p["code"] && x["message"] == p["message"]) { let mut p = p; p["level"] = json!("error"); out.push(p); } }
         out
     }
 
@@ -651,6 +694,193 @@ impl Service {
         self.save(c, None, &wf, None, Some(&sc))
     }
 
+    // ------------------------------------------------------------ the AI side chat (T-206, spec 10.1)
+
+    /// The side chat next to the editor: a plain AI call (the person's own AI, through their host) about one workflow,
+    /// told the node kinds this person may use. It answers with text and, when asked for a change, a **patch** (the
+    /// editor's commands, crate::patch), tried on the document here so its problems come with it. It writes nothing,
+    /// runs nothing, publishes nothing: the person accepts the patch into their draft, or not. With no AI it says so.
+    async fn ask(&self, c: &Caller, id: Option<&str>, docv: &Value, message: &str, selection: &Value) -> Answer {
+        if message.trim().is_empty() { return bad(400, "Ask something."); }
+        let d = if docv.is_object() {
+            let mut dv = docv.clone();
+            if dv.get("id").is_none() { dv["id"] = json!("wf-draft"); }
+            match doc::from_value(dv) { Ok(d) => d, Err(e) => return bad(400, e.to_string()) }
+        } else {
+            let Some(m) = id.and_then(|i| self.meta_by_id(i)) else { return bad(404, "No such workflow.") };
+            let r = self.rights(c, &m);
+            if !r.view { return bad(404, "No such workflow."); }
+            match self.draft_doc(&m, &c.user).map(|x| x.0).or_else(|| self.published(&m).map(|x| x.1)) { Some(d) => d, None => return bad(404, "That workflow has no version.") }
+        };
+        let (eng, _) = self.engine_for(&c.user, &d);
+        let catalogue: Vec<Value> = eng.registry().kinds().filter(|k| eng.can_run(&k.kind) || matches!(k.kind.as_str(), "note" | "comment")).map(|k| json!({
+            "kind": k.kind, "title": k.title, "category": k.category,
+            "in": k.ports.inputs.iter().map(|p| format!("{}:{}{}", p.name, p.ty, if p.required == Some(true) { " (required)" } else { "" })).collect::<Vec<_>>(),
+            "out": k.ports.outputs.iter().map(|p| format!("{}:{}", p.name, p.ty)).collect::<Vec<_>>(),
+            "config": k.config.as_ref().and_then(|s| s.get("properties")).and_then(Value::as_object).map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+        })).collect();
+        let system = "You help a person design a Hyper Workflow in VibeRoller: a graph of nodes joined by wires (\"node.port\" to \"node.port\"). You read the workflow, explain it and suggest changes. A change is a patch: a list of commands, each one of {\"type\":\"add\",\"kind\":K,\"id\":ID,\"x\":X,\"y\":Y,\"props\":{config}}, {\"type\":\"connect\",\"from\":\"a.port\",\"to\":\"b.port\"}, {\"type\":\"disconnect\",\"from\":\"a.port\",\"to\":\"b.port\"}, {\"type\":\"setProp\",\"ids\":[ID],\"props\":{config}}, {\"type\":\"delete\",\"ids\":[ID]}, {\"type\":\"move\",\"ids\":[ID],\"dx\":X,\"dy\":Y}. Use only the node kinds and ports listed. You never run, publish or save anything: the person accepts or rejects your patch. Answer with JSON only: {\"text\": \"your answer\", \"patch\": [commands, or empty]}.";
+        let user = format!("Node kinds:\n{}\n\nThe workflow:\n{}\n\nSelected: {}\n\n{message}", serde_json::to_string(&catalogue).unwrap_or_default(), doc::write(&d), if selection.is_null() { "nothing".into() } else { selection.to_string() });
+        let req = ModelRequest { run: format!("ask-{}", c.user), key: "side-chat".into(), node: "side-chat".into(), attempt: 1, model: None,
+            messages: vec![json!({ "role": "system", "content": system }), json!({ "role": "user", "content": user })], options: json!({ "responseFormat": "json" }) };
+        let a = match self.dir.host_for(&c.user).call_model(req, Cancel::new()).await {
+            Ok(a) => a,
+            Err(e) if matches!(e.code.as_str(), "engine.unavailable" | "model.unreachable" | "model.rate-limited" | "engine.model-unreachable") =>
+                return j(200, json!({ "noAi": true, "text": format!("No AI is available to you right now ({}); the editor works without it.", e.message), "patch": [] })),
+            Err(e) => return bad(502, e.message),
+        };
+        let v = crate::kinds::ai::json_in(&a.text).unwrap_or(Value::Null);
+        let text = v.get("text").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| a.text.clone());
+        let patch: Vec<Value> = v.get("patch").and_then(Value::as_array).cloned().unwrap_or_default();
+        let problems: Vec<Value> = if patch.is_empty() { vec![] } else {
+            match crate::patch::apply(&d, &patch) {
+                Ok(nd) => self.problems_in(&nd, &c.user).into_iter().filter(|p| p["level"] == "error").collect(),
+                Err((i, m)) => vec![json!({ "code": "patch", "index": i, "message": m, "level": "error" })],
+            }
+        };
+        j(200, json!({ "text": text, "patch": patch, "problems": problems }))
+    }
+
+    // ------------------------------------------------------------ custom node kinds (T-203, spec 11)
+
+    fn kind_dir(&self, scope: &str, kind: &str) -> PathBuf { self.root.join(scope).join("kinds").join(kind.replace('/', "__")) }
+
+    /// Every stored version of every custom kind in the given scopes (nearest scope first, newest version first), each
+    /// `{manifest, hash, author, at, trust, reviewers, scope}`.
+    fn kind_records(&self, scopes: &[String]) -> Vec<Value> {
+        let mut out = vec![];
+        for sc in scopes {
+            let mut here = vec![];
+            for kd in std::fs::read_dir(self.root.join(sc).join("kinds")).into_iter().flatten().flatten() {
+                for f in std::fs::read_dir(kd.path()).into_iter().flatten().flatten() {
+                    if let Some(mut r) = read(&f.path()) { r["scope"] = json!(sc); here.push(r); }
+                }
+            }
+            here.sort_by(|a, b| s(&a["manifest"], "kind").cmp(s(&b["manifest"], "kind")).then_with(|| semver(s(&b["manifest"], "version")).cmp(&semver(s(&a["manifest"], "version")))));
+            out.extend(here);
+        }
+        out
+    }
+
+    /// May this person run (or add) this version? `blocked`: nobody; `author-only` (not reviewed yet): its author;
+    /// `reviewed`: everyone who sees it.
+    fn trust_ok(&self, r: &Value, user: &str) -> Result<(), Value> {
+        let kind = s(&r["manifest"], "kind");
+        match s(r, "trust") {
+            "blocked" => Err(json!({ "code": "engine.kind-blocked", "message": format!("the node kind `{kind}` is blocked") })),
+            "reviewed" => Ok(()),
+            _ if s(r, "author") == user => Ok(()),
+            _ => Err(json!({ "code": "engine.kind-untrusted", "message": format!("the node kind `{kind}` is not reviewed yet: only its author ({}) may run it", s(r, "author")) })),
+        }
+    }
+
+    /// The engine for a document of this person: the built-ins plus every custom kind it uses (and those use), each
+    /// the newest stored version of the major its nodes pin, if they may run it and its hash still matches.
+    pub fn engine_for(&self, user: &str, d: &Document) -> (Engine, Vec<Value>) {
+        let mut eng = self.engine.clone();
+        let mut problems = vec![];
+        let records = self.kind_records(&self.dir.scopes_of(user));
+        if records.is_empty() { return (eng, problems); }
+        let mut todo: Vec<(String, u32)> = d.nodes.iter().chain(d.subgraphs.iter().flat_map(|m| m.values().flat_map(|g| g.nodes.iter()))).map(|n| (n.kind.clone(), n.kind_version.unwrap_or(1))).collect();
+        let mut done: Vec<String> = vec![];
+        while let Some((kind, major)) = todo.pop() {
+            if done.contains(&kind) || self.engine.registry().manifest(&kind).is_some() { continue; }
+            done.push(kind.clone());
+            let Some(r) = records.iter().find(|r| s(&r["manifest"], "kind") == kind && semver(s(&r["manifest"], "version")).0 == major) else { continue };
+            if let Err(p) = self.trust_ok(r, user) { problems.push(p); continue; }
+            let Ok(m) = serde_json::from_value::<KindManifest>(r["manifest"].clone()) else { continue };
+            match eng.install(m.clone(), r["hash"].as_str()) {
+                Ok(()) => { if let Some(g) = eng.custom_graph(&kind) { for n in g["nodes"].as_array().into_iter().flatten() { todo.push((s(n, "kind").to_string(), n["kindVersion"].as_u64().unwrap_or(1) as u32)); } } }
+                Err(e) => problems.push(json!({ "code": if e[0].starts_with("engine.kind-hash") { "engine.kind-hash" } else { "engine.kind" }, "message": e.join("; ") })),
+            }
+        }
+        (eng, problems)
+    }
+
+    /// Publishes a version of a custom kind into a scope (spec 11.4): the manifest is checked, its version must be newer
+    /// than the scope's, its tests run (and must pass); it starts `author-only` until it is reviewed.
+    async fn kind_publish(&self, c: &Caller, mv: &Value, scope: Option<&str>) -> Answer {
+        let Ok(m) = serde_json::from_value::<KindManifest>(mv.clone()) else { return bad(400, "`manifest` is not a node kind manifest.") };
+        let sc = scope.map(str::to_string).unwrap_or_else(|| format!("me-{}", c.user));
+        if !safe(&sc) || !(sc.strip_prefix("me-") == Some(c.user.as_str()) || (!sc.starts_with("me-") && self.dir.scopes_of(&c.user).contains(&sc))) { return bad(403, "You may not add node kinds to that scope."); }
+        let mut problems = m.problems();
+        if self.engine.registry().manifest(&m.kind).is_some() { problems.push(format!("`{}` is a built-in kind", m.kind)); }
+        if !problems.is_empty() { return j(400, json!({ "error": "The manifest has problems.", "problems": problems })); }
+        let program = crate::custom::needs_two(&m);
+        if !program { if let Err(p) = Engine::with_builtins().install(m.clone(), None) { return j(400, json!({ "error": "The kind cannot be installed.", "problems": p })); } }
+        let existing = self.kind_records(std::slice::from_ref(&sc));
+        if let Some(r) = existing.iter().find(|r| s(&r["manifest"], "kind") == m.kind) {
+            if semver(&m.version) <= semver(s(&r["manifest"], "version")) { return j(409, json!({ "error": format!("`{}` has version {} here already: publish a newer one", m.kind, s(&r["manifest"], "version")) })); }
+        }
+        if !program {
+            let others: Vec<KindManifest> = self.kind_records(&self.dir.scopes_of(&c.user)).into_iter().filter_map(|r| serde_json::from_value(r["manifest"].clone()).ok()).collect();
+            let failures = crate::custom::run_tests(&m, &others).await;
+            if !failures.is_empty() { return j(422, json!({ "error": "Its tests fail.", "failures": failures })); }
+        }
+        let h = crate::custom::hash(&m);
+        let rec = json!({ "manifest": m, "hash": h, "author": c.user, "at": now_ms(), "trust": "author-only", "reviewers": [] });
+        if !write(&self.kind_dir(&sc, &m.kind).join(format!("{}.json", m.version)), &rec) { return bad(500, "Could not save the kind."); }
+        self.audit(&sc, &c.user, "kind-publish", json!({ "kind": m.kind, "version": m.version, "hash": h }));
+        j(200, json!({ "ok": true, "kind": m.kind, "version": m.version, "hash": h, "trust": "author-only" }))
+    }
+
+    /// A review (spec 11.4): by someone who is not the author and may publish in the scope (an admin, or named in its
+    /// `lawEditors`); one makes it `reviewed`, a sandboxed program needs two.
+    fn kind_review(&self, c: &Caller, kind: &str, version: &str, scope: Option<&str>) -> Answer {
+        let scopes = self.dir.scopes_of(&c.user);
+        let Some(mut r) = self.kind_records(&scopes).into_iter().find(|r| s(&r["manifest"], "kind") == kind && (version.is_empty() || s(&r["manifest"], "version") == version) && scope.is_none_or(|x| s(r, "scope") == x)) else { return bad(404, "No such node kind.") };
+        let sc = s(&r, "scope").to_string();
+        if s(&r, "author") == c.user { return bad(403, "A kind is reviewed by someone other than its author."); }
+        if !self.may_shelve(c, &sc) { return bad(403, "Only the scope's admins (or its lawEditors) review its node kinds."); }
+        if s(&r, "trust") == "blocked" { return bad(409, "That kind is blocked."); }
+        if !r["reviewers"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(c.user.as_str()))) {
+            if !r["reviewers"].is_array() { r["reviewers"] = json!([]); }
+            r["reviewers"].as_array_mut().unwrap().push(json!(c.user));
+        }
+        let m: Option<KindManifest> = serde_json::from_value(r["manifest"].clone()).ok();
+        let need = if m.as_ref().is_some_and(crate::custom::needs_two) { 2 } else { 1 };
+        if r["reviewers"].as_array().map_or(0, |a| a.len()) >= need { r["trust"] = json!("reviewed"); }
+        let v = s(&r["manifest"], "version").to_string();
+        if let Some(o) = r.as_object_mut() { o.remove("scope"); }
+        write(&self.kind_dir(&sc, kind).join(format!("{v}.json")), &r);
+        self.audit(&sc, &c.user, "kind-review", json!({ "kind": kind, "version": v, "trust": r["trust"] }));
+        j(200, json!({ "ok": true, "trust": r["trust"], "reviewers": r["reviewers"] }))
+    }
+
+    /// Blocks every version of a kind in a scope (an admin): it can be neither added nor run.
+    fn kind_block(&self, c: &Caller, kind: &str, scope: Option<&str>) -> Answer {
+        let Some(sc) = scope.filter(|x| safe(x)) else { return bad(400, "Which scope?") };
+        if !(self.dir.is_admin(&c.user) && self.dir.scopes_of(&c.user).iter().any(|x| x == sc)) { return bad(403, "Only an admin blocks a node kind."); }
+        let recs: Vec<Value> = self.kind_records(&[sc.to_string()]).into_iter().filter(|r| s(&r["manifest"], "kind") == kind).collect();
+        if recs.is_empty() { return bad(404, "No such node kind."); }
+        for mut r in recs {
+            r["trust"] = json!("blocked");
+            let v = s(&r["manifest"], "version").to_string();
+            if let Some(o) = r.as_object_mut() { o.remove("scope"); }
+            write(&self.kind_dir(sc, kind).join(format!("{v}.json")), &r);
+        }
+        self.audit(sc, &c.user, "kind-block", json!({ "kind": kind }));
+        j(200, json!({ "ok": true }))
+    }
+
+    /// "New node from selection" (spec 11.1): the selected nodes of a document become a `graph` kind
+    /// (`<user>/<name>`), published in the person's own scope; the answer has the manifest and the document rewired to
+    /// use it (the editor shows it; nothing else is saved).
+    async fn selection(&self, c: &Caller, docv: &Value, nodes: &Value, name: &str, title: &str) -> Answer {
+        let mut dv = docv.clone();
+        if dv.is_object() && dv.get("id").is_none() { dv["id"] = json!("wf-selection"); }
+        let Ok(d) = doc::from_value(dv) else { return bad(400, "`doc` is not a workflow document.") };
+        let ids: Vec<String> = nodes.as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+        if name.is_empty() || !name.chars().all(|ch| ch.is_ascii_alphanumeric() || "-_".contains(ch)) { return bad(400, "The new kind needs a `name` of letters, digits, - and _."); }
+        let kind = format!("{}/{name}", c.user);
+        let (eng, _) = self.engine_for(&c.user, &d);
+        let (m, nd) = match crate::custom::from_selection(&d, eng.registry(), &ids, &kind, if title.is_empty() { name } else { title }) { Ok(x) => x, Err(e) => return bad(400, e) };
+        match Box::pin(self.kind_publish(c, &serde_json::to_value(&m).unwrap_or(Value::Null), None)).await {
+            Answer::Json(200, v) => j(200, json!({ "ok": true, "kind": kind, "manifest": m, "hash": v["hash"], "doc": doc::to_value(&nd) })),
+            other => other,
+        }
+    }
+
     // ------------------------------------------------------------ runs
 
     fn run_meta(&self, run: &str) -> Option<Value> { if safe(run) { read(&self.run_dir(run).join("run.json")) } else { None } }
@@ -690,15 +920,17 @@ impl Service {
             match self.resolve_range(&m, range.as_deref()) { Some((v, d)) => (Some(v), d), None => return bad(404, "That workflow has no such published version.") }
         };
         let project = body["project"].as_str().filter(|p| !p.is_empty()).map(str::to_string);
-        let mut problems: Vec<Value> = self.problems_in(&d, s(&m, "owner")).into_iter().filter(|p| p["level"] == "error").collect();
+        let mut problems: Vec<Value> = self.problems_in(&d, &c.user).into_iter().filter(|p| p["level"] == "error").collect();
         if d.needs_project == Some(true) && project.is_none() { problems.push(json!({ "code": "engine.no-project", "message": "this workflow runs against a project: say which (--project)" })); }
         if !problems.is_empty() { return j(422, json!({ "error": "This workflow cannot run here.", "problems": problems })); }
         let mut input = RunInput::prompt(body["prompt"].as_str().unwrap_or("")).sender("person", &c.user);
+        // a trigger starts its runs as the workflow's owner and says so (spec 9.2)
+        if body["sender"].is_object() { input.sender = body["sender"].clone(); }
         input.inputs = body["inputs"].as_object().cloned().unwrap_or_default();
         input.files = body["files"].as_array().cloned().unwrap_or_default();
         input.project = project;
         let run = format!("hr-{:012x}", (now_ms() << 8 ^ self.rev.fetch_add(1, Ordering::SeqCst)) & 0xffff_ffff_ffff);
-        let rm = json!({ "id": run, "owner": c.user, "workflow": { "id": m["id"], "name": m["name"], "scope": m["scope"], "version": version, "draft": draft }, "status": "running", "at": now_ms(), "runner": "hub", "doc": doc::to_value(&d) });
+        let rm = json!({ "id": run, "owner": c.user, "workflow": { "id": m["id"], "name": m["name"], "scope": m["scope"], "version": version, "draft": draft }, "status": "running", "at": now_ms(), "runner": "hub", "doc": doc::to_value(&d), "trigger": body["trigger"] });
         write(&self.run_dir(&run).join("run.json"), &rm);
         self.drive(run.clone(), c.user.clone(), Arc::new(d), Drive::Start(input));
         j(202, json!({ "run": run, "runner": "hub" }))
@@ -793,9 +1025,10 @@ impl Service {
         let scope = self.run_meta(&run).map(|m| s(&m["workflow"], "scope").to_string()).unwrap_or_default();
         let host: Arc<dyn WorkflowHost> = Arc::new(RunHost { inner: self.dir.host_for(&owner), svc: self.me.clone(), run: run.clone(), owner: owner.clone(), scope, live: live.clone() });
         self.dir.changed(&owner, &json!({ "type": "hyper_run", "run": run, "status": "running" }));
+        // the engine with the custom kinds this person may run (a problem with one shows as the run's preflight)
+        let (e, _) = self.engine_for(&owner, &d);
         tokio::spawn(async move {
             let opts = RunOptions { run_id: Some(run.clone()), runner: Some("hub".into()), cancel: live.cancel.clone(), ..Default::default() };
-            let e = me.engine.clone();
             let rep: RunReport = match how {
                 Drive::Start(input) => e.start(d, input, host, opts).await,
                 Drive::Resume(log) => e.resume(d, log, host, opts).await,
@@ -820,6 +1053,7 @@ impl Service {
             write(&self.run_dir(run).join("run.json"), &m);
         }
         self.dir.changed(owner, &json!({ "type": "hyper_run", "run": run, "status": rep.status, "outcome": rep.outcome, "waiting": rep.waiting }));
+        self.trigger_finished(run, owner, rep);
     }
 
     /// After a start (the hub restarted): every run that was running goes on from its log; a waiting run whose
@@ -839,7 +1073,8 @@ impl Service {
     }
 
     /// The deadlines of waiting runs (call every few seconds).
-    pub fn tick(&self) { self.resume_all(false) }
+    /// Every few seconds: the deadlines of waiting runs, and the timers that are due (T-211).
+    pub fn tick(&self) { self.resume_all(false); self.tick_at(now_ms()); }
 
     /// The published workflow a `sub-workflow` node of a run in `scope`, owned by `owner`, may run.
     fn workflow_for(&self, owner: &str, scope: &str, name: &str, range: Option<&str>) -> Option<Document> {

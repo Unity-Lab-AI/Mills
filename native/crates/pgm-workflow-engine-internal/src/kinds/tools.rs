@@ -37,10 +37,18 @@ fn fill(call: &NodeCall, host: &dyn WorkflowHost, v: &Value) -> Result<Value, No
     })
 }
 
-async fn http(call: &NodeCall, host: &dyn WorkflowHost, h: &Value) -> Result<NodeOutput, NodeError> {
+async fn http(call: &NodeCall, host: &dyn WorkflowHost, h: &Value) -> Result<NodeOutput, NodeError> { http_call(call, host, h, None).await }
+
+/// A custom HTTP call. `allowed`: the hosts a custom node declared (`permissions.network`); a call anywhere else is
+/// `engine.denied` before anything is sent (None: the scope's policy and the host decide, as for the `tool` kind).
+pub async fn http_call(call: &NodeCall, host: &dyn WorkflowHost, h: &Value, allowed: Option<&[String]>) -> Result<NodeOutput, NodeError> {
     let method = h.get("method").and_then(Value::as_str).unwrap_or("GET").to_uppercase();
     let url = render(call, host, h.get("url").and_then(Value::as_str).unwrap_or(""), false)?;
     if !(url.starts_with("https://") || url.starts_with("http://")) { return Err(NodeError::fatal("engine.config", format!("node `{}`: `{url}` is not an http(s) address", call.node.id))); }
+    if let Some(allowed) = allowed {
+        let target = url.split("://").nth(1).and_then(|r| r.split(['/', ':', '?']).next()).unwrap_or("").to_lowercase();
+        if !allowed.iter().any(|a| a.eq_ignore_ascii_case(&target)) { return Err(NodeError::fatal("engine.denied", format!("node `{}` ({}) may not reach {target}: its kind did not ask for it (permissions.network)", call.node.id, call.node.kind))); }
+    }
     let mut headers = vec![];
     for (k, v) in h.get("headers").and_then(Value::as_object).cloned().unwrap_or_default() { headers.push((k, render(call, host, &text_of(&v), true)?)); }
     let body = match h.get("body") {

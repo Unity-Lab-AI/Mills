@@ -456,9 +456,11 @@ async fn fire_inner(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, inp: Inputs, c
         if let Some(rec) = run.prior.memo.get(&key).cloned() { return from_memo(run, scope, n, &key, &rec); }
     }
     let r = match node.kind.as_str() {
+        // a custom `graph` kind (T-203): its graph, as a sub-graph
+        k if run.engine.custom_graph(k).is_some() => run_sub(run, scope, n, &key, inp, cancel, Some(crate::engine::kind_graph_key(k))).await,
         "loop" => run_loop(run, scope, n, &key, inp, cancel).await,
         "parallel" if is_compound(node) => run_lines(run, scope, n, &key, inp, cancel).await,
-        "subgraph" | "for-each" => run_sub(run, scope, n, &key, inp, cancel).await,
+        "subgraph" | "for-each" => run_sub(run, scope, n, &key, inp, cancel, None).await,
         "approve" => approve(run, scope, n, &key, inp),
         "sub-workflow" => run_child(run, scope, n, &key, inp, cancel).await,
         k if CONTROL.contains(&k) => control(run, scope, n, &key, inp, cancel).await,
@@ -1128,18 +1130,20 @@ async fn run_child(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp:
     }
 }
 
-/// `subgraph` (a box you can look inside) and `for-each` (the same sub-graph once per item, a list of results).
-async fn run_sub(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp: Inputs, cancel: Cancel) -> Result<Fired, NodeError> {
+/// `subgraph` (a box you can look inside), a custom `graph` kind (`graph_ref`: its graph), and `for-each` (the same
+/// sub-graph once per item, a list of results).
+async fn run_sub(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp: Inputs, cancel: Cancel, graph_ref: Option<String>) -> Result<Fired, NodeError> {
     let plan = scope.plan.clone();
     let node = &plan.nodes[n];
     let t0 = now(run);
-    let sk = node.cfg_str("ref").ok_or_else(|| NodeError::fatal("engine.config", format!("node `{}` names no sub-graph (`ref`)", node.id)))?;
-    let sub = run.plans.get(&Some(sk.to_string())).cloned().ok_or_else(|| NodeError::fatal("engine.config", format!("node `{}`: there is no sub-graph `{sk}`", node.id)))?;
+    let boxed = graph_ref.is_some() || node.kind == "subgraph";
+    let sk = match &graph_ref { Some(r) => r.clone(), None => node.cfg_str("ref").ok_or_else(|| NodeError::fatal("engine.config", format!("node `{}` names no sub-graph (`ref`)", node.id)))?.to_string() };
+    let sub = run.plans.get(&Some(sk.clone())).cloned().ok_or_else(|| NodeError::fatal("engine.config", format!("node `{}`: there is no sub-graph `{sk}`", node.id)))?;
     if scope.depth + 1 > pgm_workflow_internal::MAX_DEPTH { return Err(NodeError::fatal("engine.depth", format!("node `{}` opens sub-graphs more than {} deep", node.id, pgm_workflow_internal::MAX_DEPTH))); }
     if !begin_compound(run, scope, n, key, &inp.values) { return Ok(Fired::Stopped); }
     let out_names: Vec<String> = plan.ports[n].outputs.iter().filter(|p| p.name != "error").map(|p| p.name.clone()).collect();
     let mut outs = all(&plan, n, Tok::Skip);
-    if node.kind == "subgraph" {
+    if boxed {
         let inst = Scope::graph(sub, scope.child_path(&format!("{}:sg", node.id)), scope.depth + 1, cancel.child(), inp.values.clone(), Map::new());
         match exec_scope(run.clone(), inst.clone()).await {
             ScopeEnd::Pending => return Ok(Fired::Pending),

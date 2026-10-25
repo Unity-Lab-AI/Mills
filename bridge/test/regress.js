@@ -250,11 +250,11 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -3808,8 +3808,29 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R430: 'workflow laws: an export bundle carries the laws, groups and prompts the workflow uses (and nothing else); an import into another scope checks them and brings them along',
       // T-207: the /hyperwork command line (the one parser for the page, HPM and jcode)
       R460: 'hyperwork command: /hyperwork name prompt with --project / --on / --version (and --x=y, /hw), a still-typed name, bad options refused; a name that matches nothing runs nothing and gets the nearest names',
+      // T-203: custom node kinds (tests/custom.rs, the store side in tests/service.rs)
+      R431: 'custom kinds: "new node from selection" makes a graph kind whose ports are the selection\'s way in and out, saved in the person\'s own scope, and the rewired workflow runs as before',
+      R432: 'custom kinds: undeclared access is denied at run time (an http kind with network: [] gets engine.denied, nothing is sent); a script kind stops at its step limit; a crash is the node\'s error; a sandboxed program is refused on this runner',
+      R433: 'custom kinds: publishing runs the kind\'s tests and refuses a failing one; a version is published once; a built-in cannot be replaced',
+      R434: 'custom kinds: a workflow pinned to major 1 never picks up 2.x; a stored kind whose hash no longer matches is refused (422 engine.kind-hash)',
+      R435: 'custom kinds: author-only runs for its author alone; a review by someone not the author (an admin or lawEditor) makes it reviewed; a sandboxed program needs two; blocked can be neither added nor run',
+      R436: 'custom kinds: a team kind is fetched by another runner (jcode) with its hash, installed only when the hash matches, and runs there',
+      // T-206: the AI side chat (tests/service.rs)
+      R454: 'side chat: ask answers about a workflow and may return a patch (the editor\'s commands); asking writes nothing',
+      R455: 'side chat: a patch is for the person\'s draft only: asking never saves, publishes or runs',
+      R456: 'side chat: a patch is only the editor\'s drawing commands; anything else (publish, run) is refused as a problem, and nothing happens',
+      R457: 'side chat: the AI is told the node kinds the person may use; a patch that breaks validation comes with its problems, not applied',
+      R458: 'side chat: with no AI reachable it says so (noAi) and the editor still works',
+      // T-186: triggers (tests/triggers.rs, a clock of the test's own)
+      R466: 'triggers: timers every N minutes / hours / days and the board\'s repeats (nightly at 02:00, monthly month-end aware); a run when due, once; a triggered run says so (sender trigger)',
+      R467: 'triggers: no double run after a restart (the next time is saved first) or across two hubs on one store (a lease; the other takes over when it lapses)',
+      R468: 'triggers: a time missed while the hub was down runs once (marked missed) or is skipped, then back on schedule',
+      R469: 'triggers: a Forgejo / GitHub webhook, signed with the trigger\'s secret, starts a run with its payload; a wrong or missing signature is 401; an event it did not ask for starts nothing; the secret is never listed',
+      R470: 'triggers: a named event from this server starts every unpaused event trigger of that name with its payload',
+      R471: 'triggers: standing workflows list their last runs and next time, pause / resume, only the owner changes them, and a failed run sends the owner a chat alert',
     };
-    const MIN407 = { R407: 2, R408: 7, R409: 2, R410: 4, R411: 4, R412: 3, R413: 2, R414: 1, R415: 1, R416: 1, R417: 1, R418: 5, R419: 2, R420: 1, R421: 1, R422: 4, R423: 5, R425: 1, R426: 2, R427: 1, R428: 1, R429: 2, R430: 1, R460: 3 };
+    const MIN407 = { R407: 2, R408: 7, R409: 2, R410: 4, R411: 4, R412: 3, R413: 2, R414: 1, R415: 1, R416: 1, R417: 1, R418: 5, R419: 2, R420: 1, R421: 1, R422: 4, R423: 5, R425: 1, R426: 2, R427: 1, R428: 1, R429: 2, R430: 1, R460: 3,
+      R431: 2, R432: 1, R433: 2, R434: 2, R435: 1, R436: 1, R454: 1, R455: 1, R456: 1, R457: 1, R458: 1, R466: 1, R467: 1, R468: 1, R469: 1, R470: 1, R471: 1 };
     if (!fs.existsSync(path.join(native407, 'crates', 'pgm-workflow-engine-internal'))) for (const id of Object.keys(L407)) skip(id, L407[id], 'no crate native/crates/pgm-workflow-engine-internal');
     else {
       const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home407}/.rustup" CARGO_HOME="${home407}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-engine-internal 2>&1`], { cwd: native407, encoding: 'utf8', timeout: 1800000 });
@@ -3817,7 +3838,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       if (ut.status === 77) for (const id of Object.keys(L407)) skip(id, L407[id], 'no Rust toolchain here (cargo not found)');
       else {
         const seen = {};
-        for (const m of out407.matchAll(/^test (?:[\w:]+::)?(r4\d\d)_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
+        // a test may stand for several checks: r454_r455_... counts for both
+        for (const m of out407.matchAll(/^test (?:[\w:]+::)?((?:r4\d\d_)+)\S* \.\.\. (ok|FAILED)/gm)) for (const x of m[1].match(/r4\d\d/g)) { const id = x.toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
         const tail = out407.replace(/\s+/g, ' ').slice(-160);
         for (const id of Object.keys(L407)) check(id, L407[id], ut.status === 0 && (seen[id] || []).length >= MIN407[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
       }
@@ -3841,6 +3863,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R461: 'hyperwork in the page: /hyperwork (and /hw) in the Work box\'s commands, a type-ahead from /api/hyperwork/list (grey = cannot run, with its reason), the line sent to POST /api/hyperwork/command with the session\'s project, the run followed from its log (steps, the answer, Approve / Reject); the command route runs a workflow by its line [HPM\'s and jcode\'s /hyperwork are T-207\'s later parts]',
       R462: 'hyperwork command: a workflow that needs a project refuses to start without one; the line\'s --project (else the page\'s project) is the run\'s project',
       R465: 'hyperwork team tools: a Work run\'s AI lists workflows (hyperwork_list) and sends a prompt through one (hyperwork_run) as the person whose run it is; someone else\'s personal workflow is refused [the session policy switch is T-207\'s later part]',
+      R472: 'hyperwork triggers on the hub: a webhook trigger made in /api/hyperwork/trigger is started by POST /hooks/hyperwork/<id> signed as Forgejo does (no session), refused unsigned; an internal event (this machine, its secret) starts an event trigger; a triggered run that fails sends its owner a private chat alert from "Hyper Workflows"; the list shows the runs',
     };
     const hw = (p, tok, body, hdr) => call('/api/hyperwork/' + p, tok, body, hdr);
     const html461 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
@@ -3943,6 +3966,31 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const mine465 = o465.run && o465.run.run ? (await hw('run?id=' + o465.run.run, A)).data : {};
       check('R465', L437.R465, Array.isArray(o465.listed) && o465.listed.includes('r461-notes') && o465.ok === true && o465.run.status === 'ok' && mine465.owner === 't-admin' && q465.ok === false,
         `listed ${JSON.stringify(o465.listed)}; run ${JSON.stringify(o465.run).slice(0, 160)}; owner ${mine465.owner}; t-user ${q465.ok} ${JSON.stringify(q465.run).slice(0, 80)}`);
+      // R472: triggers through the hub
+      const crypto472 = require('crypto');
+      const wh = await hw('trigger', A, { workflow: ai.data.id, kind: 'webhook', webhook: { events: ['pull_request'] }, prompt: 'review {{event.pull_request.title}}', title: 'r472 hook' });
+      const body472 = JSON.stringify({ action: 'opened', pull_request: { title: 'R472 PR' } });
+      const post472 = (headers) => fetch(H + '/hooks/hyperwork/' + wh.data.id, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: body472 }).then(async (x) => ({ status: x.status, data: await x.json().catch(() => ({})) })).catch((e) => ({ status: 0, data: { error: e.message } }));
+      const signed = await post472({ 'X-Forgejo-Event': 'pull_request', 'X-Forgejo-Signature': crypto472.createHmac('sha256', wh.data.secret || 'x').update(body472).digest('hex') });
+      const unsigned = await post472({ 'X-Forgejo-Event': 'pull_request' });
+      const m472 = signed.data.run ? await until(signed.data.run) : {};
+      const ev = await hw('trigger', A, { workflow: ai.data.id, kind: 'event', event: { name: 'r472-deployed' }, prompt: 'deployed {{event.v}}' });
+      const sendEvent = (secret) => fetch(H + '/internal/hyperwork/event', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Event-Secret': secret }, body: JSON.stringify({ name: 'r472-deployed', payload: { v: '9.9.9' } }) }).then(async (x) => ({ status: x.status, data: await x.json().catch(() => ({})) }));
+      const evOk = await sendEvent('r472-event-secret-0123456789'), evBad = await sendEvent('wrong-secret-0000000000');
+      const mEv = (evOk.data.runs || [])[0] ? await until(evOk.data.runs[0]) : {};
+      // a workflow that fails (an HTTP call to a host the hub does not allow), started by an event: its owner hears of it
+      const failing = await hw('save', A, { doc: { schema: 1, name: 'r472-fails', nodes: [{ id: 's', kind: 'start' }, { id: 't', kind: 'tool', config: { http: { url: 'https://not-allowed.example/x' } } }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.inputs', to: 't.args' }, { id: 'e2', from: 't.result', to: 'e.result' }] } });
+      await hw('publish', A, { id: failing.data.id, message: 'x' });
+      await hw('trigger', A, { workflow: failing.data.id, kind: 'event', event: { name: 'r472-breaks' }, title: 'r472 breaks' });
+      const seq472 = Math.max(0, ...((await call('/api/room/messages?since=0', A)).data.messages || []).map((m) => m.seq));
+      const evFail = await fetch(H + '/internal/hyperwork/event', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Event-Secret': 'r472-event-secret-0123456789' }, body: JSON.stringify({ name: 'r472-breaks', payload: {} }) }).then((x) => x.json()).catch(() => ({}));
+      const mFail = (evFail.runs || [])[0] ? await until(evFail.runs[0]) : {};
+      let alert472 = null;
+      for (let i = 0; i < 40 && !alert472; i++) { alert472 = ((await call('/api/room/messages?since=' + seq472, A)).data.messages || []).find((m) => m.as === 'Hyper Workflows' && m.to === 't-admin') || null; if (!alert472) await sleep(250); }
+      const list472 = (await hw('triggers?workflow=' + ai.data.id, A)).data.triggers || [], hook472 = list472.find((t) => t.id === wh.data.id) || {};
+      check('R472', L437.R472, wh.status === 200 && !!wh.data.secret && signed.status === 202 && m472.status === 'ok' && unsigned.status === 401 && ev.status === 200 && evOk.status === 200 && mEv.status === 'ok' && evBad.status === 403
+        && mFail.status === 'failed' && !!alert472 && (hook472.runs || []).length === 1 && hook472.webhook && hook472.webhook.secret === undefined,
+        `hook ${wh.status}; signed ${signed.status} ${m472.status} ${JSON.stringify(m472.result).slice(0, 60)}; unsigned ${unsigned.status}; event ${evOk.status} ${mEv.status}, wrong secret ${evBad.status}; failing ${mFail.status}, alert ${!!alert472}; listed runs ${(hook472.runs || []).length}`);
     }
   }
   const ws1 = (await call('/api/work/current', U)).data;

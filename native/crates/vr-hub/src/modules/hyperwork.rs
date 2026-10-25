@@ -55,6 +55,31 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account, rest: &str) -> Routed {
     }
 }
 
+/// `POST /hooks/hyperwork/<id>` (T-212): a Forgejo / Gitea / GitHub webhook. No session: its signature (the trigger's
+/// secret) is the key.
+pub fn webhook(hub: &Arc<Hub>, r: &Req, id: &str) -> Routed {
+    let Some(svc) = hub.mods.hyperwork.get().cloned() else { return answer(503, json!({ "error": "Hyper Workflows are starting." })) };
+    if r.body.len() > 2_000_000 { return answer(413, json!({ "error": "That payload is too large." })); }
+    let header = |k: &str| r.header(k).map(str::to_string);
+    let (status, v) = svc.webhook(id, &header, &r.body);
+    answer(status, v)
+}
+
+/// `POST /internal/hyperwork/event {name, payload}` (T-212's internal sockets): another process on this machine says
+/// something happened; every `event` trigger of that name starts its workflow. From this machine only, with the
+/// config's `hyperworkEventSecret` in `X-VR-Event-Secret`.
+pub fn event(hub: &Arc<Hub>, r: &Req) -> Routed {
+    use subtle::ConstantTimeEq;
+    let Some(svc) = hub.mods.hyperwork.get().cloned() else { return answer(503, json!({ "error": "Hyper Workflows are starting." })) };
+    let secret = hub.cfg.get("hyperworkEventSecret").and_then(Value::as_str).unwrap_or("");
+    let given = r.header("x-vr-event-secret").unwrap_or("");
+    if !r.peer.ip().is_loopback() || secret.len() < 16 || !bool::from(given.as_bytes().ct_eq(secret.as_bytes())) { return answer(403, json!({ "error": "forbidden" })); }
+    let b = r.json();
+    let name = b["name"].as_str().unwrap_or("");
+    if name.is_empty() { return answer(400, json!({ "error": "Which event? (name)" })); }
+    answer(200, json!({ "ok": true, "runs": svc.event(name, &b["payload"]) }))
+}
+
 /// The team tools `hyperwork_list` and `hyperwork_run` (bridge/team-mcp.js, mcp-tools.json): a Work run's AI sends a
 /// prompt through a workflow as the person whose run it is (their rights, their run). `wait` (default 120 s, at most
 /// 600) waits for the result; a run that waits for an approval answers with where it waits.
@@ -120,6 +145,26 @@ impl Directory for HubDir {
         if event["type"] == "hyper_question" { println!("[vr-hub] hyperwork: {user}'s run {} waits for an answer ({})", event["run"].as_str().unwrap_or(""), event["key"].as_str().unwrap_or("")); }
     }
     fn default_tools(&self) -> Vec<String> { READ_TOOLS.iter().map(|s| s.to_string()).collect() }
+    /// The board's own repeats (month-end aware, this machine's local time): one scheduler's rules, not two.
+    fn next_due(&self, ms: u64, recur: &str) -> Option<u64> {
+        pgm_collab_internal::board::next_due(ms as i64, if recur == "nightly" { "daily" } else { recur }, 0).map(|x| x as u64)
+    }
+    /// The first `HH:MM` after `ms`, in this machine's local time (as the board's due dates).
+    fn first_time(&self, ms: u64, at: &str) -> Option<u64> {
+        use chrono::{Local, TimeZone};
+        let (h, m) = at.split_once(':')?;
+        let t = chrono::NaiveTime::from_hms_opt(h.trim().parse().ok()?, m.trim().parse().ok()?, 0)?;
+        let now = Local.timestamp_millis_opt(ms as i64).single()?;
+        for d in 0..2 {
+            let day = now.date_naive() + chrono::Duration::days(d);
+            if let Some(x) = Local.from_local_datetime(&day.and_time(t)).earliest() { if x.timestamp_millis() as u64 > ms { return Some(x.timestamp_millis() as u64); } }
+        }
+        None
+    }
+    /// A triggered run failed: a private chat message to its owner, from "Hyper Workflows".
+    fn alert(&self, user: &str, text: &str) {
+        if let Some(h) = self.hub.upgrade() { let _ = AiHub::agent_say(&*h, text, user, "Hyper Workflows", "", ""); }
+    }
     fn secret_values(&self) -> Vec<String> {
         self.hub.upgrade().and_then(|h| h.cfg.get("hyperworkSecrets").and_then(Value::as_object).map(|m| m.values().filter_map(Value::as_str).map(str::to_string).collect())).unwrap_or_default()
     }

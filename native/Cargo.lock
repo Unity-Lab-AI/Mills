@@ -3504,6 +3504,8 @@ name = "pgm-workflow-engine-internal"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "pgm-collab-internal",
+ "pgm-core-internal",
  "pgm-orchestrator-internal",
  "pgm-workflow-internal",
  "serde",

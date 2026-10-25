@@ -239,6 +239,9 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if let Some(rest) = p.strip_prefix("/internal/gateway/") { return gateway::route(hub, r, rest).await; }
     if let Some(rest) = p.strip_prefix("/p/") { return gateway::serve(hub, r, rest).await; }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
+    // Hyper Workflows (T-212): webhooks (signed, no session) and this machine's own events
+    if let Some(id) = p.strip_prefix("/hooks/hyperwork/") { return if r.method == hyper::Method::POST { hyperwork::webhook(hub, r, id) } else { answer(405, json!({ "error": "POST only" })) }; }
+    if p == "/internal/hyperwork/event" && r.method == hyper::Method::POST { return hyperwork::event(hub, r); }
     // Unity's Claude brain calling her tools (this hub's secret; anything else is the JavaScript hub's)
     if p == "/internal/assistant-tool" && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &vr_core::crypto::hmac_hex(hub.mods.unity.secret.as_bytes(), r.header("x-mills-account").unwrap_or("").as_bytes())) { return unity_routes::internal(hub, r).await; }
     // the OpenAI- / Anthropic-compatible API: its own bearer keys, for harnesses, not the browser app

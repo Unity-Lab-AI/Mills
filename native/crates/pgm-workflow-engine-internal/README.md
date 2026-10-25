@@ -13,6 +13,9 @@ tokio and futures-util; no network, no hub, no screen of its own.
 | `kinds` | the built-in kinds (T-201): `ai` (`prompt`, `chat`, `summarise`, `jev`), `tools` (`tool` with custom HTTP calls, `agent`), `script` (the transform language), `orchestrate`; `model_chain` / `ask_model` (model choice and fallback, spec 5.4; the node's laws and their checks, spec 6) |
 | `service` | the store and run API a hub serves under `/api/hyperwork/` (T-204): workflows per scope with versions, drafts and rights; laws, saved prompts and groups (T-202); runs with their logs, follow, cancel, answer, replay, resume after a restart; `/hyperwork` lines (`command`). No web server: `Service::handle(caller, method, path, query, body)`; the program around it says who is who (`Directory`) |
 | `command` | the one `/hyperwork <name> [--project P] [--on runner] [--version V] <prompt>` parser for the page, HPM and jcode, and the nearest names for one that matches nothing (T-207) |
+| `custom` | custom node kinds (T-203): `Engine::install` (by impl type `graph` / `http` / `script`, with a hash check; sandboxed programs refused), `from_selection` ("new node from selection"), `run_tests` (a manifest's tests, on publish), `hash` |
+| `patch` | a patch in the visual editor's commands (`add`, `connect`, `disconnect`, `setProp`, `delete`, `move`, `place`) tried on a document (T-206: the AI side chat's proposals) |
+| `service::triggers` | timers, webhooks and events that start workflows, with their runs, next time, pause / resume and failure alerts (T-186) |
 | `log` | `Prior::from_log`: what an earlier log of a run says (finished instances, open questions, answers, totals, active time) |
 | `cancel` | `Cancel`: run, scope and node handles; cancelling one cancels what was made from it |
 | `fake` | `FakeHost` (scripted AI answers per node or instance, call records, most-at-once, questions, a settable clock), `fake_engine()` with fake `prompt` / `tool` and the test kinds `test/inc`, `test/const`, `test/side-effect` |
@@ -99,7 +102,41 @@ runs on every answer: `onFail` `retry` (asked again once, told which law), `erro
 service: `GET laws|prompts|groups`, `POST law|prompt|group` (every save a new version file), `POST law/delete` (a
 group's members stay); export bundles carry what a workflow uses and import checks it.
 
-Not here yet: custom-node sandboxes (T-203), large values as `values/<hash>` refs (T-204's later part), a
+## Custom node kinds (T-203, spec 11)
+
+A kind made by a person: a manifest with an `impl` of type `graph` (a packaged box; "new node from selection" makes
+one from selected nodes, its ports what crosses the selection's edge), `http` (a custom call, only to the hosts its
+`permissions.network` declares: anything else is `engine.denied` before a byte is sent) or `script` (the transform
+language). A sandboxed `program` is refused by every runner for now (open question 6). In the service: `POST kind`
+publishes a version into a scope (its `tests` run first and must pass; a version is published once; built-ins cannot be
+replaced), `POST kind/review` (not the author; an admin or a lawEditor of the scope; a program needs two reviews),
+`POST kind/block` (an admin), `POST selection`, `GET kinds` (built-ins and the customs the person sees, with trust and
+hash). A run gets the engine `Service::engine_for` makes: every custom kind its document uses, the newest version of
+the major each node pins, if the person may run it (`blocked`: nobody; `author-only`: its author; `reviewed`:
+everyone who sees it) and its stored hash still matches. Another runner installs a fetched kind with its hash.
+
+## The AI side chat (T-206, spec 10.1)
+
+`POST ask {id | doc, message, selection?}`: a plain AI call with the person's own AI, told the node kinds they may use;
+it answers `{text, patch, problems}`. The patch is a list of the editor's commands, tried on the document (`patch`),
+so a patch that breaks validation comes with its problems; nothing is saved, run or published (the editor shows the
+patch, the person accepts it into their draft). With no AI reachable it says so (`noAi`) and the editor works on.
+Run-only clients may not ask (designing is for the page and the apps).
+
+## Triggers (T-186)
+
+A trigger is its own object pointing at a workflow (open question 19), in the workflow's scope, and its runs are its
+owner's (`sender: {kind: "trigger"}`). `timer`: `every {n, unit}` or `recur` (`nightly` at 02:00, `daily` …
+`yearly`: the board's repeats through `Directory::next_due`), `at` "HH:MM", `missed: once | skip`; the next time is
+saved before a run starts and one hub at a time fires a store's timers (a lease), so nothing runs twice. `webhook`:
+`POST /hooks/hyperwork/<id>` signed with the trigger's secret (Forgejo / Gitea `X-Forgejo-Signature` /
+`X-Gitea-Signature`, GitHub `X-Hub-Signature-256`), `events` narrows them, the payload is `inputs.event` and fills
+`{{event.…}}` in the trigger's prompt. `event`: `Service::event(name, payload)`, on the hub `POST
+/internal/hyperwork/event` from this machine with `hyperworkEventSecret`. Routes: `GET triggers`, `POST trigger`,
+`trigger/pause | resume | delete`; the list shows each trigger's last runs and next time; a triggered run that fails
+is sent to its owner (`Directory::alert`, on the hub a private chat message from "Hyper Workflows").
+
+Not here yet: sandboxed programs (open question 6), large values as `values/<hash>` refs (T-204's later part), a
 `sub-workflow` child that waits for a person (`engine.child-waits`).
 
 ## Use it in another project
