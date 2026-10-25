@@ -309,6 +309,11 @@
   /* the AI asks you (T-246): a series, one question at a time */
   .qcard { align-self: center; width: min(640px, 94%); margin: .5rem auto; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: .7rem .85rem; display: flex; flex-direction: column; gap: .5rem; outline: none; box-shadow: 0 4px 18px rgba(0,0,0,.25); }
   .qcard:focus-within { border-color: var(--accent); }
+  .qcard.plan { width: min(860px, 96%); }
+  .plantbl { width: 100%; border-collapse: collapse; font-size: .85rem; margin: .4rem 0; }
+  .plantbl th, .plantbl td { text-align: left; padding: .2rem .4rem; border-bottom: 1px solid var(--line); }
+  .plantbl .planparent td { font-weight: 600; } .plantbl .plansub td { color: var(--muted); } .plantbl .plansub .plantitle { padding-left: 1.2rem; }
+  .planhead { margin-top: .5rem; font-size: .85rem; color: var(--muted); } .planlist { margin: .2rem 0 0 1.2rem; padding: 0; font-size: .85rem; }
   .qcard.closed { box-shadow: none; border-left-color: var(--line); color: var(--muted); font-size: .85rem; }
   .qhead { display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
   .qtitle { font-weight: 600; flex: 1; min-width: 8rem; }
@@ -2612,11 +2617,67 @@ async function restoreQuestions() {
   for (const q of open) showQuestion({ ...q, type: 'bridge_question' }, true);
   for (const [id, o] of openQuestions) if (!open.some((q) => q.id === id)) closeQuestion({ id, by: 'gone', answers: [] });
 }
+// The planner's draft (T-279; plans/planner-mode.md § 6): nothing reaches the board before you approve it here. A table of parents with
+// their sub-tasks, owners, priorities and blocked-on, the changes to existing tasks, what is not planned, and the source note.
+// Approve all / approve the ticked parents / Change… (your text goes back to the AI, which drafts again) / Reject. The hub writes
+// what you approved (POST /api/work/plan/answer {id, session, approve: "all" | [parent indexes], comment?, revise?}).
+const openPlans = new Map(); // draft id → card
+function showPlan(ev) {
+  if (openPlans.has(ev.id)) return;
+  const d = ev.draft || {}, ps = d.parents || [], card = qMk('div', 'qcard plan'); card.dataset.plan = ev.id;
+  card.appendChild(qMk('div', 'qtitle', 'Draft plan: ' + (d.title || 'untitled') + ' (nothing is written until you approve)'));
+  const tbl = qMk('table', 'plantbl'), hd = qMk('tr'); for (const h of ['', '#', 'Task', 'Owner', 'Priority', 'Status', 'Blocked on']) hd.appendChild(qMk('th', '', h)); tbl.appendChild(hd);
+  const boxes = [];
+  ps.forEach((p, i) => {
+    const tr = qMk('tr', 'planparent'), c = qMk('td'), cb = qMk('input'); cb.type = 'checkbox'; cb.checked = true; cb.dataset.parent = String(i); boxes.push(cb); c.appendChild(cb); tr.appendChild(c);
+    tr.append(qMk('td', '', String(i + 1)), qMk('td', 'plantitle', p.title || ''), qMk('td', '', p.owner || ''), qMk('td', '', 'P' + p.priority), qMk('td', '', p.status || ''), qMk('td', '', p.blockedOn || '-'));
+    tbl.appendChild(tr);
+    (p.subtasks || []).forEach((s, n) => { const sr = qMk('tr', 'plansub'); sr.append(qMk('td'), qMk('td'), qMk('td', 'plantitle', (n + 1) + '/' + p.subtasks.length + ': ' + (s.title || '')), qMk('td', '', s.owner || ''), qMk('td', '', 'P' + s.priority), qMk('td', '', 'todo'), qMk('td')); tbl.appendChild(sr); });
+  });
+  card.appendChild(tbl);
+  const list = (head, items) => { if (!items.length) return; card.appendChild(qMk('div', 'planhead', head)); const ul = qMk('ul', 'planlist'); for (const t of items) ul.appendChild(qMk('li', '', t)); card.appendChild(ul); };
+  list('Changes to existing tasks (with everything approved, or with their parent)', (d.existingChanges || []).map((c) => c.id + ': ' + (Object.keys(c.change || {}).join(', ')) + (c.reason ? ' - ' + c.reason : '') + (c.parent != null ? ' (with parent ' + (c.parent + 1) + ')' : '')));
+  list('Not planned, because', (d.notPlanned || []).map((n) => n.text + (n.why ? ' - ' + n.why : '')));
+  if (d.sourceNote) card.appendChild(qMk('div', 'planhead', 'Your words are kept word for word in the note ' + d.sourceNote + (d.sourceChars ? ' (' + d.sourceChars + ' characters)' : '')));
+  const errEl = qMk('div', 'qerr'), row = qMk('div', 'qfoot'), ok = qMk('button', 'primary', 'Approve all'), chg = qMk('button', '', 'Change…'), rej = qMk('button', '', 'Reject');
+  const note = qMk('textarea', 'qown'); note.rows = 2; note.placeholder = 'What should be changed?'; note.hidden = true;
+  const sendNow = qMk('button', 'primary', 'Send the change'); sendNow.hidden = true;
+  const sync = () => { const n = boxes.filter((b) => b.checked).length; ok.textContent = n === boxes.length ? 'Approve all' : 'Approve ' + n + ' of ' + boxes.length; ok.disabled = n === 0; };
+  boxes.forEach((b) => { b.onchange = sync; });
+  const send = (payload) => { for (const b of [ok, chg, rej, sendNow]) b.disabled = true; errEl.textContent = '';
+    return api('/api/work/plan/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, session: ev.session, ...payload }) })
+      .then(async (r) => { if (!r.ok && r.status !== 404 && r.status !== 409) { const x = await r.json().catch(() => ({})); throw new Error(x.error || r.statusText); } })
+      .catch((e) => { for (const b of [ok, chg, rej, sendNow]) b.disabled = false; sync(); errEl.textContent = 'Could not send the answer: ' + e.message; }); };
+  ok.onclick = () => { const on = boxes.filter((b) => b.checked).map((b) => Number(b.dataset.parent)); send({ approve: on.length === boxes.length ? 'all' : on }); };
+  rej.onclick = () => send({ approve: false });
+  chg.onclick = () => { note.hidden = sendNow.hidden = false; note.focus(); };
+  sendNow.onclick = () => { if (!note.value.trim()) { errEl.textContent = 'Say what to change.'; return; } send({ approve: false, revise: true, comment: note.value.trim() }); };
+  row.append(ok, chg, rej); card.append(row, note, sendNow, errEl);
+  log.appendChild(card); openPlans.set(ev.id, card); sync();
+  qAlert({ id: ev.id, at: ev.at, title: 'Review the draft plan: ' + (d.title || '') });
+}
+function closePlan(ev) {
+  const card = openPlans.get(ev.id); if (!card) return; openPlans.delete(ev.id);
+  const head = (card.querySelector('.qtitle') || {}).textContent || 'Draft plan';
+  card.className = 'qcard plan closed';
+  for (const el of [...card.querySelectorAll('.qfoot, textarea, .qerr, button')]) el.remove();
+  for (const b of card.querySelectorAll('input[type=checkbox]')) b.disabled = true;
+  const t = card.querySelector('.qtitle'); if (t) t.textContent = head.replace(/ \(nothing is written until you approve\)$/, '') + ' · ' + ({ approved: 'approved and written', rejected: 'rejected, nothing written', change: 'you asked for a change, nothing written', ended: 'closed (the run ended)', gone: 'closed' }[ev.outcome] || 'closed')
+    + (ev.created && ev.created.length ? ': ' + ev.created.join(', ') : '');
+}
+async function restorePlans() {
+  let d; try { d = await json('/api/work/plans'); } catch { return; }
+  const open = d.plans || [];
+  for (const p of open) showPlan({ ...p, type: 'bridge_plan' });
+  for (const [id] of openPlans) if (!open.some((p) => p.id === id)) closePlan({ id, outcome: 'gone' });
+}
 function handleEvent(ev) {
   if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; return; }
+  if (ev.type === 'bridge_plan') { showPlan(ev); scroll(); return; }
+  if (ev.type === 'bridge_plan_answered') { closePlan(ev); return; }
   if (ev.type === 'bridge_question') { showQuestion(ev); scroll(); return; }
   if (ev.type === 'bridge_answered') { closeQuestion(ev); return; }
-  if (ev.type === 'bridge_done') { runEnded = true; for (const id of [...openQuestions.keys()]) closeQuestion({ id, by: 'gone', answers: [] }); }
+  if (ev.type === 'bridge_done') { runEnded = true; for (const id of [...openQuestions.keys()]) closeQuestion({ id, by: 'gone', answers: [] }); for (const id of [...openPlans.keys()]) closePlan({ id, outcome: 'ended' }); }
   if (ev.type === 'pc_tool') return runPcTool(ev);
   const hv = hubView(ev), hk = hv ? hv.kind : '';
   // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
@@ -2850,6 +2911,7 @@ async function restoreWork() { // opening Work: the previous conversation, then 
   // waits for it (sending now would be refused and the message lost)
   if (!busy) { await followRun(s.run); curRun = null; saveCurrentSoon(); }
   restoreQuestions(); // a question still open (a half-answered series comes back with what was typed)
+  restorePlans(); // a draft plan still waiting for approval (T-279)
   if (!busy && (sendNowMessage || queue.length)) drain();
   // Work opens with nothing going on: offer the ways to start (once per page load; "Close" keeps this session)
   if (SESSIONS_OK && !startAuto && !busy && !transcript.length && !queue.length && !sendNowMessage) { startAuto = true; startOpen(); }

@@ -27,8 +27,23 @@ const ASK_USER = { name: 'ask_user', description: `Ask ${USER} one question or a
       required: { type: 'boolean' } }, required: ['text'] } },
     timeoutSec: { type: 'number', description: 'Seconds to wait before the defaults are used (default 600; 0 = until answered)' } }, required: ['questions'] } };
 
+// plan_draft (T-279; plans/planner-mode.md § 6): a planner session shows its whole plan as a draft and waits; the person approves all / some, asks for a change or rejects; the HUB writes it (source note, parents, sub-tasks, changes) and the result names the new task ids.
+const PLAN_DRAFT = { name: 'plan_draft', description: `Show ${USER} the whole plan as a draft and wait for the answer. In a planner session this is the ONLY way tasks reach the board: task_create / task_update / task_move / task_delete are refused. ${USER} approves all, approves some parents, asks for a change (you get their text back: revise and call plan_draft again) or rejects. On approval the hub writes, in this order, the source note (sourceText word for word under plans/), the parents, their sub-tasks (named "T-<parent> · n/m: ..." with the parent id as a label), the changes to existing tasks, then posts the plan summary to the team chat; the result lists the new task ids and what each owner got. Every parent needs an owner (a username).`,
+  inputSchema: { type: 'object', properties: {
+    title: { type: 'string', description: 'The plan\'s topic (names the notes plans/<topic>-original.md and plans/<topic>-plan.md)' },
+    parents: { type: 'array', description: 'One per idea', items: { type: 'object', properties: {
+      title: { type: 'string' }, body: { type: 'string', description: 'Markdown: what, must, already there, keep in mind, done when' }, owner: { type: 'string', description: 'username of who gets it' },
+      labels: { type: 'array', items: { type: 'string' } }, priority: { type: 'number', description: '0 most urgent .. 5 someday (default 2)' }, status: { type: 'string', enum: ['todo', 'backlog'] },
+      blockedOn: { type: 'string', description: 'The title (or T-id) of what it is based on; makes it backlog + the label blocked' },
+      subtasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' }, owner: { type: 'string' }, labels: { type: 'array', items: { type: 'string' } }, priority: { type: 'number' } }, required: ['title'] } } }, required: ['title', 'owner'] } },
+    existingChanges: { type: 'array', description: 'Changes to tasks that already exist (never delete or complete): applied only when everything is approved, or with their parent (parent = index)', items: { type: 'object', properties: { id: { type: 'string', description: 'T-12' }, change: { description: 'An object of fields to update (title, body, appendNote, labels, priority, status, assignee, due) or a note text', anyOf: [{ type: 'object' }, { type: 'string' }] }, reason: { type: 'string' }, parent: { type: 'number', description: 'index (from 0) of the parent it goes with' } }, required: ['id', 'change'] } },
+    notPlanned: { type: 'array', description: 'What of the input is not planned, and why (nothing is dropped silently)', items: { type: 'object', properties: { text: { type: 'string' }, why: { type: 'string' } }, required: ['text'] } },
+    sourceText: { type: 'string', description: 'The person\'s input, word for word (kept in a team note)' },
+    sourceNote: { type: 'string', description: 'A plans/ note to append it to (with the date) instead of plans/<topic>-original.md' } }, required: ['parents'] } };
+
 const TOOLS = [
   ASK_USER,
+  PLAN_DRAFT,
   { name: 'team_say', description: `Post a message into the VibeRoller team chat as "${USER} · Claude": to # Everyone (default), privately to one person (to = their username), or into a server channel / group (conv = its id from team_channels, e.g. "ch:mills/dev" or "grp:ab12cd"). Use it to tell the team what you are doing, what landed, and BEFORE any hub restart. Markdown is rendered.`,
     inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'The message (markdown)' }, to: { type: 'string', description: 'Username for a private message; leave out for everyone' }, conv: { type: 'string', description: 'A channel or group conversation id (see team_channels)' } }, required: ['text'] } },
   { name: 'team_presence', description: 'Who is in VibeRoller right now: every account with online / away / offline, where they are and when they were last seen. Each person also has presence, label (Working + available / Working / Away / Available for work / Online / Offline), working (+ workingSessions), acceptingWork, dnd, text, since and where (project, branch, task), as far as they let the team see it.', inputSchema: { type: 'object', properties: {} } },
@@ -59,7 +74,7 @@ async function callTool(name, args) {
   })).json();
   let out = await once(args);
   // a question may wait longer than one HTTP call is held: the hub answers {pending, id} every few minutes, we ask again
-  if (name === 'ask_user') while (out.ok && out.result && out.result.pending && out.result.id) out = await once({ poll: out.result.id, ...(args && args.pollSec ? { pollSec: args.pollSec } : {}) });
+  if (name === 'ask_user' || name === 'plan_draft') while (out.ok && out.result && out.result.pending && out.result.id) out = await once({ poll: out.result.id, ...(args && args.pollSec ? { pollSec: args.pollSec } : {}) });
   return out;
 }
 
