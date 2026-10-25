@@ -48,17 +48,19 @@ pub fn clean_prefs(p: &Value, prev: &Value) -> Value {
     if has("autoScroll") { out["autoScroll"] = json!(p["autoScroll"] == json!(true)); }
     if has("theme") { let t = match &p["theme"] { Value::String(x) => x.clone(), o => o.to_string() }; out["theme"] = json!(if t.len() <= 40 && t.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') { t } else { String::new() }); }
     if has("autosave") { out["autosave"] = json!(clamp(&p["autosave"], 0.0, 120.0, 0.0) as i64); }
-    if p["sound"].is_object() { let mut s = if out["sound"].is_object() { out["sound"].clone() } else { json!({}) }; let q = &p["sound"]; if q.get("on").is_some() { s["on"] = json!(b(&q["on"])); } for k in ["message", "mention", "reply", "call", "board"] { if q.get(k).is_some() { s[k] = json!(clamp(&q[k], 0.0, 100.0, 0.0) as i64); } } if let Some(v) = q["set"].as_str().filter(|v| *v == "classic" || *v == "patterns") { s["set"] = json!(v); } out["sound"] = s; }
+    if p["sound"].is_object() { let mut s = if out["sound"].is_object() { out["sound"].clone() } else { json!({}) }; let q = &p["sound"]; if q.get("on").is_some() { s["on"] = json!(b(&q["on"])); } for k in ["message", "mention", "reply", "call", "board", "ask"] { if q.get(k).is_some() { s[k] = json!(clamp(&q[k], 0.0, 100.0, 0.0) as i64); } } if let Some(v) = q["set"].as_str().filter(|v| *v == "classic" || *v == "patterns") { s["set"] = json!(v); } out["sound"] = s; }
     if p["tts"].is_object() {
         let mut t = if out["tts"].is_object() { out["tts"].clone() } else { json!({}) }; let q = &p["tts"];
-        for k in ["all", "unity", "on"] { if q.get(k).is_some() { t[k] = json!(b(&q[k])); } }
+        for k in ["all", "unity", "on", "ask"] { if q.get(k).is_some() { t[k] = json!(b(&q[k])); } }
         if q.get("volume").is_some() { t["volume"] = json!(clamp(&q["volume"], 0.0, 100.0, 0.0) as i64); }
         if q.get("rate").is_some() { t["rate"] = json!(clamp(&q["rate"], 50.0, 200.0, 100.0) as i64); }
         if q.get("voice").is_some() { t["voice"] = json!(units(&match &q["voice"] { Value::String(x) => x.clone(), o => o.to_string() }, 120)); }
         if q.get("scope").is_some() { t["scope"] = json!(if q["scope"] == json!("mine") { "mine" } else { "all" }); }
         out["tts"] = t;
     }
-    if p["audio"].is_object() { let mut a = if out["audio"].is_object() { out["audio"].clone() } else { json!({}) }; for k in ["noise", "echo", "agc"] { if p["audio"].get(k).is_some() { a[k] = json!(b(&p["audio"][k])); } } out["audio"] = a; }
+    // when the AI asks (T-248): wait `minutes` without you, then the recommended answers; any activity waits
+    if p["ask"].is_object() { let mut a = if out["ask"].is_object() { out["ask"].clone() } else { json!({}) }; let q = &p["ask"]; for k in ["auto", "activity"] { if q.get(k).is_some() { a[k] = json!(b(&q[k])); } } if q.get("minutes").is_some() { a["minutes"] = json!(clamp(&q["minutes"], 1.0, 1440.0, 10.0) as i64); } out["ask"] = a; }
+    if p["audio"].is_object() { let mut a =if out["audio"].is_object() { out["audio"].clone() } else { json!({}) }; for k in ["noise", "echo", "agc"] { if p["audio"].get(k).is_some() { a[k] = json!(b(&p["audio"][k])); } } out["audio"] = a; }
     if p["call"].is_object() { let mut c = if out["call"].is_object() { out["call"].clone() } else { json!({}) }; let q = &p["call"]; if q.get("volume").is_some() { c["volume"] = json!(clamp(&q["volume"], 0.0, 100.0, 0.0) as i64); } if q.get("quality").is_some() { c["quality"] = json!(if ["low", "medium", "high"].contains(&q["quality"].as_str().unwrap_or("")) { q["quality"].clone() } else { json!("medium") }); } out["call"] = c; }
     if p["clips"].is_object() { let mut c = if out["clips"].is_object() { out["clips"].clone() } else { json!({}) }; let q = &p["clips"]; if q.get("volume").is_some() { c["volume"] = json!(clamp(&q["volume"], 0.0, 100.0, 0.0) as i64); } if q.get("autoplay").is_some() { c["autoplay"] = json!(b(&q["autoplay"])); } out["clips"] = c; }
     out
