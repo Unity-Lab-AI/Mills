@@ -1600,6 +1600,18 @@ async function run() {
   const got1 = (woke.signals || []).find((s) => s.from === 't-admin');
   const camState = await call('/api/call/state', A, { conv: 'room', cam: true, mic: false, screen: true });
   const afterCam = (((await call('/api/call/poll?after=0&ver=-1', U)).data.calls || {}).room || []).find((p) => p.user === 't-admin');
+  // T-242: stopping a share clears only the screen flag; another person's share is shown to the others, not mixed up with mine
+  const seeShare = async () => { const l = (((await call('/api/call/poll?after=0&ver=-1', A)).data.calls || {}).room || []); return Object.fromEntries(l.map((p) => [p.user, p])); };
+  const uShares = await call('/api/call/state', U, { conv: 'room', cam: false, mic: true, screen: true });
+  const bothSharing = await seeShare();
+  const aStops = await call('/api/call/state', A, { conv: 'room', cam: true, mic: false, screen: false });
+  const shareAfterStop = (await seeShare());
+  await call('/api/call/state', U, { conv: 'room', cam: false, mic: true, screen: false });
+  const noneSharing = await seeShare();
+  check('R275', 'calls: the screen flag round-trips per person in the call state (two people can share, stopping clears only that flag, camera and mic stay)',
+    camState.status === 200 && uShares.status === 200 && aStops.status === 200
+    && bothSharing['t-admin'].screen === true && bothSharing['t-user'].screen === true && shareAfterStop['t-admin'].screen === false && shareAfterStop['t-admin'].cam === true && shareAfterStop['t-user'].screen === true
+    && noneSharing['t-user'].screen === false && noneSharing['t-user'].mic === true, `a ${shareAfterStop['t-admin'].screen}/${shareAfterStop['t-admin'].cam}, u ${shareAfterStop['t-user'].screen}`);
   await call('/api/call/leave', A, {});
   const afterLeave = (((await call('/api/call/poll?after=0&ver=-1', U)).data.calls || {}).room || []).map((p) => p.user);
   check('R50', 'calls: presence per conversation, private calls only for their two people, one call at a time, signals relayed opaquely and only inside the call, long-poll wakes on a signal, cam/mic/screen state, leave',
@@ -1870,6 +1882,19 @@ async function run() {
     && /mills\.mute\.' \+ user/.test(html) && /className = 'pVol'/.test(html) && /micOn \? 'mic-off' : 'mic', micOn \? 'Mute' : 'Unmute'/.test(html) && /M = mute \/ unmute yourself/.test(html)
     && /id="callTheater"/.test(html) && /id="callStage"/.test(html) && /#roomCore\.theater \.roomMain/.test(html) && /rc\.classList\.toggle\('theater', theater\)/.test(html) && /theaterOn\(\) && !e\.target\.closest/.test(html)
     && /id="callScreen"/.test(html) && /getDisplayMedia\(/.test(html) && /pc\.addTransceiver\('video', \{ direction: 'sendrecv', streams: \[call\.screenStream\] \}\)/.test(html) && /isScreenTransceiver\(pc, e\.transceiver\)/.test(html) && /\.tile\.screenTile \{ grid-column: 1 \/ -1/.test(html) && /screen: !!call\.screen/.test(html));
+  const callsJs = fs.readFileSync(path.join(MILLS, 'web', 'calls.js'), 'utf8');
+  check('R276', '[static] screen share: an audio choice first (none / tab-system audio / plus the microphone), getDisplayMedia asks for audio only when chosen, the mic is mixed in with an AudioContext into one track',
+    /id="shareOpts"/.test(html) && /name="shareAudio" value="none" checked/.test(html) && /value="sys"/.test(html) && /value="sysmic"/.test(html) && /id="shareGo"/.test(html)
+    && /audio: choice !== 'none'/.test(callsJs) && /createMediaStreamDestination\(\)/.test(callsJs) && /createMediaStreamSource\(new MediaStream\(\[call\.mic\]\)\)/.test(callsJs) && /gave no tab \/ system audio/.test(callsJs));
+  check('R277', '[static] screen share: the share\'s sound is a 4th sender added inactive and turned on only for pages that signal sa (older pages never see it), its renegotiation comes from the offerer only, and it plays in the screen tile',
+    /pc\.addTransceiver\('audio', \{ direction: 'inactive', streams: \[call\.screenStream\] \}\)/.test(callsJs) && /sa: 1, \.\.\.body/.test(callsJs) && /msg\.sa && peer\.offerer && msg\.d\.type === 'answer'/.test(callsJs)
+    && /isScreenAudio\(pc, e\.transceiver\)/.test(callsJs) && /isScreenAudio\(peer\.pc, t\) \? call\.screenAudio : call\.mic/.test(callsJs) && /if \(!self\) applyPersonAudio\(t\)/.test(callsJs));
+  check('R278', '[static] screen share: who is sharing shown in the call bar and on the tiles, stop also from the browser\'s own Stop sharing (track ended) and on leaving, all share audio released',
+    /sharing a screen/.test(callsJs) && /call\.screen\.onended = \(\) => stopScreen\(\)/.test(callsJs) && /function dropShareAudio\(\)/.test(callsJs) && /call\.screen = null; dropShareAudio\(\)/.test(callsJs) && /\n  dropShareAudio\(\);\n  call\.mic = call\.cam/.test(callsJs)
+    && /if \(p\.screen\) l\.append\(ic\('share', 'trail'\)\)/.test(callsJs) && /screen: !!call\.screen/.test(callsJs));
+  check('R279', '[static] screen share: click a shared screen to enlarge it (big view, click again or Esc to shrink), and the browser differences are written down in calls.js',
+    /t\.onclick = \(\) => t\.classList\.toggle\('big'\)/.test(callsJs) && /\.tile\.screenTile\.big \{ position: fixed/.test(html) && /querySelector\('\.screenTile\.big'\)/.test(callsJs)
+    && /Chrome \/ Edge \(Linux\): audio only for a TAB/.test(callsJs) && /PipeWire/.test(callsJs) && /Firefox: screen \/ window \/ tab video; no tab or system audio/.test(callsJs) && /Safari/.test(callsJs));
   check('R55', '[static] dictation in chat + Work: browser speech recognition, appends (continue), ~3 s silence stop, never auto-sends except "send message" + silence',
     /id="roomDictate"/.test(html) && /id="workDictate"/.test(html) && /window\.SpeechRecognition \|\| window\.webkitSpeechRecognition/.test(html)
     && /setTimeout\(dictStop, 3000\)/.test(html) && /const WAKE = \/\\s\*\\bsend message/.test(html) && /if \(box\.value\) d\.submit\(\)/.test(html)
