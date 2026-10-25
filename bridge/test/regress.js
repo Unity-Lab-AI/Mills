@@ -122,10 +122,43 @@ let fakeSawPhoto = false;
 function startFakeOllama() {
   const http = require('http');
   ollamaSrv = http.createServer((req, res) => {
-    let body = ''; req.on('data', (c) => { body += c; });
+    let body = ''; const chunks = []; req.on('data', (c) => { body += c; chunks.push(c); });
     req.on('end', () => {
-      const j = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+      const j = (o, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
       if (req.url === '/api/version') return j({ version: 'fake' });
+      // fake Forgejo repos (T-238), as the person whose token is fake-personal-token-1 (login tuser-fj): search, create (a bare
+      // repo that takes pushes through git's own smart-HTTP backend), get; any other caller is refused
+      if (/^\/api\/v1\/(repos\/search|user\/repos|repos\/[^/?]+\/[^/?]+$)/.test(req.url) || /^\/[^/]+\/[^/]+\.git\//.test(req.url)) {
+        const auth = req.headers.authorization || '';
+        const who = auth === 'token fake-personal-token-1' || (/^Basic /.test(auth) && Buffer.from(auth.slice(6), 'base64').toString() === 'tuser-fj:fake-personal-token-1') ? 'tuser-fj' : '';
+        if (!who) { res.writeHead(401); return res.end('{"message":"token"}'); }
+        const FR = fakeForgejo.repos || (fakeForgejo.repos = new Map()); fakeForgejo.repoCalls = fakeForgejo.repoCalls || [];
+        const root = path.join(SCRATCH, 'fjrepos'), u = new URL('http://x' + req.url);
+        if (u.pathname === '/api/v1/repos/search') {
+          const q = (u.searchParams.get('q') || '').toLowerCase(); fakeForgejo.repoCalls.push('search ' + q);
+          return j({ ok: true, data: [...FR.values()].filter((r) => !q || (r.full_name + ' ' + r.description).toLowerCase().includes(q)) });
+        }
+        if (req.method === 'POST' && u.pathname === '/api/v1/user/repos') {
+          const b = JSON.parse(body || '{}'), full = who + '/' + b.name;
+          fakeForgejo.repoCalls.push('create ' + full + (b.private ? ' private' : ' public'));
+          if (FR.has(full)) return j({ message: 'The repository with the same name already exists.' }, 409);
+          const dir = path.join(root, who, b.name + '.git'); fs.mkdirSync(dir, { recursive: true });
+          execFileSync('git', ['init', '-q', '--bare', '-b', 'main', dir]); execFileSync('git', ['-C', dir, 'config', 'http.receivepack', 'true']);
+          const r = { full_name: full, private: !!b.private, fork: false, mirror: false, description: b.description || '', clone_url: `http://127.0.0.1:${OLLAMA_PORT}/${full}.git` };
+          FR.set(full, r); return j(r, 201);
+        }
+        let m = /^\/api\/v1\/repos\/([^/]+)\/([^/]+)$/.exec(u.pathname);
+        if (m) { const r = FR.get(m[1] + '/' + m[2]); return r ? j(r) : j({ message: 'not found' }, 404); }
+        // git over HTTP: git http-backend does the work
+        const cgi = spawn('git', ['http-backend'], { env: { PATH: process.env.PATH, HOME: process.env.HOME || root, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: '1', PATH_INFO: u.pathname, REQUEST_METHOD: req.method, QUERY_STRING: u.search.slice(1), CONTENT_TYPE: req.headers['content-type'] || '', CONTENT_LENGTH: String(Buffer.concat(chunks).length), REMOTE_USER: who, REMOTE_ADDR: '127.0.0.1' } });
+        const out = []; cgi.stdout.on('data', (c) => out.push(c)); cgi.stdin.on('error', () => {}); cgi.stdin.end(Buffer.concat(chunks));
+        cgi.on('close', () => {
+          const all = Buffer.concat(out), cut = all.indexOf('\r\n\r\n'); const head = all.subarray(0, cut).toString().split('\r\n'), hdr = {}; let status = 200;
+          for (const h of head) { const k = h.indexOf(':'); if (k < 0) continue; const n = h.slice(0, k).trim(), v = h.slice(k + 1).trim(); if (n.toLowerCase() === 'status') status = parseInt(v, 10) || 200; else hdr[n] = v; }
+          res.writeHead(status, hdr); res.end(all.subarray(cut + 4));
+        });
+        return;
+      }
       // fake image engine on the same port: a 1x1 PNG for any prompt; the prompt is kept for checks
       if (req.url === '/health') return j({ ok: true, loaded: true });
       // fake web search (Bing-shaped) and YouTube results page
@@ -3092,6 +3125,83 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
     stop250(); await call('/api/presence', D, { device: 'r250', gone: true });
   } else for (const [id, l] of [['R250', 'the team tools carry the whole status'], ['R251', 'notify_when_available tells the asker'], ['R252', 'back / free / online waits'], ['R253', 'appear offline hides the change'], ['R254', 'notify tools: limits, cancel, privacy, the status event']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R245-R249 (T-238 = T-193 · 1/4): one start-work flow; the fake Forgejo (this runner) answers as tuser-fj and takes pushes over smart HTTP
+    const PR238 = path.join(SCRATCH, 'projects'), FR = (fakeForgejo.repos = fakeForgejo.repos || new Map()), gitq238 = (dir, ...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const cwd238 = (events) => ((texts(events).match(/cwd=(.+?)(?: \||$)/m) || [])[1] || '').trim();
+    const same238 = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+    const sess238 = async (id) => ((await call('/api/work/sessions', U)).data.sessions || []).find((s) => s.id === id) || {};
+    const html238 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    // R245: the repos list
+    const noTok = await call('/api/projects/repos', U), anon = await call('/api/projects/repos?q=x', null);
+    const conn = await call('/api/forgejo/connect', U, { token: 'fake-personal-token-1' });
+    FR.set('tuser-fj/alpha-tools', { full_name: 'tuser-fj/alpha-tools', private: true, fork: false, mirror: false, description: 'Alpha tooling', clone_url: `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/alpha-tools.git` });
+    FR.set('UnityAILab/shared-lib', { full_name: 'UnityAILab/shared-lib', private: false, fork: true, mirror: false, description: 'Shared library for the alpha team', clone_url: `http://127.0.0.1:${OLLAMA_PORT}/UnityAILab/shared-lib.git` });
+    const allRepos = await call('/api/projects/repos', U), someRepos = await call('/api/projects/repos?q=shared', U), oddRepos = await call('/api/projects/repos?q=' + encodeURIComponent('--repo x  -- ; ls'), U);
+    const alpha = ((allRepos.data || {}).repos || []).find((r) => r.name === 'tuser-fj/alpha-tools') || {}, shared = ((someRepos.data || {}).repos || [])[0] || {};
+    check('R245', 'start work, clone from a list: GET /api/projects/repos?q= lists the Forgejo repos the person can see (name, private / fork, clone address, description), searched by words, asked of Forgejo as them through worktree.js repos; without their own saved token it says to save one (400); signed out is 401; no secret in the answer; words cannot become options',
+      noTok.status === 400 && noTok.data.needsToken === true && /Forgejo token/.test(noTok.data.error) && anon.status === 401 && conn.status === 200
+      && allRepos.status === 200 && allRepos.data.repos.length === 2 && alpha.private === true && alpha.url === `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/alpha-tools.git` && alpha.description === 'Alpha tooling'
+      && someRepos.status === 200 && someRepos.data.repos.length === 1 && shared.name === 'UnityAILab/shared-lib' && shared.fork === true && oddRepos.status === 200 && !JSON.stringify([allRepos.data, someRepos.data]).includes('fake-personal-token-1'),
+      `no token ${noTok.status} "${(noTok.data.error || '').slice(0, 50)}" anon ${anon.status} connect ${conn.status} · all ${allRepos.status} ${((allRepos.data || {}).repos || []).length} alpha ${JSON.stringify(alpha).slice(0, 120)} · q=shared ${((someRepos.data || {}).repos || []).length} ${shared.name} · odd ${oddRepos.status}`);
+    // R246: a new empty project, private on Forgejo (checks first, then repo-create, new, publish)
+    await call('/api/forgejo/disconnect', U, {});
+    const nTok = await call('/api/projects/create', U, { name: 'start-new' }); const noTokLocal = fs.existsSync(path.join(PR238, 'start-new'));
+    await call('/api/forgejo/connect', U, { token: 'fake-personal-token-1' });
+    const bad = [await call('/api/projects/create', U, { name: '../evil' }), await call('/api/projects/create', U, { name: '_repo' }), await call('/api/projects/create', U, { name: 'a b' }), await call('/api/projects/create', U, {}), await call('/api/projects/create', U, { name: 'x'.repeat(65) })].map((x) => x.status);
+    const taken = await call('/api/projects/create', U, { name: 'Demo-App' }), takenHub = await call('/api/projects/create', U, { name: 'viberoller' });
+    FR.set('tuser-fj/taken-remote', { full_name: 'tuser-fj/taken-remote', private: false, fork: false, mirror: false, description: '', clone_url: '' });
+    const takenFj = await call('/api/projects/create', U, { name: 'taken-remote' });
+    const made238 = await call('/api/projects/create', U, { name: 'start-new', description: 'made by r246' });
+    const repoDir = path.join(PR238, 'start-new', '_repo'), bareDir = path.join(SCRATCH, 'fjrepos', 'tuser-fj', 'start-new.git');
+    const origin = gitq238(repoDir, 'remote', 'get-url', 'origin').stdout.trim(), remoteBranches = gitq238(bareDir, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').stdout.trim().split('\n').sort().join(',');
+    const again = await call('/api/projects/create', U, { name: 'Start-New' }), listed = ((await call('/api/projects', U)).data.projects || []).find((p) => p.name === 'start-new') || {};
+    const fjRec = FR.get('tuser-fj/start-new') || {};
+    check('R246', 'start work, a new empty project: POST /api/projects/create { name } checks first (bad name 400, a name taken here in any case or the hub\'s own 409, no saved Forgejo token 400 with nothing made, a repo of that name already on Forgejo 409 with no project made here), then makes the repo private on Forgejo as the person (repo-create), the local project (new) and publishes it: origin is Forgejo with main and develop pushed; the project is listed; again → 409',
+      nTok.status === 400 && nTok.data.needsToken === true && !noTokLocal && bad.join() === '400,400,400,400,400' && taken.status === 409 && takenHub.status === 409
+      && takenFj.status === 409 && !fs.existsSync(path.join(PR238, 'taken-remote')) && made238.status === 200 && made238.data.project === 'start-new' && made238.data.repo === 'tuser-fj/start-new' && made238.data.private === true && fjRec.private === true && fjRec.description === 'made by r246'
+      && origin === `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/start-new.git` && remoteBranches === 'develop,main' && listed.remote === origin && again.status === 409,
+      `no token ${nTok.status} local ${noTokLocal} · bad ${bad} · taken ${taken.status}/${takenHub.status} · on Forgejo ${takenFj.status} · made ${made238.status} ${JSON.stringify(made238.data).slice(0, 140)} · private ${fjRec.private} origin ${origin} remote branches ${remoteBranches} · again ${again.status}`);
+    // R247: a clone start from the repos list; each start is a NEW session that lands in the person's own worktree at once
+    const before = (await call('/api/work/sessions', U)).data, n0 = before.sessions.length;
+    const cloned = await call('/api/projects', U, { url: `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/start-new.git`, name: 'start-copy' });
+    const copyRepo = path.join(PR238, 'start-copy', '_repo'), readme = fs.existsSync(path.join(copyRepo, 'README.md'));
+    const nonHttps = await call('/api/projects', U, { url: 'file:///nonexistent-r247' }), noHost = await call('/api/projects', U, { url: 'ftp://example.invalid/x.git' });
+    const s247 = await call('/api/work/sessions/new', U, { project: 'start-copy', title: 'r247', background: true });
+    const dir247 = (s247.data || {}).dir || '', after = (await call('/api/work/sessions', U)).data, sum247 = await sess238(s247.data.id);
+    const run247 = await chat(U, 'where do I land', { session: s247.data.id });
+    check('R247', 'start work, clone: a repo cloned from a Forgejo address (the repos list gives it; the person\'s own token is the login, private ones too) becomes a project with the repo\'s own branches; POST /api/work/sessions/new { project } opens a NEW session (one more in the list) and lands at once in the person\'s own worktree <project>/<user>.<id> on work/<user>.<id>, where its first run happens; other addresses than https / ssh are 400',
+      cloned.status === 200 && cloned.data.project === 'start-copy' && readme && gitq238(copyRepo, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim() === 'develop' && nonHttps.status === 400 && noHost.status === 400
+      && s247.status === 200 && /^s-[0-9a-f]{12}$/.test(s247.data.id) && s247.data.project === 'start-copy' && same238(dir247, path.join(PR238, 'start-copy', 't-user.' + s247.data.id.slice(2))) && fs.existsSync(path.join(dir247, '.git')) && s247.data.branch === 'work/t-user.' + s247.data.id.slice(2)
+      && after.sessions.length === n0 + 1 && sum247.project === 'start-copy' && sum247.noProject === false && same238(cwd238(run247.events), dir247),
+      `clone ${cloned.status} ${JSON.stringify(cloned.data).slice(0, 60)} readme ${readme} · non-https ${nonHttps.status}/${noHost.status} · session ${s247.status} ${JSON.stringify(s247.data).slice(0, 160)} · list ${n0} → ${after.sessions.length} · run cwd ${cwd238(run247.events)}`);
+    // R248: no project: the AI only, in the person's scratch folder, said so in the system prompt; no git for it
+    const s248 = await call('/api/work/sessions/new', U, { none: true, title: 'r248', background: true }), id248 = (s248.data || {}).id;
+    const scratch = path.join(PR238, '_scratch', 't-user'), sum248 = await sess238(id248);
+    const run248 = await chat(U, 'where am I with no project', { session: id248 }), t248 = texts(run248.events);
+    fs.writeFileSync(path.join(scratch, 'note.txt'), 'kept\n');
+    const git248 = await call('/api/work/git?session=' + id248, U), home248 = await call('/api/work/sessions/home', U, { id: id248 });
+    const names248 = ((await call('/api/projects', U)).data.projects || []).map((p) => p.name);
+    const back248 = await call('/api/workspace', U, { session: id248, project: 'start-copy' }), sum248b = await sess238(id248);
+    const none248 = await call('/api/workspace', U, { session: id248, none: true }), sum248c = await sess238(id248);
+    await call('/api/work/sessions/delete', U, { id: id248 });
+    check('R248', 'start work, no project: POST /api/work/sessions/new { none: true } opens a session whose project is "(none)" (noProject true) and whose run happens in the person\'s own scratch folder <projects>/_scratch/<user> (not a git worktree, never in the projects list), with a system prompt that says so and has no worktree law; the git panel and "merge home" say there is no project (400); /api/workspace switches a session to a project and back; deleting it keeps the scratch folder',
+      s248.status === 200 && s248.data.noProject === true && s248.data.project === '(none)' && same238(s248.data.dir, scratch) && fs.existsSync(scratch) && sum248.project === '(none)' && sum248.noProject === true
+      && same238(cwd238(run248.events), scratch) && /sysnone=true/.test(t248) && /syslaw=false/.test(t248) && !fs.existsSync(path.join(scratch, '.git')) && git248.status === 400 && git248.data.noProject === true && home248.status === 400 && !names248.includes('_scratch') && !names248.includes('(none)')
+      && back248.status === 200 && back248.data.project === 'start-copy' && sum248b.noProject === false && sum248b.project === 'start-copy' && none248.status === 200 && none248.data.project === '(none)' && sum248c.noProject === true && fs.existsSync(path.join(scratch, 'note.txt')),
+      `new ${s248.status} ${JSON.stringify(s248.data).slice(0, 140)} · run cwd ${cwd238(run248.events)} sysnone ${/sysnone=true/.test(t248)} syslaw ${/syslaw=true/.test(t248)} · git ${git248.status} home ${home248.status} · list ${names248} · switch ${back248.status} ${sum248b.project}/${sum248b.noProject} → ${none248.status} ${sum248c.noProject} · note kept ${fs.existsSync(path.join(scratch, 'note.txt'))}`);
+    // R249: refusals, other people, and the page
+    const unk = await call('/api/work/sessions/new', U, { project: 'no-such-project', background: true }), unkNone = await call('/api/work/sessions/new', U, { project: '../x', background: true });
+    const hubS = await call('/api/work/sessions/new', U, { project: 'viberoller', background: true });
+    const foreign = await call('/api/work/sessions', A), seenByA = (foreign.data.sessions || []).some((s) => [s247.data.id, hubS.data.id].includes(s.id));
+    const hubWt = fs.existsSync(path.join(hubS.data.dir || '', '.git'));
+    for (const id of [s247.data.id, (hubS.data || {}).id]) if (id) await call('/api/work/sessions/delete', U, { id });
+    await call('/api/forgejo/disconnect', U, {});
+    const repoCalls = (fakeForgejo.repoCalls || []).join(' | ');
+    check('R249', 'start work, the rest: a start naming an unknown or bad project is 400 and opens nothing; the hub\'s own project starts (any case) in the person\'s worktree of it; nobody else sees the session; the Forgejo calls were made as the person only; the page has the Start work panel (project list, clone address box + repos search, new project name, no project) and sends ?session= for the session on screen',
+      unk.status === 400 && unkNone.status === 400 && hubS.status === 200 && hubS.data.project === 'VibeRoller' && hubWt && !seenByA && /create tuser-fj\/start-new private/.test(repoCalls) && !/create (?!tuser-fj\/)/.test(repoCalls)
+      && /id="startPanel"/.test(html238) && /id="startProjects"/.test(html238) && /id="startUrl"/.test(html238) && /id="startRepoQ"/.test(html238) && /id="startNewName"/.test(html238) && /id="startNoneGo"/.test(html238) && /id="startWork"/.test(html238) && /\/api\/projects\/repos\?q=/.test(html238) && /\/api\/projects\/create/.test(html238) && /'session=' \+ encodeURIComponent\(SESSION\)/.test(html238),
+      `unknown ${unk.status}/${unkNone.status} · hub project ${hubS.status} ${hubS.data.project} ${hubS.data.dir} · seen by another ${seenByA} · Forgejo calls "${repoCalls.slice(0, 160)}"`);
+  } else for (const id of ['R245', 'R246', 'R247', 'R248', 'R249']) skip(id, 'one start-work flow (T-238)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};

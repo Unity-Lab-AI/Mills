@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub const HUB_PROJECT: &str = "VibeRoller";
+/// What a session with no project is called in lists and the run's state (T-238); not a valid project name.
+pub const NO_PROJECT: &str = "(none)";
 const REPO_DIR: &str = "_repo";
 
 #[derive(Clone, Debug)]
@@ -47,6 +49,18 @@ impl Worktrees {
         let found = self.project_dirs().into_iter().find(|d| d.eq_ignore_ascii_case(name)).ok_or_else(|| format!("No project named \"{name}\" in {}. \"node bridge/worktree.js projects\" lists them; \"new <name>\" starts one, \"clone <url>\" pulls one in.", self.projects_root.display()))?;
         let repo = self.projects_root.join(&found).join(REPO_DIR);
         Ok(Project { main: Self::integration(&repo), name: found.clone(), hub: false, root: self.projects_root.join(&found), repo })
+    }
+    /// Is this a name worktree.js accepts for a project (T-238)?
+    pub fn valid_name(name: &str) -> bool { valid_project(name) }
+    /// Is there a project (or a folder in the projects area) of that name, any case (worktree.js exists)?
+    pub fn name_taken(&self, name: &str) -> bool { name.eq_ignore_ascii_case(HUB_PROJECT) || self.project(name).is_ok() || self.projects_root.join(name).exists() }
+    /// A session with no project (T-238): the person's own scratch folder, never a git repository of a project, kept
+    /// out of the projects list (its name starts with "_"). The run's cwd for such a session.
+    pub fn scratch(&self, user: &str) -> Result<Wt, String> {
+        if !valid_user(user) { return Err("Usage: a username (lowercase letters, digits, dashes).".into()); }
+        let root = self.projects_root.join("_scratch"); let dir = root.join(user);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Could not make {}: {e}", dir.display()))?;
+        Ok(Wt { dir: dir.clone(), branch: String::new(), project: NO_PROJECT.into(), repo: dir, root, main: String::new(), hub: false })
     }
     /// Every project: VibeRoller first, then by name (worktree.js listProjects).
     pub fn list(&self) -> Vec<Value> {
