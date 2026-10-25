@@ -2880,8 +2880,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       await call('/api/presence', D, { device: 'r196a', idle: false, screen: 'work' }); await call('/api/presence', D, { device: 'r196b', idle: true });
       await sleep(200); seen.mixed = await st196(U, 'mills');
       await call('/api/presence', D, { device: 'r196a', idle: true }); await sleep(200); seen.bothIdle = await st196(U, 'mills');
-      await call('/api/presence', D, { device: 'r196a', gone: true }); await sleep(200); seen.oneGone = await st196(U, 'mills');
-      await call('/api/presence', D, { device: 'r196a', idle: false });
+      stopA(); await call('/api/presence', D, { device: 'r196a', gone: true }); await sleep(200); seen.oneGone = await st196(U, 'mills'); // (its poll loop stops first, so the page that closed does not poll again)
+      await call('/api/presence', D, { device: 'r196b', idle: false });
       const slow = call('/api/chat', D, { message: 'SLOW r196' }); await sleep(800); seen.run = await st196(U, 'mills');
       await call('/api/presence/me', D, { acceptingWork: true }); await sleep(200); seen.runAccept = await st196(U, 'mills');
       await slow; await sleep(300); seen.accept = await st196(U, 'mills');
@@ -2893,15 +2893,14 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.oldList = (room.presence || []).find((p) => p.user === 'mills') || {};
       await sleep(2000); seen.back = await st196(U, 'mills'); seen.profile = ((await call('/api/profile', D)).data.profile || {}).status;
       await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
-      await call('/api/presence', D, { device: 'r196a', gone: true }); await call('/api/presence', D, { device: 'r196b', gone: true }); await sleep(200); seen.allGone = await st196(U, 'mills');
-      stopA(); stopB();
+      stopB(); await call('/api/presence', D, { device: 'r196b', gone: true }); await sleep(200); seen.allGone = await st196(U, 'mills');
       ok196 = seen.mixed.presence === 'online' && seen.mixed.label === 'Online' && seen.mixed.devices === 2 && seen.bothIdle.presence === 'away' && seen.bothIdle.label === 'Away' && seen.oneGone.presence === 'away'
         && seen.run.working === true && seen.run.label === 'Working' && seen.runAccept.label === 'Working + available' && seen.accept.working === false && seen.accept.label === 'Available for work'
         && seen.badOverride === 400 && seen.badText === 400 && seen.meReal === 'online' && seen.off.presence === 'offline' && seen.off.label === 'Offline' && !seen.off.text && seen.oldList.online === false
         && seen.verMoved && seen.inRoom && seen.back.presence !== 'offline' && !seen.back.text && seen.profile === '' && seen.allGone.presence === 'offline';
     }
     const l196 = (x) => x ? `${x.presence || '?'}/${x.label || '?'}` : '?';
-    spec('R196', 'presence and activity (plans/presence.md): a person is as present as their most active device (one active + one idle → online, both idle → away, the last one gone → offline); a run of theirs makes them Working; the accept-work switch makes them Available for work (Working + available during a run); appear offline shows Offline to everyone (also in the old presence list) while they see their real presence, and it ends at its until; the custom text (profile.status) ends at its until; bad override / too-long text → 400; a change reaches pages through the room long poll (status, ver)',
+    check('R196', 'presence and activity (plans/presence.md): a person is as present as their most active device (one active + one idle → online, both idle → away, the last one gone → offline); a run of theirs makes them Working; the accept-work switch makes them Available for work (Working + available during a run); appear offline shows Offline to everyone (also in the old presence list) while they see their real presence, and it ends at its until; the custom text (profile.status) ends at its until; bad override / too-long text → 400; a change reaches pages through the room long poll (status, ver)',
       ok196, has196 ? `mixed ${l196(seen.mixed)} (${seen.mixed.devices} devices) · both idle ${l196(seen.bothIdle)} · one gone ${l196(seen.oneGone)} · run ${l196(seen.run)} · run+accept ${l196(seen.runAccept)} · accept ${l196(seen.accept)} · bad ${seen.badOverride}/${seen.badText} · appear offline: others ${l196(seen.off)} text "${seen.off.text || ''}", old list online ${seen.oldList.online}, self real ${seen.meReal} · room ver moved ${seen.verMoved} status ${seen.inRoom} · after until ${l196(seen.back)} text "${seen.back.text || ''}" · all gone ${l196(seen.allGone)}` : 'GET /api/presence does not exist yet');
   } else skip('R196', 'presence and activity (plans/presence.md)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)

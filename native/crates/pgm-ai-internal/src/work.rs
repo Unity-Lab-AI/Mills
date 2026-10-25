@@ -844,7 +844,8 @@ pub fn start(hub: &Arc<dyn AiHub>) {
     let h = hub.clone();
     tokio::spawn(async move { loop {
         h.work().busy_changed.notified().await;
-        let busy = h.work().any_busy() || h.api().busy() || h.unity().busy() || crate::unity_routes::room_busy(&*h);
+        h.chat_room_changed(); // presence's "working" (plans/presence.md) reaches the pages
+        let busy =h.work().any_busy() || h.api().busy() || h.unity().busy() || crate::unity_routes::room_busy(&*h);
         h.internal("/internal/front/work-busy", json!({ "busy": busy }).to_string()).await;
     } });
 }

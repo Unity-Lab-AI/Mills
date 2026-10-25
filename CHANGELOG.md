@@ -7,6 +7,22 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.14.0 — 2026-10-25
+
+MINOR: **presence and activity, the hub side** (T-259; team note plans/presence.md). A person is as present as their
+most active device: each tab sends its own `device` id on the room long poll and on `POST /api/presence` (an older page
+counts as one device, "legacy", as before), so an idle laptop no longer makes an active phone look away. Next to
+online / away / offline: **working** (any Work run of theirs; the run's start and end reach pages through the long poll)
+and **accepting work** (their own switch). The **label** others see follows plans/presence.md § 2 (Offline · Away ·
+Online · Working · Available for work · Working + available). A person can **appear away / offline** (with an until),
+set **do not disturb** (it only mutes their own sounds and desktop notifications; nothing is blocked) and a **status
+text with an until** (the profile's status line). New: `GET /api/presence` (everyone's status), `GET|POST
+/api/presence/me`; the room answer carries `status`; the old `presence` list applies appear offline / away, so older
+pages show it too; `hub_status` / `team_presence` gain label, working, acceptingWork, dnd, text. Saved in state.json
+"presence" and profile.textUntil (add-only; the JavaScript hub ignores them). The page: a device id per tab, dnd muting
+(sounds, read-aloud, desktop and reminder notifications; the settings' test sounds still play). R196 is now a check.
+web/index.html 1.19.0, web/board.js 1.0.4.
+
 ## 5.13.8 — 2026-10-25
 
 PATCH: **a picture the browser kept no longer makes a page think an older build is running.** Unity's pictures
