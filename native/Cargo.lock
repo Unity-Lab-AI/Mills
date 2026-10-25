@@ -6100,6 +6100,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "vr-core",
+ "webkit2gtk",
 ]
 
 [[package]]

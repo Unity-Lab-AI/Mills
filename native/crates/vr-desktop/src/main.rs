@@ -14,6 +14,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod aihost;
+mod capture;
 mod install;
 mod local;
 mod proxy;
@@ -36,7 +37,7 @@ type R<T> = Result<T, String>;
 
 // ---------- for both windows ----------
 #[tauri::command]
-fn app_info(st: S) -> Value { json!({ "version": update::VERSION, "target": update::TARGET, "hub": st.store.get().hub, "native": true, "os": std::env::consts::OS }) }
+fn app_info(st: S) -> Value { let mut v = json!({ "version": update::VERSION, "target": update::TARGET, "hub": st.store.get().hub, "native": true, "os": std::env::consts::OS }); if let (Some(o), Some(c)) = (v.as_object_mut(), capture::capability().as_object()) { o.extend(c.clone()); } v }
 /// `vr-desktop --smoke`: the build check opens the Tools window, whose page reports back through this command once it
 /// has loaded and reached the app (then the app ends: 0 = the page, its script and the IPC all work).
 static SMOKE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -159,10 +160,14 @@ fn main() {
                 .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup"))?;
             let url: tauri::Url = hub.parse().map_err(|e| format!("bad hub address {hub}: {e}"))?;
             let host = url.host_str().unwrap_or("").to_string();
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).title(APP_NAME).inner_size(1320.0, 880.0).min_inner_size(420.0, 520.0)
+            let hub_for_perm = hub.clone();
+            let main_win = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).title(APP_NAME).inner_size(1320.0, 880.0).min_inner_size(420.0, 520.0)
+                // screen sharing / microphone / camera: only for the hub's own page (capture.rs); the Tools window has no handler
+                .on_permission_request(move |wv, kind| capture::decide(&kind, wv.url().map(|u| u.to_string()).unwrap_or_default().as_str(), &hub_for_perm))
                 // links to other sites open in the browser, not in the app
                 .on_navigation(move |u| { let same = u.host_str() == Some(host.as_str()) || u.scheme() == "tauri" || u.scheme() == "about" || u.scheme() == "blob" || u.scheme() == "data"; if !same && (u.scheme() == "https" || u.scheme() == "http") { let _ = open_external(u.to_string()); } same })
                 .build()?;
+            capture::enable_in_webview(&main_win);
             // the tray
             let h = app.handle();
             let show = MenuItem::with_id(h, "show", "Show VibeRoller", true, None::<&str>)?;
@@ -194,7 +199,7 @@ fn main() {
                     let h2 = app.handle().clone();
                     std::thread::spawn(move || for _ in 0..15 {
                         std::thread::sleep(std::time::Duration::from_secs(2));
-                        if let Some(w) = h2.get_webview_window("main") { let _ = w.eval("if (window.__TAURI__ && window.__TAURI__.core && typeof NATIVE !== 'undefined' && NATIVE) window.__TAURI__.core.invoke('app_info').then((i) => window.__TAURI__.core.invoke('notify', { title: 'smoke-main', body: location.host + ' ' + i.version + ' tools-tile ' + !document.getElementById('goTools').hidden }))"); }
+                        if let Some(w) = h2.get_webview_window("main") { let _ = w.eval("if (window.__TAURI__ && window.__TAURI__.core && typeof NATIVE !== 'undefined' && NATIVE) window.__TAURI__.core.invoke('app_info').then((i) => window.__TAURI__.core.invoke('notify', { title: 'smoke-main', body: location.host + ' ' + i.version + ' tools-tile ' + !document.getElementById('goTools').hidden + ' share-field ' + (typeof i.screenShare) }))"); }
                     });
                 }
             }
