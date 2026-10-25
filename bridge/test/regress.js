@@ -489,7 +489,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['attach.js', 'library.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['localai.js', 'attach.js', 'library.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -1547,7 +1547,7 @@ async function run() {
 
   const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html) || [])[1] || '';
   const missing66 = [
-    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com ipc: http:\/\/ipc\.localhost __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
+    [/default-src 'none'/.test(csp) && /connect-src 'self' http:\/\/127\.0\.0\.1:11434 https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com ipc: http:\/\/ipc\.localhost __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
     [/: \/\^https:\\\/\\\/\[a-z0-9-\]\+\\\.trycloudflare\\\.com\$\/;/.test(html) && /store\.set\('mills\.hub'/.test(html) && /const HUB_HOST = /.test(html), 'hub address pinned + cached (quick tunnel, or the named tunnel host injected at deploy)'],
     [/function trustedPub\(/.test(html) && /changedKeys\.has\(m\.username\)\) continue; \/\/ never encrypt to an unverified key/.test(html) && /Trust new key/.test(html), 'key pinning'],
     [/streams: \[call\.local\]/.test(html) && /sender\.setStreams\(isScreenTransceiver\(peer\.pc, t\) \? call\.screenStream : call\.local\)/.test(html) && /e\.streams && e\.streams\[0\]/.test(html), 'call lip-sync streams'],
@@ -3351,22 +3351,21 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   } else for (const [id, what] of [['R285', 'external session report'], ['R286', 'report validation'], ['R287', 'reports per person'], ['R288', 'report expiry'], ['R289', 'report leaves the list alone']]) skip(id, 'T-289 ' + what, 'the Rust hub\'s: --rust-hub runs it');
   { // R310 to R314 (T-208): the person's own local Ollama, found by the page (browser) or the desktop app, listed as "Local (this computer)"
     const page208 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), main208 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'src', 'main.rs'), 'utf8');
-    const a208 = page208.indexOf('// ── This computer\'s own Ollama (T-208)'), b208 = page208.indexOf('// ── Settings → My AI hosts, monitor and control');
-    const blk208 = a208 >= 0 && b208 > a208 ? page208.slice(a208, b208) : '';
+    const blk208 = fs.readFileSync(path.join(MILLS, 'web', 'localai.js'), 'utf8'); // T-209: the probe lives in the shared module, not in the page
     let names208 = [], bad208 = [];
     try {
-      const m = /const ollamaFromTags = (.*);\n/.exec(blk208), fromTags = new Function('return ' + m[1])();
+      const m = /const fromTags = (.*);\n/.exec(blk208), fromTags = new Function('return ' + m[1])();
       const tags = await (await fetch(`http://127.0.0.1:${OLLAMA_PORT}/api/tags`)).json(); // the suite's fake Ollama, as a browser would be answered
       names208 = fromTags(tags); bad208 = [fromTags(null), fromTags({ error: 'x' }), fromTags({ models: [{ size: 1 }, { model: 'b:1' }, 7] })];
     } catch (e) { names208 = ['ERR ' + e.message]; }
     check('R310', 'T-208 the page reads Ollama\'s /api/tags answer (the fake Ollama\'s here) into its model names, and an answer that is not Ollama\'s gives none instead of an error',
       names208.join() === 'unity-brain:latest' && bad208[0].length === 0 && bad208[1].length === 0 && bad208[2].join() === 'b:1', `names ${names208.join()} · odd ${JSON.stringify(bad208)}`);
     check('R311', 'T-208 the page asks 127.0.0.1:11434 /api/tags with a short timeout; a browser that is refused (CORS / private network) is told apart from "not running" by a no-cors ping, and only then is OLLAMA_ORIGINS explained (small hint, no error wall); when nothing runs, nothing is drawn',
-      /LOCAL_OLLAMA = 'http:\/\/127\.0\.0\.1:11434'/.test(blk208) && /\/api\/tags/.test(blk208) && /abort\(\), 1500\)/.test(blk208) && /mode: 'no-cors'/.test(blk208) && /r\.blocked = true/.test(blk208) && /OLLAMA_ORIGINS="' \+ location\.origin/.test(blk208) && /wrap\.hidden = true/.test(blk208) && /if \(!r\.found && !r\.blocked\) return;/.test(blk208) && !/sys\(|sysSettings\(|alert\(/.test(blk208.split('function renderLocalOllama')[0]), 'static check of the page');
+      /LOCAL_OLLAMA = 'http:\/\/127\.0\.0\.1:11434'/.test(blk208) && /\/api\/tags/.test(blk208) && /abort\(\), 1500\)/.test(blk208) && /mode: 'no-cors'/.test(blk208) && /r\.blocked = true/.test(blk208) && /OLLAMA_ORIGINS="' \+ \(o\.origin \|\| location\.origin\)/.test(blk208) && /wrap\.hidden = true/.test(blk208) && /if \(!r\.found && !r\.blocked\) return;/.test(blk208) && !/sys\(|sysSettings\(|alert\(/.test(blk208.split('function line')[0]) && /<script src="localai\.js"><\/script>/.test(page208) && /LOCALAI\.line\(box, d\.providers/.test(page208) && !/LOCAL_OLLAMA|api\/tags/.test(page208) && /connect-src 'self' http:\/\/127\.0\.0\.1:11434 /.test(page208), 'static check of the module and the page');
     check('R312', 'T-208 the desktop app asks Ollama through its own program (command ollama_local, no CORS: OLLAMA_HOST or 127.0.0.1:11434) and the page uses it there; it also offers "Start this computer\'s AI host" (host_act start, or the set-up pointer) when none of the person\'s hosts lends a local model, and names where to lend it in a browser',
-      /async fn ollama_local\(\)/.test(main208) && /probe_ollama_blocking/.test(main208) && /host_status, ollama_local, host_act/.test(main208) && /NATIVE\.call\('ollama_local'\)/.test(blk208) && /NATIVE\.call\('host_act', \{ what: 'start' \}\)/.test(blk208) && /Run on this PC/.test(blk208) && /My AI hosts/.test(blk208), 'static check of the page and the app');
+      /async fn ollama_local\(\)/.test(main208) && /probe_ollama_blocking/.test(main208) && /host_status, ollama_local, host_act/.test(main208) && /native\.call\('ollama_local'\)/.test(blk208) && /native\.call\('host_act', \{ what: 'start' \}\)/.test(blk208) && /Run on this PC/.test(blk208) && /My AI hosts/.test(blk208), 'static check of the page and the app');
     check('R313', 'T-208 the shared provider stays the default: the local list is display only (greyed, never a provider option the hub knows, no call to /api/model or /api/apikey/settings from the probe), and it is skipped when one of the person\'s own hosts already lends a local model',
-      !/\/api\/model|\/api\/apikey|\/api\/providers/.test(blk208) && /o\.disabled = true/.test(page208.slice(page208.indexOf('Local (this computer) · not for Work'), page208.indexOf('Local (this computer) · not for Work') + 400)) && /localOllama\.found && localOllama\.models\.length && !ownLocalProvider\(provs\)/.test(page208) && /p\.kind === 'host-openai' && p\.owner === /.test(blk208), 'static check of the page');
+      !/\/api\/model|\/api\/apikey|\/api\/providers/.test(blk208) && /op\.disabled = true/.test(blk208.slice(blk208.indexOf('Local (this computer) · not for Work'), blk208.indexOf('Local (this computer) · not for Work') + 500)) && /localOllama\.found && localOllama\.models\.length && !ownProvider\(provs, o && o\.user\)/.test(blk208) && /LOCALAI\.group\(sel, provs/.test(page208) && /p\.kind === 'host-openai' && p\.owner === /.test(blk208), 'static check of the page');
     const ck208 = (await call('/api/check', U)).data || {};
     check('R314', 'T-208 a person without a local Ollama sees nothing change: /api/check lists no provider for it (the page\'s probe adds nothing on the hub), and the default provider / model fields keep their shape',
       Array.isArray(ck208.providers) && !ck208.providers.some((p) => /local-ollama/.test(p.id || '')) && 'defaultProvider' in ck208 && Array.isArray(ck208.models), `providers ${(ck208.providers || []).length} · defaultProvider ${'defaultProvider' in ck208}`);
