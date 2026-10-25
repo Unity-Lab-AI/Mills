@@ -154,7 +154,8 @@ function create(name, who = 'VibeRoller') {
 const URL_RE = /^(https:\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+|ssh:\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+|[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~/@!$&'()*+,;=%-]+)$/;
 function clone(url, name, who = 'VibeRoller', env = {}) {
   url = String(url || '').trim();
-  const local = /^file:\/\//i.test(url) && CFG.projectsLocalClone === true;
+  // (the runner's own fake Forgejo is plain http on 127.0.0.1: allowed under the same switch, T-238)
+  const local = (/^file:\/\//i.test(url) || /^http:\/\/127\.0\.0\.1(:\d+)?\//.test(url)) && CFG.projectsLocalClone === true;
   if (!local && !URL_RE.test(url)) throw new Error('Give the repo\'s https:// or ssh address (https://host/owner/repo.git or git@host:owner/repo.git).');
   name = String(name || '').trim() || url.replace(/\/+$/, '').split(/[/:]/).pop().replace(/\.git$/i, '');
   checkProjectName(name);

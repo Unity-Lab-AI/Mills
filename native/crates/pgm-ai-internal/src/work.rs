@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot, Notify};
 use crate::hub::{answer, AiHub, Resp};
 use crate::questions;
 use crate::sessions::{self, Sx};
-use pgm_collab_internal::worktree::{Worktrees, Wt, HUB_PROJECT};
+use pgm_collab_internal::worktree::{Worktrees, Wt, HUB_PROJECT, NO_PROJECT};
 use pgm_core_internal::config::Config;
 use pgm_core_internal::now_ms;
 use pgm_identity_internal::Account;
@@ -130,7 +130,7 @@ impl Work {
     }
     pub fn effective_model(&self, a: &Account) -> String { let m = s(&self.state(a), "model"); if m.is_empty() { self.default_model(a) } else { m } }
     /// A session's project (the first session's is project_of).
-    pub fn project_in(&self, a: &Account, sx: &Sx) -> String { let p = s(&sessions::sstate(self, a, sx), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
+    pub fn project_in(&self, a: &Account, sx: &Sx) -> String { if self.is_none(a, sx) { return NO_PROJECT.into(); } let p = s(&sessions::sstate(self, a, sx), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
     /// The session limits on a host for a person (T-285, T-286; plans/multi-session.md § 6): working sessions per
     /// person, per provider on it, and whether the host's owner may exceed them. The host's own settings (its hello, or
     /// what its owner set from the page) first; else config workSessions { perUser 5, perProvider 3 }.
@@ -151,7 +151,16 @@ impl Work {
     }
     /// How long a run may send nothing of its own before it counts as stalled (config workSessions.stallAfterMs).
     pub fn stall_after(&self) -> u64 { self.cfg.get("workSessions").and_then(|w| w["stallAfterMs"].as_u64()).filter(|x| *x >= 10_000).unwrap_or(720_000) }
-    pub fn project_of(&self, a: &Account) -> String { let p = s(&self.state(a), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
+    /// Is this a session with no project (T-238: the AI only, in the person's scratch folder)?
+    pub fn is_none(&self, a: &Account, sx: &Sx) -> bool { sessions::sstate(self, a, sx)["noProject"] == json!(true) }
+    /// Where a session's run happens: the person's worktree of its project (the first session's own, the others' their
+    /// own <user>.<id>), or the scratch folder of a session with no project.
+    pub fn session_wt(&self, a: &Account, sx: &Sx) -> Result<Wt, String> {
+        if self.is_none(a, sx) { return self.wt.scratch(&a.username); }
+        let pj = self.project_in(a, sx);
+        if sx.primary { self.wt.ensure(&a.username, &pj) } else { self.wt.ensure_session(&a.username, sx.hex(), &pj) }
+    }
+    pub fn project_of(&self, a: &Account) -> String { let st = self.state(a); if st["noProject"] == json!(true) { return NO_PROJECT.into(); } let p = s(&st, "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
     pub fn project_list(&self) -> Value {
         let mut c = self.projects.lock().unwrap_or_else(|e| e.into_inner());
         if now_ms() - c.0 > 5000 { *c = (now_ms(), json!(self.wt.list())); }
@@ -224,6 +233,7 @@ impl Work {
     pub fn check_fresh(self: &Arc<Self>, a: &Account) { let pj = self.project_of(a); self.check_fresh_in(a, &pj, None); }
     /// The background freshness check of a worktree: the person's own (None) or one of their sessions' (its id's hex).
     pub fn check_fresh_in(self: &Arc<Self>, a: &Account, pj: &str, hex: Option<&str>) {
+        if pj == NO_PROJECT { return; }
         let pj = pj.to_string(); let hex = hex.map(String::from); let key = fresh_key(&a.username, &pj, hex.as_deref());
         { let mut f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()); let cur = f.get(&key).cloned().unwrap_or_default(); if cur.busy || (cur.at > 0 && now_ms() - cur.at < 60000) { return; } f.insert(key.clone(), Fresh { busy: true, ..cur }); }
         let (w, user) = (self.clone(), a.username.clone());
@@ -259,7 +269,11 @@ impl Work {
         let (name, u) = (&a.display, &a.username);
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let dir = wd.dir.display(); let b = &wd.branch;
-        let wher: Vec<String> = if wd.hub { vec![
+        let wher: Vec<String> = if wd.project == NO_PROJECT { vec![
+            format!("{name} started this session with NO PROJECT: there is no git repository and no worktree. Your working folder is {dir}, a scratch folder that only {name} uses on this hub (nothing in it is shared, versioned or backed up)."),
+            "Use it for notes, drafts, experiments and one-off scripts; never touch the VibeRoller checkout, any project's folders or other people's folders. The worktree law (check / update / merge) is for real projects and does not apply here.".to_string(),
+            format!("If the work turns into a project, tell {name}: Work's Start work panel starts a new private project on Forgejo or clones one, in their own worktree; then copy over what is worth keeping."),
+        ] } else if wd.hub { vec![
             format!("For work on the VibeRoller project itself you are in {name}'s OWN git worktree: {dir}, branch {b}."),
             format!("Commit only on {b}; never check out other branches here and never touch other people's worktrees in {}.", self.wt.wt_root.display()),
             "Before committing, run the regression suite from the worktree: node bridge/test/regress.js --no-prod (it must report 0 failed).".into(),
@@ -541,11 +555,12 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if w.shares_session(&a.username, &sx.sid) { w.share_line(&a.username, "user", &message); }
     let pj = w.project_in(a, &sx);
     // each session its own worktree (T-292): the first one the person's, the others <user>.<id> on work/<user>.<id>
-    let wd = match if sx.primary { w.wt.ensure(&a.username, &pj) } else { w.wt.ensure_session(&a.username, sx.hex(), &pj) } { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
+    let none = pj == NO_PROJECT;
+    let wd = match w.session_wt(a, &sx) { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
     sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
     // a new message answers whatever the session waited for (T-288)
     { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); m.remove("waiting"); }); }
-    if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
+    if none { } else if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
     let mcp_config = w.mcp_config(a, &sx);
@@ -573,6 +588,10 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // Jcode PGM on a host runs Work on that host's computer, like the legacy case above: only its owner may
     if hjcode && owner != a.username {
         return one_line(json!({ "type": "bridge_error", "text": format!("{nick} runs Work through Jcode PGM on {} computer, and only its owner may work on that computer. Pick another AI in the dropdown.", if owner.is_empty() { "its own".to_string() } else { format!("{}'s", hub.name_of(&owner)) }) }));
+    }
+    // a session with no project works in a folder on THIS hub: a host's computer has no such folder
+    if none && (hjcode || (kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work")) {
+        return one_line(json!({ "type": "bridge_error", "text": format!("{nick} runs Work on another computer, but a session with no project works in your scratch folder on this hub. Pick the hub's Claude or a Claude shared as AI only, or give this session a project.") }));
     }
     // the limits (T-285): only working sessions count, per host and per provider on it; a host's owner is not limited on it
     { let pfull = s(&prov, "id"); let host = sessions::host_of(&pfull);
@@ -836,6 +855,20 @@ impl Work {
     pub fn share_stop(&self, owner: &str) { let gone = self.shares.lock().unwrap_or_else(|e| e.into_inner()).remove(owner); if let Some(s) = gone { s.woke.notify_waiters(); self.shares_changed.notify_one(); } }
 }
 
+const NO_FORGEJO_TOKEN: &str = "Save your own Forgejo token first (Settings → My Forgejo): the repos you can see, and a new private repo, are asked of Forgejo as you.";
+/// worktree.js repos' lines → [{ name, private, fork, mirror, url, description }].
+fn parse_repos(out: &str) -> Vec<Value> {
+    let re = regex::Regex::new(r"^(\S+/\S+?)((?: \((?:private|fork|mirror)\))*)  (\S+)\s*$").unwrap();
+    let mut v: Vec<Value> = vec![];
+    for line in out.lines() {
+        if let Some(c) = re.captures(line) {
+            let tags = &c[2];
+            v.push(json!({ "name": &c[1], "private": tags.contains("(private)"), "fork": tags.contains("(fork)"), "mirror": tags.contains("(mirror)"), "url": &c[3], "description": "" }));
+        } else if line.starts_with("    ") { if let Some(last) = v.last_mut() { last["description"] = json!(line.trim()); } }
+    }
+    v
+}
+
 /// The Work routes (signed in as `a`); None = not one of them.
 pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let w = hub.work(); let u = &a.username;
@@ -893,15 +926,59 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                 None => { let e = err.trim().lines().last().unwrap_or("").trim_start_matches("Error: ").to_string(); let e = if e.is_empty() { out.trim().lines().last().unwrap_or("Could not make the project.").to_string() } else { e }; answer(if e.contains("exists already") { 409 } else { 400 }, json!({ "error": e })) }
             }
         }
+        // the Forgejo repos this person can see, to clone from (T-238): worktree.js repos, as them; it needs their own token
+        "/api/projects/repos" if get => {
+            let env = w.work_env(u);
+            if env.is_empty() { return Some(answer(400, json!({ "error": NO_FORGEJO_TOKEN, "needsToken": true }))); }
+            let q: String = r.param("q").unwrap_or_default().chars().filter(|c| !c.is_control()).take(80).collect::<String>().split_whitespace().map(|x| x.trim_start_matches('-')).filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" ");
+            let mut args: Vec<&str> = vec!["repos"]; args.extend(q.split(' ').filter(|x| !x.is_empty()));
+            let wt = &w.wt; let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&args, &env));
+            if !ok { let e = err.trim().lines().last().unwrap_or("Forgejo did not answer.").to_string(); return Some(answer(502, json!({ "error": e }))); }
+            answer(200, json!({ "repos": parse_repos(&out), "q": q }))
+        }
+        // a new empty project, private on Forgejo (T-238), in this order: the checks (name, taken, token), the repo on
+        // Forgejo (repo-create, as them), the local project (new), and publish (origin = Forgejo, every branch pushed)
+        "/api/projects/create" if post => {
+            let b = r.json(); let name = s(&b, "name").trim().to_string();
+            if !pgm_collab_internal::worktree::Worktrees::valid_name(&name) { return Some(answer(400, json!({ "error": "A project name is 1-64 characters: letters, digits, dots, dashes and underscores, starting with a letter or digit." }))); }
+            if w.wt.name_taken(&name) { return Some(answer(409, json!({ "error": format!("A project named \"{name}\" exists already.") }))); }
+            let mut env = w.work_env(u);
+            let Some(login) = w.forgejo_login(u).filter(|_| !env.is_empty()) else { return Some(answer(400, json!({ "error": NO_FORGEJO_TOKEN, "needsToken": true }))) };
+            let owner = { let o = s(&b, "owner"); if o.is_empty() { login } else { o } };
+            if !owner.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) || owner.is_empty() || owner.len() > 100 { return Some(answer(400, json!({ "error": "That owner name is not valid." }))); }
+            let full = format!("{owner}/{name}");
+            let desc: String = s(&b, "description").chars().filter(|c| !c.is_control()).take(200).collect();
+            let wt = &w.wt;
+            let fail = |out: &str, err: &str, what: &str| -> (u16, String) { let e = err.trim().lines().last().unwrap_or("").trim_start_matches("Error: ").to_string(); let e = if e.is_empty() { out.trim().lines().last().unwrap_or(what).to_string() } else { e }; (if e.contains("409") || e.contains("already exists") || e.contains("exists already") { 409 } else { 502 }, e) };
+            let mut rc: Vec<&str> = vec!["repo-create", full.as_str(), "--private"]; if !desc.is_empty() { rc.push("--description"); rc.push(desc.as_str()); }
+            let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&rc, &env));
+            if !ok { let (st, e) = fail(&out, &err, "Forgejo did not make the repo."); return Some(answer(st, json!({ "error": e, "stage": "repo-create" }))); }
+            env.push(("USERNAME".into(), u.clone())); env.push(("USER".into(), u.clone()));
+            let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&["new", name.as_str()], &env));
+            if !ok { let (st, e) = fail(&out, &err, "Could not make the project."); return Some(answer(st, json!({ "error": format!("{e} ({full} was made on Forgejo; it is empty and yours to delete or reuse.)"), "stage": "new", "repo": full }))); }
+            let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&["--project", name.as_str(), "publish", full.as_str(), "--private"], &env));
+            w.projects_changed();
+            if !ok { let (st, e) = fail(&out, &err, "Could not publish the project."); return Some(answer(st, json!({ "error": format!("{e} (the project {name} exists here; \"publish\" can be run again.)"), "stage": "publish", "project": name, "repo": full }))); }
+            answer(200, json!({ "project": name, "repo": full, "private": true, "log": out.trim(), "projects": w.project_list() }))
+        }
         "/api/workspace" if post => {
             let b = r.json();
+            // no project: the AI only, in the person's scratch folder (T-238)
+            if b["none"] == json!(true) || s(&b, "project") == NO_PROJECT {
+                let Some(sx) = sess(&b) else { return Some(no_session()) };
+                if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
+                let wd = match w.wt.scratch(u) { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": e }))) };
+                let switched = !w.is_none(a, &sx);
+                sessions::supdate(w, a, &sx, |m| { if switched { m.remove("claudeSessionId"); } m.remove("project"); m.insert("noProject".into(), json!(true)); });
+                return Some(answer(200, json!({ "project": NO_PROJECT, "none": true, "dir": wd.dir.display().to_string(), "branch": "" })));
+            }
             let want = if !s(&b, "project").is_empty() { s(&b, "project") } else if !b["workspace"].is_null() && b["workspace"] != json!("") { HUB_PROJECT.into() } else { String::new() };
             let pj = match w.wt.project(&want) { Ok(p) => p, Err(e) => return Some(answer(400, json!({ "error": e }))) };
             let Some(sx) = sess(&b) else { return Some(no_session()) };
             if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
             let wd = match if sx.primary { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.hex(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
             let switched = w.project_in(a, &sx) != pj.name;
-            sessions::supdate(w, a, &sx, |m| { if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
+            sessions::supdate(w, a, &sx, |m| { m.remove("noProject"); if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
             w.check_fresh(a);
             answer(200, json!({ "project": pj.name, "dir": wd.dir.display().to_string(), "branch": wd.branch }))
         }

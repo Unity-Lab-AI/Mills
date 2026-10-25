@@ -34,6 +34,7 @@ fn target(hub: &Arc<dyn AiHub>, r: &Req, a: &Account, b: &Value) -> Result<Targe
     let w = hub.work();
     let Some(sx) = sessions::resolve(a, &sessions::wanted(r, b)) else { return Err(answer(404, json!({ "error": "No such session." }))) };
     let project = w.project_in(a, &sx);
+    if w.is_none(a, &sx) { return Err(answer(400, json!({ "error": "This session has no project, so there is no git worktree to show.", "noProject": true }))); }
     if sx.primary {
         let wd = w.wt.ensure(&a.username, &project).map_err(|e| answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") })))?;
         let up = format!("origin/{}", wd.main);

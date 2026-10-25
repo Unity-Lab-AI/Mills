@@ -343,6 +343,13 @@
   .apiKeyShow { display: flex; gap: .4rem; align-items: center; } .apiKeyShow input { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
   .provItem { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--line); }
   .provItem:first-child { border-top: 0; } .provItem small { color: var(--muted); }
+  .startCard { display: flex; flex-direction: column; gap: .45rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem; }
+  .startCard h3 { margin: 0; font-size: .95rem; } .startCard small { color: var(--muted); }
+  .startCard .row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; } .startCard .row input { flex: 1; min-width: 9rem; }
+  .startList { display: flex; flex-direction: column; gap: .25rem; max-height: 11rem; overflow: auto; }
+  .startList button { text-align: left; background: transparent; border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: .3rem .5rem; font-size: .85rem; }
+  .startList button small { margin-left: .4rem; }
+  #startMsg { font-size: .85rem; color: var(--muted); min-height: 1.1rem; } #startMsg.err { color: #e5534b; }
   #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
   .archiveSearch { padding: .5rem .75rem 0; } .archiveSearch input { font-size: .9rem; }
   .conv .snip { font-size: .76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .15rem; }
@@ -1131,6 +1138,7 @@
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
+    <button class="ghost" id="startWork" hidden title="Start work: a new session on a project you have, a repo cloned, a new empty project, or just the AI">New session</button>
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
     <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
     <button class="ghost" id="openArchive" title="Your saved Claude sessions">Past sessions</button>
@@ -1220,6 +1228,29 @@
     <div class="bar"><span>Past sessions</span><button class="ghost" id="closeArchive">Close</button></div>
     <div class="archiveSearch"><input id="archiveQ" type="search" placeholder="Search titles and everything said in your sessions…" spellcheck="false" autocomplete="off"></div>
     <div id="archiveList"></div>
+  </div>
+</div>
+
+<div id="startPanel" class="modal" hidden>
+  <div class="box">
+    <div class="bar"><span>Start work</span><button class="ghost" id="startClose">Close</button></div>
+    <div class="setBody">
+      <section class="startCard" id="startPick"><h3>1 · A project you have</h3>
+        <small>Each start is a new session in your own worktree of the project (branch work/you).</small>
+        <div class="startList" id="startProjects"></div></section>
+      <section class="startCard" id="startClone"><h3>2 · Clone a repo</h3>
+        <div class="row"><input id="startUrl" type="text" placeholder="https://github.com/owner/repo.git or a Forgejo address" spellcheck="false" autocomplete="off"><input id="startCloneName" type="text" placeholder="name (optional)" spellcheck="false" autocomplete="off"><button id="startCloneGo">Clone and start</button></div>
+        <div class="row"><input id="startRepoQ" type="search" placeholder="…or search the Forgejo repos you can see" spellcheck="false" autocomplete="off"></div>
+        <small id="startRepoNote"></small>
+        <div class="startList" id="startRepos"></div></section>
+      <section class="startCard" id="startNew"><h3>3 · A new, empty project</h3>
+        <small>Made private on Forgejo as you, so everyone's worktrees and merges have a home from the first minute.</small>
+        <div class="row"><input id="startNewName" type="text" placeholder="project name (letters, digits, dots, dashes, underscores)" spellcheck="false" autocomplete="off"><button id="startNewGo">Create and start</button></div></section>
+      <section class="startCard" id="startNone"><h3>4 · No project</h3>
+        <small>Just the AI: a scratch folder of your own, no git, nothing shared.</small>
+        <div class="row"><button id="startNoneGo">Start with no project</button></div></section>
+      <div id="startMsg" role="status"></div>
+    </div>
   </div>
 </div>
 
@@ -1377,7 +1408,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
 let reconnecting = false;
 const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '').toLowerCase(); return !/no-store|no-cache/.test(cc) && /max-age=([1-9]\d*)/.test(cc); };
+// The Work session on screen ('' = the first one, as older pages and hubs know it): the calls that belong to one
+// session carry ?session=<id> (T-238: Start work opens a new session of its own).
+let SESSION = '';
+const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|work\/(current|queue|attach|git|share|draft))(\/|\?|$)/;
+const withSession = (path) => (SESSION && SESSION_PATHS.test(path) && !/[?&]session=/.test(path) ? path + (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(SESSION) : path);
 async function api(path, opts = {}) {
+  path = withSession(path);
   if (!base) throw new Error('VibeRoller is offline — ask the admin to start it.');
   const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
   for (let attempt = 1; ; attempt++) {
@@ -2049,14 +2086,22 @@ function renderProjects() {
   sel.textContent = '';
   const opt = (v, l, title) => { const o = document.createElement('option'); o.value = v; o.textContent = l; if (title) o.title = title; sel.append(o); };
   for (const p of me.projects) opt(p.name, p.name + ' · my worktree', p.dir + (p.remote ? '  ←  ' + p.remote : '') + (p.people.length ? '  ·  worktrees: ' + p.people.join(', ') : ''));
+  opt('__none', '◌ No project (the AI only)');
   opt('__new', '＋ New project…'); opt('__clone', '⤓ Pull in a repo…');
-  sel.value = me.project || 'VibeRoller';
+  sel.value = me.project === '(none)' ? '__none' : (me.project || 'VibeRoller');
   sel.hidden = false;
 }
 $('workspace').onchange = async () => {
-  const sel = $('workspace'), want = sel.value, before = me.project || 'VibeRoller';
+  const sel = $('workspace'), want = sel.value, before = me.project === '(none)' ? '__none' : (me.project || 'VibeRoller');
+  if ((want === '__new' || want === '__clone') && SESSIONS_OK) { sel.value = before; return startOpen(); } // one start flow (T-238)
   try {
     let project = want;
+    if (want === '__none') {
+      const d = await json('/api/workspace', { method: 'POST', body: JSON.stringify({ none: true }) });
+      me.project = d.project; renderProjects(); fresh = true;
+      sys('Working with no project: only the AI, in your scratch folder ' + d.dir + ' (no git). Next message starts a new chat.');
+      return;
+    }
     if (want === '__new' || want === '__clone') {
       const url = want === '__clone' ? (prompt('Address of the repo to pull in (https://host/owner/repo.git or git@host:owner/repo.git). Your saved Forgejo token is used for the lab\'s Forgejo.') || '').trim() : '';
       if (want === '__clone' && !url) { sel.value = before; return; }
@@ -2072,6 +2117,80 @@ $('workspace').onchange = async () => {
     sys('Working on ' + d.project + ' in your own worktree: ' + d.dir + ' (branch ' + d.branch + '). Ask Claude to "merge" when your change is done. Next message starts a new chat.');
   } catch (err) { sel.value = before; sys(err.message, true); }
 };
+// ---------- Start work (T-238): one flow for every way to begin ----------
+// pick a project / clone (an address, or a repo from Forgejo) / a new empty project (private on Forgejo) / no project.
+// Each start opens a NEW Work session (POST /api/work/sessions/new) that lands in your own worktree of it.
+let SESSIONS_OK = false, startAuto = false, startRepoTimer = null, startBusy = false;
+const startMsg = (t, err) => { const m = $('startMsg'); m.textContent = t || ''; m.className = err ? 'err' : ''; };
+function startOpen() {
+  if (!me || !SESSIONS_OK) return;
+  $('startPanel').hidden = false; startMsg('');
+  const box = $('startProjects'); box.textContent = '';
+  for (const p of me.projects || []) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = p.name;
+    const sm = document.createElement('small'); sm.textContent = p.remote || 'no remote yet'; b.append(sm);
+    b.onclick = () => startSession({ project: p.name }); box.append(b);
+  }
+  startRepos();
+}
+function startClose() { $('startPanel').hidden = true; }
+async function startRepos() {
+  const q = $('startRepoQ').value.trim(), box = $('startRepos'), note = $('startRepoNote');
+  try {
+    const d = await json('/api/projects/repos?q=' + encodeURIComponent(q));
+    if (q !== $('startRepoQ').value.trim()) return;
+    box.textContent = ''; note.textContent = d.repos.length ? '' : 'No repo matches.';
+    for (const r of d.repos.slice(0, 200)) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = r.name;
+      const sm = document.createElement('small'); sm.textContent = [r.private ? 'private' : '', r.fork ? 'fork' : '', r.description].filter(Boolean).join(' · '); b.append(sm);
+      b.onclick = () => startClone(r.url, ''); box.append(b);
+    }
+  } catch (err) { box.textContent = ''; note.textContent = err.message; }
+}
+async function startClone(url, name) {
+  if (startBusy) return;
+  if (!url) return startMsg('Give the repo\'s address (https://…).', true);
+  startMsg('Cloning ' + url + '…');
+  try {
+    const made = await json('/api/projects', { method: 'POST', body: JSON.stringify(name ? { url, name } : { url }) });
+    me.projects = made.projects; renderProjects();
+    await startSession({ project: made.project });
+  } catch (err) { startMsg(err.message, true); }
+}
+async function startCreate(name) {
+  if (startBusy) return;
+  if (!name) return startMsg('Give the new project a name.', true);
+  startMsg('Making ' + name + ' on Forgejo (private) and here…');
+  try {
+    const made = await json('/api/projects/create', { method: 'POST', body: JSON.stringify({ name }) });
+    me.projects = made.projects; renderProjects();
+    await startSession({ project: made.project });
+  } catch (err) { startMsg(err.message, true); }
+}
+async function startSession(body) {
+  if (startBusy) return;
+  if (busy || queue.length || sendNowMessage) return startMsg('Claude is working here: stop it (and clear the queue) first, or let it finish.', true);
+  startBusy = true;
+  try {
+    startMsg('Opening a new session…');
+    const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify(body.none ? { none: true } : body) });
+    SESSION = d.id; fresh = true; log.innerHTML = ''; setConversation(null, null, []);
+    me.project = d.project; renderProjects();
+    if (usageData) { usageData.context = null; paintUsage(); }
+    startClose(); gitRefresh();
+    sys(d.noProject ? 'New session with no project: only the AI, in your scratch folder ' + d.dir + ' (no git).'
+      : 'New session on ' + d.project + ' in your own worktree: ' + d.dir + ' (branch ' + d.branch + '). Ask Claude to "merge" when your change is done.');
+  } catch (err) { startMsg(err.message, true); }
+  startBusy = false;
+}
+$('startWork').onclick = startOpen; $('startClose').onclick = startClose;
+$('startPanel').addEventListener('click', (e) => { if (e.target === $('startPanel')) startClose(); });
+$('startCloneGo').onclick = () => startClone($('startUrl').value.trim(), $('startCloneName').value.trim());
+$('startUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('startCloneGo').click(); });
+$('startNewGo').onclick = () => startCreate($('startNewName').value.trim());
+$('startNewName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('startNewGo').click(); });
+$('startNoneGo').onclick = () => startSession({ none: true });
+$('startRepoQ').addEventListener('input', () => { clearTimeout(startRepoTimer); startRepoTimer = setTimeout(startRepos, 350); });
 $('model').onchange = async () => {
   try {
     const [provider, model] = $('model').value.includes('|') ? $('model').value.split('|') : ['host', $('model').value];
@@ -2511,6 +2630,12 @@ function saveCurrentSoon() { clearTimeout(currentSaveTimer); currentSaveTimer = 
 function saveCurrent() { clearTimeout(currentSaveTimer); if (me) json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle, run: curRun }) }).catch(() => {}); }
 function record(cls, text) { transcript.push({ cls, text }); saveCurrentSoon(); }
 async function restoreWork() { // opening Work: the previous conversation, then the queue (which starts running)
+  // which session is open (hubs with many sessions): the page keeps to it; older hubs have only the one
+  try {
+    const l = await json('/api/work/sessions'); SESSIONS_OK = Array.isArray(l.sessions); $('startWork').hidden = !SESSIONS_OK;
+    const cur = (l.sessions || []).find((x) => x.id === l.current);
+    if (cur) { if (l.current !== l.primary) SESSION = l.current; me.project = cur.project; renderProjects(); }
+  } catch { $('startWork').hidden = true; }
   let s; try { s = await json('/api/work/current'); } catch { return; }
   if ((s.transcript || []).length && !transcript.length) {
     for (const t of s.transcript) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
@@ -2526,6 +2651,8 @@ async function restoreWork() { // opening Work: the previous conversation, then 
   // waits for it (sending now would be refused and the message lost)
   if (!busy) { await followRun(s.run); curRun = null; saveCurrentSoon(); }
   if (!busy && (sendNowMessage || queue.length)) drain();
+  // Work opens with nothing going on: offer the ways to start (once per page load; "Close" keeps this session)
+  if (SESSIONS_OK && !startAuto && !busy && !transcript.length && !queue.length && !sendNowMessage) { startAuto = true; startOpen(); }
 }
 function setConversation(id, title, items) {
   archiveId = id; archiveTitle = title; transcript = items; saveCurrentSoon();
