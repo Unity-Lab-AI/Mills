@@ -7,6 +7,16 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.8 — 2026-10-25
+
+PATCH: **a picture the browser kept no longer makes a page think an older build is running.** Unity's pictures
+(/api/assistant/image) are cacheable for a day (private, max-age=86400), and the Rust hub stamped them with its build
+(X-VR-Version). After 5.13.3 went live a page showed a picture kept from 5.13.2, read 5.13.2 from it, reloaded "for" it
+and then said "VibeRoller 5.13.2+a837cb1 is running, but this page still got 5.13.3+40a831f". The hub no longer names
+its build on an answer a browser may keep (pgm-net-internal `http::cacheable`), and the page ignores the build on such
+an answer (copies already kept still carry it for up to a day). R199 (written first: it failed with the build on the
+picture). web/index.html 1.18.1.
+
 ## 5.13.7 — 2026-10-25
 
 PATCH: **Sponge's session and presence decisions in the specs and their checks** (T-282, T-258). Each Work session gets

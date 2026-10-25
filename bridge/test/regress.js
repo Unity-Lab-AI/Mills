@@ -2969,6 +2969,19 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     spec('R198', 'session limits (plans/multi-session.md § 6): with the defaults (5 per person per host, 3 per provider) a 4th working session on the same provider answers 429 (idle sessions cost nothing: the 4th exists, only its run is refused) with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
+    // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
+    const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });
+    fs.writeFileSync(path.join(img199, 'r199-test.png'), Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fe0d4c2bba0000000049454e44ae426082', 'hex'));
+    const pic199 = await fetch(H + '/api/assistant/image?ref=room%2Fr199-test', { headers: { Authorization: 'Bearer ' + U } }).catch(() => null);
+    const chk199 = await fetch(H + '/api/check', { headers: { Authorization: 'Bearer ' + U } }).catch(() => null);
+    const hd = (r, k) => (r && r.headers.get(k)) || '';
+    const page199 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R199', 'an answer the browser may keep (Unity\'s pictures: cache-control private, max-age) does not name the hub\'s build, so a copy kept from an older build never makes a page think that build is running; a normal answer (no-store) still names it; [static] the page reads the build only from answers that are not cacheable',
+      !!pic199 && pic199.status === 200 && /max-age=\d+/.test(hd(pic199, 'cache-control')) && !hd(pic199, 'x-vr-version') && !!chk199 && !!hd(chk199, 'x-vr-version') && /cacheable\(res\)/.test(page199),
+      `picture ${pic199 ? pic199.status : 'no answer'} cache "${hd(pic199, 'cache-control')}" build "${hd(pic199, 'x-vr-version')}" · /api/check build "${hd(chk199, 'x-vr-version')}" · page checks ${/cacheable\(res\)/.test(page199)}`);
+    fs.rmSync(path.join(img199, 'r199-test.png'), { force: true });
+  } else skip('R199', 'a cacheable answer does not name the build', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB && !WIN) { // R178 (FR5): deploy/trial.sh tries a build on a side port against a copy of the data before it is swapped in
     const tr = path.join(MILLS, 'deploy', 'trial.sh');
     const before178 = fs.readdirSync(require('os').tmpdir()).filter((d) => /^vr-trial-/.test(d)).length;

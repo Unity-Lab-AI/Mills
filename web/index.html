@@ -1358,6 +1358,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // host switch; everything that touches the computer lives in the Tools window, the app's own page.
 const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
 let reconnecting = false;
+const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '').toLowerCase(); return !/no-store|no-cache/.test(cc) && /max-age=([1-9]\d*)/.test(cc); };
 async function api(path, opts = {}) {
   if (!base) throw new Error('VibeRoller is offline — ask the admin to start it.');
   const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
@@ -1366,7 +1367,8 @@ async function api(path, opts = {}) {
     try { res = await fetch(base + path, init); } catch {}
     if (res && ![502, 503, 504, 530].includes(res.status)) {
       if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
-      const hubBuild = res.headers.get('x-vr-version');
+      // a cacheable answer (Unity's pictures) may be a copy the browser kept from an older build: its build says nothing (R199)
+      const hubBuild = cacheable(res) ? '' : res.headers.get('x-vr-version');
       if (hubBuild && me && (me.build || me.version) && hubBuild !== (me.build || me.version)) pageUpdateAvailable(hubBuild, path);
       if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
       return res;

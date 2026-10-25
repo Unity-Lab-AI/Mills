@@ -101,8 +101,9 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
         modules::Routed::Answer(mut resp) => {
             if let Some(o) = &cors { kit::add_cors(&mut resp, o); }
             resp.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust")); // who answered (FR6's meter: R179)
-            // signed-in pages notice a new build on their next call (and every 5 minutes) and update themselves
-            if r.path.starts_with("/api/") && !resp.headers().contains_key("x-vr-version") { if let Ok(v) = hyper::header::HeaderValue::from_str(&hub.mods.build.get(&hub).0) { resp.headers_mut().insert("x-vr-version", v); } }
+            // signed-in pages notice a new build on their next call (and every 5 minutes) and update themselves. Not on an
+            // answer the browser may keep (Unity's pictures): a kept copy would name the build it came from long after (R199)
+            if r.path.starts_with("/api/") && !resp.headers().contains_key("x-vr-version") && !kit::cacheable(&resp) { if let Ok(v) = hyper::header::HeaderValue::from_str(&hub.mods.build.get(&hub).0) { resp.headers_mut().insert("x-vr-version", v); } }
             return with_front(resp);
         }
         modules::Routed::Pass(h) => extra = h,

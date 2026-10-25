@@ -60,6 +60,12 @@ pub fn add_cors(r: &mut Response<Body>, origin: &str) {
     h.insert("access-control-allow-headers", hyper::header::HeaderValue::from_static("Content-Type, Authorization"));
     h.insert("access-control-allow-methods", hyper::header::HeaderValue::from_static("GET, POST, OPTIONS"));
 }
+/// May a browser keep this answer and hand it back later (cache-control with a max-age above 0, no no-store / no-cache)?
+/// What such an answer says about the server (its build) can be stale by the time it is read again.
+pub fn cacheable(r: &Response<Body>) -> bool {
+    let cc = r.headers().get("cache-control").and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
+    !cc.contains("no-store") && !cc.contains("no-cache") && cc.split(',').filter_map(|d| d.trim().strip_prefix("max-age=")).any(|n| n.trim().parse::<u64>().map(|n| n > 0).unwrap_or(false))
+}
 /// The CORS preflight answer (204) for an allowed origin.
 pub fn preflight(origin: &str) -> Response<Body> { let mut resp = Response::builder().status(204).body(full("")).expect("response"); add_cors(&mut resp, origin); resp }
 /// Is `o` an allowed origin: one of `list`, this machine on `port` (localhost / 127.0.0.1), or the public https address.
