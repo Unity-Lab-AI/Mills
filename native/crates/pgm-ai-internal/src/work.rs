@@ -878,6 +878,7 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
     if which == "team" {
         if let Some(v) = crate::planner::tool(&**hub, account, &name, &args) { return v; } // T-276/277/278: plan_parse, plan_existing, plan_roles, plan_owner, plan_glossary
         if name.starts_with("notes_") { return hub.notes_tool(&name, &args, &hub.name_of(account)); }
+        if name.starts_with("re_") { return hub.re_tool(&name, &args, &a).await; } // T-303: the RE containers
         match name.as_str() {
             "ask_user" => return w.ask(&a, b, &args).await, // T-245: a question series for the person of the run
             "plan_draft" => return w.plan_draft(&a, b, &args).await, // T-279: the planner's draft; the hub writes it once the person approved
@@ -1343,6 +1344,7 @@ pub fn planner_refusal(which: &str, name: &str, args: &Value) -> String {
     match (which, name) {
         ("pc", _) => format!("Planner mode: PC tools are not available (this session only plans; {name} refused)."),
         ("team", "notes_delete" | "team_channel_create" | "team_group_create") => format!("Planner mode: {name} is not available to a planner session."),
+        ("team", "re_start" | "re_exec" | "re_put" | "re_stop") => format!("Planner mode: {name} is not available to a planner session (RE containers run code; a planner only plans)."),
         ("team", "notes_write") => {
             let p = args["path"].as_str().unwrap_or("").replace('\\', "/").to_lowercase(); let p = p.trim_start_matches('/');
             if p.starts_with("plans/") && p.len() > 6 && !p.split('/').any(|seg| seg == ".." || seg == ".") { String::new() }

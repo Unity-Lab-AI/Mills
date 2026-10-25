@@ -49,6 +49,8 @@ pub trait AiHub: Send + Sync {
     fn notes_tool(&self, name: &str, args: &Value, actor: &str) -> Value;
     /// A team (chat) tool for this account.
     fn team_tool(&self, name: &str, args: &Value, a: &Account) -> Value;
+    /// An RE container tool (`re_start` to `re_stop`, T-303): `{ ok, result }` / `{ ok: false, error }`. A program without the container manager says so.
+    fn re_tool<'a>(&'a self, _name: &'a str, _args: &'a Value, _a: &'a Account) -> Fut<'a, Value> { Box::pin(async { serde_json::json!({ "ok": false, "error": "The RE containers are not available on this hub." }) }) }
     // ---- the chat's AI member
     fn chat_has_key(&self, u: &str) -> bool;
     fn chat_agent_on(&self, users: &[(String, String, bool)]) -> bool;

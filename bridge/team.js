@@ -78,6 +78,7 @@ module.exports = function createTeam({ accounts, agentSay, presenceList, display
   // when its runs ask (its Work module keeps the usage and the shared sessions): { usage, shares }
   function call(name, args, acct, extra = null) {
     if (/^notes_/.test(name)) return notes ? notes.call(name, args || {}, acct) : no('Notes are not available.'); // bridge/notes.js
+    if (/^re_(start|status|list|exec|put|get|stop)$/.test(name)) return no('The RE containers are not available on this hub (only the Rust hub runs them).'); // T-303
     const t = tools[name];
     if (!t) return no('Unknown team tool: ' + name);
     const saved = hub;

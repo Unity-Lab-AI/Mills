@@ -12,6 +12,7 @@ use crate::front::{json as jresp, Body, Hub, Req};
 pub mod admin;
 pub mod ai_hosts;
 pub mod profile;
+pub mod re;
 pub mod site;
 mod traits;
 pub mod auth;
@@ -71,6 +72,7 @@ pub struct Modules {
     pub downloads: downloads::Downloads,
     pub releases: releases::Releases,
     pub gateway: gateway::Gateway,
+    pub re: Arc<re::Re>,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -84,7 +86,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), mills })
+            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -187,6 +189,7 @@ pub fn start_background(hub: &Arc<Hub>) {
     work::start(hub);
     chat::start(hub);
     unity_brain::start(hub);
+    re::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     let h = hub.clone();
     forever("notes watch", move || { let h = h.clone(); async move {
@@ -368,6 +371,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if p == "/api/version" && r.method == hyper::Method::GET { let b = hub.mods.build.get(hub).0; return answer(200, json!({ "version": b.split('+').next().unwrap_or(""), "build": b })); }
             if let Some(x) = profile::route(hub, r, &acc) { return x; } // profiles, prefs, pictures
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
+            if let Some(x) = re::route(hub, r, &acc).await { return x; } // the RE containers (T-303): everyone on the team
             if let Some(x) = gateway::admin(hub, r, &acc) { return x; } // the admin's gateway products
             if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
             if let Some(x) = releases::route(hub, r).await { return x; } // the products' releases (T-250)
