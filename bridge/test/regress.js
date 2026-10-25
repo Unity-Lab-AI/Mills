@@ -2819,7 +2819,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     // R195: switching the live hub to the Rust hub alone is a config line and a graceful restart (deploy/full-rust-swap.md).
     // 2026-10-25 vr-run read rustHub.alone only when it started, so the graceful restart (exit 75) kept the JavaScript hub
     // running behind the Rust one and the swap needed a restart of the whole service.
-    let r195 = { before: '', after: '', backBefore: false, backAfter: true };
+    let r195 = { before: '', after: '', back: '', backBefore: false, backAfter: true, backBack: false };
     if (built177.status === 0) {
       const back195 = async (p) => { try { const r = await fetch(`http://127.0.0.1:${p}/api/status`, { signal: AbortSignal.timeout(1000) }); return (await r.json()).commit === 'js-behind'; } catch { return false; } };
       const front195 = async (p) => { try { const r = await fetch(`http://127.0.0.1:${p}/api/status`, { signal: AbortSignal.timeout(1000) }); return await r.json(); } catch { return {}; } };
@@ -2840,11 +2840,18 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid0) break; }
       await sleep(1500); // the JavaScript hub would have been started again by now
       r195.after = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`; r195.backAfter = await back195(backPort);
+      // and back (the rollback in deploy/full-rust-swap.md): alone false + a graceful restart starts the JavaScript hub behind again
+      fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1, rustHub: { enabled: true, backPort, alone: false } }));
+      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500);
+      const pid1 = s.pid;
+      for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid1) break; }
+      for (let i = 0; i < 20 && !(r195.backBack = await back195(backPort)); i++) await sleep(300);
+      r195.back = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`;
       proc.kill('SIGTERM'); await sleep(500); try { proc.kill('SIGKILL'); } catch { /* gone */ }
     }
-    check('R195', 'switching to the Rust hub alone needs only the config line and a graceful restart: vr-run reads rustHub.alone again when a build asks for a restart (exit 75), starts the next build with --alone and stops the JavaScript hub behind it (it stays the last resort)',
-      built177.status === 0 && r195.before === 'n1' && r195.backBefore && r195.after === 'n1 --alone' && !r195.backAfter,
-      `before: ${r195.before}, JavaScript hub behind ${r195.backBefore} · after the restart: ${r195.after}, JavaScript hub behind ${r195.backAfter}`);
+    check('R195', 'switching to the Rust hub alone needs only the config line and a graceful restart: vr-run reads rustHub.alone again when a build asks for a restart (exit 75), starts the next build with --alone and stops the JavaScript hub behind it (it stays the last resort); setting it back to false and a graceful restart starts the JavaScript hub behind again (the rollback)',
+      built177.status === 0 && r195.before === 'n1' && r195.backBefore && r195.after === 'n1 --alone' && !r195.backAfter && r195.back === 'n1' && r195.backBack,
+      `before: ${r195.before}, JavaScript hub behind ${r195.backBefore} · after the restart: ${r195.after}, JavaScript hub behind ${r195.backAfter} · rolled back: ${r195.back || 'nobody'}, JavaScript hub behind ${r195.backBack}`);
   }
   if (!WIN) { // R194: the chain fills up the way the auto-deploy runs it (5.13.3: no build was ever marked good, so every deploy deleted the previous builds)
     const dist194 = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-r194-')), nat194 = path.join(MILLS, 'native'), seen194 = [];

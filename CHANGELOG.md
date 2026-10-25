@@ -13,7 +13,7 @@ PATCH: **switching to the Rust hub alone is the config line and a graceful resta
 `rustHub.alone` only when it started, so on the live server the graceful restart after 5.13.3 kept the JavaScript hub
 running behind the Rust one, and the swap needed a restart of the whole service (which also ends the Work run that asks
 for it). vr-run now reads it again whenever a build asks for a restart (exit 75): the next build starts with `--alone`
-and the JavaScript hub behind it stops (it stays the last resort); setting it back to false starts it behind again.
+and the JavaScript hub behind it stops (it stays the last resort); setting it back to false starts it behind again (both directions in R195).
 R195 (written first, under the testing law: it failed on 5.13.4 with the JavaScript hub still behind).
 
 ## 5.13.4 — 2026-10-25
