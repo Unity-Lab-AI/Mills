@@ -450,7 +450,9 @@ impl Work {
         let sx = sessions::resolve(a, &want).filter(|sx| !want.is_empty() && self.busy_key(&sx.key))
             .or_else(|| self.run_key_of(&a.username).and_then(|k| sessions::resolve(a, k.split_once('#').map(|x| x.1).unwrap_or(""))));
         let Some(sx) = sx else { return err("No run of yours is going, so there is nobody to ask.".into()) };
-        let sec = questions::timeout_sec(args, self.cfg.get("questionTimeoutSec").and_then(Value::as_u64).unwrap_or(questions::DEFAULT_TIMEOUT_SEC));
+        // the wait: the tool's own timeoutSec, else the person's setting (prefs.ask: auto off = never, or minutes), else config, else 10 minutes
+        let person = read_json(&a.dir.join("state.json")).map(|st| st["prefs"]["ask"].clone()).filter(Value::is_object).and_then(|p| if p["auto"] == json!(false) { Some(0) } else { p["minutes"].as_f64().filter(|m| *m >= 1.0).map(|m| (m.min(1440.0) * 60.0) as u64) });
+        let sec = questions::timeout_sec(args, person.unwrap_or_else(|| self.cfg.get("questionTimeoutSec").and_then(Value::as_u64).unwrap_or(questions::DEFAULT_TIMEOUT_SEC)));
         let now = now_ms(); let id = format!("q-{}", pgm_core_internal::crypto::random_hex(6));
         let deadline = if sec > 0 { now + sec * 1000 } else { u64::MAX };
         {

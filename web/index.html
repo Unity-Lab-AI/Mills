@@ -306,6 +306,23 @@
   .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); word-break: break-all; }
   .sys { font-size: .8rem; color: var(--muted); text-align: center; }
   .sys.bad { color: var(--bad); }
+  /* the AI asks you (T-246): a series, one question at a time */
+  .qcard { align-self: center; width: min(640px, 94%); margin: .5rem auto; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: .7rem .85rem; display: flex; flex-direction: column; gap: .5rem; outline: none; box-shadow: 0 4px 18px rgba(0,0,0,.25); }
+  .qcard:focus-within { border-color: var(--accent); }
+  .qcard.closed { box-shadow: none; border-left-color: var(--line); color: var(--muted); font-size: .85rem; }
+  .qhead { display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+  .qtitle { font-weight: 600; flex: 1; min-width: 8rem; }
+  .qstep, .qclock, .qhint, .qcount { font-size: .75rem; color: var(--muted); }
+  .qbar { height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; } .qbar::after { content: ''; display: block; height: 100%; width: calc(var(--qleft, 1) * 100%); background: var(--accent); transition: width 1s linear; }
+  .qtext { font-size: .95rem; line-height: 1.4; white-space: pre-wrap; margin-bottom: .3rem; }
+  .qopts { display: flex; flex-direction: column; gap: .15rem; } .qopts.long { max-height: 15rem; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: .3rem; }
+  .qopt { display: flex; align-items: baseline; gap: .5rem; padding: .3rem .45rem; border-radius: 6px; cursor: pointer; flex-wrap: wrap; } .qopt:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); } .qopt[hidden] { display: none; }
+  .qopt input { width: auto; flex: none; margin: 0; } .qopt kbd { font: inherit; font-size: .7rem; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 .3rem; }
+  .qrec { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: var(--on-accent); background: var(--accent); border-radius: 999px; padding: .02rem .45rem; }
+  .qtools { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-bottom: .3rem; } .qtools input { flex: 1; min-width: 8rem; padding: .35rem .55rem; } .qtools button { padding: .3rem .6rem; font-size: .8rem; }
+  .qown { margin-top: .4rem; } .qerr { color: var(--bad); font-size: .8rem; } .qerr:empty { display: none; }
+  .qfoot { display: flex; gap: .5rem; align-items: center; } .qgrow { flex: 1; }
+  .qsum { display: flex; flex-direction: column; margin-top: .25rem; } .qsq { font-size: .78rem; } .qsa { color: var(--text); }
   #composer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--line); }
   #composer textarea { resize: none; height: 4.2rem; }
   .sendCol { display: flex; flex-direction: column; gap: .4rem; }
@@ -933,7 +950,15 @@
       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <label class="row">Sound style <select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
+      <details class="setSection" open><summary>When the AI asks</summary>
+        <label class="chk"><input type="checkbox" id="setAskAuto"> If I do not respond, use the recommended answers (marked "chosen by default")</label>
+        <label class="row">…after this many minutes <input type="number" id="setAskMin" min="1" max="1440" step="1" style="width:6rem"></label>
+        <label class="chk"><input type="checkbox" id="setAskActivity"> Any activity on the page while a question is open (a click, a key, coming back to the window) makes it wait for me again</label>
+        <label class="chk"><input type="checkbox" id="setAskTts"> Say "User action required" and the question aloud (needs the text to speech master switch below; Do not disturb mutes it)</label>
+        <div class="status">Off: the AI waits for you as long as it takes. The alert sound has its own volume above.</div>
+      </details>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
       <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
       <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
@@ -2282,50 +2307,170 @@ function hubView(ev) {
     default: return null;
   }
 }
-// The AI asks you (T-245, team note plans/question-protocol.md). The minimum, until the real series UI (T-246): one card with every
-// question (radio / checkbox / text, "my own answer"), the recommended answers ticked, "Send" and "Use the recommended".
-// Any click or keystroke tells the hub you are on it, so the timeout starts over.
-const openQuestions = new Map();
-function showQuestion(ev) {
+// The AI asks you (T-245 protocol, T-246 UI, T-248 timing and alert; docs in plans/question-protocol.md). A series is shown one
+// question at a time (Back / Next, Done at the end: the answers go back together); single = radio buttons, multi = checkboxes,
+// checklist = a long scrollable checkbox list with all / none and a filter, "my own answer" fields, the recommended answer
+// ticked and marked, a countdown to the moment the recommended answers are used, "Use the recommended". A half-answered
+// series survives a reload (typed answers in sessionStorage, the open questions re-read from GET /api/work/questions).
+// Enter = Next, the digits pick an option. Any activity tells the hub you are on it, so the wait starts over (T-248).
+const openQuestions = new Map(); // question id → { card, stop() }
+const qMk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const qStore = {
+  get: (id) => { try { return JSON.parse(sessionStorage.getItem(NS + 'vr.q.' + id)) || null; } catch { return null; } },
+  set: (id, v) => { try { sessionStorage.setItem(NS + 'vr.q.' + id, JSON.stringify(v)); } catch {} },
+  del: (id) => { try { sessionStorage.removeItem(NS + 'vr.q.' + id); } catch {} },
+};
+const qClock = (ms) => { const s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const qAnswered = (q, a) => (q.kind === 'text' ? !!(a.text || '').trim() : !!((a.picked || []).length || (a.other || '').trim()));
+function showQuestion(ev, quiet) {
   if (openQuestions.has(ev.id)) return;
-  const card = document.createElement('div'); card.className = 'sys';
-  const head = document.createElement('div'); head.style.fontWeight = '600';
-  head.textContent = (ev.title || 'Claude asks you') + (ev.timeoutSec ? ' (after ' + Math.round(ev.timeoutSec / 6) / 10 + ' min without you, the recommended answers are used)' : ''); card.appendChild(head);
-  const reads = []; let lastPoke = 0;
-  const active = () => { if (Date.now() - lastPoke > 15000) { lastPoke = Date.now(); api('/api/work/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, activity: true }) }).catch(() => {}); } };
-  for (const q of ev.questions || []) {
-    const box = document.createElement('div'); box.style.margin = '8px 0';
-    const t = document.createElement('div'); t.textContent = q.text; box.appendChild(t);
-    if (q.kind === 'text') { const inp = document.createElement('input'); inp.value = q.default || ''; inp.oninput = active; box.appendChild(inp); reads.push(() => ({ id: q.id, text: inp.value })); }
-    else {
-      const def = Array.isArray(q.default) ? q.default : [], picks = [];
-      for (const o of q.options || []) {
-        const lab = document.createElement('label'); lab.style.display = 'block';
-        const c = document.createElement('input'); c.type = q.kind === 'single' ? 'radio' : 'checkbox'; c.name = ev.id + '-' + q.id; c.checked = def.includes(o.id); c.onchange = active;
-        lab.appendChild(c); lab.appendChild(document.createTextNode(' ' + o.label + (def.includes(o.id) ? ' (recommended)' : '') + (o.hint ? ' · ' + o.hint : ''))); box.appendChild(lab); picks.push([c, o.id]);
-      }
-      let own = null;
-      if (q.other) { own = document.createElement('input'); own.placeholder = q.otherLabel || 'my own answer'; own.oninput = active; box.appendChild(own); }
-      reads.push(() => ({ id: q.id, picked: picks.filter(([c]) => c.checked).map(([, id]) => id), other: own ? own.value : '' }));
+  const qs = ev.questions || []; if (!qs.length) return;
+  const saved = qStore.get(ev.id), st = { i: 0, a: {}, v: [] };
+  if (saved && saved.a) { st.i = Math.max(0, Math.min(saved.i | 0, qs.length - 1)); st.a = saved.a; st.v = Array.isArray(saved.v) ? saved.v : []; }
+  for (const q of qs) {
+    const a = st.a[q.id] = st.a[q.id] || {};
+    if (q.kind === 'text') { if (typeof a.text !== 'string') a.text = q.default || ''; }
+    else { if (!Array.isArray(a.picked)) a.picked = Array.isArray(q.default) ? q.default.slice() : []; if (typeof a.other !== 'string') a.other = ''; }
+  }
+  const save = () => qStore.set(ev.id, st);
+  const card = qMk('div', 'qcard'); card.tabIndex = -1; card.setAttribute('role', 'group'); card.setAttribute('aria-label', 'Claude asks you');
+  const head = qMk('div', 'qhead'), titleEl = qMk('div', 'qtitle', ev.title || 'Claude asks you'), stepEl = qMk('div', 'qstep'), clockEl = qMk('div', 'qclock');
+  const bar = qMk('div', 'qbar'); head.append(titleEl, stepEl, clockEl);
+  const body = qMk('div', 'qbody'), errEl = qMk('div', 'qerr'), foot = qMk('div', 'qfoot');
+  const back = qMk('button', 'ghost', 'Back'), rec = qMk('button', 'ghost', 'Use the recommended'), next = qMk('button', '', 'Next');
+  back.type = rec.type = next.type = 'button'; rec.title = 'Take the recommended answer of every question';
+  foot.append(back, qMk('span', 'qgrow'), rec, next);
+  card.append(head, bar, body, errEl, foot);
+  // the clock: when the recommended answers are used if nobody answers; activity starts it over
+  const timeoutMs = (ev.timeoutSec || 0) * 1000; let deadline = ev.deadline || null, lastPoke = 0, done = false;
+  const tick = () => {
+    if (!deadline) { clockEl.textContent = 'Waits until you answer'; bar.hidden = true; return; }
+    const left = deadline - Date.now();
+    clockEl.textContent = left > 0 ? 'Recommended answers in ' + qClock(left) : 'Using the recommended answers…';
+    bar.hidden = !timeoutMs; if (timeoutMs) bar.style.setProperty('--qleft', Math.max(0, Math.min(1, left / timeoutMs)));
+  };
+  const timer = setInterval(tick, 1000);
+  const poke = () => { // any activity: the wait starts over (at most every 15 s)
+    const now = Date.now(); if (done || now - lastPoke < 15000) return; lastPoke = now;
+    if (timeoutMs) deadline = now + timeoutMs; tick();
+    api('/api/work/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, activity: true }) }).then((r) => r.json()).then((d) => { if (d && d.deadline) { deadline = d.deadline; tick(); } }).catch(() => {});
+  };
+  const onAny = () => { if (prefs().ask.activity) poke(); };
+  const ownActivity = () => poke(); // inside the card, always
+  for (const t of ['click', 'keydown', 'input', 'focusin']) card.addEventListener(t, ownActivity);
+  for (const t of ['pointerdown', 'keydown']) document.addEventListener(t, onAny, true);
+  window.addEventListener('focus', onAny);
+  const unhook = () => { done = true; clearInterval(timer); for (const t of ['pointerdown', 'keydown']) document.removeEventListener(t, onAny, true); window.removeEventListener('focus', onAny); };
+  // one question
+  const draw = () => {
+    const q = qs[st.i], a = st.a[q.id]; if (!st.v.includes(q.id)) st.v.push(q.id); save();
+    body.textContent = ''; errEl.textContent = '';
+    stepEl.textContent = qs.length > 1 ? 'Question ' + (st.i + 1) + ' of ' + qs.length : '';
+    back.hidden = st.i === 0; next.textContent = st.i === qs.length - 1 ? 'Done' : 'Next';
+    body.appendChild(qMk('div', 'qtext', q.text + (q.required ? ' *' : '')));
+    if (q.kind === 'text') {
+      const t = qMk('textarea'); t.rows = 3; t.value = a.text; t.placeholder = 'Your answer'; t.oninput = () => { a.text = t.value; save(); };
+      body.appendChild(t); if (q.default) body.appendChild(qMk('div', 'qhint', 'Recommended: ' + q.default));
+      return;
     }
-    card.appendChild(box);
-  }
-  const send = (body) => api('/api/work/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, ...body }) }).catch((e) => sys('Could not send the answer: ' + e.message, true));
-  for (const [label, body] of [['Send', () => ({ answers: reads.map((r) => r()) })], ['Use the recommended', () => ({ defaults: true })]]) {
-    const b = document.createElement('button'); b.textContent = label; b.style.marginRight = '8px'; b.onclick = () => send(body()); card.appendChild(b);
-  }
-  log.appendChild(card); openQuestions.set(ev.id, card);
-  const P = prefs(); if (P.sound && P.sound.on) playTone('mention', P.sound.mention);
+    const def = Array.isArray(q.default) ? q.default : [], single = q.kind === 'single', list = qMk('div', 'qopts' + (q.kind === 'checklist' ? ' long' : '')), rows = [];
+    let own = null, count = null;
+    const refresh = () => { for (const r of rows) r.c.checked = a.picked.includes(r.o.id); if (count) count.textContent = a.picked.length + ' of ' + (q.options || []).length + ' ticked'; };
+    const setPick = (id, on) => {
+      if (single) { a.picked = on ? [id] : []; if (on && own) { own.value = ''; a.other = ''; } }
+      else { a.picked = a.picked.filter((x) => x !== id); if (on) a.picked.push(id); }
+      save(); refresh();
+    };
+    if (q.kind === 'checklist') {
+      const tools = qMk('div', 'qtools'), filt = qMk('input'); filt.placeholder = 'Filter the list'; filt.type = 'search'; count = qMk('span', 'qcount');
+      const all = qMk('button', 'ghost', 'Select all'), none = qMk('button', 'ghost', 'Select none'); all.type = none.type = 'button';
+      const visible = () => rows.filter((r) => !r.el.hidden).map((r) => r.o.id);
+      all.onclick = () => { for (const id of visible()) if (!a.picked.includes(id)) a.picked.push(id); save(); refresh(); };
+      none.onclick = () => { const v = visible(); a.picked = a.picked.filter((x) => !v.includes(x)); save(); refresh(); };
+      filt.oninput = () => { const f = filt.value.trim().toLowerCase(); for (const r of rows) r.el.hidden = !!f && !(r.o.label + ' ' + (r.o.hint || '')).toLowerCase().includes(f); };
+      tools.append(filt, all, none, count); body.appendChild(tools);
+    }
+    (q.options || []).forEach((o, n) => {
+      const el = qMk('label', 'qopt'), c = qMk('input'); c.type = single ? 'radio' : 'checkbox'; c.name = ev.id + '-' + q.id;
+      c.onchange = () => setPick(o.id, c.checked);
+      el.appendChild(c);
+      if (n < 9 && q.kind !== 'checklist') el.appendChild(qMk('kbd', '', String(n + 1)));
+      const t = qMk('span', 'qlabel', o.label); el.appendChild(t);
+      if (def.includes(o.id)) el.appendChild(qMk('span', 'qrec', 'recommended'));
+      if (o.hint) el.appendChild(qMk('span', 'qhint', o.hint));
+      list.appendChild(el); rows.push({ el, c, o });
+    });
+    body.appendChild(list);
+    if (q.other) {
+      own = qMk('input', 'qown'); own.placeholder = q.otherLabel || 'my own answer'; own.value = a.other;
+      own.oninput = () => { a.other = own.value; if (single && own.value) a.picked = []; save(); refresh(); };
+      body.appendChild(own);
+    }
+    refresh();
+  };
+  const problem = (q) => (q.required && !qAnswered(q, st.a[q.id]) ? 'Please answer this one first.' : '');
+  const send = (payload) => { next.disabled = rec.disabled = back.disabled = true; return api('/api/work/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, ...payload }) })
+    .then(async (r) => { if (!r.ok && r.status !== 409 && r.status !== 404) { const d = await r.json().catch(() => ({})); throw new Error(d.error || r.statusText); } })
+    .catch((e) => { next.disabled = rec.disabled = back.disabled = false; errEl.textContent = 'Could not send the answer: ' + e.message; }); };
+  next.onclick = () => {
+    const q = qs[st.i], p = problem(q); if (p) { errEl.textContent = p; return; }
+    if (st.i < qs.length - 1) { st.i++; draw(); card.focus({ preventScroll: true }); return; }
+    const miss = qs.find((x) => problem(x)); if (miss) { st.i = qs.indexOf(miss); draw(); errEl.textContent = 'Please answer this one first.'; return; }
+    send({ answers: qs.filter((x) => st.v.includes(x.id)).map((x) => { const a = st.a[x.id]; return x.kind === 'text' ? { id: x.id, text: a.text } : { id: x.id, picked: a.picked, other: a.other }; }) });
+  };
+  back.onclick = () => { if (st.i > 0) { st.i--; draw(); card.focus({ preventScroll: true }); } };
+  rec.onclick = () => send({ defaults: true });
+  card.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (e.target.tagName || '').toLowerCase(), typing = tag === 'textarea' || (tag === 'input' && !['radio', 'checkbox'].includes(e.target.type));
+    if (e.key === 'Enter' && tag !== 'textarea' && tag !== 'button') { e.preventDefault(); next.click(); return; }
+    if (e.key === 'Enter' && tag === 'textarea' && !e.shiftKey && qs.length > 1) { e.preventDefault(); next.click(); return; }
+    if (!typing && /^[1-9]$/.test(e.key)) {
+      const q = qs[st.i], o = (q.options || [])[Number(e.key) - 1]; if (!o || q.kind === 'checklist') return;
+      e.preventDefault(); const a = st.a[q.id]; const on = q.kind === 'single' ? true : !a.picked.includes(o.id);
+      if (q.kind === 'single') { a.picked = [o.id]; a.other = ''; } else { a.picked = a.picked.filter((x) => x !== o.id); if (on) a.picked.push(o.id); }
+      draw();
+    }
+  });
+  draw();
+  log.appendChild(card);
+  openQuestions.set(ev.id, { card, stop: unhook });
+  if (!quiet) qAlert(ev);
+}
+// "User action required": the alert tone (its own volume in Settings), optionally spoken, and in the desktop app a
+// notification when the window is in the background. Do-not-disturb mutes all of it. Each question alerts once per page.
+const qAlerted = new Set();
+function qAlert(ev) {
+  if (qAlerted.has(ev.id) || (ev.at && Date.now() - ev.at > 30000)) return; qAlerted.add(ev.id);
+  const P = prefs(), title = ev.title || ((ev.questions || [])[0] || {}).text || 'Claude asks you';
+  if (dndOn()) return;
+  if (P.sound.on) playTone('ask', P.sound.ask);
+  if (P.tts.ask) speak('User action required. ' + title);
+  if (NATIVE && (document.visibilityState !== 'visible' || !document.hasFocus())) NATIVE.call('notify', { title: 'User action required', body: title }).catch(() => {});
 }
 function closeQuestion(ev) {
-  const card = openQuestions.get(ev.id); if (!card) return; openQuestions.delete(ev.id);
-  card.textContent = ev.by === 'user' ? 'You answered Claude\'s question.' : ev.by === 'mixed' ? 'You answered part of Claude\'s question; the rest took the recommended answers.' : 'Claude\'s question took the recommended answers.';
+  const o = openQuestions.get(ev.id); if (!o) return; openQuestions.delete(ev.id); o.stop(); qStore.del(ev.id);
+  const card = o.card; card.textContent = ''; card.className = 'qcard closed';
+  const by = ev.by === 'gone' ? 'Closed (answered elsewhere, or the run ended)' : ev.by === 'user' ? 'You answered' : ev.by === 'mixed' ? 'You answered part of it; the rest took the recommended answers' : 'Nobody answered in time: the recommended answers were used (chosen by default)';
+  card.appendChild(qMk('div', 'qtitle', (ev.title || 'Claude\'s question') + ' · ' + by));
+  for (const x of ev.answers || []) {
+    const what = x.kind === 'text' ? (x.text || '') : [...(x.labels || []), ...(x.other ? ['“' + x.other + '”'] : [])].join(', ');
+    const row = qMk('div', 'qsum'); row.append(qMk('span', 'qsq', x.question || x.id), qMk('span', 'qsa', (what || '(nothing)') + (x.by === 'default' && ev.by !== 'default' ? ' · by default' : '')));
+    card.appendChild(row);
+  }
+}
+// A page that was away (reload, a second device): the questions still open come back with what was typed so far.
+async function restoreQuestions() {
+  let d; try { d = await json('/api/work/questions'); } catch { return; }
+  const open = d.questions || [];
+  for (const q of open) showQuestion({ ...q, type: 'bridge_question' }, true);
+  for (const [id, o] of openQuestions) if (!open.some((q) => q.id === id)) closeQuestion({ id, by: 'gone', answers: [] });
 }
 function handleEvent(ev) {
   if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; return; }
   if (ev.type === 'bridge_question') { showQuestion(ev); scroll(); return; }
   if (ev.type === 'bridge_answered') { closeQuestion(ev); return; }
-  if (ev.type === 'bridge_done') { runEnded = true; for (const [id, card] of openQuestions) { card.textContent = 'Claude\'s question ended with the run.'; openQuestions.delete(id); } }
+  if (ev.type === 'bridge_done') { runEnded = true; for (const id of [...openQuestions.keys()]) closeQuestion({ id, by: 'gone', answers: [] }); }
   if (ev.type === 'pc_tool') return runPcTool(ev);
   const hv = hubView(ev), hk = hv ? hv.kind : '';
   // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
@@ -2525,8 +2670,10 @@ async function restoreWork() { // opening Work: the previous conversation, then 
   // a reply still going (the page was reloaded meanwhile): shown live from where this page was, to its end; the queue
   // waits for it (sending now would be refused and the message lost)
   if (!busy) { await followRun(s.run); curRun = null; saveCurrentSoon(); }
+  restoreQuestions(); // a question still open (a half-answered series comes back with what was typed)
   if (!busy && (sendNowMessage || queue.length)) drain();
 }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && me && !$('shell').hidden) restoreQuestions(); });
 function setConversation(id, title, items) {
   archiveId = id; archiveTitle = title; transcript = items; saveCurrentSoon();
   savedLen = items.length; // what is on screen now counts as saved (a fresh chat, an opened session, or a just-deleted one)
@@ -2838,8 +2985,9 @@ const snippet = (rec) => (rec.m.deleted ? 'message deleted'
 function prefs() {
   const p = (me && me.prefs) || {};
   return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
-    sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70 },
-    tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) }, // all = master switch
+    sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70, ask: (p.sound && p.sound.ask) ?? 80 },
+    tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ask: false, ...(p.tts || {}) }, // all = master switch
+    ask: { auto: true, minutes: 10, activity: true, ...(p.ask || {}) }, // when the AI asks (T-248): wait N minutes without you, then its recommended answers; any activity waits
     clips: { volume: 90, autoplay: false, ...(p.clips || {}) },
     audio: { noise: true, echo: true, agc: true, ...(p.audio || {}) }, // noise suppression on by default
     call: { volume: 100, quality: 'medium', ...(p.call || {}) } };
@@ -3226,8 +3374,10 @@ let audioCtx = null;
 // to you, a ringing trill that repeats for an incoming call, a tick-tock for a board reminder. Notes are
 // [frequency Hz, start s, length s, wave, loudness 0..1]; every note gets a soft attack, a long-ish decay, a quiet
 // overtone an octave up (bell-like, never harsh) and a low-pass so nothing is shrill. All under two seconds.
-const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]], call: [[880, 0, 0.12], [1100, 0.14, 0.12], [880, 0.5, 0.12], [1100, 0.64, 0.12]], board: [[988, 0, 0.12], [740, 0.16, 0.16]] };
+const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]], call: [[880, 0, 0.12], [1100, 0.14, 0.12], [880, 0.5, 0.12], [1100, 0.64, 0.12]], board: [[988, 0, 0.12], [740, 0.16, 0.16]], ask: [[523, 0, 0.1], [659, 0.12, 0.1], [784, 0.24, 0.1], [1047, 0.36, 0.2], [523, 0.9, 0.1], [659, 1.02, 0.1], [784, 1.14, 0.1], [1047, 1.26, 0.2]] };
 const PATTERNS = {
+  // "User action required": a rising three-note call and a high held note, said twice, so it is not mistaken for a message
+  ask: [0, 0.95].flatMap((t) => [[523, t, 0.11, 'triangle', 0.85], [659, t + 0.12, 0.11, 'triangle', 0.9], [784, t + 0.24, 0.11, 'triangle', 0.95], [1047, t + 0.36, 0.38, 'square', 0.5]]),
   message: [[784, 0, 0.32, 'triangle', 1], [587, 0.13, 0.5, 'triangle', 0.85]],
   mention: [[659, 0, 0.12, 'triangle', 0.8], [784, 0.07, 0.12, 'triangle', 0.85], [988, 0.14, 0.12, 'triangle', 0.9], [1319, 0.21, 0.42, 'triangle', 1]],
   reply: [[784, 0, 0.14, 'sine', 0.9], [988, 0.13, 0.22, 'sine', 1], [659, 0.46, 0.14, 'triangle', 0.75], [784, 0.59, 0.36, 'triangle', 0.85]],
@@ -3918,6 +4068,7 @@ function openSettings() {
   mark();
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
   $('volCall').value = P.sound.call; $('volBoard').value = P.sound.board; $('soundSet').value = P.sound.set === 'classic' ? 'classic' : 'patterns';
+  $('volAsk').value = P.sound.ask; $('setAskAuto').checked = P.ask.auto !== false; $('setAskMin').value = P.ask.minutes; $('setAskActivity').checked = P.ask.activity !== false; $('setAskTts').checked = !!P.tts.ask;
   $('setToasts').checked = P.toasts; $('setAutoScroll').checked = P.autoScroll;
   $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
@@ -4241,13 +4392,14 @@ $('ttsTest').onclick = () => { // test with the values on screen, before saving
   speechSynthesis.speak(u);
 };
 // a test plays in the style picked right now (before saving), so the two can be compared
-document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply', call: 'volCall', board: 'volBoard' }[b.dataset.test]).value), $('soundSet').value, true); });
+document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply', call: 'volCall', board: 'volBoard', ask: 'volAsk' }[b.dataset.test]).value), $('soundSet').value, true); });
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
       nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
-      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), set: $('soundSet').value },
-      tts: { all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
+      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), ask: Number($('volAsk').value), set: $('soundSet').value },
+      ask: { auto: $('setAskAuto').checked, minutes: Math.max(1, Math.min(1440, Math.round(Number($('setAskMin').value) || 10))), activity: $('setAskActivity').checked },
+      tts: { ask: $('setAskTts').checked, all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
       clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },
       audio: { noise: $('audNoise').checked, echo: $('audEcho').checked, agc: $('audAgc').checked },
       call: { volume: Number($('callVolume').value), quality: $('callQuality').value },

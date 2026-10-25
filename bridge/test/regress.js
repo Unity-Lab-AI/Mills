@@ -3243,6 +3243,44 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         !!q && seen.during === 'waiting' && seen.after !== 'waiting' && !seen.waiting && seen.open === 0 && seen.late === 404 && jsTools.includes('ask_user') && nativeTools.includes('ask_user') && /bridge_question/.test(page) && /\/api\/work\/answer/.test(page),
         `while open ${seen.during} · after the stop ${seen.after} waiting ${JSON.stringify(seen.waiting)} · open ${seen.open} · late answer ${seen.late} · js tool ${jsTools.includes('ask_user')} native tool ${nativeTools.includes('ask_user')}`); }
   } else for (const [id, l] of [['R210', 'a question series reaches the page and the answers come back'], ['R211', 'an unanswered question takes the recommended answers'], ['R212', 'a question is asked in the session that asked'], ['R213', 'a long question polls; activity restarts the timeout'], ['R214', 'a stopped run ends its question']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R240-R244 (T-246 / T-248): the question UI's page, the person's "when the AI asks" setting, the activity rule, the alert prefs
+    const askOf = (events) => { const t = texts(events).split('\n').find((l) => l.startsWith('ASK:')); try { return JSON.parse(t.slice(4)); } catch { return {}; } };
+    const askOnce = async (msg, after) => { let q = null; const seen = {};
+      const r = await chat(U, msg, { onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => { try { await after(ev, seen); } catch {} seen.go = (await call('/api/work/answer', U, { id: ev.id, defaults: true })).status; })(); } } });
+      return { q, seen, res: askOf(r.events).result || {} }; };
+    // R240: the settings are saved (clamped, add-only: the rest of the prefs stays)
+    const nickBefore = ((await call('/api/prefs', U)).data.prefs || {}).nick;
+    const sv = await call('/api/prefs', U, { ask: { auto: true, minutes: 2, activity: false }, sound: { ask: 55 }, tts: { ask: true } });
+    const pf = (await call('/api/prefs', U)).data.prefs || {};
+    const big = (await call('/api/prefs', U, { ask: { minutes: 99999 } })).data.prefs.ask, small = (await call('/api/prefs', U, { ask: { minutes: 0 } })).data.prefs.ask;
+    await call('/api/prefs', U, { ask: { minutes: 2 } });
+    check('R240', 'T-248 the "when the AI asks" settings are saved per person (ask: auto, minutes, activity; the alert sound volume sound.ask; tts.ask), minutes are kept between 1 and 1440, and the other preferences are left as they were',
+      sv.status === 200 && pf.ask && pf.ask.auto === true && pf.ask.minutes === 2 && pf.ask.activity === false && pf.sound.ask === 55 && pf.tts.ask === true && big.minutes === 1440 && small.minutes >= 1 && pf.nick === nickBefore,
+      `saved ${JSON.stringify(pf.ask)} sound.ask ${pf.sound && pf.sound.ask} tts.ask ${pf.tts && pf.tts.ask} · 99999 -> ${big.minutes}, 0 -> ${small.minutes}`);
+    // R241: a question with no timeoutSec of its own waits as long as the person's setting says
+    { const t = await askOnce('ASKTOOL r241', async () => {});
+      check('R241', 'T-248 a question that has no timeoutSec of its own waits the minutes of the person\'s setting (2 minutes: timeoutSec 120, a deadline 120 s after it was asked), not the 10-minute default',
+        !!t.q && t.q.timeoutSec === 120 && t.q.deadline - t.q.at === 120000 && t.res.answered === true, `timeoutSec ${t.q && t.q.timeoutSec} deadline-at ${t.q && t.q.deadline - t.q.at}`); }
+    // R242: turned off = never; the tool's own timeoutSec still wins over the setting
+    { await call('/api/prefs', U, { ask: { auto: false } });
+      const off = await askOnce('ASKTOOL r242', async () => {});
+      const t0 = Date.now(); const own = await chat(U, 'ASKTOOL TIMEOUT r242'); const took = Date.now() - t0, ownRes = askOf(own.events).result || {};
+      await call('/api/prefs', U, { ask: { auto: true, minutes: 3 } });
+      check('R242', 'T-248 with "use the recommended after N minutes" turned off the question waits until answered (timeoutSec 0, no deadline); a question that brings its own timeoutSec still times out by it',
+        !!off.q && off.q.timeoutSec === 0 && off.q.deadline === null && off.res.answered === true
+        && ownRes.timedOut === true && ownRes.by === 'default' && took < 20000, `off: timeoutSec ${off.q && off.q.timeoutSec} deadline ${off.q && off.q.deadline} · own timeout: ${ownRes.timedOut} after ${took} ms`); }
+    // R243: any activity restarts the wait from the person's setting (the page sends it for a click, a key, a focus)
+    { const t = await askOnce('ASKTOOL r243', async (ev, seen) => { await sleep(1300); const a = await call('/api/work/answer', U, { id: ev.id, activity: true }); seen.act = a.status; seen.dl = a.data.deadline; });
+      check('R243', 'T-248 activity on a question restarts the wait from the person\'s setting (3 minutes): the new deadline is 180 s from the activity, later than the first one',
+        !!t.q && t.q.timeoutSec === 180 && t.seen.act === 200 && t.seen.dl > t.q.deadline && t.seen.dl - Date.now() > 170000 && t.seen.dl - Date.now() <= 180000, `first ${t.q && t.q.deadline - t.q.at} ms, after activity +${t.seen.dl - t.q.at} ms from the ask`); }
+    await call('/api/prefs', U, { ask: { auto: true, minutes: 10, activity: true }, sound: { ask: 80 }, tts: { ask: false } });
+    // R244: the page (static: no browser here)
+    { const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      check('R244', 'T-246/T-248 [static] the Work page shows a question series one at a time (Back / Next / Done, radio, checkboxes, checklist with select all / none and a filter, own answer, recommended marked, countdown, Use the recommended), restores it after a reload (GET /api/work/questions, sessionStorage), the "User action required" tone has its own kind and volume in Settings, a "When the AI asks" settings group, speech and the desktop notification respect do-not-disturb, and any activity is sent at most every 15 s',
+        /function showQuestion/.test(page) && /'Next'/.test(page) && /'Done'/.test(page) && /Select all/.test(page) && /Select none/.test(page) && /Filter the list/.test(page) && /qrec/.test(page) && /Use the recommended/.test(page) && /restoreQuestions/.test(page) && /api\/work\/questions/.test(page) && /sessionStorage/.test(page)
+        && /ask: \[0, 0\.95\]/.test(page) && /id="volAsk"/.test(page) && /id="setAskMin"/.test(page) && /When the AI asks/.test(page) && /User action required/.test(page) && /if \(dndOn\(\)\) return;\s*\n\s*if \(P\.sound\.on\) playTone\('ask'/.test(page) && /NATIVE\.call\('notify', \{ title: 'User action required'/.test(page) && /now - lastPoke < 15000/.test(page),
+        'page checked'); }
+  } else for (const [id, l] of [['R240', 'the question settings are saved'], ['R241', 'a question waits the person\'s minutes'], ['R242', 'off = never; the tool\'s own timeout wins'], ['R243', 'activity restarts the wait'], ['R244', 'the question UI on the page']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R215 to R219 (T-262): presence on the task board. mills (D) holds claims; t-user (U) looks; T-Admin (A) makes tasks
     const find215 = async (tok, id) => ((await call('/api/board', tok)).data.tasks || []).find((t) => t.id === id) || {};
     const keep215 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
