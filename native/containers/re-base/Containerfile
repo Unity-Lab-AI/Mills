@@ -142,7 +142,7 @@ RUN set -eu; python3 -m venv /opt/frida-venv; \
     ln -sf /opt/node/bin/npm /usr/local/bin/npm; \
     ln -sf /opt/rea/node_modules/rea-agents/scripts/rea.mjs /usr/local/bin/rea; \
     chmod 0755 /usr/local/bin/re-entrypoint /opt/re-smoke.sh /opt/rea/node_modules/rea-agents/scripts/rea.mjs; \
-    true; \
+    chmod -R a+rX /opt/re-fixtures; \
     useradd --uid 1000 --create-home --shell /bin/bash re; \
     mkdir -p /work/in /work/out /work/tmp /home/re/.cache; \
     chown -R 1000:1000 /work /home/re; \
