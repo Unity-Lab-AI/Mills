@@ -987,6 +987,8 @@
      <div data-setpane="connections" hidden>
       <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
         <div id="apiBox" class="apiBox"></div></div>
+      <div class="setSection"><b>Signed-in devices</b> — tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.
+        <div id="devBox" class="apiBox"></div></div>
       <div class="setSection"><b>AI source</b> — whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).
         <div id="srcBox" class="apiBox"></div></div>
       <div class="setSection"><b>My AI hosts</b> — your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.
@@ -1763,6 +1765,7 @@ async function enter() {
   if (me.prefs && typeof me.prefs.theme === 'string') { if (me.prefs.theme !== (store.get('mills.theme') || '')) { const m = me; me = null; applyTheme(m.prefs.theme); me = m; } } // (no chat re-render yet: it is drawn next)
   else if (store.get('mills.theme')) saveThemeChoice(store.get('mills.theme'));
   USER_NAME = me.display;
+  try { const dc = new URLSearchParams(location.search).get('device'); if (dc) setTimeout(() => { openSettings(); const b = document.querySelector('[data-settab="connections"]'); if (b) b.click(); renderDevices(dc.slice(0, 9)); }, 400); } catch {} // a tool's link: ?device=CODE opens the box with the code in it
   document.title = `${APP_NAME} · ${me.display}`;
   $('brand').textContent = `${APP_NAME} · ${me.display}`;
   $('menuUser').textContent = me.username;
@@ -4084,7 +4087,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderSource(); renderHosts();
+  renderDevices(); renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderSource(); renderHosts();
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
@@ -4116,6 +4119,28 @@ async function renderForgejo() {
     row.append(rm);
   }
   row.append(msg); box.append(row);
+}
+// ── Settings → Signed-in devices (T-236): approve / refuse a tool's code, list and revoke its devices ──
+async function renderDevices(prefill) {
+  const box = $('devBox'); if (!box) return;
+  let d; try { d = await json('/api/devices'); } catch (e) { box.textContent = e.message; return; }
+  const typed = prefill || ($('devCode') && $('devCode').value) || '';
+  box.textContent = '';
+  const row = document.createElement('div'); row.className = 'row';
+  const code = document.createElement('input'); code.id = 'devCode'; code.placeholder = 'ABCD-EFGH'; code.maxLength = 9; code.autocomplete = 'off'; code.value = typed;
+  const msg = document.createElement('span'); msg.className = 'status';
+  const act = (path, ok) => async () => { try { const r = await json(path, { method: 'POST', body: JSON.stringify({ userCode: code.value }) }); msg.textContent = (ok ? 'Approved ' : 'Refused ') + (r.device || r.client || 'the device') + '.'; code.value = ''; renderDevices(); setTimeout(() => { msg.textContent = ''; }, 4000); } catch (e) { msg.textContent = e.message; } };
+  const yes = document.createElement('button'); yes.type = 'button'; yes.textContent = 'Approve'; yes.onclick = act('/api/device/approve', true);
+  const no = document.createElement('button'); no.type = 'button'; no.className = 'ghost'; no.textContent = 'Refuse'; no.onclick = act('/api/device/deny', false);
+  row.append(code, yes, no, msg); box.append(row);
+  if (!(d.devices || []).length) { const n = document.createElement('div'); n.className = 'status'; n.textContent = 'No signed-in devices.'; box.append(n); }
+  for (const dv of d.devices || []) {
+    const r = document.createElement('div'); r.className = 'row';
+    const t = document.createElement('span'); t.textContent = `${dv.name || dv.client} · ${dv.client || ''} · signed in ${new Date(dv.created).toLocaleString()} · ${dv.lastUsed ? 'last used ' + new Date(dv.lastUsed).toLocaleString() : 'not used yet'}`;
+    const rv = document.createElement('button'); rv.type = 'button'; rv.className = 'ghost'; rv.textContent = 'Revoke';
+    rv.onclick = () => json('/api/devices/revoke', { method: 'POST', body: JSON.stringify({ id: dv.id }) }).then(() => renderDevices()).catch((e) => { msg.textContent = e.message; });
+    r.append(t, rv); box.append(r);
+  }
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
