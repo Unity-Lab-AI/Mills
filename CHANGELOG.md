@@ -7,6 +7,16 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.7 — 2026-10-25
+
+PATCH: **Sponge's session and presence decisions in the specs and their checks** (T-282, T-258). Each Work session gets
+its own worktree (work/<user>.<sid>, T-292); only working sessions count against the limits, and a run that stalls or
+goes silent without saying done is ended and counts as idle; closing a session hides it; one menu (the dots and the
+right-click) with delete (force-stops its runs), archive and the person's own folders; do not disturb only mutes
+notifications; active time vs AI working time with a 15-minute gap (T-263). R197 checks per-session worktrees, open
+while running, hide / unhide, folders and delete-while-running; R198 counts working sessions. Team notes
+plans/multi-session.md and plans/presence.md. No behaviour changed.
+
 ## 5.13.6 — 2026-10-25
 
 PATCH: **the specs for presence and multi-session Work, as checks first** (T-259, T-283). Team notes
