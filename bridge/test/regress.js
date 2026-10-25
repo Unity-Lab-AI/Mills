@@ -113,7 +113,8 @@ function unzipAll(buf) {
   return out;
 }
 const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
-const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [] };
+const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] };
+const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
 //   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
@@ -126,6 +127,17 @@ function startFakeOllama() {
     req.on('end', () => {
       const j = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
       if (req.url === '/api/version') return j({ version: 'fake' });
+      // T-250: a fake Forgejo release API (a private repo: only with the hub's token) and the asset download
+      if ((req.url.startsWith('/api/v1/repos/UnityAILab/') && /\/releases(\?|$)/.test(req.url)) || req.url.startsWith('/UnityAILab/fake-prod/releases/download/')) {
+        fakeForgejo.relCalls.push({ url: req.url, auth: req.headers.authorization || '' });
+        if (req.headers.authorization !== 'token fake-forgejo-token') { res.writeHead(404); return res.end('{}'); }
+        if (req.url.startsWith('/api/v1/repos/UnityAILab/fake-prod/')) return j([
+          { tag_name: 'v2.0.0', name: 'Two', draft: false, prerelease: false, published_at: '2026-10-20T10:00:00Z', body: 'Second release notes', assets: [{ name: 'fake-prod-windows-x86_64.zip', size: FAKE_ASSET.length }, { name: 'fake-prod-linux-x86_64.tar.gz', size: 5 }] },
+          { tag_name: 'v1.0.0', name: 'One', draft: false, prerelease: false, published_at: '2026-10-01T10:00:00Z', body: 'First', assets: [{ name: 'fake-prod-macos-arm64.dmg', size: 3 }] },
+          { tag_name: 'v0.0.1-draft', name: 'Draft', draft: true, assets: [] }]);
+        if (req.url === '/UnityAILab/fake-prod/releases/download/v2.0.0/fake-prod-windows-x86_64.zip') { res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': FAKE_ASSET.length }); return res.end(FAKE_ASSET); }
+        res.writeHead(404); return res.end('{}');
+      }
       // fake image engine on the same port: a 1x1 PNG for any prompt; the prompt is kept for checks
       if (req.url === '/health') return j({ ok: true, loaded: true });
       // fake web search (Bing-shaped) and YouTube results page
@@ -254,7 +266,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -3392,6 +3404,39 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R239', 'T-236 only a hash of a device token is kept (device-tokens.json holds neither the token nor the device code); [static] the page has the user-code box (approve) and the Signed-in devices list with Revoke',
       s.hashed && s.page, `hashed ${s.hashed} · page ${s.page}`);
   } else for (const [id, what] of [['R235', 'device sign-in: start, pending, slow_down, approve, token'], ['R236', 'a device token works as its person'], ['R237', 'own devices listed, revoke stops the token'], ['R238', 'a refused or expired device sign-in'], ['R239', 'device tokens kept hashed; the page has the box']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R270-R274 (T-250): the Products section of the Download panel: the team's product releases through the hub, with the hub's own Forgejo token
+    const s270 = {};
+    s270.anon = await call('/api/releases'); s270.anonFile = await call('/api/releases/file?product=fake-prod&tag=v2.0.0&asset=fake-prod-windows-x86_64.zip');
+    s270.list = await call('/api/releases', U);
+    const prods = (s270.list.data || {}).products || [], fp = prods.find((x) => x.product === 'fake-prod') || {}, gone = prods.find((x) => x.product === 'fake-gone') || {};
+    const fetchFile = (q, tok) => fetch(H + '/api/releases/file?' + q, { headers: tok ? { Authorization: 'Bearer ' + tok } : {} });
+    const fr = await fetchFile('product=fake-prod&tag=v2.0.0&asset=fake-prod-windows-x86_64.zip', U), got = Buffer.from(await fr.arrayBuffer());
+    s270.file = { status: fr.status, same: got.equals(FAKE_ASSET), cd: fr.headers.get('content-disposition') || '', len: fr.headers.get('content-length') };
+    s270.unlisted = (await fetchFile('product=fake-prod&tag=v2.0.0&asset=..%2F..%2Fetc%2Fpasswd', U)).status;
+    s270.unknownProduct = (await fetchFile('product=nope&tag=v2.0.0&asset=x', U)).status;
+    s270.signedOutFile = (await fetchFile('product=fake-prod&tag=v2.0.0&asset=fake-prod-windows-x86_64.zip', '')).status;
+    const everything = JSON.stringify(s270.list.data) + [...fr.headers.entries()].join(',');
+    const hubLog = fs.existsSync(path.join(SCRATCH, 'hub.log')) ? fs.readFileSync(path.join(SCRATCH, 'hub.log'), 'utf8') : '';
+    const listCalls = () => fakeForgejo.relCalls.filter((c) => /^\/api\/v1\/repos\/UnityAILab\/fake-prod\/releases/.test(c.url)).length;
+    const before = listCalls(); await call('/api/releases', U); const cached = listCalls() === before && before === 1;
+    check('R270', 'T-250 the releases catalogue lists the fake Forgejo\'s releases for a signed-in account: product, label, versions newest first (a draft is left out), date, notes, assets with name, size and the platform guessed from the name (Windows, Linux, macOS); a product whose repo cannot be read says so and the others still list',
+      s270.list.status === 200 && fp.label === 'Fake Product' && (fp.releases || []).map((x) => x.version).join() === 'v2.0.0,v1.0.0' && fp.releases[0].date === '2026-10-20T10:00:00Z' && fp.releases[0].notes === 'Second release notes'
+      && fp.releases[0].assets.map((x) => x.platform).join() === 'Windows,Linux' && fp.releases[0].assets[0].size === FAKE_ASSET.length && fp.releases[1].assets[0].platform === 'macOS' && (gone.releases || []).length === 0 && !!gone.error,
+      `list ${s270.list.status} · ${prods.map((x) => x.product + ':' + (x.releases || []).length).join(' ')} · platforms ${((fp.releases || [{ assets: [] }])[0].assets || []).map((x) => x.platform).join()}`);
+    check('R271', 'T-250 a release file streams through the hub with exactly the right bytes (300 KB), its length and a Content-Disposition naming the file',
+      s270.file.status === 200 && s270.file.same && /attachment; filename="fake-prod-windows-x86_64\.zip"/.test(s270.file.cd) && Number(s270.file.len) === FAKE_ASSET.length,
+      `status ${s270.file.status} · same bytes ${s270.file.same} · ${s270.file.cd} · length ${s270.file.len}`);
+    check('R272', 'T-250 a signed-out request is refused (401) for the catalogue and for a file; a file that is not in the catalogue (a path trick, an unknown product) is 404 and nothing is asked of Forgejo for it',
+      s270.anon.status === 401 && s270.anonFile.status === 401 && s270.signedOutFile === 401 && s270.unlisted === 404 && s270.unknownProduct === 404 && !fakeForgejo.relCalls.some((c) => /passwd|nope/.test(c.url)),
+      `signed out ${s270.anon.status}/${s270.anonFile.status}/${s270.signedOutFile} · unlisted ${s270.unlisted} · unknown product ${s270.unknownProduct}`);
+    check('R273', 'T-250 the hub\'s Forgejo token never appears in any answer (catalogue, file headers) or in the hub log, yet Forgejo got it on every call (a private repo answers 404 without it)',
+      !everything.includes('fake-forgejo-token') && !hubLog.includes('fake-forgejo-token') && fakeForgejo.relCalls.length > 0 && fakeForgejo.relCalls.every((c) => c.auth === 'token fake-forgejo-token'),
+      `answers clean ${!everything.includes('fake-forgejo-token')} · log clean ${!hubLog.includes('fake-forgejo-token')} · calls with the token ${fakeForgejo.relCalls.filter((c) => c.auth === 'token fake-forgejo-token').length}/${fakeForgejo.relCalls.length}`);
+    const html270 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R274', 'T-250 [static] the Download panel has a Products section reading /api/releases and downloading through /api/releases/file (the person\'s platform first); the catalogue is cached (a second look makes no new call to Forgejo)',
+      /\/api\/releases'/.test(html270) && /\/api\/releases\/file\?/.test(html270) && /dlProducts/.test(html270) && cached,
+      `page ${/dlProducts/.test(html270)} · cached ${cached} (${before} call)`);
+  } else for (const [id, what] of [['R270', 'releases catalogue'], ['R271', 'a release file streams'], ['R272', 'signed out refused'], ['R273', 'token never in an answer'], ['R274', 'Products section + cache']]) skip(id, what, '--rust-hub only');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });
