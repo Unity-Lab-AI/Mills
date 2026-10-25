@@ -3798,9 +3798,18 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R420: 'workflow kinds: script (the transform language) computes, has no file / network / clock function, and stops at its step limit; other languages are refused',
       R421: 'workflow kinds: model choice is the node\'s, then its section\'s (inner first), then the workflow default; fallback is tried when a model is unreachable',
       R422: 'workflow kinds: sub-workflow runs a pinned child with both logs linked and refuses past the depth limit; agent waits for the final answer; orchestrate plans, fans out, reviews within maxRounds and picks workers with a pgm-orchestrator profile',
-      R423: 'workflow kinds: jev picks one choice port; low confidence follows onLowConfidence (default, error, second opinion, ask a person); off-shape is retried then an error; votes take the majority; through openrouter, ollama and host',
+      R423: 'workflow kinds: jev picks one choice port; low confidence follows onLowConfidence (default, error, second opinion, ask a person); off-shape is retried then an error; votes take the majority; through openrouter, ollama and host; the decision-model slot (T-210): a scope\'s decision model, JEV through OpenRouter then a local model, a node\'s own model first',
+      // T-202: laws and saved prompts (tests/laws.rs, the store side in tests/service.rs)
+      R425: 'workflow laws: a law and a prompt are saved, grouped (in two groups at once), left standalone, listed and deleted; deleting a group keeps its members; every save is a new version file; only the scope\'s admins (and lawEditors) change a team\'s',
+      R426: 'workflow laws: scope defaults, workflow, sections (outer to inner) and node give the laws in that order with no duplicates; the right laws reach the right node and nowhere else; node_start names their ids and versions',
+      R427: 'workflow laws: a lower level adds a law and takes one away (-law-x), but cannot remove a lockable: false law of a higher level',
+      R428: 'workflow laws: a law check (regex, expr, jev) that fails follows its onFail: retry (once, told which law), error, or warn',
+      R429: 'workflow prompts: {{prompt:name}} resolves a saved prompt; a pinned one (name@1) does not change when the prompt is edited, a latest one does; an unknown name is a validation error',
+      R430: 'workflow laws: an export bundle carries the laws, groups and prompts the workflow uses (and nothing else); an import into another scope checks them and brings them along',
+      // T-207: the /hyperwork command line (the one parser for the page, HPM and jcode)
+      R460: 'hyperwork command: /hyperwork name prompt with --project / --on / --version (and --x=y, /hw), a still-typed name, bad options refused; a name that matches nothing runs nothing and gets the nearest names',
     };
-    const MIN407 = { R407: 2, R408: 7, R409: 2, R410: 4, R411: 4, R412: 3, R413: 2, R414: 1, R415: 1, R416: 1, R417: 1, R418: 5, R419: 2, R420: 1, R421: 1, R422: 4, R423: 4 };
+    const MIN407 = { R407: 2, R408: 7, R409: 2, R410: 4, R411: 4, R412: 3, R413: 2, R414: 1, R415: 1, R416: 1, R417: 1, R418: 5, R419: 2, R420: 1, R421: 1, R422: 4, R423: 5, R425: 1, R426: 2, R427: 1, R428: 1, R429: 2, R430: 1, R460: 3 };
     if (!fs.existsSync(path.join(native407, 'crates', 'pgm-workflow-engine-internal'))) for (const id of Object.keys(L407)) skip(id, L407[id], 'no crate native/crates/pgm-workflow-engine-internal');
     else {
       const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home407}/.rustup" CARGO_HOME="${home407}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-engine-internal 2>&1`], { cwd: native407, encoding: 'utf8', timeout: 1800000 });
@@ -3808,7 +3817,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       if (ut.status === 77) for (const id of Object.keys(L407)) skip(id, L407[id], 'no Rust toolchain here (cargo not found)');
       else {
         const seen = {};
-        for (const m of out407.matchAll(/^test (r4(?:0[7-9]|1[0-9]|2[0-3]))_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
+        for (const m of out407.matchAll(/^test (?:[\w:]+::)?(r4\d\d)_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
         const tail = out407.replace(/\s+/g, ' ').slice(-160);
         for (const id of Object.keys(L407)) check(id, L407[id], ut.status === 0 && (seen[id] || []).length >= MIN407[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
       }
@@ -3829,8 +3838,14 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R444: 'hyperwork routes: a secret (config hyperworkSecrets) used in a workflow\'s HTTP call never appears in the run log or any route\'s answer',
       R445: 'hyperwork routes: the frozen JavaScript hub answers 404 on /api/hyperwork/ (no mirror); the Rust hub lists the module',
       R446: 'hyperwork routes: list?since=<rev> gives only what changed [the gateway serving the same routes and mirroring the home hub is T-204\'s later part]',
+      R461: 'hyperwork in the page: /hyperwork (and /hw) in the Work box\'s commands, a type-ahead from /api/hyperwork/list (grey = cannot run, with its reason), the line sent to POST /api/hyperwork/command with the session\'s project, the run followed from its log (steps, the answer, Approve / Reject); the command route runs a workflow by its line [HPM\'s and jcode\'s /hyperwork are T-207\'s later parts]',
+      R462: 'hyperwork command: a workflow that needs a project refuses to start without one; the line\'s --project (else the page\'s project) is the run\'s project',
+      R465: 'hyperwork team tools: a Work run\'s AI lists workflows (hyperwork_list) and sends a prompt through one (hyperwork_run) as the person whose run it is; someone else\'s personal workflow is refused [the session policy switch is T-207\'s later part]',
     };
     const hw = (p, tok, body, hdr) => call('/api/hyperwork/' + p, tok, body, hdr);
+    const html461 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const page461 = /\{ cmd: '\/hyperwork', desc: /.test(html461) && /\{ cmd: '\/hw', desc: /.test(html461) && /function hwTypeahead\(\)/.test(html461) && /\/api\/hyperwork\/list\?q=/.test(html461)
+      && /\/api\/hyperwork\/command', \{ method: 'POST', body: JSON\.stringify\(\{ line, project: \(me && me\.project\) \|\| '' \}\) \}/.test(html461) && /\/api\/hyperwork\/log\?id=/.test(html461) && /\/api\/hyperwork\/answer/.test(html461) && /cannot run: /.test(html461);
     if (!RUST_HUB) {
       const js1 = await hw('list', U), js2 = await hw('run', U, { name: 'x', prompt: 'y' });
       check('R445', L437.R445, js1.status === 404 && js2.status === 404, `JavaScript hub: list ${js1.status}, run ${js2.status}`);
@@ -3913,6 +3928,21 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const ch = await hw('save', A, { doc: doc('r446-new') });
       const since = await hw('list?since=' + rev, A);
       check('R446', L437.R446, ch.status === 200 && (since.data.items || []).length === 1 && since.data.items[0].id === ch.data.id, `since ${rev}: ${(since.data.items || []).map((i) => i.name).join(', ')}`);
+      // R461 / R462: the command line (as the page sends it)
+      const ai = await hw('save', A, { doc: doc('r461-notes') }); await hw('publish', A, { id: ai.data.id, message: 'x' });
+      const c1 = await hw('command', A, { line: '/hyperwork r461-notes write it', project: 'VibeRoller' }), c1m = c1.data.run ? await until(c1.data.run) : {};
+      const c2 = await hw('command', A, { line: '/hyperwork r461-nots write it' }), c3 = await hw('command', A, { line: '/hyperwork r461-notes --on moon x' });
+      check('R461', L437.R461, page461 && c1.status === 202 && c1m.status === 'ok' && c2.status === 404 && (c2.data.nearest || []).includes('r461-notes') && c3.status === 400,
+        `page ${page461}; command ${c1.status} ${c1m.status}; unknown ${c2.status} nearest ${JSON.stringify(c2.data.nearest)}; bad --on ${c3.status}`);
+      const c4 = await hw('command', A, { line: '/hyperwork r441-needs x' }), c5 = await hw('command', A, { line: '/hyperwork r441-needs --project Jcode-PGM x', project: 'VibeRoller' }), c6 = await hw('command', A, { line: '/hyperwork r441-needs x', project: 'VibeRoller' });
+      const p5 = c5.data.run ? (await follow(c5.data.run, A))[0] || {} : {}, p6 = c6.data.run ? (await follow(c6.data.run, A))[0] || {} : {};
+      check('R462', L437.R462, c4.status === 422 && c5.status === 202 && p5.project === 'Jcode-PGM' && c6.status === 202 && p6.project === 'VibeRoller', `none ${c4.status}; --project ${c5.status} ${p5.project}; the page's ${c6.status} ${p6.project}`);
+      // R465: a Work run's AI (the fake Claude's HYPERWORK) uses the team tools
+      const t465 = await chat(A, 'HYPERWORK r461-notes', { fresh: true }), o465 = JSON.parse((texts(t465.events).match(/HW:(\{.*\})/) || [])[1] || '{}');
+      const u465 = await chat(U, 'HYPERWORK r461-notes', { fresh: true }), q465 = JSON.parse((texts(u465.events).match(/HW:(\{.*\})/) || [])[1] || '{}');
+      const mine465 = o465.run && o465.run.run ? (await hw('run?id=' + o465.run.run, A)).data : {};
+      check('R465', L437.R465, Array.isArray(o465.listed) && o465.listed.includes('r461-notes') && o465.ok === true && o465.run.status === 'ok' && mine465.owner === 't-admin' && q465.ok === false,
+        `listed ${JSON.stringify(o465.listed)}; run ${JSON.stringify(o465.run).slice(0, 160)}; owner ${mine465.owner}; t-user ${q465.ok} ${JSON.stringify(q465.run).slice(0, 80)}`);
     }
   }
   const ws1 = (await call('/api/work/current', U)).data;

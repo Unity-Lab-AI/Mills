@@ -55,6 +55,47 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account, rest: &str) -> Routed {
     }
 }
 
+/// The team tools `hyperwork_list` and `hyperwork_run` (bridge/team-mcp.js, mcp-tools.json): a Work run's AI sends a
+/// prompt through a workflow as the person whose run it is (their rights, their run). `wait` (default 120 s, at most
+/// 600) waits for the result; a run that waits for an approval answers with where it waits.
+pub async fn tool(hub: &Arc<Hub>, account: &str, b: &Value) -> Value {
+    let Some(svc) = hub.mods.hyperwork.get().cloned() else { return json!({ "ok": false, "error": "Hyper Workflows are starting." }) };
+    let c = Caller { user: account.to_string(), run_only: false };
+    let args = &b["args"];
+    let fail = |v: &Value| json!({ "ok": false, "error": v["error"].as_str().unwrap_or("the hub refused it").to_string() + &v["nearest"].as_array().filter(|a| !a.is_empty()).map(|a| format!(" (nearest: {})", a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))).unwrap_or_default() });
+    match b["name"].as_str().unwrap_or("") {
+        "hyperwork_list" => {
+            let q: HashMap<String, String> = args["q"].as_str().map(|q| [("q".to_string(), q.to_string())].into_iter().collect()).unwrap_or_default();
+            match svc.handle(&c, "GET", "list", &q, &json!({})).await {
+                Answer::Json(200, v) => json!({ "ok": true, "result": v["items"].as_array().map(|a| a.iter().map(|i| json!({ "name": i["shown"], "scope": i["scope"], "title": i["title"], "description": i["description"], "version": i["version"], "unrunnable": i["unrunnable"] })).collect::<Vec<_>>()).unwrap_or_default() }),
+                Answer::Json(_, v) => fail(&v),
+                Answer::Lines(_) => json!({ "ok": false, "error": "unexpected" }),
+            }
+        }
+        "hyperwork_run" => {
+            let mut body = json!({ "name": args["name"], "prompt": args["prompt"].as_str().unwrap_or("") });
+            for k in ["inputs", "project"] { if !args[k].is_null() { body[k] = args[k].clone(); } }
+            let run = match svc.handle(&c, "POST", "run", &HashMap::new(), &body).await {
+                Answer::Json(202, v) => v["run"].as_str().unwrap_or("").to_string(),
+                Answer::Json(_, v) => return fail(&v),
+                Answer::Lines(_) => return json!({ "ok": false, "error": "unexpected" }),
+            };
+            let wait = args["wait"].as_f64().unwrap_or(120.0).clamp(0.0, 600.0);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
+            let q: HashMap<String, String> = [("id".to_string(), run.clone())].into_iter().collect();
+            loop {
+                let m = match svc.handle(&c, "GET", "run", &q, &json!({})).await { Answer::Json(_, v) => v, Answer::Lines(_) => Value::Null };
+                let status = m["status"].as_str().unwrap_or("running").to_string();
+                if status != "running" || std::time::Instant::now() >= until {
+                    return json!({ "ok": true, "result": { "run": run, "status": status, "outcome": m["outcome"], "result": m["result"], "error": m["error"], "waiting": m["waiting"] } });
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+        n => json!({ "ok": false, "error": format!("Unknown team tool: {n}") }),
+    }
+}
+
 /// Who is who on this hub: every account is in `company`; teams come from config `hyperworkTeams`
 /// (`{ "core": ["gee", "sponge", "mills"] }` makes `team-core`); everyone has their own `me-<user>`.
 pub struct HubDir { hub: Weak<Hub> }

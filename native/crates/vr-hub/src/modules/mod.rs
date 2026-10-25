@@ -164,6 +164,11 @@ fn from_front(hub: &Hub, r: &Req) -> bool {
     r.peer.ip().is_loopback() && r.header("x-vr-front-secret").map(|s| bool::from(s.as_bytes().ct_eq(hub.mods.front_secret.as_bytes()))).unwrap_or(false)
 }
 fn answer(status: u16, v: Value) -> Routed { Routed::Answer(jresp(status, &v)) }
+/// A Work run's MCP tool call: the Hyper Workflows team tools are this hub's own (hyperwork.rs), the rest Work's.
+async fn team_or_work(hub: &Arc<Hub>, tool: &str, account: &str, b: &Value) -> Value {
+    if tool == "team" && b["name"].as_str().is_some_and(|n| n.starts_with("hyperwork_")) { return hyperwork::tool(hub, account, b).await; }
+    work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, account, b).await
+}
 
 /// The JavaScript hub's own "moving house" switch (bridge/.maintenance): its text is the new address.
 fn maintenance(hub: &Hub) -> Option<String> { std::fs::read_to_string(hub.root.join(".maintenance")).ok().map(|t| { let t = t.trim().to_string(); if t.is_empty() { "the server".into() } else { t } }) }
@@ -218,7 +223,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let (id, tool) = rest.split_once("/internal/").unwrap_or(("", ""));
         if id.is_empty() || !matches!(tool, "pc-tool" | "board" | "team") { return answer(404, json!({ "error": "Not found" })); }
         return match hub.mods.ai.job_for(id, r.header("x-mills-internal").unwrap_or("")) {
-            Some((account, _)) => answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &r.json()).await),
+            Some((account, _)) => answer(200, team_or_work(hub, tool, &account, &r.json()).await),
             None => answer(403, json!({ "ok": false, "error": "forbidden" })),
         };
     }
@@ -226,7 +231,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if let Some(tool) = p.strip_prefix("/internal/").filter(|t| matches!(*t, "pc-tool" | "board" | "team")) {
         let account = r.header("x-mills-account").filter(|a| !a.is_empty()).map(String::from).unwrap_or_else(|| hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string());
         if r.method == hyper::Method::POST && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &hub.mods.work.secret_for(&account)) {
-            return answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &r.json()).await);
+            return answer(200, team_or_work(hub, tool, &account, &r.json()).await);
         }
         return Routed::Pass(vec![]);
     }

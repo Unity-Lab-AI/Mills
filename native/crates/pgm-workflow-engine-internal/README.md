@@ -10,7 +10,9 @@ tokio and futures-util; no network, no hub, no screen of its own.
 | --- | --- |
 | `engine` | `Engine`: `start`, `resume` (from the run's log), `answer` (a question the run waits on), `replay` (no outside calls), `preflight`; `with_builtins()`; `implement` / `register` node kinds; `RunInput`, `RunOptions`, `RunLimits`, `RunReport` |
 | `host` | `WorkflowHost` (AI, tools, HTTP, agents, people, emit, saved prompts, workflows for `sub-workflow`, projects, secrets, the log sink, snapshots, the clock: every method defaults to "not here"), `NodeKind` (one attempt of one kind of node), `NodeCall` (`lookup`, `render` for `{{templates}}`, `answer`), `NodeError` (`NodeError::ask`: the node needs a person), `NodeOutput`, `NoHost` |
-| `kinds` | the built-in kinds (T-201): `ai` (`prompt`, `chat`, `summarise`, `jev`), `tools` (`tool` with custom HTTP calls, `agent`), `script` (the transform language), `orchestrate`; `model_chain` / `ask_model` (model choice and fallback, spec 5.4) |
+| `kinds` | the built-in kinds (T-201): `ai` (`prompt`, `chat`, `summarise`, `jev`), `tools` (`tool` with custom HTTP calls, `agent`), `script` (the transform language), `orchestrate`; `model_chain` / `ask_model` (model choice and fallback, spec 5.4; the node's laws and their checks, spec 6) |
+| `service` | the store and run API a hub serves under `/api/hyperwork/` (T-204): workflows per scope with versions, drafts and rights; laws, saved prompts and groups (T-202); runs with their logs, follow, cancel, answer, replay, resume after a restart; `/hyperwork` lines (`command`). No web server: `Service::handle(caller, method, path, query, body)`; the program around it says who is who (`Directory`) |
+| `command` | the one `/hyperwork <name> [--project P] [--on runner] [--version V] <prompt>` parser for the page, HPM and jcode, and the nearest names for one that matches nothing (T-207) |
 | `log` | `Prior::from_log`: what an earlier log of a run says (finished instances, open questions, answers, totals, active time) |
 | `cancel` | `Cancel`: run, scope and node handles; cancelling one cancels what was made from it |
 | `fake` | `FakeHost` (scripted AI answers per node or instance, call records, most-at-once, questions, a settable clock), `fake_engine()` with fake `prompt` / `tool` and the test kinds `test/inc`, `test/const`, `test/side-effect` |
@@ -81,9 +83,24 @@ or rate-limited (`model.unreachable` / `model.rate-limited` from the host), then
 **A node may ask a person** (`NodeError::ask(questions, state)`): the attempt closes as `waiting`, the run waits, and
 `Engine::answer` runs the node again with `NodeCall::answer` (and the `state` it gave in `NodeCall::asked`).
 
-Not here yet: laws and saved prompts applied to nodes (T-202; `{{prompt:name}}` already fills from
-`WorkflowHost::saved_prompt`), custom-node sandboxes (T-203), large values as `values/<hash>` refs and secret masking in
-the log (T-204), a `sub-workflow` child that waits for a person (`engine.child-waits`).
+**The decision-model slot** (T-210, spec 5.7): a `jev` node without its own model uses the scope's decision model
+(`WorkflowHost::decision_model`; on the hub the scope policy's `decisionModel`, e.g. JEV through OpenRouter with a local
+Ollama model as its `fallback`), then the sections' and the workflow's.
+
+## Laws and saved prompts (T-202, spec 6)
+
+A node's AI calls follow the laws of four levels, in this order: the scope's standing laws (`WorkflowHost::law_book`,
+`defaults`; on the hub the scope policy's `laws`), the workflow's `defaults.laws`, its sections' (outer to inner), the
+node's own. Groups are expanded, each law comes once (the first place stays), `-law-x` at a lower level takes a law
+away unless it says `lockable: false`. The laws go into the system part under a heading; `node_start` names their ids
+and versions. A law's `check` (`regex`, `expr` on `value`, or `jev`: the decision model answers a yes / no question)
+runs on every answer: `onFail` `retry` (asked again once, told which law), `error` (`engine.law-check`), `warn` (in
+`node_end.warnings`). `{{prompt:name}}` is a saved prompt's latest version, `{{prompt:name@3}}` a pinned one. In the
+service: `GET laws|prompts|groups`, `POST law|prompt|group` (every save a new version file), `POST law/delete` (a
+group's members stay); export bundles carry what a workflow uses and import checks it.
+
+Not here yet: custom-node sandboxes (T-203), large values as `values/<hash>` refs (T-204's later part), a
+`sub-workflow` child that waits for a person (`engine.child-waits`).
 
 ## Use it in another project
 

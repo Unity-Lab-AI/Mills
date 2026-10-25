@@ -289,3 +289,140 @@ async fn r444_a_secret_is_never_in_the_log_or_an_answer() {
     let file = std::fs::read_to_string(root.join("runs").join(&run).join("log.ndjson")).unwrap();
     assert!(!file.contains("sekrit-token-123") && !file.contains("hub-key-0000"));
 }
+
+#[tokio::test]
+async fn r460_a_hyperwork_line_runs_or_names_the_nearest() {
+    let root = tmp("r460");
+    let host = FakeHost::new();
+    let s = svc(&root, &dir(&host));
+    published(&s, "gee", "me-gee", "release-notes").await;
+    published(&s, "gee", "team-core", "team-review").await;
+    let (st, r) = call(&s, "gee", "POST", "command", &[], json!({ "line": "/hyperwork release-notes write them --project VibeRoller", "project": "Other" })).await;
+    assert_eq!(st, 202, "{r}");
+    let m = until_done(&s, "gee", r["run"].as_str().unwrap()).await;
+    assert_eq!(m["result"], "ai:p:write them");
+    let (_, lines) = call(&s, "gee", "GET", "log", &[("id", r["run"].as_str().unwrap())], json!({})).await;
+    assert_eq!(lines[0]["project"], "VibeRoller", "the line's --project wins over the product's");
+    let (st, miss) = call(&s, "gee", "POST", "command", &[], json!({ "line": "/hyperwork release x" })).await;
+    assert_eq!(st, 404, "a name that matches nothing runs nothing");
+    assert_eq!(miss["nearest"], json!(["release-notes"]));
+    assert_eq!(call(&s, "gee", "POST", "command", &[], json!({ "line": "/hyperwork release-notes --on moon x" })).await.0, 400);
+    assert_eq!(call(&s, "mills", "POST", "command", &[], json!({ "line": "/hyperwork release-notes x" })).await.0, 404, "someone else's personal workflow is not theirs to run");
+    assert_eq!(call(&s, "mills", "POST", "command", &[], json!({ "line": "/hw team-review look" })).await.0, 202, "the short form, a team workflow");
+}
+
+// ---------------------------------------------------------------- T-202: laws, saved prompts, groups in the store
+
+async fn shelve(s: &Service, user: &str, what: &str, item: Value, scope: Option<&str>) -> (u16, Value) {
+    let mut body = json!({ "item": item });
+    if let Some(sc) = scope { body["scope"] = json!(sc); }
+    call(s, user, "POST", what, &[], body).await
+}
+
+#[tokio::test]
+async fn r425_laws_prompts_and_groups_saved_grouped_listed_deleted_versioned() {
+    let root = tmp("r425");
+    let host = FakeHost::new();
+    let s = svc(&root, &dir(&host));
+    let (st, tone) = shelve(&s, "gee", "law", json!({ "name": "tone", "text": "Answer kindly." }), None).await;
+    assert_eq!(st, 200, "{tone}");
+    let tone = tone["id"].as_str().unwrap().to_string();
+    assert!(tone.starts_with("law-"));
+    let cite = shelve(&s, "gee", "law", json!({ "name": "cite", "text": "Cite file and line." }), None).await.1["id"].as_str().unwrap().to_string();
+    let alone = shelve(&s, "gee", "law", json!({ "name": "alone", "text": "A standalone law." }), None).await.1["id"].as_str().unwrap().to_string();
+    let pr = shelve(&s, "gee", "prompt", json!({ "name": "release-style", "text": "Write notes for {{audience}}.", "slots": [{ "name": "audience", "default": "the team" }] }), None).await.1["id"].as_str().unwrap().to_string();
+    let g1 = shelve(&s, "gee", "group", json!({ "name": "style", "kind": "laws", "members": [tone, cite] }), None).await.1["id"].as_str().unwrap().to_string();
+    let (st, g2) = shelve(&s, "gee", "group", json!({ "name": "all", "kind": "mixed", "members": [tone, pr] }), None).await;
+    assert_eq!(st, 200, "a law can be in two groups at once: {g2}");
+    let (_, laws) = call(&s, "gee", "GET", "laws", &[], json!({})).await;
+    assert_eq!(laws["items"].as_array().unwrap().len(), 3);
+    assert_eq!(call(&s, "gee", "GET", "groups", &[], json!({})).await.1["items"].as_array().unwrap().len(), 2);
+    // a second save is a second version, the first stays readable
+    let (_, v2) = shelve(&s, "gee", "law", json!({ "id": tone, "name": "tone", "text": "Answer kindly and briefly." }), None).await;
+    assert_eq!(v2["version"], 2);
+    assert!(root.join("me-gee").join("laws").join(format!("{tone}.v1.json")).exists() && root.join("me-gee").join("laws").join(format!("{tone}.v2.json")).exists());
+    assert_eq!(call(&s, "gee", "GET", "laws", &[("id", &tone), ("version", "1")], json!({})).await.1["item"]["text"], "Answer kindly.");
+    // deleting a group keeps its members; a deleted law is gone from the list
+    assert_eq!(call(&s, "gee", "POST", "group/delete", &[], json!({ "id": g1 })).await.0, 200);
+    assert_eq!(call(&s, "gee", "GET", "laws", &[], json!({})).await.1["items"].as_array().unwrap().len(), 3, "the members stay");
+    assert_eq!(call(&s, "gee", "POST", "law/delete", &[], json!({ "id": alone })).await.0, 200);
+    assert_eq!(call(&s, "gee", "GET", "laws", &[], json!({})).await.1["items"].as_array().unwrap().len(), 2);
+    // a bad one is refused with its problems; the team's laws are its admins' (and lawEditors')
+    let (st, bad) = shelve(&s, "gee", "law", json!({ "name": "empty", "text": " " }), None).await;
+    assert_eq!(st, 400, "{bad}");
+    assert_eq!(shelve(&s, "mills", "law", json!({ "name": "t", "text": "team rule" }), Some("team-core")).await.0, 403);
+    assert_eq!(shelve(&s, "sponge", "law", json!({ "name": "t", "text": "team rule" }), Some("team-core")).await.0, 200);
+    assert_eq!(shelve(&s, "outsider", "law", json!({ "name": "t", "text": "x" }), Some("team-core")).await.0, 403);
+    assert_eq!(call_as(&s, "gee", true, "POST", "law", &[], json!({ "item": { "name": "x", "text": "y" } })).await.0, 403, "run-only clients change nothing");
+    assert_eq!(call(&s, "mills", "GET", "laws", &[("scope", "team-core")], json!({})).await.1["items"].as_array().unwrap().len(), 1, "team members see the team's laws");
+}
+
+#[tokio::test]
+async fn r426_store_laws_reach_the_right_node_of_a_hub_run() {
+    let root = tmp("r426s");
+    let host = FakeHost::new();
+    let s = svc(&root, &dir(&host));
+    let team = shelve(&s, "sponge", "law", json!({ "name": "team", "text": "RULE team" }), Some("team-core")).await.1["id"].as_str().unwrap().to_string();
+    let only = shelve(&s, "sponge", "law", json!({ "name": "only", "text": "RULE only-a" }), Some("team-core")).await.1["id"].as_str().unwrap().to_string();
+    let _unused = shelve(&s, "sponge", "law", json!({ "name": "unused", "text": "RULE unused" }), Some("team-core")).await;
+    call(&s, "sponge", "POST", "policy", &[], json!({ "scope": "team-core", "policy": { "laws": [team] } })).await;
+    let d = json!({ "schema": 1, "name": "two", "nodes": [{ "id": "s", "kind": "start" }, { "id": "a", "kind": "prompt", "laws": [only] }, { "id": "b", "kind": "prompt" }, { "id": "j", "kind": "join" }, { "id": "e", "kind": "end" }],
+        "edges": [{ "id": "e1", "from": "s.prompt", "to": "a.in" }, { "id": "e2", "from": "s.prompt", "to": "b.in" }, { "id": "e3", "from": "a.text", "to": "j.lines" }, { "id": "e4", "from": "b.text", "to": "j.lines" }, { "id": "e5", "from": "j.result", "to": "e.result" }] });
+    let (_, saved) = call(&s, "gee", "POST", "save", &[], json!({ "doc": d, "scope": "team-core" })).await;
+    assert_eq!(call(&s, "gee", "POST", "publish", &[], json!({ "id": saved["id"], "message": "x" })).await.0, 200);
+    let (_, r) = call(&s, "gee", "POST", "run", &[], json!({ "name": "two", "prompt": "go" })).await;
+    let m = until_done(&s, "gee", r["run"].as_str().unwrap()).await;
+    assert_eq!(m["status"], "ok", "{m}");
+    let a = host.calls_of("a")[0].prompt.clone();
+    let b = host.calls_of("b")[0].prompt.clone();
+    assert!(a.contains("RULE team") && a.contains("RULE only-a"), "{a}");
+    assert!(b.contains("RULE team") && !b.contains("RULE only-a"), "the node's own law reaches it and nowhere else: {b}");
+    assert!(!a.contains("RULE unused") && !b.contains("RULE unused"));
+}
+
+#[tokio::test]
+async fn r429_a_saved_prompt_from_the_store_latest_and_pinned_and_an_unknown_one_is_refused() {
+    let root = tmp("r429s");
+    let host = FakeHost::new();
+    let s = svc(&root, &dir(&host));
+    let doc = |system: &str| json!({ "schema": 1, "name": "notes", "nodes": [{ "id": "s", "kind": "start" }, { "id": "p", "kind": "prompt", "config": { "system": system } }, { "id": "e", "kind": "end" }],
+        "edges": [{ "id": "e1", "from": "s.prompt", "to": "p.in" }, { "id": "e2", "from": "p.text", "to": "e.result" }] });
+    let (_, saved) = call(&s, "gee", "POST", "save", &[], json!({ "doc": doc("{{prompt:release-style}}") })).await;
+    assert!(saved["problems"].as_array().unwrap().iter().any(|p| p["code"] == "prompt.missing"), "an unknown prompt is a validation error: {saved}");
+    assert_eq!(call(&s, "gee", "POST", "publish", &[], json!({ "id": saved["id"], "message": "x" })).await.0, 422);
+    let pr = shelve(&s, "gee", "prompt", json!({ "name": "release-style", "text": "First: notes for {{audience}}.", "slots": [{ "name": "audience", "default": "the team" }] }), None).await.1["id"].as_str().unwrap().to_string();
+    shelve(&s, "gee", "prompt", json!({ "id": pr, "name": "release-style", "text": "Second: notes for {{audience}}.", "slots": [{ "name": "audience", "default": "the team" }] }), None).await;
+    let (_, saved) = call(&s, "gee", "POST", "save", &[], json!({ "id": saved["id"], "doc": doc("{{prompt:release-style}} / {{prompt:release-style@1}}") })).await;
+    assert!(!saved["problems"].as_array().unwrap().iter().any(|p| p["level"] == "error"), "{saved}");
+    assert_eq!(call(&s, "gee", "POST", "publish", &[], json!({ "id": saved["id"], "message": "x" })).await.0, 200);
+    let (_, r) = call(&s, "gee", "POST", "run", &[], json!({ "name": "notes", "prompt": "go" })).await;
+    until_done(&s, "gee", r["run"].as_str().unwrap()).await;
+    assert!(host.calls_of("p")[0].prompt.starts_with("Second: notes for the team. / First: notes for the team."), "latest follows the edit, @1 stays: {}", host.calls_of("p")[0].prompt);
+}
+
+#[tokio::test]
+async fn r430_an_export_carries_its_laws_and_prompts_and_an_import_checks_them() {
+    let root = tmp("r430");
+    let host = FakeHost::new();
+    let s = svc(&root, &dir(&host));
+    let l1 = shelve(&s, "gee", "law", json!({ "name": "a", "text": "Rule A." }), None).await.1["id"].as_str().unwrap().to_string();
+    let l2 = shelve(&s, "gee", "law", json!({ "name": "b", "text": "Rule B." }), None).await.1["id"].as_str().unwrap().to_string();
+    shelve(&s, "gee", "law", json!({ "name": "c", "text": "Not used." }), None).await;
+    let g = shelve(&s, "gee", "group", json!({ "name": "ab", "kind": "laws", "members": [l1, l2] }), None).await.1["id"].as_str().unwrap().to_string();
+    shelve(&s, "gee", "prompt", json!({ "name": "style", "text": "Be brief." }), None).await;
+    let d = json!({ "schema": 1, "name": "carry", "defaults": { "laws": [g] }, "nodes": [{ "id": "s", "kind": "start" }, { "id": "p", "kind": "prompt", "config": { "system": "{{prompt:style}}" } }, { "id": "e", "kind": "end" }],
+        "edges": [{ "id": "e1", "from": "s.prompt", "to": "p.in" }, { "id": "e2", "from": "p.text", "to": "e.result" }] });
+    let (_, saved) = call(&s, "gee", "POST", "save", &[], json!({ "doc": d })).await;
+    call(&s, "gee", "POST", "publish", &[], json!({ "id": saved["id"], "message": "x" })).await;
+    let (st, ex) = call(&s, "gee", "POST", "export", &[], json!({ "id": saved["id"], "bundle": true })).await;
+    assert_eq!(st, 200, "{ex}");
+    let b = &ex["bundle"];
+    assert_eq!((b["laws"].as_array().unwrap().len(), b["groups"].as_array().unwrap().len(), b["prompts"].as_array().unwrap().len()), (2, 1, 1), "the group's two laws, the group, the prompt; not the unused law: {b}");
+    let (st, im) = call(&s, "sponge", "POST", "import", &[], json!({ "bundle": b, "scope": "me-sponge" })).await;
+    assert_eq!(st, 200, "{im}");
+    assert!(!im["problems"].as_array().unwrap().iter().any(|p| p["level"] == "error"), "everything it uses came with it: {im}");
+    assert_eq!(call(&s, "sponge", "GET", "laws", &[], json!({})).await.1["items"].as_array().unwrap().len(), 2);
+    let mut broken = b.clone();
+    broken["laws"][0]["text"] = json!("");
+    assert_eq!(call(&s, "sponge", "POST", "import", &[], json!({ "bundle": broken, "scope": "me-sponge" })).await.0, 400, "a bad law in the bundle is refused");
+}

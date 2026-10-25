@@ -2255,6 +2255,8 @@ const SLASH = [
   { cmd: '/new', desc: 'Start a fresh conversation', local: () => $('newChat').click() },
   { cmd: '/stop', desc: 'Stop the current reply', local: () => $('stop').click() },
   { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', local: (a) => slashModel(a) },
+  { cmd: '/hyperwork', desc: 'Send a prompt through a Hyper Workflow (it runs on the hub; type a name to see the list)', args: '<name> <prompt>', local: (a) => hyperwork(a) },
+  { cmd: '/hw', desc: 'Short for /hyperwork', args: '<name> <prompt>', local: (a) => hyperwork(a) },
   { cmd: '/share', desc: 'Share / stop sharing this Work session with everyone', local: () => $('shareBtn').click() },
   { cmd: '/save', desc: 'Save this session to Past sessions now', local: () => saveToArchive(false) },
   { cmd: '/sessions', desc: 'Open Past sessions', local: () => showArchive() },
@@ -2310,14 +2312,107 @@ function runLocalSlash(message) {
   if (!s || !s.local) return false;
   s.local(m[2]); return true;
 }
-$('input').addEventListener('input', () => { slashIdx = 0; renderSlash(); });
+// ── /hyperwork <name> <prompt> (T-207; the team note plans/hyper-workflows.md § 10.2): a prompt sent through a Hyper
+// Workflow on the hub. Typing "/hyperwork te" lists the workflows that match (prefix, then word starts, then anywhere;
+// grey = cannot run here, with the reason); the hub parses the line (one parser for the page, HPM and jcode) and the
+// run follows here: each step as a line, the answer at the end, an approval as two buttons. A hub without Hyper
+// Workflows (the JavaScript hub, an older one) answers 404: the page says so.
+let hwItems = [], hwTimer = null, hwFor = null;
+function hwQuery() { const m = /^\/(?:hyperwork|hw) (\S*)$/.exec($('input').value); return m ? m[1] : null; }
+function hwTypeahead() {
+  const q = hwQuery();
+  if (q === null) return false;
+  if (hwFor !== q) {
+    hwFor = q; clearTimeout(hwTimer);
+    hwTimer = setTimeout(async () => {
+      try { const r = await api('/api/hyperwork/list?q=' + encodeURIComponent(q)); hwItems = r.ok ? ((await r.json()).items || []) : []; } catch { hwItems = []; }
+      if (hwQuery() === q) renderHw();
+    }, 150);
+  }
+  renderHw();
+  return true;
+}
+function renderHw() {
+  const box = $('slashMenu');
+  box.textContent = '';
+  if (!hwItems.length) { box.hidden = true; return; }
+  slashIdx = Math.min(slashIdx, hwItems.length - 1);
+  hwItems.forEach((w, i) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'sl' + (i === slashIdx ? ' on' : '');
+    const c = document.createElement('code'); c.textContent = w.shown || w.name;
+    const d = document.createElement('small'); d.textContent = w.unrunnable ? 'cannot run: ' + w.unrunnable : (w.title || w.description || '');
+    const t = document.createElement('span'); t.className = 'tag'; t.textContent = String(w.scope || '').replace(/^me-.*/, 'mine').replace(/^(team|grp)-/, '');
+    if (w.unrunnable) { b.style.opacity = '.55'; b.title = w.unrunnable; }
+    b.append(c, d, t); b.onmousedown = (e) => { e.preventDefault(); pickHw(w); }; box.append(b);
+  });
+  box.hidden = false;
+}
+function pickHw(w) {
+  const box = $('input');
+  box.value = '/hyperwork ' + (w.shown || w.name) + ' '; $('slashMenu').hidden = true; box.focus(); box.setSelectionRange(box.value.length, box.value.length); updateStopButton();
+}
+async function hyperwork(arg) {
+  const line = '/hyperwork ' + String(arg || '').trim();
+  bubble('me').textContent = line; scroll();
+  let r;
+  try { r = await api('/api/hyperwork/command', { method: 'POST', body: JSON.stringify({ line, project: (me && me.project) || '' }) }); } catch (e) { return sys(e.message, true); }
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 404 && d.nearest) return sys((d.error || 'No such workflow.') + (d.nearest.length ? ' Did you mean: ' + d.nearest.join(', ') + '?' : ''), true);
+  if (r.status === 404) return sys('This hub has no Hyper Workflows (it is older, or the JavaScript hub serves alone).', true);
+  if (r.status === 422) return sys('This workflow cannot run here: ' + (d.problems || []).map((p) => p.message).join('; '), true);
+  if (r.status !== 202) return sys(d.error || 'Could not start the workflow (' + r.status + ').', true);
+  sys('Hyper Workflow started (' + d.run + ').');
+  hwFollow(d.run, 0);
+}
+async function hwFollow(run, from) {
+  let res;
+  try { res = await fetch(base + '/api/hyperwork/log?id=' + encodeURIComponent(run) + '&from=' + from + '&follow=1', { headers: token ? { Authorization: 'Bearer ' + token } : {} }); } catch { return sys('Lost sight of the workflow run ' + run + '; it goes on on the hub.', true); }
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const l = buf.slice(0, i); buf = buf.slice(i + 1);
+      let ev; try { ev = JSON.parse(l); } catch { continue; }
+      hwEvent(run, ev);
+    }
+  }
+}
+function hwEvent(run, ev) {
+  if (ev.type === 'node_end' && ev.status === 'ok' && !['start', 'end'].includes(ev.kind)) sys('· ' + ev.node + ' (' + ev.kind + ') done' + (ev.durationMs ? ' in ' + Math.round(ev.durationMs / 100) / 10 + ' s' : ''));
+  else if (ev.type === 'node_end' && ev.status === 'error' && !ev.retry) sys('· ' + ev.node + ' (' + ev.kind + ') failed: ' + ((ev.error && ev.error.message) || ''), true);
+  else if (ev.type === 'wait') {
+    const d = document.createElement('div'); d.className = 'sys';
+    d.textContent = 'The workflow waits for you at ' + ev.node + ' (' + ev.what + ').';
+    for (const [label, ok] of [['Approve', true], ['Reject', false]]) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      b.onclick = async () => {
+        d.querySelectorAll('button').forEach((x) => { x.disabled = true; });
+        const answers = ev.what === 'resume' ? { rerun: ok } : { approved: ok };
+        const r = await api('/api/hyperwork/answer', { method: 'POST', body: JSON.stringify({ run, node: ev.key || ev.node, answers }) }).catch(() => null);
+        if (r && r.ok) hwFollow(run, (ev.seq || 0) + 1); else sys('Could not answer.', true);
+      };
+      d.append(' ', b);
+    }
+    log.appendChild(d); scroll();
+  } else if (ev.type === 'run_end') {
+    if (ev.status === 'ok') { renderText(bubble('claude'), typeof ev.result === 'string' ? ev.result : '```json\n' + JSON.stringify(ev.result, null, 2) + '\n```'); sys('Hyper Workflow done (' + (ev.outcome || 'done') + ')' + (ev.durationMs ? ' in ' + Math.round(ev.durationMs / 1000) + ' s' : '') + '.'); }
+    else sys('Hyper Workflow ended ' + ev.status + (ev.error && ev.error.message ? ': ' + ev.error.message : ''), true);
+    scroll();
+  }
+}
+$('input').addEventListener('input', () => { slashIdx = 0; if (!hwTypeahead()) renderSlash(); });
 $('input').addEventListener('blur', () => setTimeout(() => { $('slashMenu').hidden = true; }, 150));
 $('input').addEventListener('keydown', (e) => {
-  const open = !$('slashMenu').hidden, list = open ? slashMatches() : [];
+  const open = !$('slashMenu').hidden, hw = hwQuery() !== null, list = open ? (hw ? hwItems : slashMatches()) : [];
   if (open && list.length) {
-    if (e.key === 'ArrowDown') { e.preventDefault(); slashIdx = (slashIdx + 1) % list.length; return renderSlash(); }
-    if (e.key === 'ArrowUp') { e.preventDefault(); slashIdx = (slashIdx - 1 + list.length) % list.length; return renderSlash(); }
-    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); return pickSlash(list[slashIdx]); }
+    const redraw = () => (hw ? renderHw() : renderSlash());
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashIdx = (slashIdx + 1) % list.length; return redraw(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashIdx = (slashIdx - 1 + list.length) % list.length; return redraw(); }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); return hw ? pickHw(list[slashIdx]) : pickSlash(list[slashIdx]); }
     if (e.key === 'Escape') { e.preventDefault(); $('slashMenu').hidden = true; return; }
   }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('composer').requestSubmit(); }

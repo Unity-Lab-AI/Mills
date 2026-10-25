@@ -260,9 +260,12 @@ impl Service {
         if !self.dir.exists(&c.user) { return bad(401, "Not signed in."); }
         let q = |k: &str| query.get(k).map(String::as_str).filter(|x| !x.is_empty());
         let b = |k: &str| body.get(k).and_then(Value::as_str).filter(|x| !x.is_empty());
-        let writes = matches!(path, "save" | "publish" | "promote" | "delete" | "restore" | "perms" | "import" | "policy" | "law" | "prompt" | "kind");
+        let writes = matches!(path, "save" | "publish" | "promote" | "delete" | "restore" | "perms" | "import" | "policy" | "kind") || ["law", "prompt", "group"].iter().any(|k| path == *k || path.starts_with(&format!("{k}/")));
         if c.run_only && method == "POST" && writes { return bad(403, "This client may list, view and run workflows, not change them."); }
         match (method, path) {
+            ("GET", "laws") | ("GET", "prompts") | ("GET", "groups") => self.shelf_get(c, Shelf::of(path), q("scope"), q("id"), q("version").and_then(|v| v.parse().ok())),
+            ("POST", "law") | ("POST", "prompt") | ("POST", "group") => self.shelf_save(c, Shelf::of(path), body.get("item").unwrap_or(body), b("scope")),
+            ("POST", "law/delete") | ("POST", "prompt/delete") | ("POST", "group/delete") => self.shelf_delete(c, Shelf::of(path), b("id")),
             ("GET", "list") => self.list(c, q("q").unwrap_or(""), q("scope"), q("since").and_then(|x| x.parse().ok())),
             ("GET", "get") => self.get(c, q("id"), q("name"), q("scope"), q("version").or(q("channel"))),
             ("GET", "versions") => self.with(c, q("id"), |r| r.view, |m| j(200, json!({ "versions": m["versions"], "published": m["published"], "tags": m["tags"] }))),
@@ -272,7 +275,7 @@ impl Service {
             ("GET", "run") => match self.run_meta_for(c, q("id").unwrap_or("")) { Ok(m) => j(200, m), Err(e) => e },
             ("GET", "log") => self.log(c, q("id").unwrap_or(""), q("from").and_then(|x| x.parse().ok()).unwrap_or(0), q("follow") == Some("1")),
             ("POST", "validate") => match doc::from_value(body["doc"].clone()) {
-                Ok(d) => j(200, json!({ "problems": self.problems(&d) })),
+                Ok(d) => j(200, json!({ "problems": self.problems_in(&d, &c.user) })),
                 Err(e) => bad(400, e.to_string()),
             },
             ("POST", "save") => self.save(c, b("id"), &body["doc"], b("etag"), b("scope")),
@@ -294,6 +297,7 @@ impl Service {
             }),
             ("POST", "promote") => self.promote(c, b("id"), b("scope")),
             ("POST", "run") => self.start_run(c, body),
+            ("POST", "command") => self.command(c, b("line").unwrap_or(""), b("project")),
             ("POST", "cancel") => match self.run_meta_for(c, b("id").unwrap_or("")) {
                 Ok(m) if s(&m, "owner") == c.user || self.meta_by_id(s(&m["workflow"], "id")).is_some_and(|w| self.rights(c, &w).admin) => {
                     match lock(&self.runs).get(s(&m, "id")) { Some(l) => { l.cancel.cancel(); j(200, json!({ "ok": true })) } None => bad(409, "That run is not running.") }
@@ -304,15 +308,13 @@ impl Service {
             ("POST", "answer") => self.answer(c, b("run").unwrap_or(""), b("node").or(b("key")).unwrap_or(""), body.get("answers").cloned().unwrap_or(Value::Null)).await,
             ("POST", "replay") => self.replay(c, b("id").unwrap_or("")),
             ("POST", "export") => self.with(c, b("id"), |r| r.view, |m| match self.published(&m).or_else(|| self.draft_doc(&m, &c.user).map(|d| (0, d.0))) {
-                Some((v, d)) => j(200, json!({ "bundle": { "schema": 1, "workflow": doc::to_value(&d), "version": v, "laws": [], "prompts": [], "kinds": [] } })),
+                Some((v, d)) => {
+                    let (laws, groups, prompts) = self.used_by(&d, s(&m, "owner"), s(&m, "scope"));
+                    j(200, json!({ "bundle": { "schema": 1, "workflow": doc::to_value(&d), "version": v, "laws": laws, "groups": groups, "prompts": prompts, "kinds": [] } }))
+                }
                 None => bad(404, "That workflow has no version to export."),
             }),
-            ("POST", "import") => {
-                let wfv = body["bundle"]["workflow"].clone();
-                let mut wf = wfv.clone();
-                if let Some(o) = wf.as_object_mut() { o.remove("id"); }
-                self.save(c, None, &wf, None, b("scope"))
-            }
+            ("POST", "import") => self.import(c, &body["bundle"], b("scope")),
             ("GET", "policy") | ("POST", "policy") => self.policy(c, method, q("scope").or(b("scope")), &body["policy"]),
             _ => bad(404, "Unknown endpoint"),
         }
@@ -324,12 +326,6 @@ impl Service {
         if !(r.view || r.run) { return bad(404, "No such workflow."); }
         if !need(&r) { return bad(403, "You do not have the right for that on this workflow."); }
         f(m)
-    }
-
-    fn problems(&self, d: &Document) -> Vec<Value> {
-        let mut out: Vec<Value> = validate(d, &Options::new(self.engine.registry())).issues.into_iter().map(|i| serde_json::to_value(i).unwrap_or(Value::Null)).collect();
-        for p in self.engine.preflight(d) { if !out.iter().any(|x| x["code"] == p["code"] && x["message"] == p["message"]) { let mut p = p; p["level"] = json!("error"); out.push(p); } }
-        out
     }
 
     fn list(&self, c: &Caller, q: &str, scope: Option<&str>, since: Option<u64>) -> Answer {
@@ -420,7 +416,7 @@ impl Service {
         m["rev"] = json!(self.bump());
         m["drafts"][&c.user] = json!({ "etag": etag, "at": now_ms() });
         if !write(&self.wf_dir(s(&m, "scope"), s(&m, "id")).join(format!("draft-{}.json", c.user)), &json!({ "etag": etag, "doc": doc::to_value(&d) })) || !self.save_meta(&m) { return bad(500, "Could not save the draft."); }
-        j(200, json!({ "ok": true, "id": m["id"], "etag": etag, "problems": self.problems(&d) }))
+        j(200, json!({ "ok": true, "id": m["id"], "etag": etag, "problems": self.problems_in(&d, s(&m, "owner")) }))
     }
 
     fn publish(&self, c: &Caller, id: Option<&str>, message: &str) -> Answer {
@@ -431,7 +427,7 @@ impl Service {
         if !r.publish { return bad(403, "You may not publish this workflow."); }
         if message.trim().is_empty() { return bad(400, "Publishing needs a message (what changed)."); }
         let Some((mut d, _)) = self.draft_doc(&m, &c.user) else { return bad(409, "You have no draft to publish.") };
-        let problems: Vec<Value> = self.problems(&d).into_iter().filter(|p| p["level"] == "error").collect();
+        let problems: Vec<Value> = self.problems_in(&d, s(&m, "owner")).into_iter().filter(|p| p["level"] == "error").collect();
         if !problems.is_empty() { return j(422, json!({ "error": "The draft has errors.", "problems": problems })); }
         let next = m["versions"].as_array().map(|a| a.iter().filter_map(|v| v["version"].as_u64()).max().unwrap_or(0)).unwrap_or(0) as u32 + 1;
         let at = now_ms();
@@ -507,6 +503,154 @@ impl Service {
     /// A scope's policy (spec 9.3), `{}` when it has none.
     pub fn scope_policy(&self, scope: &str) -> Value { if safe(scope) { read(&self.root.join(scope).join("policy.json")).unwrap_or(json!({})) } else { json!({}) } }
 
+    // ------------------------------------------------------------ laws, saved prompts, groups (T-202, spec 6)
+
+    fn shelf_dir(&self, scope: &str, sh: Shelf) -> PathBuf { self.root.join(scope).join(sh.folder()) }
+
+    /// Every current item of a kind in the given scopes (nearest scope first), each tagged with its scope.
+    fn shelf_items(&self, scopes: &[String], sh: Shelf) -> Vec<Value> {
+        let mut out = vec![];
+        for sc in scopes {
+            let mut here: Vec<Value> = std::fs::read_dir(self.shelf_dir(sc, sh)).into_iter().flatten().flatten()
+                .filter(|e| { let n = e.file_name().to_string_lossy().to_string(); n.ends_with(".json") && !n.contains(".v") && !n.contains(".deleted") })
+                .filter_map(|e| read(&e.path())).map(|mut v| { v["scope"] = json!(sc); v }).collect();
+            here.sort_by(|a, b| s(a, "name").cmp(s(b, "name")));
+            out.extend(here);
+        }
+        out
+    }
+
+    /// May this person change the laws / prompts / groups of a scope? Their own personal scope; another scope they are
+    /// in when they are an admin or the scope's policy names them in `lawEditors`.
+    fn may_shelve(&self, c: &Caller, scope: &str) -> bool {
+        if scope.strip_prefix("me-") == Some(c.user.as_str()) { return true; }
+        if scope.starts_with("me-") || !self.dir.scopes_of(&c.user).iter().any(|x| x == scope) { return false; }
+        self.dir.is_admin(&c.user) || self.scope_policy(scope)["lawEditors"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(c.user.as_str())))
+    }
+
+    fn shelf_get(&self, c: &Caller, sh: Shelf, scope: Option<&str>, id: Option<&str>, version: Option<u32>) -> Answer {
+        let scopes: Vec<String> = self.dir.scopes_of(&c.user).into_iter().filter(|x| scope.is_none_or(|w| w == x)).collect();
+        let items = self.shelf_items(&scopes, sh);
+        let Some(id) = id else { return j(200, json!({ "items": items })) };
+        let Some(it) = items.into_iter().find(|x| s(x, "id") == id) else { return bad(404, format!("No such {}.", sh.one())) };
+        match version {
+            None => j(200, json!({ "item": it })),
+            Some(v) => match read(&self.shelf_dir(s(&it, "scope"), sh).join(format!("{id}.v{v}.json"))) { Some(mut x) => { x["scope"] = it["scope"].clone(); j(200, json!({ "item": x })) } None => bad(404, "No such version.") },
+        }
+    }
+
+    fn shelf_save(&self, c: &Caller, sh: Shelf, item: &Value, scope: Option<&str>) -> Answer {
+        let _w = lock(&self.write);
+        let mut it = item.clone();
+        if !it.is_object() { return bad(400, format!("A {} is an object.", sh.one())); }
+        let existing = it.get("id").and_then(Value::as_str).and_then(|id| self.shelf_items(&self.dir.scopes_of(&c.user), sh).into_iter().find(|x| s(x, "id") == id));
+        let sc = match &existing { Some(e) => s(e, "scope").to_string(), None => scope.map(str::to_string).unwrap_or_else(|| format!("me-{}", c.user)) };
+        if !safe(&sc) || !self.may_shelve(c, &sc) { return bad(403, format!("You may not change the {}s of that scope.", sh.one())); }
+        if it.get("id").and_then(Value::as_str).is_none_or(str::is_empty) { it["id"] = json!(format!("{}{:010x}", sh.prefix(), (now_ms() << 4 ^ self.rev.fetch_add(1, Ordering::SeqCst)) & 0xff_ffff_ffff)); }
+        let id = s(&it, "id").to_string();
+        if !safe(&id) { return bad(400, "That id cannot be a file name."); }
+        let version = existing.as_ref().and_then(|e| e["version"].as_u64()).unwrap_or(0) + 1;
+        it["version"] = json!(version);
+        it["scope"] = json!(sc);
+        it["owner"] = existing.as_ref().map(|e| e["owner"].clone()).unwrap_or(json!(c.user));
+        it["updatedAt"] = json!(now_ms());
+        let problems = sh.problems(&it);
+        if !problems.is_empty() { return j(400, json!({ "error": format!("That {} has problems.", sh.one()), "problems": problems })); }
+        let dirp = self.shelf_dir(&sc, sh);
+        if !write(&dirp.join(format!("{id}.v{version}.json")), &it) || !write(&dirp.join(format!("{id}.json")), &it) { return bad(500, "Could not save it."); }
+        self.audit(&sc, &c.user, &format!("{}-save", sh.one()), json!({ "id": id, "version": version }));
+        j(200, json!({ "ok": true, "id": id, "version": version, "item": it }))
+    }
+
+    fn shelf_delete(&self, c: &Caller, sh: Shelf, id: Option<&str>) -> Answer {
+        let Some(it) = id.and_then(|id| self.shelf_items(&self.dir.scopes_of(&c.user), sh).into_iter().find(|x| s(x, "id") == id)) else { return bad(404, format!("No such {}.", sh.one())) };
+        let sc = s(&it, "scope").to_string();
+        if !self.may_shelve(c, &sc) { return bad(403, format!("You may not change the {}s of that scope.", sh.one())); }
+        // the versions stay (the audit); a group's members are never touched
+        let dirp = self.shelf_dir(&sc, sh);
+        let _ = std::fs::rename(dirp.join(format!("{}.json", s(&it, "id"))), dirp.join(format!("{}.deleted-{}.json", s(&it, "id"), stamp())));
+        self.audit(&sc, &c.user, &format!("{}-delete", sh.one()), json!({ "id": it["id"] }));
+        j(200, json!({ "ok": true }))
+    }
+
+    /// The laws a run of `owner`'s in `scope` may use (every one they can see) and the scope's standing laws.
+    fn law_book_for(&self, owner: &str, scope: &str) -> crate::host::LawBook {
+        let mut scopes = self.dir.scopes_of(owner);
+        if !scopes.iter().any(|x| x == scope) { scopes.push(scope.to_string()); }
+        let laws = self.shelf_items(&scopes, Shelf::Laws).into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
+        let groups = self.shelf_items(&scopes, Shelf::Groups).into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
+        let defaults = self.scope_policy(scope)["laws"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+        crate::host::LawBook { laws, groups, defaults }
+    }
+
+    /// A saved prompt as `owner` sees it: `name` or id (its latest version) or `name@3` (that version); its slots
+    /// filled with their defaults when they all have one.
+    fn saved_prompt_for(&self, owner: &str, name: &str) -> Option<String> {
+        let (n, v) = match name.rsplit_once('@') { Some((a, b)) if b.parse::<u32>().is_ok() => (a, b.parse::<u32>().ok()), _ => (name, None) };
+        let it = self.shelf_items(&self.dir.scopes_of(owner), Shelf::Prompts).into_iter().find(|x| s(x, "name") == n || s(x, "id") == n)?;
+        let it = match v { None => it, Some(v) => read(&self.shelf_dir(s(&it, "scope"), Shelf::Prompts).join(format!("{}.v{v}.json", s(&it, "id"))))? };
+        let p: pgm_workflow_internal::shapes::Prompt = serde_json::from_value(it.clone()).ok()?;
+        Some(p.fill(&serde_json::Map::new()).unwrap_or(p.text))
+    }
+
+    /// The problems of a document in its scope: validation with the store's laws and prompts, then what the engine
+    /// cannot run.
+    fn problems_in(&self, d: &Document, owner: &str) -> Vec<Value> {
+        let info = StoreScope { svc: self, owner };
+        let mut out: Vec<Value> = validate(d, &Options::new(self.engine.registry()).scope(&info)).issues.into_iter().map(|i| serde_json::to_value(i).unwrap_or(Value::Null)).collect();
+        for p in self.engine.preflight(d) { if !out.iter().any(|x| x["code"] == p["code"] && x["message"] == p["message"]) { let mut p = p; p["level"] = json!("error"); out.push(p); } }
+        out
+    }
+
+    /// The laws, groups and saved prompts a document uses (for an export bundle).
+    fn used_by(&self, d: &Document, owner: &str, scope: &str) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
+        let mut scopes = self.dir.scopes_of(owner);
+        if !scopes.iter().any(|x| x == scope) { scopes.push(scope.to_string()); }
+        let mut ids: Vec<String> = vec![];
+        let mut add = |l: &Option<Vec<String>>| for x in l.iter().flatten() { let x = x.trim_start_matches('-').to_string(); if !ids.contains(&x) { ids.push(x); } };
+        add(&d.defaults.as_ref().and_then(|x| x.laws.clone()));
+        for sct in d.sections.iter().flatten() { add(&sct.laws); }
+        let all_nodes: Vec<&pgm_workflow_internal::Node> = d.nodes.iter().chain(d.subgraphs.iter().flat_map(|m| m.values().flat_map(|g| g.nodes.iter()))).collect();
+        for n in &all_nodes { add(&n.laws); }
+        let groups: Vec<Value> = self.shelf_items(&scopes, Shelf::Groups).into_iter().filter(|g| ids.iter().any(|i| i == s(g, "id"))).collect();
+        for g in &groups { for m in g["members"].as_array().into_iter().flatten().filter_map(Value::as_str) { if !ids.iter().any(|i| i == m) { ids.push(m.to_string()); } } }
+        let laws: Vec<Value> = self.shelf_items(&scopes, Shelf::Laws).into_iter().filter(|l| ids.iter().any(|i| i == s(l, "id"))).collect();
+        let mut refs: Vec<String> = vec![];
+        fn scan(v: &Value, refs: &mut Vec<String>) {
+            match v {
+                Value::String(t) if t.contains("{{") => { if let Ok(tp) = pgm_workflow_internal::expr::parse_template(t) { for r in tp.prompt_refs() { let r = r.split('@').next().unwrap_or(r).to_string(); if !refs.contains(&r) { refs.push(r); } } } }
+                Value::Array(a) => for x in a { scan(x, refs) },
+                Value::Object(o) => for x in o.values() { scan(x, refs) },
+                _ => {}
+            }
+        }
+        for n in &all_nodes { if let Some(cfg) = &n.config { scan(cfg, &mut refs); } for p in n.prompts.iter().flatten() { if !refs.contains(p) { refs.push(p.clone()); } } }
+        let prompts: Vec<Value> = self.shelf_items(&scopes, Shelf::Prompts).into_iter().filter(|p| refs.iter().any(|r| r == s(p, "name") || r == s(p, "id"))).collect();
+        (laws, groups, prompts)
+    }
+
+    /// An exported bundle into a scope: its laws, groups and prompts are checked and added where the scope lacks them
+    /// (by id), then the workflow becomes a new draft there.
+    fn import(&self, c: &Caller, bundle: &Value, scope: Option<&str>) -> Answer {
+        let sc = scope.map(str::to_string).unwrap_or_else(|| format!("me-{}", c.user));
+        let mut problems = vec![];
+        for (key, sh) in [("laws", Shelf::Laws), ("groups", Shelf::Groups), ("prompts", Shelf::Prompts)] {
+            for it in bundle[key].as_array().into_iter().flatten() { for p in sh.problems(it) { problems.push(json!({ "id": it["id"], "problem": p })); } }
+        }
+        if !problems.is_empty() { return j(400, json!({ "error": "The bundle has problems.", "problems": problems })); }
+        for (key, sh) in [("laws", Shelf::Laws), ("groups", Shelf::Groups), ("prompts", Shelf::Prompts)] {
+            let have: Vec<String> = self.shelf_items(&self.dir.scopes_of(&c.user), sh).iter().map(|x| s(x, "id").to_string()).collect();
+            for it in bundle[key].as_array().into_iter().flatten().filter(|it| !have.iter().any(|h| h == s(it, "id"))) {
+                let mut it = it.clone();
+                if let Some(o) = it.as_object_mut() { o.remove("version"); o.remove("scope"); o.remove("owner"); }
+                if let Answer::Json(st, v) = self.shelf_save(c, sh, &it, Some(&sc)) { if st != 200 { return j(st, v); } }
+            }
+        }
+        let mut wf = bundle["workflow"].clone();
+        if let Some(o) = wf.as_object_mut() { o.remove("id"); o.remove("version"); o.remove("publishedAt"); o.remove("publishedBy"); }
+        self.save(c, None, &wf, None, Some(&sc))
+    }
+
     // ------------------------------------------------------------ runs
 
     fn run_meta(&self, run: &str) -> Option<Value> { if safe(run) { read(&self.run_dir(run).join("run.json")) } else { None } }
@@ -546,7 +690,7 @@ impl Service {
             match self.resolve_range(&m, range.as_deref()) { Some((v, d)) => (Some(v), d), None => return bad(404, "That workflow has no such published version.") }
         };
         let project = body["project"].as_str().filter(|p| !p.is_empty()).map(str::to_string);
-        let mut problems = self.engine.preflight(&d);
+        let mut problems: Vec<Value> = self.problems_in(&d, s(&m, "owner")).into_iter().filter(|p| p["level"] == "error").collect();
         if d.needs_project == Some(true) && project.is_none() { problems.push(json!({ "code": "engine.no-project", "message": "this workflow runs against a project: say which (--project)" })); }
         if !problems.is_empty() { return j(422, json!({ "error": "This workflow cannot run here.", "problems": problems })); }
         let mut input = RunInput::prompt(body["prompt"].as_str().unwrap_or("")).sender("person", &c.user);
@@ -558,6 +702,28 @@ impl Service {
         write(&self.run_dir(&run).join("run.json"), &rm);
         self.drive(run.clone(), c.user.clone(), Arc::new(d), Drive::Start(input));
         j(202, json!({ "run": run, "runner": "hub" }))
+    }
+
+    /// `/hyperwork <name> [--project P] [--on runner] [--version V] <prompt>` as typed in a product (spec 10.2): parsed
+    /// with the one parser, the name found in the caller's scopes (nearest first), the run started. A name that matches
+    /// nothing runs nothing: 404 with the nearest names. `project` is the product's current project (the line's
+    /// `--project` wins).
+    fn command(&self, c: &Caller, line: &str, project: Option<&str>) -> Answer {
+        let cmd = match crate::command::parse(line) {
+            crate::command::Parsed::Command(cmd) => cmd,
+            crate::command::Parsed::Bad(m) => return bad(400, m),
+            crate::command::Parsed::Typing(_) | crate::command::Parsed::No => return bad(400, "Usage: /hyperwork <name> [--project P] [--on runner] [--version V] <prompt>"),
+        };
+        if cmd.on.as_deref().is_some_and(|o| !matches!(o, "hub" | "any")) { return bad(400, format!("This hub runs workflows on the hub; `--on {}` runs it there (jcode, HPM or the gateway).", cmd.on.as_deref().unwrap_or(""))); }
+        if self.find(c, None, Some(&cmd.name), None).is_none() {
+            let names: Vec<String> = self.metas(&self.dir.scopes_of(&c.user)).into_iter().filter(|m| { let r = self.rights(c, m); r.run || r.view }).map(|m| s(&m, "name").to_string()).collect();
+            let near = crate::command::nearest(names.iter().map(String::as_str), &cmd.name, 5);
+            return j(404, json!({ "error": format!("No workflow is called `{}`.", cmd.name), "nearest": near }));
+        }
+        let mut body = json!({ "name": cmd.name, "prompt": cmd.prompt });
+        if let Some(p) = cmd.project.as_deref().or(project) { body["project"] = json!(p); }
+        if let Some(v) = &cmd.version { body["version"] = json!(v); }
+        self.start_run(c, &body)
     }
 
     fn replay(&self, c: &Caller, run: &str) -> Answer {
@@ -698,6 +864,40 @@ impl Service {
     }
 }
 
+/// The three kinds of item next to the workflows (spec 6.3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Shelf { Laws, Prompts, Groups }
+
+impl Shelf {
+    fn of(path: &str) -> Shelf {
+        match path.split('/').next().unwrap_or("") { "law" | "laws" => Shelf::Laws, "prompt" | "prompts" => Shelf::Prompts, _ => Shelf::Groups }
+    }
+    fn folder(self) -> &'static str { match self { Shelf::Laws => "laws", Shelf::Prompts => "prompts", Shelf::Groups => "groups" } }
+    fn one(self) -> &'static str { match self { Shelf::Laws => "law", Shelf::Prompts => "prompt", Shelf::Groups => "group" } }
+    fn prefix(self) -> &'static str { match self { Shelf::Laws => "law-", Shelf::Prompts => "pr-", Shelf::Groups => "grp-" } }
+    fn problems(self, v: &Value) -> Vec<String> {
+        use pgm_workflow_internal::shapes::{Group, Law, Prompt};
+        let shape = |e: serde_json::Error| vec![format!("not a {}: {e}", self.one())];
+        match self {
+            Shelf::Laws => serde_json::from_value::<Law>(v.clone()).map(|x| x.problems()).unwrap_or_else(shape),
+            Shelf::Prompts => serde_json::from_value::<Prompt>(v.clone()).map(|x| x.problems()).unwrap_or_else(shape),
+            Shelf::Groups => serde_json::from_value::<Group>(v.clone()).map(|x| x.problems()).unwrap_or_else(shape),
+        }
+    }
+}
+
+/// What validation asks about laws and prompts, answered from the store as a person sees it.
+struct StoreScope<'a> { svc: &'a Service, owner: &'a str }
+
+impl pgm_workflow_internal::ScopeInfo for StoreScope<'_> {
+    fn law_visible(&self, id: &str) -> bool {
+        let id = id.trim_start_matches('-');
+        let scopes = self.svc.dir.scopes_of(self.owner);
+        self.svc.shelf_items(&scopes, Shelf::Laws).iter().chain(self.svc.shelf_items(&scopes, Shelf::Groups).iter()).any(|x| s(x, "id") == id)
+    }
+    fn prompt_visible(&self, id: &str) -> bool { self.svc.saved_prompt_for(self.owner, id).is_some() }
+}
+
 enum Drive {
     Start(RunInput),
     Resume(Vec<Value>),
@@ -745,7 +945,9 @@ impl WorkflowHost for RunHost {
         self.inner.emit(run, key, message);
         if let Some(svc) = self.svc.upgrade() { svc.dir.changed(&self.owner, &json!({ "type": "hyper_emit", "run": run, "key": key, "message": message })); }
     }
-    fn saved_prompt(&self, name: &str) -> Option<String> { self.inner.saved_prompt(name) }
+    fn saved_prompt(&self, name: &str) -> Option<String> { self.svc.upgrade().and_then(|s| s.saved_prompt_for(&self.owner, name)).or_else(|| self.inner.saved_prompt(name)) }
+    fn law_book(&self) -> Option<crate::host::LawBook> { Some(self.svc.upgrade()?.law_book_for(&self.owner, &self.scope)) }
+    fn decision_model(&self) -> Option<Value> { self.svc.upgrade()?.scope_policy(&self.scope).get("decisionModel").cloned().filter(Value::is_object).or_else(|| self.inner.decision_model()) }
     fn workflow(&self, name: &str, range: Option<&str>) -> Option<Document> { self.svc.upgrade()?.workflow_for(&self.owner, &self.scope, name, range) }
     fn project(&self, name: &str) -> Option<Value> { self.inner.project(name) }
     fn secret(&self, name: &str) -> Option<String> {

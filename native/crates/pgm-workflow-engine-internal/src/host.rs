@@ -8,12 +8,22 @@
 //!   end, if, switch, parallel, join, loop, for-each, sub-graph, approve, wait, set, emit) are the engine's own; every
 //!   other kind is a `NodeKind` given to [`crate::Engine::implement`] or [`crate::Engine::register`].
 use crate::cancel::Cancel;
+use pgm_workflow_internal::shapes::{Group, Law};
 use pgm_workflow_internal::{expr, Document, Node};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// The laws a run's scope has (spec 6): every law and group it may use, and the scope's standing laws (`defaults`, ids
+/// of laws or groups, applied to every AI node first).
+#[derive(Debug, Clone, Default)]
+pub struct LawBook {
+    pub laws: Vec<Law>,
+    pub groups: Vec<Group>,
+    pub defaults: Vec<String>,
+}
 
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -84,9 +94,16 @@ pub struct NodeCall {
     pub answer: Option<Value>,
     /// The `state` the node gave with its question.
     pub asked: Option<Value>,
+    /// The laws this node's AI calls follow (spec 6.2), in order: scope defaults, workflow, sections, node.
+    pub laws: Vec<Law>,
+    /// Warnings the node raises while it runs (a law check with `onFail: warn`); the engine logs them in `node_end`.
+    pub warnings: Arc<Mutex<Vec<String>>>,
 }
 
 impl NodeCall {
+    /// Adds a warning to the node's `node_end`.
+    pub fn warn(&self, w: impl Into<String>) { self.warnings.lock().unwrap_or_else(|e| e.into_inner()).push(w.into()); }
+
     /// A value by path (`["node","n2","out","summary"]`), the input ports first (`["in"]`), then [`NodeCall::vars`].
     pub fn lookup(&self, path: &[String]) -> Option<Value> {
         let (first, rest) = path.split_first()?;
@@ -203,8 +220,15 @@ pub trait WorkflowHost: Send + Sync {
     fn http<'a>(&'a self, _req: HttpRequest, _cancel: Cancel) -> BoxFut<'a, Result<HttpAnswer, NodeError>> {
         Box::pin(async { Err(NodeError::unavailable("network")) })
     }
-    /// A saved prompt's text by name or id (`{{prompt:name}}`, spec 6), as the workflow's scope sees it.
+    /// A saved prompt's text by name or id (`{{prompt:name}}`, spec 6), as the workflow's scope sees it: its latest
+    /// version, or the one pinned with `name@3`.
     fn saved_prompt(&self, _name: &str) -> Option<String> { None }
+    /// The laws of the run's scope (read once when a run starts). None: no laws here.
+    fn law_book(&self) -> Option<LawBook> { None }
+    /// The scope's decision model (spec 5.7, T-210): the model entry `jev` nodes use when they name none themselves
+    /// (`{via: "openrouter" | "ollama" | "host", model, fallback?}`). None: they fall back to the sections' and the
+    /// workflow's models like any AI node.
+    fn decision_model(&self) -> Option<Value> { None }
     /// The workflow a `sub-workflow` node runs: by name and version range (`3`, `stable`, none = published), from the
     /// store of the run's scope.
     fn workflow(&self, _name: &str, _range: Option<&str>) -> Option<Document> { None }

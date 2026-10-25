@@ -7,7 +7,7 @@
 //! `test/inc` (adds a number) and `test/side-effect` (a tool call that is not idempotent).
 use crate::cancel::Cancel;
 use crate::engine::Engine;
-use crate::host::{Ask, BoxFut, HttpAnswer, HttpRequest, ModelAnswer, ModelRequest, NodeCall, NodeError, NodeKind, NodeOutput, ToolCtx, WorkflowHost};
+use crate::host::{Ask, BoxFut, HttpAnswer, HttpRequest, LawBook, ModelAnswer, ModelRequest, NodeCall, NodeError, NodeKind, NodeOutput, ToolCtx, WorkflowHost};
 use pgm_workflow_internal::{Document, KindManifest};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -74,6 +74,8 @@ pub struct FakeHost {
     agent_replies: Mutex<VecDeque<Value>>,
     pub agents: Mutex<Vec<Value>>,
     prompts: Mutex<HashMap<String, String>>,
+    laws: Mutex<Option<LawBook>>,
+    decision: Mutex<Option<Value>>,
 }
 
 impl FakeHost {
@@ -100,7 +102,12 @@ impl FakeHost {
     pub fn workflow(&self, d: Document) -> &Self { lock(&self.workflows).push(d); self }
     /// Queues an agent's final answer (none queued: `{text: "done"}`).
     pub fn agent_reply(&self, v: Value) -> &Self { lock(&self.agent_replies).push_back(v); self }
+    /// A saved prompt (its latest version); `name@N` keys pin a version.
     pub fn prompt(&self, name: &str, text: &str) -> &Self { lock(&self.prompts).insert(name.to_string(), text.to_string()); self }
+    /// The scope's laws for the runs of this host.
+    pub fn laws(&self, book: LawBook) -> &Self { *lock(&self.laws) = Some(book); self }
+    /// The scope's decision model for `jev` nodes that name none.
+    pub fn decision_model(&self, m: Value) -> &Self { *lock(&self.decision) = Some(m); self }
 
     pub fn calls_of(&self, node: &str) -> Vec<FakeCall> { lock(&self.calls).iter().filter(|c| c.node == node).cloned().collect() }
     pub fn all_calls(&self) -> Vec<FakeCall> { lock(&self.calls).clone() }
@@ -201,6 +208,8 @@ impl WorkflowHost for FakeHost {
 
     fn secret(&self, name: &str) -> Option<String> { lock(&self.secrets).get(name).cloned() }
     fn saved_prompt(&self, name: &str) -> Option<String> { lock(&self.prompts).get(name).cloned() }
+    fn law_book(&self) -> Option<LawBook> { lock(&self.laws).clone() }
+    fn decision_model(&self) -> Option<Value> { lock(&self.decision).clone() }
     fn workflow(&self, name: &str, range: Option<&str>) -> Option<Document> {
         lock(&self.workflows).iter().find(|d| d.name == name && range.and_then(|r| r.parse::<u32>().ok()).is_none_or(|v| d.version == Some(v))).cloned()
     }

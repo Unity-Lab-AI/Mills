@@ -256,6 +256,7 @@ impl Engine {
             limits: limits.clone(), prior: prior.clone(), state: Mutex::new(Map::new()), input: input_v, waiting: Mutex::new(vec![]),
             started: Mutex::new(Default::default()), engine: self.clone(),
             depth: opts.parent.as_ref().and_then(|p| p.get("depth")).and_then(Value::as_u64).unwrap_or(0) as usize,
+            laws: host.law_book().unwrap_or_default(),
         });
         let top = Scope::graph(plans[&None].clone(), String::new(), 0, run.cancel.child(), Map::new(), Map::new());
         let fut = exec_scope(run.clone(), top);

@@ -38,9 +38,72 @@ pub fn model_chain_from(call: &NodeCall, own: Option<Value>) -> Vec<Value> {
 /// A host error that means "try the next model" rather than "this failed" (spec 5.4: unreachable or rate-limited).
 pub fn unreachable(e: &NodeError) -> bool { matches!(e.code.as_str(), "model.unreachable" | "model.rate-limited" | "engine.model-unreachable") }
 
-/// One AI call down the node's model chain: the first entry that answers. Each entry that is unreachable moves on to
-/// the next; when none is left the error is `engine.model-unreachable`.
+/// One AI call of a node, with its laws (spec 6.2): they go into the system part under a heading, and each law with a
+/// `check` is run on the answer. A failed check follows the law's `onFail`: `retry` (asked again once, telling the AI
+/// which law it broke, then `engine.law-check`), `error` (`engine.law-check`), `warn` (a warning in the node's log).
 pub async fn ask_model(call: &NodeCall, host: &dyn WorkflowHost, suffix: &str, chain: &[Value], messages: Vec<Value>, options: Value) -> Result<ModelAnswer, NodeError> {
+    let mut messages = with_laws(call, messages);
+    let mut a = ask_chain(call, host, suffix, chain, messages.clone(), options.clone()).await?;
+    let mut retried = false;
+    'answer: loop {
+        for law in call.laws.iter().filter(|l| l.check.is_some()) {
+            let c = law.check.as_ref().unwrap();
+            if law_holds(call, host, law, &a.text, chain).await? { continue; }
+            match c.on_fail.as_str() {
+                "warn" => call.warn(format!("the answer does not pass the check of law `{}` ({})", law.id, law.name)),
+                "retry" if !retried => {
+                    retried = true;
+                    messages.push(json!({ "role": "assistant", "content": a.text }));
+                    messages.push(json!({ "role": "user", "content": format!("Your answer breaks the law \"{}\": {}. Answer again, following it.", law.name, law.text) }));
+                    let b = ask_chain(call, host, suffix, chain, messages.clone(), options.clone()).await?;
+                    a = ModelAnswer { usage: add_usage(a.usage.clone(), &b.usage), text: b.text };
+                    continue 'answer;
+                }
+                _ => return Err(NodeError::new("engine.law-check", format!("node `{}`: the answer breaks the law `{}` ({})", call.node.id, law.id, law.name))),
+            }
+        }
+        return Ok(a);
+    }
+}
+
+fn with_laws(call: &NodeCall, mut messages: Vec<Value>) -> Vec<Value> {
+    if call.laws.is_empty() { return messages; }
+    let text = format!("Laws (follow every one of them):\n{}", call.laws.iter().map(|l| format!("- {}: {}", l.name, l.text)).collect::<Vec<_>>().join("\n"));
+    match messages.iter_mut().find(|m| m["role"] == "system") {
+        Some(m) => { let old = m["content"].as_str().unwrap_or("").to_string(); m["content"] = json!(format!("{old}\n\n{text}")); }
+        None => messages.insert(0, json!({ "role": "system", "content": text })),
+    }
+    messages
+}
+
+/// Does an answer pass a law's check? `regex`: the pattern is found in it; `expr`: the condition holds with `value`
+/// the answer; `jev`: the decision model says yes to the check's `question` about it.
+async fn law_holds(call: &NodeCall, host: &dyn WorkflowHost, law: &pgm_workflow_internal::shapes::Law, text: &str, chain: &[Value]) -> Result<bool, NodeError> {
+    let c = law.check.as_ref().unwrap();
+    let field = |k: &str| c.extra.get(k).and_then(Value::as_str).unwrap_or("");
+    let bad = |e: expr::ExprError| NodeError::fatal("engine.law", format!("law `{}`: {e}", law.id));
+    Ok(match c.kind.as_str() {
+        "regex" => expr::regex_search(field("pattern"), text).map_err(bad)?,
+        "expr" => {
+            let look = |p: &[String]| -> Option<Value> { match p.first().map(String::as_str) { Some("value") | Some("answer") => Some(json!(text)), _ => None } };
+            expr::parse_condition(field("expr")).map_err(bad)?.test(&look).map_err(bad)?
+        }
+        "jev" => {
+            let ms = vec![
+                json!({ "role": "system", "content": "You check an answer against a rule. Decide; do not discuss. Answer with JSON only: {\"choice\": \"yes\" or \"no\"}." }),
+                json!({ "role": "user", "content": format!("Rule: {}\n\nAnswer:\n{text}\n\nDoes the answer follow the rule?", field("question")) }),
+            ];
+            let own = c.extra.get("model").cloned().filter(Value::is_object).map(|m| vec![m]);
+            let a = ask_chain(call, host, &format!("#law-{}", law.id), own.as_deref().unwrap_or(chain), ms, json!({ "responseFormat": "json", "temperature": 0 })).await?;
+            ai::json_in(&a.text).and_then(|v| v.get("choice").and_then(Value::as_str).map(|s| s.trim().eq_ignore_ascii_case("yes"))).unwrap_or(false)
+        }
+        _ => true,
+    })
+}
+
+/// One AI call down a model chain: the first entry that answers. Each entry that is unreachable moves on to the next;
+/// when none is left the error is `engine.model-unreachable`.
+pub async fn ask_chain(call: &NodeCall, host: &dyn WorkflowHost, suffix: &str, chain: &[Value], messages: Vec<Value>, options: Value) -> Result<ModelAnswer, NodeError> {
     let list: Vec<Option<Value>> = if chain.is_empty() { vec![None] } else { chain.iter().cloned().map(Some).collect() };
     let mut last = None;
     for m in list {

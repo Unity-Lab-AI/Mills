@@ -25,6 +25,9 @@ const TOOLS = [
   { name: 'notes_read', description: 'Read a team note (markdown).', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
   { name: 'notes_write', description: `Create or replace a team note with the whole text (saved as "${USER} · Claude"). Folders are made as needed; names are case-insensitive.`, inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'e.g. "meetings/2026-10-17.md"' }, text: { type: 'string' } }, required: ['path', 'text'] } },
   { name: 'notes_delete', description: 'Delete a team note (or an empty folder). Only when the person asked.', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+  // Hyper Workflows (T-207): the Rust hub's; the frozen JavaScript hub answers "unknown tool"
+  { name: 'hyperwork_list', description: `The Hyper Workflows ${USER} may run (name, scope, description, whether it can run here); q narrows them the way /hyperwork's type-ahead does.`, inputSchema: { type: 'object', properties: { q: { type: 'string' } } } },
+  { name: 'hyperwork_run', description: `Send a prompt through a Hyper Workflow on the hub, as ${USER} (the run is theirs, and it may stop to ask them to approve a step). wait: seconds to wait for the result (default 120; 0 = answer at once with the run id).`, inputSchema: { type: 'object', properties: { name: { type: 'string' }, prompt: { type: 'string' }, inputs: { type: 'object' }, project: { type: 'string' }, wait: { type: 'number' } }, required: ['name'] } },
 ];
 
 function reply(rid, result) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: rid, result }) + '\n'); }

@@ -233,6 +233,8 @@ fn shape(mode: &str, v: &Value, ids: &[String]) -> Option<Decision> {
 /// `jev`: a **decision**, not a conversation (spec 5.7). Asks the decision model (`model`: `via: openrouter | ollama |
 /// host`) for one of the choices as JSON `{choice, reason, confidence}` (`score`: `{score}`, `rank`: `{ranking}`),
 /// `votes` times (the majority wins). An answer off the shape is asked again once, then fails (`engine.jev-shape`).
+/// The model: the node's own, else the scope's decision model ([`WorkflowHost::decision_model`]), else the sections'
+/// and the workflow's like any AI node; its `fallback` list is tried when one is unreachable.
 /// Under `minConfidence`: `onLowConfidence` = `default` (config `default`, else the first choice), `second-opinion`
 /// (`secondModel`, else the same chain, asked once more), `ask-person` (the run waits for a person to pick), `error`.
 pub struct Jev;
@@ -262,7 +264,8 @@ impl NodeKind for Jev {
             let user = if listing.is_empty() { format!("Question: {question}\n\nContext:\n{}", text_of(&context)) } else { format!("Question: {question}\n\nChoices:\n{listing}\n\nContext:\n{}", text_of(&context)) };
             let votes = node.cfg("votes").and_then(Value::as_u64).unwrap_or(1).clamp(1, 9);
             let mut usage = None;
-            let chain = model_chain(&call);
+            // the node's own model, else the scope's decision model (the decision-model slot), else as any AI node
+            let chain = model_chain_from(&call, call.cfg("model").cloned().or_else(|| host.decision_model()));
             let mut ds = vec![];
             for v in 0..votes {
                 let suffix = if votes > 1 { format!("#vote{}", v + 1) } else { String::new() };

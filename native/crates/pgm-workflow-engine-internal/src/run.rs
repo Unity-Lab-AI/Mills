@@ -84,6 +84,8 @@ pub(crate) struct Run {
     pub engine: crate::Engine,
     /// How many `sub-workflow` runs this one is inside.
     pub depth: usize,
+    /// The laws of the run's scope (read from the host once, when the drive starts).
+    pub laws: crate::host::LawBook,
 }
 
 impl Run {
@@ -516,16 +518,51 @@ fn vals_of(outs: &HashMap<String, Tok>) -> Map<String, Value> {
 }
 
 /// `node_start` (counted against `maxNodes`). False when the run must stop instead.
-fn begin(run: &Run, scope: &Scope, n: usize, key: &str, attempt: u32, inputs: &Map<String, Value>) -> bool {
+fn begin(run: &Run, scope: &Scope, n: usize, key: &str, attempt: u32, inputs: &Map<String, Value>) -> bool { begin_with(run, scope, n, key, attempt, inputs, Value::Null) }
+
+#[allow(clippy::too_many_arguments)]
+fn begin_with(run: &Run, scope: &Scope, n: usize, key: &str, attempt: u32, inputs: &Map<String, Value>, more: Value) -> bool {
     if run.stopped() { return false; }
     let node = &scope.plan.nodes[n];
     if !run.count_run() { return false; }
     lock(&run.started).insert(key.to_string());
-    run.log.emit("node_start", json!({
+    let mut ev = json!({
         "node": node.id, "key": key, "kind": node.kind, "attempt": attempt, "iteration": scope.iteration, "line": scope.line,
         "inputs": inputs, "graph": scope.plan.key,
-    }));
+    });
+    if let (Some(o), Value::Object(m)) = (ev.as_object_mut(), more) { for (k, v) in m { o.insert(k, v); } }
+    run.log.emit("node_start", ev);
     true
+}
+
+/// The laws a node's AI follows (spec 6.2): the scope's standing laws, then the workflow's, then its sections' (outer
+/// to inner), then its own; groups expanded, each law once (the first place stays). `-law-x` (or `-grp-x`) at a lower
+/// level takes a higher level's law away, except one marked `lockable: false`, which stays.
+pub(crate) fn node_laws(run: &Run, plan: &Plan, node: &Node) -> Vec<pgm_workflow_internal::shapes::Law> {
+    let book = &run.laws;
+    if book.laws.is_empty() { return vec![]; }
+    let mut levels: Vec<Vec<String>> = vec![book.defaults.clone(), run.doc.defaults.as_ref().and_then(|d| d.laws.clone()).unwrap_or_default()];
+    if plan.key.is_none() {
+        let mut secs: Vec<_> = run.doc.sections.iter().flatten().filter(|s| s.nodes.contains(&node.id) && s.laws.is_some()).collect();
+        secs.sort_by_key(|s| std::cmp::Reverse(s.nodes.len()));
+        for s in secs { levels.push(s.laws.clone().unwrap_or_default()); }
+    }
+    levels.push(node.laws.clone().unwrap_or_default());
+    let mut out: Vec<pgm_workflow_internal::shapes::Law> = vec![];
+    for level in levels {
+        for entry in level {
+            let (remove, id) = match entry.strip_prefix('-') { Some(x) => (true, x.to_string()), None => (false, entry.clone()) };
+            let (found, _) = pgm_workflow_internal::shapes::expand_laws(std::slice::from_ref(&id), &book.laws, &book.groups);
+            for l in found {
+                if remove {
+                    if l.extra.get("lockable") != Some(&Value::Bool(false)) { out.retain(|x| x.id != l.id); }
+                } else if !out.iter().any(|x| x.id == l.id) {
+                    out.push(l.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -857,10 +894,13 @@ async fn leaf(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp: Inpu
         attempt += 1;
         tries += 1;
         let t0 = now(run);
-        if !begin(run, scope, n, key, attempt, &inp.values) { return Ok(Fired::Stopped); }
+        let laws = node_laws(run, plan, node);
+        let law_ids: Value = if laws.is_empty() { Value::Null } else { json!(laws.iter().map(|l| json!({ "id": l.id, "v": l.version })).collect::<Vec<_>>()) };
+        if !begin_with(run, scope, n, key, attempt, &inp.values, json!({ "laws": law_ids })) { return Ok(Fired::Stopped); }
+        let warnings = Arc::new(Mutex::new(vec![]));
         let call = NodeCall {
             run: run.id.clone(), key: key.to_string(), node: node.clone(), attempt, inputs: inp.values.clone(), vars: scope.vars(run),
-            doc: run.doc.clone(), graph: plan.key.clone(), cancel: cancel.clone(), answer: answer.clone(), asked: asked.clone(),
+            doc: run.doc.clone(), graph: plan.key.clone(), cancel: cancel.clone(), answer: answer.clone(), asked: asked.clone(), laws, warnings: warnings.clone(),
         };
         let fut = AssertUnwindSafe(kind.run(call, &*run.host)).catch_unwind();
         let res = tokio::select! {
@@ -892,7 +932,8 @@ async fn leaf(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp: Inpu
                 if !(empty && st.on.iter().any(|o| o == "empty")) {
                     let mut outs = all(plan, n, Tok::Skip);
                     for (k, v) in out.outputs { outs.insert(k, Tok::Val(v)); }
-                    finish(run, scope, n, key, attempt, "ok", &outs, t0, json!({ "usage": out.usage }));
+                    let w = lock(&warnings).clone();
+                    finish(run, scope, n, key, attempt, "ok", &outs, t0, json!({ "usage": out.usage, "warnings": if w.is_empty() { Value::Null } else { json!(w) } }));
                     return Ok(Fired::Out(outs, HashMap::new()));
                 }
                 (NodeError::new("engine.empty", format!("node `{}` gave an empty answer", node.id)), "empty")

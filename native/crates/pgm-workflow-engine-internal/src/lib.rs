@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cancel;
+pub mod command;
 mod engine;
 pub mod fake;
 pub mod host;
@@ -26,6 +27,6 @@ pub mod service;
 
 pub use cancel::Cancel;
 pub use engine::{Engine, RunInput, RunLimits, RunOptions, RunReport};
-pub use host::{walk, Ask, BoxFut, HttpAnswer, HttpRequest, ModelAnswer, ModelRequest, NoHost, NodeCall, NodeError, NodeKind, NodeOutput, ToolCtx, WorkflowHost};
+pub use host::{walk, Ask, BoxFut, HttpAnswer, HttpRequest, LawBook, ModelAnswer, ModelRequest, NoHost, NodeCall, NodeError, NodeKind, NodeOutput, ToolCtx, WorkflowHost};
 pub use log::Prior;
 pub use pgm_workflow_internal as model;

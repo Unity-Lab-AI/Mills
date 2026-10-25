@@ -338,3 +338,25 @@ async fn r422_orchestrate_picks_workers_with_a_pgm_orchestrator_profile() {
     let m = host.calls_of("x#work1")[0].model.clone().expect("a worker route was chosen");
     assert!(routes.contains(&m["route"].as_str().unwrap().to_string()), "{m} is one of the profile's routes");
 }
+
+#[tokio::test]
+async fn r423_the_decision_model_slot_openrouter_then_a_local_model() {
+    // T-210: one decision node; the scope's decision model is JEV through OpenRouter, with a local model (Ollama) behind it
+    let slot = json!({ "via": "openrouter", "model": "jev-1", "fallback": [{ "via": "ollama", "model": "laya" }] });
+    let d = decision(json!({ "question": "Ship it?", "choices": ["ship", "hold"] }));
+    let host = FakeHost::new();
+    host.decision_model(slot.clone());
+    host.reply("j", pick("ship", 0.9));
+    assert_eq!(go(&d, &host, "x").await.outcome.as_deref(), Some("shipped"));
+    assert_eq!(host.calls_of("j")[0].model.clone().unwrap(), json!({ "via": "openrouter", "model": "jev-1" }), "JEV through OpenRouter first");
+    let host = FakeHost::new();
+    host.decision_model(slot.clone());
+    host.replies("j", vec![Reply::fail("model.unreachable"), pick("hold", 0.8)]);
+    assert_eq!(go(&d, &host, "x").await.outcome.as_deref(), Some("held"), "the same node, OpenRouter down: the local model decides");
+    assert_eq!(host.calls_of("j")[1].model.clone().unwrap(), json!({ "via": "ollama", "model": "laya" }));
+    let host = FakeHost::new();
+    host.decision_model(slot);
+    host.reply("j", pick("ship", 0.9));
+    go(&decision(json!({ "choices": ["ship", "hold"], "model": { "via": "host", "model": "mine" } })), &host, "x").await;
+    assert_eq!(host.calls_of("j")[0].model.clone().unwrap()["model"], "mine", "a node's own model wins over the slot");
+}

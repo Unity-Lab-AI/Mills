@@ -111,6 +111,19 @@ process.stdin.on('end', async () => {
     const who = await tool('team_presence', {});
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'TEAM:' + JSON.stringify({ all: all.ok && all.result.as, dm: dm.ok && dm.result.to, bad: bad.ok, people: who.ok ? who.result.people.length : -1 }) }] } });
   }
+  // "HYPERWORK <name>": send a prompt through a Hyper Workflow with the team tools hyperwork_list / hyperwork_run, like
+  // Claude in a Work run (R465): the run is the person's own
+  const hw = /HYPERWORK (\S+)/.exec(input);
+  if (hw) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const list = await tool('hyperwork_list', { q: hw[1].slice(0, 4) });
+    const run = await tool('hyperwork_run', { name: hw[1], prompt: 'sent by the AI', wait: 30 });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'HW:' + JSON.stringify({ listed: list.ok ? list.result.map((w) => w.name) : list.error, ok: run.ok, run: run.ok ? run.result : run.error }) }] } });
+  }
   // "LIMITPARTIAL": a 5h event with only a status (no utilization, no reset time), then a 7d event
   // reporting utilization as a percentage (55) — the hub must keep the 5h numbers and read 55 as 55 %.
   if (input.includes('LIMITPARTIAL')) {
