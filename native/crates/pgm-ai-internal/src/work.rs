@@ -122,11 +122,17 @@ impl Work {
     pub fn effective_model(&self, a: &Account) -> String { let m = s(&self.state(a), "model"); if m.is_empty() { self.default_model(a) } else { m } }
     /// A session's project (the first session's is project_of).
     pub fn project_in(&self, a: &Account, sx: &Sx) -> String { let p = s(&sessions::sstate(self, a, sx), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
-    /// The session limits on a host (T-285; plans/multi-session.md § 6): working sessions per person, and per provider
-    /// on it. Config workSessions { perUser 5, perProvider 3 } (a host's own settings come with T-286).
-    pub fn session_limits(&self, _host: &str) -> (u64, u64) {
+    /// The session limits on a host for a person (T-285, T-286; plans/multi-session.md § 6): working sessions per
+    /// person, per provider on it, and whether the host's owner may exceed them. The host's own settings (its hello, or
+    /// what its owner set from the page) first; else config workSessions { perUser 5, perProvider 3 }.
+    pub fn session_limits(&self, ai: &crate::ai_hosts::AiHosts, host: &str, user: &str, prov: &str) -> (u64, u64, bool) {
         let c = self.cfg.get("workSessions").cloned().unwrap_or(json!({}));
-        (c["perUser"].as_u64().filter(|n| *n > 0).unwrap_or(5), c["perProvider"].as_u64().filter(|n| *n > 0).unwrap_or(3))
+        let (du, dp) = (c["perUser"].as_u64().filter(|n| *n > 0).unwrap_or(5), c["perProvider"].as_u64().filter(|n| *n > 0).unwrap_or(3));
+        let Some(l) = (if host == "hub" { None } else { ai.session_limits(host) }) else { return (du, dp, true) };
+        let short = prov.rsplit('/').next().unwrap_or(prov);
+        let per_user = l["exceptions"][user].as_u64().or(l["perUser"].as_u64()).filter(|n| *n > 0).unwrap_or(du);
+        let per_prov = l["providers"][short].as_u64().or(l["perProvider"].as_u64()).filter(|n| *n > 0).unwrap_or(dp);
+        (per_user, per_prov, l["ownerBypass"] != json!(false))
     }
     /// How many of this person's sessions work on that host now, and how many of them through that provider.
     pub fn working_on(&self, u: &str, host: &str, prov: &str) -> (u64, u64) {
@@ -453,8 +459,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     }
     // the limits (T-285): only working sessions count, per host and per provider on it; a host's owner is not limited on it
     { let pfull = s(&prov, "id"); let host = sessions::host_of(&pfull);
-      if owner.is_empty() || owner != a.username {
-        let (max_u, max_p) = w.session_limits(&host); let (used, used_p) = w.working_on(&a.username, &host, &pfull);
+      let (max_u, max_p, bypass) = w.session_limits(ai, &host, &a.username, &pfull);
+      if owner.is_empty() || owner != a.username || !bypass { let (used, used_p) = w.working_on(&a.username, &host, &pfull);
         let where_ = if host == "hub" { "This hub".to_string() } else if nick.is_empty() { host.clone() } else { nick.clone() };
         if used >= max_u { return answer(429, json!({ "error": format!("{where_}: {used} of {max_u} sessions working. Wait for one, stop one, or use another AI host."), "limit": { "host": host, "used": used, "max": max_u } })); }
         if used_p >= max_p { return answer(429, json!({ "error": format!("{where_} / {pfull}: {used_p} of {max_p} sessions working on it. Wait for one, stop one, or pick another AI."), "limit": { "host": host, "used": used_p, "max": max_p, "provider": pfull } })); }

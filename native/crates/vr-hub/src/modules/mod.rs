@@ -313,7 +313,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         let b = r.json();
         let (id, action) = (b["id"].as_str().unwrap_or("").to_string(), b["action"].as_str().unwrap_or("").to_string());
-        return match hub.mods.ai.control(&u, &id, &action).await { Ok(v) => answer(200, v), Err(e) => answer(e.status, json!({ "error": e.msg })) };
+        return match hub.mods.ai.control(&u, &id, &action, &b["limits"]).await { Ok(v) => answer(200, v), Err(e) => answer(e.status, json!({ "error": e.msg })) };
     }
     // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
     if r.method == hyper::Method::POST && matches!(p, "/api/hosts/new" | "/api/hosts/rename" | "/api/hosts/remove" | "/api/hosts/share" | "/api/hosts/scope" | "/api/hosts/config") {

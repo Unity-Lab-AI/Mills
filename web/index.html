@@ -3986,8 +3986,27 @@ function hostLiveText(h, now) {
   for (const [pid, msg] of Object.entries(st.logins || {})) if (msg) bits.push('login ' + pid + ': ' + msg);
   if (st.lastUpdate) bits.push('last update: ' + st.lastUpdate + (st.lastUpdateAt ? ' (' + hostAgo(now - st.lastUpdateAt) + ' ago)' : ''));
   if (st.pending) bits.push(st.pending);
+  const sl = h.sessionLimits; // T-286: the host's own Work-session limits
+  if (sl) { const ex = Object.entries(sl.exceptions || {}).map(([u, n]) => nickOf(u) + ' ' + n); bits.push('Work sessions: ' + sl.perUser + ' per person, ' + sl.perProvider + ' per provider' + (ex.length ? ' (' + ex.join(', ') + ')' : '') + (sl.ownerBypass ? ', you may exceed them' : '')); }
   if (h.control && h.online && !h.statusFresh && h.statusAgeMs) bits.push('status ' + hostAgo(h.statusAgeMs) + ' old');
   return bits.join(' · ');
+}
+// the owner sets the host's Work-session limits (T-286): saved in the host's own settings, as its control app would
+function hostLimitsForm(h, note, done) {
+  const sl = h.sessionLimits || { perUser: 5, perProvider: 3, exceptions: {}, ownerBypass: true };
+  const f = document.createElement('div'); f.className = 'row hostLimits'; f.style.flexWrap = 'wrap';
+  const num = (label, v) => { const l = document.createElement('label'); const i = document.createElement('input'); i.type = 'number'; i.min = 1; i.max = 100; i.value = v; i.style.width = '4.5em'; l.append(label + ' ', i); f.append(l); return i; };
+  const pu = num('Working sessions per person', sl.perUser), pp = num('per provider', sl.perProvider);
+  const exl = document.createElement('label'), ex = document.createElement('input'); ex.placeholder = 'name=n, …'; ex.value = Object.entries(sl.exceptions || {}).map(([u, n]) => u + '=' + n).join(', '); exl.append('Exceptions ', ex); f.append(exl);
+  const byl = document.createElement('label'), by = document.createElement('input'); by.type = 'checkbox'; by.checked = sl.ownerBypass !== false; byl.append(by, ' I may exceed them on my own host'); f.append(byl);
+  const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save limits'; f.append(save);
+  save.onclick = async () => {
+    const exceptions = {}; for (const part of ex.value.split(',').map((x) => x.trim()).filter(Boolean)) { const [u, n] = part.split('='); exceptions[(u || '').trim().toLowerCase()] = Number(n); }
+    save.disabled = true; note.textContent = '…';
+    try { const r = await json('/api/hosts/control', { method: 'POST', body: JSON.stringify({ id: h.id, action: 'limits', limits: { perUser: Number(pu.value), perProvider: Number(pp.value), exceptions, ownerBypass: by.checked } }) }); note.textContent = r.result || 'Saved.'; f.remove(); done(); }
+    catch (e) { note.textContent = e.message; save.disabled = false; }
+  };
+  return f;
 }
 function hostLiveBox(h) {
   const box = document.createElement('div'); box.className = 'hostLive'; box.dataset.host = h.id;
@@ -4010,6 +4029,9 @@ function hostLiveBox(h) {
   mk('restart', 'Restart', 'Restart the host program once nothing is in flight');
   mk('update', 'Update now', 'Look for a new host program now and restart on it once nothing is in flight');
   mk('logs', 'Show log', 'The last 50 lines of the host\'s log, with tokens and keys removed');
+  const lb = document.createElement('button'); lb.type = 'button'; lb.className = 'ghost'; lb.dataset.action = 'limits'; lb.textContent = 'Session limits…'; lb.title = 'How many Work sessions each person may have working at once through this host';
+  lb.onclick = () => { const open = box.querySelector('.hostLimits'); if (open) { open.remove(); return; } box.insertBefore(hostLimitsForm(box._host || h, note, () => setTimeout(refreshHostLive, 800)), note); };
+  row.append(lb);
   box.append(line, row, note, logbox); return box;
 }
 async function refreshHostLive() {
@@ -4018,6 +4040,7 @@ async function refreshHostLive() {
   const by = {}; for (const h of d.hosts || []) by[h.id] = h;
   for (const box of boxes) {
     const h = by[box.dataset.host]; if (!h) continue;
+    box._host = h; // the limits form starts from what the host says now
     box.querySelector('.hostLiveLine').textContent = hostLiveText(h, d.now);
     const row = box.querySelector('.hostLiveBtns'), note = box.querySelector('.hostLiveNote'), reach = h.online || h.paused;
     row.hidden = !h.control;

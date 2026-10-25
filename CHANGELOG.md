@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.16.0 — 2026-10-25
+
+MINOR: **an AI host sets its own Work-session limits** (T-286, taken over from Gee with Sponge's word; plans/multi-session.md
+§ 6). New host settings (ai-node.json, shown and changed in the `vr-host` control app like every other):
+`sessions.perUser` (working sessions per person, default 5), `sessions.perProvider` (default 3), per provider
+`provider.<id>.maxSessions`, `sessions.exceptions` (per-person limits, `name=n, …`) and `sessions.ownerBypass` (default on:
+the owner is not limited on their own host).
+- **The host announces them in hello** as `sessionLimits` (optional: an older host sends none and gets the hub's
+  defaults; an older hub ignores it). The hub uses them for the 429 of T-285: a person's exception first, then the
+  provider's own limit, then the host's; the owner bypass only when the host allows it.
+- **Its owner sets them from Settings → My AI hosts**: a new control action `limits` (POST /api/hosts/control
+  {id, action: "limits", limits: {...}}, owner only like the other controls). The host saves them in its own settings
+  file (the same checks as the control app: 1 to 100, user names) and the hub shows them at once. GET /api/hosts/status
+  names each host's `sessionLimits`; /api/work/sessions' per-host counts use them.
+- **Page** (web/index.html 1.19.2): the host's live line says its limits; a "Session limits…" button opens a small form
+  (per person, per provider, exceptions, "I may exceed them on my own host").
+- **Tests:** a unit test of the host settings (defaults, setting, validation, clearing); R204 (a native host in the
+  scratch setup announces the defaults, its owner sets new limits from the page, the host saves them, a bad value and a
+  non-owner are refused).
+
 ## 5.15.3 — 2026-10-25
 
 PATCH: **a session waiting on you** (T-288, the part that has a source today). When a run stops short of a tool it was

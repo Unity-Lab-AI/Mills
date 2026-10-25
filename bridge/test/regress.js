@@ -1183,6 +1183,17 @@ async function run() {
     const s2 = await until191((x) => !x.paused && x.online);
     const lg = await ctl('logs'), lines191 = (lg.data || {}).lines || [];
     const html191 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    // R204 (T-286): the host's own Work-session limits: announced in hello, set by its owner from the page, saved in its settings
+    const lim0 = (s2 || {}).sessionLimits || {};
+    const limSet = await call('/api/hosts/control', A, { id: h191.id, action: 'limits', limits: { perUser: 2, perProvider: 1, exceptions: { mills: 4 }, ownerBypass: false } });
+    const limBad = await call('/api/hosts/control', A, { id: h191.id, action: 'limits', limits: { perUser: 0 } });
+    const limOther = await call('/api/hosts/control', U, { id: h191.id, action: 'limits', limits: { perUser: 9 } });
+    const s3 = await until191((x) => x.sessionLimits && x.sessionLimits.perUser === 2);
+    const saved204 = (() => { try { return JSON.parse(fs.readFileSync(f191, 'utf8')).sessions || {}; } catch { return {}; } })();
+    check('R204', 'T-286 a host\'s own Work-session limits: it announces them in hello (defaults 5 / 3, owner may exceed), its owner sets them from Settings → My AI hosts (POST /api/hosts/control {action: "limits"}), the host saves them in its own settings and the hub uses them; a bad value (0) is refused, and nobody else may set them',
+      lim0.perUser === 5 && lim0.perProvider === 3 && lim0.ownerBypass === true && limSet.status === 200 && (limSet.data.limits || {}).perUser === 2 && limBad.status === 400 && limOther.status === 403
+      && !!s3 && s3.sessionLimits.perProvider === 1 && s3.sessionLimits.exceptions.mills === 4 && s3.sessionLimits.ownerBypass === false && saved204.perUser === 2 && saved204.ownerBypass === false,
+      `announced ${JSON.stringify(lim0)} · set ${limSet.status} ${JSON.stringify(limSet.data.limits || limSet.data.error || '')} · bad ${limBad.status} · not the owner ${limOther.status} · hub now ${JSON.stringify((s3 || {}).sessionLimits || {})} · saved ${JSON.stringify(saved204)}`);
     const rs = await ctl('restart');
     for (let i = 0; i < 60 && exit191 === null; i++) await sleep(250);
     try { proc191.kill(); } catch {}
@@ -1197,7 +1208,7 @@ async function run() {
       && rs.status === 200 && exit191 === 3
       && /\/api\/hosts\/control/.test(html191) && /hostLiveBox/.test(html191) && /Show log/.test(html191) && /Update now/.test(html191),
       `status ${s0 && JSON.stringify(s0.status).slice(0, 160)} control ${s0 && s0.control} other ${otherSees}; refused ${bad.status}/${nonOwner.status}/${noHost.status}; older ${olderRes.status} "${JSON.stringify(olderRes.data).slice(0, 100)}"; pause ${pa.status} paused ${s1 && s1.paused}/${s1 && s1.online} by ${s1 && s1.status && s1.status.pausedBy} off ${offFile}; resume ${re.status} ${s2 && s2.paused}; logs ${lg.status} ${lines191.length} lines; restart ${rs.status} exit ${exit191}; host log "${(() => { try { return fs.readFileSync(path.join(dir191, 'out.log'), 'utf8').replace(/\s+/g, ' ').slice(-160); } catch { return ''; } })()}"`);
-  } else skip('R191', 'hosting controls on the hub page (status, pause / resume / restart / log from Settings → My AI hosts)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
+  } else { skip('R204', 'a host\'s own Work-session limits', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it'); skip('R191', 'hosting controls on the hub page (status, pause / resume / restart / log from Settings → My AI hosts)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it'); }
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });

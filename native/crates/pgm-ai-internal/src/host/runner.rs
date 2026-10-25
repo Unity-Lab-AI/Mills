@@ -102,7 +102,7 @@ pub async fn detect_local(h: &H) {
             if !configured_engine { d.ollama_engine = Some(url.clone()); }
             if !configured_endpoint && !models.is_empty() {
                 d.ollama_provider = Some(Provider { id: "ollama".into(), kind: "openai".into(), label: format!("{}'s Ollama (this machine)", if h.cfg.user().is_empty() { "this host".to_string() } else { h.cfg.user() }), models, enabled: true,
-                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new(), jcode_command: String::new(), jcode_provider: String::new(), jcode_args: vec![] });
+                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, max_sessions: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new(), jcode_command: String::new(), jcode_provider: String::new(), jcode_args: vec![] });
             }
         }
     }
@@ -310,7 +310,9 @@ fn hello_body(h: &Host) -> Hello {
         OfferedProvider { id: p.id.clone(), kind: p.relay_kind().to_string(), label: p.label.clone(), models: p.models.clone(), allowed_users: allowed, max5h: p.max5h, max7d: p.max7d }
     }).collect();
     Hello { nonce: pgm_core_internal::crypto::random_hex(16), user: h.cfg.user(), providers, engines: h.engines().into_iter().map(|(k, _)| k).collect(), pc: h.cfg.pc_folder().is_some(),
-        version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::caps_for(work_jcode) }
+        version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::caps_for(work_jcode),
+        // read from the file, so limits changed from the hub (the `limits` control) are what the next hello says
+        session_limits: Some(crate::host::settings::HostSettings::load(&h.cfg.path).map(|s| s.session_limits()).unwrap_or_else(|_| h.cfg.session_limits())) }
 }
 async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     detect_local(h).await;

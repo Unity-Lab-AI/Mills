@@ -124,7 +124,7 @@ fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
     out
 }
 /// GET /api/work/sessions: the list, the folders, what is running.
-fn list(w: &Work, a: &Account, archived: bool) -> Value {
+fn list(w: &Work, ai: &crate::ai_hosts::AiHosts, a: &Account, archived: bool) -> Value {
     let v = index(a); let now = now_ms();
     let mut ids: Vec<String> = v["order"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(String::from)).filter(|x| v["sessions"].get(x).is_some()).collect();
     for k in v["sessions"].as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() { if !ids.contains(&k) { ids.push(k); } }
@@ -136,7 +136,7 @@ fn list(w: &Work, a: &Account, archived: bool) -> Value {
         e["used"] = json!(e["used"].as_u64().unwrap_or(0) + 1);
         let p = s(x, "provider"); e["providers"][&p] = json!(e["providers"][&p].as_u64().unwrap_or(0) + 1);
     }
-    for (h, e) in per_host.iter_mut() { let (mu, mp) = w.session_limits(h); e["max"] = json!(mu); e["maxPerProvider"] = json!(mp); }
+    for (h, e) in per_host.iter_mut() { let (mu, mp, _) = w.session_limits(ai, h, &a.username, ""); e["max"] = json!(mu); e["maxPerProvider"] = json!(mp); }
     let sessions: Vec<Value> = all.into_iter().filter(|x| archived || x["archived"] != json!(true)).collect();
     json!({ "current": v["current"], "primary": v["primary"], "sessions": sessions, "folders": folders(a), "counts": { "working": working, "waiting": waiting, "perHost": per_host } })
 }
@@ -152,7 +152,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let b = r.json(); let id = s(&b, "id");
     let exists = |sid: &str| index(a)["sessions"].get(sid).is_some();
     Some(match p {
-        "/api/work/sessions" if get => answer(200, list(w, a, r.param("archived").as_deref() == Some("1"))),
+        "/api/work/sessions" if get => answer(200, list(w, hub.ai(), a, r.param("archived").as_deref() == Some("1"))),
         "/api/work/sessions/new" if post => {
             let v = index(a);
             if v["sessions"].as_object().map(|o| o.len()).unwrap_or(0) >= MAX_SESSIONS { return Some(answer(400, json!({ "error": format!("You have {MAX_SESSIONS} sessions; delete some first.") }))); }
