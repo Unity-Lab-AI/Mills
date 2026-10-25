@@ -2971,7 +2971,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
-    const g200 = (dir, ...args) => spawnSync('git', ['-c', 'user.name=r200', '-c', 'user.email=r200@test.invalid', ...args], { cwd: dir, encoding: 'utf8' });
+    // the hub's background freshness check (worktree.js auto, started with each run) runs git in these same worktrees, so
+    // a commit here can meet its index.lock: wait for that lock only (and say so), never for anything else
+    const g200 = (dir, ...args) => { let r; for (let i = 0; i < 20; i++) { r = spawnSync('git', ['-c', 'user.name=r200', '-c', 'user.email=r200@test.invalid', ...args], { cwd: dir, encoding: 'utf8' }); if (r.status === 0 || !/index\.lock/.test(r.stderr || '')) break; spawnSync('sleep', ['0.25']); } return r; };
+    const commit200 = (dir, file, text, msg) => { fs.writeFileSync(path.join(dir, file), text); const a = g200(dir, 'add', file), c = g200(dir, 'commit', '-q', '-m', msg); return a.status === 0 && c.status === 0 ? 'ok' : `failed: ${((c.stderr || a.stderr) || '').trim().slice(0, 120)}`; };
     const seen = {}; let ok200 = false;
     const id = (await call('/api/work/sessions/new', U, { title: 'r200', background: true })).data.id;
     if (id) {
@@ -2979,9 +2982,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const sm = (((await call('/api/work/sessions', U)).data.sessions) || []).find((x) => x.id === id) || {};
       const dir = (sm.worktree || {}).path || '', hex = id.slice(2);
       if (dir && fs.existsSync(dir)) {
-        fs.writeFileSync(path.join(dir, 'r200-session.txt'), 'from the session\n'); g200(dir, 'add', 'r200-session.txt'); g200(dir, 'commit', '-q', '-m', 'r200 session work');
+        seen.c1 = commit200(dir, 'r200-session.txt', 'from the session\n', 'r200 session work');
         const c1 = run200('check', 't-user', '--session', hex); seen.fresh = c1.status; seen.freshText = (c1.stdout || c1.stderr).trim();
-        fs.writeFileSync(path.join(own200, 'r200-own.txt'), 'from my own worktree\n'); g200(own200, 'add', 'r200-own.txt'); g200(own200, 'commit', '-q', '-m', 'r200 own work');
+        seen.c2 = commit200(own200, 'r200-own.txt', 'from my own worktree\n', 'r200 own work');
         const c2 = run200('check', 't-user', '--session', hex); seen.stale = c2.status; seen.staleText = (c2.stdout || c2.stderr).trim();
         const up = run200('update', 't-user', '--session', hex); seen.update = up.status; seen.hasOwn = fs.existsSync(path.join(dir, 'r200-own.txt'));
         seen.after = run200('check', 't-user', '--session', hex).status;
@@ -2992,8 +2995,20 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       await call('/api/work/sessions/delete', U, { id });
     }
     check('R200', 'a session\'s own worktree follows the worktree law: worktree.js check --session says FRESH with its own commit not yet in work/<user>, STALE (exit 3) once the person\'s work/<user> moved on, update --session brings that in; the session menu\'s "Merge into my work" (/api/work/sessions/home) merges the session\'s commits into work/<user>',
-      ok200, `fresh ${seen.fresh} "${(seen.freshText || '').slice(0, 160)}" · stale ${seen.stale} "${(seen.staleText || '').slice(0, 120)}" · update ${seen.update} brought own ${seen.hasOwn} · after ${seen.after} · home ${seen.home} "${(seen.homeText || '').slice(0, 120)}" came ${seen.came}`);
+      ok200, `commits: session ${seen.c1 || '?'}, own ${seen.c2 || '?'} · fresh ${seen.fresh} "${(seen.freshText || '').slice(0, 160)}" · stale ${seen.stale} "${(seen.staleText || '').slice(0, 120)}" · update ${seen.update} brought own ${seen.hasOwn} · after ${seen.after} · home ${seen.home} "${(seen.homeText || '').slice(0, 120)}" came ${seen.came}`);
   } else skip('R200', 'a session\'s worktree follows the worktree law', 'the Rust hub\'s (and not on Windows): --rust-hub runs it');
+  if (RUST_HUB) { // R201: a PC tool call reaches the page of the session that asked, not another running session of the same person
+    const b201 = (await call('/api/work/sessions/new', U, { title: 'r201', background: true })).data.id;
+    let txt201 = '', slow201 = null;
+    if (b201) {
+      slow201 = call('/api/chat', U, { message: 'SLOW r201 first session' }); await sleep(700); // the first session runs meanwhile, with no browser answering its PC calls (the old routing sent them there)
+      const pc = await Promise.race([chat(U, 'PCTOOL r201', { session: b201 }), sleep(30000).then(() => ({ events: [] }))]);
+      txt201 = texts(pc.events);
+      await slow201; await call('/api/work/sessions/delete', U, { id: b201 });
+    }
+    check('R201', 'a PC tool call of a session\'s run reaches that session\'s page (its MCP relay names the session) while another session of the same person runs',
+      /fake-listing: a\.txt/.test(txt201), `answer "${txt201.slice(0, 160)}"`);
+  } else skip('R201', 'a PC tool call reaches the asking session', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });

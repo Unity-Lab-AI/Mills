@@ -291,15 +291,16 @@ impl Work {
         render_prompt(&segs)
     }
     /// The MCP servers of a run here: PC files, the board, the team chat (bridge/*-mcp.js), with this hub's secret.
-    fn mcp_json(&self, a: &Account) -> Value {
+    fn mcp_json(&self, a: &Account, sx: &Sx) -> Value {
         let node = std::env::var("VR_NODE").unwrap_or_else(|_| "node".into());
-        let env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret_for(&a.username), "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
+        let mut env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret_for(&a.username), "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
+        if !sx.primary { env["MILLS_SESSION"] = json!(sx.sid); } // its PC tools reach the page of THIS session's run
         let srv = |js: &str| json!({ "command": node, "args": [std::path::absolute(self.root.join(js)).unwrap_or_default().display().to_string()], "env": env });
         json!({ "mcpServers": { "pc": srv("pc-tools-mcp.js"), "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } })
     }
-    fn mcp_config(&self, a: &Account) -> PathBuf {
-        let f = a.dir.join(".mcp-runtime-hub.json");
-        write_json(&f, &self.mcp_json(a));
+    fn mcp_config(&self, a: &Account, sx: &Sx) -> PathBuf {
+        let f = if sx.primary { a.dir.join(".mcp-runtime-hub.json") } else { a.dir.join(format!(".mcp-runtime-hub-{}.json", sx.hex())) };
+        write_json(&f, &self.mcp_json(a, sx));
         pgm_core_internal::fs::private(&f);
         f
     }
@@ -415,7 +416,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
-    let mcp_config = w.mcp_config(a);
+    let mcp_config = w.mcp_config(a, &sx);
     let system_prompt = w.system_prompt(a, &wd);
     let mut tools: Vec<String> = hub.cfg().get("allowedTools").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     if !wd.hub { tools.push(format!("Bash(node {}:*)", w.wt.script.display().to_string().replace('\\', "/"))); }
@@ -522,7 +523,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // argument, a private jcode home with the hub's MCP servers and the system prompt as its overlay)
     let hkind = Work::harness_kind(&prov);
     let mut hx = crate::harness::harness_for(hkind, &prov, &s(&st, "model"));
-    let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a) } else { Value::Null };
+    let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a, &sx) } else { Value::Null };
     let sid = s(&st, "claudeSessionId");
     let claude_command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
     let claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
@@ -598,7 +599,8 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
     }
     let id = pgm_core_internal::crypto::random_hex(8);
     let (otx, orx) = oneshot::channel();
-    let key = w.run_key_of(account).unwrap_or_else(|| account.to_string());
+    // the session that asked (its MCP relay names it, 5.15.2), else the person's run that is going
+    let key = sessions::resolve(&a, b["session"].as_str().unwrap_or("")).filter(|sx| !s(b, "session").is_empty() && w.busy_key(&sx.key)).map(|sx| sx.key).or_else(|| w.run_key_of(account)).unwrap_or_else(|| account.to_string());
     { let mut runs = w.runs.lock().unwrap_or_else(|e| e.into_inner()); match runs.get_mut(&key) { Some(r) => { r.pending.insert(id.clone(), otx); } None => return json!({ "ok": false, "error": format!("{}'s browser is not connected (and no AI host of theirs offers their computer).", a.display) }) } }
     w.emit(&key, json!({ "type": "pc_tool", "id": id, "name": name, "args": args }));
     match tokio::time::timeout(Duration::from_secs(120), orx).await {

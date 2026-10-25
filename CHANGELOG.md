@@ -7,6 +7,17 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.15.2 — 2026-10-25
+
+PATCH: **a PC tool call reaches the session that asked.** With several sessions running, a run's PC tool call (the
+folder open in the person's browser) went to the first session's run if that one was running, so the page of the
+session that asked never saw it. Each session's run now gets its own MCP config naming its session (MILLS_SESSION;
+.mcp-runtime-hub-<id>.json), bridge/pc-tools-mcp.js sends it along (an older hub ignores it), and the hub hands the call
+to that session's run. R201 (written with the fix; it sends the call while the first session runs with no browser
+answering). bridge/pc-tools-mcp.js 1.0.2. R200 failed once in four runs without a recorded reason; its commits now wait
+only for a git index.lock (the hub's background freshness check runs git in the same worktrees, the likely cause) and
+its detail names each commit's outcome, so a repeat explains itself (testing law, rule 2).
+
 ## 5.15.1 — 2026-10-25
 
 PATCH: **a session's worktree follows the worktree law, and its work comes home** (T-292, the rest of it).

@@ -1,5 +1,5 @@
 {
-  "project": "5.15.1",
+  "project": "5.15.2",
   "modules": {
     "bridge/ai-node.js": "3.4.0",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -23,7 +23,7 @@
     "bridge/native-releases.js": "1.0.1",
     "bridge/notes.js": "1.0.0",
     "bridge/openai.js": "1.2.0",
-    "bridge/pc-tools-mcp.js": "1.0.1",
+    "bridge/pc-tools-mcp.js": "1.0.2",
     "bridge/presence.js": "1.0.0",
     "bridge/providers.js": "1.4.0",
     "bridge/restart.js": "1.0.0",
