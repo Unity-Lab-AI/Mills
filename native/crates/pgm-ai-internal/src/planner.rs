@@ -508,7 +508,8 @@ fn board_tasks(hub: &dyn AiHub, account: &str) -> Vec<Value> {
 }
 /// The five planner tools of the team MCP server (any session may call them: they only read). `None` = not one of them.
 pub fn tool(hub: &dyn AiHub, account: &str, name: &str, args: &Value) -> Option<Value> {
-    if !name.starts_with("plan_") { return None; }
+    // plan_draft is not a helper: the Work relay handles it (T-279), so it passes through here
+    if !name.starts_with("plan_") || name == "plan_draft" { return None; }
     let actor = hub.name_of(account);
     let err = |m: &str| json!({ "ok": false, "error": m });
     Some(match name {

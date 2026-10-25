@@ -73,6 +73,14 @@ fn open_external(url: String) -> R<()> {
     let r = if cfg!(windows) { std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", &url]).spawn() } else if cfg!(target_os = "macos") { std::process::Command::new("open").arg(&url).spawn() } else { std::process::Command::new("xdg-open").arg(&url).spawn() };
     r.map(|_| ()).map_err(|e| e.to_string())
 }
+/// The person's own Ollama (OLLAMA_HOST, else 127.0.0.1:11434), asked from here so no browser CORS limit applies (T-208).
+#[tauri::command]
+async fn ollama_local() -> Value {
+    match tokio::task::spawn_blocking(pgm_ai_internal::host::runner::probe_ollama_blocking).await.ok().flatten() {
+        Some((url, models)) => json!({ "found": true, "url": url, "models": models }),
+        None => json!({ "found": false, "models": [] }),
+    }
+}
 #[tauri::command]
 fn host_status(st: S) -> Value { aihost::status(&st.host_dir) }
 #[tauri::command]
@@ -143,7 +151,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, host_act, host_setup, settings_get, settings_set, pick_folder,
+        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, host_setup, settings_get, settings_set, pick_folder,
             fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));

@@ -7,6 +7,46 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.25.0 — 2026-10-25
+
+MINOR: **the planner drafts before it writes, with exact helpers, and the person's own Ollama is found** (agent branches,
+reviewed and merged).
+- **Planner helpers** (T-276, T-277, T-278): five team tools the planner calls instead of guessing.
+  - `plan_parse` splits a rough idea list into ideas, each with its model, person, blocked-on and source lines. It
+    handles `---` blocks, person sections, a short plus a long version of the same list, and run-on chat.
+  - `plan_existing` finds matching open tasks and tasks done in the last 30 days.
+  - `plan_roles` and `plan_owner` assign an owner by marker, then by role keywords, then by the lighter workload. They
+    never leave the owner empty ("mills to pick" is asked).
+  - `plan_glossary` reads plans/glossary.md.
+  - The planner prompt now says to use them in that order, and that "blocked on" means based on.
+  - The roles are read from plans/roles.md (a json block), then from the Roles part of plans/task-assignments.md, then
+    from a built-in list. The note is proposed, not written.
+  - Checks R300 to R304.
+- **Approve, then write** (T-279, T-281).
+  - **The draft:** a planner session shows its whole plan with `plan_draft`. The session turns yellow and the page shows
+    a draft card. The person can approve all, approve some parents, ask for a change or reject
+    (`POST /api/work/plan/answer`; `GET /api/work/plans` restores open drafts after a reload).
+  - **The write:** only then does the hub write, as "<person> · Claude", in this order:
+    - the source note, word for word, to plans/<topic>-original.md;
+    - the parents, then the sub-tasks named `T-<parent> · n/m`;
+    - then the changes to existing tasks. It never deletes or completes a task.
+  - **Refused in a planner session:** the AI's own task_create, task_update, task_move, task_delete, claim and complete.
+  - **Afterwards:** one plan summary goes to the chat, the owner map is appended to plans/<topic>-plan.md, and the tool
+    result lists the new tasks for each owner.
+  - Checks R305 to R309; R266 now expects the refusal.
+- **Local Ollama** (T-208). The page and the desktop app look for the person's own Ollama and list its models as "Local
+  (this computer)" in Settings → AI source and, greyed, in the Work model list.
+  - **Desktop app:** asks Ollama directly (`ollama_local`).
+  - **Browser:** asks 127.0.0.1:11434. If Ollama runs but the page is not allowed, it shows a one-line `OLLAMA_ORIGINS`
+    hint.
+  - **When no AI host of theirs lends it:** the desktop app offers "Start this computer's AI host".
+  - **Without Ollama:** nothing shows, and the default stays as it was. R310 to R314.
+- **Fix:** co-view now starts in the page. web/coview.js's `COVIEW` is a top-level const, not on `window`, so the page's
+  `window.COVIEW` check never started it (found while moving co-view into the pgm-libs kit, T-194).
+- **Merge fix:** the planner helper dispatcher answered every `plan_*` tool, so `plan_draft` never reached the Work relay
+  once both branches were in ("Unknown planner tool"). It now passes `plan_draft` through. R305 to R309 caught it.
+- web/index.html 1.25.0, bridge/team-mcp.js 1.1.0.
+
 ## 5.24.0 — 2026-10-25
 
 MINOR: **co-view (look at the same thing together) and multi-session Work proven end to end** (agent branches, reviewed

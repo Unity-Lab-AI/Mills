@@ -1848,7 +1848,7 @@ async function enter() {
   startRoomPolling();
   callPollLoop();
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
-  if (window.COVIEW) COVIEW.start(); // web/coview.js (T-244)
+  if (typeof COVIEW !== 'undefined') COVIEW.start(); // web/coview.js (T-244)
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
   restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
@@ -1886,7 +1886,7 @@ function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes']) $(id).hidden = true;
-  BOARD.stop(); NOTES.stop(); if (window.COVIEW) COVIEW.stop();
+  BOARD.stop(); NOTES.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
@@ -2134,9 +2134,16 @@ function showModels(d) {
     for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); o.disabled = true; g.append(o); }
     sel.append(g);
   }
+  // this computer's own Ollama, when found and not already lent by one of the person's hosts (T-208): shown, never selectable
+  if (localOllama.found && localOllama.models.length && !ownLocalProvider(provs)) {
+    const g = document.createElement('optgroup'); g.label = 'Local (this computer) · not for Work: lend it through your AI host (Settings → AI source)';
+    for (const m of localOllama.models) { const o = document.createElement('option'); o.value = 'local-ollama|' + m; o.textContent = m; o.disabled = true; g.append(o); }
+    sel.append(g);
+  }
   sel.value = d.provider && d.provider !== 'host' ? d.provider + '|' + (d.model || '') : d.model || '';
   if (sel.selectedIndex < 0) sel.value = '';
   sel.hidden = false;
+  probeLocalOllama(); // cached for 30 s; a change re-draws this list once
 }
 // The project picker (Work header): every project in the shared projects area, VibeRoller first; each is worked on in
 // your own worktree of it. The two last entries start a new project or pull in an existing repo by its address.
@@ -4528,6 +4535,58 @@ async function renderSource() {
   const note = document.createElement('div'); note.className = 'status';
   note.textContent = (d.hubClaude === false ? 'This hub has no Claude of its own: Work and the API run on an AI host. ' : '') + 'AI hosts show up here when they are connected; their owners choose who may use them (My AI hosts).';
   box.append(note);
+  renderLocalOllama(box, d.providers);
+}
+// ── This computer's own Ollama (T-208): looked for at 127.0.0.1:11434 and listed as "Local (this computer)" ──
+// The desktop app asks its own program (no CORS); a browser asks the page's way, which Ollama refuses unless OLLAMA_ORIGINS
+// allows this page: a no-cors ping tells "running but not allowed" (hint) from "not running" (nothing shown at all).
+// Work runs on the hub or an AI host, never in the browser: the way to use these models is this computer's AI host.
+const LOCAL_OLLAMA = 'http://127.0.0.1:11434';
+const ollamaFromTags = (j) => (j && Array.isArray(j.models) ? j.models.map((m) => m && (m.name || m.model)).filter((n) => typeof n === 'string' && n).slice(0, 40) : []);
+let localOllama = { found: false, blocked: false, models: [], at: 0 };
+async function probeLocalOllama(force) {
+  if (!force && Date.now() - localOllama.at < 30000) return localOllama;
+  let r = { found: false, blocked: false, models: [], at: Date.now() };
+  try {
+    if (NATIVE) { const d = await NATIVE.call('ollama_local'); r.found = !!(d && d.found); r.models = r.found ? (d.models || []) : []; r.url = d && d.url; }
+    else {
+      const ac = new AbortController(), t = setTimeout(() => ac.abort(), 1500);
+      try { const x = await fetch(LOCAL_OLLAMA + '/api/tags', { signal: ac.signal }); if (x.ok) { r.models = ollamaFromTags(await x.json()); r.found = true; } }
+      catch { try { await fetch(LOCAL_OLLAMA + '/api/version', { mode: 'no-cors', signal: ac.signal }); r.blocked = true; } catch {} } // answered, but not to this page
+      clearTimeout(t);
+    }
+  } catch {}
+  const changed = r.found !== localOllama.found || r.blocked !== localOllama.blocked || r.models.join('|') !== localOllama.models.join('|');
+  localOllama = r;
+  if (changed && me && me.models) showModels(me);
+  return r;
+}
+// does one of this person's own AI hosts already lend a local model (an Ollama it found)?
+const ownLocalProvider = (provs) => (provs || []).find((p) => p.kind === 'host-openai' && p.owner === (me && me.username) && p.online !== false);
+function renderLocalOllama(box, provs) {
+  const wrap = document.createElement('div'); wrap.className = 'status'; wrap.hidden = true; box.append(wrap);
+  probeLocalOllama(true).then(async (r) => {
+    if (!r.found && !r.blocked) return; // nothing running here: nothing new on the page
+    wrap.hidden = false; wrap.textContent = '';
+    const h = document.createElement('b'); h.textContent = 'Local (this computer)'; wrap.append(h);
+    if (r.blocked) {
+      wrap.append(document.createTextNode(': Ollama is running here, but your browser may not ask it. Start Ollama with OLLAMA_ORIGINS="' + location.origin + '" to list its models here, or use the desktop app, which asks it directly.'));
+      return;
+    }
+    wrap.append(document.createTextNode(': ' + (r.models.length ? r.models.join(', ') : 'Ollama is running, no model pulled yet') + '. '));
+    const own = ownLocalProvider(provs);
+    const how = document.createElement('span');
+    if (own) how.textContent = 'Your AI host "' + (own.nickname || own.label) + '" lends them (greyed in the model list: Work needs a Claude-capable provider; pick them in API access and Unity).';
+    else {
+      how.textContent = 'To use them, lend them through this computer\'s AI host (it finds Ollama by itself; the shared provider stays the default). ';
+      if (NATIVE) {
+        const b = document.createElement('button'); b.textContent = 'Start this computer\'s AI host';
+        b.onclick = async () => { b.disabled = true; try { const st = await NATIVE.call('host_status'); if (!st || !st.configured) how.textContent = 'Set it up first: My AI hosts → "Run on this PC".'; else { await NATIVE.call('host_act', { what: 'start' }); how.textContent = 'Starting the AI host; the models appear in a moment.'; setTimeout(refreshProviders, 5000); } } catch (e) { how.textContent = String(e.message || e); } b.disabled = false; };
+        how.append(b);
+      } else how.append(document.createTextNode('Settings → My AI hosts (download vr-host, or use the desktop app).'));
+    }
+    wrap.append(how);
+  });
 }
 // ── Settings → My AI hosts, monitor and control (5.12.0): a live line per host (refreshed every 10 s while the panel is open) and Pause / Resume / Restart / Update now / Show log; an older host shows what the hub knows and a note ──
 const hostAgo = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : s < 172800 ? Math.round(s / 3600) + ' h' : Math.round(s / 86400) + ' days'; };
