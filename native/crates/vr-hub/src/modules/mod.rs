@@ -18,6 +18,7 @@ pub mod auth;
 pub mod board;
 pub mod chat;
 pub mod downloads;
+pub mod releases;
 pub mod downloads_text;
 pub mod files;
 pub mod forgejo;
@@ -68,6 +69,7 @@ pub struct Modules {
     pub unity_room: unity_routes::RoomState,
     pub build: site::Build,
     pub downloads: downloads::Downloads,
+    pub releases: releases::Releases,
     pub gateway: gateway::Gateway,
     mills: std::path::PathBuf,
 }
@@ -81,7 +83,7 @@ impl Modules {
         let api = openai::Api::new(root, &accounts);
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
-        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
+        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
             files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
@@ -313,7 +315,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     // the public download routes are gone (4.0.0): downloads and updates need an account
     if let Some(x) = downloads::gone(r) { return x; }
     let user = a.session_user(r);
-    if user.is_none() && (p == "/api/native" || p == "/api/native/file" || p == "/api/downloads" || p.starts_with("/api/downloads/")) { return answer(401, json!({ "error": "Not signed in." })); }
+    if user.is_none() && (p == "/api/native" || p == "/api/native/file" || p == "/api/downloads" || p.starts_with("/api/downloads/") || p == "/api/releases" || p == "/api/releases/file") { return answer(401, json!({ "error": "Not signed in." })); }
     // signing out (FR6: this hub's own): the session is gone, the chat sees them leave, their calls and shared Work end
     if p == "/api/logout" && r.method == hyper::Method::POST {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
@@ -368,6 +370,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
             if let Some(x) = gateway::admin(hub, r, &acc) { return x; } // the admin's gateway products
             if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
+            if let Some(x) = releases::route(hub, r).await { return x; } // the products' releases (T-250)
             if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // the admin switches Unity's own-computer tools for one account
                 if !acc.admin { return answer(403, json!({ "error": "Admins only." })); }
                 let b = r.json();

@@ -4619,6 +4619,44 @@ async function renderDownloads() {
     sec.append(row);
     box.append(sec);
   }
+  renderProducts(box, note); // the team's other products (T-250)
+}
+// Products (T-250): every product and version the team has released, through the hub (the hub holds the Forgejo token).
+// This person's platform first; kept apart from the app's own platform detection.
+async function renderProducts(box, note) {
+  const sec = document.createElement('div'); sec.className = 'setSection'; sec.id = 'dlProducts';
+  const h = document.createElement('b'); h.textContent = 'Products'; sec.append(h);
+  const info = document.createElement('div'); info.className = 'status'; info.textContent = 'Loading the team\'s products…'; sec.append(info);
+  box.append(sec);
+  let c; try { c = await json('/api/releases'); } catch (e) { info.textContent = 'The products could not be listed: ' + e.message; return; }
+  const mine = /android/i.test(navigator.userAgent) ? 'Android' : /Win/i.test(navigator.platform || navigator.userAgent) ? 'Windows' : /Mac/i.test(navigator.platform || '') ? 'macOS' : /Linux|X11/i.test(navigator.platform || navigator.userAgent) ? 'Linux' : '';
+  const size = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const grabFile = async (p, v, a, b) => {
+    b.disabled = true; note.textContent = 'Fetching ' + a.name + '…';
+    try {
+      const r = await api('/api/releases/file?product=' + encodeURIComponent(p.product) + '&tag=' + encodeURIComponent(v.version) + '&asset=' + encodeURIComponent(a.name)); if (!r.ok) throw new Error('The download failed (' + r.status + ').');
+      const l = document.createElement('a'); l.href = URL.createObjectURL(await r.blob()); l.download = a.name; document.body.append(l); l.click(); l.remove();
+      setTimeout(() => URL.revokeObjectURL(l.href), 60000); note.textContent = a.name + ' downloaded.';
+    } catch (e) { note.textContent = e.message; }
+    b.disabled = false;
+  };
+  info.textContent = (c.products || []).some((p) => (p.releases || []).length) ? 'Every product and version the team has released. Your platform comes first.' : 'No product releases yet.';
+  for (const p of c.products || []) {
+    const d = document.createElement('details'); const s = document.createElement('summary');
+    s.textContent = (p.label || p.product) + (p.releases && p.releases.length ? ' · ' + p.releases[0].version + ' (' + p.releases.length + ' version' + (p.releases.length === 1 ? '' : 's') + ')' : p.error ? ' · unavailable' : ' · no releases'); d.append(s);
+    if (p.releases && p.releases.length) d.open = p === c.products.find((x) => x.releases && x.releases.length);
+    for (const v of p.releases || []) {
+      const vb = document.createElement('div'); vb.className = 'status'; vb.textContent = v.version + (v.date ? ' · ' + v.date.slice(0, 10) : '') + (v.notes ? ' · ' + v.notes.split('\n')[0].slice(0, 120) : ''); d.append(vb);
+      const row = document.createElement('div'); row.className = 'row';
+      for (const a of (v.assets || []).slice().sort((x, y) => (y.platform === mine) - (x.platform === mine))) {
+        const b = document.createElement('button'); b.type = 'button'; if (a.platform !== mine) b.className = 'ghost';
+        b.append(ic('download', 'lead'), document.createTextNode((a.platform ? a.platform + ' · ' : '') + a.name + ' (' + size(a.size) + ')'));
+        b.onclick = () => grabFile(p, v, a, b); row.append(b);
+      }
+      d.append(row);
+    }
+    sec.append(d);
+  }
 }
 document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = openDownloads; });
 document.querySelector('[data-settab="downloads"]').addEventListener('click', renderDownloads);
