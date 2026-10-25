@@ -107,6 +107,43 @@ fn state_of(m: &Value, running: bool, now: u64) -> &'static str {
     if now.saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > IDLE_MS { return "idle"; }
     "ready"
 }
+/// Sessions other tools report (T-289): kept in memory per (person, source, device), gone when not refreshed.
+const EXT_STATES: [&str; 6] = ["waiting", "working", "done-unseen", "draft", "idle", "ready"];
+type ExtKey = (String, String, String);
+type ExtMap = std::collections::HashMap<ExtKey, (u64, Vec<Value>)>; // value: (expires at, sessions)
+fn ext_store() -> &'static Mutex<ExtMap> {
+    static S: std::sync::OnceLock<Mutex<ExtMap>> = std::sync::OnceLock::new();
+    S.get_or_init(Mutex::default)
+}
+fn ext_tag(v: &Value, max: usize) -> String { one_line(v, max).chars().filter(|c| c.is_alphanumeric() || "-_.:@ ".contains(*c)).collect() }
+/// POST /api/work/sessions/report: validate, cut, keep (at most 50 sessions per report, 20 sources/devices per person).
+fn ext_report(a: &Account, b: &Value, now: u64) -> Resp {
+    let source = ext_tag(&b["source"], 24).trim().to_lowercase();
+    if source.is_empty() { return answer(400, json!({ "error": "A report needs a source (e.g. \"jcode\")." })); }
+    let device = ext_tag(&b["device"], 40);
+    let Some(list) = b["sessions"].as_array() else { return answer(400, json!({ "error": "A report needs a sessions list." })) };
+    let ttl = b["ttlSec"].as_u64().unwrap_or(180).clamp(1, 600) * 1000;
+    let mut out: Vec<Value> = vec![];
+    for x in list.iter().take(50) {
+        let id = ext_tag(&x["id"], 80); if id.is_empty() || out.iter().any(|o| o["id"] == json!(id)) { continue; }
+        let Some(state) = x["state"].as_str().filter(|st| EXT_STATES.contains(st)) else { continue };
+        let at = x["updatedAt"].as_u64().unwrap_or(now).min(now + 60_000);
+        out.push(json!({ "source": source, "id": id, "title": one_line(&x["title"], 120), "state": state, "project": one_line(&x["project"], 80), "branch": one_line(&x["branch"], 80), "host": one_line(&x["host"], 60), "device": device, "updatedAt": at }));
+    }
+    let mut m = ext_store().lock().unwrap();
+    m.retain(|_, (exp, _)| *exp > now);
+    let key = (a.username.clone(), source, device);
+    if !m.contains_key(&key) && m.keys().filter(|k| k.0 == a.username).count() >= 20 { return answer(400, json!({ "error": "Too many reporting sources or devices." })); }
+    let n = out.len(); m.insert(key, (now + ttl, out));
+    answer(200, json!({ "ok": true, "accepted": n, "ttlSec": ttl / 1000 }))
+}
+/// The live external sessions of a person (expired reports are dropped).
+fn ext_live(user: &str, now: u64) -> Vec<Value> {
+    let mut m = ext_store().lock().unwrap();
+    m.retain(|_, (exp, _)| *exp > now);
+    let mut v: Vec<Value> = m.iter().filter(|(k, _)| k.0 == user).flat_map(|(_, (_, l))| l.clone()).collect();
+    v.sort_by_key(|x| std::cmp::Reverse(x["updatedAt"].as_u64().unwrap_or(0))); v
+}
 /// The host a provider runs on ("hub" = this hub's own Claude).
 pub fn host_of(provider: &str) -> String { provider.strip_prefix("h:").and_then(|x| x.split('/').next()).map(String::from).unwrap_or_else(|| "hub".into()) }
 
@@ -140,7 +177,9 @@ fn list(w: &Work, ai: &crate::ai_hosts::AiHosts, a: &Account, archived: bool) ->
     }
     for (h, e) in per_host.iter_mut() { let (mu, mp, _) = w.session_limits(ai, h, &a.username, ""); e["max"] = json!(mu); e["maxPerProvider"] = json!(mp); }
     let sessions: Vec<Value> = all.into_iter().filter(|x| archived || x["archived"] != json!(true)).collect();
-    json!({ "current": v["current"], "primary": v["primary"], "sessions": sessions, "folders": folders(a), "counts": { "working": working, "waiting": waiting, "perHost": per_host } })
+    let external = ext_live(&a.username, now);
+    let ext_working = external.iter().filter(|x| x["state"] == json!("working")).count();
+    json!({ "current": v["current"], "primary": v["primary"], "sessions": sessions, "external": external, "folders": folders(a), "counts": { "working": working, "waiting": waiting, "externalWorking": ext_working, "perHost": per_host } })
 }
 fn folders(a: &Account) -> Value { read_json(&folders_file(a)).map(|v| v["folders"].clone()).filter(Value::is_array).unwrap_or(json!([])) }
 fn save_folders(a: &Account, f: &Value) { write_json(&folders_file(a), &json!({ "folders": f })); }
@@ -155,6 +194,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let exists = |sid: &str| index(a)["sessions"].get(sid).is_some();
     Some(match p {
         "/api/work/sessions" if get => answer(200, list(w, hub.ai(), a, r.param("archived").as_deref() == Some("1"))),
+        "/api/work/sessions/report" if post => ext_report(a, &b, now_ms()),
         "/api/work/sessions/new" if post => {
             let v = index(a);
             if v["sessions"].as_object().map(|o| o.len()).unwrap_or(0) >= MAX_SESSIONS { return Some(answer(400, json!({ "error": format!("You have {MAX_SESSIONS} sessions; delete some first.") }))); }
