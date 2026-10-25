@@ -5,7 +5,7 @@
 #   sh deploy/setup-server.sh [--base /srv/apps/VibeRoller] [--projects /srv/apps/sharedwork]
 #                             [--host portal.unityailab.com] [--repo https://git.unityailab.com/GFourteen/VibeRoller.git]
 #
-# It: puts a user-local Node 22 under <base>/node when the system's is older · installs Claude Code under <base>/tools ·
+# It: puts a user-local Node (line NODE_LINE, 24 LTS; VR_NODE_LINE=26 picks another) under <base>/node when the system's is older than 22 · installs Claude Code under <base>/tools ·
 # clones (or fast-forwards) the live checkout <base>/app · writes the server's own settings (bridge/config.local.json,
 # with a fresh node secret) · a git identity for the hub · the systemd USER services: the hub (viberoller-hub) and the
 # auto-deploy timer (viberoller-autodeploy: every push to main goes live by itself) · the two nginx site files, ready in
@@ -32,15 +32,19 @@ mkdir -p "$HOME_DIR/.claude" "$BASE/tools" "$BASE/deploy-ready" "$PROJECTS/VibeR
 say "Tools"
 command -v git >/dev/null || { echo "git is required."; exit 1; }
 NODE_BIN=$BASE/node/current/bin
+NODE_LINE=${VR_NODE_LINE:-24}  # the Node line a fresh server gets (T-304); a system node from 22 up is still accepted: older lines keep working
 if [ ! -x "$NODE_BIN/node" ]; then
   SYS=$(command -v node >/dev/null && node -p 'process.versions.node.split(".")[0]' || echo 0)
   if [ "$SYS" -ge 22 ]; then mkdir -p "$BASE/node/current/bin"; ln -sf "$(command -v node)" "$NODE_BIN/node"; ln -sf "$(command -v npm)" "$NODE_BIN/npm"; echo "node: system $(node --version)"
   else
-    echo "system node is too old ($(command -v node >/dev/null && node --version || echo none)); fetching Node 22 for this account"
+    echo "system node is too old ($(command -v node >/dev/null && node --version || echo none)); fetching Node $NODE_LINE for this account"
     command -v curl >/dev/null || { echo "curl is required to fetch Node."; exit 1; }
-    ARCH=$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/'); V=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | sed -n 's/.*node-\(v22[^-]*\)-linux-'"$ARCH"'\.tar\.xz$/\1/p' | head -n 1)
-    [ -n "$V" ] || { echo "could not find the latest Node 22 for $ARCH"; exit 1; }
-    mkdir -p "$BASE/node"; curl -fsSL "https://nodejs.org/dist/$V/node-$V-linux-$ARCH.tar.xz" | tar -xJ -C "$BASE/node"
+    ARCH=$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/'); V=$(curl -fsSL https://nodejs.org/dist/latest-v$NODE_LINE.x/SHASUMS256.txt | sed -n 's/.*node-\(v'"$NODE_LINE"'[^-]*\)-linux-'"$ARCH"'\.tar\.xz$/\1/p' | head -n 1)
+    [ -n "$V" ] || { echo "could not find the latest Node $NODE_LINE for $ARCH"; exit 1; }
+    mkdir -p "$BASE/node"; TMPN=$(mktemp -d); T="node-$V-linux-$ARCH.tar.xz"
+    { curl -fsSL "https://nodejs.org/dist/$V/$T" -o "$TMPN/$T" && curl -fsSL "https://nodejs.org/dist/$V/SHASUMS256.txt" -o "$TMPN/SHASUMS256.txt"; } || { echo "could not download Node $V"; rm -rf "$TMPN"; exit 1; }
+    (cd "$TMPN" && grep " $T\$" SHASUMS256.txt | sha256sum -c -) || { echo "Node $V did not match its published checksum"; rm -rf "$TMPN"; exit 1; }
+    tar -xJf "$TMPN/$T" -C "$BASE/node"; rm -rf "$TMPN"
     ln -sfn "$BASE/node/node-$V-linux-$ARCH" "$BASE/node/current"; echo "node: $V under $BASE/node"
   fi
 else echo "node: $("$NODE_BIN/node" --version) under $BASE/node"; fi
