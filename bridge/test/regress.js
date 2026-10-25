@@ -3199,6 +3199,65 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       !!t215 && h(seen.gone).presence === 'offline' && seen.gone.holderOffline === true && h(seen.work).working === true && h(seen.work).label === 'Working' && !seen.work.holderOffline && !!seen.self.holder,
       `offline, idle: ${h(seen.gone).label} stale ${seen.gone && seen.gone.holderOffline} · running: ${h(seen.work).label} stale ${seen.work && seen.work.holderOffline}`);
   } else for (const [id, what] of [['R215', 'a card shows its holder\'s live status'], ['R216', 'a claim whose holder is offline is marked'], ['R217', 'the assign picker lists who is available'], ['R218', 'the board tools carry presence'], ['R219', 'a working holder is not a stale claim']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R235 to R239 (T-236): device-code sign-in for tools (Jcode PGM): per-device tokens, approve / refuse / revoke
+    const s235 = {};
+    const start = async (extra) => (await call('/api/device/start', null, { client: 'jcodepgm', device: 'r235 laptop', ...(extra || {}) }));
+    const st = await start();
+    const sd = st.data || {};
+    s235.shape = st.status === 200 && typeof sd.deviceCode === 'string' && sd.deviceCode.length >= 48 && /^[A-Z]{4}-[A-Z]{4}$/.test(sd.userCode || '') && sd.expiresIn === 600 && sd.interval === 5 && /device=/.test(sd.verificationUrl || '');
+    s235.p1 = await call('/api/device/poll', null, { deviceCode: sd.deviceCode });
+    s235.p2 = await call('/api/device/poll', null, { deviceCode: sd.deviceCode }); // at once again: too fast
+    s235.wrong = await call('/api/device/approve', U, { userCode: 'BBBB-BBBB' });
+    s235.nosess = await call('/api/device/approve', null, { userCode: sd.userCode });
+    s235.ok = await call('/api/device/approve', D, { userCode: sd.userCode.toLowerCase() });
+    s235.again = await call('/api/device/approve', U, { userCode: sd.userCode });
+    s235.p3 = await call('/api/device/poll', null, { deviceCode: sd.deviceCode });
+    const tok = (s235.p3.data || {}).token;
+    s235.chk = tok ? await call('/api/check', tok) : {};
+    s235.board = tok ? await call('/api/board', tok) : {};
+    s235.notes = tok ? await call('/api/notes', tok) : {};
+    s235.p4 = await call('/api/device/poll', null, { deviceCode: sd.deviceCode }); // a delivered code is spent
+    // R236: the token acts as its person, is its own thing (not the page session), cannot approve more devices
+    s235.viaDev = tok ? await call('/api/device/approve', tok, { userCode: 'BBBB-BBBB' }) : {};
+    s235.sessionStill = (await call('/api/check', D)).status;
+    // R237: devices list: own only; another person sees none and cannot revoke it
+    s235.listD = await call('/api/devices', D); s235.listU = await call('/api/devices', U);
+    const dev = ((s235.listD.data || {}).devices || [])[0] || {};
+    s235.other = await call('/api/devices/revoke', U, { id: dev.id });
+    s235.stillWorks = tok ? (await call('/api/check', tok)).status : 0;
+    s235.listJson = JSON.stringify(s235.listD.data || {});
+    const keep = fs.existsSync(path.join(SB, 'device-tokens.json')) ? fs.readFileSync(path.join(SB, 'device-tokens.json'), 'utf8') : '';
+    s235.hashed = !!tok && keep.includes(crypto.createHash('sha256').update(tok).digest('hex')) && !keep.includes(tok) && !keep.includes(sd.deviceCode);
+    s235.revoke = await call('/api/devices/revoke', D, { id: dev.id });
+    s235.after = tok ? await call('/api/check', tok) : {}; s235.afterBoard = tok ? await call('/api/board', tok) : {};
+    s235.listAfter = await call('/api/devices', D);
+    // R238: refusal and expiry
+    const s2 = (await start()).data;
+    await call('/api/device/poll', null, { deviceCode: s2.deviceCode });
+    s235.deny = await call('/api/device/deny', D, { userCode: s2.userCode });
+    s235.dpoll = await call('/api/device/poll', null, { deviceCode: s2.deviceCode });
+    const s3 = (await start({ expiresIn: 1 })).data; await sleep(1500);
+    s235.exp = await call('/api/device/poll', null, { deviceCode: s3.deviceCode });
+    s235.expApprove = await call('/api/device/approve', D, { userCode: s3.userCode });
+    s235.junk = await call('/api/device/poll', null, { deviceCode: 'nope' });
+    // R239: secrets stay secrets: only a hash of the token is kept, the list never shows it, and the page has the box
+    s235.page = /\/api\/device\/approve/.test(fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8')) && /api\/devices\/revoke/.test(fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'));
+    const s = s235;
+    check('R235', 'T-236 device sign-in: start gives a long device code, a short user code, interval and expiry; polling says pending (428), polling too fast says slow_down (429); a wrong code is refused (404); approving needs a signed-in session (401); after the person approves, the poll gives a NEW token for that person (and the code is spent)',
+      s.shape && s.p1.status === 428 && s.p1.data.pending === true && s.p2.status === 429 && s.p2.data.error === 'slow_down' && s.wrong.status === 404 && s.nosess.status === 401 && s.ok.status === 200 && s.ok.data.client === 'jcodepgm' && s.again.status === 409 && s.p3.status === 200 && typeof tok === 'string' && tok.length >= 48 && s.p3.data.username === 'mills' && tok !== D && s.p4.status === 410,
+      `start ${st.status} shape ${s.shape} · pending ${s.p1.status} · fast ${s.p2.status} · wrong ${s.wrong.status} · no session ${s.nosess.status} · approve ${s.ok.status} · twice ${s.again.status} · poll ${s.p3.status} ${s.p3.data && s.p3.data.username} · spent ${s.p4.status}`);
+    check('R236', 'T-236 the device token works as its person on the API (/api/check, the board, the notes) while the page session goes on; but it cannot approve another device (403)',
+      s.chk.status === 200 && (s.chk.data.user || s.chk.data.username || '') !== '' && s.board.status === 200 && s.notes.status === 200 && s.viaDev.status === 403 && s.sessionStill === 200,
+      `check ${s.chk.status} · board ${s.board.status} · notes ${s.notes.status} · approve with a device token ${s.viaDev.status} · page session ${s.sessionStill}`);
+    check('R237', 'T-236 Settings lists a person\'s own devices (name, client, created, lastUsed; never the token), another person sees none and cannot revoke it (404); revoking stops the token at once on every route (401) and it leaves the list',
+      s.listD.status === 200 && (s.listD.data.devices || []).length === 1 && dev.name === 'r235 laptop' && dev.client === 'jcodepgm' && !!dev.created && dev.current === false && !s.listJson.includes(tok) && (s.listU.data.devices || []).length === 0 && s.other.status === 404 && s.stillWorks === 200 && s.revoke.status === 200 && s.after.status === 401 && s.afterBoard.status === 401 && (s.listAfter.data.devices || []).length === 0,
+      `own ${(s.listD.data.devices || []).length} · other ${(s.listU.data.devices || []).length} · other revokes ${s.other.status} · revoke ${s.revoke.status} · token after ${s.after.status}/${s.afterBoard.status} · list after ${(s.listAfter.data.devices || []).length}`);
+    check('R238', 'T-236 a refused sign-in: the poll says denied (403) and gives no token; a request past its time says expired (410) and cannot be approved; an unknown device code is 410 too',
+      s.deny.status === 200 && s.deny.data.approved === false && s.dpoll.status === 403 && s.dpoll.data.denied === true && !s.dpoll.data.token && s.exp.status === 410 && s.exp.data.expired === true && s.expApprove.status === 404 && s.junk.status === 410,
+      `deny ${s.deny.status} · poll ${s.dpoll.status} · expired ${s.exp.status} · approve expired ${s.expApprove.status} · unknown ${s.junk.status}`);
+    check('R239', 'T-236 only a hash of a device token is kept (device-tokens.json holds neither the token nor the device code); [static] the page has the user-code box (approve) and the Signed-in devices list with Revoke',
+      s.hashed && s.page, `hashed ${s.hashed} · page ${s.page}`);
+  } else for (const [id, what] of [['R235', 'device sign-in: start, pending, slow_down, approve, token'], ['R236', 'a device token works as its person'], ['R237', 'own devices listed, revoke stops the token'], ['R238', 'a refused or expired device sign-in'], ['R239', 'device tokens kept hashed; the page has the box']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });

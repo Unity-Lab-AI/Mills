@@ -299,6 +299,17 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     let a = &hub.mods.auth;
     if p == "/api/login" && r.method == hyper::Method::POST { return a.login(r, maintenance(hub)).await; }
+    // device-code sign-in (T-236): a tool with no browser asks, the person approves on the page, the tool polls for its own token
+    if r.method == hyper::Method::POST && (p == "/api/device/start" || p == "/api/device/poll") {
+        let b = r.json();
+        if p == "/api/device/poll" { let (s, v) = a.devices.poll(b["deviceCode"].as_str().unwrap_or("")); return answer(s, v); }
+        let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
+        let client = b["client"].as_str().map(String::from).unwrap_or_else(|| b["client"]["app"].as_str().unwrap_or("").to_string());
+        return match a.devices.start(&client, b["device"].as_str().unwrap_or(""), b["expiresIn"].as_u64(), &ip) {
+            Ok(mut v) => { v["verificationUrl"] = json!(format!("{}/?device={}", hub.mods.public_url(&hub.cfg).trim_end_matches('/'), v["userCode"].as_str().unwrap_or(""))); answer(200, v) }
+            Err((s, e)) => answer(s, json!({ "error": e })),
+        };
+    }
     // the public download routes are gone (4.0.0): downloads and updates need an account
     if let Some(x) = downloads::gone(r) { return x; }
     let user = a.session_user(r);
@@ -309,6 +320,27 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         hub.mods.work.share_stop(&u); chat::calls_leave(&**hub, &u); hub.mods.chat.set_typing(&u, "", false); hub.mods.chat.gone(&u);
         if let Some(t) = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")) { a.forget_session(&auth::token_key(t)); }
         return answer(200, json!({ "ok": true }));
+    }
+    // approving a device needs the person's own page session (never another device's token); the list and revoking are theirs
+    if matches!(p, "/api/device/approve" | "/api/device/deny" | "/api/devices" | "/api/devices/revoke") {
+        let bearer = r.header("authorization").and_then(|v| v.strip_prefix("Bearer "));
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        let b = r.json();
+        return match (p, r.method.clone()) {
+            ("/api/devices", hyper::Method::GET) => answer(200, json!({ "devices": a.devices.list(&u, bearer) })),
+            ("/api/devices/revoke", hyper::Method::POST) => {
+                if a.devices.revoke(&u, b["id"].as_str().unwrap_or("")) { println!("[vr-hub] {u} revoked a signed-in device."); answer(200, json!({ "ok": true })) } else { answer(404, json!({ "error": "No such device." })) }
+            }
+            ("/api/device/approve" | "/api/device/deny", hyper::Method::POST) => {
+                if a.page_session_user(r).is_none() { return answer(403, json!({ "error": "Approve it on the page, signed in with your own session." })); }
+                let ok = p == "/api/device/approve";
+                match a.devices.decide(&u, b["userCode"].as_str().unwrap_or(""), ok) {
+                    Ok(v) => { println!("[vr-hub] {u} {} a device sign-in.", if ok { "approved" } else { "refused" }); answer(200, v) }
+                    Err((s, e)) => answer(s, json!({ "error": e })),
+                }
+            }
+            _ => answer(405, json!({ "error": "Method not allowed." })),
+        };
     }
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
     let me = || { let mut h = vec![("x-vr-notes-ver".to_string(), hub.mods.notes.version().to_string())]; if let Some(u) = &user { h.push(("x-vr-user".to_string(), u.clone())); } h };
