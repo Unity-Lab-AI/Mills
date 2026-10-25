@@ -270,7 +270,9 @@ impl Work {
     fn hub_laws(&self) -> String { ["LAWS.md", "CLAUDE.md"].iter().filter_map(|f| std::fs::read_to_string(self.mills.join(f)).ok().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n") }
     /// The stable segments of the Work system prompt (pgm-context assembly): the person's own lines are the same for the
     /// whole session (Session), the laws the same for everyone (Static). Nothing volatile may be in them (the lint).
-    pub fn system_segments(&self, a: &Account, wd: &Wt) -> Vec<Segment> {
+    pub fn system_segments(&self, a: &Account, wd: &Wt) -> Vec<Segment> { self.system_segments_for(a, wd, None) }
+    /// The segments of a run; `planner` = Some(the rulebook's text, "" = use the built-in summary) for a planner session (T-275).
+    pub fn system_segments_for(&self, a: &Account, wd: &Wt, planner: Option<&str>) -> Vec<Segment> {
         let (name, u) = (&a.display, &a.username);
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let dir = wd.dir.display(); let b = &wd.branch;
@@ -298,6 +300,17 @@ impl Work {
             format!("You are talking with {name} (username \"{u}\"{}, Unity AI Lab engineer) through the VibeRoller web interface, running on the host's Claude account.", if a.admin { ", admin" } else { "" }),
             format!("Every message in this conversation comes from {name}; address them by name and keep their work separate from everyone else's."),
         ];
+        if let Some(note) = planner {
+            // the planner segment replaces the building instructions (worktree commits, PC tools, merges): this session only plans.
+            // Its text is the same for the whole session, so it is a Session segment (the cache-lint holds it to the same rules).
+            let rules = if note.trim().is_empty() { PLANNER_SUMMARY.to_string() } else { format!("{PLANNER_HEAD} The team's rulebook (plans/planner-mode.md) follows.\n\n{}", note.trim()) };
+            let planner_seg = format!("PLANNER MODE: {name} opened this as a planner session. {rules} You are in the project worktree {} (branch {}) for reading only: your tools cannot write files, run builds or run git writes, and the hub refuses PC tools, notes outside plans/ and anything else a planner may not do. The board is available through the mcp__board__* tools (act as \"{name} · Claude\"), team notes and chat through mcp__team__* (notes_write only under plans/), and ask_user asks {name} a question.", wd.dir.display(), wd.branch);
+            return vec![
+                Segment::new("1-intro", Class::Session, intro.join(" ")),
+                Segment::new("2-planner", Class::Session, planner_seg),
+                Segment::new("4-laws", Class::Static, self.hub_laws()),
+            ];
+        }
         let mut parts: Vec<String> = vec![];
         parts.extend([
             format!("{name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools"),
@@ -320,8 +333,8 @@ impl Work {
     }
     /// The system prompt a run gets: the segments joined (the person's lines with a space, the laws after a blank line).
     /// The same bytes every run, so the provider's prompt cache can hit (R181); logs any lint hit once per hub process.
-    fn system_prompt(&self, a: &Account, wd: &Wt) -> String {
-        let segs = self.system_segments(a, wd);
+    fn system_prompt(&self, a: &Account, wd: &Wt, planner: Option<&str>) -> String {
+        let segs = self.system_segments_for(a, wd, planner);
         static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !DONE.swap(true, Ordering::SeqCst) {
             for h in lint_segments(&segs) { eprintln!("[work] system prompt segment \"{}\" ({:?}) has {}: \"{}\"; it busts the prompt cache, move it to the turn (R181)", h.segment, h.class, h.pattern, h.snippet); }
@@ -332,8 +345,11 @@ impl Work {
     fn mcp_json(&self, a: &Account, sx: &Sx) -> Value {
         let node = std::env::var("VR_NODE").unwrap_or_else(|_| "node".into());
         let mut env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret_for(&a.username), "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
-        if !sx.primary { env["MILLS_SESSION"] = json!(sx.sid); } // its PC tools reach the page of THIS session's run
+        let planner = sessions::is_planner(a, &sx.sid);
+        if !sx.primary || planner { env["MILLS_SESSION"] = json!(sx.sid); } // its PC tools reach the page of THIS session's run (and the relay knows a planner session)
         let srv = |js: &str| json!({ "command": node, "args": [std::path::absolute(self.root.join(js)).unwrap_or_default().display().to_string()], "env": env });
+        // a planner session (T-275) has no PC tools at all: it plans, it does not build
+        if planner { return json!({ "mcpServers": { "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } }); }
         json!({ "mcpServers": { "pc": srv("pc-tools-mcp.js"), "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } })
     }
     fn mcp_config(&self, a: &Account, sx: &Sx) -> PathBuf {
@@ -571,9 +587,14 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
     let mcp_config = w.mcp_config(a, &sx);
-    let system_prompt = w.system_prompt(a, &wd);
+    // a planner session (T-275): read-only tools, no PC server, its own prompt segment; the relay enforces the same
+    let planner = sessions::is_planner(a, &sx.sid);
+    let planner_note: Option<String> = if planner { Some(planner_rules(hub.notes_tool("notes_read", &json!({ "path": "plans/planner-mode.md" }), &a.display)["result"]["text"].as_str().unwrap_or(""))) } else { None };
+    let system_prompt = w.system_prompt(a, &wd, planner_note.as_deref());
     let mut tools: Vec<String> = hub.cfg().get("allowedTools").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-    if !wd.hub { tools.push(format!("Bash(node {}:*)", w.wt.script.display().to_string().replace('\\', "/"))); }
+    if planner { tools = planner_allowed_tools(&tools); }
+    else if !wd.hub { tools.push(format!("Bash(node {}:*)", w.wt.script.display().to_string().replace('\\', "/"))); }
+    let permission_mode: String = if planner { "default".into() } else { permission_mode };
     let model = { let m = s(&st, "model"); if m.is_empty() { w.default_model_of(a) } else { m } };
     let ai = hub.ai();
     let Some(prov) = w.effective(ai, &a.username, &s(&st, "provider")) else { return one_line(json!({ "type": "bridge_error", "text": "No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings." })) };
@@ -651,8 +672,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     } else if kind == "host-claude" || hjcode {
         // legacy: Claude Code runs on the host (only for a host that allows work); or Jcode PGM there (hjcode, the host
         // announced work-jcode: `harness` and `stateModel` are the optional fields it reads)
-        let mut payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": w.system_prompt(a, &wd), "model": model,
-            "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": hub.cfg().get("permissionMode"), "allowedTools": hub.cfg().get("allowedTools"), "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
+        let mut payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": system_prompt, "model": model,
+            "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": if planner { json!("default") } else { hub.cfg().get("permissionMode").cloned().unwrap_or(Value::Null) }, "allowedTools": if planner { json!(tools) } else { hub.cfg().get("allowedTools").cloned().unwrap_or(Value::Null) }, "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
         if hjcode { payload["harness"] = json!(harness); payload["stateModel"] = json!(s(&st, "model")); }
         match ai.run_work(&host_id, &prov_id, payload) {
             Err(e) => { w.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&sx.key); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
@@ -684,7 +705,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a, &sx) } else { Value::Null };
     let sid = s(&st, "claudeSessionId");
     let claude_command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
-    let claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    let mut claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    if planner { claude_args.extend(["--disallowedTools".to_string(), PLANNER_DENIED.to_string()]); } // deny beats allow and any permission mode
     let state_model = s(&st, "model");
     let spec = hx.command(&crate::harness::RunContext { prov: &prov, input: &input, resume: if resume { Some(sid.as_str()) } else { None }, model: &model, state_model: &state_model, acct_dir: &a.dir, cwd: &wd.dir,
         system_prompt: &system_prompt, mcp_json: &mcp_json, mcp_config: &mcp_config, permission_mode: &permission_mode, allowed_tools: &tools, add_dirs: &add_dirs, claude_command: &claude_command, claude_args: &claude_args });
@@ -726,6 +748,10 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
 /// The MCP tools of a run (here: /internal/<tool> with this hub's secret; on a host: /node/job/<id>/internal/<tool>).
 pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -> Value {
     let (name, args) = (s(b, "name"), if b["args"].is_object() { b["args"].clone() } else { json!({}) });
+    // a planner session's run (its relay names the session): the hub refuses what a planner may not do, whatever the tool list said (T-275)
+    if let Some(a) = hub.account(account) { if sessions::is_planner(&a, b["session"].as_str().unwrap_or("")) {
+        let why = planner_refusal(which, &name, &args); if !why.is_empty() { return json!({ "ok": false, "error": why }); }
+    } }
     if which == "board" {
         let Some(op) = pgm_collab_internal::board::tool_op(&name) else { return json!({ "ok": false, "error": format!("Unknown board tool: {name}") }) };
         if hub.account(account).is_none() { return json!({ "ok": false, "error": "Unknown account." }); }
@@ -1170,6 +1196,40 @@ pub fn start(hub: &Arc<dyn AiHub>) {
         h.internal("/internal/front/work-busy", json!({ "busy": busy }).to_string()).await;
     } });
 }
+// ---------- planner mode (T-275; team note plans/planner-mode.md § 1, 2, 6) ----------
+/// The planner's one job, said first whatever the note holds.
+const PLANNER_HEAD: &str = "You only plan: you put tasks on the board (decomposed, owned, linked) and write planning notes under plans/; you never work on them, never edit or create files elsewhere, never run builds, tests or git writes, never claim or work a task, never delete a task and never change one someone holds. Read first, every time: plans/glossary.md (the team's words), the roles in plans/task-assignments.md, the laws in your prompt, and the open board (board_list, done tasks of the last 30 days too) so you never re-plan what exists. Ask, do not guess (ask_user, only what changes the plan). Show a draft (parents with owner, priority, status, blocked on; their sub-tasks; what already exists; what is not planned and why) and write nothing to the board or plans/ until the person approves it.";
+/// Used when the hub's Notes folder has no plans/planner-mode.md.
+const PLANNER_SUMMARY: &str = "Allowed: read files and repos, search the board, notes, chat and past sessions, ask the person, write board tasks and planning notes under plans/, and post one chat message after a plan is written. Refused: writing or editing files, shell and builds, git writes, go-lives, PC tools. Owners: an explicit person marker wins, else by role (design / UI / decomposition / docs: Mills; hub / protocol / infrastructure / spec / testing: Sponge; architecture / research / creative / workflows: Gee). Priority 1 unblocks others, 2 normal, 3-4 later or polish, 5 someday. A task blocked on another goes to backlog with the label blocked. The person's input goes word for word into a source note plans/<topic>-original.md first.";
+/// The rulebook up to its re-assessment section (what a plan run needs), at most 14 000 characters.
+pub fn planner_rules(note: &str) -> String { let cut = note.find("\n## 7.").map(|i| &note[..i]).unwrap_or(note); cut.chars().take(14_000).collect() }
+/// Read-only tools a planner run may be given from the person's allowedTools: Read / Glob / Grep always, Web tools only when
+/// the config allows them, read-only git only when it allows Bash at all, MCP board / team tools (never mcp__pc__*).
+pub fn planner_allowed_tools(cfg_tools: &[String]) -> Vec<String> {
+    let has = |t: &str| cfg_tools.iter().any(|x| x == t);
+    let mut out: Vec<String> = ["Read", "Glob", "Grep"].iter().map(|x| x.to_string()).collect();
+    for t in ["WebFetch", "WebSearch"] { if has(t) { out.push(t.into()); } }
+    if cfg_tools.iter().any(|x| x == "Bash" || x.starts_with("Bash(")) { for g in ["log", "status", "diff", "show", "branch", "ls-files", "grep"] { out.push(format!("Bash(git {g}:*)")); } }
+    out.extend(cfg_tools.iter().filter(|x| (x.starts_with("mcp__board__") || x.starts_with("mcp__team__")) && !x.starts_with("mcp__pc__")).cloned());
+    for t in ["mcp__board", "mcp__team"] { if !out.iter().any(|x| x == t) { out.push(t.into()); } }
+    out
+}
+/// What a planner run is denied whatever the permission mode (Claude's --disallowedTools; deny wins over allow and over bypass).
+pub const PLANNER_DENIED: &str = "Edit,MultiEdit,Write,NotebookEdit,mcp__pc";
+/// Why a tool call from a planner session's run is refused ("" = allowed): no PC tools, no deleting notes or making channels,
+/// notes written only under plans/ (case-insensitive, no "..").
+pub fn planner_refusal(which: &str, name: &str, args: &Value) -> String {
+    match (which, name) {
+        ("pc", _) => format!("Planner mode: PC tools are not available (this session only plans; {name} refused)."),
+        ("team", "notes_delete" | "team_channel_create" | "team_group_create") => format!("Planner mode: {name} is not available to a planner session."),
+        ("team", "notes_write") => {
+            let p = args["path"].as_str().unwrap_or("").replace('\\', "/").to_lowercase(); let p = p.trim_start_matches('/');
+            if p.starts_with("plans/") && p.len() > 6 && !p.split('/').any(|seg| seg == ".." || seg == ".") { String::new() }
+            else { "Planner mode: notes_write is allowed only for paths under plans/ (this one is refused).".into() }
+        }
+        _ => String::new(),
+    }
+}
 /// The prompt a run sends: the person's segments joined with a space, the Static laws after a blank line.
 pub fn render_prompt(segs: &[Segment]) -> String {
     let own: Vec<&str> = segs.iter().filter(|s| s.class != Class::Static).map(|s| s.text.as_str()).collect();
@@ -1209,11 +1269,41 @@ mod tests {
                 let hits = lint_segments(&segs);
                 assert!(hits.is_empty(), "the Work system prompt has volatile text: {:?}", hits.iter().map(|h| format!("{} / {}: {}", h.segment, h.pattern, h.snippet)).collect::<Vec<_>>());
                 let p = render_prompt(&segs);
-                assert_eq!(p, w.system_prompt(&a, &wd), "built twice: the same bytes");
+                assert_eq!(p, w.system_prompt(&a, &wd, None), "built twice: the same bytes");
                 assert!(p.starts_with("You are talking with Sponge") && p.contains("OWN git worktree") && p.contains("\n\n"));
             }
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+    #[test]
+    fn a_planner_prompt_is_stable_and_has_no_building_instructions() {
+        let (w, _) = work_here();
+        let tmp = std::env::temp_dir().join(format!("vr-prompt-plan-{}", std::process::id())); let _ = std::fs::create_dir_all(&tmp);
+        let a = Account { username: "sponge".into(), dir: tmp.clone(), admin: false, display: "Sponge".into() };
+        let wd = wt(true, &tmp);
+        for note in ["", "## 1. What it may do\nread only\n## 7. Re-assess\nlater"] {
+            let segs = w.system_segments_for(&a, &wd, Some(&planner_rules(note)));
+            assert_eq!(segs.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["1-intro", "2-planner", "4-laws"]);
+            assert!(lint_segments(&segs).is_empty());
+            let p = render_prompt(&segs);
+            assert!(p.contains("PLANNER MODE") && !p.contains("mcp__pc__") && !p.contains("OWN git worktree"));
+            assert_eq!(p, w.system_prompt(&a, &wd, Some(&planner_rules(note))));
+        }
+        assert!(!planner_rules("a\n## 7. x\nsecret").contains("secret"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+    #[test]
+    fn a_planner_may_only_write_notes_under_plans_and_never_use_pc_tools() {
+        let w = |p: &str| planner_refusal("team", "notes_write", &json!({ "path": p }));
+        assert!(w("plans/x.md").is_empty() && w("Plans/Sub/X.md").is_empty());
+        for bad in ["x.md", "notes/plans/x.md", "plans/../x.md", "plans/", "../plans/x.md", "/etc/x", "plans\\..\\x.md"] { assert!(!w(bad).is_empty(), "{bad}"); }
+        assert!(!planner_refusal("pc", "write", &json!({})).is_empty());
+        assert!(!planner_refusal("team", "notes_delete", &json!({})).is_empty());
+        assert!(planner_refusal("board", "task_create", &json!({})).is_empty() && planner_refusal("team", "ask_user", &json!({})).is_empty() && planner_refusal("team", "team_say", &json!({})).is_empty());
+        let t = planner_allowed_tools(&["Edit".into(), "Write".into(), "Bash(node x:*)".into(), "WebFetch".into(), "mcp__pc__write".into()]);
+        assert!(t.contains(&"Read".into()) && t.contains(&"WebFetch".into()) && t.contains(&"Bash(git log:*)".into()));
+        assert!(!t.iter().any(|x| x == "Edit" || x == "Write" || x.contains("mcp__pc") || x.contains("node x")));
+        assert!(!planner_allowed_tools(&[]).iter().any(|x| x.starts_with("Bash") || x == "WebFetch"));
     }
     #[test]
     fn the_lint_names_the_segment_when_volatile_text_creeps_in() {

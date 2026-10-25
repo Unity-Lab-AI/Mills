@@ -1182,6 +1182,7 @@
     <button id="pickFolder">Open folder on my PC</button>
     <button class="ghost" id="startWork" hidden title="Start work: a new session on a project you have, a repo cloned, a new empty project, or just the AI">New session</button>
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
+    <button class="ghost" id="newPlanner" title="A planner session: Claude only plans onto the board and under plans/ in the notes; it cannot edit files, run builds or use your PC (the hub enforces it)">New planner session</button>
     <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
     <button class="ghost" id="openArchive" title="Your saved Claude sessions">Past sessions</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
@@ -1217,6 +1218,8 @@
     </section>
     <section id="chat">
       <div class="bar"><span id="convTitle" title="Click to rename">Unsaved session</span>
+        <span id="plannerBadge" hidden title="Planner mode: Claude only plans (board tasks and notes under plans/); it cannot edit files, run builds or use your PC" style="background:#6d4aff;color:#fff;border-radius:.6rem;padding:.1rem .55rem;font-size:.75rem;font-weight:600">Planner</span>
+        <button type="button" class="ghost" id="leavePlanner" hidden title="Leave planner mode: back to your normal Work session">Leave planner</button>
         <button type="button" class="ghost" id="shareBtn" title="Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue"><svg class="ic lead"><use href="#i-share"/></svg>Share with everyone</button>
         <button type="button" class="ghost" id="gitBtn" title="Git at a glance: what changed in your own worktree, stage, commit, update, merge">Git</button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
@@ -1455,7 +1458,13 @@ const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '')
 let SESSION = '';
 const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|work\/(current|queue|attach|git|share|draft))(\/|\?|$)/;
 const withSession = (path) => (SESSION && SESSION_PATHS.test(path) && !/[?&]session=/.test(path) ? path + (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(SESSION) : path);
+// Planner mode (T-275): the id of the planner session open here ('' = the normal Work session). Its requests name it (?session=).
+const PLAN_KEY = NS + 'vr.planSession';
+let planSession = (() => { try { return sessionStorage.getItem(PLAN_KEY) || ''; } catch { return ''; } })();
+const PLAN_PATHS = /^\/api\/(chat|stop|work\/(current|queue|questions|attach|git))(\?|$)/;
 async function api(path, opts = {}) {
+  // planner mode (T-275) first: its session wins over the one on screen (T-238)
+  if (planSession && PLAN_PATHS.test(path) && !/[?&]session=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(planSession);
   path = withSession(path);
   if (!base) throw new Error('VibeRoller is offline — ask the admin to start it.');
   const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
@@ -2719,6 +2728,32 @@ $('newChat').onclick = () => {
   if (usageData) { usageData.context = null; paintUsage(); } // a new session starts with an empty context window
   sys('New conversation — Claude starts fresh on your next message.');
 };
+
+// Planner mode (T-275): a planner session is made on the hub (mode "planner": plan-only tools, enforced there); the badge shows while
+// it is open, in the header of the conversation and over the input box. "Leave planner" goes back to the normal session; a session
+// never changes its mode.
+function paintPlanner() {
+  const on = !!planSession;
+  $('plannerBadge').hidden = !on; $('leavePlanner').hidden = !on;
+  $('input').placeholder = on ? 'Planner: tell Claude what to plan (it adds tasks to the board, it does not build)…  (Enter to send)' : 'Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)';
+  $('composer').style.outline = on ? '2px solid #6d4aff' : '';
+}
+async function enterPlanner(id) {
+  planSession = id; try { if (id) sessionStorage.setItem(PLAN_KEY, id); else sessionStorage.removeItem(PLAN_KEY); } catch {}
+  fresh = false; log.innerHTML = ''; setConversation(null, null, []); paintPlanner();
+  await restoreWork();
+  if (id) { $('convTitle').textContent = 'Planner session'; if (!transcript.length) sys('Planner mode: Claude only plans. It can read, search the board, notes and chat, ask you, add board tasks and write notes under plans/. It cannot edit files, run builds or use your PC.'); }
+}
+$('newPlanner').onclick = async () => {
+  if (busy) return sys('Stop Claude before starting a planner session.', true);
+  try { const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify({ mode: 'planner', title: 'Planner' }) }); await enterPlanner(d.id); }
+  catch (err) { sys('Could not start a planner session: ' + err.message, true); }
+};
+$('leavePlanner').onclick = async () => {
+  if (busy) return sys('Stop Claude before leaving planner mode.', true);
+  await enterPlanner(''); sys('Back in your normal Work session.');
+};
+if (planSession) setTimeout(paintPlanner, 0);
 
 // ---------- usage bar: 5h (hh:mm:ss left), 7d (dd/hh/mm left), context window meter ----------
 const USAGE_STOPS = [[0, [46, 204, 113]], [33, [255, 159, 26]], [66, [255, 212, 59]], [100, [255, 59, 59]]]; // green → orange → yellow → red
