@@ -431,6 +431,9 @@
   window.BOARD = {
     start() { wire(); B.gen++; B.ver = 0; loadMembers(); loop(B.gen); },
     stop() { B.gen++; B.data = null; B.ver = 0; closeDetail(); },
+    // co-view (T-244): which task is open, and open one (true when this person may read it)
+    openId: () => B.open,
+    async openTask(id) { wire(); await openDetail(id, true); return B.open === id; },
     show(name) { wire(); if (name === 'board') { loadMembers().then(() => B.data && renderBoard()); } if (B.data) (name === 'board' ? renderBoard : renderCal)(); },
   };
 })();

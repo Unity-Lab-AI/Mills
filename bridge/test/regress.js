@@ -489,7 +489,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['attach.js', 'library.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -3700,6 +3700,74 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       /\/api\/releases'/.test(html270) && /\/api\/releases\/file\?/.test(html270) && /dlProducts/.test(html270) && cached,
       `page ${/dlProducts/.test(html270)} · cached ${cached} (${before} call)`);
   } else for (const [id, what] of [['R270', 'releases catalogue'], ['R271', 'a release file streams'], ['R272', 'signed out refused'], ['R273', 'token never in an answer'], ['R274', 'Products section + cache']]) skip(id, what, '--rust-hub only');
+  if (RUST_HUB) { // R295-R299 (T-244): co-view: the sharer's page says which view it shows, viewers follow it in their own page
+    const DM = 'dm:t-admin|t-user', cvPoll = async (tok, after = 0) => (await call(`/api/coview/poll?after=${after}&ver=-1`, tok)).data;
+    const s295 = {};
+    s295.start = await call('/api/coview/start', A, { conv: DM, screen: 'menu' });
+    s295.outsiderJoin = await call('/api/coview/join', D, { sharer: 't-admin' });
+    s295.outsiderSees = (await cvPoll(D)).available;
+    s295.outsiderStart = await call('/api/coview/start', D, { conv: DM });
+    s295.outsiderView = await call('/api/coview/view', D, { screen: 'board' });
+    s295.join = await call('/api/coview/join', U, { sharer: 't-admin' });
+    const ver0 = (await cvPoll(U)).ver;
+    const waiting = call(`/api/coview/poll?wait=1&after=0&ver=${ver0}`, U); // hangs until the sharer's page shows something new
+    const t0 = Date.now(); await new Promise((r) => setTimeout(r, 400));
+    s295.v1 = await call('/api/coview/view', A, { screen: 'board', item: { kind: 'board-task', id: 'T-77' }, scroll: 0.25 });
+    s295.woke = (await waiting).data; s295.wokeMs = Date.now() - t0;
+    s295.v2 = await call('/api/coview/view', A, { screen: 'notes', item: { kind: 'note', id: 'plans/next.md' } });
+    s295.same = await call('/api/coview/view', A, { screen: 'notes', item: { kind: 'note', id: 'plans/next.md' } });
+    s295.v3 = await call('/api/coview/view', A, { screen: 'shell' });
+    s295.badScreen = await call('/api/coview/view', A, { screen: 'admin' });
+    s295.viewerView = await call('/api/coview/view', U, { screen: 'cal' });
+    s295.uAll = (await cvPoll(U)).mine; s295.uTail = (await cvPoll(U, s295.v2.data.seq)).mine;
+    const seqs = (s295.uAll.views || []).map((v) => v.seq), screens = (s295.uAll.views || []).map((v) => v.screen);
+    check('R295', 'T-244 a sharer posts what the page shows and a viewer\'s waiting poll wakes with it, then gets every view in order (and only the ones after what it already has); showing the same thing twice adds nothing',
+      s295.start.status === 200 && s295.join.status === 200 && s295.woke.mine && s295.woke.mine.view.screen === 'board' && s295.woke.mine.view.item.id === 'T-77' && s295.woke.mine.view.scroll === 0.25 && s295.wokeMs >= 300 && s295.wokeMs < 5000
+      && s295.same.data.seq === s295.v2.data.seq && seqs.join() === [1, 2, 3, 4].join() && screens.join() === 'menu,board,notes,shell' && s295.uTail.views.map((v) => v.screen).join() === 'shell',
+      `woke after ${s295.wokeMs} ms · seqs ${seqs.join()} · screens ${screens.join()} · tail ${(s295.uTail.views || []).map((v) => v.screen).join()}`);
+    check('R296', 'T-244 someone outside the conversation cannot join, see, start or steer a co-view (403 / 400 / 409, and it is not even listed); an unknown screen is refused; a viewer who does not lead cannot post the view (403)',
+      s295.outsiderJoin.status === 403 && (s295.outsiderSees || []).length === 0 && s295.outsiderStart.status === 400 && s295.outsiderView.status === 409 && s295.badScreen.status === 400 && s295.viewerView.status === 403,
+      `join ${s295.outsiderJoin.status} · listed ${(s295.outsiderSees || []).length} · start ${s295.outsiderStart.status} · view ${s295.outsiderView.status} · bad screen ${s295.badScreen.status} · viewer posts ${s295.viewerView.status}`);
+    const s297 = {};
+    s297.untaken = await call('/api/coview/take', U, {}); // not invited yet
+    s297.stranger = await call('/api/coview/handover', U, { to: 't-user' }); // a viewer is not the sharer
+    s297.invite = await call('/api/coview/invite', A, { to: 't-user' });
+    s297.invited = (await cvPoll(U)).mine.invited;
+    s297.take = await call('/api/coview/take', U, {});
+    s297.uView = await call('/api/coview/view', U, { screen: 'cal' });
+    s297.aView = await call('/api/coview/view', A, { screen: 'room' });
+    s297.aState = (await cvPoll(A)).mine;
+    s297.back = await call('/api/coview/handover', A, { to: 't-admin' });
+    s297.backState = (await cvPoll(U)).mine;
+    check('R297', 'T-244 take-over moves the lead: a viewer cannot take it uninvited, the sharer invites, the viewer accepts and then leads (the sharer\'s own posts are refused and the sharer sees the viewer as lead); the sharer can hand it back and the viewer follows again',
+      s297.untaken.status === 403 && s297.stranger.status === 403 && s297.invite.status === 200 && s297.invited === true && s297.take.status === 200 && s297.take.data.mine.lead === 't-user' && s297.uView.status === 200 && s297.aView.status === 403
+      && s297.aState.lead === 't-user' && s297.aState.isLead === false && s297.aState.view.screen === 'cal' && s297.back.status === 200 && s297.backState.lead === 't-admin' && s297.backState.isLead === false,
+      `untaken ${s297.untaken.status} · invite ${s297.invite.status} · take ${s297.take.status} lead ${(s297.take.data.mine || {}).lead} · old lead posts ${s297.aView.status} · back ${s297.backState.lead}`);
+    const s299 = {};
+    s299.secretConv = await call('/api/coview/view', A, { screen: 'room', item: { kind: 'conv', id: 'dm:mills|t-admin', text: 'SECRET-BODY' } });
+    s299.u1 = await call('/api/coview/poll?after=0&ver=-1', U);
+    s299.a1 = await call('/api/coview/poll?after=0&ver=-1', A);
+    s299.work = await call('/api/coview/view', A, { screen: 'shell', item: { kind: 'work-session', id: 'mills' } });
+    s299.u2 = await call('/api/coview/poll?after=0&ver=-1', U);
+    s299.note = await call('/api/coview/view', A, { screen: 'notes', item: { kind: 'note', id: 'private/x.md', text: 'SECRET-BODY', body: 'SECRET-BODY' } });
+    s299.u3 = await call('/api/coview/poll?after=0&ver=-1', U);
+    const raw = JSON.stringify([s299.u1.data, s299.u2.data, s299.u3.data]);
+    const hiddenConv = s299.u1.data.mine.views.find((v) => v.seq === s299.secretConv.data.seq), hiddenWork = s299.u2.data.mine.views.find((v) => v.seq === s299.work.data.seq), noteItem = s299.u3.data.mine.views.find((v) => v.seq === s299.note.data.seq);
+    check('R299', 'T-244 nothing a viewer could not read is carried: a private conversation they are not in, or another person\'s Work session that is not shared with them, reaches them only as "hidden" (no id, no name); an item carries just its kind and id, never content; the sharer still sees their own',
+      s299.secretConv.status === 200 && hiddenConv.item.hidden === true && !hiddenConv.item.id && hiddenWork.item.hidden === true && !hiddenWork.item.id && !raw.includes('dm:mills|t-admin') && !raw.includes('SECRET-BODY')
+      && Object.keys(noteItem.item).sort().join() === 'id,kind' && s299.a1.data.mine.views.find((v) => v.seq === s299.secretConv.data.seq).item.id === 'dm:mills|t-admin',
+      `conv ${JSON.stringify(hiddenConv.item)} · work ${JSON.stringify(hiddenWork.item)} · note item keys ${Object.keys(noteItem.item).join()} · leaked ${raw.includes('SECRET-BODY') || raw.includes('dm:mills|t-admin')}`);
+    const s298 = {};
+    s298.leave = await call('/api/coview/stop', U, {});
+    s298.afterLeave = (await cvPoll(A)).mine;
+    s298.rejoin = await call('/api/coview/join', U, { sharer: 't-admin' });
+    s298.end = await call('/api/coview/stop', A, {});
+    s298.uState = await cvPoll(U); s298.uPost = await call('/api/coview/view', U, { screen: 'board' });
+    s298.joinEnded = await call('/api/coview/join', U, { sharer: 't-admin' });
+    check('R298', 'T-244 stop ends it: a viewer who stops leaves (the sharer sees nobody following, the co-view goes on); when the sharer ends it every viewer\'s page is told (no co-view, nothing listed), nothing can be posted and nobody can join it any more',
+      s298.leave.status === 200 && s298.afterLeave.viewers.length === 0 && s298.rejoin.status === 200 && s298.end.status === 200 && s298.uState.mine === null && (s298.uState.available || []).length === 0 && s298.uPost.status === 409 && s298.joinEnded.status === 404,
+      `viewers after leave ${s298.afterLeave.viewers.length} · after end: mine ${JSON.stringify(s298.uState.mine)} listed ${(s298.uState.available || []).length} · post ${s298.uPost.status} · join ${s298.joinEnded.status}`);
+  } else for (const [id, what] of [['R295', 'a sharer\'s views reach a viewer in order'], ['R296', 'a non-member cannot join'], ['R297', 'take-over moves the lead'], ['R298', 'stop ends a co-view'], ['R299', 'nothing a viewer could not read is carried']]) skip(id, what, '--rust-hub only');
   { // R260 (T-241): "Reopen what I had open after a reload": a per-person pref, absent = on, kept with the other prefs; the page honours it
     const html260 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
     const c0 = (await call('/api/check', U)).data || {};
