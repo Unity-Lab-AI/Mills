@@ -80,6 +80,10 @@ pub(crate) struct Run {
     pub waiting: Mutex<Vec<Value>>,
     /// Instances this drive has logged a `node_start` for.
     pub started: Mutex<std::collections::HashSet<String>>,
+    /// The engine running this run (a `sub-workflow` starts its child with it).
+    pub engine: crate::Engine,
+    /// How many `sub-workflow` runs this one is inside.
+    pub depth: usize,
 }
 
 impl Run {
@@ -240,7 +244,7 @@ fn is_compound(n: &Node) -> bool {
 
 /// Does the engine know how to run this kind (its own, or given to it)?
 pub(crate) fn runnable(kinds: &HashMap<String, Arc<dyn NodeKind>>, kind: &str) -> bool {
-    CONTROL.contains(&kind) || matches!(kind, "loop" | "subgraph" | "for-each" | "approve") || kinds.contains_key(kind)
+    CONTROL.contains(&kind) || matches!(kind, "loop" | "subgraph" | "for-each" | "approve" | "sub-workflow") || kinds.contains_key(kind)
 }
 
 fn all(plan: &Plan, n: usize, t: Tok) -> HashMap<String, Tok> {
@@ -454,6 +458,7 @@ async fn fire_inner(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, inp: Inputs, c
         "parallel" if is_compound(node) => run_lines(run, scope, n, &key, inp, cancel).await,
         "subgraph" | "for-each" => run_sub(run, scope, n, &key, inp, cancel).await,
         "approve" => approve(run, scope, n, &key, inp),
+        "sub-workflow" => run_child(run, scope, n, &key, inp, cancel).await,
         k if CONTROL.contains(&k) => control(run, scope, n, &key, inp, cancel).await,
         _ => leaf(run, scope, n, &key, inp, cancel).await,
     };
@@ -817,27 +822,30 @@ async fn leaf(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp: Inpu
     if run.mode == Mode::Replay { return Err(NodeError::fatal("engine.replay-missing", format!("node `{}` ({key}) has no recorded result to replay", node.id))); }
     let st = settings(run, plan, node);
     let before = run.prior.started.get(key).map_or(0, |s| s.0);
-    if before > 0 && run.prior.in_flight(key) && !kind.idempotent(node) {
-        // it was running when the run was cut, and it may not be repeated blindly: a person decides
-        match run.prior.answers.get(key) {
-            Some(a) if approved(a.get("answers").unwrap_or(&Value::Null)) || a.get("answers").and_then(|x| x.get("rerun")).and_then(Value::as_bool) == Some(true) => {}
-            Some(_) => return Err(NodeError::fatal("engine.not-rerun", format!("node `{}` was cut mid-run and was not run again", node.id))),
-            None => {
-                let w = match run.prior.waits.get(key) {
-                    Some(w) => w.clone(),
-                    None => {
-                        let qs = json!([{ "text": format!("`{}` was running when the run stopped and may not be safe to repeat. Run it again?", node.label.clone().unwrap_or(node.id.clone())), "kind": "single", "options": ["yes", "no"], "default": "no" }]);
-                        let ask = Ask { run: run.id.clone(), key: key.to_string(), node: node.id.clone(), who: "sender".into(), questions: qs, deadline: None, what: "resume".into() };
-                        let r = run.host.ask_person(&ask)?;
-                        let w = json!({ "node": node.id, "key": key, "what": "resume", "ref": r });
-                        run.log.emit("wait", w.clone());
-                        w
-                    }
-                };
-                lock(&run.waiting).push(json!({ "node": node.id, "key": key, "what": "resume", "ref": w.get("ref") }));
-                return Ok(Fired::Pending);
-            }
+    let mut answer = None;
+    let mut asked = None;
+    if let Some(w) = run.prior.waits.get(key) {
+        // the node asked a person (or the engine did, for a cut node): no answer yet, it goes on waiting, asked once
+        let Some(a) = run.prior.answers.get(key) else {
+            lock(&run.waiting).push(json!({ "node": node.id, "key": key, "what": w.get("what"), "ref": w.get("ref"), "deadline": w.get("deadline") }));
+            return Ok(Fired::Pending);
+        };
+        let answers = a.get("answers").cloned().unwrap_or(Value::Null);
+        if w.get("what").and_then(Value::as_str) == Some("resume") {
+            if !(approved(&answers) || answers.get("rerun").and_then(Value::as_bool) == Some(true)) { return Err(NodeError::fatal("engine.not-rerun", format!("node `{}` was cut mid-run and was not run again", node.id))); }
+        } else {
+            answer = Some(answers);
+            asked = w.get("state").cloned();
         }
+    } else if before > 0 && run.prior.in_flight(key) && !kind.idempotent(node) {
+        // it was running when the run was cut, and it may not be repeated blindly: a person decides
+        let qs = json!([{ "text": format!("`{}` was running when the run stopped and may not be safe to repeat. Run it again?", node.label.clone().unwrap_or(node.id.clone())), "kind": "single", "options": ["yes", "no"], "default": "no" }]);
+        let ask = Ask { run: run.id.clone(), key: key.to_string(), node: node.id.clone(), who: "sender".into(), questions: qs, deadline: None, what: "resume".into() };
+        let r = run.host.ask_person(&ask)?;
+        let w = json!({ "node": node.id, "key": key, "what": "resume", "ref": r });
+        run.log.emit("wait", w.clone());
+        lock(&run.waiting).push(w);
+        return Ok(Fired::Pending);
     }
     let _permit = tokio::select! {
         p = run.sem.clone().acquire_owned() => p.map_err(|_| NodeError::fatal("engine.closed", "the run is closing"))?,
@@ -852,7 +860,7 @@ async fn leaf(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp: Inpu
         if !begin(run, scope, n, key, attempt, &inp.values) { return Ok(Fired::Stopped); }
         let call = NodeCall {
             run: run.id.clone(), key: key.to_string(), node: node.clone(), attempt, inputs: inp.values.clone(), vars: scope.vars(run),
-            doc: run.doc.clone(), graph: plan.key.clone(), cancel: cancel.clone(),
+            doc: run.doc.clone(), graph: plan.key.clone(), cancel: cancel.clone(), answer: answer.clone(), asked: asked.clone(),
         };
         let fut = AssertUnwindSafe(kind.run(call, &*run.host)).catch_unwind();
         let res = tokio::select! {
@@ -888,6 +896,17 @@ async fn leaf(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp: Inpu
                     return Ok(Fired::Out(outs, HashMap::new()));
                 }
                 (NodeError::new("engine.empty", format!("node `{}` gave an empty answer", node.id)), "empty")
+            }
+            Err(e) if e.code == "engine.ask" && e.ask.is_some() => {
+                // not a failure: the node needs a person; the run waits with this attempt closed and no worker held
+                let a = e.ask.clone().map(|b| *b).unwrap_or(Value::Null);
+                let ask = Ask { run: run.id.clone(), key: key.to_string(), node: node.id.clone(), who: node.cfg_str("who").unwrap_or("sender").to_string(), questions: a.get("questions").cloned().unwrap_or(Value::Null), deadline: None, what: "decision".into() };
+                let r = match run.host.ask_person(&ask) { Ok(r) => r, Err(e) => return Ok(fail_node(run, scope, n, key, attempt, &e, t0)) };
+                finish(run, scope, n, key, attempt, "waiting", &all(plan, n, Tok::Skip), t0, json!({}));
+                let w = json!({ "node": node.id, "key": key, "what": "decision", "ref": r, "state": a.get("state") });
+                run.log.emit("wait", w.clone());
+                lock(&run.waiting).push(json!({ "node": node.id, "key": key, "what": "decision", "ref": r }));
+                return Ok(Fired::Pending);
             }
             Err(e) => { let r = if e.code == "engine.timeout" { "timeout" } else { "error" }; (e, r) }
         };
@@ -1020,6 +1039,52 @@ async fn run_lines(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp:
     let outs = all(&plan, n, Tok::Skip);
     finish(run, scope, n, key, 1, "ok", &outs, t0, json!({ "lines": items.len() }));
     Ok(Fired::Out(outs, escapes))
+}
+
+/// `sub-workflow` (spec 5.5): another workflow, by name and version range, from the host's store, as a run of its own
+/// (id `<run>.<node key>`, its log linked to this one by `parent`). Nested at most [`pgm_workflow_internal::MAX_DEPTH`]
+/// deep. A child that stops to wait for a person is not supported yet (`engine.child-waits`).
+async fn run_child(run: &Arc<Run>, scope: &Arc<Scope>, n: usize, key: &str, inp: Inputs, cancel: Cancel) -> Result<Fired, NodeError> {
+    let plan = scope.plan.clone();
+    let node = &plan.nodes[n];
+    let t0 = now(run);
+    if run.mode == Mode::Replay { return Err(NodeError::fatal("engine.replay-missing", format!("node `{}` has no recorded result to replay", node.id))); }
+    let name = node.cfg_str("name").unwrap_or("").to_string();
+    let range = node.cfg_str("range").map(str::to_string);
+    if run.depth + 1 > pgm_workflow_internal::MAX_DEPTH { return Err(NodeError::fatal("engine.depth", format!("node `{}` would run workflows more than {} deep", node.id, pgm_workflow_internal::MAX_DEPTH))); }
+    let child = run.host.workflow(&name, range.as_deref()).ok_or_else(|| NodeError::fatal("engine.no-workflow", format!("node `{}`: there is no workflow `{name}`{} to run", node.id, range.as_deref().map(|r| format!(" @{r}")).unwrap_or_default())))?;
+    if !begin(run, scope, n, key, 1, &inp.values) { return Ok(Fired::Stopped); }
+    let mut input = crate::RunInput::prompt(&as_text(inp.values.get("in").unwrap_or(&Value::Null)));
+    input.sender = json!({ "kind": "workflow", "id": run.id });
+    input.project = run.input.get("project").and_then(Value::as_str).map(str::to_string);
+    for (k, v) in node.cfg("inputs").and_then(Value::as_object).cloned().unwrap_or_default() {
+        input.inputs.insert(k.clone(), inp.values.get(&k).cloned().unwrap_or(v));
+    }
+    let id: String = format!("{}.{key}", run.id).chars().map(|c| if c.is_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect();
+    let opts = crate::RunOptions {
+        run_id: Some(id.clone()), cancel: cancel.child(),
+        limits: crate::RunLimits { max_seconds: run.limits.max_seconds, max_nodes: Some(run.limits.max_nodes), max_cost: run.limits.max_cost, max_parallel: Some(run.limits.max_parallel) },
+        parent: Some(json!({ "run": run.id, "node": node.id, "key": key, "depth": run.depth + 1 })), ..Default::default()
+    };
+    let rep = Box::pin(run.engine.start(Arc::new(child.clone()), input, run.host.clone(), opts)).await;
+    let link = json!({ "run": id, "workflow": child.name, "version": child.version, "status": rep.status, "outcome": rep.outcome });
+    if let Some(u) = rep.totals.get("cost").and_then(Value::as_f64).filter(|c| *c > 0.0) { run.add_usage(&json!({ "cost": u })); }
+    match rep.status.as_str() {
+        "ok" => {
+            let mut outs = all(&plan, n, Tok::Skip);
+            outs.insert("result".into(), Tok::Val(rep.result.unwrap_or(Value::Null)));
+            outs.insert("outcome".into(), Tok::Val(json!(rep.outcome)));
+            finish(run, scope, n, key, 1, "ok", &outs, t0, json!({ "child": link }));
+            Ok(Fired::Out(outs, HashMap::new()))
+        }
+        "cancelled" if cancel.is_cancelled() => { finish(run, scope, n, key, 1, "cancelled", &all(&plan, n, Tok::Skip), t0, json!({ "child": link })); Ok(Fired::Cancelled) }
+        "waiting" => Err(NodeError::fatal("engine.child-waits", format!("node `{}`: the workflow `{name}` waits for a person, which a sub-workflow cannot do yet", node.id))),
+        "invalid" => Err(NodeError::fatal("engine.child-invalid", format!("node `{}`: the workflow `{name}` cannot run: {}", node.id, rep.problems.iter().filter_map(|p| p.get("message").and_then(Value::as_str)).collect::<Vec<_>>().join("; ")))),
+        _ => {
+            let e = rep.error.unwrap_or(Value::Null);
+            Err(NodeError::new(e.get("code").and_then(Value::as_str).unwrap_or("engine.child-failed"), format!("node `{}`: the workflow `{name}` ended {}: {}", node.id, rep.status, e.get("message").and_then(Value::as_str).unwrap_or(""))))
+        }
+    }
 }
 
 /// `subgraph` (a box you can look inside) and `for-each` (the same sub-graph once per item, a list of results).

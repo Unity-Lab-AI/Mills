@@ -99,7 +99,8 @@ impl Prior {
                         p.tokens += u.get("input").and_then(Value::as_u64).unwrap_or(0) + u.get("output").and_then(Value::as_u64).unwrap_or(0);
                         p.cost += u.get("cost").and_then(Value::as_f64).unwrap_or(0.0);
                     }
-                    if ev.get("retry").and_then(Value::as_bool) != Some(true) {
+                    // an attempt that will be retried, or one that stopped to ask a person, is not the instance's end
+                    if ev.get("retry").and_then(Value::as_bool) != Some(true) && ev.get("status").and_then(Value::as_str) != Some("waiting") {
                         if let Some(k) = key { p.memo.insert(k, ev.clone()); }
                         p.nodes_done += 1;
                     }

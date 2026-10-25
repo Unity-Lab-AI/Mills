@@ -7,8 +7,8 @@
 //! `test/inc` (adds a number) and `test/side-effect` (a tool call that is not idempotent).
 use crate::cancel::Cancel;
 use crate::engine::Engine;
-use crate::host::{Ask, BoxFut, ModelAnswer, ModelRequest, NodeCall, NodeError, NodeKind, NodeOutput, ToolCtx, WorkflowHost};
-use pgm_workflow_internal::KindManifest;
+use crate::host::{Ask, BoxFut, HttpAnswer, HttpRequest, ModelAnswer, ModelRequest, NodeCall, NodeError, NodeKind, NodeOutput, ToolCtx, WorkflowHost};
+use pgm_workflow_internal::{Document, KindManifest};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -45,6 +45,8 @@ pub struct FakeCall {
     pub key: String,
     pub attempt: u32,
     pub prompt: String,
+    /// The model entry the call asked for (None: the host's default).
+    pub model: Option<Value>,
     pub started: Instant,
     pub ended: Option<Instant>,
     pub cancelled: bool,
@@ -64,6 +66,14 @@ pub struct FakeHost {
     pub snapshots: Mutex<Vec<Value>>,
     refuse: AtomicBool,
     clock: AtomicU64,
+    allowed: Mutex<Option<Vec<String>>>,
+    secrets: Mutex<HashMap<String, String>>,
+    http_replies: Mutex<VecDeque<HttpAnswer>>,
+    pub http_calls: Mutex<Vec<HttpRequest>>,
+    workflows: Mutex<Vec<Document>>,
+    agent_replies: Mutex<VecDeque<Value>>,
+    pub agents: Mutex<Vec<Value>>,
+    prompts: Mutex<HashMap<String, String>>,
 }
 
 impl FakeHost {
@@ -79,6 +89,18 @@ impl FakeHost {
     /// Sets the clock (0: the real clock).
     pub fn set_clock(&self, ms: u64) -> &Self { self.clock.store(ms, Ordering::SeqCst); self }
     pub fn advance(&self, ms: u64) -> &Self { self.clock.fetch_add(ms, Ordering::SeqCst); self }
+
+    /// Only these tools are allowed (the scope's policy); any other is `engine.tool-denied`.
+    pub fn allow_tools(&self, names: &[&str]) -> &Self { *lock(&self.allowed) = Some(names.iter().map(|s| s.to_string()).collect()); self }
+    pub fn secret(&self, name: &str, value: &str) -> &Self { lock(&self.secrets).insert(name.to_string(), value.to_string()); self }
+    /// Queues the answer of the next HTTP call (none queued: 200 `{}`).
+    pub fn http_reply(&self, status: u16, body: &str) -> &Self { lock(&self.http_replies).push_back(HttpAnswer { status, body: body.to_string() }); self }
+    pub fn http_sent(&self) -> Vec<HttpRequest> { lock(&self.http_calls).clone() }
+    /// A workflow `sub-workflow` nodes can run (found by name; a numeric range must match its version).
+    pub fn workflow(&self, d: Document) -> &Self { lock(&self.workflows).push(d); self }
+    /// Queues an agent's final answer (none queued: `{text: "done"}`).
+    pub fn agent_reply(&self, v: Value) -> &Self { lock(&self.agent_replies).push_back(v); self }
+    pub fn prompt(&self, name: &str, text: &str) -> &Self { lock(&self.prompts).insert(name.to_string(), text.to_string()); self }
 
     pub fn calls_of(&self, node: &str) -> Vec<FakeCall> { lock(&self.calls).iter().filter(|c| c.node == node).cloned().collect() }
     pub fn all_calls(&self) -> Vec<FakeCall> { lock(&self.calls).clone() }
@@ -110,7 +132,7 @@ impl WorkflowHost for FakeHost {
             let prompt = req.messages.iter().filter_map(|m| m.get("content").and_then(Value::as_str)).collect::<Vec<_>>().join("\n");
             let i = {
                 let mut c = lock(&self.calls);
-                c.push(FakeCall { node: req.node.clone(), key: req.key.clone(), attempt: req.attempt, prompt: prompt.clone(), started: Instant::now(), ended: None, cancelled: false });
+                c.push(FakeCall { node: req.node.clone(), key: req.key.clone(), attempt: req.attempt, prompt: prompt.clone(), model: req.model.clone(), started: Instant::now(), ended: None, cancelled: false });
                 c.len() - 1
             };
             let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
@@ -150,6 +172,7 @@ impl WorkflowHost for FakeHost {
     fn call_tool<'a>(&'a self, name: String, args: Value, ctx: ToolCtx, _cancel: Cancel) -> BoxFut<'a, Result<Value, NodeError>> {
         Box::pin(async move {
             if self.refuse.load(Ordering::SeqCst) { return Err(NodeError::fatal("engine.refused", "this host refuses every call")); }
+            if lock(&self.allowed).as_ref().is_some_and(|a| !a.contains(&name)) { return Err(NodeError::fatal("engine.tool-denied", format!("the tool `{name}` is not allowed in this scope"))); }
             lock(&self.tools).push((name.clone(), args.clone()));
             match self.next(&ctx.key, &ctx.node) {
                 Some(Reply::Fail(code)) => Err(NodeError::new(&code, "the fake tool failed")),
@@ -158,6 +181,28 @@ impl WorkflowHost for FakeHost {
                 _ => Ok(json!({ "tool": name, "args": args })),
             }
         })
+    }
+
+    fn http<'a>(&'a self, req: HttpRequest, _cancel: Cancel) -> BoxFut<'a, Result<HttpAnswer, NodeError>> {
+        Box::pin(async move {
+            if self.refuse.load(Ordering::SeqCst) { return Err(NodeError::fatal("engine.refused", "this host refuses every call")); }
+            lock(&self.http_calls).push(req);
+            Ok(lock(&self.http_replies).pop_front().unwrap_or(HttpAnswer { status: 200, body: "{}".into() }))
+        })
+    }
+
+    fn run_agent<'a>(&'a self, spec: Value, _cancel: Cancel) -> BoxFut<'a, Result<Value, NodeError>> {
+        Box::pin(async move {
+            if self.refuse.load(Ordering::SeqCst) { return Err(NodeError::fatal("engine.refused", "this host refuses every call")); }
+            lock(&self.agents).push(spec);
+            Ok(lock(&self.agent_replies).pop_front().unwrap_or_else(|| json!({ "text": "done" })))
+        })
+    }
+
+    fn secret(&self, name: &str) -> Option<String> { lock(&self.secrets).get(name).cloned() }
+    fn saved_prompt(&self, name: &str) -> Option<String> { lock(&self.prompts).get(name).cloned() }
+    fn workflow(&self, name: &str, range: Option<&str>) -> Option<Document> {
+        lock(&self.workflows).iter().find(|d| d.name == name && range.and_then(|r| r.parse::<u32>().ok()).is_none_or(|v| d.version == Some(v))).cloned()
     }
 
     fn ask_person(&self, ask: &Ask) -> Result<String, NodeError> {

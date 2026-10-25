@@ -114,6 +114,22 @@ impl Engine {
     /// behaviour until [`Engine::implement`] gives them one (T-201); a document using one is refused before it starts.
     pub fn new() -> Engine { Engine { registry: Arc::new(DefaultRegistry::new()), kinds: Arc::new(HashMap::new()) } }
 
+    /// An engine with every built-in kind (T-201): `prompt`, `chat`, `summarise`, `jev`, `tool`, `script`, `agent`,
+    /// `orchestrate`, besides the engine's own flow-control kinds and `sub-workflow`.
+    pub fn with_builtins() -> Engine {
+        use crate::kinds::{ai, orchestrate, script, tools};
+        let mut e = Engine::new();
+        e.implement("prompt", Arc::new(ai::Prompt));
+        e.implement("chat", Arc::new(ai::Chat));
+        e.implement("summarise", Arc::new(ai::Summarise));
+        e.implement("jev", Arc::new(ai::Jev));
+        e.implement("tool", Arc::new(tools::Tool));
+        e.implement("agent", Arc::new(tools::Agent));
+        e.implement("script", Arc::new(script::Script));
+        e.implement("orchestrate", Arc::new(orchestrate::Orchestrate));
+        e
+    }
+
     /// Behaviour for a kind the registry already knows (a built-in one, such as `prompt`).
     pub fn implement(&mut self, kind: &str, k: Arc<dyn NodeKind>) { Arc::make_mut(&mut self.kinds).insert(kind.to_string(), k); }
 
@@ -235,7 +251,8 @@ impl Engine {
             mode, cancel: Cancel::new(), stop: Mutex::new(None), sem: Arc::new(Semaphore::new(limits.max_parallel.max(1))),
             node_runs: (if resumed { prior.node_starts } else { 0 }).into(), cost: Mutex::new(if resumed { prior.cost } else { 0.0 }),
             limits: limits.clone(), prior: prior.clone(), state: Mutex::new(Map::new()), input: input_v, waiting: Mutex::new(vec![]),
-            started: Mutex::new(Default::default()),
+            started: Mutex::new(Default::default()), engine: self.clone(),
+            depth: opts.parent.as_ref().and_then(|p| p.get("depth")).and_then(Value::as_u64).unwrap_or(0) as usize,
         });
         let top = Scope::graph(plans[&None].clone(), String::new(), 0, run.cancel.child(), Map::new(), Map::new());
         let fut = exec_scope(run.clone(), top);

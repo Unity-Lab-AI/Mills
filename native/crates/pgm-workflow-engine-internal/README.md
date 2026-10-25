@@ -3,13 +3,14 @@
 The Hyper Workflows engine (T-200). A workflow is a `pgm-workflow-internal` document; a **run** is one prompt sent
 through it. The engine is plain code, no agent loop: it follows the graph, calls an AI only when a node says so, and
 goes on until an `end`, a limit, a cancel or an unhandled failure. Spec: the team note `plans/hyper-workflows.md`
-(sections 4, 8.2, 14; the checks are R407 to R417). Depends on `pgm-workflow-internal`, tokio and futures-util; no
-network, no hub, no screen.
+(sections 4, 5, 8.2, 14; the checks are R407 to R423). Depends on `pgm-workflow-internal`, `pgm-orchestrator-internal`,
+tokio and futures-util; no network, no hub, no screen of its own.
 
 | Module | What it gives you |
 | --- | --- |
-| `engine` | `Engine`: `start`, `resume` (from the run's log), `answer` (a question the run waits on), `replay` (no outside calls), `preflight`; `implement` / `register` node kinds; `RunInput`, `RunOptions`, `RunLimits`, `RunReport` |
-| `host` | `WorkflowHost` (AI, tools, agents, people, emit, projects, secrets, the log sink, snapshots, the clock: every method defaults to "not here"), `NodeKind` (one attempt of one kind of node), `NodeCall` (`lookup`, `render` for `{{templates}}`), `NodeError`, `NodeOutput`, `NoHost` |
+| `engine` | `Engine`: `start`, `resume` (from the run's log), `answer` (a question the run waits on), `replay` (no outside calls), `preflight`; `with_builtins()`; `implement` / `register` node kinds; `RunInput`, `RunOptions`, `RunLimits`, `RunReport` |
+| `host` | `WorkflowHost` (AI, tools, HTTP, agents, people, emit, saved prompts, workflows for `sub-workflow`, projects, secrets, the log sink, snapshots, the clock: every method defaults to "not here"), `NodeKind` (one attempt of one kind of node), `NodeCall` (`lookup`, `render` for `{{templates}}`, `answer`), `NodeError` (`NodeError::ask`: the node needs a person), `NodeOutput`, `NoHost` |
+| `kinds` | the built-in kinds (T-201): `ai` (`prompt`, `chat`, `summarise`, `jev`), `tools` (`tool` with custom HTTP calls, `agent`), `script` (the transform language), `orchestrate`; `model_chain` / `ask_model` (model choice and fallback, spec 5.4) |
 | `log` | `Prior::from_log`: what an earlier log of a run says (finished instances, open questions, answers, totals, active time) |
 | `cancel` | `Cancel`: run, scope and node handles; cancelling one cancels what was made from it |
 | `fake` | `FakeHost` (scripted AI answers per node or instance, call records, most-at-once, questions, a settable clock), `fake_engine()` with fake `prompt` / `tool` and the test kinds `test/inc`, `test/const`, `test/side-effect` |
@@ -57,8 +58,32 @@ checked whenever the run is driven: the program around the engine calls `Engine:
    wait; resume reads the log. `answer` events carry `by: user | default | timeout`.
 7. **`wait`** sleeps inside the drive; long waits as timer wake-ups belong with triggers (T-186).
 
-Not here yet: the AI, tool, script, agent, jev and sub-workflow kinds (T-201), laws and saved prompts applied to nodes
-(T-202), custom-node sandboxes (T-203), large values as `values/<hash>` refs and secret masking in the log (T-204).
+## The built-in kinds (T-201)
+
+`Engine::with_builtins()` has them all; each reaches the world only through the host.
+
+| Kind | What it does |
+| --- | --- |
+| `prompt` | one AI call: `system` / `user` templates (`{{inputs.x}}`, `{{node.n2.out.text}}`, `{{prompt:name}}`; a missing value is an error), `responseFormat: json` (a bad answer is asked again, `jsonRetries`, then `engine.bad-json`) |
+| `chat` | the node's model and a `partner` (an AI critic) take turns until `maxTurns` or `stopWhen` (a condition on `value` / `turn`, or a phrase); outputs `messages`, `last`, `turns`, `stopped` |
+| `summarise` | to a `target` (`bullets` / `chars` / `tokens`) in a `style`; long texts in pieces (`pieceChars`) then merged; a `keep` item that was in the text stays in the summary whatever the model did |
+| `jev` | a decision: `pick` / `yes-no` / `score` / `rank` as fixed-shape JSON; `votes` (majority), `minConfidence` + `onLowConfidence` (`default`, `second-opinion`, `ask-person`, `error`); the chosen port carries the context |
+| `tool` | a named tool (the host enforces the scope's allowlist: `engine.tool-denied`) or a custom HTTP call (`url` / `headers` / `body` templates, `{{secret:NAME}}` in headers only, `expect.status` and `expect.path`) |
+| `script` | the transform language: `name = expression` lines, the `in` port as `input`; no loops, files, network or clock; `maxSteps` |
+| `agent` | hands a task to a coding agent (`host.run_agent`) and waits for its final answer; not idempotent |
+| `orchestrate` | planner → subtasks side by side → reviewer, `maxRounds`; workers by `workerModel` or by a pgm-orchestrator `workers` profile (`select` per subtask kind, fallbacks after) |
+| `sub-workflow` | (the engine's own) another workflow by `name` / `range` from the host's store, as its own run linked by `parent`; depth at most 8 |
+
+**Model choice** (spec 5.4): the node's `model`, else its sections' (innermost first), else the workflow's
+`defaults.model`, else the host's default (the person's); an entry's `fallback` list is tried when a model is unreachable
+or rate-limited (`model.unreachable` / `model.rate-limited` from the host), then `engine.model-unreachable`.
+
+**A node may ask a person** (`NodeError::ask(questions, state)`): the attempt closes as `waiting`, the run waits, and
+`Engine::answer` runs the node again with `NodeCall::answer` (and the `state` it gave in `NodeCall::asked`).
+
+Not here yet: laws and saved prompts applied to nodes (T-202; `{{prompt:name}}` already fills from
+`WorkflowHost::saved_prompt`), custom-node sandboxes (T-203), large values as `values/<hash>` refs and secret masking in
+the log (T-204), a `sub-workflow` child that waits for a person (`engine.child-waits`).
 
 ## Use it in another project
 
@@ -85,6 +110,6 @@ match report.status.as_str() {
 
 ## Tests
 
-`cargo test -p pgm-workflow-engine-internal`. `tests/spec.rs` holds the checks R407 to R417 (`r407_...` ... `r417_...`)
-and more (sub-graphs, for-each, preflight, set / emit); bridge/test/regress.js runs them once and maps the test names
-to the checks.
+`cargo test -p pgm-workflow-engine-internal`. `tests/spec.rs` holds the engine's checks R407 to R417 (`r407_...` ...
+`r417_...`) and more (sub-graphs, for-each, preflight, set / emit); `tests/kinds.rs` the built-in kinds' R418 to R423.
+bridge/test/regress.js runs them once and maps the test names to the checks.

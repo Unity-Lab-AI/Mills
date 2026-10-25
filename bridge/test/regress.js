@@ -3774,8 +3774,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       }
     }
   }
-  // R407 to R417 (T-200): the Hyper Workflows engine (native/crates/pgm-workflow-engine-internal), all with its fake
-  // host and no network: one `cargo test` run, its tests named r407_ ... r417_ map back to the checks as R401-R406 do
+  // R407 to R423 (T-200, T-201): the Hyper Workflows engine and its built-in kinds (native/crates/
+  // pgm-workflow-engine-internal), all with its fake host and no network: one `cargo test` run, its tests named
+  // r407_ ... r423_ map back to the checks as R401-R406 do
   {
     const home407 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
     const native407 = path.join(MILLS, 'native');
@@ -3791,8 +3792,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R415: 'workflow engine: cancel stops running nodes through their cancel handle and ends cancelled; no node starts after it',
       R416: 'workflow engine: a panic in one node ends that node with engine.panic, and the engine and other runs go on',
       R417: 'workflow engine: a run\'s log replayed with a host that refuses all calls gives the same result',
+      // T-201: the built-in kinds (tests/kinds.rs), same crate, same cargo run
+      R418: 'workflow kinds: prompt / chat / summarise: templates fill from wires and saved prompts, a missing value is an error, a bad json answer is asked again; chat stops at maxTurns and at stopWhen; summarise keeps the keep items and cuts long texts',
+      R419: 'workflow kinds: tool calls only what the scope allows (engine.tool-denied); a custom http call maps status and a json path; a secret is never in the log and a prompt cannot read one',
+      R420: 'workflow kinds: script (the transform language) computes, has no file / network / clock function, and stops at its step limit; other languages are refused',
+      R421: 'workflow kinds: model choice is the node\'s, then its section\'s (inner first), then the workflow default; fallback is tried when a model is unreachable',
+      R422: 'workflow kinds: sub-workflow runs a pinned child with both logs linked and refuses past the depth limit; agent waits for the final answer; orchestrate plans, fans out, reviews within maxRounds and picks workers with a pgm-orchestrator profile',
+      R423: 'workflow kinds: jev picks one choice port; low confidence follows onLowConfidence (default, error, second opinion, ask a person); off-shape is retried then an error; votes take the majority; through openrouter, ollama and host',
     };
-    const MIN407 = { R407: 2, R408: 7, R409: 2, R410: 4, R411: 4, R412: 3, R413: 2, R414: 1, R415: 1, R416: 1, R417: 1 };
+    const MIN407 = { R407: 2, R408: 7, R409: 2, R410: 4, R411: 4, R412: 3, R413: 2, R414: 1, R415: 1, R416: 1, R417: 1, R418: 5, R419: 2, R420: 1, R421: 1, R422: 4, R423: 4 };
     if (!fs.existsSync(path.join(native407, 'crates', 'pgm-workflow-engine-internal'))) for (const id of Object.keys(L407)) skip(id, L407[id], 'no crate native/crates/pgm-workflow-engine-internal');
     else {
       const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home407}/.rustup" CARGO_HOME="${home407}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-engine-internal 2>&1`], { cwd: native407, encoding: 'utf8', timeout: 1800000 });
@@ -3800,7 +3808,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       if (ut.status === 77) for (const id of Object.keys(L407)) skip(id, L407[id], 'no Rust toolchain here (cargo not found)');
       else {
         const seen = {};
-        for (const m of out407.matchAll(/^test (r4(?:0[7-9]|1[0-7]))_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
+        for (const m of out407.matchAll(/^test (r4(?:0[7-9]|1[0-9]|2[0-3]))_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
         const tail = out407.replace(/\s+/g, ' ').slice(-160);
         for (const id of Object.keys(L407)) check(id, L407[id], ut.status === 0 && (seen[id] || []).length >= MIN407[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
       }

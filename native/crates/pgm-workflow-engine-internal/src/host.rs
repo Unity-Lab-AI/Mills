@@ -26,12 +26,21 @@ pub struct NodeError {
     /// `Some(false)`: never retried, whatever the node's retry settings say (a denied tool, a bad config).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retryable: Option<bool>,
+    /// `{questions, state}`: the node cannot go on without a person ([`NodeError::ask`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<Box<Value>>,
 }
 
 impl NodeError {
-    pub fn new(code: &str, message: impl Into<String>) -> NodeError { NodeError { code: code.to_string(), message: message.into(), retryable: None } }
+    pub fn new(code: &str, message: impl Into<String>) -> NodeError { NodeError { code: code.to_string(), message: message.into(), retryable: None, ask: None } }
     /// A failure no retry can mend.
-    pub fn fatal(code: &str, message: impl Into<String>) -> NodeError { NodeError { code: code.to_string(), message: message.into(), retryable: Some(false) } }
+    pub fn fatal(code: &str, message: impl Into<String>) -> NodeError { NodeError { code: code.to_string(), message: message.into(), retryable: Some(false), ask: None } }
+    /// Not a failure: the node needs a person to answer `questions` (the question protocol's shape). The run waits with
+    /// no worker held; when the answer comes the node runs again with [`NodeCall::answer`] set and [`NodeCall::asked`]
+    /// holding `state` (what it had worked out, so it need not ask its AI again).
+    pub fn ask(questions: Value, state: Value) -> NodeError {
+        NodeError { code: "engine.ask".into(), message: "waiting for a person".into(), retryable: Some(false), ask: Some(Box::new(json!({ "questions": questions, "state": state }))) }
+    }
     pub(crate) fn unavailable(what: &str) -> NodeError { NodeError::fatal("engine.unavailable", format!("this runner has no {what}")) }
 }
 
@@ -71,6 +80,10 @@ pub struct NodeCall {
     /// The sub-graph the node is in (None: the top level).
     pub graph: Option<String>,
     pub cancel: Cancel,
+    /// The person's answer, when this node asked one ([`NodeError::ask`]) and it came.
+    pub answer: Option<Value>,
+    /// The `state` the node gave with its question.
+    pub asked: Option<Value>,
 }
 
 impl NodeCall {
@@ -149,6 +162,23 @@ pub struct Ask {
     pub what: String,
 }
 
+/// A custom HTTP call (spec 5.2), already filled in (secrets included: the host must never log it).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HttpRequest {
+    pub method: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HttpAnswer {
+    pub status: u16,
+    pub body: String,
+}
+
 /// Which node is asking a host for a tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCtx {
@@ -169,6 +199,15 @@ pub trait WorkflowHost: Send + Sync {
     fn call_tool<'a>(&'a self, _name: String, _args: Value, _ctx: ToolCtx, _cancel: Cancel) -> BoxFut<'a, Result<Value, NodeError>> {
         Box::pin(async { Err(NodeError::unavailable("tools")) })
     }
+    /// A custom HTTP call, only to the hosts the scope's policy allows (`network`, spec 9.3).
+    fn http<'a>(&'a self, _req: HttpRequest, _cancel: Cancel) -> BoxFut<'a, Result<HttpAnswer, NodeError>> {
+        Box::pin(async { Err(NodeError::unavailable("network")) })
+    }
+    /// A saved prompt's text by name or id (`{{prompt:name}}`, spec 6), as the workflow's scope sees it.
+    fn saved_prompt(&self, _name: &str) -> Option<String> { None }
+    /// The workflow a `sub-workflow` node runs: by name and version range (`3`, `stable`, none = published), from the
+    /// store of the run's scope.
+    fn workflow(&self, _name: &str, _range: Option<&str>) -> Option<Document> { None }
     /// A coding agent (a Work run, a jcode run): waits for its final answer.
     fn run_agent<'a>(&'a self, _spec: Value, _cancel: Cancel) -> BoxFut<'a, Result<Value, NodeError>> {
         Box::pin(async { Err(NodeError::unavailable("agents")) })

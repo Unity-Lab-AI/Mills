@@ -18,12 +18,13 @@ pub mod cancel;
 mod engine;
 pub mod fake;
 pub mod host;
+pub mod kinds;
 pub mod log;
 mod plan;
 mod run;
 
 pub use cancel::Cancel;
 pub use engine::{Engine, RunInput, RunLimits, RunOptions, RunReport};
-pub use host::{walk, Ask, BoxFut, ModelAnswer, ModelRequest, NoHost, NodeCall, NodeError, NodeKind, NodeOutput, ToolCtx, WorkflowHost};
+pub use host::{walk, Ask, BoxFut, HttpAnswer, HttpRequest, ModelAnswer, ModelRequest, NoHost, NodeCall, NodeError, NodeKind, NodeOutput, ToolCtx, WorkflowHost};
 pub use log::Prior;
 pub use pgm_workflow_internal as model;
