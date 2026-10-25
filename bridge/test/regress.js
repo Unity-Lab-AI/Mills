@@ -299,7 +299,8 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  reTestSetup();
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env, cpus: '1', memory: '512m' } } : {}), rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -399,6 +400,37 @@ const RUST_HOST = (() => {
   if (why) { console.error('--rust-host: ' + why); process.exit(2); }
   return NATIVE_BIN.host;
 })();
+// T-303: RE containers (R316 to R320). The checks need the real Podman and a tiny local image: reTestSetup builds one from a
+// 2-line Containerfile (a non-root user, so the exchange folder's sub-uid files are exercised) from a Debian image that is
+// already in local storage (nothing is pulled), or says why not (the checks then skip). reTestCleanup removes every
+// container the hub made under the test prefix and the image.
+const RE_T = { ok: false, why: 'the Rust hub\'s: --rust-hub runs it', env: {}, image: 'localhost/pgm-re-test:1', prefix: 'pgm-re-test-' };
+function podman(args, env) { return spawnSync('podman', args, { encoding: 'utf8', env: { ...process.env, ...(env || {}) }, timeout: 240000, windowsHide: true }); }
+function reTestSetup() {
+  if (!RUST_HUB) return;
+  if (WIN) { RE_T.why = 'the engine here is Docker on Windows: not run by this check (T-303 leaves the Windows path)'; return; }
+  const dir = path.join(SCRATCH, 're-test-image');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Containerfile'), 'FROM docker.io/library/debian:trixie-slim\nRUN useradd -m -u 1000 re\nUSER re\n');
+  let why = 'podman is not available';
+  // this account's own HOME first; its real home when the shared HOME has storage the engine cannot use (ACLs on the overlay folders)
+  for (const env of [{}, { HOME: os.userInfo().homedir }]) {
+    if (podman(['version'], env).status !== 0) { why = 'podman is not available'; break; }
+    const b = podman(['build', '--pull=never', '-q', '-t', RE_T.image, '-f', path.join(dir, 'Containerfile'), dir], env);
+    if (b.status !== 0) { why = 'no local debian:trixie-slim image to build the test image from (' + String(b.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
+    const r = podman(['run', '--rm', '--pull=never', '--network', 'none', '--cap-drop', 'ALL', RE_T.image, 'id', '-u'], env);
+    if (r.status !== 0 || r.stdout.trim() !== '1000') { why = 'podman cannot run containers here (' + String(r.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
+    RE_T.ok = true; RE_T.env = env; RE_T.why = '';
+    return;
+  }
+  RE_T.why = why;
+}
+function reTestCleanup() {
+  if (!RE_T.ok) return;
+  const left = (podman(['ps', '-a', '--filter', 'name=' + RE_T.prefix, '--format', '{{.Names}}'], RE_T.env).stdout || '').split('\n').filter(Boolean);
+  if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
+  podman(['rmi', '-f', RE_T.image], RE_T.env);
+}
 async function startHub() {
   const log = fs.openSync(path.join(SCRATCH, 'hub.log'), 'a');
   hub = spawn(process.execPath, [path.join(SB, 'run.js'), '--no-tunnel'], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
@@ -3457,6 +3489,97 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     // leave the board as it was: the planner checks after this one weigh owners by their open workload
     for (const t of [t315, p315]) if (t.id) { await call('/api/board/release', U, { id: t.id, asAgent: t === t315 }); await call('/api/board/delete', U, { id: t.id }); }
   } else skip('R315', 'asAgent board writes', 'the Rust hub\'s: --rust-hub runs it');
+  // R316 to R320 (T-303): RE containers, the manager of throw-away copies of the base image. A tiny local image (reTestSetup),
+  // the real Podman; every container this block starts is removed again, whatever happens
+  if (RE_T.ok) {
+    const prefix = RE_T.prefix, tok = { u: U, d: D, a: A };
+    const ctrs = () => (podman(['ps', '-a', '--filter', 'name=' + prefix, '--format', '{{.Names}}'], RE_T.env).stdout || '').split('\n').filter(Boolean).sort();
+    const re = (p, t, body) => call('/api/re/' + p, t, body);
+    const reList = async (t) => ((await re('list', t)).data || {});
+    const reSt = async (t, id) => ((await re('status?id=' + id, t)).data || {}).sandbox || {};
+    const exch = (id) => path.join(SCRATCH, 'Re', id);
+    const started = []; // every copy this block made, for the last clean-up
+    try {
+      // R316: at most three run, the rest wait in order, a freed slot starts the next in line
+      const mk = async (t, purpose) => { const r = await re('start', t, { purpose }); const s = (r.data || {}).sandbox || {}; if (s.id) started.push(s.id); return { status: r.status, s, error: (r.data || {}).error }; };
+      const s1 = await mk(U, 'r316 one'), s2 = await mk(U, 'r316 two'), s3 = await mk(D, 'r316 three');
+      const q1 = await mk(A, 'r316 four'), q2 = await mk(U, 'r316 five');
+      const l316 = await reList(U);
+      const names316 = ctrs();
+      const stop1 = await re('stop', U, { id: s1.s.id });
+      let q1after = {}; for (let i = 0; i < 40; i++) { q1after = await reSt(A, q1.s.id); if (q1after.state === 'running') break; await sleep(250); }
+      const q2after = await reSt(U, q2.s.id);
+      const q2stop = await re('stop', U, { id: q2.s.id }); // leaving the queue: it never starts
+      const names316b = ctrs();
+      check('R316', 'T-303 RE containers: at most 3 copies run at once (a fourth and fifth wait: state queued, place 1 and 2, no container made for them); stopping a running one starts the next in line (FIFO), the one behind moves up, and a queued copy can leave the queue; anyone on the team may start one (no approval)',
+        [s1, s2, s3].every((x) => x.status === 200 && x.s.state === 'running') && q1.s.state === 'queued' && q1.s.queuePosition === 1 && q2.s.state === 'queued' && q2.s.queuePosition === 2
+        && l316.running === 3 && l316.queued === 2 && l316.max === 3 && (l316.sandboxes || []).length === 5 && names316.length === 3 && names316.every((n) => n.startsWith(prefix))
+        && stop1.status === 200 && stop1.data.sandbox.state === 'gone' && q1after.state === 'running' && q2after.state === 'queued' && q2after.queuePosition === 1
+        && q2stop.status === 200 && names316b.length === 3 && !names316b.includes(prefix + s1.s.id),
+        `started ${[s1, s2, s3].map((x) => x.s.state)} queued ${q1.s.queuePosition}/${q2.s.queuePosition} (${q1.error || ''}${q2.error || ''}) list ${l316.running}+${l316.queued}/${l316.max} containers ${names316.length} · after stop q1 ${q1after.state} q2 ${q2after.state}/${q2after.queuePosition} containers ${names316b.length}`);
+
+      // R317: data in, a command in the copy, data out (text, binary and the raw download); no network, no host mount, a non-root user, one capability
+      const id2 = s2.s.id;
+      const bin = Buffer.from([0, 1, 2, 250, 255, 77, 90, 144, 0, 3]);
+      const p1 = await re('put', U, { id: id2, path: 'sample/hello.txt', text: 'hello re' });
+      const p2 = await re('put', U, { id: id2, path: 'bin.dat', base64: bin.toString('base64') });
+      const x1 = await re('exec', U, { id: id2, cmd: 'cat /work/in/sample/hello.txt | tr a-z A-Z > /work/out/up.txt; cp /work/in/bin.dat /work/out/bin.dat; id -u; ls /sys/class/net; ls /work; grep CapEff /proc/self/status; echo err >&2' });
+      const x2 = await re('exec', U, { id: id2, cmd: ['sh', '-c', 'echo $0 $1', 'a', 'b'] });
+      const x3 = await re('exec', U, { id: id2, cmd: 'sleep 30', timeoutSec: 1 });
+      const g1 = await re('get', U, { id: id2, path: 'up.txt' });
+      const g2 = await re('get', U, { id: id2, path: 'out/bin.dat' });
+      const raw = await fetch(H + '/api/re/get?id=' + id2 + '&path=bin.dat', { headers: { Authorization: 'Bearer ' + U } });
+      const rawBuf = Buffer.from(await raw.arrayBuffer());
+      const esc = [await re('put', U, { id: id2, path: '../escape.txt', text: 'x' }), await re('put', U, { id: id2, path: '/etc/cron.d/x', text: 'x' }), await re('get', U, { id: id2, path: '../../etc/passwd' }), await re('get', U, { id: id2, path: '/etc/passwd' }), await re('put', U, { id: id2, path: 'in/../../x', text: 'x' })];
+      const st2 = (await re('status?id=' + id2, U)).data || {};
+      const out1 = (x1.data.stdout || '').split('\n');
+      check('R317', 'T-303 RE containers: put / exec / get round trip: a text and a binary file go in (/work/in), a command in the copy makes results in /work/out (it runs as a non-root user, no network but lo, nothing of the host mounted, only the ptrace capability), they come out unchanged (JSON and raw download), stderr is kept apart, a runaway command is stopped at its timeout, and a path that leaves the exchange folder (.., absolute) is refused with 400',
+        p1.status === 200 && p1.data.path === '/work/in/sample/hello.txt' && p2.status === 200 && p2.data.size === bin.length
+        && x1.status === 200 && x1.data.code === 0 && out1[0] === '1000' && out1[1] === 'lo' && out1[2] === 'in' && out1[3] === 'out' && /CapEff:\t0000000000080000/.test(x1.data.stdout) && x1.data.stderr.trim() === 'err'
+        && x2.data.code === 0 && x2.data.stdout.trim() === 'a b' && x3.data.timedOut === true
+        && g1.status === 200 && g1.data.text === 'HELLO RE' && g2.status === 200 && g2.data.base64 === bin.toString('base64') && raw.status === 200 && rawBuf.equals(bin)
+        && esc.every((e) => e.status === 400) && !fs.existsSync(path.join(SCRATCH, 'Re', 'escape.txt')) && (st2.files || []).some((f) => f.area === 'out' && f.path === 'up.txt'),
+        `put ${p1.status}/${p2.status} exec ${x1.status} ${JSON.stringify(x1.data).slice(0, 220)} · argv ${JSON.stringify(x2.data.stdout)} · timeout ${x3.data.timedOut} · get ${g1.data.text}/${g2.status} raw ${raw.status} ${rawBuf.length} · escapes ${esc.map((e) => e.status)}`);
+
+      // R318: stop removes the container and its exchange folder entirely
+      const dir2 = exch(id2), hadDir = fs.existsSync(path.join(dir2, 'in', 'bin.dat')) && fs.existsSync(path.join(dir2, 'out', 'up.txt'));
+      const stop2 = await re('stop', U, { id: id2 });
+      const after2 = [await re('exec', U, { id: id2, cmd: 'true' }), await re('get', U, { id: id2, path: 'up.txt' })];
+      const gone = (await reList(U)).sandboxes || [];
+      check('R318', 'T-303 RE containers: stopping a copy deletes it entirely: its container is gone from the engine, its exchange folder (what went in and what came out, even files the copy\'s own user made) is deleted, it is off the list, and using it afterwards is refused (409/404); nothing survives',
+        hadDir && stop2.status === 200 && stop2.data.deleted === true && !ctrs().includes(prefix + id2) && !fs.existsSync(dir2) && !gone.some((s) => s.id === id2) && after2.every((r) => r.status === 404 || r.status === 409),
+        `had ${hadDir} stop ${stop2.status} container ${ctrs().includes(prefix + id2)} folder ${fs.existsSync(dir2)} after ${after2.map((r) => r.status)}`);
+
+      // R319: someone else's copy: listed, readable (status), but never stopped / used by another person (403)
+      const mine = await mk(U, 'r319 mine');
+      await re('put', U, { id: mine.s.id, path: 'keep.txt', text: 'keep me' });
+      const other = [await re('stop', D, { id: mine.s.id }), await re('exec', D, { id: mine.s.id, cmd: 'id' }), await re('put', D, { id: mine.s.id, path: 'x', text: 'x' }), await re('get', D, { id: mine.s.id, path: 'keep.txt' })];
+      const dList = await reList(D), dSee = (dList.sandboxes || []).find((s) => s.id === mine.s.id), dStatus = await re('status?id=' + mine.s.id, D);
+      const stillMine = await re('exec', U, { id: mine.s.id, cmd: 'echo still here' });
+      // the team tools: an agent is its person (same owner rules); an unknown tool is refused
+      check('R319', 'T-303 RE containers: another person cannot stop, exec, put to or get from someone\'s copy (403 each, nothing changed) while the list and status show it to everyone (read-only); the owner still can; the list says who owns which',
+        mine.status === 200 && other.every((r) => r.status === 403) && !!dSee && dSee.owner === 't-user' && dSee.purpose === 'r319 mine' && dStatus.status === 200 && dStatus.data.sandbox.state === 'running' && stillMine.status === 200 && stillMine.data.stdout.trim() === 'still here',
+        `other ${other.map((r) => r.status)} listed ${!!dSee} status ${dStatus.status} owner exec ${stillMine.status}`);
+
+      // R320: a hub restart adopts the running copy back (owner, purpose, files kept), never kills it; an admin may stop any copy
+      const pid0 = (await call('/api/status')).data.pid, before = ctrs();
+      fs.writeFileSync(path.join(SB, '.restart'), 'test');
+      let pid1 = pid0; for (let i = 0; i < 120 && (pid1 === pid0 || !pid1); i++) { await sleep(250); pid1 = (await call('/api/status')).data.pid; }
+      let l320 = {}, mine2 = null; for (let i = 0; i < 40 && !mine2; i++) { l320 = await reList(U); mine2 = (l320.sandboxes || []).find((s) => s.id === mine.s.id); if (!mine2) await sleep(500); }
+      const got = await re('get', U, { id: mine.s.id, path: 'in/keep.txt' }), dOther = await re('exec', D, { id: mine.s.id, cmd: 'id' });
+      const stillRuns = await re('exec', U, { id: mine.s.id, cmd: 'echo after restart' });
+      const during = ctrs();
+      const adminStop = await re('stop', A, { id: mine.s.id });
+      check('R320', 'T-303 RE containers: after a hub restart the running copy is adopted back (same id, owner, purpose; its files and its container untouched; listed as adopted), the owner rules still hold (403 for others), and an admin may stop any copy',
+        !!pid1 && pid1 !== pid0 && !!mine2 && mine2.adopted === true && mine2.state === 'running' && mine2.owner === 't-user' && mine2.purpose === 'r319 mine' && before.includes(prefix + mine.s.id)
+        && got.status === 200 && got.data.text === 'keep me' && dOther.status === 403 && stillRuns.status === 200 && stillRuns.data.stdout.trim() === 'after restart' && adminStop.status === 200 && !ctrs().includes(prefix + mine.s.id) && !fs.existsSync(exch(mine.s.id)),
+        `pid ${pid0} -> ${pid1} adopted ${mine2 && mine2.adopted} ${mine2 && mine2.state} get ${got.status} other ${dOther.status} exec ${stillRuns.status} admin stop ${adminStop.status}`);
+    } finally {
+      // whatever happened: every copy is stopped (their owners', through the hub), then any container left is removed with the engine
+      for (const id of started) for (const t of [A]) await re('stop', t, { id });
+      const left = ctrs(); if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
+    }
+  } else for (const id of ['R316', 'R317', 'R318', 'R319', 'R320']) skip(id, 'RE containers (T-303: cap of 3 + queue, put / exec / get, stop deletes everything, owner rules, restart adoption)', RE_T.why);
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
@@ -5109,6 +5232,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     await run();
   } catch (e) { if (e.stopAfter) console.log(e.message); else { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); } }
   stopHub();
+  reTestCleanup();
   if (ollamaSrv) ollamaSrv.close();
   await sleep(800);
   const failed = results.filter((r) => r.status === 'FAIL'), skipped = results.filter((r) => r.status === 'SKIP'), pending = results.filter((r) => r.status === 'SPEC');
