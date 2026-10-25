@@ -444,13 +444,19 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+  const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
   const PAGE_SCRIPTS = ['attach.js', 'library.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
-  for (const f of ['md.js', 'board.js', 'sw.js', ...PAGE_SCRIPTS]) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
+  for (const f of ['md.js', 'board.js', 'sw.js', ...PAGE_SCRIPTS, ...EDITOR_FILES]) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
   for (const f of PAGE_SCRIPTS) if (!indexHtml.includes(`<script src="${f}"></script>`)) { pageOk = false; pageErr += ' ' + f + ' not loaded'; }
-  check('R1', 'every bridge script passes node --check; page script (and web/md.js) parses', !bad.length && pageOk, [bad.map((f) => path.basename(f)).join(', '), pageErr].filter(Boolean).join(' '));
+  { // the editor foundation (T-205): its scripts load after the page script, in this order, the service worker caches them, the menu and the screen exist
+    const afterPage = indexHtml.indexOf('</script>', indexHtml.indexOf('<script>')), sw1 = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8'); let last = afterPage;
+    for (const f of EDITOR_FILES) { const at = indexHtml.indexOf(`<script src="${f}"></script>`); if (at < last) { pageOk = false; pageErr += ' ' + f + ' not loaded after the page script (in order)'; } else last = at; if (!sw1.includes(`'${f}'`)) { pageOk = false; pageErr += ' ' + f + ' not in sw.js'; } }
+    if (!/id="goWorkflows"/.test(indexHtml) || !/<div id="workflows" class="screen" hidden>/.test(indexHtml) || !/showScreen\('workflows'\)/.test(indexHtml) || !/cmd: '\/workflows'/.test(indexHtml)) { pageOk = false; pageErr += ' the Workflows screen, its menu tile or its command is missing'; }
+  }
+  check('R1', 'every bridge script passes node --check; page script (and web/md.js) parses; the editor foundation scripts (web/editor/*.js) parse, load after the page script and are cached by sw.js, and the Workflows screen has its menu tile and command', !bad.length && pageOk, [bad.map((f) => path.basename(f)).join(', '), pageErr].filter(Boolean).join(' '));
 
   const st = await call('/api/status');
   const log = fs.readFileSync(path.join(SCRATCH, 'hub.log'), 'utf8');
@@ -1812,7 +1818,7 @@ async function run() {
   const semCmp = (a, b) => { const x = SEMVER.exec(a), y = SEMVER.exec(b); for (let i = 1; i <= 3; i++) { const d = Number(x[i]) - Number(y[i]); if (d) return d; } return 0; };
   const readVersions = (root) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'versions.json'), 'utf8')); } catch { return null; } };
   const V = readVersions(MILLS) || { project: '', modules: {} }, prodRoot = path.join(PROD, '..'), PV = prodRoot !== MILLS ? readVersions(prodRoot) : null;
-  const modsOnDisk = [...fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => 'bridge/' + f), ...fs.readdirSync(path.join(MILLS, 'web')).filter((f) => /\.(js|css)$/.test(f) || f === 'index.html').map((f) => 'web/' + f)];
+  const modsOnDisk = [...fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => 'bridge/' + f), ...fs.readdirSync(path.join(MILLS, 'web')).filter((f) => /\.(js|css)$/.test(f) || f === 'index.html').map((f) => 'web/' + f), ...fs.readdirSync(path.join(MILLS, 'web', 'editor')).filter((f) => /\.js$/.test(f)).map((f) => 'web/editor/' + f)];
   const unlisted = modsOnDisk.filter((m) => !(m in V.modules)), ghosts = Object.keys(V.modules).filter((m) => !modsOnDisk.includes(m));
   const badSem = [V.project, ...Object.values(V.modules)].filter((s) => !SEMVER.test(String(s)));
   const eolFree = (b) => b.toString('latin1').replace(/\r\n/g, '\n'); // .bat / .cmd / .ps1 are checked out with CRLF (.gitattributes): line endings are not a change
@@ -3992,6 +3998,90 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && mFail.status === 'failed' && !!alert472 && (hook472.runs || []).length === 1 && hook472.webhook && hook472.webhook.secret === undefined,
         `hook ${wh.status}; signed ${signed.status} ${m472.status} ${JSON.stringify(m472.result).slice(0, 60)}; unsigned ${unsigned.status}; event ${evOk.status} ${mEv.status}, wrong secret ${evBad.status}; failing ${mFail.status}, alert ${!!alert472}; listed runs ${(hook472.runs || []).length}`);
     }
+  }
+  // R447 to R453 (T-205): the editor foundation (web/editor/core.js, view.js, the workflow plugin, a stub page-elements
+  // plugin, the Workflows screen). The logic checks run in Node in both suite modes (bridge/test/editor-check.js, with a
+  // fake DOM for the view and a stub hub for the screen); R451 also goes through the real Rust hub under --rust-hub.
+  {
+    const L447 = {
+      R447: 'editor core (web/editor/core.js: pure logic, no DOM): add, move, resize, snap to the grid and to another item, box select, align, group / ungroup; undo x n then redo x n returns the same document; a continuous drag is one undo step',
+      R448: 'editor core: copy / paste across two documents keeps ids unique; a connected selection keeps the wires inside it and drops the wires to the outside; a group travels with its members',
+      R449: 'editor core: the property panel is built from a json schema (also drawn by the view); an invalid value shows the schema\'s message and does not write',
+      R450: 'editor core: entering a sub-graph and leaving it again changes the view, not the document or its history; the breadcrumb shows the path (and the view draws it)',
+      R451: 'editor plugins: a tool registers item kinds (the workflow one, and a stub "page elements" one for T-191); core.js names neither and works alone; the workflow plugin\'s ports, types and document round trip follow the library; the Workflows screen opens the list, then the editor (save, test run with the node overlay, the side chat); with --rust-hub the plugin\'s calls match the hub: its kinds equal the hub\'s, save then open round-trips a document through /api/hyperwork/, validate, a test run reports node states, the side chat, triggers, duplicate, delete, publish',
+      R452: 'editor core: an AI patch (a list of commands) applies as one undo step; a bad patch is refused whole and a rejected proposal leaves no trace in the history',
+    };
+    const ec = await require('./editor-check.js').run();
+    let hub451 = { ok: true, detail: '' };
+    if (!RUST_HUB) hub451.detail = ' (the hub half of R451 runs with --rust-hub)';
+    else {
+      const WF = require(path.join(MILLS, 'web', 'editor', 'kinds-workflow.js')), CORE = require(path.join(MILLS, 'web', 'editor', 'core.js'));
+      const request = async (method, p, body) => {
+        const r = await fetch(H + p, { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + A }, body: body === undefined || method === 'GET' ? undefined : JSON.stringify(body) });
+        const text = await r.text(); let data = null; if (!/\/log\?/.test(p)) { try { data = JSON.parse(text); } catch { data = null; } }
+        return { status: r.status, data, text };
+      };
+      const cl = WF.client(request), why = [], need = (name, ok, more) => { if (!ok) why.push(name + (more ? ' [' + more + ']' : '')); };
+      try {
+        // the hub's kinds and the plugin's static copy agree (names, ports, types, required, many)
+        const hubKinds = await cl.kinds(), port = (p) => [p.name, p.type, !!p.required, !!p.many].join(':');
+        const sig = (m) => m.kind + '|' + (m.ports.in || []).map(port).join(',') + '|' + (m.ports.out || []).map(port).join(',');
+        const hubBuilt = hubKinds.filter((k) => k.trust === 'built-in'), sa = new Set(WF.STATIC_MANIFESTS.map(sig)), sb = new Set(hubBuilt.map(sig));
+        need('the static kinds equal the hub\'s built-ins', [...sa].every((x) => sb.has(x)) && [...sb].every((x) => sa.has(x)), 'static-only ' + [...sa].filter((x) => !sb.has(x)).join(' ; ') + ' hub-only ' + [...sb].filter((x) => !sa.has(x)).join(' ; '));
+        // build a document in the editor, save it, open it again
+        const reg = CORE.createRegistry(); WF.install(reg, hubKinds);
+        const ed = CORE.createEditor({ registry: reg, doc: WF.fromWorkflow(WF.blank('r451-edit', { extra: { labels: ['r451cat'] } })), idPrefix: 'n', linkPrefix: 'e' });
+        need('edit: disconnect the blank\'s wire', ed.exec({ type: 'disconnect', id: 'e1' }).ok);
+        const added = ed.exec({ type: 'add', kind: 'prompt', id: 'n3', x: 220, y: 100, props: { user: 'hyperwork {{inputs.prompt}}', label: 'Answer' } });
+        need('edit: add a prompt node', added.ok, added.error);
+        const c1 = ed.exec({ type: 'connect', from: 'n1.prompt', to: 'n3.in' }), c2 = ed.exec({ type: 'connect', from: 'n3.text', to: 'n2.result' });
+        need('edit: wire start to prompt to end', c1.ok && c2.ok, (c1.error || '') + (c2.error || ''));
+        const sv = await cl.save(null, ed.toJSON(), { scope: 'team-core' });
+        need('save: a new workflow in team-core, an etag, no errors', !!sv.id && !!sv.etag && !sv.problems.some((p) => p.level === 'error'), JSON.stringify(sv.problems).slice(0, 200));
+        const opened = await cl.open(sv.id), mine = WF.toWorkflow(ed.toJSON()).json, back = WF.toWorkflow(opened.doc).json;
+        const norm = (j) => CORE.canon({ nodes: j.nodes, edges: j.edges, name: j.name, labels: j.labels });
+        need('open: the saved document comes back with the same nodes, wires, positions, config and name', norm(mine) === norm(back) && opened.draft === true && opened.etag === sv.etag && opened.rights.edit === true, norm(mine).slice(0, 160) + ' <> ' + norm(back).slice(0, 160));
+        need('open: the editor loads it again (same items and wires)', Object.keys(opened.doc.items).sort().join() === Object.keys(ed.doc.items).sort().join() && Object.keys(opened.doc.links).sort().join() === Object.keys(ed.doc.links).sort().join());
+        const again = await cl.save(sv.id, opened.doc, { etag: opened.etag }); need('save again with the etag', again.id === sv.id && again.etag !== opened.etag);
+        let stale = 0; try { await cl.save(sv.id, opened.doc, { etag: opened.etag }); } catch (e) { stale = e.status; } need('a stale etag is refused (409), the editor says so', stale === 409, 'status ' + stale);
+        // validate: a good document, and one the hub refuses
+        const good = await cl.validate(ed.toJSON()); need('validate: no errors for the good document', !good.some((p) => p.level === 'error'), JSON.stringify(good).slice(0, 160));
+        const broken = CORE.createEditor({ registry: reg, doc: WF.fromWorkflow(WF.blank('r451-bad')), idPrefix: 'n', linkPrefix: 'e' }); broken.exec({ type: 'delete', ids: ['n2'] });
+        const badp = await cl.validate(broken.toJSON()); need('validate: a document with no end has the hub\'s error (end.missing)', badp.some((p) => p.code === 'end.missing' && p.level === 'error'), JSON.stringify(badp).slice(0, 160));
+        // a test run of the draft, with the node states from the log
+        const until = async (run) => { let m = {}; for (let i = 0; i < 240; i++) { m = await cl.runMeta(run); if (m.status && m.status !== 'running') break; await sleep(250); } return m; };
+        const run = await cl.run(sv.id, { prompt: 'r451 run', draft: true }); need('a test run starts (a run id, the hub as runner)', /^hr-/.test(run.run) && run.runner === 'hub', JSON.stringify(run));
+        const watched = []; const w = cl.watch(run.run, (ev) => watched.push(ev), { pollMs: 150 }); await Promise.race([w.done, sleep(60000)]); w.stop();
+        const meta = await until(run.run), logged = await cl.log(run.run, 0), ov = WF.overlay(); ov.apply.all(logged);
+        need('the live watch and the log give the same events, ending with run_end', watched.length === logged.length && watched.length > 3 && watched[watched.length - 1].type === 'run_end' && JSON.stringify(watched.map((e) => e.seq)) === JSON.stringify(logged.map((e) => e.seq)), watched.length + ' vs ' + logged.length);
+        need('the overlay reports each node\'s state (start, prompt, end: ok) and the run (ok, outcome, result)', ov.nodes.n1 && ov.nodes.n1.state === 'ok' && ov.nodes.n3 && ov.nodes.n3.state === 'ok' && ov.nodes.n2 && ov.nodes.n2.state === 'ok' && ov.run.status === 'ok' && !!ov.run.outcome && ov.run.result !== null && meta.status === 'ok', JSON.stringify(ov.marks()).slice(0, 240) + ' run ' + ov.run.status);
+        need('the marks carry text for the view and the run is over', ov.marks().n3 && /ok/.test(ov.marks().n3.text) && ov.ended());
+        // a run that fails: the overlay shows the node in error (a template with no value)
+        const bad = CORE.createEditor({ registry: reg, doc: WF.fromWorkflow(WF.blank('r451-fail')), idPrefix: 'n', linkPrefix: 'e' }); bad.exec({ type: 'disconnect', id: 'e1' });
+        bad.exec({ type: 'add', kind: 'prompt', id: 'n3', x: 220, y: 100, props: { user: '{{inputs.nothing_here}}' } }); bad.exec({ type: 'connect', from: 'n1.prompt', to: 'n3.in' }); bad.exec({ type: 'connect', from: 'n3.text', to: 'n2.result' });
+        const sv2 = await cl.save(null, bad.toJSON(), { scope: 'team-core' }), run2 = await cl.run(sv2.id, { prompt: 'x', draft: true }); await until(run2.run);
+        const ov2 = WF.overlay(); ov2.apply.all(await cl.log(run2.run, 0)); need('a failing node shows as error with its message, the run as failed', ov2.nodes.n3 && ov2.nodes.n3.state === 'error' && !!ov2.nodes.n3.error && ov2.run.status === 'failed', JSON.stringify(ov2.nodes.n3) + ' ' + ov2.run.status);
+        // the side chat: asks with the document as it is now; answers have text and a patch array (no AI reachable is an answer too)
+        const ask = await cl.ask(ed.toJSON(), 'what does this workflow do?'); need('the side chat answers with text and a patch list (writes nothing)', typeof ask.text === 'string' && Array.isArray(ask.patch), JSON.stringify(ask).slice(0, 160));
+        const chat = WF.chat(cl, ed); const before = JSON.stringify(ed.history()); await chat.send('explain it'); need('the chat records the question and an answer, and the editor history is untouched', chat.messages.length === 2 && JSON.stringify(ed.history()) === before);
+        // triggers
+        const tr = await cl.triggerSave(WF.triggerBody(sv.id, { kind: 'event', name: 'r451-evt', prompt: 'go', title: 'r451 trigger' })); need('a trigger is added', !!tr.id, JSON.stringify(tr));
+        let list = await cl.triggers(sv.id); need('the trigger list shows it, with a readable summary', list.some((t) => t.id === tr.id && /r451-evt/.test(WF.triggerSummary(t))), JSON.stringify(list).slice(0, 160));
+        await cl.triggerPause(tr.id); list = await cl.triggers(sv.id); need('pause shows in the list', list.find((t) => t.id === tr.id).paused === true);
+        await cl.triggerResume(tr.id); await cl.triggerDelete(tr.id); list = await cl.triggers(sv.id); need('remove takes it away', !list.some((t) => t.id === tr.id));
+        // publish, then the list: search, categories, duplicate, delete
+        const pub = await cl.publish(sv.id, 'r451 first').catch((e) => ({ error: e.message })); need('publish through the plugin gives version 1', pub.version === 1, JSON.stringify(pub));
+        const items = await cl.list(), mineRow = items.find((i) => i.id === sv.id);
+        need('the list has the workflow with its version and categories; filter and categories work on it', !!mineRow && mineRow.version === 1 && WF.categories(items).some((c) => c.id === 'r451cat') && WF.filterList(items, { q: 'r451-ed' }).some((i) => i.id === sv.id) && WF.filterList(items, { category: 'r451cat' }).every((i) => (i.labels || []).includes('r451cat')) && WF.filterList(items, { q: 'no-such-thing-zz' }).length === 0, JSON.stringify(mineRow).slice(0, 160));
+        const cname = WF.copyName('r451-edit', items.map((i) => i.name)), dup = await cl.duplicate(sv.id, cname), dupOpen = await cl.open(dup.id);
+        need('duplicate saves a copy under a new name in the same scope', !!dup.id && dup.id !== sv.id && dupOpen.meta.name === cname && dupOpen.meta.scope === 'team-core' && (dupOpen.json.nodes || []).length === 3, JSON.stringify(dupOpen.meta).slice(0, 160));
+        await cl.remove(dup.id); const gone = await cl.list(); need('delete removes it from the list', !gone.some((i) => i.id === dup.id) && gone.some((i) => i.id === sv.id));
+      } catch (e) { why.push('threw: ' + e.message + ' ' + String(e.stack).split('\n')[1]); }
+      hub451 = { ok: !why.length, detail: why.length ? '; hub: ' + why.join('; ') : '; hub: kinds, save / open round trip, validate, test run + overlay, chat, triggers, publish, list, duplicate, delete all match' };
+    }
+    for (const id of ['R447', 'R448', 'R449', 'R450', 'R452']) check(id, L447[id], ec[id].ok, ec[id].detail);
+    check('R451', L447.R451, ec.R451.ok && hub451.ok, ec.R451.detail + hub451.detail);
+    skip('R453', 'editor core: the same fixture (a document and a list of user commands) gives the same result on the web build and the native build', 'there is no native build of editor-core yet (the Rust port, pgm-editor, comes after the web page; open question 11); the web build\'s checks R447 to R452 are the results a native build is held to');
   }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });

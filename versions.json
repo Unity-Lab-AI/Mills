@@ -44,14 +44,19 @@
     "web/attach.js": "1.1.0",
     "web/board.js": "1.0.4",
     "web/calls.js": "1.0.2",
+    "web/editor/core.js": "1.0.0",
+    "web/editor/kinds-boxes.js": "1.0.0",
+    "web/editor/kinds-workflow.js": "1.0.0",
+    "web/editor/view.js": "1.0.0",
+    "web/editor/workflows-ui.js": "1.0.0",
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.1.0",
-    "web/index.html": "1.19.0",
+    "web/index.html": "1.20.0",
     "web/library.js": "1.1.0",
     "web/md.js": "1.0.1",
     "web/notes.js": "1.0.2",
     "web/polish.css": "1.0.2",
     "web/profile.js": "1.0.1",
-    "web/sw.js": "1.0.3"
+    "web/sw.js": "1.0.4"
   }
 }
