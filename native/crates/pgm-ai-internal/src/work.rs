@@ -33,7 +33,7 @@ const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSe
 
 /// A run of one session (its key: the person for the primary session, "<user>#<id>" for the others). `last` = when it
 /// last sent something of its own (not the hub's pings): the liveness check ends a run silent for too long.
-struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String }
+struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String, project: String, branch: String, started: u64 }
 /// Everything a run has sent, so a page that reloads (or a second tab) can join it again: GET /api/work/attach.
 /// `base` = how many of the oldest events were dropped (a run keeps its last RUN_LOG_MAX).
 #[derive(Default, Clone)]
@@ -114,6 +114,8 @@ impl Work {
     pub fn busy(&self, u: &str) -> bool { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).keys().any(|k| k == u || k.starts_with(&p)) }
     /// How many of their sessions run now (presence shows it, T-288).
     pub fn working_count(&self, u: &str) -> u64 { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).keys().filter(|k| *k == u || k.starts_with(&p)).count() as u64 }
+    /// Where their most recently started running session works: (project, worktree branch, started at ms). Presence shows it (T-260).
+    pub fn working_where(&self, u: &str) -> Option<(String, String, u64)> { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(k, _)| *k == u || k.starts_with(&p)).map(|(_, r)| r).max_by_key(|r| r.started).map(|r| (r.project.clone(), r.branch.clone(), r.started)) }
     /// Is this one session running (its run key)?
     pub fn busy_key(&self, key: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key) }
     /// The run key of a run of theirs that waits for something from their browser: the primary session's first.
@@ -596,7 +598,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id") });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms() });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     w.busy_changed.notify_one();

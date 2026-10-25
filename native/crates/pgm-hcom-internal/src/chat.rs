@@ -48,6 +48,10 @@ pub trait ChatHost: Send + Sync {
     fn working(&self, _u: &str) -> bool { false }
     /// How many of this person's sessions work now (shown next to "working").
     fn working_count(&self, u: &str) -> u64 { u64::from(self.working(u)) }
+    /// Where their most recently started running session works: (project, branch, started at ms) (T-260).
+    fn working_where(&self, _u: &str) -> Option<(String, String, u64)> { None }
+    /// The board task they hold a claim on: (id, title, claimed at ms) (T-260).
+    fn held_task(&self, _u: &str) -> Option<(String, String, u64)> { None }
 }
 /// An answer.
 pub type Resp = hyper::Response<Body>;
@@ -65,7 +69,21 @@ struct Pres { online: bool, idle: bool, screen: String, at: u64, seen: u64, devi
 /// One page / app instance (its `device` id; an older page without one is "legacy"): live while it holds a long poll
 /// (and 8 s after the last one closed), idle when it says so (5 min without input, hidden, or the screen locked).
 #[derive(Default, Clone)]
-struct Dev { polls: u32, gen: u64, live: bool, idle: bool, locked: bool, seen: u64 }
+struct Dev { polls: u32, gen: u64, live: bool, idle: bool, locked: bool, seen: u64, wh: Option<Value> }
+/// What a source (Jcode PGM, the desktop app, a workflow) says its person works at: `where` = { project, branch, task: {id, title}?, since? }
+/// and `source` (letters, digits, - and _, up to 20). None = it cleared it (or sent junk). `since` is kept while it stays the same.
+fn clean_where(w: &Value, source: &str, before: &Option<Value>, now: u64) -> Option<Value> {
+    if !w.is_object() { return None; }
+    let t = |k: &str, n: usize| guilds::take_units(w[k].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).collect::<String>().trim(), n);
+    let (project, branch) = (t("project", 80), t("branch", 120));
+    let task = if w["task"].is_object() { let id = guilds::take_units(w["task"]["id"].as_str().unwrap_or("").trim(), 20); if id.is_empty() { Value::Null } else { json!({ "id": id, "title": guilds::take_units(w["task"]["title"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).collect::<String>().trim(), 160) }) } } else { Value::Null };
+    if project.is_empty() && branch.is_empty() && task.is_null() { return None; }
+    let same = before.as_ref().map(|b| b["project"] == json!(project) && b["branch"] == json!(branch) && b["task"] == task && b["source"] == json!(source)).unwrap_or(false);
+    let since = if same { before.as_ref().and_then(|b| b["since"].as_u64()).unwrap_or(now) } else { w["since"].as_u64().filter(|s| *s <= now).unwrap_or(now) };
+    let mut v = json!({ "project": project, "branch": branch, "since": since, "source": source });
+    if !task.is_null() { v["task"] = task; }
+    Some(v)
+}
 impl Pres {
     /// online = any live device; idle (away) = every live device idle
     fn derive(&mut self) {
@@ -269,22 +287,35 @@ fn conv_member(hub: &dyn ChatHost, conv: &str, user: &str, us: &[(String, String
 // ---------- presence + typing ----------
 impl Chat {
     fn pres_set(&self, user: &str, f: impl FnOnce(&mut Pres)) {
-        let changed = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); let before = (p.online, p.idle, p.screen.clone()); f(p); p.derive(); p.seen = now_ms(); let after = (p.online, p.idle, p.screen.clone()); if before != after { p.at = now_ms(); true } else { false } };
+        let changed = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); let before = (p.online, p.idle, p.screen.clone()); let wb = Chat::wsig(p); f(p); p.derive(); p.seen = now_ms(); let after = (p.online, p.idle, p.screen.clone()); let moved = before != after; if moved { p.at = now_ms(); } moved || wb != Chat::wsig(p) };
         if changed { self.room_changed(); }
+    }
+    /// what the live devices say they work at (a change of it wakes pages)
+    fn wsig(p: &Pres) -> String { let mut v: Vec<String> = p.devices.iter().filter(|(_, d)| d.live).filter_map(|(k, d)| d.wh.as_ref().map(|w| format!("{k}={w}"))).collect(); v.sort(); v.join("|") }
+    /// A source's report for one device: it counts as live while it keeps reporting (ONLINE_MS), whatever it names itself.
+    fn report_where(&self, user: &str, dev: &str, w: Option<&Value>, source: &str) {
+        self.pres_set(user, |p| { let now = now_ms(); let d = p.dev(dev); if let Some(w) = w { d.wh = clean_where(w, source, &d.wh, now); } if !source.is_empty() && d.polls == 0 { d.live = true; } d.seen = now; });
+    }
+    /// The live device reports of one person, newest first.
+    fn reported_where(&self, user: &str, now: u64) -> Vec<Value> {
+        let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(p) = m.get_mut(user) else { return vec![] }; Chat::expire(p, now);
+        let mut v: Vec<Value> = p.devices.values().filter(|d| d.live).filter_map(|d| d.wh.clone()).collect();
+        v.sort_by_key(|w| std::cmp::Reverse(w["since"].as_u64().unwrap_or(0))); v
     }
     pub fn touch(&self, user: &str) { self.presence.lock().unwrap_or_else(|e| e.into_inner()).entry(user.to_string()).or_default().seen = now_ms(); }
     fn poll_opened(&self, user: &str, dev: &str) { self.pres_set(user, |p| { let d = p.dev(dev); d.polls += 1; d.gen += 1; d.live = true; d.seen = now_ms(); }); }
     fn poll_closed(self: &Arc<Self>, user: &str, dev: &str) {
         let gen = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let d = m.entry(user.to_string()).or_default().dev(dev); d.polls = d.polls.saturating_sub(1); d.seen = now_ms(); if d.polls > 0 { return; } d.gen += 1; d.gen };
         let (c, u, dv) = (self.clone(), user.to_string(), dev.to_string());
-        tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(GONE_MS)).await; let still = c.presence.lock().unwrap_or_else(|e| e.into_inner()).get(&u).and_then(|p| p.devices.get(&dv)).map(|d| d.gen == gen && d.polls == 0 && d.live).unwrap_or(false); if still { c.pres_set(&u, |p| { let d = p.dev(&dv); d.live = false; d.idle = false; }); } });
+        tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(GONE_MS)).await; let still = c.presence.lock().unwrap_or_else(|e| e.into_inner()).get(&u).and_then(|p| p.devices.get(&dv)).map(|d| d.gen == gen && d.polls == 0 && d.live).unwrap_or(false); if still { c.pres_set(&u, |p| { let d = p.dev(&dv); d.live = false; d.idle = false; d.wh = None; }); } });
     }
     /// Every device of this person gone at once (signed out, or an older page's pagehide).
-    pub fn gone(&self, user: &str) { self.pres_set(user, |p| { for d in p.devices.values_mut() { d.polls = 0; d.gen += 1; d.live = false; d.idle = false; } }); }
+    pub fn gone(&self, user: &str) { self.pres_set(user, |p| { for d in p.devices.values_mut() { d.polls = 0; d.gen += 1; d.live = false; d.idle = false; d.wh = None; } }); }
     /// One device gone at once (its page was closed).
-    fn device_gone(&self, user: &str, dev: &str) { self.pres_set(user, |p| { let d = p.dev(dev); d.polls = 0; d.gen += 1; d.live = false; d.idle = false; }); }
+    fn device_gone(&self, user: &str, dev: &str) { self.pres_set(user, |p| { let d = p.dev(dev); d.polls = 0; d.gen += 1; d.live = false; d.idle = false; d.wh = None; }); }
     /// Devices not seen for ONLINE_MS are gone (a page that vanished without saying so).
-    fn expire(p: &mut Pres, now: u64) { let mut lapsed = false; for d in p.devices.values_mut() { if d.live && now.saturating_sub(d.seen) > ONLINE_MS && d.polls == 0 { d.live = false; d.idle = false; lapsed = true; } } if lapsed { let was = (p.online, p.idle); p.derive(); if was != (p.online, p.idle) { p.at = now; } } }
+    fn expire(p: &mut Pres, now: u64) { let mut lapsed = false; for d in p.devices.values_mut() { if d.live && now.saturating_sub(d.seen) > ONLINE_MS && d.polls == 0 { d.live = false; d.idle = false; d.wh = None; lapsed = true; } } if lapsed { let was = (p.online, p.idle); p.derive(); if was != (p.online, p.idle) { p.at = now; } } }
     /// The old presence list (older pages and the team tools read it): what others are shown, so it applies a person's
     /// "appear offline / away".
     pub fn presence_list(&self, us: &[(String, String, bool)]) -> Vec<Value> {
@@ -346,6 +377,19 @@ fn manual_of(hub: &dyn ChatHost, u: &str) -> Manual {
     c.manual.lock().unwrap_or_else(|e| e.into_inner()).insert(u.to_string(), m.clone());
     m
 }
+/// What a person works at now: their most recent source (a running Work session here, or what Jcode PGM / the desktop app
+/// reported), with the board task they hold a claim on. { project, branch, task: {id, title}?, since, source }
+fn where_of(hub: &dyn ChatHost, u: &str, now: u64) -> Option<Value> {
+    let mut best = hub.working_where(u).map(|(project, branch, since)| json!({ "project": project, "branch": branch, "since": since, "source": "work" }));
+    if let Some(r) = hub.chat().reported_where(u, now).into_iter().next() { if best.as_ref().map(|b| r["since"].as_u64() > b["since"].as_u64()).unwrap_or(true) { best = Some(r); } }
+    let held = hub.held_task(u).map(|(id, title, at)| (json!({ "id": id, "title": title }), at));
+    match (best, held) {
+        (Some(mut w), Some((t, _))) => { if w["task"].is_null() { w["task"] = t; } Some(w) }
+        (Some(w), None) => Some(w),
+        (None, Some((t, at))) => Some(json!({ "task": t, "since": at, "source": "board" })),
+        (None, None) => None,
+    }
+}
 /// One person's status as `viewer` sees it (themselves: with `real`, their actual presence).
 pub fn status_of(hub: &dyn ChatHost, u: &str, viewer: &str, now: u64) -> Value {
     let c = hub.chat();
@@ -358,6 +402,8 @@ pub fn status_of(hub: &dyn ChatHost, u: &str, viewer: &str, now: u64) -> Value {
     let hidden = m.over == "offline"; // appear offline: nothing else is shown
     let mut v = json!({ "user": u, "presence": shown, "label": label, "working": working && !hidden, "workingSessions": if hidden || !working { 0 } else { hub.working_count(u) }, "acceptingWork": m.accepting && !hidden, "dnd": m.dnd && !hidden,
         "text": if hidden { String::new() } else { m.text.clone() }, "since": since, "seen": if hidden { 0 } else { seen }, "devices": if hidden { 0 } else { devices } });
+    // where they work (T-260): left out when they hide it or appear offline; the person always sees their own
+    if !hidden && (!m.hide_where || viewer == u) && (shown != "offline" || working) { if let Some(w) = where_of(hub, u, now) { v["where"] = w; } }
     if viewer == u { v["real"] = json!(real); v["override"] = json!(m.over); v["overrideUntil"] = json!(m.over_until); v["dndUntil"] = json!(m.dnd_until); v["textUntil"] = json!(m.text_until); v["hideWhere"] = json!(m.hide_where); if hidden { v["text"] = json!(m.text); } }
     v
 }
@@ -715,7 +761,10 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             let truthy = |x: &Value| !(x.is_null() || *x == json!(false) || *x == json!(0) || *x == json!(""));
             let named = b["device"].as_str().map(|x| !x.trim().is_empty()).unwrap_or(false); let dev = device_id(b["device"].as_str());
             if truthy(&b["gone"]) { if named { c.device_gone(u, &dev); } else { c.gone(u); } } // an older page without a device id: everything, as before
-            else { let screen = b["screen"].as_str().map(|x| guilds::take_units(x, 12)); let idle = b.get("idle").map(truthy); let locked = b.get("locked").map(truthy); c.pres_set(u, |pr| { if let Some(sc) = screen { pr.screen = sc; } let d = pr.dev(&dev); if let Some(i) = idle { d.idle = i; } if let Some(l) = locked { d.locked = l; } d.seen = now_ms(); }); if truthy(&b["active"]) { note_active(hub, a); } }
+            else { let screen = b["screen"].as_str().map(|x| guilds::take_units(x, 12)); let idle = b.get("idle").map(truthy); let locked = b.get("locked").map(truthy); c.pres_set(u, |pr| { if let Some(sc) = screen { pr.screen = sc; } let d = pr.dev(&dev); if let Some(i) = idle { d.idle = i; } if let Some(l) = locked { d.locked = l; } d.seen = now_ms(); }); if truthy(&b["active"]) { note_active(hub, a); }
+                // a source reports what it works at (T-260): { where: { project, branch, task?, since? } | null, source: "jcode" | "app" | ... }; a report keeps its device live
+                let source: String = b["source"].as_str().unwrap_or("").trim().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(20).collect();
+                if !source.is_empty() || b.get("where").is_some() { c.report_where(u, &dev, b.get("where"), if source.is_empty() { "app" } else { &source }); } }
             answer(200, json!({ "ok": true }))
         }
         "/api/presence/time" if get => {
@@ -874,7 +923,7 @@ pub fn team_tool(hub: &dyn ChatHost, name: &str, args: &Value, a: &Account) -> V
     let now = now_ms() as i64;
     // (plans/presence.md: with the label, working / accepting work, do not disturb and the status text, so an AI can check
     // before it assigns or messages)
-    let people = || -> Vec<Value> { c.presence_list(&us).into_iter().map(|p| { let seen = p["seen"].as_i64().unwrap_or(0); let st = status_of(hub, &s(&p, "user"), u, now as u64); json!({ "user": p["user"], "name": disp(&s(&p, "user")), "state": if p["online"] == json!(true) { if p["idle"] == json!(true) { "away" } else { "online" } } else { "offline" }, "label": st["label"], "working": st["working"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "screen": s(&p, "screen"), "lastSeen": if seen > 0 { json!(guilds_iso(seen)) } else { Value::Null }, "agoMin": if seen > 0 { json!(((now - seen) as f64 / 60000.0).round() as i64) } else { Value::Null } }) }).collect() };
+    let people = || -> Vec<Value> { c.presence_list(&us).into_iter().map(|p| { let seen = p["seen"].as_i64().unwrap_or(0); let st = status_of(hub, &s(&p, "user"), u, now as u64); json!({ "user": p["user"], "name": disp(&s(&p, "user")), "state": if p["online"] == json!(true) { if p["idle"] == json!(true) { "away" } else { "online" } } else { "offline" }, "label": st["label"], "working": st["working"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "where": st["where"], "screen": s(&p, "screen"), "lastSeen": if seen > 0 { json!(guilds_iso(seen)) } else { Value::Null }, "agoMin": if seen > 0 { json!(((now - seen) as f64 / 60000.0).round() as i64) } else { Value::Null } }) }).collect() };
     match name {
         "team_channel_create" | "team_group_create" => {
             let ctx = ctx!(hub, us.clone());
@@ -927,7 +976,7 @@ pub fn team_tool(hub: &dyn ChatHost, name: &str, args: &Value, a: &Account) -> V
         }
         "team_presence" => {
             let mut list = people();
-            for (x, _, _) in &us { if !list.iter().any(|p| p["user"] == json!(x)) { let st = status_of(hub, x, u, now as u64); list.push(json!({ "user": x, "name": disp(x), "state": "offline", "label": st["label"], "working": st["working"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "screen": "", "lastSeen": Value::Null, "agoMin": Value::Null })); } }
+            for (x, _, _) in &us { if !list.iter().any(|p| p["user"] == json!(x)) { let st = status_of(hub, x, u, now as u64); list.push(json!({ "user": x, "name": disp(x), "state": "offline", "label": st["label"], "working": st["working"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "where": st["where"], "screen": "", "lastSeen": Value::Null, "agoMin": Value::Null })); } }
             ok(json!({ "you": u, "people": list }))
         }
         _ => no(format!("Unknown team tool: {name}")),

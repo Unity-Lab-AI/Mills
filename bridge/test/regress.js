@@ -2953,6 +2953,54 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       typeof j209.activeMs === 'number' && typeof j209.awayMs === 'number' && typeof j209.aiMs === 'number' && typeof j209.agentMs === 'number' && Array.isArray(j209.spans) && typeof j209.updatedAt === 'number'
         && /inputSince && Date\.now\(\) - sentActive >= 60000/.test(page209) && /body\.active = true/.test(page209), `file ${fs.existsSync(f209)} keys ${Object.keys(j209).join(',')}`);
   } else for (const id of ['R205', 'R206', 'R207', 'R208', 'R209']) skip(id, 'time accounting and the activity log (plans/presence.md section 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R230-R234: where a person works (T-260): project, branch, held task, from Work runs, the board and other sources
+    const st230 = async (tok, u) => (((await call('/api/presence', tok)).data.people || []).find((p) => p.user === u)) || {};
+    const wh230 = async (u = 'mills', tok = U) => (await st230(tok, u)).where;
+    const keep230 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+    const stop230 = keep230(D, 'r230'); await sleep(400); await call('/api/presence', D, { device: 'r230', idle: false });
+    const s230 = {};
+    s230.before = await wh230();
+    const slow = call('/api/chat', D, { message: 'SLOW r230' }); await sleep(800);
+    s230.run = await wh230(); const rst = await st230(U, 'mills');
+    await slow; await sleep(400); s230.after = await wh230();
+    check('R230', 'where (plans/presence.md): a person with a running Work session shows where they work, { project, branch, since, source: "work" }, to the team in GET /api/presence, and it is gone when the run ends',
+      !s230.before && s230.run && s230.run.source === 'work' && typeof s230.run.project === 'string' && s230.run.project.length > 0 && /^work\/mills/.test(s230.run.branch) && typeof s230.run.since === 'number' && rst.working === true && !s230.after,
+      `before ${JSON.stringify(s230.before)} · run ${JSON.stringify(s230.run)} · after ${JSON.stringify(s230.after)}`);
+    const t230 = (await call('/api/board/create', D, { title: 'where r230', status: 'todo' })).data.task || {};
+    await call('/api/board/claim', D, { id: t230.id, minutes: 10 });
+    s230.claim = await wh230();
+    const slow2 = call('/api/chat', D, { message: 'SLOW r230b' }); await sleep(800); s230.both = await wh230();
+    await slow2; await sleep(300);
+    await call('/api/board/release', D, { id: t230.id }); await sleep(100); s230.released = await wh230();
+    await call('/api/board/complete', D, { id: t230.id });
+    check('R231', 'where: the board task a person holds a claim on shows as where.task { id, title } (source "board" on its own, added to the Work session\'s project / branch during a run) and goes when the claim is released',
+      s230.claim && s230.claim.task && s230.claim.task.id === t230.id && s230.claim.task.title === 'where r230' && s230.claim.source === 'board' && s230.both && s230.both.source === 'work' && s230.both.task && s230.both.task.id === t230.id && s230.both.project && !s230.released,
+      `claim ${JSON.stringify(s230.claim)} · run+claim ${JSON.stringify(s230.both)} · released ${JSON.stringify(s230.released)}`);
+    const rep = { project: 'r232-proj', branch: 'feature/x', task: { id: 'T-232', title: 'reported' } };
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: rep });
+    s230.jc = await wh230(); const jcRoom = ((await call('/api/room/messages?rev=0', U)).data.status || []).find((p) => p.user === 'mills') || {};
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: { project: 'r232-proj', branch: 'feature/y' } }); s230.jc2 = await wh230();
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: null }); s230.jcClear = await wh230();
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: rep }); await call('/api/presence', D, { device: 'r232', gone: true }); s230.jcGone = await wh230();
+    check('R232', 'where: another source (Jcode PGM, the desktop app) reports POST /api/presence { device, source, where: { project, branch, task? } }: others see it with that source, in the room long poll\'s status too, a new report replaces it, where: null clears it and the device going away removes it',
+      s230.jc && s230.jc.source === 'jcode' && s230.jc.project === 'r232-proj' && s230.jc.branch === 'feature/x' && s230.jc.task && s230.jc.task.id === 'T-232' && jcRoom.where && jcRoom.where.project === 'r232-proj' && s230.jc2 && s230.jc2.branch === 'feature/y' && !s230.jc2.task && !s230.jcClear && !s230.jcGone,
+      `reported ${JSON.stringify(s230.jc)} · replaced ${JSON.stringify(s230.jc2)} · cleared ${JSON.stringify(s230.jcClear)} · gone ${JSON.stringify(s230.jcGone)}`);
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: rep });
+    await call('/api/presence/me', D, { hideWhere: true }); await sleep(100); s230.hidden = await wh230(); const mine = await call('/api/presence/me', D); s230.mine = mine.data.where;
+    await call('/api/presence/me', D, { hideWhere: false, override: 'offline' }); await sleep(100); s230.offline = await wh230(); const offMine = (await call('/api/presence/me', D)).data;
+    await call('/api/presence/me', D, { override: 'auto' }); await sleep(100); s230.back = await wh230();
+    await call('/api/presence', D, { device: 'r232', gone: true });
+    check('R233', 'where: hideWhere hides project / branch / task from others (the person still sees their own where); appear offline hides it too; both are back when switched off',
+      s230.hidden === undefined && s230.mine && s230.mine.project === 'r232-proj' && s230.offline === undefined && offMine.hideWhere === false && s230.back && s230.back.project === 'r232-proj',
+      `hidden ${JSON.stringify(s230.hidden)} · own ${JSON.stringify(s230.mine)} · offline ${JSON.stringify(s230.offline)} · back ${JSON.stringify(s230.back)}`);
+    await call('/api/presence', D, { device: 'r234', source: 'in valid!/' + 'x'.repeat(40), where: { project: 'p'.repeat(200), branch: 'b\u0001ranch', task: { id: 'T-1', title: 't'.repeat(500) } } });
+    const long = await wh230(); const junk = [await call('/api/presence', D, { device: 'r234', where: 'nope' }), await call('/api/presence', D, { device: 'r234', where: {} })]; const afterJunk = await wh230();
+    await call('/api/presence', D, { device: 'r234', gone: true }); stop230(); await call('/api/presence', D, { device: 'r230', gone: true });
+    const page234 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R234', 'where: a source\'s name and text are cleaned and cut (source letters / digits / - _ up to 20, project 80, branch 120, task title 160, control characters dropped); junk or empty where clears it (still 200); [static] the page tooltip names "on <project> · <task>"',
+      long && long.source.length <= 20 && /^[A-Za-z0-9_-]+$/.test(long.source) && long.project.length === 80 && long.branch === 'branch' && long.task.title.length === 160 && junk.every((r) => r.status === 200) && !afterJunk && /function whereText/.test(page234) && /' · on '/.test(page234),
+      `source "${long && long.source}" project ${long && long.project.length} branch "${long && long.branch}" title ${long && long.task && long.task.title.length} · junk ${junk.map((r) => r.status)} · after ${JSON.stringify(afterJunk)}`);
+  } else for (const id of ['R230', 'R231', 'R232', 'R233', 'R234']) skip(id, 'where a person works (T-260)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};

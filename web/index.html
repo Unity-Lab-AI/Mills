@@ -3745,11 +3745,16 @@ window.addEventListener('pagehide', () => { // closing the tab: offline at once 
   if (me && token && base) fetch(base + '/api/presence', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ gone: true, device: DEVICE }) }).catch(() => {});
 });
 const ago = (ms) => { const s = Math.round((Date.now() - ms) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago'; };
+function whereText(u) { // "on <project> · <task>" from the status's `where` (newer hubs; hidden by its person, then absent); Mills' T-261 has the full UI
+  const w = (typeof statusMap === 'object' && statusMap[u] || {}).where; if (!w) return '';
+  const bits = [w.project, w.task && (w.task.id + (w.task.title ? ' ' + w.task.title : ''))].filter(Boolean);
+  return bits.length ? ' · on ' + bits.join(' · ') : '';
+}
 function statusOf(u) { // 'on' | 'idle' | 'off', with a sentence for tooltips and the menu
   const p = presenceMap[u];
-  if (!p || !p.online) return { cls: 'off', text: p && p.seen ? 'offline · last seen ' + ago(p.seen) : 'offline' };
-  if (p.idle) return { cls: 'idle', text: 'away' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') };
-  return { cls: 'on', text: 'online' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') };
+  if (!p || !p.online) return { cls: 'off', text: (p && p.seen ? 'offline · last seen ' + ago(p.seen) : 'offline') + whereText(u) };
+  if (p.idle) return { cls: 'idle', text: 'away' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') + whereText(u) };
+  return { cls: 'on', text: 'online' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') + whereText(u) };
 }
 function renderWho() { // the main menu's "Who's here" strip
   const box = $('menuWho'); if (!box || !me) return;
