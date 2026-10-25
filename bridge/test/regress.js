@@ -254,7 +254,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -3812,6 +3812,107 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         const tail = out407.replace(/\s+/g, ' ').slice(-160);
         for (const id of Object.keys(L407)) check(id, L407[id], ut.status === 0 && (seen[id] || []).length >= MIN407[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
       }
+    }
+  }
+  // R437 to R446 (T-204): Hyper Workflows' store and run API, /api/hyperwork/ (the Rust hub's alone: the frozen
+  // JavaScript hub has none of it, R445). The library's own tests (tests/service.rs) run with the cargo block above;
+  // these go over HTTP, as the person: config hyperworkTeams makes team-core of t-admin + t-user, mills is outside it
+  {
+    const L437 = {
+      R437: 'hyperwork routes: save, get, publish (a message needed, errors refused), versions, diff, restore round trip; a stale etag gets 409',
+      R438: 'hyperwork routes: a viewer cannot save (403), an editor cannot publish (403), a run-only client (jcode) cannot save, publish, delete or change rights (403 each) and can list, get the published version and run',
+      R439: 'hyperwork routes: a team workflow is seen by a team member and not by someone outside the team (404 on get, list and run); a personal scope is private; the same name in two scopes lists twice, tagged; promote copies with history',
+      R440: 'hyperwork routes: run pins the published version and runs it through the hub\'s own AI path; log?follow=1 streams its events to run_end; a page that reloads attaches again from a seq; runs lists it',
+      R441: 'hyperwork routes: a run with preflight problems (needsProject without a project) answers 422 with the problems and starts nothing',
+      R442: 'hyperwork routes: an approval workflow shows waiting, someone else cannot answer it, /api/hyperwork/answer wakes it [the Work question protocol\'s bridge_question + POST /api/work/answer is T-204\'s later part, with 5.17.0\'s ask_user]',
+      R443: 'hyperwork routes: a hub restart in the middle of a run: the run resumes from its log after the restart and says so (run_resume)',
+      R444: 'hyperwork routes: a secret (config hyperworkSecrets) used in a workflow\'s HTTP call never appears in the run log or any route\'s answer',
+      R445: 'hyperwork routes: the frozen JavaScript hub answers 404 on /api/hyperwork/ (no mirror); the Rust hub lists the module',
+      R446: 'hyperwork routes: list?since=<rev> gives only what changed [the gateway serving the same routes and mirroring the home hub is T-204\'s later part]',
+    };
+    const hw = (p, tok, body, hdr) => call('/api/hyperwork/' + p, tok, body, hdr);
+    if (!RUST_HUB) {
+      const js1 = await hw('list', U), js2 = await hw('run', U, { name: 'x', prompt: 'y' });
+      check('R445', L437.R445, js1.status === 404 && js2.status === 404, `JavaScript hub: list ${js1.status}, run ${js2.status}`);
+      for (const id of Object.keys(L437).filter((x) => x !== 'R445')) skip(id, L437[id], 'the Rust hub\'s: --rust-hub runs it');
+    } else {
+      const doc = (name, extra = {}) => ({ schema: 1, name, nodes: [{ id: 's', kind: 'start' }, { id: 'p', kind: 'prompt', config: { user: 'hyperwork {{inputs.prompt}}' } }, { id: 'e', kind: 'end' }],
+        edges: [{ id: 'e1', from: 's.prompt', to: 'p.in' }, { id: 'e2', from: 'p.text', to: 'e.result' }], ...extra });
+      const until = async (run, tok = A) => { let m = {}; for (let i = 0; i < 240; i++) { m = (await hw('run?id=' + run, tok)).data || {}; if (m.status && m.status !== 'running') break; await sleep(250); } return m; };
+      const follow = async (run, tok, from = 0) => { try { const r = await fetch(`${H}/api/hyperwork/log?id=${run}&from=${from}&follow=1`, { headers: { Authorization: 'Bearer ' + tok }, signal: AbortSignal.timeout(60000) }); return (await r.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch (e) { return [{ error: e.message }]; } };
+      const JC = { 'X-VR-Client': 'jcode' };
+      // R437
+      const sv = await hw('save', A, { doc: doc('r437-notes'), scope: 'team-core' }), id = sv.data.id;
+      const g1 = await hw('get?id=' + id, A), p0 = await hw('publish', A, { id }), p1 = await hw('publish', A, { id, message: 'first' });
+      const sv2 = await hw('save', A, { id, doc: doc('r437-notes', { description: 'second' }), etag: sv.data.etag });
+      const stale = await hw('save', A, { id, doc: doc('r437-notes'), etag: sv.data.etag });
+      const p2 = await hw('publish', A, { id, message: 'second' }), vers = await hw('versions?id=' + id, A), df = await hw(`diff?id=${id}&a=1&b=2`, A), rst = await hw('restore', A, { id, version: 1 });
+      const broken = await hw('save', A, { doc: { schema: 1, name: 'r437-broken', nodes: [{ id: 's', kind: 'start' }, { id: 's2', kind: 'start' }], edges: [] } }), pb = await hw('publish', A, { id: broken.data.id, message: 'x' });
+      check('R437', L437.R437, sv.status === 200 && g1.status === 200 && p0.status === 400 && p1.data.version === 1 && sv2.status === 200 && stale.status === 409 && p2.data.version === 2 && (vers.data.versions || []).length === 2 && df.status === 200 && rst.status === 200 && pb.status === 422,
+        `save ${sv.status} get ${g1.status} publish ${p0.status}/${p1.data.version}/${p2.data.version} stale ${stale.status} versions ${(vers.data.versions || []).length} diff ${df.status} restore ${rst.status} broken ${pb.status}`);
+      // R438
+      const viewerSave = await hw('save', U, { id, doc: doc('r437-notes') });
+      await hw('perms', A, { id, perms: { edit: ['t-user'] } });
+      const editorSave = await hw('save', U, { id, doc: doc('r437-notes') }), editorPub = await hw('publish', U, { id, message: 'x' });
+      const jc = [await hw('save', A, { id, doc: doc('r437-notes') }, JC), await hw('publish', A, { id, message: 'x' }, JC), await hw('delete', A, { id }, JC), await hw('perms', A, { id, perms: {} }, JC)].map((r) => r.status);
+      const jcList = await hw('list', A, undefined, JC), jcGet = await hw('get?id=' + id, A, undefined, JC), jcRun = await hw('run', A, { id, prompt: 'from jcode' }, JC);
+      check('R438', L437.R438, viewerSave.status === 403 && editorSave.status === 200 && editorPub.status === 403 && jc.every((s) => s === 403) && jcList.status === 200 && (jcList.data.items || []).some((i) => i.id === id && i.rights.edit === false) && jcGet.status === 200 && jcGet.data.version === 2 && jcRun.status === 202,
+        `viewer save ${viewerSave.status}, editor save ${editorSave.status} publish ${editorPub.status}; run-only writes ${jc.join('/')}, list ${jcList.status} get ${jcGet.status} v${jcGet.data.version} run ${jcRun.status}`);
+      // R439
+      const outGet = await hw('get?id=' + id, D), outList = await hw('list', D), outRun = await hw('run', D, { id, prompt: 'x' });
+      const mine = await hw('save', A, { doc: doc('r437-notes') }); await hw('publish', A, { id: mine.data.id, message: 'mine' });
+      const peek = await hw('get?id=' + mine.data.id, U), both = await hw('list?q=r437-no', A);
+      const promo = await hw('promote', A, { id: mine.data.id, scope: 'company' }), promoVers = promo.data.id ? await hw('versions?id=' + promo.data.id, D) : { data: {} };
+      const shown = (both.data.items || []).map((i) => i.shown);
+      check('R439', L437.R439, outGet.status === 404 && !(outList.data.items || []).some((i) => i.id === id) && outRun.status === 404 && peek.status === 404 && shown.includes('r437-notes') && shown.includes('core/r437-notes') && promo.status === 200 && (promoVers.data.versions || []).length === 1,
+        `outside: get ${outGet.status} run ${outRun.status} listed ${(outList.data.items || []).some((i) => i.id === id)}; personal peek ${peek.status}; shown ${shown.join(', ')}; promote ${promo.status}, company sees ${(promoVers.data.versions || []).length} version(s)`);
+      // R440 (and T-201's run through the hub: the prompt node answers through the hub's own AI path)
+      const r440 = await hw('run', A, { id, prompt: 'r440' });
+      await hw('save', A, { id, doc: doc('r437-notes', { description: 'third' }) }); await hw('publish', A, { id, message: 'third' });
+      const lines = await follow(r440.data.run, A), m440 = await until(r440.data.run), again = await follow(r440.data.run, A, 3), runs = await hw('runs?mine=1', A);
+      const ty = lines.map((e) => e.type);
+      check('R440', L437.R440, r440.status === 202 && ty[0] === 'run_start' && ty[ty.length - 1] === 'run_end' && lines[0].workflow && lines[0].workflow.version === 2 && m440.status === 'ok' && !!m440.result && again.length > 0 && again[0].seq === 3 && (runs.data.runs || []).some((x) => x.id === r440.data.run),
+        `run ${r440.status}; streamed ${ty.join(' ')}; pinned v${lines[0] && lines[0].workflow && lines[0].workflow.version}; status ${m440.status} result ${JSON.stringify(m440.result || m440.error).slice(0, 120)}; reattach from ${again[0] && again[0].seq}`);
+      // R441
+      const np = await hw('save', A, { doc: doc('r441-needs', { needsProject: true }) }); await hw('publish', A, { id: np.data.id, message: 'x' });
+      const r441 = await hw('run', A, { id: np.data.id, prompt: 'x' }), runs441 = await hw('runs?workflow=' + np.data.id, A);
+      check('R441', L437.R441, r441.status === 422 && (r441.data.problems || []).some((p) => p.code === 'engine.no-project') && (runs441.data.runs || []).length === 0, `run ${r441.status} ${JSON.stringify(r441.data.problems || []).slice(0, 120)}; runs ${(runs441.data.runs || []).length}`);
+      // R442
+      const ap = await hw('save', A, { doc: { schema: 1, name: 'r442-ship', nodes: [{ id: 's', kind: 'start' }, { id: 'a', kind: 'approve', config: { timeoutSec: 600 } }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'a.in' }, { id: 'e2', from: 'a.approved', to: 'e.result' }] } });
+      await hw('publish', A, { id: ap.data.id, message: 'x' });
+      const r442 = await hw('run', A, { id: ap.data.id, prompt: 'ship v5' }), w442 = await until(r442.data.run);
+      const notMine = await hw('answer', U, { run: r442.data.run, node: 'a', answers: { approved: true } }), ok442 = await hw('answer', A, { run: r442.data.run, node: 'a', answers: { approved: true } });
+      const d442 = await until(r442.data.run);
+      check('R442', L437.R442, w442.status === 'waiting' && (w442.waiting || [])[0] && w442.waiting[0].key === 'a' && [403, 404].includes(notMine.status) && ok442.status === 200 && d442.status === 'ok' && d442.result === 'ship v5',
+        `first ${w442.status} on ${JSON.stringify(w442.waiting || []).slice(0, 80)}; t-user answers ${notMine.status}; owner ${ok442.status}; then ${d442.status} ${JSON.stringify(d442.result)}`);
+      // R443: a run that waits 4 s is cut by a graceful restart (a workflow run does not hold the hub busy) and resumes
+      const wt = await hw('save', A, { doc: { schema: 1, name: 'r443-wait', nodes: [{ id: 's', kind: 'start' }, { id: 'w', kind: 'wait', config: { seconds: 4 } }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'w.in' }, { id: 'e2', from: 'w.out', to: 'e.result' }] } });
+      await hw('publish', A, { id: wt.data.id, message: 'x' });
+      const pid443 = (await call('/api/status')).data.pid;
+      const r443 = await hw('run', A, { id: wt.data.id, prompt: 'after the restart' });
+      await sleep(800);
+      fs.writeFileSync(path.join(SB, '.restart'), 'test');
+      let pid2 = pid443; for (let i = 0; i < 80 && (pid2 === pid443 || !pid2); i++) { await sleep(250); pid2 = (await call('/api/status')).data.pid; }
+      for (let i = 0; i < 40 && (await call('/api/status')).status !== 200; i++) await sleep(250);
+      const m443 = await until(r443.data.run), l443 = await follow(r443.data.run, A);
+      check('R443', L437.R443, pid2 && pid2 !== pid443 && m443.status === 'ok' && m443.result === 'after the restart' && l443.some((e) => e.type === 'run_resume'),
+        `pid ${pid443} -> ${pid2}; ${m443.status} ${JSON.stringify(m443.result || m443.error).slice(0, 100)}; resumed ${l443.some((e) => e.type === 'run_resume')}`);
+      // R444
+      const sec = await hw('save', A, { doc: { schema: 1, name: 'r444-call', nodes: [{ id: 's', kind: 'start' }, { id: 't', kind: 'tool', config: { http: { url: `http://127.0.0.1:${OLLAMA_PORT}/r444`, headers: { authorization: 'token {{secret:R444_TOKEN}}' }, expect: { status: [200, 404] } } } }, { id: 'e', kind: 'end' }],
+        edges: [{ id: 'e1', from: 's.inputs', to: 't.args' }, { id: 'e2', from: 't.result', to: 'e.result' }] } });
+      await hw('publish', A, { id: sec.data.id, message: 'x' });
+      const r444 = await hw('run', A, { id: sec.data.id, prompt: 'x' }), m444 = await until(r444.data.run), l444 = await follow(r444.data.run, A), all444 = JSON.stringify([m444, l444, (await hw('runs', A)).data]);
+      const file444 = (() => { try { return fs.readFileSync(path.join(SCRATCH, 'Hyperwork', 'runs', r444.data.run, 'log.ndjson'), 'utf8'); } catch { return ''; } })();
+      check('R444', L437.R444, r444.status === 202 && l444.length > 2 && !all444.includes('r444-sekrit-token-77') && !!file444 && !file444.includes('r444-sekrit-token-77'),
+        `run ${r444.status} ${m444.status}; ${l444.length} events; secret in answers ${all444.includes('r444-sekrit-token-77')}, in the file ${file444.includes('r444-sekrit-token-77')} (${file444.length} bytes)`);
+      // R445
+      const front = await call('/__vr-front');
+      check('R445', L437.R445, (front.data.modules || []).includes('hyperwork') && (await hw('list', A)).status === 200 && (await hw('list')).status === 401, `modules ${(front.data.modules || []).join(' ')}`);
+      // R446
+      const rev = (await hw('list', A)).data.rev;
+      const ch = await hw('save', A, { doc: doc('r446-new') });
+      const since = await hw('list?since=' + rev, A);
+      check('R446', L437.R446, ch.status === 200 && (since.data.items || []).length === 1 && since.data.items[0].id === ch.data.id, `since ${rev}: ${(since.data.items || []).map((i) => i.name).join(', ')}`);
     }
   }
   const ws1 = (await call('/api/work/current', U)).data;

@@ -233,6 +233,14 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
     }
     Ok(an)
 }
+/// One answer for a person outside Work and the API (a Hyper Workflows node, T-204): through their provider (`provider`
+/// empty: their default), counted in the usage ledger like every other answer. `(text, model, usage)`, usage in the
+/// OpenAI shape (`prompt_tokens`, `completion_tokens`).
+#[allow(clippy::too_many_arguments)]
+pub async fn answer_for(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, system: &str, messages: &[(String, String)], cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<(String, String, Value), ApiErr> {
+    let a = complete(hub, user, provider, model, system, messages, None, cancel, max_tokens).await?;
+    Ok((a.text, a.model, a.usage))
+}
 async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, system: &str, messages: &[(String, String)], on_token: Tok, cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<Answer, ApiErr> {
     let w = hub.work(); let ai = hub.ai();
     let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, NO_AI))?;

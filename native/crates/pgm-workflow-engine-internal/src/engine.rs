@@ -144,6 +144,9 @@ impl Engine {
 
     pub fn registry(&self) -> &DefaultRegistry { &self.registry }
 
+    /// Can this engine run nodes of that kind (its own, or one given to it)?
+    pub fn can_run(&self, kind: &str) -> bool { runnable(&self.kinds, kind) }
+
     fn prepare(&self, doc: &Document) -> (Vec<Value>, HashMap<Option<String>, Arc<Plan>>) {
         let mut problems: Vec<Value> = validate(doc, &Options::new(&*self.registry)).issues.into_iter().filter(|i| i.level == Level::Error)
             .map(|i| json!({ "code": i.code, "message": i.message, "node": i.node, "graph": i.graph })).collect();

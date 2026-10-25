@@ -150,6 +150,11 @@ impl Auth {
         if rec["exp"].as_u64().unwrap_or(0) < now_ms() || self.account(&user).is_none() { s.remove(&k); drop(s); self.save_sessions(); return None; }
         Some(user)
     }
+    /// The client a request's session signed in with (`{kind, name, …}` as the sign-in sent it), when it said.
+    pub fn session_client(&self, r: &Req) -> Option<Value> {
+        let tok = r.header("authorization").and_then(|a| a.strip_prefix("Bearer "))?;
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).get(&token_key(tok)).and_then(|s| s.get("client").cloned()).filter(Value::is_object)
+    }
     pub fn forget_session(&self, key: &str) { if self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(key).is_some() { self.save_sessions(); } }
     pub fn drop_sessions(&self, user: &str) { self.sessions.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| s["user"].as_str() != Some(user)); self.save_sessions(); }
     pub fn signed_in(&self, user: &str) -> usize { let now = now_ms(); self.sessions.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|s| s["user"].as_str() == Some(user) && s["exp"].as_u64().unwrap_or(0) > now).count() }
@@ -208,7 +213,10 @@ impl Auth {
             }
         }
         let token = pgm_core_internal::crypto::random_hex(32);
-        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(token_key(&token), json!({ "user": acct.username, "exp": now_ms() + SESSION_MS }));
+        // the client it signed in with (`{kind, …}`, optional): a run-only one (jcode) is held to its rights by the routes
+        let mut rec = json!({ "user": acct.username, "exp": now_ms() + SESSION_MS });
+        if b["client"].is_object() { rec["client"] = b["client"].clone(); }
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(token_key(&token), rec);
         self.save_sessions();
         Login::SignedIn { token, user: acct.username, client: b["client"].clone(), ip: self.outside_ip(r) }
     }

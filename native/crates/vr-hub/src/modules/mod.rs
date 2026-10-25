@@ -23,6 +23,7 @@ pub mod files;
 pub mod forgejo;
 pub mod gateway;
 pub mod guilds;
+pub mod hyperwork;
 pub mod perms;
 pub mod native_releases;
 pub mod notes;
@@ -69,6 +70,7 @@ pub struct Modules {
     pub build: site::Build,
     pub downloads: downloads::Downloads,
     pub gateway: gateway::Gateway,
+    pub hyperwork: hyperwork::Hyperwork,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -82,7 +84,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), mills })
+            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), hyperwork: Default::default(), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -141,6 +143,7 @@ pub fn start_background(hub: &Arc<Hub>) {
     let h = hub.clone();
     forever("AI hosts state push", move || { let h = h.clone(); async move { loop { h.mods.ai.dirty.notified().await; tokio::time::sleep(std::time::Duration::from_millis(50)).await; push_ai_state(&h).await; } } });
     work::start(hub);
+    hyperwork::start(hub);
     chat::start(hub);
     unity_brain::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
@@ -281,9 +284,12 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         return files_http(hub, r, &u).await;
     }
+    // ----- Hyper Workflows (T-204): this hub's own, the JavaScript hub has none -----
+    if p.starts_with("/api/hyperwork/") && user.is_none() { return answer(401, json!({ "error": "Not signed in." })); }
     // ----- Work: runs, model / provider, project, usage, shared sessions, the conversation + queue, past sessions -----
     if let Some(u) = &user {
         if let Some(acc) = a.account(u) {
+            if let Some(rest) = p.strip_prefix("/api/hyperwork/") { return hyperwork::route(hub, r, &acc, rest).await; }
             if let Some(x) = work::route(hub, r, &acc).await { return x; }
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
             if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence
@@ -567,4 +573,4 @@ fn s_of(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() 
 pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
 
 /// The modules this front answers itself.
-pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api", "chat", "unity"] }
+pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api", "chat", "unity", "hyperwork"] }

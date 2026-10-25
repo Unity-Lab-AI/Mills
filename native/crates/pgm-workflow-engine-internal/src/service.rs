@@ -1,0 +1,772 @@
+//! The workflow store and the run API (T-204; spec 7, 9, 15): what a hub (or the gateway) serves under
+//! `/api/hyperwork/`. No web server here: [`Service::handle`] takes a method, a path, the query, the body and who asks,
+//! and gives a JSON answer or a stream of NDJSON lines; the program around it maps that onto its own HTTP and says,
+//! through [`Directory`], who belongs where and how a run of a person reaches AI, tools and people.
+//!
+//! The store is files (atomic writes, private):
+//! - `<root>/<scope>/workflows/<id>/meta.json` (name, owner, perms, versions, the published pointer, tags),
+//!   `v<N>.json` (each published version, never rewritten), `draft-<user>.json` (one draft per editor);
+//! - `<root>/runs/<run>/run.json` (owner, workflow, version, status), `log.ndjson` (the run log, append-only, secrets
+//!   scrubbed), `snapshot.json`; `<root>/<scope>/audit.ndjson` (who published, deleted, changed rights);
+//! - scopes: `me-<user>` (personal, private), `team-<id>`, `grp-<id>`, `company`.
+//!
+//! A file that is not valid JSON is moved aside as `*.bad-<time>` and the store goes on (FR2).
+use crate::cancel::Cancel;
+use crate::engine::{Engine, RunInput, RunOptions, RunReport};
+use crate::host::{Ask, BoxFut, HttpAnswer, HttpRequest, ModelAnswer, ModelRequest, NodeError, ToolCtx, WorkflowHost};
+use pgm_workflow_internal::{diff, doc, validate, Document, Options};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use tokio::sync::{broadcast, mpsc};
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
+fn now_ms() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0) }
+fn stamp() -> String {
+    let s = now_ms() / 1000;
+    let (d, t) = (s / 86_400, s % 86_400);
+    // civil date from days since 1970 (Howard Hinnant's algorithm)
+    let z = d as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let (day, month) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    format!("{year:04}{month:02}{day:02}-{:02}{:02}{:02}", t / 3600, t / 60 % 60, t % 60)
+}
+
+/// What the service asks the hub (or the gateway) it lives in.
+pub trait Directory: Send + Sync {
+    fn exists(&self, user: &str) -> bool;
+    fn is_admin(&self, user: &str) -> bool;
+    /// The scopes a person is in, nearest first: `me-<user>`, their groups, their teams, `company`.
+    fn scopes_of(&self, user: &str) -> Vec<String>;
+    /// The host a run of this person uses (AI, tools, HTTP, agents, people). The service puts its own parts around it
+    /// (the log, snapshots, the store's workflows, questions).
+    fn host_for(&self, user: &str) -> Arc<dyn WorkflowHost>;
+    /// Something about a person's run changed (a page shows it in their sessions list): `{type, run, ...}`.
+    fn changed(&self, _user: &str, _event: &Value) {}
+    /// Values that must never be written into a log (keys, tokens), besides the secrets a run asked its host for.
+    fn secret_values(&self) -> Vec<String> { vec![] }
+    /// The tools a run may use when its scope's policy names none (spec 9.3). None by default.
+    fn default_tools(&self) -> Vec<String> { vec![] }
+}
+
+/// Who asks: a person, through a full client (the page, the apps) or a run-only one (jcode: list, view, run only).
+#[derive(Debug, Clone)]
+pub struct Caller {
+    pub user: String,
+    pub run_only: bool,
+}
+
+/// What a route answers.
+pub enum Answer {
+    Json(u16, Value),
+    /// NDJSON lines (each ends with `\n`), until the sender is dropped.
+    Lines(mpsc::Receiver<String>),
+}
+
+fn j(status: u16, v: Value) -> Answer { Answer::Json(status, v) }
+fn bad(status: u16, msg: impl Into<String>) -> Answer { j(status, json!({ "error": msg.into() })) }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Rights {
+    pub run: bool,
+    pub view: bool,
+    pub edit: bool,
+    pub publish: bool,
+    pub admin: bool,
+}
+
+impl Rights {
+    fn json(&self) -> Value { json!({ "run": self.run, "view": self.view, "edit": self.edit, "publish": self.publish, "admin": self.admin }) }
+}
+
+struct Live {
+    cancel: Cancel,
+    tx: broadcast::Sender<Value>,
+    /// values to scrub from this run's log (the secrets its host gave out)
+    secrets: Arc<Mutex<Vec<String>>>,
+}
+
+pub struct Service {
+    root: PathBuf,
+    engine: Engine,
+    dir: Arc<dyn Directory>,
+    runs: Mutex<HashMap<String, Arc<Live>>>,
+    rev: AtomicU64,
+    me: Weak<Service>,
+    /// writes of one workflow's files never interleave
+    write: Mutex<()>,
+}
+
+fn read(p: &Path) -> Option<Value> {
+    let t = std::fs::read_to_string(p).ok()?;
+    match serde_json::from_str(&t) {
+        Ok(v) => Some(v),
+        Err(_) => { let _ = std::fs::rename(p, p.with_file_name(format!("{}.bad-{}", p.file_name()?.to_string_lossy(), stamp()))); None }
+    }
+}
+
+fn write(p: &Path, v: &Value) -> bool {
+    if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
+    let tmp = p.with_extension(format!("tmp-{}", std::process::id()));
+    let ok = std::fs::write(&tmp, serde_json::to_string_pretty(v).unwrap_or_default()).is_ok() && std::fs::rename(&tmp, p).is_ok();
+    #[cfg(unix)]
+    if ok { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600)); }
+    ok
+}
+
+fn append_line(p: &Path, line: &str) {
+    use std::io::Write;
+    if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) { let _ = writeln!(f, "{line}"); }
+}
+
+fn read_lines(p: &Path) -> Vec<Value> {
+    std::fs::read_to_string(p).map(|t| t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()).unwrap_or_default()
+}
+
+fn safe(id: &str) -> bool { !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) && !id.starts_with('.') }
+fn s<'a>(v: &'a Value, k: &str) -> &'a str { v.get(k).and_then(Value::as_str).unwrap_or("") }
+
+/// `prefix` first, then a word start, then anywhere (spec 10.2); None: no match.
+fn rank(name: &str, q: &str) -> Option<u8> {
+    if q.is_empty() { return Some(0); }
+    let (n, q) = (name.to_lowercase(), q.to_lowercase());
+    if n.starts_with(&q) { return Some(0); }
+    if n.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&q)) { return Some(1); }
+    if n.contains(&q) { Some(2) } else { None }
+}
+
+impl Service {
+    pub fn new(root: PathBuf, engine: Engine, dir: Arc<dyn Directory>) -> Arc<Service> {
+        let rev = read(&root.join("state.json")).and_then(|v| v["rev"].as_u64()).unwrap_or(0);
+        Arc::new_cyclic(|me| Service { root, engine, dir, runs: Mutex::new(HashMap::new()), rev: AtomicU64::new(rev), me: me.clone(), write: Mutex::new(()) })
+    }
+
+    pub fn engine(&self) -> &Engine { &self.engine }
+
+    fn bump(&self) -> u64 {
+        let r = self.rev.fetch_add(1, Ordering::SeqCst) + 1;
+        write(&self.root.join("state.json"), &json!({ "rev": r }));
+        r
+    }
+
+    fn wf_dir(&self, scope: &str, id: &str) -> PathBuf { self.root.join(scope).join("workflows").join(id) }
+    fn run_dir(&self, run: &str) -> PathBuf { self.root.join("runs").join(run) }
+
+    /// Every workflow's meta in the given scopes.
+    fn metas(&self, scopes: &[String]) -> Vec<Value> {
+        let mut out = vec![];
+        for sc in scopes {
+            let Ok(rd) = std::fs::read_dir(self.root.join(sc).join("workflows")) else { continue };
+            for e in rd.flatten() {
+                if let Some(m) = read(&e.path().join("meta.json")) { if m["deleted"] != json!(true) { out.push(m); } }
+            }
+        }
+        out
+    }
+
+    fn meta_by_id(&self, id: &str) -> Option<Value> {
+        if !safe(id) { return None; }
+        let rd = std::fs::read_dir(&self.root).ok()?;
+        for e in rd.flatten() {
+            let p = e.path().join("workflows").join(id).join("meta.json");
+            if p.exists() { return read(&p).filter(|m| m["deleted"] != json!(true)); }
+        }
+        None
+    }
+
+    fn save_meta(&self, m: &Value) -> bool { write(&self.wf_dir(s(m, "scope"), s(m, "id")).join("meta.json"), m) }
+
+    fn audit(&self, scope: &str, who: &str, what: &str, more: Value) {
+        let mut e = json!({ "at": now_ms(), "by": who, "what": what });
+        if let (Some(o), Value::Object(m)) = (e.as_object_mut(), more) { for (k, v) in m { o.insert(k, v); } }
+        append_line(&self.root.join(scope).join("audit.ndjson"), &e.to_string());
+    }
+
+    /// What a person may do with a workflow (spec 9.2).
+    pub fn rights(&self, c: &Caller, m: &Value) -> Rights {
+        let scope = s(m, "scope");
+        let u = c.user.as_str();
+        let mut r = if let Some(owner) = scope.strip_prefix("me-") {
+            // a personal scope is its owner's alone
+            if owner == u { Rights { run: true, view: true, edit: true, publish: true, admin: true } } else { Rights::default() }
+        } else {
+            let member = self.dir.scopes_of(u).iter().any(|x| x == scope);
+            let owner = s(m, "owner") == u;
+            let perms = &m["perms"];
+            let listed = |right: &str| perms.get(right).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).any(|x| x == u || x == "*" || (member && matches!(x, "members" | "team" | "scope"))));
+            let has = |right: &str, default: bool| owner || listed(right).unwrap_or(default);
+            Rights {
+                run: has("run", member),
+                view: has("view", member),
+                edit: has("edit", false),
+                publish: has("publish", false),
+                admin: has("admin", false) || (member && self.dir.is_admin(u)),
+            }
+        };
+        // the stronger rights hold the weaker ones
+        r.publish |= r.admin;
+        r.edit |= r.publish;
+        r.view |= r.edit || r.run;
+        r.run |= r.edit;
+        if c.run_only { r.edit = false; r.publish = false; r.admin = false; }
+        r
+    }
+
+    fn version_doc(&self, m: &Value, v: u32) -> Option<Document> {
+        doc::from_value(read(&self.wf_dir(s(m, "scope"), s(m, "id")).join(format!("v{v}.json")))?).ok()
+    }
+    fn draft_doc(&self, m: &Value, user: &str) -> Option<(Document, String)> {
+        let v = read(&self.wf_dir(s(m, "scope"), s(m, "id")).join(format!("draft-{user}.json")))?;
+        let etag = v["etag"].as_str().unwrap_or("").to_string();
+        Some((doc::from_value(v["doc"].clone()).ok()?, etag))
+    }
+    fn published(&self, m: &Value) -> Option<(u32, Document)> {
+        let v = m["published"].as_u64()? as u32;
+        Some((v, self.version_doc(m, v)?))
+    }
+    fn resolve_range(&self, m: &Value, range: Option<&str>) -> Option<(u32, Document)> {
+        match range.map(str::trim).filter(|r| !r.is_empty()) {
+            None | Some("published") => self.published(m),
+            Some(r) => {
+                let v = r.parse::<u32>().ok().or_else(|| m["tags"][r].as_u64().map(|x| x as u32))?;
+                Some((v, self.version_doc(m, v)?))
+            }
+        }
+    }
+
+    /// A workflow by id, or by name in the caller's scopes (nearest first; `scope` narrows it).
+    fn find(&self, c: &Caller, id: Option<&str>, name: Option<&str>, scope: Option<&str>) -> Option<Value> {
+        if let Some(id) = id.filter(|x| !x.is_empty()) { return self.meta_by_id(id); }
+        let name = name.filter(|x| !x.is_empty())?;
+        let (scope_part, bare) = match name.split_once('/') { Some((a, b)) if scope.is_none() => (Some(a.to_string()), b.to_string()), _ => (scope.map(str::to_string), name.to_string()) };
+        let scopes = self.dir.scopes_of(&c.user);
+        for sc in &scopes {
+            if scope_part.as_ref().is_some_and(|p| p != sc && sc.split_once('-').map(|x| x.1) != Some(p.as_str())) { continue; }
+            if let Some(m) = self.metas(std::slice::from_ref(sc)).into_iter().find(|m| s(m, "name") == bare) { return Some(m); }
+        }
+        None
+    }
+
+    /// The route `/api/hyperwork/<path>`.
+    pub async fn handle(&self, c: &Caller, method: &str, path: &str, query: &HashMap<String, String>, body: &Value) -> Answer {
+        if !self.dir.exists(&c.user) { return bad(401, "Not signed in."); }
+        let q = |k: &str| query.get(k).map(String::as_str).filter(|x| !x.is_empty());
+        let b = |k: &str| body.get(k).and_then(Value::as_str).filter(|x| !x.is_empty());
+        let writes = matches!(path, "save" | "publish" | "promote" | "delete" | "restore" | "perms" | "import" | "policy" | "law" | "prompt" | "kind");
+        if c.run_only && method == "POST" && writes { return bad(403, "This client may list, view and run workflows, not change them."); }
+        match (method, path) {
+            ("GET", "list") => self.list(c, q("q").unwrap_or(""), q("scope"), q("since").and_then(|x| x.parse().ok())),
+            ("GET", "get") => self.get(c, q("id"), q("name"), q("scope"), q("version").or(q("channel"))),
+            ("GET", "versions") => self.with(c, q("id"), |r| r.view, |m| j(200, json!({ "versions": m["versions"], "published": m["published"], "tags": m["tags"] }))),
+            ("GET", "diff") => self.diff(c, q("id"), q("a"), q("b")),
+            ("GET", "kinds") => j(200, json!({ "kinds": self.engine.registry().kinds().map(|k| { let mut v = serde_json::to_value(k).unwrap_or(Value::Null); v["trust"] = json!("built-in"); v["runnable"] = json!(self.engine.can_run(&k.kind)); v }).collect::<Vec<_>>() })),
+            ("GET", "runs") => self.runs(c, q("workflow"), q("mine") == Some("1"), q("status")),
+            ("GET", "run") => match self.run_meta_for(c, q("id").unwrap_or("")) { Ok(m) => j(200, m), Err(e) => e },
+            ("GET", "log") => self.log(c, q("id").unwrap_or(""), q("from").and_then(|x| x.parse().ok()).unwrap_or(0), q("follow") == Some("1")),
+            ("POST", "validate") => match doc::from_value(body["doc"].clone()) {
+                Ok(d) => j(200, json!({ "problems": self.problems(&d) })),
+                Err(e) => bad(400, e.to_string()),
+            },
+            ("POST", "save") => self.save(c, b("id"), &body["doc"], b("etag"), b("scope")),
+            ("POST", "publish") => self.publish(c, b("id"), b("message").unwrap_or("")),
+            ("POST", "restore") => self.restore(c, b("id"), body["version"].as_u64()),
+            ("POST", "perms") => self.with(c, b("id"), |r| r.admin, |mut m| {
+                m["perms"] = body["perms"].clone();
+                m["rev"] = json!(self.bump());
+                self.save_meta(&m);
+                self.audit(s(&m, "scope"), &c.user, "perms", json!({ "id": m["id"], "perms": m["perms"] }));
+                j(200, json!({ "ok": true, "perms": m["perms"] }))
+            }),
+            ("POST", "delete") => self.with(c, b("id"), |r| r.admin, |mut m| {
+                m["deleted"] = json!(true);
+                m["rev"] = json!(self.bump());
+                self.save_meta(&m);
+                self.audit(s(&m, "scope"), &c.user, "delete", json!({ "id": m["id"], "name": m["name"] }));
+                j(200, json!({ "ok": true }))
+            }),
+            ("POST", "promote") => self.promote(c, b("id"), b("scope")),
+            ("POST", "run") => self.start_run(c, body),
+            ("POST", "cancel") => match self.run_meta_for(c, b("id").unwrap_or("")) {
+                Ok(m) if s(&m, "owner") == c.user || self.meta_by_id(s(&m["workflow"], "id")).is_some_and(|w| self.rights(c, &w).admin) => {
+                    match lock(&self.runs).get(s(&m, "id")) { Some(l) => { l.cancel.cancel(); j(200, json!({ "ok": true })) } None => bad(409, "That run is not running.") }
+                }
+                Ok(_) => bad(403, "Only the person who started a run (or an admin of its workflow) may cancel it."),
+                Err(e) => e,
+            },
+            ("POST", "answer") => self.answer(c, b("run").unwrap_or(""), b("node").or(b("key")).unwrap_or(""), body.get("answers").cloned().unwrap_or(Value::Null)).await,
+            ("POST", "replay") => self.replay(c, b("id").unwrap_or("")),
+            ("POST", "export") => self.with(c, b("id"), |r| r.view, |m| match self.published(&m).or_else(|| self.draft_doc(&m, &c.user).map(|d| (0, d.0))) {
+                Some((v, d)) => j(200, json!({ "bundle": { "schema": 1, "workflow": doc::to_value(&d), "version": v, "laws": [], "prompts": [], "kinds": [] } })),
+                None => bad(404, "That workflow has no version to export."),
+            }),
+            ("POST", "import") => {
+                let wfv = body["bundle"]["workflow"].clone();
+                let mut wf = wfv.clone();
+                if let Some(o) = wf.as_object_mut() { o.remove("id"); }
+                self.save(c, None, &wf, None, b("scope"))
+            }
+            ("GET", "policy") | ("POST", "policy") => self.policy(c, method, q("scope").or(b("scope")), &body["policy"]),
+            _ => bad(404, "Unknown endpoint"),
+        }
+    }
+
+    fn with(&self, c: &Caller, id: Option<&str>, need: fn(&Rights) -> bool, f: impl FnOnce(Value) -> Answer) -> Answer {
+        let Some(m) = id.and_then(|i| self.meta_by_id(i)) else { return bad(404, "No such workflow.") };
+        let r = self.rights(c, &m);
+        if !(r.view || r.run) { return bad(404, "No such workflow."); }
+        if !need(&r) { return bad(403, "You do not have the right for that on this workflow."); }
+        f(m)
+    }
+
+    fn problems(&self, d: &Document) -> Vec<Value> {
+        let mut out: Vec<Value> = validate(d, &Options::new(self.engine.registry())).issues.into_iter().map(|i| serde_json::to_value(i).unwrap_or(Value::Null)).collect();
+        for p in self.engine.preflight(d) { if !out.iter().any(|x| x["code"] == p["code"] && x["message"] == p["message"]) { let mut p = p; p["level"] = json!("error"); out.push(p); } }
+        out
+    }
+
+    fn list(&self, c: &Caller, q: &str, scope: Option<&str>, since: Option<u64>) -> Answer {
+        let scopes: Vec<String> = self.dir.scopes_of(&c.user).into_iter().filter(|x| scope.is_none_or(|w| w == x)).collect();
+        let mut rows: Vec<(u8, usize, u64, Value)> = vec![];
+        for m in self.metas(&scopes) {
+            let r = self.rights(c, &m);
+            if !(r.view || r.run) { continue; }
+            if since.is_some_and(|x| m["rev"].as_u64().unwrap_or(0) <= x) { continue; }
+            let pub_doc = self.published(&m);
+            let draft = r.edit && self.draft_doc(&m, &c.user).is_some();
+            if pub_doc.is_none() && !draft { continue; }
+            let Some(rk) = rank(s(&m, "name"), q) else { continue };
+            let near = scopes.iter().position(|x| x == s(&m, "scope")).unwrap_or(usize::MAX);
+            let d = pub_doc.as_ref().map(|x| &x.1);
+            let unrunnable = match d { Some(d) => self.engine.preflight(d).first().and_then(|p| p["message"].as_str().map(str::to_string)), None => Some("not published yet (only your draft)".into()) };
+            let row = json!({
+                "id": m["id"], "name": m["name"], "title": d.and_then(|d| d.title.clone()), "description": d.and_then(|d| d.description.clone()), "scope": m["scope"],
+                "version": pub_doc.as_ref().map(|x| x.0), "labels": d.and_then(|d| d.labels.clone()), "runOn": d.and_then(|d| d.run_on.clone()), "needsProject": d.and_then(|d| d.needs_project),
+                "rights": r.json(), "draft": draft, "unrunnable": unrunnable, "updatedAt": m["updatedAt"],
+            });
+            rows.push((rk, near, m["updatedAt"].as_u64().unwrap_or(0), row));
+        }
+        rows.sort_by(|a, b| a.0.cmp(&b.0).then(if q.is_empty() { b.2.cmp(&a.2) } else { a.1.cmp(&b.1) }).then_with(|| s(&a.3, "name").cmp(s(&b.3, "name"))));
+        // the same name in two scopes: both are listed, the farther one as scope/name
+        let mut seen: Vec<String> = vec![];
+        let items: Vec<Value> = rows.into_iter().map(|(_, _, _, mut row)| {
+            let n = s(&row, "name").to_string();
+            if seen.contains(&n) { row["shown"] = json!(format!("{}/{n}", s(&row, "scope").split_once('-').map(|x| x.1).unwrap_or(s(&row, "scope")))); } else { row["shown"] = json!(n.clone()); seen.push(n); }
+            row
+        }).collect();
+        j(200, json!({ "items": items, "rev": self.rev.load(Ordering::SeqCst) }))
+    }
+
+    fn get(&self, c: &Caller, id: Option<&str>, name: Option<&str>, scope: Option<&str>, version: Option<&str>) -> Answer {
+        let Some(m) = self.find(c, id, name, scope) else { return bad(404, "No such workflow.") };
+        let r = self.rights(c, &m);
+        if !(r.view || r.run) { return bad(404, "No such workflow."); }
+        let (d, v, etag) = match version {
+            Some("draft") => {
+                if !r.edit { return bad(403, "Only an editor sees a draft."); }
+                match self.draft_doc(&m, &c.user) { Some((d, e)) => (d, Value::Null, e), None => return bad(404, "You have no draft of this workflow.") }
+            }
+            Some(x) => match self.resolve_range(&m, Some(x)) { Some((v, d)) => (d, json!(v), String::new()), None => return bad(404, "No such version.") },
+            None => match (r.edit.then(|| self.draft_doc(&m, &c.user)).flatten(), self.published(&m)) {
+                (Some((d, e)), _) => (d, Value::Null, e),
+                (None, Some((v, d))) => (d, json!(v), String::new()),
+                (None, None) => return bad(404, "That workflow has no published version."),
+            },
+        };
+        let mut meta = m.clone();
+        if let Some(o) = meta.as_object_mut() { o.remove("drafts"); }
+        j(200, json!({ "doc": doc::to_value(&d), "version": v, "etag": etag, "rights": r.json(), "meta": meta }))
+    }
+
+    fn save(&self, c: &Caller, id: Option<&str>, docv: &Value, etag: Option<&str>, scope: Option<&str>) -> Answer {
+        let _w = lock(&self.write);
+        let mut dv = docv.clone();
+        if !dv.is_object() { return bad(400, "`doc` must be a workflow document."); }
+        let existing = id.and_then(|i| self.meta_by_id(i));
+        if id.is_some() && existing.is_none() { return bad(404, "No such workflow."); }
+        let mut m = match existing {
+            Some(m) => {
+                if !self.rights(c, &m).edit { return bad(403, "You may not edit this workflow."); }
+                if let (Some(e), Some((_, cur))) = (etag, self.draft_doc(&m, &c.user)) { if e != cur { return j(409, json!({ "error": "Your draft changed since you opened it (another tab or device saved it).", "etag": cur })); } }
+                m
+            }
+            None => {
+                let sc = scope.map(str::to_string).unwrap_or_else(|| format!("me-{}", c.user));
+                if !self.dir.scopes_of(&c.user).contains(&sc) || !safe(&sc) { return bad(403, "You may not make workflows in that scope."); }
+                let new_id = format!("wf-{:012x}", (now_ms() ^ ((self.rev.load(Ordering::SeqCst) + 1) << 44)) & 0xffff_ffff_ffff);
+                json!({ "id": new_id, "scope": sc, "owner": c.user, "createdAt": now_ms(), "versions": [], "published": null, "tags": {}, "perms": null })
+            }
+        };
+        let name = dv.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        if name.is_empty() || !name.chars().all(|ch| ch.is_alphanumeric() || "-_.".contains(ch)) { return bad(400, "A workflow needs a `name` of letters, digits and - _ . (it is what /hyperwork types)."); }
+        if self.metas(&[s(&m, "scope").to_string()]).iter().any(|x| s(x, "name") == name && x["id"] != m["id"]) { return j(409, json!({ "error": format!("`{name}` is taken in this scope.") })); }
+        dv["id"] = m["id"].clone();
+        dv["scope"] = m["scope"].clone();
+        dv["owner"] = m["owner"].clone();
+        if dv.get("schema").is_none() { dv["schema"] = json!(pgm_workflow_internal::SCHEMA); }
+        if dv.get("nodes").is_none() { dv["nodes"] = json!([]); }
+        if dv.get("edges").is_none() { dv["edges"] = json!([]); }
+        let d = match doc::from_value(dv) { Ok(d) => d, Err(e) => return bad(400, e.to_string()) };
+        let etag = format!("{:016x}", { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); doc::write(&d).hash(&mut h); now_ms().hash(&mut h); h.finish() });
+        m["name"] = json!(name);
+        m["updatedAt"] = json!(now_ms());
+        m["rev"] = json!(self.bump());
+        m["drafts"][&c.user] = json!({ "etag": etag, "at": now_ms() });
+        if !write(&self.wf_dir(s(&m, "scope"), s(&m, "id")).join(format!("draft-{}.json", c.user)), &json!({ "etag": etag, "doc": doc::to_value(&d) })) || !self.save_meta(&m) { return bad(500, "Could not save the draft."); }
+        j(200, json!({ "ok": true, "id": m["id"], "etag": etag, "problems": self.problems(&d) }))
+    }
+
+    fn publish(&self, c: &Caller, id: Option<&str>, message: &str) -> Answer {
+        let _w = lock(&self.write);
+        let Some(mut m) = id.and_then(|i| self.meta_by_id(i)) else { return bad(404, "No such workflow.") };
+        let r = self.rights(c, &m);
+        if !(r.view || r.run) { return bad(404, "No such workflow."); }
+        if !r.publish { return bad(403, "You may not publish this workflow."); }
+        if message.trim().is_empty() { return bad(400, "Publishing needs a message (what changed)."); }
+        let Some((mut d, _)) = self.draft_doc(&m, &c.user) else { return bad(409, "You have no draft to publish.") };
+        let problems: Vec<Value> = self.problems(&d).into_iter().filter(|p| p["level"] == "error").collect();
+        if !problems.is_empty() { return j(422, json!({ "error": "The draft has errors.", "problems": problems })); }
+        let next = m["versions"].as_array().map(|a| a.iter().filter_map(|v| v["version"].as_u64()).max().unwrap_or(0)).unwrap_or(0) as u32 + 1;
+        let at = now_ms();
+        d.version = Some(next);
+        d.published_at = Some(at);
+        d.published_by = Some(c.user.clone());
+        d.message = Some(message.to_string());
+        if !write(&self.wf_dir(s(&m, "scope"), s(&m, "id")).join(format!("v{next}.json")), &doc::to_value(&d)) { return bad(500, "Could not write the version."); }
+        m["published"] = json!(next);
+        if !m["versions"].is_array() { m["versions"] = json!([]); }
+        m["versions"].as_array_mut().unwrap().push(json!({ "version": next, "at": at, "by": c.user, "message": message }));
+        m["updatedAt"] = json!(at);
+        m["rev"] = json!(self.bump());
+        self.save_meta(&m);
+        self.audit(s(&m, "scope"), &c.user, "publish", json!({ "id": m["id"], "name": m["name"], "version": next, "message": message }));
+        j(200, json!({ "ok": true, "version": next }))
+    }
+
+    fn restore(&self, c: &Caller, id: Option<&str>, version: Option<u64>) -> Answer {
+        let Some(m) = id.and_then(|i| self.meta_by_id(i)) else { return bad(404, "No such workflow.") };
+        if !self.rights(c, &m).edit { return bad(403, "You may not edit this workflow."); }
+        let Some(d) = version.and_then(|v| self.version_doc(&m, v as u32)) else { return bad(404, "No such version.") };
+        let d = pgm_workflow_internal::version::restore(&d, now_ms());
+        self.save(c, Some(s(&m, "id")), &doc::to_value(&d), None, None)
+    }
+
+    fn diff(&self, c: &Caller, id: Option<&str>, a: Option<&str>, b: Option<&str>) -> Answer {
+        self.with(c, id, |r| r.view, |m| {
+            let pick = |x: Option<&str>| -> Option<Document> { match x { Some("draft") => self.draft_doc(&m, &c.user).map(|d| d.0), x => self.resolve_range(&m, x).map(|d| d.1) } };
+            match (pick(a), pick(b)) { (Some(x), Some(y)) => j(200, json!({ "diff": diff(&x, &y).to_json(), "summary": diff(&x, &y).summary() })), _ => bad(404, "No such version.") }
+        })
+    }
+
+    fn promote(&self, c: &Caller, id: Option<&str>, target: Option<&str>) -> Answer {
+        let Some(m) = id.and_then(|i| self.meta_by_id(i)) else { return bad(404, "No such workflow.") };
+        if !self.rights(c, &m).publish { return bad(403, "You may not promote this workflow."); }
+        let Some(t) = target.filter(|t| safe(t) && self.dir.scopes_of(&c.user).iter().any(|x| x == t)) else { return bad(403, "You are not in that scope.") };
+        if self.metas(&[t.to_string()]).iter().any(|x| x["name"] == m["name"]) { return j(409, json!({ "error": format!("`{}` is taken in {t}.", s(&m, "name")) })); }
+        let _w = lock(&self.write);
+        let new_id = format!("{}-{}", s(&m, "id"), t.split_once('-').map(|x| x.1).unwrap_or(t));
+        let (from, to) = (self.wf_dir(s(&m, "scope"), s(&m, "id")), self.wf_dir(t, &new_id));
+        let _ = std::fs::create_dir_all(&to);
+        for e in std::fs::read_dir(&from).into_iter().flatten().flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with('v') && n.ends_with(".json") {
+                if let Some(mut v) = read(&e.path()) { v["id"] = json!(new_id); v["scope"] = json!(t); write(&to.join(&n), &v); }
+            }
+        }
+        let mut nm = m.clone();
+        nm["id"] = json!(new_id);
+        nm["scope"] = json!(t);
+        nm["promotedFrom"] = json!({ "id": m["id"], "scope": m["scope"] });
+        if let Some(o) = nm.as_object_mut() { o.remove("drafts"); }
+        nm["rev"] = json!(self.bump());
+        self.save_meta(&nm);
+        self.audit(t, &c.user, "promote", json!({ "id": new_id, "from": m["id"], "fromScope": m["scope"] }));
+        j(200, json!({ "ok": true, "id": new_id, "scope": t }))
+    }
+
+    fn policy(&self, c: &Caller, method: &str, scope: Option<&str>, policy: &Value) -> Answer {
+        let Some(sc) = scope.filter(|x| safe(x)) else { return bad(400, "Which scope?") };
+        if !self.dir.scopes_of(&c.user).iter().any(|x| x == sc) { return bad(404, "No such scope."); }
+        let f = self.root.join(sc).join("policy.json");
+        if method == "GET" { return j(200, json!({ "policy": read(&f).unwrap_or(json!({})) })); }
+        let admin = sc.strip_prefix("me-") == Some(c.user.as_str()) || self.dir.is_admin(&c.user);
+        if !admin { return bad(403, "Only an admin changes a scope's policy."); }
+        if !policy.is_object() { return bad(400, "`policy` must be an object."); }
+        write(&f, policy);
+        self.audit(sc, &c.user, "policy", json!({ "policy": policy }));
+        j(200, json!({ "ok": true }))
+    }
+
+    /// A scope's policy (spec 9.3), `{}` when it has none.
+    pub fn scope_policy(&self, scope: &str) -> Value { if safe(scope) { read(&self.root.join(scope).join("policy.json")).unwrap_or(json!({})) } else { json!({}) } }
+
+    // ------------------------------------------------------------ runs
+
+    fn run_meta(&self, run: &str) -> Option<Value> { if safe(run) { read(&self.run_dir(run).join("run.json")) } else { None } }
+
+    fn run_meta_for(&self, c: &Caller, run: &str) -> Result<Value, Answer> {
+        let Some(m) = self.run_meta(run) else { return Err(bad(404, "No such run.")) };
+        let may = s(&m, "owner") == c.user || self.meta_by_id(s(&m["workflow"], "id")).is_some_and(|w| self.rights(c, &w).view);
+        if !may { return Err(bad(404, "No such run.")); }
+        Ok(m)
+    }
+
+    fn runs(&self, c: &Caller, workflow: Option<&str>, mine: bool, status: Option<&str>) -> Answer {
+        let mut out = vec![];
+        for e in std::fs::read_dir(self.root.join("runs")).into_iter().flatten().flatten() {
+            let Some(m) = read(&e.path().join("run.json")) else { continue };
+            if workflow.is_some_and(|w| s(&m["workflow"], "id") != w && s(&m["workflow"], "name") != w) { continue; }
+            if mine && s(&m, "owner") != c.user { continue; }
+            if status.is_some_and(|x| s(&m, "status") != x) { continue; }
+            if s(&m, "owner") != c.user && !self.meta_by_id(s(&m["workflow"], "id")).is_some_and(|w| self.rights(c, &w).view) { continue; }
+            out.push(m);
+        }
+        out.sort_by(|a, b| b["at"].as_u64().cmp(&a["at"].as_u64()));
+        j(200, json!({ "runs": out }))
+    }
+
+    fn start_run(&self, c: &Caller, body: &Value) -> Answer {
+        let Some(m) = self.find(c, body["id"].as_str(), body["name"].as_str(), body["scope"].as_str()) else { return bad(404, "No such workflow.") };
+        let r = self.rights(c, &m);
+        if !(r.view || r.run) { return bad(404, "No such workflow."); }
+        if !r.run { return bad(403, "You may not run this workflow."); }
+        let draft = body["draft"] == json!(true);
+        let (version, d) = if draft {
+            if !r.edit { return bad(403, "Only an editor test-runs a draft."); }
+            match self.draft_doc(&m, &c.user) { Some((d, _)) => (None, d), None => return bad(404, "You have no draft of this workflow.") }
+        } else {
+            let range = body["version"].as_u64().map(|v| v.to_string()).or_else(|| body["version"].as_str().map(str::to_string));
+            match self.resolve_range(&m, range.as_deref()) { Some((v, d)) => (Some(v), d), None => return bad(404, "That workflow has no such published version.") }
+        };
+        let project = body["project"].as_str().filter(|p| !p.is_empty()).map(str::to_string);
+        let mut problems = self.engine.preflight(&d);
+        if d.needs_project == Some(true) && project.is_none() { problems.push(json!({ "code": "engine.no-project", "message": "this workflow runs against a project: say which (--project)" })); }
+        if !problems.is_empty() { return j(422, json!({ "error": "This workflow cannot run here.", "problems": problems })); }
+        let mut input = RunInput::prompt(body["prompt"].as_str().unwrap_or("")).sender("person", &c.user);
+        input.inputs = body["inputs"].as_object().cloned().unwrap_or_default();
+        input.files = body["files"].as_array().cloned().unwrap_or_default();
+        input.project = project;
+        let run = format!("hr-{:012x}", (now_ms() << 8 ^ self.rev.fetch_add(1, Ordering::SeqCst)) & 0xffff_ffff_ffff);
+        let rm = json!({ "id": run, "owner": c.user, "workflow": { "id": m["id"], "name": m["name"], "scope": m["scope"], "version": version, "draft": draft }, "status": "running", "at": now_ms(), "runner": "hub", "doc": doc::to_value(&d) });
+        write(&self.run_dir(&run).join("run.json"), &rm);
+        self.drive(run.clone(), c.user.clone(), Arc::new(d), Drive::Start(input));
+        j(202, json!({ "run": run, "runner": "hub" }))
+    }
+
+    fn replay(&self, c: &Caller, run: &str) -> Answer {
+        let old = match self.run_meta_for(c, run) { Ok(m) => m, Err(e) => return e };
+        let Ok(d) = doc::from_value(old["doc"].clone()) else { return bad(409, "That run's document is gone.") };
+        let id = format!("{run}-replay-{:06x}", now_ms() & 0xff_ffff);
+        let mut rm = old.clone();
+        rm["id"] = json!(id);
+        rm["owner"] = json!(c.user);
+        rm["status"] = json!("running");
+        rm["at"] = json!(now_ms());
+        rm["replayOf"] = json!(run);
+        write(&self.run_dir(&id).join("run.json"), &rm);
+        self.drive(id.clone(), c.user.clone(), Arc::new(d), Drive::Replay(read_lines(&self.run_dir(run).join("log.ndjson"))));
+        j(202, json!({ "run": id }))
+    }
+
+    async fn answer(&self, c: &Caller, run: &str, key: &str, answers: Value) -> Answer {
+        let m = match self.run_meta_for(c, run) { Ok(m) => m, Err(e) => return e };
+        if s(&m, "owner") != c.user && !self.dir.is_admin(&c.user) { return bad(403, "Only the person who started the run answers its questions."); }
+        if s(&m, "status") != "waiting" { return bad(409, "That run is not waiting for an answer."); }
+        let log = read_lines(&self.run_dir(run).join("log.ndjson"));
+        let p = crate::log::Prior::from_log(log.clone());
+        if !p.waits.contains_key(key) { return bad(404, "The run does not wait on that question."); }
+        if p.answers.contains_key(key) { return bad(409, "That question is answered already."); }
+        let Ok(d) = doc::from_value(m["doc"].clone()) else { return bad(409, "That run's document is gone.") };
+        self.set_status(run, "running");
+        self.drive(run.to_string(), s(&m, "owner").to_string(), Arc::new(d), Drive::Answer(log, key.to_string(), answers, if s(&m, "owner") == c.user { "user".into() } else { c.user.clone() }));
+        j(200, json!({ "ok": true }))
+    }
+
+    fn log(&self, c: &Caller, run: &str, from: u64, follow: bool) -> Answer {
+        if let Err(e) = self.run_meta_for(c, run) { return e; }
+        let (tx, rx) = mpsc::channel::<String>(1024);
+        let past = read_lines(&self.run_dir(run).join("log.ndjson"));
+        let live = if follow { lock(&self.runs).get(run).map(|l| l.tx.subscribe()) } else { None };
+        let last = past.iter().filter_map(|e| e["seq"].as_u64()).max().unwrap_or(0);
+        let ended = past.iter().any(|e| e["type"] == "run_end");
+        tokio::spawn(async move {
+            for e in past.iter().filter(|e| e["seq"].as_u64().unwrap_or(0) >= from) { if tx.send(format!("{e}\n")).await.is_err() { return; } }
+            if ended { return; }
+            let Some(mut live) = live else { return };
+            loop {
+                match live.recv().await {
+                    Ok(e) => {
+                        if e["seq"].as_u64().unwrap_or(0) <= last || e["seq"].as_u64().unwrap_or(0) < from { continue; }
+                        let end = e["type"] == "run_end" || e["type"] == "snapshot";
+                        if tx.send(format!("{e}\n")).await.is_err() || end { return; }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return,
+                }
+            }
+        });
+        Answer::Lines(rx)
+    }
+
+    fn set_status(&self, run: &str, status: &str) {
+        if let Some(mut m) = self.run_meta(run) { m["status"] = json!(status); m["updatedAt"] = json!(now_ms()); write(&self.run_dir(run).join("run.json"), &m); }
+    }
+
+    fn drive(&self, run: String, owner: String, d: Arc<Document>, how: Drive) {
+        let Some(me) = self.me.upgrade() else { return };
+        let (tx, _) = broadcast::channel(1024);
+        let live = Arc::new(Live { cancel: Cancel::new(), tx, secrets: Arc::new(Mutex::new(vec![])) });
+        lock(&self.runs).insert(run.clone(), live.clone());
+        let scope = self.run_meta(&run).map(|m| s(&m["workflow"], "scope").to_string()).unwrap_or_default();
+        let host: Arc<dyn WorkflowHost> = Arc::new(RunHost { inner: self.dir.host_for(&owner), svc: self.me.clone(), run: run.clone(), owner: owner.clone(), scope, live: live.clone() });
+        self.dir.changed(&owner, &json!({ "type": "hyper_run", "run": run, "status": "running" }));
+        tokio::spawn(async move {
+            let opts = RunOptions { run_id: Some(run.clone()), runner: Some("hub".into()), cancel: live.cancel.clone(), ..Default::default() };
+            let e = me.engine.clone();
+            let rep: RunReport = match how {
+                Drive::Start(input) => e.start(d, input, host, opts).await,
+                Drive::Resume(log) => e.resume(d, log, host, opts).await,
+                Drive::Answer(log, key, answers, by) => e.answer(d, log, &key, answers, &by, host, opts).await,
+                Drive::Replay(log) => e.replay(d, log, host, opts).await,
+            };
+            me.finished(&run, &owner, &rep);
+        });
+    }
+
+    fn finished(&self, run: &str, owner: &str, rep: &RunReport) {
+        lock(&self.runs).remove(run);
+        if let Some(mut m) = self.run_meta(run) {
+            m["status"] = json!(rep.status);
+            m["outcome"] = json!(rep.outcome);
+            m["result"] = rep.result.clone().unwrap_or(Value::Null);
+            m["error"] = rep.error.clone().unwrap_or(Value::Null);
+            m["waiting"] = json!(rep.waiting);
+            m["totals"] = rep.totals.clone();
+            m["problems"] = json!(rep.problems);
+            m["updatedAt"] = json!(now_ms());
+            write(&self.run_dir(run).join("run.json"), &m);
+        }
+        self.dir.changed(owner, &json!({ "type": "hyper_run", "run": run, "status": rep.status, "outcome": rep.outcome, "waiting": rep.waiting }));
+    }
+
+    /// After a start (the hub restarted): every run that was running goes on from its log; a waiting run whose
+    /// deadline has passed is driven so its timeout applies. Call it once at start and then now and then (`tick`).
+    pub fn resume_all(&self, include_running: bool) {
+        for e in std::fs::read_dir(self.root.join("runs")).into_iter().flatten().flatten() {
+            let Some(m) = read(&e.path().join("run.json")) else { continue };
+            let run = s(&m, "id").to_string();
+            if lock(&self.runs).contains_key(&run) { continue; }
+            let due = s(&m, "status") == "waiting" && m["waiting"].as_array().is_some_and(|w| w.iter().any(|x| x["deadline"].as_u64().is_some_and(|d| d <= now_ms())));
+            if !(include_running && s(&m, "status") == "running" || due) { continue; }
+            let Ok(d) = doc::from_value(m["doc"].clone()) else { continue };
+            let log = read_lines(&e.path().join("log.ndjson"));
+            if log.is_empty() { self.set_status(&run, "failed"); continue; }
+            self.drive(run, s(&m, "owner").to_string(), Arc::new(d), Drive::Resume(log));
+        }
+    }
+
+    /// The deadlines of waiting runs (call every few seconds).
+    pub fn tick(&self) { self.resume_all(false) }
+
+    /// The published workflow a `sub-workflow` node of a run in `scope`, owned by `owner`, may run.
+    fn workflow_for(&self, owner: &str, scope: &str, name: &str, range: Option<&str>) -> Option<Document> {
+        let c = Caller { user: owner.to_string(), run_only: false };
+        let m = self.find(&c, None, Some(name), None).or_else(|| self.metas(&[scope.to_string()]).into_iter().find(|m| s(m, "name") == name))?;
+        if !self.rights(&c, &m).run { return None; }
+        self.resolve_range(&m, range).map(|x| x.1)
+    }
+
+    fn write_event(&self, run: &str, live: &Live, ev: &Value) {
+        let mut text = ev.to_string();
+        let mut secrets = self.dir.secret_values();
+        secrets.extend(lock(&live.secrets).iter().cloned());
+        for sec in secrets.iter().filter(|x| x.len() >= 4) {
+            let quoted = serde_json::to_string(sec).unwrap_or_default();
+            let inner = quoted.trim_matches('"');
+            text = text.replace(inner, "***");
+        }
+        append_line(&self.run_dir(run).join("log.ndjson"), &text);
+        let clean: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let _ = live.tx.send(clean);
+    }
+}
+
+enum Drive {
+    Start(RunInput),
+    Resume(Vec<Value>),
+    Answer(Vec<Value>, String, Value, String),
+    Replay(Vec<Value>),
+}
+
+/// The host a run gets: the hub's, with the service's own parts around it (the log, snapshots, the store, secrets
+/// remembered for scrubbing).
+struct RunHost {
+    inner: Arc<dyn WorkflowHost>,
+    svc: Weak<Service>,
+    run: String,
+    owner: String,
+    scope: String,
+    live: Arc<Live>,
+}
+
+impl WorkflowHost for RunHost {
+    fn call_model<'a>(&'a self, req: ModelRequest, cancel: Cancel) -> BoxFut<'a, Result<ModelAnswer, NodeError>> { self.inner.call_model(req, cancel) }
+    fn call_tool<'a>(&'a self, name: String, args: Value, ctx: ToolCtx, cancel: Cancel) -> BoxFut<'a, Result<Value, NodeError>> {
+        // the scope's policy names the tools its runs may use (spec 9.3), else the hub's default list: a workflow cannot
+        // grant itself a tool
+        let allowed = match self.svc.upgrade() {
+            Some(svc) => match svc.scope_policy(&self.scope).get("tools").and_then(Value::as_array) {
+                Some(a) => a.iter().any(|t| t.as_str() == Some(name.as_str())),
+                None => svc.dir.default_tools().contains(&name),
+            },
+            None => false,
+        };
+        if !allowed { return Box::pin(async move { Err(NodeError::fatal("engine.tool-denied", format!("the tool `{name}` is not allowed in this workflow's scope"))) }); }
+        self.inner.call_tool(name, args, ctx, cancel)
+    }
+    fn http<'a>(&'a self, req: HttpRequest, cancel: Cancel) -> BoxFut<'a, Result<HttpAnswer, NodeError>> {
+        for (_, v) in &req.headers { if v.len() >= 4 { lock(&self.live.secrets).push(v.clone()); } }
+        self.inner.http(req, cancel)
+    }
+    fn run_agent<'a>(&'a self, spec: Value, cancel: Cancel) -> BoxFut<'a, Result<Value, NodeError>> { self.inner.run_agent(spec, cancel) }
+    fn ask_person(&self, ask: &Ask) -> Result<String, NodeError> {
+        let r = self.inner.ask_person(ask).unwrap_or_else(|_| format!("{}:{}", ask.run, ask.key));
+        if let Some(svc) = self.svc.upgrade() { svc.dir.changed(&self.owner, &json!({ "type": "hyper_question", "run": self.run, "key": ask.key, "node": ask.node, "what": ask.what, "questions": ask.questions, "deadline": ask.deadline, "ref": r })); }
+        Ok(r)
+    }
+    fn emit(&self, run: &str, key: &str, message: &str) {
+        self.inner.emit(run, key, message);
+        if let Some(svc) = self.svc.upgrade() { svc.dir.changed(&self.owner, &json!({ "type": "hyper_emit", "run": run, "key": key, "message": message })); }
+    }
+    fn saved_prompt(&self, name: &str) -> Option<String> { self.inner.saved_prompt(name) }
+    fn workflow(&self, name: &str, range: Option<&str>) -> Option<Document> { self.svc.upgrade()?.workflow_for(&self.owner, &self.scope, name, range) }
+    fn project(&self, name: &str) -> Option<Value> { self.inner.project(name) }
+    fn secret(&self, name: &str) -> Option<String> {
+        let v = self.inner.secret(name)?;
+        lock(&self.live.secrets).push(v.clone());
+        Some(v)
+    }
+    fn log(&self, event: &Value) {
+        // a sub-workflow's events are its own run's: each run id has its own log
+        let run = event.get("run").and_then(Value::as_str).unwrap_or(&self.run).to_string();
+        if let Some(svc) = self.svc.upgrade() {
+            if run != self.run && svc.run_meta(&run).is_none() {
+                let parent = svc.run_meta(&self.run).unwrap_or(Value::Null);
+                write(&svc.run_dir(&run).join("run.json"), &json!({ "id": run, "owner": self.owner, "workflow": { "name": event["workflow"]["name"], "version": event["workflow"]["version"], "scope": self.scope }, "status": "child", "parent": self.run, "at": now_ms(), "doc": Value::Null, "parentWorkflow": parent["workflow"] }));
+            }
+            svc.write_event(&run, &self.live, event);
+        }
+        self.inner.log(event);
+    }
+    fn save_snapshot(&self, run: &str, snapshot: &Value) {
+        if let Some(svc) = self.svc.upgrade() { write(&svc.run_dir(run).join("snapshot.json"), snapshot); }
+    }
+    fn now_ms(&self) -> u64 { self.inner.now_ms() }
+}

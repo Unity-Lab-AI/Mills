@@ -22,6 +22,7 @@ pub mod kinds;
 pub mod log;
 mod plan;
 mod run;
+pub mod service;
 
 pub use cancel::Cancel;
 pub use engine::{Engine, RunInput, RunLimits, RunOptions, RunReport};
