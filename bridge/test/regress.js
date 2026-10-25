@@ -3304,6 +3304,51 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R198', 'session limits (plans/multi-session.md § 6): with the defaults (5 per person per host, 3 per provider) a 4th working session on the same provider answers 429 (idle sessions cost nothing: the 4th exists, only its run is refused) with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R285 to R289 (T-289): other tools (Jcode PGM) report their sessions; the person's list shows them as `external`
+    const s285 = {}, now285 = Date.now();
+    const rep = (tok, body) => call('/api/work/sessions/report', tok, body);
+    const ext = async (tok) => (await call('/api/work/sessions', tok)).data || {};
+    const base = await ext(U);
+    s285.r1 = await rep(U, { source: 'jcode', device: 'r285 laptop', sessions: [
+      { id: 'jc-1', title: 'Fix the parser', state: 'working', project: 'viberoller', branch: 'work/x', host: 'laptop', updatedAt: now285 },
+      { id: 'jc-2', title: 'Ask me', state: 'waiting', updatedAt: now285 - 5000 },
+      { id: 'jc-3', title: 'Typed', state: 'draft', updatedAt: now285 - 9000 }] });
+    const g1 = await ext(U);
+    s285.list = (g1.external || []).filter((x) => x.source === 'jcode');
+    const j1 = s285.list.find((x) => x.id === 'jc-1') || {};
+    s285.fields = j1.title === 'Fix the parser' && j1.state === 'working' && j1.project === 'viberoller' && j1.branch === 'work/x' && j1.source === 'jcode' && typeof j1.updatedAt === 'number';
+    s285.ew = (g1.counts || {}).externalWorking;
+    check('R285', 'T-289 POST /api/work/sessions/report keeps another tool\'s sessions per person: GET /api/work/sessions then has `external` [{source, id, title, state, project, branch, updatedAt}] (newest first) and counts.externalWorking counts the working ones',
+      s285.r1.status === 200 && s285.r1.data.accepted === 3 && s285.list.length === 3 && s285.fields && s285.list[0].id === 'jc-1' && s285.ew === 1, `report ${s285.r1.status} accepted ${s285.r1.data.accepted} · listed ${s285.list.length} · fields ${s285.fields} · externalWorking ${s285.ew}`);
+    // R286: validation and cutting
+    s285.bad = await rep(U, { source: 'jcode', device: 'r286', sessions: [
+      { id: 'ok-1', title: 'x'.repeat(500), state: 'ready', project: 'p'.repeat(500), branch: 'b\nc', updatedAt: now285 },
+      { id: 'bad-state', title: 'no', state: 'sleeping' }, { id: '', title: 'no id', state: 'idle' }, { title: 'no id at all', state: 'idle' }] });
+    s285.noSource = await rep(U, { sessions: [] }); s285.noList = await rep(U, { source: 'jcode' }); s285.anon = await rep(null, { source: 'jcode', sessions: [] });
+    const g2 = await ext(U); const o1 = (g2.external || []).find((x) => x.id === 'ok-1') || {};
+    s285.cut = (o1.title || '').length === 120 && (o1.project || '').length === 80 && /^b ?c$/.test(o1.branch || '');
+    s285.dropped = !(g2.external || []).some((x) => x.id === 'bad-state' || x.id === '');
+    check('R286', 'T-289 the report is validated: only the six states are kept (others dropped), a session without an id is dropped, title / project / branch are cut to 120 / 80 / 80 on one line, no source or no list → 400, signed out → 401',
+      s285.cut && s285.dropped && s285.bad.data.accepted === 1 && s285.noSource.status === 400 && s285.noList.status === 400 && s285.anon.status === 401, `cut ${s285.cut} · dropped ${s285.dropped} · accepted ${s285.bad.data.accepted} · no source ${s285.noSource.status} no list ${s285.noList.status} signed out ${s285.anon.status}`);
+    // R287: per person, and a new report of the same source + device replaces the old one; another device is kept next to it
+    const dOther = await ext(D);
+    s285.rep2 = await rep(U, { source: 'jcode', device: 'r285 laptop', sessions: [{ id: 'jc-1', title: 'Now ready', state: 'ready', updatedAt: Date.now() }] });
+    const g3 = await ext(U);
+    const mine = (g3.external || []).filter((x) => x.source === 'jcode' && x.device === 'r285 laptop' || ['jc-1', 'jc-2', 'jc-3'].includes(x.id));
+    s285.replaced = mine.length === 1 && mine[0].state === 'ready' && (g3.external || []).some((x) => x.id === 'ok-1');
+    check('R287', 'T-289 reports are the person\'s own (another person\'s list has none of them), and a new report of the same source + device replaces the old one while another device\'s report stays',
+      !(dOther.external || []).some((x) => ['jc-1', 'jc-2', 'jc-3', 'ok-1'].includes(x.id)) && s285.replaced && ((g3.counts || {}).externalWorking === 0), `others see ${(dOther.external || []).length} · replaced ${s285.replaced} · externalWorking ${(g3.counts || {}).externalWorking}`);
+    // R288: a report that is not refreshed expires
+    s285.short = await rep(U, { source: 'r288', device: 'x', ttlSec: 1, sessions: [{ id: 'gone-1', title: 'soon gone', state: 'working', updatedAt: Date.now() }] });
+    const here = ((await ext(U)).external || []).some((x) => x.id === 'gone-1');
+    await sleep(1600);
+    const g4 = await ext(U); const stays = (g4.external || []).some((x) => x.id === 'ok-1');
+    check('R288', 'T-289 a report that is not refreshed expires (ttlSec 1 here; 3 minutes by default), the other reports stay, and the expired working session no longer counts',
+      here && !(g4.external || []).some((x) => x.id === 'gone-1') && stays && (g4.counts || {}).externalWorking === 0, `listed at first ${here} · after 1.6 s gone ${!(g4.external || []).some((x) => x.id === 'gone-1')} · others stay ${stays}`);
+    // R289: nothing existing changes: the hub's own sessions and counts are the same, the old fields keep their shape
+    check('R289', 'T-289 the report changes nothing of the hub\'s own list: sessions, folders and counts.working / waiting are as before, and a page that ignores `external` sees the same shape',
+      JSON.stringify((await ext(U)).sessions.map((x) => x.id)) === JSON.stringify(base.sessions.map((x) => x.id)) && typeof (g4.counts || {}).working === 'number' && (g4.counts || {}).working === (base.counts || {}).working && Array.isArray(g4.folders) && typeof g4.current === 'string', `sessions ${(g4.sessions || []).length} vs ${(base.sessions || []).length} · working ${(g4.counts || {}).working}`);
+  } else for (const [id, what] of [['R285', 'external session report'], ['R286', 'report validation'], ['R287', 'reports per person'], ['R288', 'report expiry'], ['R289', 'report leaves the list alone']]) skip(id, 'T-289 ' + what, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
