@@ -31,7 +31,7 @@
     "bridge/server.js": "4.2.2",
     "bridge/set-password.js": "1.0.0",
     "bridge/shares.js": "1.0.0",
-    "bridge/team-mcp.js": "1.0.1",
+    "bridge/team-mcp.js": "1.0.2",
     "bridge/team.js": "1.1.1",
     "bridge/usage.js": "1.2.0",
     "bridge/user-profile.js": "1.0.0",

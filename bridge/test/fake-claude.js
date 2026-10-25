@@ -35,6 +35,21 @@ process.stdin.on('end', async () => {
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
   }
+  // "ASKTOOL" (T-245): ask the person two questions through the team MCP relay's ask_user and print the answers.
+  // "ASKTOOL TIMEOUT": a 2-second timeout (the defaults must come back). "ASKTOOL POLL": polls every second like the MCP relay does.
+  if (input.includes('ASKTOOL')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const tool = (args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name: 'ask_user', args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const timeout = input.includes('ASKTOOL TIMEOUT'), poll = input.includes('ASKTOOL POLL');
+    let r = await tool({ title: 'r210', ...(timeout ? { timeoutSec: 2 } : poll ? { timeoutSec: 30, pollSec: 1 } : {}), questions: [
+      { id: 'which', text: 'Which way?', kind: 'single', options: ['left', { id: 'right', label: 'Right', hint: 'the other one' }], default: 'right' },
+      { id: 'what', text: 'Which parts?', kind: 'checklist', options: ['a', 'b', 'c'], default: ['a', 'c'] }] });
+    while (r.ok && r.result && r.result.pending) r = await tool({ poll: r.result.id, ...(poll ? { pollSec: 1 } : {}) });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'ASK:' + JSON.stringify(r) }] } });
+  }
   // "BOARDTOOL": act on the team board through the board MCP relay, like Claude in a Work run:
   // create a task, claim it, add a progress note.
   if (input.includes('BOARDTOOL')) {

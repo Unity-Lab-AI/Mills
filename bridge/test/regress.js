@@ -3089,6 +3089,64 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R203', 'a shared Work session shows the session that was shared (POST /api/work/share {session}): its lines reach the watchers, another session\'s do not; the watch answer names it',
       seen.share === c203 && seen.has && !seen.leak && seen.session === c203, `shared ${seen.share} · watcher sees it ${seen.has}, the first session\'s ${seen.leak} · watch names ${seen.session}`);
   } else skip('R203', 'a share shows the shared session', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R210-R214 (T-245 = T-195 · 1/4): the AI asks its person (docs/question-protocol.md); the fake Claude's "ASKTOOL" calls ask_user like the team MCP relay
+    const askOf = (events) => { const t = texts(events).split('\n').find((l) => l.startsWith('ASK:')); try { return JSON.parse(t.slice(4)); } catch { return {}; } };
+    const sessionsOf = async () => ((await call('/api/work/sessions', U)).data.sessions) || [];
+    const primary = async () => (await sessionsOf()).find((x) => x.primary) || {};
+    // R210: a series reaches the page as an event, the session waits (yellow), the answers come back as one tool result
+    { let q = null, during = null, seenAfter = null; const seen = {};
+      const r = await chat(U, 'ASKTOOL r210', { onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => { during = await primary(); seen.stranger = (await call('/api/work/answer', D, { id: ev.id, answers: [] })).status; seen.go = (await call('/api/work/answer', U, { id: ev.id, answers: [{ id: 'which', picked: ['left', 'right'] }, { id: 'what', picked: ['b', 'zzz'], other: 'ignored' }] })).status; })(); } } });
+      const res = askOf(r.events).result || {}; seenAfter = await primary();
+      const ans = res.answers || [];
+      check('R210', 'T-245 ask_user: a question series reaches the page as a bridge_question event (kinds, options, recommended defaults), its session is "waiting" (kind question, ref = the question) while it is open, and the answers come back to the AI as one tool result (what was picked, cut to what each question allows, by: user); then the event bridge_answered closes it and the session is no longer waiting; another person cannot answer it',
+        !!q && q.questions.length === 2 && q.questions[0].kind === 'single' && q.questions[0].default[0] === 'right' && q.questions[1].kind === 'checklist' && q.questions[1].other === false && q.timeoutSec === 600
+        && during.state === 'waiting' && during.waiting.kind === 'question' && during.waiting.ref === q.id
+        && seen.stranger === 404 && seen.go === 200 && res.answered === true && res.by === 'user' && ans[0].picked.join() === 'left' && ans[1].picked.join() === 'b' && !ans[1].other && ans[1].labels.join() === 'b'
+        && r.events.some((e) => e.type === 'bridge_answered' && e.id === q.id && e.by === 'user') && seenAfter.state !== 'waiting' && !seenAfter.waiting,
+        `event ${q ? q.questions.map((x) => x.kind + ':' + (x.default || []).join('+')).join(' / ') + ' timeout ' + q.timeoutSec : 'none'} · during ${during && during.state}/${during && during.waiting && during.waiting.kind} · stranger ${seen.stranger}, answer ${seen.go} · result ${JSON.stringify(res).slice(0, 200)} · after ${seenAfter.state}`); }
+    // R211: nobody answers: after the timeout the recommended answers are used, and the AI is told so
+    { const t0 = Date.now(); const r = await chat(U, 'ASKTOOL TIMEOUT r211'); const took = Date.now() - t0, res = askOf(r.events).result || {}, ans = res.answers || [], p = await primary();
+      check('R211', 'T-245 an unanswered question times out (timeoutSec, default 10 minutes): the recommended answers are used (by: default, timedOut: true) and the AI is told so, the page gets bridge_answered by default, and the session is no longer waiting',
+        res.answered === true && res.by === 'default' && res.timedOut === true && ans[0].picked.join() === 'right' && ans[1].picked.join() === 'a,c' && ans.every((x) => x.by === 'default')
+        && r.events.some((e) => e.type === 'bridge_answered' && e.by === 'default') && took >= 1800 && took < 20000 && !p.waiting,
+        `result ${JSON.stringify(res).slice(0, 220)} · took ${took} ms · waiting after ${JSON.stringify(p.waiting)}`); }
+    // R212: a question belongs to the session whose run asked, so a person with two sessions running is asked in the right one
+    { const sid = (await call('/api/work/sessions/new', U, { title: 'r212', background: true })).data.id; const seen = {}; let q = null;
+      if (sid) {
+        const first = call('/api/chat', U, { message: 'SLOW r212 first session' }); await sleep(600);
+        const r = await chat(U, 'ASKTOOL r212', { session: sid, onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => {
+          const list = (await call('/api/work/questions?session=' + sid, U)).data.questions || []; seen.listed = list.length === 1 && list[0].id === ev.id;
+          seen.otherSession = ((await call('/api/work/questions?session=none', U)).data.questions || []).length;
+          const all = await sessionsOf(); seen.child = (all.find((x) => x.id === sid) || {}).state; seen.first = (all.find((x) => x.primary) || {}).state;
+          seen.answer = (await call('/api/work/answer', U, { id: ev.id, defaults: true })).status; })(); } } });
+        await first; const res = askOf(r.events).result || {};
+        seen.by = res.by; seen.session = q && q.session;
+        await call('/api/work/sessions/delete', U, { id: sid });
+      }
+      check('R212', 'T-245 a question is asked in the session whose run asked it (its MCP relay names the session): its event carries the session id, GET /api/work/questions lists it for that session only, that session is "waiting" while another session of the same person is "working" (not waiting); {defaults: true} answers with the recommended answers',
+        !!sid && seen.session === sid && seen.listed && seen.otherSession === 0 && seen.child === 'waiting' && seen.first === 'working' && seen.answer === 200 && seen.by === 'default',
+        `event session ${seen.session} (asked in ${sid}) · listed ${seen.listed}, other session lists ${seen.otherSession} · states: asking ${seen.child}, other ${seen.first} · answer ${seen.answer} by ${seen.by}`); }
+    // R213: a call longer than one HTTP request is held (the relay polls), and "I am on it" (activity) starts the timeout over
+    { let q = null; const seen = {};
+      const r = await chat(U, 'ASKTOOL POLL r213', { onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => {
+        await sleep(1500); const act = await call('/api/work/answer', U, { id: ev.id, activity: true }); seen.act = act.status; seen.dl = act.data.deadline;
+        await sleep(1700); seen.go = (await call('/api/work/answer', U, { id: ev.id, answers: [{ id: 'which', picked: ['right'] }] })).status; })(); } } });
+      const res = askOf(r.events).result || {}, ans = res.answers || [];
+      check('R213', 'T-245 a question may wait longer than one tool call is held: the hub answers {pending, id} after pollSec and the MCP relay asks again with {poll: id}; the answer still arrives as the tool result (picked what was sent, the unanswered question took its recommended answer: by mixed); {activity: true} says the person is on it and restarts the timeout (a new deadline)',
+        !!q && seen.act === 200 && seen.dl > q.deadline && seen.go === 200 && res.answered === true && res.by === 'mixed' && !res.timedOut && ans[0].by === 'user' && ans[1].by === 'default' && ans[1].picked.join() === 'a,c',
+        `activity ${seen.act} deadline ${seen.dl} (was ${q && q.deadline}) · answer ${seen.go} · result ${JSON.stringify(res).slice(0, 200)}`); }
+    // R214: a stopped run ends its open question; the tool is offered by the JavaScript and the native MCP servers and the page shows the event
+    { let q = null; const seen = {};
+      await chat(U, 'ASKTOOL r214', { onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => { await sleep(400); seen.during = (await primary()).state; await call('/api/stop', U, {}); })(); } } });
+      await sleep(300); const p = await primary(); seen.after = p.state; seen.waiting = p.waiting; seen.open = ((await call('/api/work/questions', U)).data.questions || []).length;
+      seen.late = q ? (await call('/api/work/answer', U, { id: q.id, defaults: true })).status : 0;
+      const nativeTools = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+      const jsTools = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+      const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      check('R214', 'T-245 stopping the run ends its open question (the session is no longer waiting, nothing is left open, a late answer finds no question: 404); [static] ask_user is offered by team-mcp.js and by the native host MCP (mcp-tools.json), and the Work page shows bridge_question and sends the answer to /api/work/answer',
+        !!q && seen.during === 'waiting' && seen.after !== 'waiting' && !seen.waiting && seen.open === 0 && seen.late === 404 && jsTools.includes('ask_user') && nativeTools.includes('ask_user') && /bridge_question/.test(page) && /\/api\/work\/answer/.test(page),
+        `while open ${seen.during} · after the stop ${seen.after} waiting ${JSON.stringify(seen.waiting)} · open ${seen.open} · late answer ${seen.late} · js tool ${jsTools.includes('ask_user')} native tool ${nativeTools.includes('ask_user')}`); }
+  } else for (const [id, l] of [['R210', 'a question series reaches the page and the answers come back'], ['R211', 'an unanswered question takes the recommended answers'], ['R212', 'a question is asked in the session that asked'], ['R213', 'a long question polls; activity restarts the timeout'], ['R214', 'a stopped run ends its question']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });

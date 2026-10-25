@@ -215,7 +215,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let (id, tool) = rest.split_once("/internal/").unwrap_or(("", ""));
         if id.is_empty() || !matches!(tool, "pc-tool" | "board" | "team") { return answer(404, json!({ "error": "Not found" })); }
         return match hub.mods.ai.job_for(id, r.header("x-mills-internal").unwrap_or("")) {
-            Some((account, _)) => answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &r.json()).await),
+            Some((account, _)) => { let mut b = r.json(); if b["session"].as_str().unwrap_or("").is_empty() { let sid = hub.mods.work.session_of_job(id); if !sid.is_empty() { b["session"] = json!(sid); } } answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &b).await) }
             None => answer(403, json!({ "ok": false, "error": "forbidden" })),
         };
     }
@@ -252,7 +252,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if p == "/api/status" && r.method == hyper::Method::GET { return answer(200, site::status(hub, r)); }
     // moving house (bridge/handoff.js pack writes bridge/.maintenance): every change answers "moved", reading and the
     // Work run doing the move go on (the JavaScript hub's rule, for everything answered here and there)
-    if r.method == hyper::Method::POST && !matches!(p, "/api/chat" | "/api/stop" | "/api/pc-result") && p != "/api/status" {
+    if r.method == hyper::Method::POST && !matches!(p, "/api/chat" | "/api/stop" | "/api/pc-result" | "/api/work/answer") && p != "/api/status" {
         if let Some(w) = maintenance(hub) { return answer(503, json!({ "error": format!("VibeRoller has moved to {w}: open it there and sign in as usual. This copy is read-only now.") })); }
     }
     let a = &hub.mods.auth;

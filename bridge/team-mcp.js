@@ -10,7 +10,25 @@ const SECRET = process.env.MILLS_INTERNAL || '';
 const USER = process.env.MILLS_USER || 'the user';
 const ACCOUNT = process.env.MILLS_ACCOUNT || '';
 
+const SESSION = process.env.MILLS_SESSION || ''; // the Work session of this run (not the first one): its page gets the question
+
+// ask_user (T-245; docs/question-protocol.md): the person answers on their page; the answers come back as this tool's result.
+const OPTION = { anyOf: [{ type: 'string' }, { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, hint: { type: 'string', description: 'A short explanation shown under the label' } }, required: ['label'] }] };
+const ASK_USER = { name: 'ask_user', description: `Ask ${USER} one question or a series of questions and wait for the answers (a choice, several choices, a checkbox list, or free text). Use it when a decision is theirs and guessing would waste work: an owner, a scope, a name, which of several designs. Do NOT ask what you can find out yourself or what a rule already settles. Each question has a kind: "single" (pick one), "multi" (pick several), "checklist" (a long list to tick, for features or items) or "text" (their own words); single and multi also offer "my own answer" by default. Give each question the answer you recommend as "default": if ${USER} does not answer within the timeout (10 minutes unless timeoutSec says otherwise; 0 = wait until answered), the defaults are used and the result says so (by: "default", timedOut: true). Several questions are shown one after the other (Next, then Done) and come back together. The result is {answered, by: "user" | "default" | "mixed", answers: [{id, question, kind, picked: [option ids], labels, other?, text?, by}]}.`,
+  inputSchema: { type: 'object', properties: {
+    title: { type: 'string', description: 'A short heading for the series' },
+    questions: { type: 'array', description: 'The questions, in the order to ask them (at most 30)', items: { type: 'object', properties: {
+      id: { type: 'string', description: 'A short name to find the answer by (default q1, q2, ...)' },
+      text: { type: 'string', description: 'The question' },
+      kind: { type: 'string', enum: ['single', 'multi', 'checklist', 'text'], description: 'Default: single when there are options, else text' },
+      options: { type: 'array', items: OPTION, description: 'The choices: strings, or {id, label, hint}' },
+      other: { description: 'true / false / a label: offer "my own answer" (default: on for single and multi, off for checklist)', anyOf: [{ type: 'boolean' }, { type: 'string' }] },
+      default: { description: 'Your recommended answer: an option id (single), a list of option ids (multi, checklist), or the text (text)', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      required: { type: 'boolean' } }, required: ['text'] } },
+    timeoutSec: { type: 'number', description: 'Seconds to wait before the defaults are used (default 600; 0 = until answered)' } }, required: ['questions'] } };
+
 const TOOLS = [
+  ASK_USER,
   { name: 'team_say', description: `Post a message into the VibeRoller team chat as "${USER} · Claude": to # Everyone (default), privately to one person (to = their username), or into a server channel / group (conv = its id from team_channels, e.g. "ch:mills/dev" or "grp:ab12cd"). Use it to tell the team what you are doing, what landed, and BEFORE any hub restart. Markdown is rendered.`,
     inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'The message (markdown)' }, to: { type: 'string', description: 'Username for a private message; leave out for everyone' }, conv: { type: 'string', description: 'A channel or group conversation id (see team_channels)' } }, required: ['text'] } },
   { name: 'team_presence', description: 'Who is in VibeRoller right now: every account with online / away / offline, where they are and when they were last seen.', inputSchema: { type: 'object', properties: {} } },
@@ -31,12 +49,15 @@ function reply(rid, result) { process.stdout.write(JSON.stringify({ jsonrpc: '2.
 function fail(rid, code, message) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: rid, error: { code, message } }) + '\n'); }
 
 async function callTool(name, args) {
-  const res = await fetch(BRIDGE + '/internal/team', {
+  const once = async (a) => (await fetch(BRIDGE + '/internal/team', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': SECRET, 'X-Mills-Account': ACCOUNT },
-    body: JSON.stringify({ name, args: args || {} }),
-  });
-  return res.json();
+    body: JSON.stringify({ name, args: a || {}, ...(SESSION ? { session: SESSION } : {}) }),
+  })).json();
+  let out = await once(args);
+  // a question may wait longer than one HTTP call is held: the hub answers {pending, id} every few minutes, we ask again
+  if (name === 'ask_user') while (out.ok && out.result && out.result.pending && out.result.id) out = await once({ poll: out.result.id, ...(args && args.pollSec ? { pollSec: args.pollSec } : {}) });
+  return out;
 }
 
 async function handle(msg) {
