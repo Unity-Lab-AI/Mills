@@ -363,6 +363,113 @@
  ],
  "team": [
   {
+   "name": "ask_user",
+   "description": "Ask {USER} one question or a series of questions and wait for the answers (a choice, several choices, a checkbox list, or free text). Use it when a decision is theirs and guessing would waste work: an owner, a scope, a name, which of several designs. Do NOT ask what you can find out yourself or what a rule already settles. Each question has a kind: \"single\" (pick one), \"multi\" (pick several), \"checklist\" (a long list to tick, for features or items) or \"text\" (their own words); single and multi also offer \"my own answer\" by default. Give each question the answer you recommend as \"default\": if {USER} does not answer within the timeout (10 minutes unless timeoutSec says otherwise; 0 = wait until answered), the defaults are used and the result says so (by: \"default\", timedOut: true). Several questions are shown one after the other (Next, then Done) and come back together. The result is {answered, by: \"user\" | \"default\" | \"mixed\", answers: [{id, question, kind, picked: [option ids], labels, other?, text?, by}]}.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "title": {
+      "type": "string",
+      "description": "A short heading for the series"
+     },
+     "questions": {
+      "type": "array",
+      "description": "The questions, in the order to ask them (at most 30)",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "string",
+         "description": "A short name to find the answer by (default q1, q2, ...)"
+        },
+        "text": {
+         "type": "string",
+         "description": "The question"
+        },
+        "kind": {
+         "type": "string",
+         "enum": [
+          "single",
+          "multi",
+          "checklist",
+          "text"
+         ],
+         "description": "Default: single when there are options, else text"
+        },
+        "options": {
+         "type": "array",
+         "items": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "object",
+            "properties": {
+             "id": {
+              "type": "string"
+             },
+             "label": {
+              "type": "string"
+             },
+             "hint": {
+              "type": "string",
+              "description": "A short explanation shown under the label"
+             }
+            },
+            "required": [
+             "label"
+            ]
+           }
+          ]
+         },
+         "description": "The choices: strings, or {id, label, hint}"
+        },
+        "other": {
+         "description": "true / false / a label: offer \"my own answer\" (default: on for single and multi, off for checklist)",
+         "anyOf": [
+          {
+           "type": "boolean"
+          },
+          {
+           "type": "string"
+          }
+         ]
+        },
+        "default": {
+         "description": "Your recommended answer: an option id (single), a list of option ids (multi, checklist), or the text (text)",
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "array",
+           "items": {
+            "type": "string"
+           }
+          }
+         ]
+        },
+        "required": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "text"
+       ]
+      }
+     },
+     "timeoutSec": {
+      "type": "number",
+      "description": "Seconds to wait before the defaults are used (default 600; 0 = until answered)"
+     }
+    },
+    "required": [
+     "questions"
+    ]
+   }
+  },
+  {
    "name": "team_say",
    "description": "Post a message into the VibeRoller team chat as \"{USER} · Claude\": to # Everyone (default), privately to one person (to = their username), or into a server channel / group (conv = its id from team_channels, e.g. \"ch:mills/dev\" or \"grp:ab12cd\"). Use it to tell the team what you are doing, what landed, and BEFORE any hub restart. Markdown is rendered.",
    "inputSchema": {

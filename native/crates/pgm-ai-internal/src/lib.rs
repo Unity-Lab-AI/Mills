@@ -29,6 +29,7 @@ pub mod hub;
 pub mod jcode;
 pub mod local_proxy;
 pub mod openai;
+pub mod questions;
 pub mod sessions;
 pub mod unity;
 pub mod unity_brain;

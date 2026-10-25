@@ -18,6 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::hub::{answer, AiHub, Resp};
+use crate::questions;
 use crate::sessions::{self, Sx};
 use pgm_collab_internal::worktree::{Worktrees, Wt, HUB_PROJECT};
 use pgm_core_internal::config::Config;
@@ -45,6 +46,8 @@ impl RunLog {
 }
 /// A shared Work session: `sid` = which of the owner's sessions it shows (plans/multi-session.md § 7).
 struct Share { conv: String, since: String, n: u64, log: Vec<Value>, live: Value, ver: u64, woke: Arc<Notify>, sid: String, key: String }
+/// A question the AI asked (T-245): waits in `Work::asks` for its person, the timeout, or the end of the run.
+struct Ask { user: String, key: String, sid: String, title: String, qs: Vec<Value>, at: u64, timeout_ms: u64, deadline: u64, result: Option<Value>, notify: Arc<Notify> }
 #[derive(Clone, Default)]
 struct Fresh { text: String, at: u64, busy: bool }
 
@@ -62,6 +65,8 @@ pub struct Work {
     llm: Mutex<HashMap<String, (String, String, String, u64)>>,
     fresh: Mutex<HashMap<String, Fresh>>,
     shares: Mutex<HashMap<String, Share>>,
+    /// the questions the AI of a run asked and nobody answered yet (by id)
+    asks: Mutex<HashMap<String, Ask>>,
     projects: Mutex<(u64, Value)>,
     /// the shared sessions changed (the JavaScript hub's room poll lists them)
     pub shares_changed: Notify,
@@ -78,7 +83,7 @@ fn iso() -> String { pgm_core_internal::time::iso_now() }
 
 impl Work {
     pub fn new(root: &Path, cfg: &Config) -> Work {
-        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: pgm_core_internal::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
+        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: pgm_core_internal::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
     }
     // ---------- each person's Work state ----------
     fn state_file(a: &Account) -> PathBuf { a.dir.join("work.json") }
@@ -113,6 +118,8 @@ impl Work {
     pub fn busy_key(&self, key: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key) }
     /// The run key of a run of theirs that waits for something from their browser: the primary session's first.
     fn run_key_of(&self, u: &str) -> Option<String> { let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.contains_key(u) { return Some(u.to_string()); } let p = format!("{u}#"); runs.keys().find(|k| k.starts_with(&p)).cloned() }
+    /// The session (not the first one) whose run is this host job, for the tools its MCP relay calls ("" = none / the first).
+    pub fn session_of_job(&self, job: &str) -> String { if job.is_empty() { return String::new(); } self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(_, r)| r.remote == job).and_then(|(k, _)| k.split_once('#').map(|x| x.1.to_string())).unwrap_or_default() }
     pub fn any_busy(&self) -> bool { !self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() }
     pub fn default_model_of(&self, a: &Account) -> String { self.default_model(a) }
     fn default_model(&self, a: &Account) -> String {
@@ -349,6 +356,7 @@ impl Work {
         let run = { let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.get(&sx.key).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&sx.key) } else { None } };
         let Some(mut r) = run else { return };
         for (_, p) in r.pending { let _ = p.send(json!({ "ok": false, "error": "Run ended" })); }
+        self.ask_end(a, sx); // its open questions end with it (the session is no longer waiting on them)
         let done = json!({ "type": "bridge_done", "code": code });
         let _ = r.tx.send(line(done.clone()));
         r.ev.push(done);
@@ -390,6 +398,112 @@ impl Work {
         let (pid, remote) = match self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(u) { Some(r) => (r.pid, r.remote.clone()), None => return };
         if !remote.is_empty() { hub.ai().cancel_work(&remote); return; }
         if let Some(pid) = pid { kill_pid(pid); }
+    }
+
+    // ---------- the AI asks its person (T-245; docs/question-protocol.md) ----------
+    /// An open question keeps its run alive for the liveness check (a person may take longer than stallAfter).
+    fn keep_alive(&self, key: &str) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { r.last = now_ms(); } }
+    /// The session's dot: waiting (yellow) while any question of it is open.
+    fn ask_waiting(&self, a: &Account, sid: &str) {
+        let open: Vec<(u64, String)> = self.asks.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.sid == sid && x.result.is_none()).map(|(id, x)| (x.at, id.clone())).collect();
+        let first = open.iter().min().cloned();
+        sessions::touch(a, sid, |m| {
+            match first {
+                Some((at, id)) => { m.insert("waiting".into(), json!({ "kind": "question", "at": at, "ref": id, "count": open.len() })); }
+                None => { if m.get("waiting").map(|w| w["kind"] == json!("question")).unwrap_or(false) { m.remove("waiting"); } }
+            }
+        });
+    }
+    /// Answers a question (the person, the timeout, or the end of the run): the waiting tool call gets `result`. False = it was not open.
+    fn settle(&self, a: &Account, id: &str, result: Value) -> bool {
+        let (key, sid) = { let mut m = self.asks.lock().unwrap_or_else(|e| e.into_inner()); let Some(x) = m.get_mut(id) else { return false }; if x.result.is_some() { return false; } let by = result["result"]["by"].clone(); let answers = result["result"]["answers"].clone(); x.result = Some(result); x.notify.notify_waiters(); (x.key.clone(), (x.sid.clone(), by, answers)) };
+        let (sid, by, answers) = sid;
+        self.ask_waiting(a, &sid);
+        self.emit(&key, json!({ "type": "bridge_answered", "id": id, "session": sid, "by": by, "answers": answers }));
+        true
+    }
+    /// A run ended: its open questions end with it.
+    fn ask_end(&self, a: &Account, sx: &Sx) {
+        let mut any = false;
+        { let mut m = self.asks.lock().unwrap_or_else(|e| e.into_inner());
+          let mine: Vec<String> = m.iter().filter(|(_, x)| x.key == sx.key).map(|(id, _)| id.clone()).collect();
+          for id in mine { let open = m.get(&id).map(|x| x.result.is_none()).unwrap_or(false); if open { any = true; if let Some(x) = m.get_mut(&id) { x.result = Some(json!({ "ok": false, "error": "Run ended" })); x.notify.notify_waiters(); } } else { m.remove(&id); } } }
+        if any { self.ask_waiting(a, &sx.sid); }
+    }
+    /// The tool `ask_user` (team MCP): opens a question series for the session that asked and waits for the answers; or,
+    /// with `poll: <id>`, waits on one already open (the MCP relay asks again every few minutes, so no HTTP call is held for 10).
+    async fn ask(&self, a: &Account, b: &Value, args: &Value) -> Value {
+        let err = |e: String| json!({ "ok": false, "error": e });
+        let poll = args["pollSec"].as_u64().unwrap_or(240).clamp(1, 240);
+        if let Some(id) = args["poll"].as_str() { return self.ask_wait(a, id, poll).await; }
+        let (title, qs) = match questions::normalize(args) { Ok(x) => x, Err(e) => return err(format!("ask_user: {e}")) };
+        let want = s(b, "session");
+        let sx = sessions::resolve(a, &want).filter(|sx| !want.is_empty() && self.busy_key(&sx.key))
+            .or_else(|| self.run_key_of(&a.username).and_then(|k| sessions::resolve(a, k.split_once('#').map(|x| x.1).unwrap_or(""))));
+        let Some(sx) = sx else { return err("No run of yours is going, so there is nobody to ask.".into()) };
+        let sec = questions::timeout_sec(args, self.cfg.get("questionTimeoutSec").and_then(Value::as_u64).unwrap_or(questions::DEFAULT_TIMEOUT_SEC));
+        let now = now_ms(); let id = format!("q-{}", pgm_core_internal::crypto::random_hex(6));
+        let deadline = if sec > 0 { now + sec * 1000 } else { u64::MAX };
+        {
+            let mut m = self.asks.lock().unwrap_or_else(|e| e.into_inner());
+            m.retain(|_, x| now.saturating_sub(x.at) < 2 * 86_400_000);
+            if m.values().any(|x| x.key == sx.key && x.result.is_none()) { return err("A question of yours is still waiting for its answer in this session; wait for it before asking another.".into()); }
+            m.insert(id.clone(), Ask { user: a.username.clone(), key: sx.key.clone(), sid: sx.sid.clone(), title: title.clone(), qs: qs.clone(), at: now, timeout_ms: sec * 1000, deadline, result: None, notify: Arc::new(Notify::new()) });
+        }
+        self.ask_waiting(a, &sx.sid);
+        self.emit(&sx.key, json!({ "type": "bridge_question", "id": id, "session": sx.sid, "title": title, "questions": qs, "timeoutSec": sec, "at": now, "deadline": if sec > 0 { json!(deadline) } else { Value::Null } }));
+        self.ask_wait(a, &id, poll).await
+    }
+    async fn ask_wait(&self, a: &Account, id: &str, poll: u64) -> Value {
+        let end = std::time::Instant::now() + Duration::from_secs(poll);
+        let gone = || json!({ "ok": false, "error": "No such open question (it was answered, or the run ended)." });
+        loop {
+            let Some(notify) = self.asks.lock().unwrap_or_else(|e| e.into_inner()).get(id).filter(|x| x.user == a.username).map(|x| x.notify.clone()) else { return gone() };
+            let nf = notify.notified(); tokio::pin!(nf); nf.as_mut().enable(); // before the look below: an answer in between still wakes us
+            let snap = self.asks.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|x| (x.result.clone(), x.key.clone(), x.timeout_ms, x.deadline));
+            let Some((res, key, tmo, deadline)) = snap else { return gone() };
+            if let Some(r) = res { self.asks.lock().unwrap_or_else(|e| e.into_inner()).remove(id); return r; }
+            self.keep_alive(&key);
+            let now = now_ms();
+            if tmo > 0 && now >= deadline {
+                let qs = self.asks.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|x| x.qs.clone()).unwrap_or_default();
+                self.settle(a, id, json!({ "ok": true, "result": { "answered": true, "by": "default", "timedOut": true, "answers": questions::default_answers(&qs) } }));
+                continue;
+            }
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() { return json!({ "ok": true, "result": { "pending": true, "id": id } }); }
+            let mut wait = left.min(Duration::from_secs(2));
+            if tmo > 0 { wait = wait.min(Duration::from_millis(deadline.saturating_sub(now)).max(Duration::from_millis(1))); }
+            let _ = tokio::time::timeout(wait, nf).await;
+        }
+    }
+    /// POST /api/work/answer {id, answers: [{id, picked, other?, text?}]} (or {id, defaults: true}, or {id, activity: true}
+    /// = the person is busy with it: the timeout starts over).
+    fn answer(&self, a: &Account, b: &Value) -> (u16, Value) {
+        let id = s(b, "id");
+        let snap = self.asks.lock().unwrap_or_else(|e| e.into_inner()).get(&id).filter(|x| x.user == a.username).map(|x| (x.result.is_some(), x.qs.clone(), x.key.clone(), x.result.as_ref().map(|r| r["ok"] == json!(false)).unwrap_or(false)));
+        let Some((done, qs, key, ended)) = snap else { return (404, json!({ "error": "No such open question." })) };
+        if ended { return (404, json!({ "error": "No such open question (its run ended)." })); }
+        if done { return (409, json!({ "error": "That question was answered already." })); }
+        let yes = |k: &str| b[k] == json!(true) || b[k] == json!(1);
+        if yes("activity") {
+            let mut m = self.asks.lock().unwrap_or_else(|e| e.into_inner());
+            let dl = m.get_mut(&id).map(|x| { if x.timeout_ms > 0 { x.deadline = now_ms() + x.timeout_ms; } x.deadline }).unwrap_or(0);
+            drop(m); self.keep_alive(&key);
+            return (200, json!({ "ok": true, "deadline": if dl == u64::MAX { Value::Null } else { json!(dl) } }));
+        }
+        let answers = if yes("defaults") { questions::default_answers(&qs) } else { questions::answers_from(&qs, &b["answers"]) };
+        let list = answers.as_array().cloned().unwrap_or_default();
+        let by = if list.iter().all(|x| x["by"] == json!("user")) { "user" } else if list.iter().all(|x| x["by"] == json!("default")) { "default" } else { "mixed" };
+        if !self.settle(a, &id, json!({ "ok": true, "result": { "answered": true, "by": by, "answers": answers } })) { return (409, json!({ "error": "That question was answered already." })); }
+        (200, json!({ "ok": true, "by": by }))
+    }
+    /// The questions of theirs that wait now (a page that was away asks), of one session when named.
+    fn open_questions(&self, a: &Account, session: &str) -> Vec<Value> {
+        let want = if session.is_empty() { String::new() } else { session.to_string() };
+        let mut v: Vec<(u64, Value)> = self.asks.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.result.is_none() && (want.is_empty() || x.sid == want))
+            .map(|(id, x)| (x.at, json!({ "id": id, "session": x.sid, "title": x.title, "questions": x.qs, "timeoutSec": x.timeout_ms / 1000, "at": x.at, "deadline": if x.timeout_ms > 0 { json!(x.deadline) } else { Value::Null } }))).collect();
+        v.sort_by_key(|x| x.0); v.into_iter().map(|x| x.1).collect()
     }
 }
 /// Asks a process to stop (pgm-platform-internal since 5.0.0).
@@ -587,6 +701,7 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
     if which == "team" {
         if name.starts_with("notes_") { return hub.notes_tool(&name, &args, &hub.name_of(account)); }
         match name.as_str() {
+            "ask_user" => return w.ask(&a, b, &args).await, // T-245: a question series for the person of the run
             "sessions_search" => {
                 let q: String = args["q"].as_str().or(args["query"].as_str()).unwrap_or("").chars().take(200).collect();
                 let me = hub.name_of(account);
@@ -730,6 +845,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             if let Some(tx) = entry { let mut v = json!({ "ok": b["ok"].as_bool().unwrap_or(false) || (!b["ok"].is_null() && b["ok"] != json!(false) && b["ok"] != json!(0) && b["ok"] != json!("")) }); for k in ["result", "error"] { if let Some(x) = b.get(k) { v[k] = x.clone(); } } let _ = tx.send(v); }
             answer(200, json!({ "ok": true }))
         }
+        // the AI's question (T-245): the page answers it, or says the person is busy with it (the timeout starts over)
+        "/api/work/answer" if post => { let (st, v) = w.answer(a, &r.json()); answer(st, v) }
+        "/api/work/questions" if get => answer(200, json!({ "questions": w.open_questions(a, &r.param("session").unwrap_or_default()) })),
         "/api/usage" if get => answer(200, w.usage_status(&**hub, a)),
         "/api/model" if post => {
             let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let st = sessions::sstate(w, a, &sx); let ai = hub.ai();

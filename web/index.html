@@ -2222,9 +2222,50 @@ function hubView(ev) {
     default: return null;
   }
 }
+// The AI asks you (T-245, docs/question-protocol.md). The minimum, until the real series UI (T-246): one card with every
+// question (radio / checkbox / text, "my own answer"), the recommended answers ticked, "Send" and "Use the recommended".
+// Any click or keystroke tells the hub you are on it, so the timeout starts over.
+const openQuestions = new Map();
+function showQuestion(ev) {
+  if (openQuestions.has(ev.id)) return;
+  const card = document.createElement('div'); card.className = 'sys';
+  const head = document.createElement('div'); head.style.fontWeight = '600';
+  head.textContent = (ev.title || 'Claude asks you') + (ev.timeoutSec ? ' (after ' + Math.round(ev.timeoutSec / 6) / 10 + ' min without you, the recommended answers are used)' : ''); card.appendChild(head);
+  const reads = []; let lastPoke = 0;
+  const active = () => { if (Date.now() - lastPoke > 15000) { lastPoke = Date.now(); api('/api/work/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, activity: true }) }).catch(() => {}); } };
+  for (const q of ev.questions || []) {
+    const box = document.createElement('div'); box.style.margin = '8px 0';
+    const t = document.createElement('div'); t.textContent = q.text; box.appendChild(t);
+    if (q.kind === 'text') { const inp = document.createElement('input'); inp.value = q.default || ''; inp.oninput = active; box.appendChild(inp); reads.push(() => ({ id: q.id, text: inp.value })); }
+    else {
+      const def = Array.isArray(q.default) ? q.default : [], picks = [];
+      for (const o of q.options || []) {
+        const lab = document.createElement('label'); lab.style.display = 'block';
+        const c = document.createElement('input'); c.type = q.kind === 'single' ? 'radio' : 'checkbox'; c.name = ev.id + '-' + q.id; c.checked = def.includes(o.id); c.onchange = active;
+        lab.appendChild(c); lab.appendChild(document.createTextNode(' ' + o.label + (def.includes(o.id) ? ' (recommended)' : '') + (o.hint ? ' · ' + o.hint : ''))); box.appendChild(lab); picks.push([c, o.id]);
+      }
+      let own = null;
+      if (q.other) { own = document.createElement('input'); own.placeholder = q.otherLabel || 'my own answer'; own.oninput = active; box.appendChild(own); }
+      reads.push(() => ({ id: q.id, picked: picks.filter(([c]) => c.checked).map(([, id]) => id), other: own ? own.value : '' }));
+    }
+    card.appendChild(box);
+  }
+  const send = (body) => api('/api/work/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, ...body }) }).catch((e) => sys('Could not send the answer: ' + e.message, true));
+  for (const [label, body] of [['Send', () => ({ answers: reads.map((r) => r()) })], ['Use the recommended', () => ({ defaults: true })]]) {
+    const b = document.createElement('button'); b.textContent = label; b.style.marginRight = '8px'; b.onclick = () => send(body()); card.appendChild(b);
+  }
+  log.appendChild(card); openQuestions.set(ev.id, card);
+  const P = prefs(); if (P.sound && P.sound.on) playTone('mention', P.sound.mention);
+}
+function closeQuestion(ev) {
+  const card = openQuestions.get(ev.id); if (!card) return; openQuestions.delete(ev.id);
+  card.textContent = ev.by === 'user' ? 'You answered Claude\'s question.' : ev.by === 'mixed' ? 'You answered part of Claude\'s question; the rest took the recommended answers.' : 'Claude\'s question took the recommended answers.';
+}
 function handleEvent(ev) {
   if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; return; }
-  if (ev.type === 'bridge_done') runEnded = true;
+  if (ev.type === 'bridge_question') { showQuestion(ev); scroll(); return; }
+  if (ev.type === 'bridge_answered') { closeQuestion(ev); return; }
+  if (ev.type === 'bridge_done') { runEnded = true; for (const [id, card] of openQuestions) { card.textContent = 'Claude\'s question ended with the run.'; openQuestions.delete(id); } }
   if (ev.type === 'pc_tool') return runPcTool(ev);
   const hv = hubView(ev), hk = hv ? hv.kind : '';
   // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
