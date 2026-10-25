@@ -4,7 +4,7 @@ VibeRoller lives on the lab server (the same box as Forgejo), in a work area the
 
 | Folder | Group | What |
 |---|---|---|
-| `/srv/apps/VibeRoller` | `VibeRoller` (gee, mills, sponge) | the hub: `app/` (live checkout + its data), `node/` (Node 22 for this account), `tools/` (Claude Code), `home/` (Claude's login + settings), `deploy-ready/` (the nginx files for the root step) |
+| `/srv/apps/VibeRoller` | `VibeRoller` (gee, mills, sponge) | the hub: `app/` (live checkout + its data), `node/` (Node for this account: 24 LTS from the T-304 move, `current` points at it; see `deploy/node-upgrade.md`), `tools/` (Claude Code), `home/` (Claude's login + settings), `deploy-ready/` (the nginx files for the root step) |
 | `/srv/apps/sharedwork` | `sharedwork` (gee, mills, sponge) | the **projects area**: one folder per project, `_repo/` = its main checkout, one worktree per person; `VibeRoller/` holds the VibeRoller worktrees |
 
 The hub runs as a systemd **user** service of the account that set it up (gee), from boot (lingering on). Every push to
@@ -30,7 +30,7 @@ Nothing here changes a machine by itself. The scripts do the work; people run th
 
 | File | What it is |
 |---|---|
-| `deploy/setup-server.sh` | as the hub's account, idempotent: user-local Node 22 + Claude Code, the live checkout, `bridge/config.local.json` with a fresh node secret, the hub's git identity, the systemd user services (hub + auto-deploy timer), the nginx site files in `deploy-ready/`, and the printed root / people steps. |
+| `deploy/setup-server.sh` | as the hub's account, idempotent: user-local Node (24 LTS by default, checksum-verified) + Claude Code, the live checkout, `bridge/config.local.json` with a fresh node secret, the hub's git identity, the systemd user services (hub + auto-deploy timer), the nginx site files in `deploy-ready/`, and the printed root / people steps. |
 | `deploy/autodeploy.sh` + `viberoller-autodeploy.service` / `.timer` | every minute: a new `main` on Forgejo → fast-forward the live checkout (never anything else), `node --check` every hub script, `bridge/.restart` for a graceful restart. Log: `/srv/apps/VibeRoller/autodeploy.log`. |
 | `deploy/viberoller-hub.service` | the hub as a user service: its own Node, Claude Code and HOME under `/srv/apps/VibeRoller`, group-writable files (`UMask=0007`), restart on failure, graceful restarts inside `run.js`. |
 | `deploy/nginx-portal.conf` | `portal.unityailab.com` + `portal.git.unityailab.com`: TLS, streaming unbuffered, WebSocket-ready, `/internal/` blocked, forged forwarding headers dropped. |
