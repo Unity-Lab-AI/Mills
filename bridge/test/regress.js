@@ -2808,7 +2808,13 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const crash = await scenario('crash', { n1: 'crash', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const hang = await scenario('hang', { n1: 'hang', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const fine = await scenario('fine', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1');
-    const again = await scenario('exit75', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1', async (dir) => { fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500); }); // the next health check makes the fake exit 75; vr-run starts it again
+    // the next health check makes the fake exit 75 and vr-run starts it again; it goes back to normal only once vr-run's log
+    // says the restart was asked for (a fixed 1.5 s switch-back could miss a slow health check under load: flaky)
+    const again = await scenario('exit75', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1', async (dir) => {
+      const m = path.join(dir, 'n1', 'mode'), log = path.join(SCRATCH, 'vr-run-exit75.log'); fs.writeFileSync(m, 'exit75');
+      for (let i = 0; i < 200; i++) { await sleep(300); let t = ''; try { t = fs.readFileSync(log, 'utf8'); } catch { /* not yet */ } if (/restart asked for/.test(t)) break; }
+      fs.writeFileSync(m, 'ok');
+    });
     // the first swap's last net: every kept Rust build is bad and bridge/server.js still exists → the JavaScript hub takes the port alone (as run.js did)
     const jsAlone = await scenario('jsalone', { n1: 'crash' }, 'n1', [], 'js-alone', null, true);
     const jsAloneNote = fs.existsSync(path.join(SCRATCH, 'root177-jsalone', 'bridge', '.announce')) && fs.readdirSync(path.join(SCRATCH, 'root177-jsalone', 'bridge', '.announce')).some((f) => /^js-alone-/.test(f));
@@ -2843,20 +2849,26 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const port = await freePort(PORT + 360), backPort = await freePort(port + 2);
       const log = fs.openSync(path.join(SCRATCH, 'vr-run-r195.log'), 'a');
       const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--back', String(backPort), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
-      let s = {}; for (let i = 0; i < 60 && !(s.commit === 'n1' && (r195.backBefore = await back195(backPort))); i++) { await sleep(300); s = await front195(port); }
+      // (waits are "until", up to 60 s: several suites and builds may share the machine)
+      let s = {}; for (let i = 0; i < 200 && !(s.commit === 'n1' && (r195.backBefore = await back195(backPort))); i++) { await sleep(300); s = await front195(port); }
+      // a graceful restart of the build: it answers in exit-75 mode once (no pid, or the connection drops), and only then
+      // goes back to normal, so a slow health check cannot miss the window (a fixed 1.5 s switch-back made this flaky)
+      const restart195 = async (pidOld) => {
+        const m = path.join(dir, 'n1', 'mode'); fs.writeFileSync(m, 'exit75');
+        let x = {}; for (let i = 0; i < 200; i++) { await sleep(300); x = await front195(port); if (!x.pid || x.pid !== pidOld) break; }
+        fs.writeFileSync(m, 'ok');
+        for (let i = 0; i < 200 && !(x.pid && x.pid !== pidOld); i++) { await sleep(300); x = await front195(port); }
+        return x;
+      };
       r195.before = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`;
       fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1, rustHub: { enabled: true, backPort, alone: true } }));
-      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500);
-      const pid0 = s.pid;
-      for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid0) break; }
+      s = await restart195(s.pid);
       await sleep(1500); // the JavaScript hub would have been started again by now
       r195.after = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`; r195.backAfter = await back195(backPort);
       // and back (the rollback in deploy/full-rust-swap.md): alone false + a graceful restart starts the JavaScript hub behind again
       fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1, rustHub: { enabled: true, backPort, alone: false } }));
-      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500);
-      const pid1 = s.pid;
-      for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid1) break; }
-      for (let i = 0; i < 20 && !(r195.backBack = await back195(backPort)); i++) await sleep(300);
+      s = await restart195(s.pid);
+      for (let i = 0; i < 100 && !(r195.backBack = await back195(backPort)); i++) await sleep(300);
       r195.back = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`;
       proc.kill('SIGTERM'); await sleep(500); try { proc.kill('SIGKILL'); } catch { /* gone */ }
     }
