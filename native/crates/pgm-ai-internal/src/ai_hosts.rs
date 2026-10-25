@@ -761,7 +761,12 @@ impl AiHosts {
         if status >= 400 || out["ok"] != json!(true) { return Err(herr(if status >= 400 { status } else { 502 }, out["result"].as_str().or(out["error"]["message"].as_str()).unwrap_or("The host refused.").to_string())); }
         // pause / resume are visible at once; the host's own report follows
         if action == "pause" || action == "resume" { if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(id) { if !n.status.is_object() { n.status = json!({}); } n.status["paused"] = json!(action == "pause"); n.status["pausedBy"] = json!(if action == "pause" { "hub" } else { "" }); n.status_at = now_ms(); } }
-        if action == "limits" && out["limits"].is_object() { if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(id) { n.limits = Some(out["limits"].clone()); } }
+        // what its owner set also goes into the hello kept for a hub restart: a host that keeps its session does not say hello
+        // again, so without this the hub would go back to the limits of that host's last hello (found by T-290)
+        if action == "limits" && out["limits"].is_object() {
+            if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(id) { n.limits = Some(out["limits"].clone()); if let Some(h) = n.hello.as_mut().and_then(Value::as_object_mut) { h.insert("sessionLimits".into(), clean_limits(&out["limits"])); } }
+            self.save_sessions();
+        }
         println!("[ai-host] {} ({user}) asked {nick} to {action} from the page", id);
         self.changed();
         Ok(json!({ "ok": true, "result": out["result"], "lines": out["lines"], "limits": out["limits"] }))

@@ -3398,6 +3398,180 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R203', 'a shared Work session shows the session that was shared (POST /api/work/share {session}): its lines reach the watchers, another session\'s do not; the watch answer names it',
       seen.share === c203 && seen.has && !seen.leak && seen.session === c203, `shared ${seen.share} · watcher sees it ${seen.has}, the first session\'s ${seen.leak} · watch names ${seen.session}`);
   } else skip('R203', 'a share shows the shared session', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB && NATIVE_BIN.host) { // R280-R284 (T-290 = T-282 · 8/8): several people, two native hosts, many sessions: limits, restarts, a share and an older page, in one run
+    const until280 = async (fn, ms = 20000) => { const end = Date.now() + ms; let v; while (Date.now() < end) { v = await fn(); if (v) return v; await sleep(100); } return v; };
+    const list280 = async (tok) => (await call('/api/work/sessions', tok)).data || {};
+    const sum280 = async (tok, id) => ((await list280(tok)).sessions || []).find((x) => x.id === id) || {};
+    const used280 = async (tok, h) => ((((await list280(tok)).counts || {}).perHost) || {})[h.id] || {};
+    const working280 = (tok, h, n) => until280(async () => ((await used280(tok, h)).used || 0) >= n);
+    const hostSt280 = async (tok, h) => (((await call('/api/hosts/status', tok)).data || {}).hosts || []).find((x) => x.id === h.id) || null;
+    const online280 = (tok, h, pred = () => true) => until280(async () => { const x = await hostSt280(tok, h); return x && x.online && x.sessionLimits && pred(x) ? x : null; }, 40000);
+    const pid280 = async () => (await call('/api/status')).data.pid;
+    const kill280 = (p) => { try { if (WIN) execFileSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' }); else p.kill('SIGKILL'); } catch {} };
+    const ran280 = (r) => !!r && r.status === 200 && r.events.some((e) => e.type === 'result') && /relay=200:upstream ok/.test(texts(r.events)); // it finished, and its model call went through its host
+    const sysId280 = (r) => ((r.events.find((e) => e.type === 'system') || {}).session_id) || '';
+    const within280 = (p, ms) => Promise.race([p, sleep(ms).then(() => ({ status: 0, events: [], stuck: true }))]);
+    const go280 = (tok, id, tag) => chat(tok, 'SLOW r280 ' + tag, { session: id });
+    const prov280 = (h, p) => `h:${h.id}/${p}`;
+    const mine280 = []; // [token, id] of every session this block made: all deleted at the end
+    const mkSession = async (tok, h, p, title) => { const id = (await call('/api/work/sessions/new', tok, { title, background: true, provider: prov280(h, p), model: 'claude-haiku-5-5' })).data.id; if (id) mine280.push([tok, id]); return id; };
+    const mkHost = async (tok, who, name) => {
+      const made = (await call('/api/hosts/new', tok, {})).data.host || {}, c = (await call('/api/hosts/config', tok, { id: made.id })).data.config || {};
+      const dir = path.join(SCRATCH, 'r280-' + name); fs.mkdirSync(dir, { recursive: true });
+      const cfgf = path.join(dir, 'ai-node.json'), base = `http://127.0.0.1:${OLLAMA_PORT}`;
+      const prov = (id) => ({ id, kind: 'claude-relay', label: `R280 ${name} ${id}`, models: ['claude-haiku-5-5'], allowedUsers: ['t-user', 't-admin', 'mills'], configDir: path.join(SCRATCH, 'host-claude-login'), baseUrl: base + '/anthropic' });
+      fs.writeFileSync(cfgf, JSON.stringify({ hub: H, id: made.id, token: c.token, user: c.user || who, autoUpdate: false, engines: {}, providers: [prov('c1'), prov('c2')] }), { mode: 0o600 });
+      const out = fs.openSync(path.join(dir, 'out.log'), 'a');
+      const h = { id: made.id, tok, dir, exit: null, start() { h.exit = null; h.proc = spawn(NATIVE_BIN.host, ['host', '--config', cfgf], { cwd: dir, stdio: ['ignore', out, out], windowsHide: true }); h.proc.on('exit', () => { h.exit = true; }); } };
+      h.start(); return h;
+    };
+    const S = {}, hosts280 = [];
+    let mySt = null;
+    try {
+      const h1 = await mkHost(A, 't-admin', 'one'), h2 = await mkHost(D, 'mills', 'two'); hosts280.push(h1, h2);
+      S.up = !!(await online280(A, h1)) && !!(await online280(D, h2));
+      const offered = async () => { for (const tok of [A, U, D]) { const ps = ((await call('/api/check', tok)).data.providers || []).map((p) => p.id); for (const h of [h1, h2]) for (const p of ['c1', 'c2']) if (!ps.includes(prov280(h, p))) return false; } return true; };
+      S.offered = !!(await until280(offered, 30000));
+      // the first (primary) session of t-user is what an older page means: it works through host one, provider c2
+      mySt = (await call('/api/check', U)).data;
+      await call('/api/model', U, { provider: prov280(h1, 'c2'), model: 'claude-haiku-5-5' });
+      const primary = ((await list280(U)).sessions || []).find((x) => x.primary) || {};
+
+      // ---- 1. everyone at once: t-user 5 on host one (3 on c1 + 2 on c2) and 3 on host two (c1); the owners go beyond the caps on their own hosts
+      const uA = [], uB = [], uC = [], aOwn = [], dOwn = [];
+      for (let i = 0; i < 3; i++) uA.push(await mkSession(U, h1, 'c1', 'r280 u-one-c1 ' + i));
+      for (let i = 0; i < 2; i++) uB.push(await mkSession(U, h1, 'c2', 'r280 u-one-c2 ' + i));
+      for (let i = 0; i < 4; i++) uC.push(await mkSession(U, h2, 'c1', 'r280 u-two-c1 ' + i)); // the fourth only to be refused
+      const uX = await mkSession(U, h1, 'c2', 'r280 u-one-c2 refused');
+      for (let i = 0; i < 4; i++) aOwn.push(await mkSession(A, h1, 'c1', 'r280 a ' + i));
+      for (let i = 0; i < 4; i++) dOwn.push(await mkSession(D, h2, 'c1', 'r280 d ' + i));
+      const dOther = await mkSession(D, h1, 'c2', 'r280 d on one');
+      const wave = [...uA.map((id, i) => go280(U, id, 'ua' + i)), ...uB.map((id, i) => go280(U, id, 'ub' + i)), ...uC.slice(0, 3).map((id, i) => go280(U, id, 'uc' + i)),
+        ...aOwn.map((id, i) => go280(A, id, 'a' + i)), ...dOwn.map((id, i) => go280(D, id, 'd' + i)), go280(D, dOther, 'dx')];
+      S.reached = !!(await working280(U, h1, 5)) && !!(await working280(U, h2, 3));
+      S.ownersReached = !!(await working280(A, h1, 4)) && !!(await working280(D, h2, 4));
+      const r4 = await call('/api/chat', U, { message: 'SLOW r280 over the provider cap', session: uC[3] });
+      const r6 = await call('/api/chat', U, { message: 'SLOW r280 over the host cap', session: uX });
+      const old6 = await call('/api/chat', U, { message: 'SLOW r280 an older page, over the host cap' });
+      const perHost = ((await list280(U)).counts || {}).perHost || {};
+      const l4 = r4.data.limit || {}, l6 = r6.data.limit || {};
+      S.provCap = r4.status === 429 && l4.provider === prov280(h2, 'c1') && l4.used === 3 && l4.max === 3 && l4.host === h2.id && /3 of 3/.test(r4.data.error || '');
+      S.hostCap = r6.status === 429 && !l6.provider && l6.used === 5 && l6.max === 5 && l6.host === h1.id && /5 of 5/.test(r6.data.error || '');
+      S.oldCap = old6.status === 429 && /5 of 5/.test(old6.data.error || '');
+      S.perHost = [(perHost[h1.id] || {}).used, (perHost[h2.id] || {}).used].join('/');
+      S.refusedIdle = [(await sum280(U, uC[3])).state, (await sum280(U, uX)).state, (await sum280(U, primary.id)).state !== 'working'].join('/');
+      const done = await Promise.all(wave);
+      S.waveOk = done.every(ran280); S.waveBad = done.map((r, i) => (ran280(r) ? '' : i + ':' + r.status)).filter(Boolean).join(',');
+
+      // ---- 1b. the owner of a host is limited on it only when that host says so (the limits control)
+      const lim = (tok, h, limits) => call('/api/hosts/control', tok, { id: h.id, action: 'limits', limits });
+      S.notOwner = (await lim(A, h2, { perProvider: 1 })).status;
+      S.off = (await lim(D, h2, { perUser: 5, perProvider: 1, exceptions: {}, ownerBypass: false })).status;
+      S.offSeen = !!(await online280(D, h2, (x) => x.sessionLimits.ownerBypass === false && x.sessionLimits.perProvider === 1));
+      const b1 = go280(D, dOwn[0], 'b1'); await working280(D, h2, 1);
+      const bRefused = await call('/api/chat', D, { message: 'SLOW r280 owner, bypass off', session: dOwn[1] });
+      S.ownerLimited = bRefused.status === 429 && (bRefused.data.limit || {}).provider === prov280(h2, 'c1') && (bRefused.data.limit || {}).max === 1;
+      S.b1 = ran280(await b1);
+      S.on = (await lim(D, h2, { perUser: 5, perProvider: 1, exceptions: {}, ownerBypass: true })).status;
+      S.onSeen = !!(await online280(D, h2, (x) => x.sessionLimits.ownerBypass === true && x.sessionLimits.perProvider === 1));
+      const b2 = go280(D, dOwn[0], 'b2'); await working280(D, h2, 1);
+      const b3 = go280(D, dOwn[1], 'b3'); await working280(D, h2, 2);
+      S.ownerFree = ran280(await b2) && ran280(await b3);
+
+      // ---- 2. a hub restart while runs go: it waits for them (no new run meanwhile), then every session is as it was and the hosts are back with their limits
+      const U1 = uA[0], U2 = uC[0], D1 = dOwn[2], kept = [[U, U1], [U, uB[0]], [U, U2], [D, D1]];
+      const tr = (id) => [{ cls: 'me', text: 'r280 asked ' + id }, { cls: 'claude', text: 'r280 answered ' + id }, { cls: 'tool', text: 'r280 tool ' + id }];
+      for (const [tok, id] of kept) { await call('/api/work/current', tok, { session: id, transcript: tr(id) }); await call('/api/work/queue', tok, { session: id, queue: ['r280 queued a ' + id, 'r280 queued b ' + id], sendNow: 'r280 now ' + id }); }
+      const snap = async () => { const o = {}; for (const [tok, id] of kept) { const c = (await call('/api/work/current?session=' + id, tok)).data; o[id] = JSON.stringify([c.transcript, c.queue, c.sendNow]); } return o; };
+      const view = async (tok) => (((await list280(tok)).sessions) || []).map((x) => x.id + '|' + ((x.worktree || {}).path || '') + '|' + x.provider + '|' + x.title).sort().join('\n');
+      const before = await snap(), viewU = await view(U), viewD = await view(D), viewA = await view(A);
+      const wtOf = async (ids) => (await Promise.all(ids.map((id) => sum280(U, id)))).map((x) => (x.worktree || {}).path).filter((p) => p && fs.existsSync(p)).length;
+      const wt0 = await wtOf([U1, U2]);
+      await call('/api/work/share', U, { conv: 'room', transcript: [], session: U1 });
+      const w0 = (await call('/api/work/watch?user=t-user&after=0', D)).data; S.watch0 = w0.session === U1 && !w0.stopped;
+      const pid0 = await pid280();
+      const m1 = go280(U, U1, 'restart shared'), m2 = go280(U, U2, 'restart two'), m3 = go280(D, D1, 'restart d');
+      await working280(U, h1, 1); await working280(U, h2, 1); await working280(D, h2, 1);
+      S.watchRun = !!(await until280(async () => (((await call('/api/work/watch?user=t-user&after=0', D)).data.events) || []).some((e) => /restart shared/.test(e.text || '')), 10000));
+      spawnSync(process.execPath, [path.join(SB, 'restart.js')], { cwd: SB });
+      S.held = [(await call('/api/chat', A, { message: 'r280 held' })).status, (await call('/api/chat', U, { message: 'r280 held', session: uA[1] })).status].join('/');
+      const mids = await Promise.all([m1, m2, m3]); S.midRuns = mids.every(ran280);
+      let pid1 = pid0; for (let i = 0; i < 240 && (pid1 === pid0 || !pid1); i++) { await sleep(250); pid1 = await pid280(); }
+      S.restarted = !!pid1 && pid1 !== pid0;
+      S.watchStopped = (await call('/api/work/watch?user=t-user&after=0', D)).data.stopped === true;
+      const after = await snap();
+      S.sameConv = Object.keys(before).every((k) => before[k] === after[k]);
+      S.sameList = [await view(U) === viewU, await view(D) === viewD, await view(A) === viewA].join('/');
+      S.wtKept = wt0 === 2 && (await wtOf([U1, U2])) === 2;
+      S.hostsBack = !!(await online280(A, h1)) && !!(await online280(D, h2, (x) => x.sessionLimits.perProvider === 1 && x.sessionLimits.ownerBypass === true && x.sessionLimits.perUser === 5));
+      S.offered2 = !!(await until280(offered, 30000));
+      // a share lives in the hub's memory: the person shares the session again and the watcher follows it
+      await call('/api/work/share', U, { conv: 'room', transcript: [], session: U1 });
+      const p1 = await chat(U, 'r280 after restart shared', { session: U1 }), p2 = await chat(U, 'r280 after restart two', { session: U2 }), p3 = await chat(D, 'r280 after restart d', { session: D1 });
+      S.afterRuns = ran280(p1) && ran280(p2) && ran280(p3);
+      S.sameClaude = !!sysId280(p1) && sysId280(p1) === sysId280(mids[0]) && sysId280(p2) === sysId280(mids[1]) && sysId280(p3) === sysId280(mids[2]);
+      const w2 = (await call('/api/work/watch?user=t-user&after=0', D)).data, wt2 = (w2.events || []).map((e) => e.text).join(' | ');
+      S.watchAgain = w2.session === U1 && /after restart shared/.test(wt2) && !/after restart two/.test(wt2);
+      await call('/api/work/share', U, { conv: '' });
+
+      // ---- 3. a host restart while runs go: its run ends cleanly, nothing stays "working", a run while it is down says so, runs go through once it is back
+      const E1 = uA[1], E2 = uC[1];
+      const k1 = go280(U, E1, 'host dies'), k2 = go280(U, E2, 'other host');
+      await working280(U, h1, 1); await working280(U, h2, 1);
+      kill280(h1.proc); S.exited = !!(await until280(async () => h1.exit === true, 15000));
+      const [d1, d2] = await Promise.all([within280(k1, 60000), within280(k2, 60000)]);
+      S.hostRun = !d1.stuck && d1.status === 200 && d1.events.some((e) => e.type === 'bridge_done'); S.otherHostRun = ran280(d2);
+      S.idle = !!(await until280(async () => (await sum280(U, E1)).state !== 'working' && !(await used280(U, h1)).used, 15000));
+      S.goesOffline = !!(await until280(async () => { const x = await hostSt280(A, h1); return x && !x.online; }, 30000));
+      const off = await chat(U, 'r280 while it is down', { session: E1 });
+      S.downRun = off.status === 200 && off.events.some((e) => e.type === 'bridge_error' && /offline/.test(e.text || '')) && !!(await until280(async () => !(await used280(U, h1)).used, 5000));
+      h1.start(); S.backUp = !!(await online280(A, h1));
+      const again = await chat(U, 'r280 after the host restart', { session: E1 });
+      const aRun = await chat(A, 'r280 owner after the host restart', { session: aOwn[0] });
+      S.afterHost = ran280(again) && ran280(aRun);
+
+      // ---- 4. an older page (no session in its calls) keeps the first session while others run: it sees it, runs it, stops it, the others are untouched
+      await call('/api/work/current', U, { transcript: [{ cls: 'me', text: 'r280 first session marker' }] });
+      await call('/api/work/queue', U, { queue: ['r280 first session queue'], sendNow: null });
+      await call('/api/model', U, { provider: prov280(h2, 'c2'), model: 'claude-haiku-5-5' });
+      const oOther = go280(U, uA[2], 'other while old'); await working280(U, h1, 1);
+      const oOld = chat(U, 'SLOW r280 older page runs the first session'); await working280(U, h2, 1);
+      const cur = (await call('/api/work/current', U)).data, curOther = (await call('/api/work/current?session=' + uA[2], U)).data;
+      S.oldSees = JSON.stringify(cur.transcript || []).includes('first session marker') && (cur.queue || []).join() === 'r280 first session queue' && !JSON.stringify(curOther.transcript || []).includes('first session marker');
+      const att = (await call('/api/work/attach?run=&after=0', U)).data || {};
+      S.oldAttach = att.busy === true && (att.events || []).some((e) => e.type === 'bridge_run');
+      S.oldBusy = (await call('/api/chat', U, { message: 'x' })).status;
+      S.states = [(await sum280(U, primary.id)).state, (await sum280(U, uA[2])).state].join('/');
+      S.oldStop = (await call('/api/stop', U, {})).status;
+      S.oldStopped = !(await oOld).events.some((e) => e.type === 'result');
+      S.otherLeft = (await sum280(U, uA[2])).state;
+      S.otherRan = ran280(await oOther);
+    } catch (e) { S.err = String((e && e.stack) || e).slice(0, 400); }
+    // put everything back
+    await call('/api/work/share', U, { conv: '' });
+    for (const h of hosts280) if (h.proc) kill280(h.proc);
+    if (mySt) await call('/api/model', U, { provider: mySt.provider || 'host', model: mySt.model || 'claude-opus-5-5' });
+    await call('/api/work/current', U, { transcript: [] }); await call('/api/work/queue', U, { queue: [], sendNow: null });
+    for (const [tok, id] of mine280) await call('/api/work/sessions/delete', tok, { id });
+    for (const h of hosts280) await call('/api/hosts/remove', h.tok, { id: h.id });
+    const E = S.err ? ' · ERROR ' + S.err : '';
+    check('R280', 'T-290 three people (t-admin, t-user, mills) on two native hosts, up to 5 sessions each, SLOW turns at once (17 runs): t-user\'s fifth working session on a host is fine (3 on one provider + 2 on another) and the sixth is 429 naming the host (5 of 5), a fourth on one provider is 429 naming the provider (3 of 3), an older page (no session) is told the same, refused sessions stay idle, the counters say 5 and 3; each host\'s owner runs 4 on one provider on their own host (beyond 3); the owner is limited once that host sets ownerBypass off (the limits control: 429 at its provider cap, nobody else may set it) and free again when it is on',
+      !S.err && S.up && S.offered && S.reached && S.ownersReached && S.provCap && S.hostCap && S.oldCap && S.perHost === '5/3' && S.refusedIdle === 'ready/ready/true' && S.waveOk
+      && S.notOwner === 403 && S.off === 200 && S.offSeen && S.ownerLimited && S.b1 && S.on === 200 && S.onSeen && S.ownerFree,
+      `hosts up ${S.up}/${S.offered} · all running ${S.reached}/${S.ownersReached} · provider cap ${S.provCap} · host cap ${S.hostCap} · older page ${S.oldCap} · counters ${S.perHost} · refused stay ${S.refusedIdle} · runs ok ${S.waveOk} (${S.waveBad}) · limits control: not owner ${S.notOwner}, off ${S.off}/${S.offSeen}, owner refused ${S.ownerLimited}, ran ${S.b1}, on ${S.on}/${S.onSeen}, owner free ${S.ownerFree}${E}`);
+    check('R281', 'T-290 a hub restart asked while sessions of three people run on both hosts: it waits for the runs (they all finish, through their hosts) and no new run starts meanwhile (503, also for another session), then comes back with every session as it was (same list, same worktrees, each conversation, queue and "Send now"), both hosts reconnect on their own with the limits they announced, and the sessions go on in the same Claude conversation',
+      !S.err && S.held === '503/503' && S.midRuns && S.restarted && S.sameConv && S.sameList === 'true/true/true' && S.wtKept && S.hostsBack && S.offered2 && S.afterRuns && S.sameClaude,
+      `held ${S.held} · runs finished ${S.midRuns} · new pid ${S.restarted} · conversations ${S.sameConv} · lists ${S.sameList} · worktrees ${S.wtKept} · hosts back ${S.hostsBack}/${S.offered2} · runs after ${S.afterRuns} · same Claude session ${S.sameClaude}${E}`);
+    check('R282', 'T-290 a host killed while runs go: its run ends cleanly (a finished stream, the session not "working", no slot held), the other host\'s run is not disturbed, a run while it is down answers that it is offline (and holds no slot), and once it is back runs go through again (for t-user and for the host\'s owner)',
+      !S.err && S.exited && S.hostRun && S.otherHostRun && S.idle && S.goesOffline && S.downRun && S.backUp && S.afterHost,
+      `killed ${S.exited} · its run ended ${S.hostRun} · other host ${S.otherHostRun} · idle ${S.idle} · offline ${S.goesOffline} · run while down ${S.downRun} · back ${S.backUp} · runs after ${S.afterHost}${E}`);
+    check('R283', 'T-290 a shared Work session is watched by another person (mills) while it runs and across a hub restart: the watcher sees the shared session\'s lines as they are sent, the restart ends the share (it lives in the hub\'s memory) and the watcher is told it stopped, and after the owner shares the same session again the watcher sees it again, with the new lines of that session and none of the owner\'s other sessions',
+      !S.err && S.watch0 && S.watchRun && S.watchStopped && S.watchAgain,
+      `watch at once ${S.watch0} · sees the run ${S.watchRun} · stopped after the restart ${S.watchStopped} · follows it again ${S.watchAgain}${E}`);
+    check('R284', 'T-290 an older page (calls without a session) keeps meaning the first session while other sessions run: it reads that conversation and queue (not another session\'s), runs it (attach finds the run), a second message is 409, Stop ends only that run, and the other session of the same person finishes untouched',
+      !S.err && S.oldSees && S.oldAttach && S.oldBusy === 409 && S.states === 'working/working' && S.oldStop === 200 && S.oldStopped && S.otherLeft === 'working' && S.otherRan,
+      `sees its own ${S.oldSees} · attach ${S.oldAttach} · second message ${S.oldBusy} · states ${S.states} · stop ${S.oldStop} ended without an answer ${S.oldStopped} · the other still ${S.otherLeft}, finished ${S.otherRan}${E}`);
+  } else for (const [id, what] of [['R280', 'three people on two native hosts: caps and owners'], ['R281', 'a hub restart mid-run keeps every session'], ['R282', 'a host restart mid-run'], ['R283', 'a shared session across a restart'], ['R284', 'an older page next to the sessions']]) skip(id, what + ' (T-290)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
   if (RUST_HUB) { // R210-R214 (T-245 = T-195 · 1/4): the AI asks its person (team note plans/question-protocol.md); the fake Claude's "ASKTOOL" calls ask_user like the team MCP relay
     const askOf = (events) => { const t = texts(events).split('\n').find((l) => l.startsWith('ASK:')); try { return JSON.parse(t.slice(4)); } catch { return {}; } };
     const sessionsOf = async () => ((await call('/api/work/sessions', U)).data.sessions) || [];
