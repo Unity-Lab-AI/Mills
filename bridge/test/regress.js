@@ -3349,6 +3349,82 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R289', 'T-289 the report changes nothing of the hub\'s own list: sessions, folders and counts.working / waiting are as before, and a page that ignores `external` sees the same shape',
       JSON.stringify((await ext(U)).sessions.map((x) => x.id)) === JSON.stringify(base.sessions.map((x) => x.id)) && typeof (g4.counts || {}).working === 'number' && (g4.counts || {}).working === (base.counts || {}).working && Array.isArray(g4.folders) && typeof g4.current === 'string', `sessions ${(g4.sessions || []).length} vs ${(base.sessions || []).length} · working ${(g4.counts || {}).working}`);
   } else for (const [id, what] of [['R285', 'external session report'], ['R286', 'report validation'], ['R287', 'reports per person'], ['R288', 'report expiry'], ['R289', 'report leaves the list alone']]) skip(id, 'T-289 ' + what, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R300 to R304 (T-276, T-277, T-278): the planner's exact helpers as team tools: parse, existing, roles, owner, glossary
+    const plan = async (calls) => { const r = await chat(U, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
+    const excerpt = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'planner-example.md'), 'utf8');
+    const shortList = 'Person M\n\n--- fable\n[Board Archiving]\nArchive done tasks after about 48 hours and delete the archived ones after 30 days.\n';
+    const longList = '--- opus\n[Automated Task Board Archiving System]\n\nWe need the ability for the task boards to be able to archive tasks, and delete tasks that have been archived after ~30 days. Done tasks should auto archive after ~48 hours, but can be manually or AI archived.\n';
+    const runOn = 'Hey, we need a board archive so the done tab stops filling up. Also we should have a right-click menu in the web version, plus maybe a queued messages panel. Oh and the board should show who is online.';
+    const [pEx, pMerge, pRun, pEmpty] = await plan([['plan_parse', { text: excerpt }], ['plan_parse', { text: shortList + '\n' + longList }], ['plan_parse', { text: runOn }], ['plan_parse', { text: '   ' }]]);
+    const ex = (pEx && pEx.ok && pEx.result.ideas) || [];
+    const by = (t) => ex.find((i) => i.title.includes(t)) || {};
+    const hw = by('Hyper Workflows Architecture').n;
+    const blocked = ex.filter((i) => i.blockedOn.length);
+    const mg = (pMerge && pMerge.ok && pMerge.result) || { ideas: [], counts: {} };
+    const rn = (pRun && pRun.ok && pRun.result.ideas) || [];
+    check('R300', 'T-276 plan_parse on an excerpt of the 2026-10-24 idea list gives its 11 ideas with the model tag, the person section owner and the source lines (hyper workflows, REA, queued panel …), the four "blocked on" ideas point at the hyper workflows idea, and only markers / role lines are left over; a short and a long version of one idea merge into one (longer wording kept, the other model tag noted, the person kept); run-on chat is split at each new wish; an empty input is an error',
+      ex.length === 11 && by('Queued Messages').person === 'mills' && by('Queued Messages').model === 'opus' && by('Website Builder').model === 'fable' && by('REA Project').person === 'sponge' && hw > 0
+        && blocked.length === 4 && blocked.every((b) => b.blockedOnIdeas.length === 1 && b.blockedOnIdeas[0] === hw) && by('Queued Messages').sourceSpan.from < by('Queued Messages').sourceSpan.to
+        && pEx.result.leftovers.every((l) => /marker|role line/.test(l.reason)) && pEx.result.people.length === 3 && pEx.result.people.every((x) => x.known && !x.mismatch)
+        && mg.ideas.length === 1 && mg.counts.merged === 1 && mg.ideas[0].title === 'Automated Task Board Archiving System' && mg.ideas[0].model === 'opus' && mg.ideas[0].person === 'mills' && ((mg.ideas[0].differs || [])[0] || {}).other === 'fable'
+        && rn.length === 4 && /right-click/i.test(rn[1].title) && rn.every((i) => i.form === 'D') && !!pEmpty && pEmpty.ok === false,
+      `ideas ${ex.length} · blocked ${blocked.length} on ${blocked.map((b) => b.blockedOnIdeas)} (hyper ${hw}) · people ${pEx && pEx.result && pEx.result.people.map((x) => x.person + (x.mismatch ? '!' : ''))} · merged ${mg.counts.merged}/${mg.ideas.length} · run-on ${rn.map((i) => i.title)} · empty ${pEmpty && pEmpty.ok}`);
+
+    const mkTask = async (b) => ((await call('/api/board/create', U, b)).data.task || {}).id;
+    const t301 = [await mkTask({ title: 'T-184 · 1/10: Hyper workflows spec: node-based independent system', status: 'todo', labels: 'T-184' }), await mkTask({ title: 'Queued messages sidebar panel', status: 'todo' }), await mkTask({ title: 'Presence and activity for the team', status: 'todo' })];
+    await call('/api/board/complete', U, { id: t301[1] });
+    const [e1, e2, e3, e4, e5] = await plan([['plan_existing', { title: 'Node-Based Hyper Workflows Architecture' }], ['plan_existing', { title: 'Hidable Queued Messages Sidebar Panel', words: 'view queued messages' }], ['plan_existing', { title: 'Zzyzx Quuxbar Wibblewobble' }], ['plan_existing', { title: '' }], ['plan_existing', { title: 'Queued messages sidebar panel', days: 0 }]]);
+    const mt = (e) => ((e && e.ok && e.result.matches) || []);
+    check('R301', 'T-276 plan_existing finds open tasks and recently done ones by word overlap (the open hyper workflows spec for the hyper workflows idea, the done queued panel with done: true, scored best first), nothing for words the board never used, an error for an empty title, and days: 0 leaves out a done task',
+      mt(e1)[0] && mt(e1)[0].id === t301[0] && !mt(e1).some((m) => m.id === t301[2]) && mt(e2)[0] && mt(e2)[0].id === t301[1] && mt(e2)[0].done === true && mt(e2)[0].status === 'done' && mt(e2)[0].score >= 0.4 && mt(e3).length === 0 && e4 && e4.ok === false && !mt(e5).some((m) => m.id === t301[1]),
+      `hyper → ${mt(e1).map((m) => m.id + ':' + m.score)} (want ${t301[0]}) · queued → ${mt(e2).map((m) => m.id + ':' + m.done)} (want ${t301[1]}) · nonsense ${mt(e3).length} · empty ${e4 && e4.ok} · days 0 → ${mt(e5).length}`);
+
+    // roles: no note → built-in; a Roles section in plans/task-assignments.md; the roles file wins
+    const rolesFile = JSON.stringify({ fallback: 't-user', people: [{ user: 't-user', name: 'Uma', initial: 'U', specialties: ['zebra herding'], keywords: ['zebra', 'stripes'] }, { user: 't-admin', name: 'Adam', initial: 'A', specialties: ['giraffe care'], keywords: ['giraffe'] }] });
+    const assignNote = '# Assignments\n\n## Roles\n\n- **Sponge** (`sponge`): hub work.\n- **Ann** (`ann`): illustration, UI design.\n\n## Board rules\n\n1. x\n';
+    for (const x of ['plans/roles.md', 'plans/task-assignments.md']) await call('/api/notes/delete', U, { path: x });
+    const t302 = [await mkTask({ title: 'r302 zebra one', status: 'todo', assignee: 't-user' }), await mkTask({ title: 'r302 zebra two', status: 'doing', assignee: 't-user', priority: 1 }), await mkTask({ title: 'r302 zebra three', status: 'todo', assignee: 't-user' }), await mkTask({ title: 'r302 zebra four', status: 'todo', assignee: 't-user' })];
+    const r = await plan([['plan_roles', {}], ['notes_write', { path: 'plans/task-assignments.md', text: assignNote }], ['plan_roles', {}], ['notes_write', { path: 'plans/roles.md', text: '# Roles\n\n```json\n' + rolesFile + '\n```\n' }], ['plan_roles', {}]]);
+    const rr = (x) => (x && x.ok && x.result) || { people: [] };
+    const wlOf = (x, u) => (rr(x).people.find((p) => p.user === u) || {}).workload || {};
+    check('R302', 'T-277 plan_roles gives the team\'s roles and each person\'s open workload and says where they came from: built-in (sponge, mills, gee) when the Notes have nothing, the Roles section of plans/task-assignments.md when it exists, and plans/roles.md above both (its fallback, names and keywords); the workload counts a person\'s open tasks by status and priority, held ones apart (done ones not)',
+      rr(r[0]).source === 'built-in' && rr(r[0]).people.map((p) => p.user).join() === 'sponge,mills,gee' && rr(r[0]).fallback === 'mills'
+        && rr(r[2]).source === 'plans/task-assignments.md' && rr(r[2]).people.map((p) => p.user).join() === 'sponge,ann' && rr(r[2]).people[1].specialties.join() === 'illustration,UI design'
+        && rr(r[4]).source === 'plans/roles.md' && rr(r[4]).people.map((p) => p.name).join() === 'Uma,Adam' && rr(r[4]).fallback === 't-user' && rr(r[4]).people[0].keywords.includes('zebra')
+        && wlOf(r[4], 't-user').open >= 4 && wlOf(r[4], 't-user').byPriority['1'] >= 1 && wlOf(r[4], 't-user').active >= 4,
+      `sources ${rr(r[0]).source} / ${rr(r[2]).source} / ${rr(r[4]).source} · people ${rr(r[0]).people.map((p) => p.user)} / ${rr(r[2]).people.map((p) => p.user)} / ${rr(r[4]).people.map((p) => p.name)} · t-user workload ${JSON.stringify(wlOf(r[4], 't-user'))}`);
+
+    const o = await plan([['plan_roles', {}], ['plan_owner', { idea: { title: 'Anything at all', person: 'A' } }], ['plan_owner', { idea: { title: 'Zebra stripes research', body: '' } }], ['plan_owner', { idea: { title: 'Zebra giraffe parade' } }], ['plan_owner', { idea: { title: 'Qqq www eee', model: 'opus' } }], ['plan_owner', { ideas: [{ title: 'Giraffe feeding', model: 'fable', blockedOn: ['Zebra'] }, 'Zebra'] }], ['plan_owner', {}]]);
+    const wl = (u) => ((rr(o[0]).people.find((p) => p.user === u) || {}).workload || {}).load;
+    const lighter = wl('t-admin') < wl('t-user') ? 't-admin' : 't-user';
+    const ow = (x) => (x && x.ok && x.result) || {};
+    const many = (o[5] && o[5].ok && o[5].result.owners) || [];
+    check('R303', 'T-277 plan_owner takes an explicit marker first (Person A → Adam), then role keywords (zebra → Uma, giraffe → Adam), a tie or no match by the lighter open workload (the second case says needsPick), is never empty, returns the model tag as a label and a priority (a blocked idea 3), several ideas at once, and an error without an idea',
+      ow(o[1]).owner === 't-admin' && ow(o[1]).by === 'marker' && ow(o[2]).owner === 't-user' && ow(o[2]).by === 'role' && /zebra/.test(ow(o[2]).reason)
+        && ow(o[3]).by === 'workload' && ow(o[3]).owner === lighter && ow(o[4]).owner === lighter && ow(o[4]).needsPick === true && ow(o[4]).labels.includes('opus') && ow(o[4]).priority === 2
+        && many.length === 2 && many[0].owner === 't-admin' && many[0].priority === 3 && many[0].labels.includes('fable') && !!many[1].owner && !!ow(o[3]).reason && !!o[6] && o[6].ok === false,
+      `marker ${ow(o[1]).owner}/${ow(o[1]).by} · zebra ${ow(o[2]).owner}/${ow(o[2]).by} · tie ${ow(o[3]).owner}/${ow(o[3]).by} (lighter ${lighter}: ${wl('t-admin')} vs ${wl('t-user')}) · none ${ow(o[4]).owner}/${ow(o[4]).by} pick ${ow(o[4]).needsPick} · many ${many.map((m) => m.owner + ':' + m.priority)} · empty ${o[6] && o[6].ok}`);
+    for (const id of [...t301, ...t302]) await call('/api/board/delete', U, { id });
+    for (const x of ['plans/roles.md', 'plans/task-assignments.md', 'plans/glossary.md']) await call('/api/notes/delete', U, { path: x });
+
+    const glNote = '# Team glossary\n\n## Words\n\n- **Hyper workflows / hyper work:** an **independent system** of our own.\n- **"Blocked on X":** means **based on X**: built from it. (Sponge, 2026-10-24)\n\n## Decisions\n\n- **Everything private by default.** Built for the team first. (Sponge, 2026-10-24)\n';
+    const pid304 = (await call('/api/work/sessions/new', U, { title: 'r304 planner', background: true, mode: 'planner' })).data.id;
+    const nid304 = (await call('/api/work/sessions/new', U, { title: 'r304 normal', background: true })).data.id;
+    const planRes = (sid) => chat(U, 'PLANNERPLAN please', { session: sid }).then((x) => { try { return JSON.parse((texts(x.events).match(/PLANRES:(\{.*\})/) || [])[1]); } catch { return {}; } });
+    const [g0, , g1] = await plan([['plan_glossary', {}], ['notes_write', { path: 'plans/glossary.md', text: glNote }], ['plan_glossary', {}]]);
+    const pr304 = await planRes(pid304), nr304 = await planRes(nid304);
+    const gr = (x) => (x && x.ok && x.result) || { words: [], decisions: [] };
+    const jsNames = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+    const rsNames = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+    const five = ['plan_parse', 'plan_existing', 'plan_roles', 'plan_owner', 'plan_glossary'];
+    check('R304', 'T-278 plan_glossary gives the words and decisions of plans/glossary.md (aliases, meaning, source; built-in minimum when the note is missing, said in its source); a planner session\'s prompt tells it to call plan_glossary, plan_roles, plan_parse, plan_existing and plan_owner in that order and that "blocked on" means based on, and its run may call them through the relay (a normal session too); [static] both team MCP servers (team-mcp.js, mcp-tools.json) list the five tools',
+      /built-in/.test(gr(g0).source) && gr(g0).words.length >= 4 && gr(g1).source === 'plans/glossary.md' && gr(g1).words.length === 2 && gr(g1).words[0].aliases.join() === 'hyper workflows,hyper work' && /^means based on X/.test(gr(g1).words[1].meaning) && gr(g1).words[1].source === 'Sponge, 2026-10-24' && gr(g1).decisions[0].title === 'Everything private by default'
+        && pr304.order === true && pr304.basedOn === true && pr304.glossary === 2 && pr304.ideas === 1 && pr304.owner === 'sponge' && nr304.glossary === 2 && nr304.ideas === 1 && nr304.order === false
+        && five.every((t) => jsNames.includes(t) && rsNames.includes(t)),
+      `glossary ${gr(g0).source} (${gr(g0).words.length} words) / ${gr(g1).source} (${gr(g1).words.length}) · planner prompt order ${pr304.order} basedOn ${pr304.basedOn} tools ${pr304.glossary}/${pr304.ideas}/${pr304.owner} · normal ${nr304.glossary}/${nr304.ideas}/${nr304.order} · js ${five.filter((t) => jsNames.includes(t)).length} rs ${five.filter((t) => rsNames.includes(t)).length}`);
+    await call('/api/notes/delete', U, { path: 'plans/glossary.md' });
+    for (const id of [pid304, nid304]) await call('/api/work/sessions/delete', U, { id });
+  } else for (const [id, what] of [['R300', 'plan_parse'], ['R301', 'plan_existing'], ['R302', 'plan_roles'], ['R303', 'plan_owner'], ['R304', 'plan_glossary and the planner prompt']]) skip(id, 'T-276/277/278 ' + what, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
