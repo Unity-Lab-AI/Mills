@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.25.1 — 2026-10-25
+
+PATCH: **the context meter no longer shows 200 %+ on a 1M model** (T-302, Gee's report).
+- **What happened:** the hub showed a 200 000-token window until a run's result reported its own window, and believed a
+  result that said 200 000 even for a 1M model. A long first run, or a 1M model whose result reports 200k, showed the
+  tokens far past the window (200 %+, and "full: start a New chat").
+- **Now** the window shown (`/api/usage` `context.window`) is:
+  - what the result reported, else the configured default;
+  - at least 1M for a model id tagged `[1m]`;
+  - never less than what the session already holds: past the window it moves to the 1M tier, and past that to the
+    tokens themselves.
+- `usage::context_window` is unit-tested. The Jcode PGM side of the same bug is fixed separately.
+
 ## 5.25.0 — 2026-10-25
 
 MINOR: **the planner drafts before it writes, with exact helpers, and the person's own Ollama is found** (agent branches,
