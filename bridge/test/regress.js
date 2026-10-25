@@ -3047,6 +3047,54 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R200', 'a session\'s own worktree follows the worktree law: worktree.js check --session says FRESH with its own commit not yet in work/<user>, STALE (exit 3) once the person\'s work/<user> moved on, update --session brings that in; the session menu\'s "Merge into my work" (/api/work/sessions/home) merges the session\'s commits into work/<user>',
       ok200, `commits: session ${seen.c1 || '?'}, own ${seen.c2 || '?'} · fresh ${seen.fresh} "${(seen.freshText || '').slice(0, 160)}" · stale ${seen.stale} "${(seen.staleText || '').slice(0, 120)}" · update ${seen.update} brought own ${seen.hasOwn} · after ${seen.after} · home ${seen.home} "${(seen.homeText || '').slice(0, 120)}" came ${seen.came}`);
   } else skip('R200', 'a session\'s worktree follows the worktree law', 'the Rust hub\'s (and not on Windows): --rust-hub runs it');
+  if (RUST_HUB) { // R225-R229: git at a glance on the Work page (T-240): the person's own worktree of the open session
+    const own225 = path.join(SCRATCH, 'worktrees', 't-user');
+    const gitq = (dir, ...args) => spawnSync('git', ['-c', 'user.name=r225', '-c', 'user.email=r225@test.invalid', ...args], { cwd: dir, encoding: 'utf8' });
+    const gs = (q = '') => call('/api/work/git' + q, U);
+    await call('/api/work/git', U); // makes the person's own worktree if there is none yet
+    fs.writeFileSync(path.join(own225, 'r225-new.txt'), 'new file\n'); fs.writeFileSync(path.join(own225, 'r225-other.txt'), 'other file\n');
+    const st1 = await gs(); const f1 = ((st1.data || {}).files || []).find((f) => f.path === 'r225-new.txt') || {};
+    const sid225 = (await call('/api/work/sessions/new', U, { title: 'r225', background: true })).data.id;
+    const noWt = await gs('?session=' + sid225);
+    await chat(U, 'r225 first run', { session: sid225 }); // makes the session's worktree
+    const ss1 = await gs('?session=' + sid225); const none = await gs('?session=s-000000000000');
+    check('R225', 'git at a glance: GET /api/work/git shows the person\'s own worktree of the first session (branch, base, ahead / behind as numbers, changed files with their state: an untracked file is unstaged) and, with ?session=, that session\'s own worktree on work/<user>.<id> against work/<user> (exists false before its first run); an unknown session is 404',
+      st1.status === 200 && st1.data.branch === 'work/t-user' && st1.data.kind === 'own' && st1.data.working === false && typeof st1.data.ahead === 'number' && typeof st1.data.behind === 'number' && f1.state === 'untracked' && f1.staged === false && f1.unstaged === true
+        && noWt.status === 200 && noWt.data.exists === false && ss1.status === 200 && ss1.data.kind === 'session' && ss1.data.branch === 'work/t-user.' + sid225.slice(2) && ss1.data.base === 'work/t-user' && ss1.data.exists === true && none.status === 404,
+      `own ${st1.status} ${st1.data.branch} ahead ${st1.data.ahead} behind ${st1.data.behind} file ${JSON.stringify(f1)} · session before run exists ${noWt.data.exists}, after ${ss1.data.branch} base ${ss1.data.base} · unknown ${none.status}`);
+    const stg = await call('/api/work/git/stage', U, { files: ['r225-new.txt'] }); const fs1 = (stg.data.files || []).find((f) => f.path === 'r225-new.txt') || {};
+    const uns = await call('/api/work/git/unstage', U, { files: ['r225-new.txt'] }); const fu1 = (uns.data.files || []).find((f) => f.path === 'r225-new.txt') || {};
+    const bad = [await call('/api/work/git/stage', U, { files: ['../outside'] }), await call('/api/work/git/stage', U, { files: ['-A'] }), await call('/api/work/git/stage', U, { files: [] }), await call('/api/work/git/stage', U, { files: ['/etc/passwd'] })].map((x) => x.status);
+    check('R226', 'stage / unstage: POST /api/work/git/stage puts a file in the index (staged true), unstage takes it out again; a path outside the worktree, an option, an absolute path or no file at all is 400',
+      stg.status === 200 && fs1.staged === true && uns.status === 200 && fu1.staged === false && fu1.unstaged === true && bad.every((x) => x === 400), `stage ${stg.status} staged ${fs1.staged} · unstage ${uns.status} staged ${fu1.staged} · bad paths ${bad.join(',')}`);
+    const noMsg = await call('/api/work/git/commit', U, { message: '  ' }); const noStaged = await call('/api/work/git/commit', U, { message: 'r225 nothing' });
+    await call('/api/work/git/stage', U, { files: ['r225-new.txt'] });
+    const cm = await call('/api/work/git/commit', U, { message: 'r225: the panel commits' });
+    const log = gitq(own225, 'log', '-1', '--format=%s|%ae|%an').stdout.trim(); const left = ((await gs()).data.files || []).map((f) => f.path);
+    check('R227', 'commit: only what is staged is committed, as the person (author email <login>@viberoller.local, from their Forgejo record when they have one); no message or nothing staged is 400 and changes nothing; the unstaged file stays a change',
+      noMsg.status === 400 && noStaged.status === 400 && cm.status === 200 && /^Committed on work\/t-user/.test(cm.data.text) && log.startsWith('r225: the panel commits|') && /@viberoller\.local\|/.test(log) && left.includes('r225-other.txt') && !left.includes('r225-new.txt'),
+      `no message ${noMsg.status}, nothing staged ${noStaged.status}, commit ${cm.status} "${cm.data.text}" · last ${log} · still changed ${left.join(',')}`);
+    const b409 = {}; fs.writeFileSync(path.join(ss1.data.dir || '', 'r228.txt'), 'r228\n'); const slow225 = chat(U, 'SLOW r225 hold', { session: sid225 }); await sleep(700);
+    const S = { session: sid225 };
+    const wk = await gs('?session=' + sid225); b409.stage = (await call('/api/work/git/stage', U, { ...S, files: ['r228.txt'] })).status; b409.commit = (await call('/api/work/git/commit', U, { ...S, message: 'x' })).status; b409.merge = (await call('/api/work/git/merge', U, S)).status; b409.update = (await call('/api/work/git/update', U, S)).status;
+    const other = (await gs()).data.working; await call('/api/stop', U, S); await slow225;
+    const after409 = (await call('/api/work/git/stage', U, { ...S, files: ['r228.txt'] })).status;
+    check('R228', 'while that session\'s run is working every git action (stage, commit, update, merge) is 409 and the status says working; another session of the same person is not held by it; afterwards it works again',
+      wk.data.working === true && Object.values(b409).every((x) => x === 409) && other === false && after409 === 200, `working ${wk.data.working} · ${JSON.stringify(b409)} · other session working ${other} · after ${after409}`);
+    // a session's worktree: commit through the panel, update from work/<user>, "merge" = into work/<user> (worktree.js home); the person's own: worktree.js merge
+    fs.writeFileSync(path.join(ss1.data.dir || '', 'r229-session.txt'), 'from the session\n');
+    await call('/api/work/git/stage', U, { session: sid225, all: true }); const sc = await call('/api/work/git/commit', U, { session: sid225, message: 'r229: session work' });
+    await call('/api/work/git/stage', U, { all: true }); await call('/api/work/git/commit', U, { message: 'r229: own work moves on' });
+    const sa = await gs('?session=' + sid225);
+    const su = await call('/api/work/git/update', U, { session: sid225 }); const sa2 = await gs('?session=' + sid225);
+    const sm = await call('/api/work/git/merge', U, { session: sid225 }); const came = fs.existsSync(path.join(own225, 'r229-session.txt'));
+    const pm = await call('/api/work/git/merge', U, {});
+    const foreign = (await call('/api/work/git?session=' + sid225, A)).status;
+    await call('/api/work/sessions/delete', U, { id: sid225 });
+    check('R229', 'update and merge go only through worktree.js: a session\'s own worktree updates from work/<user> (behind 1 → 0, its commit stays) and "merge" brings its commit into work/<user> (the file arrives in the person\'s worktree); the person\'s own worktree "merge" answers with the tool\'s own words (Forgejo first, versioning law); another person never reaches this person\'s session (404)',
+      sc.status === 200 && sa.data.behind >= 1 && sa.data.ahead === 1 && su.status === 200 && sa2.data.behind === 0 && sa2.data.ahead >= 1 && sm.status === 200 && came && typeof pm.data.text === 'string' && /Merged|Nothing to merge|Not merged|CONFLICT|Forgejo|develop/.test(pm.data.text) && foreign === 404,
+      `session commit ${sc.status} · behind/ahead ${sa.data.behind}/${sa.data.ahead} · update ${su.status} → ${sa2.data.behind}/${sa2.data.ahead} · merge ${sm.status} "${(sm.data.text || '').slice(0, 90)}" came ${came} · own merge ${pm.status} "${(pm.data.text || '').slice(0, 140)}" · other person on this session ${foreign}`);
+  } else { for (const [id, what] of [['R225', 'git at a glance: status of the own / session worktree'], ['R226', 'git panel: stage / unstage'], ['R227', 'git panel: commit as the person'], ['R228', 'git panel: refused (409) while the session works'], ['R229', 'git panel: update / merge only through worktree.js']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it'); }
   if (RUST_HUB) { // R201: a PC tool call reaches the page of the session that asked, not another running session of the same person
     const b201 = (await call('/api/work/sessions/new', U, { title: 'r201', background: true })).data.id;
     let txt201 = '', slow201 = null;

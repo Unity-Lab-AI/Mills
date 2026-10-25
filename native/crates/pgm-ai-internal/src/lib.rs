@@ -23,6 +23,7 @@
 
 pub mod ai_hosts;
 pub mod fj;
+pub mod gitpanel;
 pub mod harness;
 pub mod host;
 pub mod hub;

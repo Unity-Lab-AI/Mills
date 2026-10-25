@@ -209,6 +209,7 @@ impl Work {
     // ---------- the person's Forgejo token (bridge/forgejo.js keeps it) ----------
     fn forgejo_url(&self) -> String { read_json(&self.root.join("forgejo.json")).and_then(|c| c["url"].as_str().map(String::from)).or_else(|| self.cfg.get("forgejoUrl").and_then(Value::as_str).map(String::from)).unwrap_or_else(|| "https://git.unityailab.com".into()).trim_end_matches('/').to_string() }
     fn forgejo_rec(&self, u: &str) -> Option<Value> { read_json(&self.root.join("forgejo-users.json")).and_then(|v| v["users"].get(u).cloned()).filter(Value::is_object) }
+    pub fn forgejo_login(&self, u: &str) -> Option<String> { self.forgejo_rec(u).map(|r| s(&r, "login")).filter(|l| !l.is_empty()) }
     pub fn work_env(&self, u: &str) -> Vec<(String, String)> {
         let Some(r) = self.forgejo_rec(u) else { return vec![] };
         use base64::Engine;
@@ -839,6 +840,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let p = r.path.as_str();
     if let Some(resp) = sessions::route(hub, r, a).await { return Some(resp); }
+    if let Some(resp) = crate::gitpanel::route(hub, r, a).await { return Some(resp); }
     // the session a request names (plans/multi-session.md; none = the first one, as older pages send it)
     let sess = |b: &Value| sessions::resolve(a, &sessions::wanted(r, b));
     let no_session = || answer(404, json!({ "error": "No such session." }));
