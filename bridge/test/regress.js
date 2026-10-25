@@ -254,7 +254,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -2903,6 +2903,45 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R196', 'presence and activity (plans/presence.md): a person is as present as their most active device (one active + one idle → online, both idle → away, the last one gone → offline); a run of theirs makes them Working; the accept-work switch makes them Available for work (Working + available during a run); appear offline shows Offline to everyone (also in the old presence list) while they see their real presence, and it ends at its until; the custom text (profile.status) ends at its until; bad override / too-long text → 400; a change reaches pages through the room long poll (status, ver)',
       ok196, has196 ? `mixed ${l196(seen.mixed)} (${seen.mixed.devices} devices) · both idle ${l196(seen.bothIdle)} · one gone ${l196(seen.oneGone)} · run ${l196(seen.run)} · run+accept ${l196(seen.runAccept)} · accept ${l196(seen.accept)} · bad ${seen.badOverride}/${seen.badText} · appear offline: others ${l196(seen.off)} text "${seen.off.text || ''}", old list online ${seen.oldList.online}, self real ${seen.meReal} · room ver moved ${seen.verMoved} status ${seen.inRoom} · after until ${l196(seen.back)} text "${seen.back.text || ''}" · all gone ${l196(seen.allGone)}` : 'GET /api/presence does not exist yet');
   } else skip('R196', 'presence and activity (plans/presence.md)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R205-R209: time accounting (plans/presence.md section 6, T-263); the scratch hub's config has presence.workGapMs = 1500
+    const day205 = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
+    const time205 = async (tok, q = '') => (await call(`/api/presence/time${q}`, tok)).data || {};
+    const today205 = async (tok, who) => (((await time205(tok, who ? `?user=${who}` : '')).days || []).find((x) => x.day === day205)) || { activeMs: 0, awayMs: 0, aiMs: 0, agentMs: 0, spans: [], events: [] };
+    const act = (tok) => call('/api/presence', tok, { device: 'r205', active: true });
+    await sleep(1800); // a quiet longer than the gap, so nothing before this extends into the test
+    const b205 = await today205(U);
+    await act(U); await sleep(700); await act(U); await sleep(2200); await act(U);
+    const a205 = await today205(U);
+    const dSpans = a205.spans.length - b205.spans.length, dActive = a205.activeMs - b205.activeMs;
+    const last2 = a205.spans.slice(-2);
+    const quiet = last2.length === 2 ? last2[1][0] - last2[0][1] : 0;
+    check('R205', 'time accounting: input, then input within the gap, then a quiet longer than workGapMs, then input again makes two spans, and the quiet is not counted (active time = the spans only)',
+      dSpans === 2 && quiet >= 2000 && dActive >= 600 && dActive < 1200, `spans +${dSpans} · quiet between ${quiet} ms · active +${dActive} ms (expect about 700)`);
+    const b206 = await today205(D); const t206 = Date.now();
+    await call('/api/presence', D, { device: 'r206', idle: true });
+    await call('/api/chat', D, { message: 'SLOW r206' });
+    await sleep(2200); // past the gap with the person idle; the tick has seen the run end
+    const a206 = await today205(D);
+    const dAi = a206.aiMs - b206.aiMs, dAgent = a206.agentMs - b206.agentMs, dAct = a206.activeMs - b206.activeMs;
+    check('R206', 'time accounting: a run (SLOW) of a person who is idle (no input) adds its running time to aiMs (and agentMs, summed over sessions) and nothing to activeMs',
+      dAi >= 2500 && dAi <= 7000 && dAgent >= dAi && dAct === 0, `ai +${dAi} ms · agent +${dAgent} ms · active +${dAct} ms`);
+    const ev206 = (a206.events || []).filter((e) => e.at >= t206);
+    check('R207', 'the activity log (events of the day, append-only): a run shows as an "ai" event with the number of working sessions (1, then 0) and a "status" event to Working and back',
+      ev206.some((e) => e.kind === 'ai' && e.sessions >= 1) && ev206.some((e) => e.kind === 'ai' && e.sessions === 0) && ev206.some((e) => e.kind === 'status' && e.label === 'Working'),
+      ev206.map((e) => `${e.kind}:${e.label || e.sessions}`).join(' '));
+    const other = await time205(D, `?user=t-user&from=${day205}&to=${day205}`), own = await time205(U, `?from=${day205}&to=${day205}`);
+    const od = (other.days || [])[0] || {}, ownd = (own.days || [])[0] || {};
+    const bad = (await call('/api/presence/time?from=nope', U)).status, nobody = (await call('/api/presence/time?user=nobody-here', U)).status, anon = (await call('/api/presence/time')).status;
+    check('R208', 'GET /api/presence/time: the team sees another person\'s totals (activeMs, awayMs, aiMs, agentMs) without their spans and events, a person sees their own record with both; a bad day is 400, an unknown person 404, not signed in 401; it names the workGapMs',
+      typeof od.activeMs === 'number' && od.spans === undefined && od.events === undefined && Array.isArray(ownd.spans) && ownd.spans.length >= 2 && Array.isArray(ownd.events) && bad === 400 && nobody === 404 && anon === 401 && own.workGapMs === 1500,
+      `other: ${Object.keys(od).join(',')} · own spans ${(ownd.spans || []).length} · ${bad}/${nobody}/${anon} · gap ${own.workGapMs}`);
+    const f209 = path.join(SB, 'profiles', 't-user', 'activity', `${day205}.json`);
+    const j209 = fs.existsSync(f209) ? JSON.parse(fs.readFileSync(f209, 'utf8')) : {};
+    const page209 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R209', 'the day is kept in the person\'s own profiles/<user>/activity/<day>.json ({activeMs, awayMs, aiMs, agentMs, spans, events, updatedAt}); [static] the page sends active: true on its 15 s presence tick, at most once a minute, only when there was input',
+      typeof j209.activeMs === 'number' && typeof j209.awayMs === 'number' && typeof j209.aiMs === 'number' && typeof j209.agentMs === 'number' && Array.isArray(j209.spans) && typeof j209.updatedAt === 'number'
+        && /inputSince && Date\.now\(\) - sentActive >= 60000/.test(page209) && /body\.active = true/.test(page209), `file ${fs.existsSync(f209)} keys ${Object.keys(j209).join(',')}`);
+  } else for (const id of ['R205', 'R206', 'R207', 'R208', 'R209']) skip(id, 'time accounting and the activity log (plans/presence.md section 6)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};
