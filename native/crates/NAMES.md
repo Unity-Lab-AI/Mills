@@ -13,6 +13,7 @@ vr-host, vr-desktop) are built on them. Plan and rules: the team note plans/pgm-
 | PGM_HCom_Internal | PsyGraphMediaHumanCommunicationInternal | `pgm-hcom-internal` (`pgm_hcom_internal`) | chat + end-to-end encryption, servers / channels / roles, calls, attachments, voice clips, images / video, profiles, markdown |
 | PGM_Collab_Internal | PsyGraphMediaCollaborationInternal | `pgm-collab-internal` (`pgm_collab_internal`) | board, notes, projects / worktrees, Forgejo |
 | PGM_Context_Internal | PsyGraphMediaContextInternal | `pgm-context-internal` (`pgm_context_internal`) | fewer tokens, more cache hits: token counting per provider, the usage / cache ledger, cache-friendly prompt assembly + its volatile-text lint, tool-output shaping, repo map, replay cache, prefix-cache routing (tree-sitter feature off here) |
+| PGM_Plan_Internal | PsyGraphMediaPlanInternal | `pgm-plan-internal` (`pgm_plan_internal`) | planner mode, one library for the hub and Jcode PGM: the draft check, the parents / sub-tasks table, approve all / some / change / reject, the writer in the hub's order behind a `PlanHub` trait, the planner helpers (parse, existing, roles, owner, glossary) and helper-set detection |
 | PGM_Dist_Internal | PsyGraphMediaDistributionInternal | `pgm-dist-internal` (`pgm_dist_internal`) | signed releases, self-update, downloads, version stamps |
 
 Dependency order (a library only uses the ones before it): Core → Platform, Net → Identity, Collab, Dist → HCom, AI.
@@ -26,4 +27,6 @@ Since 5.1.0 the libraries also have a repository of their own, https://git.unity
 that one are kept identical: a change to a crate here goes there as well, with a new tag.
 
 Mirrored from pgm-libs by copy (LAWS.md, library law): `pgm-context-internal` = pgm-libs 5.15.1 (the `src/` identical; the
-tree-sitter feature is optional and OFF here, so the repomap uses its text scanner). A change goes to pgm-libs first.
+tree-sitter feature is optional and OFF here, so the repomap uses its text scanner), `pgm-plan-internal` = pgm-libs 5.23.0
+(identical; used by `pgm-ai-internal` through `plan.rs` / `planner.rs`, and mirrored the same way in Jcode PGM's
+`pgm/libs`). A change goes to pgm-libs first.

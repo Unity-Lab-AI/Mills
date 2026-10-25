@@ -3351,7 +3351,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   } else for (const [id, what] of [['R285', 'external session report'], ['R286', 'report validation'], ['R287', 'reports per person'], ['R288', 'report expiry'], ['R289', 'report leaves the list alone']]) skip(id, 'T-289 ' + what, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R300 to R304 (T-276, T-277, T-278): the planner's exact helpers as team tools: parse, existing, roles, owner, glossary
     const plan = async (calls) => { const r = await chat(U, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
-    const excerpt = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'planner-example.md'), 'utf8');
+    const excerpt = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-plan-internal', 'src', 'planner-example.md'), 'utf8');
     const shortList = 'Person M\n\n--- fable\n[Board Archiving]\nArchive done tasks after about 48 hours and delete the archived ones after 30 days.\n';
     const longList = '--- opus\n[Automated Task Board Archiving System]\n\nWe need the ability for the task boards to be able to archive tasks, and delete tasks that have been archived after ~30 days. Done tasks should auto archive after ~48 hours, but can be manually or AI archived.\n';
     const runOn = 'Hey, we need a board archive so the done tab stops filling up. Also we should have a right-click menu in the web version, plus maybe a queued messages panel. Oh and the board should show who is online.';

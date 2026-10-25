@@ -3352,6 +3352,7 @@ dependencies = [
  "pgm-dist-internal",
  "pgm-identity-internal",
  "pgm-net-internal",
+ "pgm-plan-internal",
  "pgm-platform-internal",
  "regex",
  "reqwest",
@@ -3478,6 +3479,14 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "pgm-plan-internal"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde_json",
 ]
 
 [[package]]
