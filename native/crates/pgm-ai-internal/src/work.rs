@@ -116,6 +116,11 @@ impl Work {
     pub fn working_count(&self, u: &str) -> u64 { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).keys().filter(|k| *k == u || k.starts_with(&p)).count() as u64 }
     /// Where their most recently started running session works: (project, worktree branch, started at ms). Presence shows it (T-260).
     pub fn working_where(&self, u: &str) -> Option<(String, String, u64)> { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(k, _)| *k == u || k.starts_with(&p)).map(|(_, r)| r).max_by_key(|r| r.started).map(|r| (r.project.clone(), r.branch.clone(), r.started)) }
+    /// Does a run work in this project now: one of that person's (Some), or anyone's (None)? (project management, T-239)
+    pub fn working_in(&self, user: Option<&str>, project: &str) -> bool {
+        let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        runs.iter().any(|(k, r)| r.project.eq_ignore_ascii_case(project) && user.map(|u| k == u || k.starts_with(&format!("{u}#"))).unwrap_or(true))
+    }
     /// Is this one session running (its run key)?
     pub fn busy_key(&self, key: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key) }
     /// The run key of a run of theirs that waits for something from their browser: the primary session's first.
@@ -878,6 +883,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let p = r.path.as_str();
     if let Some(resp) = sessions::route(hub, r, a).await { return Some(resp); }
     if let Some(resp) = crate::gitpanel::route(hub, r, a).await { return Some(resp); }
+    if let Some(resp) = crate::projects::route(hub, r, a).await { return Some(resp); }
     // the session a request names (plans/multi-session.md; none = the first one, as older pages send it)
     let sess = |b: &Value| sessions::resolve(a, &sessions::wanted(r, b));
     let no_session = || answer(404, json!({ "error": "No such session." }));
@@ -982,6 +988,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let switched = w.project_in(a, &sx) != pj.name;
             sessions::supdate(w, a, &sx, |m| { m.remove("noProject"); if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
             w.check_fresh(a);
+            crate::projects::used(a, &pj.name);
             answer(200, json!({ "project": pj.name, "dir": wd.dir.display().to_string(), "branch": wd.branch }))
         }
         // ----- the Work conversation + queue, kept across restarts -----
