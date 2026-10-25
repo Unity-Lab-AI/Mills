@@ -409,8 +409,8 @@ function podman(args, env) { return spawnSync('podman', args, { encoding: 'utf8'
 function reTestSetup() {
   if (!RUST_HUB) return;
   if (WIN) { RE_T.why = 'the engine here is Docker on Windows: not run by this check (T-303 leaves the Windows path)'; return; }
-  const dir = path.join(SCRATCH, 're-test-image');
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 're-test-image-')); // outside the scratch copy: its main must stay clean for R109
+  RE_T.dir = dir;
   fs.writeFileSync(path.join(dir, 'Containerfile'), 'FROM docker.io/library/debian:trixie-slim\nRUN useradd -m -u 1000 re\nUSER re\n');
   let why = 'podman is not available';
   // this account's own HOME first; its real home when the shared HOME has storage the engine cannot use (ACLs on the overlay folders)
@@ -430,6 +430,7 @@ function reTestCleanup() {
   const left = (podman(['ps', '-a', '--filter', 'name=' + RE_T.prefix, '--format', '{{.Names}}'], RE_T.env).stdout || '').split('\n').filter(Boolean);
   if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
   podman(['rmi', '-f', RE_T.image], RE_T.env);
+  try { fs.rmSync(RE_T.dir, { recursive: true, force: true }); } catch {}
 }
 async function startHub() {
   const log = fs.openSync(path.join(SCRATCH, 'hub.log'), 'a');
