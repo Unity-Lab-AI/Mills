@@ -3001,6 +3001,85 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       long && long.source.length <= 20 && /^[A-Za-z0-9_-]+$/.test(long.source) && long.project.length === 80 && long.branch === 'branch' && long.task.title.length === 160 && junk.every((r) => r.status === 200) && !afterJunk && /function whereText/.test(page234) && /' · on '/.test(page234),
       `source "${long && long.source}" project ${long && long.project.length} branch "${long && long.branch}" title ${long && long.task && long.task.title.length} · junk ${junk.map((r) => r.status)} · after ${JSON.stringify(afterJunk)}`);
   } else for (const id of ['R230', 'R231', 'R232', 'R233', 'R234']) skip(id, 'where a person works (T-260)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R250-R254 (T-264): presence for AIs and tools: the full status in the team tools, notify_when_available / notify_list / notify_cancel, the status event. t-user's Claude (fake "NOTIFYTOOL") asks about mills (D)
+    const keep250 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+    const stop250 = keep250(D, 'r250'); await sleep(400); await call('/api/presence', D, { device: 'r250', idle: false });
+    await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, dnd: false, text: '' });
+    const tools250 = async (calls, tok = U) => { const r = await chat(tok, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
+    const seq250 = async () => Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+    const dms250 = async (since) => { const ms = ((await call('/api/room/messages?since=' + since, U)).data.messages || []).filter((m) => m.from === 'claude' && m.to === 't-user' && m.as); return Promise.all(ms.map(async (m) => ({ as: m.as, via: m.via, text: await roomRead(restored, m) }))); };
+    const waitDm = async (since, re, ms = 6000) => { const end = Date.now() + ms; for (;;) { const hit = (await dms250(since)).find((d) => re.test(d.text)); if (hit || Date.now() > end) return hit; await sleep(300); } };
+    const noDm = async (since, re, ms = 3000) => { await sleep(ms); return !(await dms250(since)).some((d) => re.test(d.text)); };
+    const ok250 = (r) => !!r && r.ok === true;
+    const s250 = {};
+    // R250: the tools carry the whole status
+    await call('/api/presence/me', D, { acceptingWork: true, text: 'r250 status' }); await sleep(300);
+    { const [pr, hs] = await tools250([['team_presence', {}], ['hub_status', {}]]);
+      const mp = ((pr && pr.result && pr.result.people) || []).find((p) => p.user === 'mills') || {}, mh = ((hs && hs.result && hs.result.people) || []).find((p) => p.user === 'mills') || {};
+      const keys = ['presence', 'label', 'working', 'workingSessions', 'acceptingWork', 'dnd', 'text', 'since', 'state', 'screen', 'agoMin', 'user', 'name'];
+      check('R250', 'T-264 the team tools carry the whole status: team_presence and hub_status give each person presence, label, working (+ workingSessions), acceptingWork, dnd, text, since (and where) next to the older state / screen / agoMin',
+        ok250(pr) && ok250(hs) && keys.every((k) => k in mp && k in mh) && mp.presence === 'online' && mp.state === 'online' && mp.label === 'Available for work' && mp.acceptingWork === true && mp.working === false && mp.workingSessions === 0 && mp.dnd === false && mp.text === 'r250 status' && typeof mp.since === 'number' && mh.label === mp.label,
+        `mills in team_presence ${JSON.stringify(mp)} · hub_status label ${mh.label}`); }
+    // R251: "available": registered, listed, told in a private message from the asker's Claude when it holds, then gone from the list
+    await call('/api/presence/me', D, { acceptingWork: false }); await sleep(1300);
+    { const since = await seq250();
+      const [ask, list1] = await tools250([['notify_when_available', { user: 'mills', what: 'available', message: 'r251 ping' }], ['notify_list', {}]]);
+      await call('/api/presence/me', D, { acceptingWork: true });
+      const dm = await waitDm(since, /is available now/);
+      const [again, list2] = await tools250([['notify_when_available', { user: 'mills', what: 'available' }], ['notify_list', {}]]);
+      s250.r251 = { ask, list1, dm, again, list2 };
+      check('R251', 'T-264 notify_when_available: a request for "available" is remembered (notify_list shows it with its id), and once the person accepts work the asker is told in a private chat message from "<asker> · Claude" ("Mills is available now (asked by your Claude at HH:MM). Note: …"); the request is then gone; asking while it already holds answers at once (already: true) and registers nothing',
+        ok250(ask) && ask.result.registered === true && !!ask.result.id && ok250(list1) && list1.result.watching.length === 1 && list1.result.watching[0].user === 'mills' && list1.result.watching[0].what === 'available'
+        && !!dm && /^.+ · Claude$/.test(dm.as) && dm.via === 't-user' && /^.+ is available now \(asked by your Claude at \d\d:\d\d\)\. Note: r251 ping$/.test(dm.text)
+        && ok250(again) && again.result.already === true && again.result.registered === false && ok250(list2) && list2.result.watching.length === 0,
+        `ask ${JSON.stringify(ask && ask.result)} · told "${dm && dm.text}" as "${dm && dm.as}" · again ${JSON.stringify(again && again.result && { already: again.result.already })} · list after ${list2 && list2.result && list2.result.watching.length}`); }
+    // R252: "back" (away → online), "free" (a run ends), "online" (appear offline ends)
+    { await call('/api/presence/me', D, { acceptingWork: false, override: 'away' }); await sleep(1300);
+      const sBack = await seq250(); const [aBack] = await tools250([['notify_when_available', { user: 'mills', what: 'back' }]]);
+      await call('/api/presence/me', D, { override: 'auto' }); const dBack = await waitDm(sBack, /is back \(asked/);
+      const slow = call('/api/chat', D, { message: 'SLOW r252' }); await sleep(900);
+      const sFree = await seq250(); const [aFree] = await tools250([['notify_when_available', { user: 'mills', what: 'free' }]]);
+      const noEarly = await noDm(sFree, /is free now/, 500); await slow; const dFree = await waitDm(sFree, /is free now \(not working\) \(asked/);
+      await call('/api/presence/me', D, { override: 'offline' }); await sleep(1300);
+      const sOn = await seq250(); const [aOn] = await tools250([['notify_when_available', { user: 'mills', what: 'online' }]]);
+      await call('/api/presence/me', D, { override: 'auto' }); const dOn = await waitDm(sOn, /is online now \(asked/);
+      check('R252', 'T-264 the other waits: "back" is told when someone who was away is online again, "free" when their run ends (not before), "online" when their appear offline ends; each is told once',
+        ok250(aBack) && aBack.result.registered === true && !!dBack && ok250(aFree) && aFree.result.registered === true && noEarly && !!dFree && ok250(aOn) && aOn.result.registered === true && !!dOn,
+        `back ${aBack && aBack.result && aBack.result.registered}/${!!dBack} · free ${aFree && aFree.result && aFree.result.registered}/early-silent ${noEarly}/${!!dFree} · online ${aOn && aOn.result && aOn.result.registered}/${!!dOn}`); }
+    // R253: appear offline hides the change (nothing is told while it holds), and shows nothing the status does not show
+    { await call('/api/presence/me', D, { acceptingWork: false, override: 'offline' }); await sleep(1300);
+      const slow = call('/api/chat', D, { message: 'SLOW r253' }); await sleep(900);
+      const since = await seq250();
+      const [free, avail] = await tools250([['notify_when_available', { user: 'mills', what: 'free' }], ['notify_when_available', { user: 'mills', what: 'available' }]]);
+      await slow;
+      await call('/api/presence/me', D, { acceptingWork: true });
+      const quiet = await noDm(since, /is available now/, 2800);
+      await call('/api/presence/me', D, { override: 'auto' }); const dm = await waitDm(since, /is available now \(asked/);
+      check('R253', 'T-264 appear offline: while it holds, "free" is answered from what others are shown (not working, though a run is going), a request for "available" stays quiet when the person starts accepting work, and the asker is told only once they appear again; the message says nothing beyond the status',
+        ok250(free) && free.result.already === true && free.result.status.working === false && free.result.status.label === 'Offline' && !free.result.status.text && ok250(avail) && avail.result.registered === true && avail.result.label === 'Offline' && quiet && !!dm && !/Offline|working|r250/i.test(dm.text),
+        `free ${JSON.stringify(free && free.result && { already: free.result.already, label: free.result.status && free.result.status.label })} · available ${avail && avail.result && avail.result.registered} · quiet while hidden ${quiet} · told after "${dm && dm.text}"`); }
+    // R254: errors, the limit of five, cancel, privacy between askers, and the status event hook
+    { await call('/api/presence/me', D, { acceptingWork: false, override: 'offline' }); await sleep(1300);
+      const errs = await tools250([['notify_when_available', { user: 'nobody-here', what: 'available' }], ['notify_when_available', { user: 'mills', what: 'bogus' }], ['notify_when_available', { user: 't-user' }], ['notify_cancel', {}]]);
+      const tadminOff = (((await call('/api/presence', U)).data.people || []).find((p) => p.user === 't-admin') || {}).presence === 'offline';
+      const adds = await tools250([['notify_when_available', { user: 'mills', what: 'available' }], ['notify_when_available', { user: 'mills', what: 'back' }], ['notify_when_available', { user: 'mills', what: 'online' }], ['notify_when_available', { user: 't-admin', what: 'available' }], ['notify_when_available', { user: 't-admin', what: 'back' }], ['notify_when_available', { user: 't-admin', what: 'online' }]]);
+      const regs = adds.filter((r) => ok250(r) && r.result.registered === true).length, errsAdd = adds.filter((r) => !ok250(r));
+      const [lStranger] = await tools250([['notify_list', {}]], A);
+      const [cOne, lAfterOne] = await tools250([['notify_cancel', { user: 'mills' }], ['notify_list', {}]]);
+      const [cAll, lAfterAll] = await tools250([['notify_cancel', { all: true }], ['notify_list', {}]]);
+      const lib = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-hcom-internal', 'src', 'chat.rs'), 'utf8');
+      const nativeTools = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+      const jsTools = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+      const names = ['notify_when_available', 'notify_list', 'notify_cancel'];
+      check('R254', 'T-264 notify tools: an unknown person, an unknown "what", yourself and a cancel without a target are refused; at most five requests wait per asker (the sixth is refused); they are private to the asker (another person lists none); notify_cancel by user / all removes them; [static] the status change is an event (Chat::subscribe_status) that notify uses, and both MCP servers offer the three tools',
+        errs.length === 4 && errs.every((r) => r.ok === false) && (!tadminOff || (regs === 5 && errsAdd.length === 1 && /5 people/.test(errsAdd[0].error)))
+        && ok250(lStranger) && lStranger.result.watching.length === 0 && ok250(cOne) && cOne.result.cancelled >= 3 && ok250(lAfterOne) && lAfterOne.result.watching.every((w) => w.user !== 'mills')
+        && ok250(cAll) && ok250(lAfterAll) && lAfterAll.result.watching.length === 0
+        && /pub fn subscribe_status/.test(lib) && /subscribe_status\(\)/.test(lib.slice(lib.indexOf('pub fn start('))) && names.every((n) => nativeTools.includes(n) && jsTools.includes(n)),
+        `refused ${errs.map((r) => r.ok)} · registered ${regs} refused ${errsAdd.map((r) => r.error)} (t-admin offline ${tadminOff}) · stranger lists ${lStranger && lStranger.result && lStranger.result.watching.length} · cancelled by user ${cOne && cOne.result && cOne.result.cancelled}, all ${cAll && cAll.result && cAll.result.cancelled} · left ${lAfterAll && lAfterAll.result && lAfterAll.result.watching.length}`); }
+    await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
+    stop250(); await call('/api/presence', D, { device: 'r250', gone: true });
+  } else for (const [id, l] of [['R250', 'the team tools carry the whole status'], ['R251', 'notify_when_available tells the asker'], ['R252', 'back / free / online waits'], ['R253', 'appear offline hides the change'], ['R254', 'notify tools: limits, cancel, privacy, the status event']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};

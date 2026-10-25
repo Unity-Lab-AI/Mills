@@ -121,6 +121,10 @@ fn label_of(shown: &str, over: &str, working: bool, accepting: bool) -> &'static
     if working { return "Working"; }
     match shown { "offline" => "Offline", "away" => "Away", _ if accepting => "Available for work", _ => "Online" }
 }
+/// One "tell me when" request of an asker's AI (the team tool notify_when_available).
+#[derive(Clone)]
+struct Watch { id: String, asker: String, user: String, what: String, message: String, at: u64, until: u64 }
+const WATCH_MAX: usize = 5; const WATCH_TTL_MS: u64 = 24 * 3600 * 1000;
 struct Store { messages: Vec<Value>, seq: i64, rev: i64 }
 #[derive(Default)]
 struct Calls { calls: Vec<(String, Vec<(String, Value)>)>, mailbox: HashMap<String, Vec<Value>>, n: u64, ver: u64 }
@@ -142,6 +146,11 @@ pub struct Chat {
     labels: Mutex<HashMap<String, (String, u64)>>,
     /// time accounting + activity log (activity.rs)
     acct: Mutex<crate::activity::Tracker>,
+    /// The status-change event (T-264): see [`Chat::subscribe_status`]. `last_status` = each person's last public status.
+    status_tx: tokio::sync::broadcast::Sender<Value>,
+    last_status: Mutex<HashMap<String, Value>>,
+    /// "tell me when X is available" (notify_when_available), kept in Chat/notify-watches.json
+    watches: Mutex<Vec<Watch>>,
     typing: Mutex<HashMap<String, (String, u64)>>,
     agent_key: ChatKey,
     agent_pub: Value,
@@ -200,8 +209,9 @@ impl Chat {
         let agent_on = !users.iter().any(|u| u.0 == AGENT) && cfg.get("roomAgent") != Some(&json!(false));
         let home = cfg.get("homeServerName").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).unwrap_or("VibeRoller");
         let g = Guilds::new(&dir, root.join("server-owners.json"), &agent_name, home, users);
+        let watches: Vec<Watch> = read_json(&dir.join("notify-watches.json")).and_then(|v| v.as_array().cloned()).unwrap_or_default().iter().map(|w| Watch { id: s(w, "id"), asker: s(w, "asker"), user: s(w, "user"), what: s(w, "what"), message: s(w, "message"), at: w["at"].as_u64().unwrap_or(0), until: w["until"].as_u64().unwrap_or(0) }).filter(|w| !w.id.is_empty() && !w.asker.is_empty()).collect();
         Chat { dir, store: Mutex::new(Store { messages, seq, rev }), keys: Mutex::new(keys), seen: Mutex::new(seen), seen_dirty: Notify::new(), guilds: g, room_ver: AtomicU64::new(1), keys_ver: AtomicU64::new(1), room_woke: Notify::new(),
-            presence: Mutex::default(), manual: Mutex::default(), labels: Mutex::default(), acct: Mutex::default(), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
+            presence: Mutex::default(), manual: Mutex::default(), labels: Mutex::default(), acct: Mutex::default(), status_tx: tokio::sync::broadcast::channel(64).0, last_status: Mutex::default(), watches: Mutex::new(watches), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
     }
     pub fn room_changed(&self) { self.room_ver.fetch_add(1, Ordering::SeqCst); self.room_woke.notify_waiters(); }
     pub fn keys_changed(&self) { self.keys_ver.fetch_add(1, Ordering::SeqCst); self.avatars.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.manual.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.room_changed(); }
@@ -366,6 +376,63 @@ fn account_tick(hub: &dyn ChatHost) {
         let (real, _, _) = c.real_presence(&a.username, now);
         let label = status_of(hub, &a.username, &a.username, now)["label"].as_str().unwrap_or("").to_string();
         c.acct.lock().unwrap_or_else(|e| e.into_inner()).tick(&a.username, &a.dir, now, gap, real != "offline", hub.working_count(&a.username), &label);
+        status_event(hub, &a.username, now);
+    }
+}
+impl Chat {
+    /// The status-change event (T-264). Whenever what the team is shown about a person changes (presence, label, working,
+    /// accepting work, do not disturb), the hub sends `{ type: "status", user, at, presence, label, working,
+    /// acceptingWork, dnd, text, from: { presence, label, working, acceptingWork } }` to every subscriber. It is the
+    /// PUBLIC status (as a stranger sees it): appear offline hides the change, and nothing is in it a team member could
+    /// not read from GET /api/presence. Checked once a second (the account tick), so it lags a change by up to a second.
+    /// Subscribers must be quick and must not block: take the receiver in a task (see [`start`]; notify_when_available
+    /// is the first subscriber, workflow triggers (T-186) can be the next). A slow subscriber loses the oldest events
+    /// (RecvError::Lagged), it never holds the hub back.
+    pub fn subscribe_status(&self) -> tokio::sync::broadcast::Receiver<Value> { self.status_tx.subscribe() }
+    fn save_watches(&self, w: &[Watch]) {
+        write_json(&self.dir.join("notify-watches.json"), &Value::Array(w.iter().map(|x| json!({ "id": x.id, "asker": x.asker, "user": x.user, "what": x.what, "message": x.message, "at": x.at, "until": x.until })).collect()));
+    }
+    /// Drops expired watches (and saves when some went); returns what is left, as a copy.
+    fn watches_now(&self, now: u64) -> Vec<Watch> {
+        let mut g = self.watches.lock().unwrap_or_else(|e| e.into_inner());
+        let n = g.len(); g.retain(|w| w.until > now);
+        if g.len() != n { self.save_watches(&g); }
+        g.clone()
+    }
+}
+/// Sends the status event when a person's public status changed since the last tick (the first sight sets, sends nothing).
+fn status_event(hub: &dyn ChatHost, u: &str, now: u64) {
+    let c = hub.chat(); let st = status_of(hub, u, "", now);
+    let key = |v: &Value| json!([v["presence"], v["label"], v["working"], v["acceptingWork"], v["dnd"]]);
+    let prev = c.last_status.lock().unwrap_or_else(|e| e.into_inner()).insert(u.to_string(), st.clone());
+    let Some(prev) = prev else { return };
+    if key(&prev) == key(&st) { return; }
+    let _ = c.status_tx.send(json!({ "type": "status", "user": u, "at": now, "presence": st["presence"], "label": st["label"], "working": st["working"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"],
+        "from": { "presence": prev["presence"], "label": prev["label"], "working": prev["working"], "acceptingWork": prev["acceptingWork"] } }));
+}
+/// Does this status (or event) satisfy what the asker waits for?
+fn watch_matches(what: &str, st: &Value) -> bool {
+    let (pres, working, accepting) = (st["presence"].as_str().unwrap_or("offline"), st["working"] == json!(true), st["acceptingWork"] == json!(true));
+    match what { "online" => pres != "offline", "back" => pres == "online", "available" => accepting && pres != "offline", "free" => !working, _ => false }
+}
+fn watch_phrase(what: &str) -> &'static str { match what { "online" => "is online now", "back" => "is back", "free" => "is free now (not working)", _ => "is available now" } }
+/// The first subscriber of the status event: tells the asker's chat when the person they wait for matches.
+fn notify_event(hub: &dyn ChatHost, ev: &Value) {
+    let c = hub.chat(); let now = now_ms(); let user = s(ev, "user");
+    let due: Vec<Watch> = {
+        let mut g = c.watches.lock().unwrap_or_else(|e| e.into_inner());
+        let n = g.len(); g.retain(|w| w.until > now);
+        let (hit, keep): (Vec<Watch>, Vec<Watch>) = g.iter().cloned().partition(|w| w.user == user && watch_matches(&w.what, ev));
+        let changed = hit.len() + keep.len() != n || !hit.is_empty();
+        *g = keep; if changed { c.save_watches(&g); }
+        hit
+    };
+    for w in due {
+        if !c.has_key(&w.asker) { continue; }
+        let at = chrono::DateTime::from_timestamp_millis(w.at as i64).map(|d| d.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
+        let mut text = format!("{} {} (asked by your Claude at {at})", hub.name_of(&user), watch_phrase(&w.what));
+        if !w.message.is_empty() { text.push_str(&format!(". Note: {}", w.message)); }
+        agent_say(hub, &text, &w.asker, &format!("{} · Claude", hub.name_of(&w.asker)), &w.asker, "");
     }
 }
 
@@ -577,6 +644,9 @@ pub fn calls_leave(hub: &dyn ChatHost, user: &str) {
 pub fn start(hub: Arc<dyn ChatHost>) {
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(1)).await; account_tick(&*h); } });
+    // the status event's first subscriber: notify_when_available
+    let h = hub.clone(); let mut rx = hub.chat().subscribe_status();
+    tokio::spawn(async move { loop { match rx.recv().await { Ok(ev) => notify_event(&*h, &ev), Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue, Err(_) => break } } });
     // browsers long-poll at least every 25 s while in a call; 60 s of silence = gone
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(10)).await; let now = now_ms(); let mut changed = vec![];
@@ -923,7 +993,7 @@ pub fn team_tool(hub: &dyn ChatHost, name: &str, args: &Value, a: &Account) -> V
     let now = now_ms() as i64;
     // (plans/presence.md: with the label, working / accepting work, do not disturb and the status text, so an AI can check
     // before it assigns or messages)
-    let people = || -> Vec<Value> { c.presence_list(&us).into_iter().map(|p| { let seen = p["seen"].as_i64().unwrap_or(0); let st = status_of(hub, &s(&p, "user"), u, now as u64); json!({ "user": p["user"], "name": disp(&s(&p, "user")), "state": if p["online"] == json!(true) { if p["idle"] == json!(true) { "away" } else { "online" } } else { "offline" }, "label": st["label"], "working": st["working"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "where": st["where"], "screen": s(&p, "screen"), "lastSeen": if seen > 0 { json!(guilds_iso(seen)) } else { Value::Null }, "agoMin": if seen > 0 { json!(((now - seen) as f64 / 60000.0).round() as i64) } else { Value::Null } }) }).collect() };
+    let people = || -> Vec<Value> { c.presence_list(&us).into_iter().map(|p| { let seen = p["seen"].as_i64().unwrap_or(0); let st = status_of(hub, &s(&p, "user"), u, now as u64); json!({ "user": p["user"], "name": disp(&s(&p, "user")), "state": if p["online"] == json!(true) { if p["idle"] == json!(true) { "away" } else { "online" } } else { "offline" }, "presence": st["presence"], "label": st["label"], "working": st["working"], "workingSessions": st["workingSessions"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "since": st["since"], "where": st["where"], "screen": s(&p, "screen"), "lastSeen": if seen > 0 { json!(guilds_iso(seen)) } else { Value::Null }, "agoMin": if seen > 0 { json!(((now - seen) as f64 / 60000.0).round() as i64) } else { Value::Null } }) }).collect() };
     match name {
         "team_channel_create" | "team_group_create" => {
             let ctx = ctx!(hub, us.clone());
@@ -976,8 +1046,39 @@ pub fn team_tool(hub: &dyn ChatHost, name: &str, args: &Value, a: &Account) -> V
         }
         "team_presence" => {
             let mut list = people();
-            for (x, _, _) in &us { if !list.iter().any(|p| p["user"] == json!(x)) { let st = status_of(hub, x, u, now as u64); list.push(json!({ "user": x, "name": disp(x), "state": "offline", "label": st["label"], "working": st["working"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "where": st["where"], "screen": "", "lastSeen": Value::Null, "agoMin": Value::Null })); } }
+            for (x, _, _) in &us { if !list.iter().any(|p| p["user"] == json!(x)) { let st = status_of(hub, x, u, now as u64); list.push(json!({ "user": x, "name": disp(x), "state": "offline", "presence": st["presence"], "label": st["label"], "working": st["working"], "workingSessions": st["workingSessions"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "since": st["since"], "where": st["where"], "screen": "", "lastSeen": Value::Null, "agoMin": Value::Null })); } }
             ok(json!({ "you": u, "people": list }))
+        }
+        // "tell me when X is available / back" (T-264): remembered per asker (5 at most, 24 h), answered by the status event
+        "notify_when_available" => {
+            let who = s(args, "user").trim().to_lowercase();
+            let target = us.iter().find(|x| x.0 == who).or_else(|| us.iter().find(|x| x.1.to_lowercase() == who || disp(&x.0).to_lowercase() == who)).map(|x| x.0.clone());
+            let Some(target) = target else { return no(format!("No account called \"{who}\".")); };
+            if target == u { return no("That is you: you know when you are available.".into()); }
+            let what = { let w = s(args, "what").trim().to_lowercase(); if w.is_empty() { "available".to_string() } else { w } };
+            if !matches!(what.as_str(), "available" | "back" | "online" | "free") { return no("what must be \"available\", \"back\", \"online\" or \"free\".".into()); }
+            let message = guilds::take_units(s(args, "message").chars().filter(|ch| !ch.is_control()).collect::<String>().trim(), 200);
+            let st = status_of(hub, &target, u, now as u64);
+            if watch_matches(&what, &st) { return ok(json!({ "registered": false, "already": true, "user": target, "name": disp(&target), "label": st["label"], "status": st })); }
+            let list = c.watches_now(now as u64);
+            let mine = list.iter().filter(|w| w.asker == u).count();
+            let dup = list.iter().any(|w| w.asker == u && w.user == target && w.what == what);
+            if !dup && mine >= WATCH_MAX { return no(format!("You already wait for {WATCH_MAX} people; cancel one first (notify_cancel).")); }
+            let w = Watch { id: format!("n{}", pgm_core_internal::crypto::random_hex(4)), asker: u.to_string(), user: target.clone(), what: what.clone(), message, at: now as u64, until: now as u64 + WATCH_TTL_MS };
+            { let mut g = c.watches.lock().unwrap_or_else(|e| e.into_inner()); g.retain(|x| !(x.asker == u && x.user == target && x.what == what)); g.push(w.clone()); c.save_watches(&g); }
+            ok(json!({ "registered": true, "id": w.id, "user": target, "name": disp(&target), "what": what, "expiresAt": guilds_iso(w.until as i64), "label": st["label"] }))
+        }
+        "notify_list" => {
+            let mine: Vec<Value> = c.watches_now(now as u64).into_iter().filter(|w| w.asker == u).map(|w| json!({ "id": w.id, "user": w.user, "name": disp(&w.user), "what": w.what, "message": w.message, "askedAt": guilds_iso(w.at as i64), "expiresAt": guilds_iso(w.until as i64) })).collect();
+            ok(json!({ "watching": mine }))
+        }
+        "notify_cancel" => {
+            let (id, who) = (s(args, "id").trim().to_string(), s(args, "user").trim().to_lowercase());
+            if id.is_empty() && who.is_empty() && args["all"] != json!(true) { return no("Give an \"id\" (from notify_list), a \"user\", or \"all\": true.".into()); }
+            let mut g = c.watches.lock().unwrap_or_else(|e| e.into_inner()); let n = g.len();
+            g.retain(|w| !(w.asker == u && (args["all"] == json!(true) || (!id.is_empty() && w.id == id) || (!who.is_empty() && w.user == who))));
+            let gone = n - g.len(); if gone > 0 { c.save_watches(&g); }
+            ok(json!({ "cancelled": gone }))
         }
         _ => no(format!("Unknown team tool: {name}")),
     }

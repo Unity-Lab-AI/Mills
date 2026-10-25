@@ -127,6 +127,20 @@ process.stdin.on('end', async () => {
     const who = await tool('team_presence', {});
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'TEAM:' + JSON.stringify({ all: all.ok && all.result.as, dm: dm.ok && dm.result.to, bad: bad.ok, people: who.ok ? who.result.people.length : -1 }) }] } });
   }
+  // "NOTIFYTOOL [[name, args], ...] END" (T-264): calls those team tools in order through the team MCP relay and prints
+  // "NOTIFY:" + the list of their answers (R250 to R254).
+  if (input.includes('NOTIFYTOOL')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const m = input.match(/NOTIFYTOOL (\[\[.*?\]\]) END/s);
+    const calls = m ? JSON.parse(m[1]) : [];
+    const res = [];
+    for (const [name, args] of calls) res.push(await tool(name, args));
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'NOTIFY:' + JSON.stringify(res) }] } });
+  }
   // "LIMITPARTIAL": a 5h event with only a status (no utilization, no reset time), then a 7d event
   // reporting utilization as a percentage (55) — the hub must keep the 5h numbers and read 55 as 55 %.
   if (input.includes('LIMITPARTIAL')) {
