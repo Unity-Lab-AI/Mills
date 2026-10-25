@@ -7,6 +7,33 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.24.0 — 2026-10-25
+
+MINOR: **co-view (look at the same thing together) and multi-session Work proven end to end** (agent branches, reviewed
+and merged).
+- **Co-view** (T-244). Co-view shares the product view itself, not pixels.
+  - **How it works:** the sharer's page posts WHICH view it shows (a screen plus an item such as a board task, a note,
+    a conversation or a shared Work session; `/api/coview/*`). Each viewer's page opens the same view itself, through
+    the normal routes and with its own permissions.
+  - **Privacy:** what a viewer may not read reaches them only as "hidden", with no id and no content, and they see "Not
+    shared with you".
+  - **Controls:** the sharer can invite a viewer to take over and can take the lead back. A viewer can stop following;
+    the sharer can end the co-view for everyone.
+  - **Older pages and hubs:** an older hub (and the JavaScript fallback) answers "Unknown endpoint", so the buttons stay
+    hidden.
+  - **Files:** web/coview.js 1.0.0, web/board.js 1.0.6, web/notes.js 1.0.3. R295 to R299.
+  - **Still to do:** moving it into the shared kit for Hyper Prod Man and ShaDow.
+- **Multi-session Work proven end to end** (T-290). R280 to R284 cover three people on two native hosts with up to 5
+  sessions each:
+  - the per-user and per-provider limits, and the owner's bypass;
+  - a hub restart mid-run (every session comes back as it was);
+  - a host killed mid-run;
+  - a shared session across a restart;
+  - an older page next to the sessions.
+  - **Fix found by it:** limits an owner sets from the page are now kept in the host's stored hello, so they survive a
+    hub restart. Before, the hub went back to the limits of the host's last hello.
+  - **Still to do:** the Windows host run.
+
 ## 5.23.1 — 2026-10-25
 
 PATCH: **screen sharing in the desktop app** (T-243, an agent branch, reviewed and merged).

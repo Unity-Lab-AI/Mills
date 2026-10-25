@@ -919,6 +919,7 @@
       <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone"><svg class="ic lead"><use href="#i-mic"/></svg>Mic on</button>
       <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)"><svg class="ic lead"><use href="#i-camera"/></svg>Camera off</button>
       <button type="button" class="ghost" id="callScreen" title="Share your screen, a window or a tab with the call (shows as its own tile for everyone)"><svg class="ic lead"><use href="#i-share"/></svg>Share screen</button>
+      <button type="button" class="ghost" id="callCoview" hidden title="Co-view: the people in this call follow what you have open (screen, board task, note, chat) live in their own page">Co-view</button>
       <button type="button" class="ghost" id="callTheater" title="Theater: the call fills the screen and the chat stays on the left (Esc leaves it)"><svg class="ic lead"><use href="#i-eye"/></svg>Theater</button>
       <button type="button" id="callLeave" title="Leave the call">Leave</button>
     </div>
@@ -1221,6 +1222,7 @@
         <span id="plannerBadge" hidden title="Planner mode: Claude only plans (board tasks and notes under plans/); it cannot edit files, run builds or use your PC" style="background:#6d4aff;color:#fff;border-radius:.6rem;padding:.1rem .55rem;font-size:.75rem;font-weight:600">Planner</span>
         <button type="button" class="ghost" id="leavePlanner" hidden title="Leave planner mode: back to your normal Work session">Leave planner</button>
         <button type="button" class="ghost" id="shareBtn" title="Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue"><svg class="ic lead"><use href="#i-share"/></svg>Share with everyone</button>
+        <button type="button" class="ghost" id="coviewBtn" hidden title="Co-view: everyone you pick follows what you have open (screen, board task, note, chat) live in their own page">Co-view</button>
         <button type="button" class="ghost" id="gitBtn" title="Git at a glance: what changed in your own worktree, stage, commit, update, merge">Git</button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
       <div id="gitBox" hidden>
@@ -1841,6 +1843,7 @@ async function enter() {
   startRoomPolling();
   callPollLoop();
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
+  if (window.COVIEW) COVIEW.start(); // web/coview.js (T-244)
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
   restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
@@ -1878,7 +1881,7 @@ function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes']) $(id).hidden = true;
-  BOARD.stop(); NOTES.stop();
+  BOARD.stop(); NOTES.stop(); if (window.COVIEW) COVIEW.stop();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
@@ -5003,6 +5006,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 </script>
 <!-- voice / video calls, theater and screen share: web/calls.js (loaded after the page script, uses its helpers) -->
 <script src="calls.js"></script>
+<!-- co-view: share the product view itself, viewers follow in their own page (T-244): web/coview.js -->
+<script src="coview.js"></script>
 <!-- servers, channels, groups, member column: web/guilds.js · app mode + install: web/app.js -->
 <script src="guilds.js"></script>
 <!-- Server Settings, join / invitations, channel + group dialogs: web/guild-settings.js -->

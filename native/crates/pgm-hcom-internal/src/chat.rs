@@ -126,6 +126,11 @@ fn label_of(shown: &str, over: &str, working: bool, accepting: bool) -> &'static
 struct Watch { id: String, asker: String, user: String, what: String, message: String, at: u64, until: u64 }
 const WATCH_MAX: usize = 5; const WATCH_TTL_MS: u64 = 24 * 3600 * 1000;
 struct Store { messages: Vec<Value>, seq: i64, rev: i64 }
+/// One co-view (T-244): the sharer's page tells the hub what it shows ({screen, item, scroll}); viewers follow it in their own page.
+#[derive(Clone)]
+struct CoView { sharer: String, conv: String, lead: String, viewers: Vec<(String, u64)>, invited: Vec<String>, view: Value, seq: u64, log: Vec<Value>, since: String, seen: u64 }
+#[derive(Default)]
+struct CoViews { list: Vec<CoView>, ver: u64 }
 #[derive(Default)]
 struct Calls { calls: Vec<(String, Vec<(String, Value)>)>, mailbox: HashMap<String, Vec<Value>>, n: u64, ver: u64 }
 
@@ -160,6 +165,8 @@ pub struct Chat {
     agent_busy: Mutex<Option<(String, String)>>,
     calls: Mutex<Calls>,
     call_woke: Mutex<HashMap<String, Arc<Notify>>>,
+    coview: Mutex<CoViews>,
+    coview_woke: Notify,
     avatars: Mutex<HashMap<String, String>>,
     agent_name: String,
     agent_on: bool,
@@ -211,7 +218,7 @@ impl Chat {
         let g = Guilds::new(&dir, root.join("server-owners.json"), &agent_name, home, users);
         let watches: Vec<Watch> = read_json(&dir.join("notify-watches.json")).and_then(|v| v.as_array().cloned()).unwrap_or_default().iter().map(|w| Watch { id: s(w, "id"), asker: s(w, "asker"), user: s(w, "user"), what: s(w, "what"), message: s(w, "message"), at: w["at"].as_u64().unwrap_or(0), until: w["until"].as_u64().unwrap_or(0) }).filter(|w| !w.id.is_empty() && !w.asker.is_empty()).collect();
         Chat { dir, store: Mutex::new(Store { messages, seq, rev }), keys: Mutex::new(keys), seen: Mutex::new(seen), seen_dirty: Notify::new(), guilds: g, room_ver: AtomicU64::new(1), keys_ver: AtomicU64::new(1), room_woke: Notify::new(),
-            presence: Mutex::default(), manual: Mutex::default(), labels: Mutex::default(), acct: Mutex::default(), status_tx: tokio::sync::broadcast::channel(64).0, last_status: Mutex::default(), watches: Mutex::new(watches), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
+            presence: Mutex::default(), manual: Mutex::default(), labels: Mutex::default(), acct: Mutex::default(), status_tx: tokio::sync::broadcast::channel(64).0, last_status: Mutex::default(), watches: Mutex::new(watches), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), coview: Mutex::default(), coview_woke: Notify::new(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
     }
     pub fn room_changed(&self) { self.room_ver.fetch_add(1, Ordering::SeqCst); self.room_woke.notify_waiters(); }
     pub fn keys_changed(&self) { self.keys_ver.fetch_add(1, Ordering::SeqCst); self.avatars.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.manual.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.room_changed(); }
@@ -652,6 +659,9 @@ pub fn start(hub: Arc<dyn ChatHost>) {
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(10)).await; let now = now_ms(); let mut changed = vec![];
         { let mut cs = h.chat().calls.lock().unwrap_or_else(|e| e.into_inner()); for (c, ps) in cs.calls.iter_mut() { let n = ps.len(); ps.retain(|(_, p)| now.saturating_sub(p["seen"].as_u64().unwrap_or(0)) <= 60000); if ps.len() != n { changed.push(c.clone()); } } cs.calls.retain(|(_, ps)| !ps.is_empty()); }
         if !changed.is_empty() { let us = users(&*h); for c in changed { calls_changed(&*h, &c, &us); } } } });
+    // a co-view's people who stopped polling for a minute drop out (a lead who did: the sharer leads again; the sharer: it ends)
+    let h = hub.clone();
+    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(10)).await; coview_sweep(&*h, now_ms()); } });
     // temporary members who went offline leave; ended timeouts go
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(20)).await; let us = users(&*h); let on = h.chat().online(&us); if h.chat().guilds.sweep(&|u| on.iter().any(|x| x == u)) { h.chat().room_changed(); } } });
@@ -710,7 +720,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
     let c = &hub.chat(); let u = a.username.as_str();
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let p = r.path.as_str();
-    if !(p.starts_with("/api/room/") || p == "/api/presence" || p == "/api/presence/me" || p == "/api/presence/time" || p.starts_with("/api/call/") || p == "/api/guilds" || p.starts_with("/api/guilds/") || p == "/api/admin/room/clear") { return None; }
+    if !(p.starts_with("/api/room/") || p == "/api/presence" || p == "/api/presence/me" || p == "/api/presence/time" || p.starts_with("/api/call/") || p.starts_with("/api/coview/") || p == "/api/guilds" || p.starts_with("/api/guilds/") || p == "/api/admin/room/clear") { return None; }
     let us = users(hub); let agent_on = c.agent_enabled(&us);
     let b = r.json();
     Some(match p {
@@ -857,6 +867,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             match st.messages.iter().find(|m| m["seq"].as_i64() == Some(n)).filter(|m| m["blob"].is_string() && rd.visible(m) && !m["keys"][u].is_null()) { Some(m) => answer(200, json!({ "blob": m["blob"] })), None => answer(404, json!({ "error": "Not found." })) }
         }
         p if p.starts_with("/api/call/") => return Some(calls_route(hub, r, a, &us, &b).await),
+        p if p.starts_with("/api/coview/") => return Some(coview_route(hub, r, a, &us, &b).await),
         "/api/guilds" if get => { let ctx = ctx!(hub, us.clone()); answer(200, c.guilds.view(u, &ctx)) }
         p if post && p.starts_with("/api/guilds/") => match guild_op_name(p) {
             Some(op) => {
@@ -967,6 +978,136 @@ async fn calls_route(hub: &dyn ChatHost, r: &Req, a: &Account, us: &[(String, St
             let (sigs, v) = { let mut cs = c.calls.lock().unwrap_or_else(|e| e.into_inner()); for (_, ps) in cs.calls.iter_mut() { if let Some((_, pv)) = ps.iter_mut().find(|(x, _)| x == u) { pv["seen"] = json!(now_ms()); } } (cs.mailbox.get(u).map(|bx| bx.iter().filter(|x| x["n"].as_u64().unwrap_or(0) > after).cloned().collect::<Vec<_>>()).unwrap_or_default(), cs.ver) };
             let last = sigs.last().and_then(|x| x["n"].as_u64()).unwrap_or(after);
             answer(200, json!({ "signals": sigs, "after": last, "calls": calls_state(hub, u, us), "ver": v }))
+        }
+        _ => answer(404, json!({ "error": "Unknown endpoint" })),
+    }
+}
+
+// ---------- co-view (T-244): share the product view itself ----------
+// The sharer's page posts what it shows; the hub keeps ONE co-view per sharer in memory and carries only {screen, item: {kind, id}, scroll}
+// (never content). A viewer's page follows by opening the same screen + item itself, through the normal routes with its own permissions.
+const COVIEW_SCREENS: [&str; 7] = ["menu", "shell", "room", "board", "cal", "notes", "assist"];
+const COVIEW_KINDS: [&str; 4] = ["board-task", "note", "work-session", "conv"];
+const COVIEW_LOG: usize = 60; const COVIEW_GONE_MS: u64 = 60000;
+fn coview_screen(v: &Value) -> String { v.as_str().filter(|x| COVIEW_SCREENS.contains(x)).map(|x| x.to_string()).unwrap_or_default() }
+fn coview_item(v: &Value) -> Value {
+    let (kind, id) = (s(v, "kind"), guilds::take_units(&s(v, "id").chars().filter(|c| !c.is_control()).collect::<String>(), 200));
+    if COVIEW_KINDS.contains(&kind.as_str()) && !id.is_empty() { json!({ "kind": kind, "id": id }) } else { Value::Null }
+}
+fn coview_valid_conv(hub: &dyn ChatHost, conv: &str, us: &[(String, String, bool)]) -> bool {
+    if conv == "room" { return true; }
+    if let Some((x, y)) = dm_of(conv) { return x < y && us.iter().any(|q| q.0 == x) && us.iter().any(|q| q.0 == y); }
+    let ctx = ctx!(hub, us.to_vec()); guilds::is_guild_conv(conv) && hub.chat().guilds.exists(conv, &ctx)
+}
+/// The item as THIS person may be told of it: a conversation or a shared Work session they cannot see is only marked `hidden`.
+fn coview_item_for(hub: &dyn ChatHost, u: &str, item: &Value, us: &[(String, String, bool)]) -> Value {
+    if item.is_null() { return Value::Null; }
+    let id = s(item, "id");
+    let ok = match s(item, "kind").as_str() {
+        "conv" => coview_valid_conv(hub, &id, us) && conv_member(hub, &id, u, us),
+        "work-session" => id == u || hub.shares_for(u).iter().any(|x| s(x, "user") == id),
+        _ => true, // a note / task: only its id travels; the viewer's own page asks the normal route (which answers them, or refuses)
+    };
+    if ok { item.clone() } else { json!({ "kind": item["kind"], "hidden": true }) }
+}
+fn coview_bump(c: &Chat) { c.coview.lock().unwrap_or_else(|e| e.into_inner()).ver += 1; c.coview_woke.notify_waiters(); }
+fn coview_touch(c: &Chat, u: &str) { let now = now_ms(); for v in c.coview.lock().unwrap_or_else(|e| e.into_inner()).list.iter_mut() { if v.sharer == u { v.seen = now; } if let Some(x) = v.viewers.iter_mut().find(|x| x.0 == u) { x.1 = now; } } }
+fn coview_sweep(hub: &dyn ChatHost, now: u64) {
+    let c = &hub.chat(); let mut changed = false;
+    { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+      let n = g.list.len(); g.list.retain(|v| now.saturating_sub(v.seen) <= COVIEW_GONE_MS); changed |= g.list.len() != n;
+      for v in g.list.iter_mut() { let n = v.viewers.len(); v.viewers.retain(|x| now.saturating_sub(x.1) <= COVIEW_GONE_MS);
+        if v.viewers.len() != n { changed = true; let names: Vec<String> = v.viewers.iter().map(|x| x.0.clone()).collect(); v.invited.retain(|x| names.contains(x));
+            if v.lead != v.sharer && !names.contains(&v.lead) { v.lead = v.sharer.clone(); v.seq += 1; let e = json!({ "seq": v.seq, "kind": "lead", "lead": v.lead, "by": v.sharer }); v.log.push(e); } } } }
+    if changed { coview_bump(c); }
+}
+/// What this person's page needs: the co-views open to them, and the one they are in (with the views after `after`).
+fn coview_state(hub: &dyn ChatHost, u: &str, us: &[(String, String, bool)], after: u64) -> Value {
+    let c = &hub.chat(); let (list, ver) = { let g = c.coview.lock().unwrap_or_else(|e| e.into_inner()); (g.list.clone(), g.ver) };
+    let mut available = vec![]; let mut mine = Value::Null;
+    for v in list {
+        let role = if v.sharer == u { "sharer" } else if v.viewers.iter().any(|x| x.0 == u) { "viewer" } else { "" };
+        if role.is_empty() { if conv_member(hub, &v.conv, u, us) { available.push(json!({ "id": v.sharer, "name": hub.name_of(&v.sharer), "conv": v.conv, "lead": v.lead, "leadName": hub.name_of(&v.lead), "screen": v.view["screen"], "viewers": v.viewers.len(), "since": v.since })); } continue; }
+        let mine_or_filtered = |e: &Value| -> Value { let mut e = e.clone(); if s(&e, "by") != u && !e["item"].is_null() { e["item"] = coview_item_for(hub, u, &e["item"], us); } e };
+        let mut view = mine_or_filtered(&v.view); view["seq"] = json!(v.seq);
+        mine = json!({ "id": v.sharer, "role": role, "sharer": v.sharer, "sharerName": hub.name_of(&v.sharer), "conv": v.conv, "lead": v.lead, "leadName": hub.name_of(&v.lead), "isLead": v.lead == u,
+            "viewers": v.viewers.iter().map(|x| json!({ "user": x.0, "name": hub.name_of(&x.0) })).collect::<Vec<_>>(), "invited": v.invited.iter().any(|x| x == u), "since": v.since,
+            "view": view, "seq": v.seq, "views": v.log.iter().filter(|e| e["seq"].as_u64().unwrap_or(0) > after).map(|e| mine_or_filtered(e)).collect::<Vec<_>>() });
+    }
+    json!({ "ver": ver, "available": available, "mine": mine })
+}
+async fn coview_route(hub: &dyn ChatHost, r: &Req, a: &Account, us: &[(String, String, bool)], b: &Value) -> Resp {
+    let c = &hub.chat(); let u = a.username.as_str(); let now = now_ms();
+    let reply = |hub: &dyn ChatHost| answer(200, { let mut v = coview_state(hub, u, us, 0); v["ok"] = json!(true); v });
+    match (r.method.as_str(), r.path.as_str()) {
+        ("GET", "/api/coview/poll") => {
+            let ver: Option<u64> = r.param("ver").and_then(|x| x.parse().ok());
+            let after: u64 = r.param("after").and_then(|x| x.parse::<f64>().ok()).map(|f| f as u64).unwrap_or(0);
+            coview_touch(c, u);
+            let woke = c.coview_woke.notified(); tokio::pin!(woke); woke.as_mut().enable();
+            let stale = ver != Some(c.coview.lock().unwrap_or_else(|e| e.into_inner()).ver);
+            if r.param("wait").as_deref() == Some("1") && !stale { let _ = tokio::time::timeout(Duration::from_secs(25), woke).await; }
+            coview_touch(c, u);
+            answer(200, coview_state(hub, u, us, after))
+        }
+        ("POST", "/api/coview/start") => {
+            let conv = { let x = s(b, "conv"); if x.is_empty() { "room".to_string() } else { x } };
+            if !coview_valid_conv(hub, &conv, us) || !conv_member(hub, &conv, u, us) { return answer(400, json!({ "error": "Unknown conversation." })); }
+            let (screen, item) = (coview_screen(&b["screen"]), coview_item(&b["item"]));
+            { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+              for v in g.list.iter_mut() { v.viewers.retain(|x| x.0 != u); v.invited.retain(|x| x != u); if v.lead == u && v.sharer != u { v.lead = v.sharer.clone(); } }
+              if let Some(v) = g.list.iter_mut().find(|v| v.sharer == u) { if v.conv != conv { v.conv = conv.clone(); v.viewers.clear(); v.invited.clear(); v.lead = u.to_string(); } v.seen = now; }
+              else { g.list.push(CoView { sharer: u.to_string(), conv, lead: u.to_string(), viewers: vec![], invited: vec![], view: json!({ "screen": screen, "item": item, "scroll": Value::Null, "by": u }), seq: 1,
+                  log: vec![json!({ "seq": 1, "by": u, "screen": screen, "item": item, "scroll": Value::Null })], since: iso(), seen: now }); } }
+            coview_bump(c); reply(hub)
+        }
+        ("POST", "/api/coview/join") => {
+            let who = s(b, "sharer");
+            let (exists, conv, own) = { let g = c.coview.lock().unwrap_or_else(|e| e.into_inner()); (g.list.iter().any(|v| v.sharer == who), g.list.iter().find(|v| v.sharer == who).map(|v| v.conv.clone()).unwrap_or_default(), g.list.iter().any(|v| v.sharer == u)) };
+            if !exists || who == u { return answer(404, json!({ "error": "That co-view is not running." })); }
+            if !conv_member(hub, &conv, u, us) { return answer(403, json!({ "error": "That co-view is not shared with you." })); }
+            if own { return answer(409, json!({ "error": "End your own co-view first." })); }
+            { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+              for v in g.list.iter_mut() { if v.sharer != who { v.viewers.retain(|x| x.0 != u); v.invited.retain(|x| x != u); if v.lead == u { v.lead = v.sharer.clone(); } } }
+              if let Some(v) = g.list.iter_mut().find(|v| v.sharer == who) { v.viewers.retain(|x| x.0 != u); v.viewers.push((u.to_string(), now)); } }
+            coview_bump(c); reply(hub)
+        }
+        ("POST", "/api/coview/stop") => {
+            { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+              g.list.retain(|v| v.sharer != u);
+              for v in g.list.iter_mut() { v.viewers.retain(|x| x.0 != u); v.invited.retain(|x| x != u);
+                  if v.lead == u { v.lead = v.sharer.clone(); v.seq += 1; let e = json!({ "seq": v.seq, "kind": "lead", "lead": v.lead, "by": u }); v.log.push(e); } } }
+            coview_bump(c); answer(200, json!({ "ok": true, "ver": c.coview.lock().unwrap_or_else(|e| e.into_inner()).ver, "mine": Value::Null }))
+        }
+        ("POST", "/api/coview/view") => {
+            let screen = coview_screen(&b["screen"]);
+            if screen.is_empty() { return answer(400, json!({ "error": "Unknown screen." })); }
+            let item = coview_item(&b["item"]);
+            let scroll = b["scroll"].as_f64().map(|f| json!((f.clamp(0.0, 1.0) * 1000.0).round() / 1000.0)).unwrap_or(Value::Null);
+            let res = { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+                match g.list.iter_mut().find(|v| v.sharer == u || v.viewers.iter().any(|x| x.0 == u)) {
+                    None => Err((409, "You are not in a co-view.")),
+                    Some(v) if v.lead != u => Err((403, "Only the lead shows the view.")),
+                    Some(v) => { v.seen = if v.sharer == u { now } else { v.seen };
+                        if v.view["screen"] == json!(screen) && v.view["item"] == item && v.view["scroll"] == scroll { Ok((v.seq, false)) }
+                        else { v.seq += 1; v.view = json!({ "screen": screen, "item": item, "scroll": scroll, "by": u }); let e = json!({ "seq": v.seq, "by": u, "screen": screen, "item": item, "scroll": scroll }); v.log.push(e);
+                            if v.log.len() > COVIEW_LOG { let k = v.log.len() - COVIEW_LOG; v.log.drain(0..k); } Ok((v.seq, true)) } } } };
+            match res { Err((code, e)) => answer(code, json!({ "error": e })), Ok((seq, changed)) => { if changed { coview_bump(c); } answer(200, json!({ "ok": true, "seq": seq })) } }
+        }
+        ("POST", "/api/coview/handover") | ("POST", "/api/coview/invite") | ("POST", "/api/coview/take") => {
+            let (to, op) = (s(b, "to"), r.path.rsplit('/').next().unwrap_or("").to_string());
+            let res = { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+                match g.list.iter_mut().find(|v| v.sharer == u || v.viewers.iter().any(|x| x.0 == u)) {
+                    None => Err((409, "You are not in a co-view.")),
+                    Some(v) => {
+                        let target = if op == "take" { u.to_string() } else { to.clone() };
+                        let is_member = |x: &str, v: &CoView| v.sharer == x || v.viewers.iter().any(|y| y.0 == x);
+                        if op != "take" && v.sharer != u && v.lead != u { Err((403, "Only the sharer (or the lead) hands over.")) }
+                        else if !is_member(&target, v) || (op == "invite" && target == v.sharer) { Err((404, "That person is not in this co-view.")) }
+                        else if op == "take" && !v.invited.iter().any(|x| x == u) && v.sharer != u { Err((403, "You have not been invited to take over.")) }
+                        else if op == "invite" { if !v.invited.contains(&target) { v.invited.push(target); } Ok(()) }
+                        else { v.invited.retain(|x| *x != target); v.lead = target.clone(); v.seq += 1; let e = json!({ "seq": v.seq, "kind": "lead", "lead": target, "by": u }); v.log.push(e); Ok(()) } } } };
+            match res { Err((code, e)) => answer(code, json!({ "error": e })), Ok(()) => { coview_bump(c); reply(hub) } }
         }
         _ => answer(404, json!({ "error": "Unknown endpoint" })),
     }
