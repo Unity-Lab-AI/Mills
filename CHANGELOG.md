@@ -7,6 +7,31 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.21.0 — 2026-10-25
+
+MINOR: **start work, and team-only product downloads** (agent branches, reviewed and merged).
+- **Start work** (T-238). Opening Work with nothing going on, or the new "New session" button, offers one flow with four
+  starts:
+  1. pick a project you have;
+  2. clone a repo, by address or from a searchable list of the Forgejo repos you can see
+     (`GET /api/projects/repos?q=`, run as you; it says when your Forgejo token is missing);
+  3. start a new empty project, made private on Forgejo and published so origin is Forgejo
+     (`POST /api/projects/create {name}`: repo-create, new, publish; bad name 400, taken 409);
+  4. go straight to the AI with no project (a session with `none: true` works in your own scratch folder
+     `<projectsRoot>/_scratch/<user>`, with no git and no worktree law).
+  Each start opens a new Work session in your own worktree (`sessions/new` makes it at once and returns where it is).
+  The page remembers the open session. R245 to R249, with the runner's fake Forgejo now answering repo search, create
+  and git smart-HTTP. bridge/worktree.js 2.4.1.
+- **Team-only product downloads** (T-250). The Download panel gets a Products section: every product and version
+  (ShaDow Chat, Hyper Prod Man, Prod Suit, Jcode PGM; config `releases`), with your platform first.
+  - The hub reads the releases from Forgejo with its own token (env `VR_FORGEJO_TOKEN`, else forgejo.json
+    `releaseToken` / `token`), caches them for 5 minutes, and streams each file to signed-in people only
+    (`GET /api/releases`, `GET /api/releases/file?product&tag&asset`).
+  - Only assets in the catalogue can be asked for. No token reaches the page or the log.
+  - This lets the release repos go private (plans/release-audit.md). R270 to R274.
+- **No flaky restarts in the suite:** R195 and R177 no longer switch the fake build back after a fixed 1.5 s; they wait
+  until the restart was seen, and their until-waits go up to 60 s (testing law, rule 2: R195 had failed once under load).
+
 ## 5.20.0 — 2026-10-25
 
 MINOR: **presence for AIs and tools** (T-264, an agent branch, reviewed and merged).
