@@ -18,6 +18,7 @@ pub mod auth;
 pub mod board;
 pub mod chat;
 pub mod downloads;
+pub mod releases;
 pub mod downloads_text;
 pub mod files;
 pub mod forgejo;
@@ -68,6 +69,7 @@ pub struct Modules {
     pub unity_room: unity_routes::RoomState,
     pub build: site::Build,
     pub downloads: downloads::Downloads,
+    pub releases: releases::Releases,
     pub gateway: gateway::Gateway,
     mills: std::path::PathBuf,
 }
@@ -81,7 +83,7 @@ impl Modules {
         let api = openai::Api::new(root, &accounts);
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
-        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
+        Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
             files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
@@ -106,6 +108,48 @@ impl Modules {
         out
     }
     fn actor(&self, user: &str, agent: bool) -> board::Actor { board::Actor { user: user.to_string(), agent, name: self.name_of(user) } }
+}
+/// Presence on the board (T-262): every task card in `v` (the board view, a list, one task, the calendar) gains, add-only,
+/// `holder` (the live status of whoever holds its claim: user, name, presence, label, working, since, text, offline) and
+/// `assigneeStatus`; a claim whose holder is offline and not working gets `claim.holderOffline` and `holderOffline`
+/// (a stale claim in the making). A view or list also gains `people`: who is available to give work to (`available` =
+/// accepting work and not offline), and what each holds / has assigned. `viewer` is who asks (what they see of others).
+pub fn board_presence(hub: &Hub, viewer: &str, v: &mut Value) {
+    let now = pgm_core_internal::now_ms();
+    let mut cache: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    let mut st = |u: &str| -> Value { cache.entry(u.to_string()).or_insert_with(|| chat::status_of(hub, u, viewer, now)).clone() };
+    let brief = |hub: &Hub, u: &str, s: &Value| json!({ "user": u, "name": hub.mods.name_of(u), "presence": s["presence"], "label": s["label"], "working": s["working"], "since": s["since"], "text": s["text"],
+        "offline": s["presence"] == json!("offline") && s["working"] != json!(true) });
+    let mut card = |t: &mut Value| {
+        if let Some(k) = t["claim"]["key"].as_str().map(|k| k.split('#').next().unwrap_or("").to_string()).filter(|u| !u.is_empty() && hub.mods.has(u)) {
+            let s = st(&k); let h = brief(hub, &k, &s);
+            if h["offline"] == json!(true) { t["claim"]["holderOffline"] = json!(true); t["holderOffline"] = json!(true); }
+            t["holder"] = h;
+        }
+        if let Some(u) = t["assignee"].as_str().map(String::from).filter(|u| hub.mods.has(u)) { let s = st(&u); t["assigneeStatus"] = brief(hub, &u, &s); }
+    };
+    if let Some(a) = v["tasks"].as_array_mut() { for t in a { card(t); } }
+    if let Some(a) = v["overdue"].as_array_mut() { for t in a { card(t); } }
+    if let Some(days) = v["days"].as_array_mut() { for d in days { if let Some(a) = d["tasks"].as_array_mut() { for t in a { card(t); } } } }
+    if v["task"].is_object() { card(&mut v["task"]); }
+    if v["tasks"].is_array() && v["statuses"].is_array() {
+        let hold = hub.mods.board.holdings();
+        let mut people: Vec<Value> = vec![];
+        let mut names: Vec<String> = hub.mods.auth.accounts().into_iter().map(|a| a.username).collect(); names.sort();
+        for u in names {
+            let s = st(&u); let (held, assigned) = hold.get(&u).cloned().unwrap_or_default();
+            let available = s["acceptingWork"] == json!(true) && s["presence"] != json!("offline");
+            people.push(json!({ "user": u, "name": hub.mods.name_of(&u), "presence": s["presence"], "label": s["label"], "working": s["working"], "acceptingWork": s["acceptingWork"], "dnd": s["dnd"], "text": s["text"], "since": s["since"],
+                "available": available, "holding": held, "assignedOpen": assigned }));
+        }
+        v["people"] = json!(people);
+    }
+}
+/// The board operation with presence added to its answer (people and Claude asking; not the Forgejo mirror).
+pub fn board_op_presence(hub: &Hub, op: &str, a: &board::Actor, b: &Value) -> board::Out {
+    let mut out = hub.mods.board_op(op, a, b);
+    if out.status == 200 { board_presence(hub, &a.user, &mut out.body); }
+    out
 }
 /// A background loop that outlives a panic inside it (FR1): started again after 5 s, with a log line, never silently
 /// gone. A loop that ends by itself is done.
@@ -185,7 +229,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             "board/tool" => {
                 let Some(op) = board::tool_op(b["name"].as_str().unwrap_or("")) else { return answer(200, json!({ "ok": false, "error": format!("Unknown board tool: {}", b["name"].as_str().unwrap_or("")) })) };
                 if !hub.mods.has(&account) { return answer(200, json!({ "ok": false, "error": "Unknown account." })); }
-                let out = hub.mods.board_op(op, &hub.mods.actor(&account, true), &if b["args"].is_object() { b["args"].clone() } else { json!({}) });
+                let out = board_op_presence(hub, op, &hub.mods.actor(&account, true), &if b["args"].is_object() { b["args"].clone() } else { json!({}) });
                 answer(200, if out.status == 200 { json!({ "ok": true, "result": out.body }) } else { json!({ "ok": false, "error": out.body["error"] }) })
             }
             "notes/tool" => answer(200, hub.mods.notes.tool(b["name"].as_str().unwrap_or(""), &b["args"], &hub.mods.name_of(&account))),
@@ -215,7 +259,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let (id, tool) = rest.split_once("/internal/").unwrap_or(("", ""));
         if id.is_empty() || !matches!(tool, "pc-tool" | "board" | "team") { return answer(404, json!({ "error": "Not found" })); }
         return match hub.mods.ai.job_for(id, r.header("x-mills-internal").unwrap_or("")) {
-            Some((account, _)) => answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &r.json()).await),
+            Some((account, _)) => { let mut b = r.json(); if b["session"].as_str().unwrap_or("").is_empty() { let sid = hub.mods.work.session_of_job(id); if !sid.is_empty() { b["session"] = json!(sid); } } answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &b).await) }
             None => answer(403, json!({ "ok": false, "error": "forbidden" })),
         };
     }
@@ -252,21 +296,53 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if p == "/api/status" && r.method == hyper::Method::GET { return answer(200, site::status(hub, r)); }
     // moving house (bridge/handoff.js pack writes bridge/.maintenance): every change answers "moved", reading and the
     // Work run doing the move go on (the JavaScript hub's rule, for everything answered here and there)
-    if r.method == hyper::Method::POST && !matches!(p, "/api/chat" | "/api/stop" | "/api/pc-result") && p != "/api/status" {
+    if r.method == hyper::Method::POST && !matches!(p, "/api/chat" | "/api/stop" | "/api/pc-result" | "/api/work/answer" | "/api/work/plan/answer") && p != "/api/status" {
         if let Some(w) = maintenance(hub) { return answer(503, json!({ "error": format!("VibeRoller has moved to {w}: open it there and sign in as usual. This copy is read-only now.") })); }
     }
     let a = &hub.mods.auth;
     if p == "/api/login" && r.method == hyper::Method::POST { return a.login(r, maintenance(hub)).await; }
+    // device-code sign-in (T-236): a tool with no browser asks, the person approves on the page, the tool polls for its own token
+    if r.method == hyper::Method::POST && (p == "/api/device/start" || p == "/api/device/poll") {
+        let b = r.json();
+        if p == "/api/device/poll" { let (s, v) = a.devices.poll(b["deviceCode"].as_str().unwrap_or("")); return answer(s, v); }
+        let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
+        let client = b["client"].as_str().map(String::from).unwrap_or_else(|| b["client"]["app"].as_str().unwrap_or("").to_string());
+        return match a.devices.start(&client, b["device"].as_str().unwrap_or(""), b["expiresIn"].as_u64(), &ip) {
+            Ok(mut v) => { v["verificationUrl"] = json!(format!("{}/?device={}", hub.mods.public_url(&hub.cfg).trim_end_matches('/'), v["userCode"].as_str().unwrap_or(""))); answer(200, v) }
+            Err((s, e)) => answer(s, json!({ "error": e })),
+        };
+    }
     // the public download routes are gone (4.0.0): downloads and updates need an account
     if let Some(x) = downloads::gone(r) { return x; }
     let user = a.session_user(r);
-    if user.is_none() && (p == "/api/native" || p == "/api/native/file" || p == "/api/downloads" || p.starts_with("/api/downloads/")) { return answer(401, json!({ "error": "Not signed in." })); }
+    if user.is_none() && (p == "/api/native" || p == "/api/native/file" || p == "/api/downloads" || p.starts_with("/api/downloads/") || p == "/api/releases" || p == "/api/releases/file") { return answer(401, json!({ "error": "Not signed in." })); }
     // signing out (FR6: this hub's own): the session is gone, the chat sees them leave, their calls and shared Work end
     if p == "/api/logout" && r.method == hyper::Method::POST {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         hub.mods.work.share_stop(&u); chat::calls_leave(&**hub, &u); hub.mods.chat.set_typing(&u, "", false); hub.mods.chat.gone(&u);
         if let Some(t) = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")) { a.forget_session(&auth::token_key(t)); }
         return answer(200, json!({ "ok": true }));
+    }
+    // approving a device needs the person's own page session (never another device's token); the list and revoking are theirs
+    if matches!(p, "/api/device/approve" | "/api/device/deny" | "/api/devices" | "/api/devices/revoke") {
+        let bearer = r.header("authorization").and_then(|v| v.strip_prefix("Bearer "));
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        let b = r.json();
+        return match (p, r.method.clone()) {
+            ("/api/devices", hyper::Method::GET) => answer(200, json!({ "devices": a.devices.list(&u, bearer) })),
+            ("/api/devices/revoke", hyper::Method::POST) => {
+                if a.devices.revoke(&u, b["id"].as_str().unwrap_or("")) { println!("[vr-hub] {u} revoked a signed-in device."); answer(200, json!({ "ok": true })) } else { answer(404, json!({ "error": "No such device." })) }
+            }
+            ("/api/device/approve" | "/api/device/deny", hyper::Method::POST) => {
+                if a.page_session_user(r).is_none() { return answer(403, json!({ "error": "Approve it on the page, signed in with your own session." })); }
+                let ok = p == "/api/device/approve";
+                match a.devices.decide(&u, b["userCode"].as_str().unwrap_or(""), ok) {
+                    Ok(v) => { println!("[vr-hub] {u} {} a device sign-in.", if ok { "approved" } else { "refused" }); answer(200, v) }
+                    Err((s, e)) => answer(s, json!({ "error": e })),
+                }
+            }
+            _ => answer(405, json!({ "error": "Method not allowed." })),
+        };
     }
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
     let me = || { let mut h = vec![("x-vr-notes-ver".to_string(), hub.mods.notes.version().to_string())]; if let Some(u) = &user { h.push(("x-vr-user".to_string(), u.clone())); } h };
@@ -294,6 +370,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
             if let Some(x) = gateway::admin(hub, r, &acc) { return x; } // the admin's gateway products
             if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
+            if let Some(x) = releases::route(hub, r).await { return x; } // the products' releases (T-250)
             if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // the admin switches Unity's own-computer tools for one account
                 if !acc.admin { return answer(403, json!({ "error": "Admins only." })); }
                 let b = r.json();
@@ -313,7 +390,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         let b = r.json();
         let (id, action) = (b["id"].as_str().unwrap_or("").to_string(), b["action"].as_str().unwrap_or("").to_string());
-        return match hub.mods.ai.control(&u, &id, &action).await { Ok(v) => answer(200, v), Err(e) => answer(e.status, json!({ "error": e.msg })) };
+        return match hub.mods.ai.control(&u, &id, &action, &b["limits"]).await { Ok(v) => answer(200, v), Err(e) => answer(e.status, json!({ "error": e.msg })) };
     }
     // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
     if r.method == hyper::Method::POST && matches!(p, "/api/hosts/new" | "/api/hosts/rename" | "/api/hosts/remove" | "/api/hosts/share" | "/api/hosts/scope" | "/api/hosts/config") {
@@ -440,12 +517,16 @@ async fn board_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(25), rx.changed()).await;
             m.board.seen(u);
         }
-        return answer(200, m.board.view(u, &|x| m.name_of(x), &|x| m.has(x), m.mirror.status()));
+        let mut view = m.board.view(u, &|x| m.name_of(x), &|x| m.has(x), m.mirror.status());
+        board_presence(hub, u, &mut view);
+        return answer(200, view);
     }
     let Some(op) = board::route_op(&r.path) else { return answer(404, json!({ "error": "Unknown endpoint" })) };
     let b = if r.method == hyper::Method::POST { if r.body.is_empty() { json!({}) } else { match serde_json::from_slice::<Value>(&r.body) { Ok(v) => v, Err(_) => return answer(400, json!({ "error": "That request is not valid JSON." })) } } }
         else { Value::Object(crate::front::url_params(&r.query).into_iter().map(|(k, v)| (k, json!(v))).collect()) };
-    let out = m.board_op(op, &m.actor(u, false), &b);
+    // a person's own AI outside a Work run (Jcode PGM's planner, T-301) says so with asAgent: the write is signed
+    // "<person> · Claude" like a Work run's; it is still that person's account and rights (an optional field: older hubs ignore it)
+    let out = board_op_presence(hub, op, &m.actor(u, b["asAgent"].as_bool() == Some(true)), &b);
     answer(out.status, out.body)
 }
 fn notes_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {

@@ -113,7 +113,8 @@ function unzipAll(buf) {
   return out;
 }
 const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
-const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [] };
+const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] };
+const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
 //   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
@@ -122,10 +123,54 @@ let fakeSawPhoto = false;
 function startFakeOllama() {
   const http = require('http');
   ollamaSrv = http.createServer((req, res) => {
-    let body = ''; req.on('data', (c) => { body += c; });
+    let body = ''; const chunks = []; req.on('data', (c) => { body += c; chunks.push(c); });
     req.on('end', () => {
-      const j = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+      const j = (o, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
       if (req.url === '/api/version') return j({ version: 'fake' });
+      // fake Forgejo repos (T-238), as the person whose token is fake-personal-token-1 (login tuser-fj): search, create (a bare
+      // repo that takes pushes through git's own smart-HTTP backend), get; any other caller is refused
+      if (/^\/api\/v1\/(repos\/search|user\/repos|repos\/[^/?]+\/[^/?]+$)/.test(req.url) || /^\/[^/]+\/[^/]+\.git\//.test(req.url)) {
+        const auth = req.headers.authorization || '';
+        const who = auth === 'token fake-personal-token-1' || (/^Basic /.test(auth) && Buffer.from(auth.slice(6), 'base64').toString() === 'tuser-fj:fake-personal-token-1') ? 'tuser-fj' : '';
+        if (!who) { res.writeHead(401); return res.end('{"message":"token"}'); }
+        const FR = fakeForgejo.repos || (fakeForgejo.repos = new Map()); fakeForgejo.repoCalls = fakeForgejo.repoCalls || [];
+        const root = path.join(SCRATCH, 'fjrepos'), u = new URL('http://x' + req.url);
+        if (u.pathname === '/api/v1/repos/search') {
+          const q = (u.searchParams.get('q') || '').toLowerCase(); fakeForgejo.repoCalls.push('search ' + q);
+          return j({ ok: true, data: [...FR.values()].filter((r) => !q || (r.full_name + ' ' + r.description).toLowerCase().includes(q)) });
+        }
+        if (req.method === 'POST' && u.pathname === '/api/v1/user/repos') {
+          const b = JSON.parse(body || '{}'), full = who + '/' + b.name;
+          fakeForgejo.repoCalls.push('create ' + full + (b.private ? ' private' : ' public'));
+          if (FR.has(full)) return j({ message: 'The repository with the same name already exists.' }, 409);
+          const dir = path.join(root, who, b.name + '.git'); fs.mkdirSync(dir, { recursive: true });
+          execFileSync('git', ['init', '-q', '--bare', '-b', 'main', dir]); execFileSync('git', ['-C', dir, 'config', 'http.receivepack', 'true']);
+          const r = { full_name: full, private: !!b.private, fork: false, mirror: false, description: b.description || '', clone_url: `http://127.0.0.1:${OLLAMA_PORT}/${full}.git` };
+          FR.set(full, r); return j(r, 201);
+        }
+        let m = /^\/api\/v1\/repos\/([^/]+)\/([^/]+)$/.exec(u.pathname);
+        if (m) { const r = FR.get(m[1] + '/' + m[2]); return r ? j(r) : j({ message: 'not found' }, 404); }
+        // git over HTTP: git http-backend does the work
+        const cgi = spawn('git', ['http-backend'], { env: { PATH: process.env.PATH, HOME: process.env.HOME || root, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: '1', PATH_INFO: u.pathname, REQUEST_METHOD: req.method, QUERY_STRING: u.search.slice(1), CONTENT_TYPE: req.headers['content-type'] || '', CONTENT_LENGTH: String(Buffer.concat(chunks).length), REMOTE_USER: who, REMOTE_ADDR: '127.0.0.1' } });
+        const out = []; cgi.stdout.on('data', (c) => out.push(c)); cgi.stdin.on('error', () => {}); cgi.stdin.end(Buffer.concat(chunks));
+        cgi.on('close', () => {
+          const all = Buffer.concat(out), cut = all.indexOf('\r\n\r\n'); const head = all.subarray(0, cut).toString().split('\r\n'), hdr = {}; let status = 200;
+          for (const h of head) { const k = h.indexOf(':'); if (k < 0) continue; const n = h.slice(0, k).trim(), v = h.slice(k + 1).trim(); if (n.toLowerCase() === 'status') status = parseInt(v, 10) || 200; else hdr[n] = v; }
+          res.writeHead(status, hdr); res.end(all.subarray(cut + 4));
+        });
+        return;
+      }
+      // T-250: a fake Forgejo release API (a private repo: only with the hub's token) and the asset download
+      if ((req.url.startsWith('/api/v1/repos/UnityAILab/') && /\/releases(\?|$)/.test(req.url)) || req.url.startsWith('/UnityAILab/fake-prod/releases/download/')) {
+        fakeForgejo.relCalls.push({ url: req.url, auth: req.headers.authorization || '' });
+        if (req.headers.authorization !== 'token fake-forgejo-token') { res.writeHead(404); return res.end('{}'); }
+        if (req.url.startsWith('/api/v1/repos/UnityAILab/fake-prod/')) return j([
+          { tag_name: 'v2.0.0', name: 'Two', draft: false, prerelease: false, published_at: '2026-10-20T10:00:00Z', body: 'Second release notes', assets: [{ name: 'fake-prod-windows-x86_64.zip', size: FAKE_ASSET.length }, { name: 'fake-prod-linux-x86_64.tar.gz', size: 5 }] },
+          { tag_name: 'v1.0.0', name: 'One', draft: false, prerelease: false, published_at: '2026-10-01T10:00:00Z', body: 'First', assets: [{ name: 'fake-prod-macos-arm64.dmg', size: 3 }] },
+          { tag_name: 'v0.0.1-draft', name: 'Draft', draft: true, assets: [] }]);
+        if (req.url === '/UnityAILab/fake-prod/releases/download/v2.0.0/fake-prod-windows-x86_64.zip') { res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': FAKE_ASSET.length }); return res.end(FAKE_ASSET); }
+        res.writeHead(404); return res.end('{}');
+      }
       // fake image engine on the same port: a 1x1 PNG for any prompt; the prompt is kept for checks
       if (req.url === '/health') return j({ ok: true, loaded: true });
       // fake web search (Bing-shaped) and YouTube results page
@@ -254,7 +299,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -444,7 +489,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['attach.js', 'library.js', 'calls.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['localai.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -1183,6 +1228,17 @@ async function run() {
     const s2 = await until191((x) => !x.paused && x.online);
     const lg = await ctl('logs'), lines191 = (lg.data || {}).lines || [];
     const html191 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    // R204 (T-286): the host's own Work-session limits: announced in hello, set by its owner from the page, saved in its settings
+    const lim0 = (s2 || {}).sessionLimits || {};
+    const limSet = await call('/api/hosts/control', A, { id: h191.id, action: 'limits', limits: { perUser: 2, perProvider: 1, exceptions: { mills: 4 }, ownerBypass: false } });
+    const limBad = await call('/api/hosts/control', A, { id: h191.id, action: 'limits', limits: { perUser: 0 } });
+    const limOther = await call('/api/hosts/control', U, { id: h191.id, action: 'limits', limits: { perUser: 9 } });
+    const s3 = await until191((x) => x.sessionLimits && x.sessionLimits.perUser === 2);
+    const saved204 = (() => { try { return JSON.parse(fs.readFileSync(f191, 'utf8')).sessions || {}; } catch { return {}; } })();
+    check('R204', 'T-286 a host\'s own Work-session limits: it announces them in hello (defaults 5 / 3, owner may exceed), its owner sets them from Settings → My AI hosts (POST /api/hosts/control {action: "limits"}), the host saves them in its own settings and the hub uses them; a bad value (0) is refused, and nobody else may set them',
+      lim0.perUser === 5 && lim0.perProvider === 3 && lim0.ownerBypass === true && limSet.status === 200 && (limSet.data.limits || {}).perUser === 2 && limBad.status === 400 && limOther.status === 403
+      && !!s3 && s3.sessionLimits.perProvider === 1 && s3.sessionLimits.exceptions.mills === 4 && s3.sessionLimits.ownerBypass === false && saved204.perUser === 2 && saved204.ownerBypass === false,
+      `announced ${JSON.stringify(lim0)} · set ${limSet.status} ${JSON.stringify(limSet.data.limits || limSet.data.error || '')} · bad ${limBad.status} · not the owner ${limOther.status} · hub now ${JSON.stringify((s3 || {}).sessionLimits || {})} · saved ${JSON.stringify(saved204)}`);
     const rs = await ctl('restart');
     for (let i = 0; i < 60 && exit191 === null; i++) await sleep(250);
     try { proc191.kill(); } catch {}
@@ -1197,7 +1253,7 @@ async function run() {
       && rs.status === 200 && exit191 === 3
       && /\/api\/hosts\/control/.test(html191) && /hostLiveBox/.test(html191) && /Show log/.test(html191) && /Update now/.test(html191),
       `status ${s0 && JSON.stringify(s0.status).slice(0, 160)} control ${s0 && s0.control} other ${otherSees}; refused ${bad.status}/${nonOwner.status}/${noHost.status}; older ${olderRes.status} "${JSON.stringify(olderRes.data).slice(0, 100)}"; pause ${pa.status} paused ${s1 && s1.paused}/${s1 && s1.online} by ${s1 && s1.status && s1.status.pausedBy} off ${offFile}; resume ${re.status} ${s2 && s2.paused}; logs ${lg.status} ${lines191.length} lines; restart ${rs.status} exit ${exit191}; host log "${(() => { try { return fs.readFileSync(path.join(dir191, 'out.log'), 'utf8').replace(/\s+/g, ' ').slice(-160); } catch { return ''; } })()}"`);
-  } else skip('R191', 'hosting controls on the hub page (status, pause / resume / restart / log from Settings → My AI hosts)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
+  } else { skip('R204', 'a host\'s own Work-session limits', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it'); skip('R191', 'hosting controls on the hub page (status, pause / resume / restart / log from Settings → My AI hosts)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it'); }
   // Anthropic in → Claude (the host's, the fake one here), with the Bearer form of the same kind of key
   const antKey = (await call('/api/apikey/rotate', U, {})).data.key;
   const antClaude = await v1('/v1/messages', antKey, { model: 'claude-haiku-5-5', max_tokens: 50, messages: [{ role: 'user', content: 'claude-in-r160' }] }, { 'anthropic-version': '2023-06-01' });
@@ -1491,7 +1547,7 @@ async function run() {
 
   const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html) || [])[1] || '';
   const missing66 = [
-    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com ipc: http:\/\/ipc\.localhost __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
+    [/default-src 'none'/.test(csp) && /connect-src 'self' http:\/\/127\.0\.0\.1:11434 https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com ipc: http:\/\/ipc\.localhost __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
     [/: \/\^https:\\\/\\\/\[a-z0-9-\]\+\\\.trycloudflare\\\.com\$\/;/.test(html) && /store\.set\('mills\.hub'/.test(html) && /const HUB_HOST = /.test(html), 'hub address pinned + cached (quick tunnel, or the named tunnel host injected at deploy)'],
     [/function trustedPub\(/.test(html) && /changedKeys\.has\(m\.username\)\) continue; \/\/ never encrypt to an unverified key/.test(html) && /Trust new key/.test(html), 'key pinning'],
     [/streams: \[call\.local\]/.test(html) && /sender\.setStreams\(isScreenTransceiver\(peer\.pc, t\) \? call\.screenStream : call\.local\)/.test(html) && /e\.streams && e\.streams\[0\]/.test(html), 'call lip-sync streams'],
@@ -1589,6 +1645,18 @@ async function run() {
   const got1 = (woke.signals || []).find((s) => s.from === 't-admin');
   const camState = await call('/api/call/state', A, { conv: 'room', cam: true, mic: false, screen: true });
   const afterCam = (((await call('/api/call/poll?after=0&ver=-1', U)).data.calls || {}).room || []).find((p) => p.user === 't-admin');
+  // T-242: stopping a share clears only the screen flag; another person's share is shown to the others, not mixed up with mine
+  const seeShare = async () => { const l = (((await call('/api/call/poll?after=0&ver=-1', A)).data.calls || {}).room || []); return Object.fromEntries(l.map((p) => [p.user, p])); };
+  const uShares = await call('/api/call/state', U, { conv: 'room', cam: false, mic: true, screen: true });
+  const bothSharing = await seeShare();
+  const aStops = await call('/api/call/state', A, { conv: 'room', cam: true, mic: false, screen: false });
+  const shareAfterStop = (await seeShare());
+  await call('/api/call/state', U, { conv: 'room', cam: false, mic: true, screen: false });
+  const noneSharing = await seeShare();
+  check('R275', 'calls: the screen flag round-trips per person in the call state (two people can share, stopping clears only that flag, camera and mic stay)',
+    camState.status === 200 && uShares.status === 200 && aStops.status === 200
+    && bothSharing['t-admin'].screen === true && bothSharing['t-user'].screen === true && shareAfterStop['t-admin'].screen === false && shareAfterStop['t-admin'].cam === true && shareAfterStop['t-user'].screen === true
+    && noneSharing['t-user'].screen === false && noneSharing['t-user'].mic === true, `a ${shareAfterStop['t-admin'].screen}/${shareAfterStop['t-admin'].cam}, u ${shareAfterStop['t-user'].screen}`);
   await call('/api/call/leave', A, {});
   const afterLeave = (((await call('/api/call/poll?after=0&ver=-1', U)).data.calls || {}).room || []).map((p) => p.user);
   check('R50', 'calls: presence per conversation, private calls only for their two people, one call at a time, signals relayed opaquely and only inside the call, long-poll wakes on a signal, cam/mic/screen state, leave',
@@ -1859,6 +1927,19 @@ async function run() {
     && /mills\.mute\.' \+ user/.test(html) && /className = 'pVol'/.test(html) && /micOn \? 'mic-off' : 'mic', micOn \? 'Mute' : 'Unmute'/.test(html) && /M = mute \/ unmute yourself/.test(html)
     && /id="callTheater"/.test(html) && /id="callStage"/.test(html) && /#roomCore\.theater \.roomMain/.test(html) && /rc\.classList\.toggle\('theater', theater\)/.test(html) && /theaterOn\(\) && !e\.target\.closest/.test(html)
     && /id="callScreen"/.test(html) && /getDisplayMedia\(/.test(html) && /pc\.addTransceiver\('video', \{ direction: 'sendrecv', streams: \[call\.screenStream\] \}\)/.test(html) && /isScreenTransceiver\(pc, e\.transceiver\)/.test(html) && /\.tile\.screenTile \{ grid-column: 1 \/ -1/.test(html) && /screen: !!call\.screen/.test(html));
+  const callsJs = fs.readFileSync(path.join(MILLS, 'web', 'calls.js'), 'utf8');
+  check('R276', '[static] screen share: an audio choice first (none / tab-system audio / plus the microphone), getDisplayMedia asks for audio only when chosen, the mic is mixed in with an AudioContext into one track',
+    /id="shareOpts"/.test(html) && /name="shareAudio" value="none" checked/.test(html) && /value="sys"/.test(html) && /value="sysmic"/.test(html) && /id="shareGo"/.test(html)
+    && /audio: choice !== 'none'/.test(callsJs) && /createMediaStreamDestination\(\)/.test(callsJs) && /createMediaStreamSource\(new MediaStream\(\[call\.mic\]\)\)/.test(callsJs) && /gave no tab \/ system audio/.test(callsJs));
+  check('R277', '[static] screen share: the share\'s sound is a 4th sender added inactive and turned on only for pages that signal sa (older pages never see it), its renegotiation comes from the offerer only, and it plays in the screen tile',
+    /pc\.addTransceiver\('audio', \{ direction: 'inactive', streams: \[call\.screenStream\] \}\)/.test(callsJs) && /sa: 1, \.\.\.body/.test(callsJs) && /msg\.sa && peer\.offerer && msg\.d\.type === 'answer'/.test(callsJs)
+    && /isScreenAudio\(pc, e\.transceiver\)/.test(callsJs) && /isScreenAudio\(peer\.pc, t\) \? call\.screenAudio : call\.mic/.test(callsJs) && /if \(!self\) applyPersonAudio\(t\)/.test(callsJs));
+  check('R278', '[static] screen share: who is sharing shown in the call bar and on the tiles, stop also from the browser\'s own Stop sharing (track ended) and on leaving, all share audio released',
+    /sharing a screen/.test(callsJs) && /call\.screen\.onended = \(\) => stopScreen\(\)/.test(callsJs) && /function dropShareAudio\(\)/.test(callsJs) && /call\.screen = null; dropShareAudio\(\)/.test(callsJs) && /\n  dropShareAudio\(\);\n  call\.mic = call\.cam/.test(callsJs)
+    && /if \(p\.screen\) l\.append\(ic\('share', 'trail'\)\)/.test(callsJs) && /screen: !!call\.screen/.test(callsJs));
+  check('R279', '[static] screen share: click a shared screen to enlarge it (big view, click again or Esc to shrink), and the browser differences are written down in calls.js',
+    /t\.onclick = \(\) => t\.classList\.toggle\('big'\)/.test(callsJs) && /\.tile\.screenTile\.big \{ position: fixed/.test(html) && /querySelector\('\.screenTile\.big'\)/.test(callsJs)
+    && /Chrome \/ Edge \(Linux\): audio only for a TAB/.test(callsJs) && /PipeWire/.test(callsJs) && /Firefox: screen \/ window \/ tab video; no tab or system audio/.test(callsJs) && /Safari/.test(callsJs));
   check('R55', '[static] dictation in chat + Work: browser speech recognition, appends (continue), ~3 s silence stop, never auto-sends except "send message" + silence',
     /id="roomDictate"/.test(html) && /id="workDictate"/.test(html) && /window\.SpeechRecognition \|\| window\.webkitSpeechRecognition/.test(html)
     && /setTimeout\(dictStop, 3000\)/.test(html) && /const WAKE = \/\\s\*\\bsend message/.test(html) && /if \(box\.value\) d\.submit\(\)/.test(html)
@@ -2797,7 +2878,13 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const crash = await scenario('crash', { n1: 'crash', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const hang = await scenario('hang', { n1: 'hang', g1: 'ok', g0: 'ok' }, 'n1', ['g1', 'g0'], 'g1');
     const fine = await scenario('fine', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1');
-    const again = await scenario('exit75', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1', async (dir) => { fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500); }); // the next health check makes the fake exit 75; vr-run starts it again
+    // the next health check makes the fake exit 75 and vr-run starts it again; it goes back to normal only once vr-run's log
+    // says the restart was asked for (a fixed 1.5 s switch-back could miss a slow health check under load: flaky)
+    const again = await scenario('exit75', { n1: 'ok', g1: 'ok' }, 'n1', ['g1'], 'n1', async (dir) => {
+      const m = path.join(dir, 'n1', 'mode'), log = path.join(SCRATCH, 'vr-run-exit75.log'); fs.writeFileSync(m, 'exit75');
+      for (let i = 0; i < 200; i++) { await sleep(300); let t = ''; try { t = fs.readFileSync(log, 'utf8'); } catch { /* not yet */ } if (/restart asked for/.test(t)) break; }
+      fs.writeFileSync(m, 'ok');
+    });
     // the first swap's last net: every kept Rust build is bad and bridge/server.js still exists → the JavaScript hub takes the port alone (as run.js did)
     const jsAlone = await scenario('jsalone', { n1: 'crash' }, 'n1', [], 'js-alone', null, true);
     const jsAloneNote = fs.existsSync(path.join(SCRATCH, 'root177-jsalone', 'bridge', '.announce')) && fs.readdirSync(path.join(SCRATCH, 'root177-jsalone', 'bridge', '.announce')).some((f) => /^js-alone-/.test(f));
@@ -2832,20 +2919,26 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const port = await freePort(PORT + 360), backPort = await freePort(port + 2);
       const log = fs.openSync(path.join(SCRATCH, 'vr-run-r195.log'), 'a');
       const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--back', String(backPort), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
-      let s = {}; for (let i = 0; i < 60 && !(s.commit === 'n1' && (r195.backBefore = await back195(backPort))); i++) { await sleep(300); s = await front195(port); }
+      // (waits are "until", up to 60 s: several suites and builds may share the machine)
+      let s = {}; for (let i = 0; i < 200 && !(s.commit === 'n1' && (r195.backBefore = await back195(backPort))); i++) { await sleep(300); s = await front195(port); }
+      // a graceful restart of the build: it answers in exit-75 mode once (no pid, or the connection drops), and only then
+      // goes back to normal, so a slow health check cannot miss the window (a fixed 1.5 s switch-back made this flaky)
+      const restart195 = async (pidOld) => {
+        const m = path.join(dir, 'n1', 'mode'); fs.writeFileSync(m, 'exit75');
+        let x = {}; for (let i = 0; i < 200; i++) { await sleep(300); x = await front195(port); if (!x.pid || x.pid !== pidOld) break; }
+        fs.writeFileSync(m, 'ok');
+        for (let i = 0; i < 200 && !(x.pid && x.pid !== pidOld); i++) { await sleep(300); x = await front195(port); }
+        return x;
+      };
       r195.before = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`;
       fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1, rustHub: { enabled: true, backPort, alone: true } }));
-      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500);
-      const pid0 = s.pid;
-      for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid0) break; }
+      s = await restart195(s.pid);
       await sleep(1500); // the JavaScript hub would have been started again by now
       r195.after = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`; r195.backAfter = await back195(backPort);
       // and back (the rollback in deploy/full-rust-swap.md): alone false + a graceful restart starts the JavaScript hub behind again
       fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1, rustHub: { enabled: true, backPort, alone: false } }));
-      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500);
-      const pid1 = s.pid;
-      for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid1) break; }
-      for (let i = 0; i < 20 && !(r195.backBack = await back195(backPort)); i++) await sleep(300);
+      s = await restart195(s.pid);
+      for (let i = 0; i < 100 && !(r195.backBack = await back195(backPort)); i++) await sleep(300);
       r195.back = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`;
       proc.kill('SIGTERM'); await sleep(500); try { proc.kill('SIGKILL'); } catch { /* gone */ }
     }
@@ -2903,6 +2996,249 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R196', 'presence and activity (plans/presence.md): a person is as present as their most active device (one active + one idle → online, both idle → away, the last one gone → offline); a run of theirs makes them Working; the accept-work switch makes them Available for work (Working + available during a run); appear offline shows Offline to everyone (also in the old presence list) while they see their real presence, and it ends at its until; the custom text (profile.status) ends at its until; bad override / too-long text → 400; a change reaches pages through the room long poll (status, ver)',
       ok196, has196 ? `mixed ${l196(seen.mixed)} (${seen.mixed.devices} devices) · both idle ${l196(seen.bothIdle)} · one gone ${l196(seen.oneGone)} · run ${l196(seen.run)} · run+accept ${l196(seen.runAccept)} · accept ${l196(seen.accept)} · bad ${seen.badOverride}/${seen.badText} · appear offline: others ${l196(seen.off)} text "${seen.off.text || ''}", old list online ${seen.oldList.online}, self real ${seen.meReal} · room ver moved ${seen.verMoved} status ${seen.inRoom} · after until ${l196(seen.back)} text "${seen.back.text || ''}" · all gone ${l196(seen.allGone)}` : 'GET /api/presence does not exist yet');
   } else skip('R196', 'presence and activity (plans/presence.md)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R205-R209: time accounting (plans/presence.md section 6, T-263); the scratch hub's config has presence.workGapMs = 1500
+    const day205 = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
+    const time205 = async (tok, q = '') => (await call(`/api/presence/time${q}`, tok)).data || {};
+    const today205 = async (tok, who) => (((await time205(tok, who ? `?user=${who}` : '')).days || []).find((x) => x.day === day205)) || { activeMs: 0, awayMs: 0, aiMs: 0, agentMs: 0, spans: [], events: [] };
+    const act = (tok) => call('/api/presence', tok, { device: 'r205', active: true });
+    await sleep(1800); // a quiet longer than the gap, so nothing before this extends into the test
+    const b205 = await today205(U);
+    await act(U); await sleep(700); await act(U); await sleep(2200); await act(U);
+    const a205 = await today205(U);
+    const dSpans = a205.spans.length - b205.spans.length, dActive = a205.activeMs - b205.activeMs;
+    const last2 = a205.spans.slice(-2);
+    const quiet = last2.length === 2 ? last2[1][0] - last2[0][1] : 0;
+    check('R205', 'time accounting: input, then input within the gap, then a quiet longer than workGapMs, then input again makes two spans, and the quiet is not counted (active time = the spans only)',
+      dSpans === 2 && quiet >= 2000 && dActive >= 600 && dActive < 1200, `spans +${dSpans} · quiet between ${quiet} ms · active +${dActive} ms (expect about 700)`);
+    const b206 = await today205(D); const t206 = Date.now();
+    await call('/api/presence', D, { device: 'r206', idle: true });
+    await call('/api/chat', D, { message: 'SLOW r206' });
+    await sleep(2200); // past the gap with the person idle; the tick has seen the run end
+    const a206 = await today205(D);
+    const dAi = a206.aiMs - b206.aiMs, dAgent = a206.agentMs - b206.agentMs, dAct = a206.activeMs - b206.activeMs;
+    check('R206', 'time accounting: a run (SLOW) of a person who is idle (no input) adds its running time to aiMs (and agentMs, summed over sessions) and nothing to activeMs',
+      dAi >= 2500 && dAi <= 7000 && dAgent >= dAi && dAct === 0, `ai +${dAi} ms · agent +${dAgent} ms · active +${dAct} ms`);
+    const ev206 = (a206.events || []).filter((e) => e.at >= t206);
+    check('R207', 'the activity log (events of the day, append-only): a run shows as an "ai" event with the number of working sessions (1, then 0) and a "status" event to Working and back',
+      ev206.some((e) => e.kind === 'ai' && e.sessions >= 1) && ev206.some((e) => e.kind === 'ai' && e.sessions === 0) && ev206.some((e) => e.kind === 'status' && e.label === 'Working'),
+      ev206.map((e) => `${e.kind}:${e.label || e.sessions}`).join(' '));
+    const other = await time205(D, `?user=t-user&from=${day205}&to=${day205}`), own = await time205(U, `?from=${day205}&to=${day205}`);
+    const od = (other.days || [])[0] || {}, ownd = (own.days || [])[0] || {};
+    const bad = (await call('/api/presence/time?from=nope', U)).status, nobody = (await call('/api/presence/time?user=nobody-here', U)).status, anon = (await call('/api/presence/time')).status;
+    check('R208', 'GET /api/presence/time: the team sees another person\'s totals (activeMs, awayMs, aiMs, agentMs) without their spans and events, a person sees their own record with both; a bad day is 400, an unknown person 404, not signed in 401; it names the workGapMs',
+      typeof od.activeMs === 'number' && od.spans === undefined && od.events === undefined && Array.isArray(ownd.spans) && ownd.spans.length >= 2 && Array.isArray(ownd.events) && bad === 400 && nobody === 404 && anon === 401 && own.workGapMs === 1500,
+      `other: ${Object.keys(od).join(',')} · own spans ${(ownd.spans || []).length} · ${bad}/${nobody}/${anon} · gap ${own.workGapMs}`);
+    const f209 = path.join(SB, 'profiles', 't-user', 'activity', `${day205}.json`);
+    const j209 = fs.existsSync(f209) ? JSON.parse(fs.readFileSync(f209, 'utf8')) : {};
+    const page209 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R209', 'the day is kept in the person\'s own profiles/<user>/activity/<day>.json ({activeMs, awayMs, aiMs, agentMs, spans, events, updatedAt}); [static] the page sends active: true on its 15 s presence tick, at most once a minute, only when there was input',
+      typeof j209.activeMs === 'number' && typeof j209.awayMs === 'number' && typeof j209.aiMs === 'number' && typeof j209.agentMs === 'number' && Array.isArray(j209.spans) && typeof j209.updatedAt === 'number'
+        && /inputSince && Date\.now\(\) - sentActive >= 60000/.test(page209) && /body\.active = true/.test(page209), `file ${fs.existsSync(f209)} keys ${Object.keys(j209).join(',')}`);
+  } else for (const id of ['R205', 'R206', 'R207', 'R208', 'R209']) skip(id, 'time accounting and the activity log (plans/presence.md section 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R230-R234: where a person works (T-260): project, branch, held task, from Work runs, the board and other sources
+    const st230 = async (tok, u) => (((await call('/api/presence', tok)).data.people || []).find((p) => p.user === u)) || {};
+    const wh230 = async (u = 'mills', tok = U) => (await st230(tok, u)).where;
+    const keep230 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+    const stop230 = keep230(D, 'r230'); await sleep(400); await call('/api/presence', D, { device: 'r230', idle: false });
+    const s230 = {};
+    s230.before = await wh230();
+    const slow = call('/api/chat', D, { message: 'SLOW r230' }); await sleep(800);
+    s230.run = await wh230(); const rst = await st230(U, 'mills');
+    await slow; await sleep(400); s230.after = await wh230();
+    check('R230', 'where (plans/presence.md): a person with a running Work session shows where they work, { project, branch, since, source: "work" }, to the team in GET /api/presence, and it is gone when the run ends',
+      !s230.before && s230.run && s230.run.source === 'work' && typeof s230.run.project === 'string' && s230.run.project.length > 0 && /^work\/mills/.test(s230.run.branch) && typeof s230.run.since === 'number' && rst.working === true && !s230.after,
+      `before ${JSON.stringify(s230.before)} · run ${JSON.stringify(s230.run)} · after ${JSON.stringify(s230.after)}`);
+    const t230 = (await call('/api/board/create', D, { title: 'where r230', status: 'todo' })).data.task || {};
+    await call('/api/board/claim', D, { id: t230.id, minutes: 10 });
+    s230.claim = await wh230();
+    const slow2 = call('/api/chat', D, { message: 'SLOW r230b' }); await sleep(800); s230.both = await wh230();
+    await slow2; await sleep(300);
+    await call('/api/board/release', D, { id: t230.id }); await sleep(100); s230.released = await wh230();
+    await call('/api/board/complete', D, { id: t230.id });
+    check('R231', 'where: the board task a person holds a claim on shows as where.task { id, title } (source "board" on its own, added to the Work session\'s project / branch during a run) and goes when the claim is released',
+      s230.claim && s230.claim.task && s230.claim.task.id === t230.id && s230.claim.task.title === 'where r230' && s230.claim.source === 'board' && s230.both && s230.both.source === 'work' && s230.both.task && s230.both.task.id === t230.id && s230.both.project && !s230.released,
+      `claim ${JSON.stringify(s230.claim)} · run+claim ${JSON.stringify(s230.both)} · released ${JSON.stringify(s230.released)}`);
+    const rep = { project: 'r232-proj', branch: 'feature/x', task: { id: 'T-232', title: 'reported' } };
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: rep });
+    s230.jc = await wh230(); const jcRoom = ((await call('/api/room/messages?rev=0', U)).data.status || []).find((p) => p.user === 'mills') || {};
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: { project: 'r232-proj', branch: 'feature/y' } }); s230.jc2 = await wh230();
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: null }); s230.jcClear = await wh230();
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: rep }); await call('/api/presence', D, { device: 'r232', gone: true }); s230.jcGone = await wh230();
+    check('R232', 'where: another source (Jcode PGM, the desktop app) reports POST /api/presence { device, source, where: { project, branch, task? } }: others see it with that source, in the room long poll\'s status too, a new report replaces it, where: null clears it and the device going away removes it',
+      s230.jc && s230.jc.source === 'jcode' && s230.jc.project === 'r232-proj' && s230.jc.branch === 'feature/x' && s230.jc.task && s230.jc.task.id === 'T-232' && jcRoom.where && jcRoom.where.project === 'r232-proj' && s230.jc2 && s230.jc2.branch === 'feature/y' && !s230.jc2.task && !s230.jcClear && !s230.jcGone,
+      `reported ${JSON.stringify(s230.jc)} · replaced ${JSON.stringify(s230.jc2)} · cleared ${JSON.stringify(s230.jcClear)} · gone ${JSON.stringify(s230.jcGone)}`);
+    await call('/api/presence', D, { device: 'r232', source: 'jcode', where: rep });
+    await call('/api/presence/me', D, { hideWhere: true }); await sleep(100); s230.hidden = await wh230(); const mine = await call('/api/presence/me', D); s230.mine = mine.data.where;
+    await call('/api/presence/me', D, { hideWhere: false, override: 'offline' }); await sleep(100); s230.offline = await wh230(); const offMine = (await call('/api/presence/me', D)).data;
+    await call('/api/presence/me', D, { override: 'auto' }); await sleep(100); s230.back = await wh230();
+    await call('/api/presence', D, { device: 'r232', gone: true });
+    check('R233', 'where: hideWhere hides project / branch / task from others (the person still sees their own where); appear offline hides it too; both are back when switched off',
+      s230.hidden === undefined && s230.mine && s230.mine.project === 'r232-proj' && s230.offline === undefined && offMine.hideWhere === false && s230.back && s230.back.project === 'r232-proj',
+      `hidden ${JSON.stringify(s230.hidden)} · own ${JSON.stringify(s230.mine)} · offline ${JSON.stringify(s230.offline)} · back ${JSON.stringify(s230.back)}`);
+    await call('/api/presence', D, { device: 'r234', source: 'in valid!/' + 'x'.repeat(40), where: { project: 'p'.repeat(200), branch: 'b\u0001ranch', task: { id: 'T-1', title: 't'.repeat(500) } } });
+    const long = await wh230(); const junk = [await call('/api/presence', D, { device: 'r234', where: 'nope' }), await call('/api/presence', D, { device: 'r234', where: {} })]; const afterJunk = await wh230();
+    await call('/api/presence', D, { device: 'r234', gone: true }); stop230(); await call('/api/presence', D, { device: 'r230', gone: true });
+    const page234 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R234', 'where: a source\'s name and text are cleaned and cut (source letters / digits / - _ up to 20, project 80, branch 120, task title 160, control characters dropped); junk or empty where clears it (still 200); [static] the page tooltip names "on <project> · <task>"',
+      long && long.source.length <= 20 && /^[A-Za-z0-9_-]+$/.test(long.source) && long.project.length === 80 && long.branch === 'branch' && long.task.title.length === 160 && junk.every((r) => r.status === 200) && !afterJunk && /function whereText/.test(page234) && /' · on '/.test(page234),
+      `source "${long && long.source}" project ${long && long.project.length} branch "${long && long.branch}" title ${long && long.task && long.task.title.length} · junk ${junk.map((r) => r.status)} · after ${JSON.stringify(afterJunk)}`);
+  } else for (const id of ['R230', 'R231', 'R232', 'R233', 'R234']) skip(id, 'where a person works (T-260)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R250-R254 (T-264): presence for AIs and tools: the full status in the team tools, notify_when_available / notify_list / notify_cancel, the status event. t-user's Claude (fake "NOTIFYTOOL") asks about mills (D)
+    const keep250 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+    const stop250 = keep250(D, 'r250'); await sleep(400); await call('/api/presence', D, { device: 'r250', idle: false });
+    await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, dnd: false, text: '' });
+    const tools250 = async (calls, tok = U) => { const r = await chat(tok, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
+    const seq250 = async () => Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+    const dms250 = async (since) => { const ms = ((await call('/api/room/messages?since=' + since, U)).data.messages || []).filter((m) => m.from === 'claude' && m.to === 't-user' && m.as); return Promise.all(ms.map(async (m) => ({ as: m.as, via: m.via, text: await roomRead(restored, m) }))); };
+    const waitDm = async (since, re, ms = 6000) => { const end = Date.now() + ms; for (;;) { const hit = (await dms250(since)).find((d) => re.test(d.text)); if (hit || Date.now() > end) return hit; await sleep(300); } };
+    const noDm = async (since, re, ms = 3000) => { await sleep(ms); return !(await dms250(since)).some((d) => re.test(d.text)); };
+    const ok250 = (r) => !!r && r.ok === true;
+    const s250 = {};
+    // R250: the tools carry the whole status
+    await call('/api/presence/me', D, { acceptingWork: true, text: 'r250 status' }); await sleep(300);
+    { const [pr, hs] = await tools250([['team_presence', {}], ['hub_status', {}]]);
+      const mp = ((pr && pr.result && pr.result.people) || []).find((p) => p.user === 'mills') || {}, mh = ((hs && hs.result && hs.result.people) || []).find((p) => p.user === 'mills') || {};
+      const keys = ['presence', 'label', 'working', 'workingSessions', 'acceptingWork', 'dnd', 'text', 'since', 'state', 'screen', 'agoMin', 'user', 'name'];
+      check('R250', 'T-264 the team tools carry the whole status: team_presence and hub_status give each person presence, label, working (+ workingSessions), acceptingWork, dnd, text, since (and where) next to the older state / screen / agoMin',
+        ok250(pr) && ok250(hs) && keys.every((k) => k in mp && k in mh) && mp.presence === 'online' && mp.state === 'online' && mp.label === 'Available for work' && mp.acceptingWork === true && mp.working === false && mp.workingSessions === 0 && mp.dnd === false && mp.text === 'r250 status' && typeof mp.since === 'number' && mh.label === mp.label,
+        `mills in team_presence ${JSON.stringify(mp)} · hub_status label ${mh.label}`); }
+    // R251: "available": registered, listed, told in a private message from the asker's Claude when it holds, then gone from the list
+    await call('/api/presence/me', D, { acceptingWork: false }); await sleep(1300);
+    { const since = await seq250();
+      const [ask, list1] = await tools250([['notify_when_available', { user: 'mills', what: 'available', message: 'r251 ping' }], ['notify_list', {}]]);
+      await call('/api/presence/me', D, { acceptingWork: true });
+      const dm = await waitDm(since, /is available now/);
+      const [again, list2] = await tools250([['notify_when_available', { user: 'mills', what: 'available' }], ['notify_list', {}]]);
+      s250.r251 = { ask, list1, dm, again, list2 };
+      check('R251', 'T-264 notify_when_available: a request for "available" is remembered (notify_list shows it with its id), and once the person accepts work the asker is told in a private chat message from "<asker> · Claude" ("Mills is available now (asked by your Claude at HH:MM). Note: …"); the request is then gone; asking while it already holds answers at once (already: true) and registers nothing',
+        ok250(ask) && ask.result.registered === true && !!ask.result.id && ok250(list1) && list1.result.watching.length === 1 && list1.result.watching[0].user === 'mills' && list1.result.watching[0].what === 'available'
+        && !!dm && /^.+ · Claude$/.test(dm.as) && dm.via === 't-user' && /^.+ is available now \(asked by your Claude at \d\d:\d\d\)\. Note: r251 ping$/.test(dm.text)
+        && ok250(again) && again.result.already === true && again.result.registered === false && ok250(list2) && list2.result.watching.length === 0,
+        `ask ${JSON.stringify(ask && ask.result)} · told "${dm && dm.text}" as "${dm && dm.as}" · again ${JSON.stringify(again && again.result && { already: again.result.already })} · list after ${list2 && list2.result && list2.result.watching.length}`); }
+    // R252: "back" (away → online), "free" (a run ends), "online" (appear offline ends)
+    { await call('/api/presence/me', D, { acceptingWork: false, override: 'away' }); await sleep(1300);
+      const sBack = await seq250(); const [aBack] = await tools250([['notify_when_available', { user: 'mills', what: 'back' }]]);
+      await call('/api/presence/me', D, { override: 'auto' }); const dBack = await waitDm(sBack, /is back \(asked/);
+      const slow = call('/api/chat', D, { message: 'SLOW r252' }); await sleep(900);
+      const sFree = await seq250(); const [aFree] = await tools250([['notify_when_available', { user: 'mills', what: 'free' }]]);
+      const noEarly = await noDm(sFree, /is free now/, 500); await slow; const dFree = await waitDm(sFree, /is free now \(not working\) \(asked/);
+      await call('/api/presence/me', D, { override: 'offline' }); await sleep(1300);
+      const sOn = await seq250(); const [aOn] = await tools250([['notify_when_available', { user: 'mills', what: 'online' }]]);
+      await call('/api/presence/me', D, { override: 'auto' }); const dOn = await waitDm(sOn, /is online now \(asked/);
+      check('R252', 'T-264 the other waits: "back" is told when someone who was away is online again, "free" when their run ends (not before), "online" when their appear offline ends; each is told once',
+        ok250(aBack) && aBack.result.registered === true && !!dBack && ok250(aFree) && aFree.result.registered === true && noEarly && !!dFree && ok250(aOn) && aOn.result.registered === true && !!dOn,
+        `back ${aBack && aBack.result && aBack.result.registered}/${!!dBack} · free ${aFree && aFree.result && aFree.result.registered}/early-silent ${noEarly}/${!!dFree} · online ${aOn && aOn.result && aOn.result.registered}/${!!dOn}`); }
+    // R253: appear offline hides the change (nothing is told while it holds), and shows nothing the status does not show
+    { await call('/api/presence/me', D, { acceptingWork: false, override: 'offline' }); await sleep(1300);
+      const slow = call('/api/chat', D, { message: 'SLOW r253' }); await sleep(900);
+      const since = await seq250();
+      const [free, avail] = await tools250([['notify_when_available', { user: 'mills', what: 'free' }], ['notify_when_available', { user: 'mills', what: 'available' }]]);
+      await slow;
+      await call('/api/presence/me', D, { acceptingWork: true });
+      const quiet = await noDm(since, /is available now/, 2800);
+      await call('/api/presence/me', D, { override: 'auto' }); const dm = await waitDm(since, /is available now \(asked/);
+      check('R253', 'T-264 appear offline: while it holds, "free" is answered from what others are shown (not working, though a run is going), a request for "available" stays quiet when the person starts accepting work, and the asker is told only once they appear again; the message says nothing beyond the status',
+        ok250(free) && free.result.already === true && free.result.status.working === false && free.result.status.label === 'Offline' && !free.result.status.text && ok250(avail) && avail.result.registered === true && avail.result.label === 'Offline' && quiet && !!dm && !/Offline|working|r250/i.test(dm.text),
+        `free ${JSON.stringify(free && free.result && { already: free.result.already, label: free.result.status && free.result.status.label })} · available ${avail && avail.result && avail.result.registered} · quiet while hidden ${quiet} · told after "${dm && dm.text}"`); }
+    // R254: errors, the limit of five, cancel, privacy between askers, and the status event hook
+    { await call('/api/presence/me', D, { acceptingWork: false, override: 'offline' }); await sleep(1300);
+      const errs = await tools250([['notify_when_available', { user: 'nobody-here', what: 'available' }], ['notify_when_available', { user: 'mills', what: 'bogus' }], ['notify_when_available', { user: 't-user' }], ['notify_cancel', {}]]);
+      const tadminOff = (((await call('/api/presence', U)).data.people || []).find((p) => p.user === 't-admin') || {}).presence === 'offline';
+      const adds = await tools250([['notify_when_available', { user: 'mills', what: 'available' }], ['notify_when_available', { user: 'mills', what: 'back' }], ['notify_when_available', { user: 'mills', what: 'online' }], ['notify_when_available', { user: 't-admin', what: 'available' }], ['notify_when_available', { user: 't-admin', what: 'back' }], ['notify_when_available', { user: 't-admin', what: 'online' }]]);
+      const regs = adds.filter((r) => ok250(r) && r.result.registered === true).length, errsAdd = adds.filter((r) => !ok250(r));
+      const [lStranger] = await tools250([['notify_list', {}]], A);
+      const [cOne, lAfterOne] = await tools250([['notify_cancel', { user: 'mills' }], ['notify_list', {}]]);
+      const [cAll, lAfterAll] = await tools250([['notify_cancel', { all: true }], ['notify_list', {}]]);
+      const lib = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-hcom-internal', 'src', 'chat.rs'), 'utf8');
+      const nativeTools = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+      const jsTools = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+      const names = ['notify_when_available', 'notify_list', 'notify_cancel'];
+      check('R254', 'T-264 notify tools: an unknown person, an unknown "what", yourself and a cancel without a target are refused; at most five requests wait per asker (the sixth is refused); they are private to the asker (another person lists none); notify_cancel by user / all removes them; [static] the status change is an event (Chat::subscribe_status) that notify uses, and both MCP servers offer the three tools',
+        errs.length === 4 && errs.every((r) => r.ok === false) && (!tadminOff || (regs === 5 && errsAdd.length === 1 && /5 people/.test(errsAdd[0].error)))
+        && ok250(lStranger) && lStranger.result.watching.length === 0 && ok250(cOne) && cOne.result.cancelled >= 3 && ok250(lAfterOne) && lAfterOne.result.watching.every((w) => w.user !== 'mills')
+        && ok250(cAll) && ok250(lAfterAll) && lAfterAll.result.watching.length === 0
+        && /pub fn subscribe_status/.test(lib) && /subscribe_status\(\)/.test(lib.slice(lib.indexOf('pub fn start('))) && names.every((n) => nativeTools.includes(n) && jsTools.includes(n)),
+        `refused ${errs.map((r) => r.ok)} · registered ${regs} refused ${errsAdd.map((r) => r.error)} (t-admin offline ${tadminOff}) · stranger lists ${lStranger && lStranger.result && lStranger.result.watching.length} · cancelled by user ${cOne && cOne.result && cOne.result.cancelled}, all ${cAll && cAll.result && cAll.result.cancelled} · left ${lAfterAll && lAfterAll.result && lAfterAll.result.watching.length}`); }
+    await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
+    stop250(); await call('/api/presence', D, { device: 'r250', gone: true });
+  } else for (const [id, l] of [['R250', 'the team tools carry the whole status'], ['R251', 'notify_when_available tells the asker'], ['R252', 'back / free / online waits'], ['R253', 'appear offline hides the change'], ['R254', 'notify tools: limits, cancel, privacy, the status event']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R245-R249 (T-238 = T-193 · 1/4): one start-work flow; the fake Forgejo (this runner) answers as tuser-fj and takes pushes over smart HTTP
+    const PR238 = path.join(SCRATCH, 'projects'), FR = (fakeForgejo.repos = fakeForgejo.repos || new Map()), gitq238 = (dir, ...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const cwd238 = (events) => ((texts(events).match(/cwd=(.+?)(?: \||$)/m) || [])[1] || '').trim();
+    const same238 = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+    const sess238 = async (id) => ((await call('/api/work/sessions', U)).data.sessions || []).find((s) => s.id === id) || {};
+    const html238 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    // R245: the repos list
+    const noTok = await call('/api/projects/repos', U), anon = await call('/api/projects/repos?q=x', null);
+    const conn = await call('/api/forgejo/connect', U, { token: 'fake-personal-token-1' });
+    FR.set('tuser-fj/alpha-tools', { full_name: 'tuser-fj/alpha-tools', private: true, fork: false, mirror: false, description: 'Alpha tooling', clone_url: `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/alpha-tools.git` });
+    FR.set('UnityAILab/shared-lib', { full_name: 'UnityAILab/shared-lib', private: false, fork: true, mirror: false, description: 'Shared library for the alpha team', clone_url: `http://127.0.0.1:${OLLAMA_PORT}/UnityAILab/shared-lib.git` });
+    const allRepos = await call('/api/projects/repos', U), someRepos = await call('/api/projects/repos?q=shared', U), oddRepos = await call('/api/projects/repos?q=' + encodeURIComponent('--repo x  -- ; ls'), U);
+    const alpha = ((allRepos.data || {}).repos || []).find((r) => r.name === 'tuser-fj/alpha-tools') || {}, shared = ((someRepos.data || {}).repos || [])[0] || {};
+    check('R245', 'start work, clone from a list: GET /api/projects/repos?q= lists the Forgejo repos the person can see (name, private / fork, clone address, description), searched by words, asked of Forgejo as them through worktree.js repos; without their own saved token it says to save one (400); signed out is 401; no secret in the answer; words cannot become options',
+      noTok.status === 400 && noTok.data.needsToken === true && /Forgejo token/.test(noTok.data.error) && anon.status === 401 && conn.status === 200
+      && allRepos.status === 200 && allRepos.data.repos.length === 2 && alpha.private === true && alpha.url === `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/alpha-tools.git` && alpha.description === 'Alpha tooling'
+      && someRepos.status === 200 && someRepos.data.repos.length === 1 && shared.name === 'UnityAILab/shared-lib' && shared.fork === true && oddRepos.status === 200 && !JSON.stringify([allRepos.data, someRepos.data]).includes('fake-personal-token-1'),
+      `no token ${noTok.status} "${(noTok.data.error || '').slice(0, 50)}" anon ${anon.status} connect ${conn.status} · all ${allRepos.status} ${((allRepos.data || {}).repos || []).length} alpha ${JSON.stringify(alpha).slice(0, 120)} · q=shared ${((someRepos.data || {}).repos || []).length} ${shared.name} · odd ${oddRepos.status}`);
+    // R246: a new empty project, private on Forgejo (checks first, then repo-create, new, publish)
+    await call('/api/forgejo/disconnect', U, {});
+    const nTok = await call('/api/projects/create', U, { name: 'start-new' }); const noTokLocal = fs.existsSync(path.join(PR238, 'start-new'));
+    await call('/api/forgejo/connect', U, { token: 'fake-personal-token-1' });
+    const bad = [await call('/api/projects/create', U, { name: '../evil' }), await call('/api/projects/create', U, { name: '_repo' }), await call('/api/projects/create', U, { name: 'a b' }), await call('/api/projects/create', U, {}), await call('/api/projects/create', U, { name: 'x'.repeat(65) })].map((x) => x.status);
+    const taken = await call('/api/projects/create', U, { name: 'Demo-App' }), takenHub = await call('/api/projects/create', U, { name: 'viberoller' });
+    FR.set('tuser-fj/taken-remote', { full_name: 'tuser-fj/taken-remote', private: false, fork: false, mirror: false, description: '', clone_url: '' });
+    const takenFj = await call('/api/projects/create', U, { name: 'taken-remote' });
+    const made238 = await call('/api/projects/create', U, { name: 'start-new', description: 'made by r246' });
+    const repoDir = path.join(PR238, 'start-new', '_repo'), bareDir = path.join(SCRATCH, 'fjrepos', 'tuser-fj', 'start-new.git');
+    const origin = gitq238(repoDir, 'remote', 'get-url', 'origin').stdout.trim(), remoteBranches = gitq238(bareDir, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').stdout.trim().split('\n').sort().join(',');
+    const again = await call('/api/projects/create', U, { name: 'Start-New' }), listed = ((await call('/api/projects', U)).data.projects || []).find((p) => p.name === 'start-new') || {};
+    const fjRec = FR.get('tuser-fj/start-new') || {};
+    check('R246', 'start work, a new empty project: POST /api/projects/create { name } checks first (bad name 400, a name taken here in any case or the hub\'s own 409, no saved Forgejo token 400 with nothing made, a repo of that name already on Forgejo 409 with no project made here), then makes the repo private on Forgejo as the person (repo-create), the local project (new) and publishes it: origin is Forgejo with main and develop pushed; the project is listed; again → 409',
+      nTok.status === 400 && nTok.data.needsToken === true && !noTokLocal && bad.join() === '400,400,400,400,400' && taken.status === 409 && takenHub.status === 409
+      && takenFj.status === 409 && !fs.existsSync(path.join(PR238, 'taken-remote')) && made238.status === 200 && made238.data.project === 'start-new' && made238.data.repo === 'tuser-fj/start-new' && made238.data.private === true && fjRec.private === true && fjRec.description === 'made by r246'
+      && origin === `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/start-new.git` && remoteBranches === 'develop,main' && listed.remote === origin && again.status === 409,
+      `no token ${nTok.status} local ${noTokLocal} · bad ${bad} · taken ${taken.status}/${takenHub.status} · on Forgejo ${takenFj.status} · made ${made238.status} ${JSON.stringify(made238.data).slice(0, 140)} · private ${fjRec.private} origin ${origin} remote branches ${remoteBranches} · again ${again.status}`);
+    // R247: a clone start from the repos list; each start is a NEW session that lands in the person's own worktree at once
+    const before = (await call('/api/work/sessions', U)).data, n0 = before.sessions.length;
+    const cloned = await call('/api/projects', U, { url: `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/start-new.git`, name: 'start-copy' });
+    const copyRepo = path.join(PR238, 'start-copy', '_repo'), readme = fs.existsSync(path.join(copyRepo, 'README.md'));
+    const nonHttps = await call('/api/projects', U, { url: 'file:///nonexistent-r247' }), noHost = await call('/api/projects', U, { url: 'ftp://example.invalid/x.git' });
+    const s247 = await call('/api/work/sessions/new', U, { project: 'start-copy', title: 'r247', background: true });
+    const dir247 = (s247.data || {}).dir || '', after = (await call('/api/work/sessions', U)).data, sum247 = await sess238(s247.data.id);
+    const run247 = await chat(U, 'where do I land', { session: s247.data.id });
+    check('R247', 'start work, clone: a repo cloned from a Forgejo address (the repos list gives it; the person\'s own token is the login, private ones too) becomes a project with the repo\'s own branches; POST /api/work/sessions/new { project } opens a NEW session (one more in the list) and lands at once in the person\'s own worktree <project>/<user>.<id> on work/<user>.<id>, where its first run happens; other addresses than https / ssh are 400',
+      cloned.status === 200 && cloned.data.project === 'start-copy' && readme && gitq238(copyRepo, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim() === 'develop' && nonHttps.status === 400 && noHost.status === 400
+      && s247.status === 200 && /^s-[0-9a-f]{12}$/.test(s247.data.id) && s247.data.project === 'start-copy' && same238(dir247, path.join(PR238, 'start-copy', 't-user.' + s247.data.id.slice(2))) && fs.existsSync(path.join(dir247, '.git')) && s247.data.branch === 'work/t-user.' + s247.data.id.slice(2)
+      && after.sessions.length === n0 + 1 && sum247.project === 'start-copy' && sum247.noProject === false && same238(cwd238(run247.events), dir247),
+      `clone ${cloned.status} ${JSON.stringify(cloned.data).slice(0, 60)} readme ${readme} · non-https ${nonHttps.status}/${noHost.status} · session ${s247.status} ${JSON.stringify(s247.data).slice(0, 160)} · list ${n0} → ${after.sessions.length} · run cwd ${cwd238(run247.events)}`);
+    // R248: no project: the AI only, in the person's scratch folder, said so in the system prompt; no git for it
+    const s248 = await call('/api/work/sessions/new', U, { none: true, title: 'r248', background: true }), id248 = (s248.data || {}).id;
+    const scratch = path.join(PR238, '_scratch', 't-user'), sum248 = await sess238(id248);
+    const run248 = await chat(U, 'where am I with no project', { session: id248 }), t248 = texts(run248.events);
+    fs.writeFileSync(path.join(scratch, 'note.txt'), 'kept\n');
+    const git248 = await call('/api/work/git?session=' + id248, U), home248 = await call('/api/work/sessions/home', U, { id: id248 });
+    const names248 = ((await call('/api/projects', U)).data.projects || []).map((p) => p.name);
+    const back248 = await call('/api/workspace', U, { session: id248, project: 'start-copy' }), sum248b = await sess238(id248);
+    const none248 = await call('/api/workspace', U, { session: id248, none: true }), sum248c = await sess238(id248);
+    await call('/api/work/sessions/delete', U, { id: id248 });
+    check('R248', 'start work, no project: POST /api/work/sessions/new { none: true } opens a session whose project is "(none)" (noProject true) and whose run happens in the person\'s own scratch folder <projects>/_scratch/<user> (not a git worktree, never in the projects list), with a system prompt that says so and has no worktree law; the git panel and "merge home" say there is no project (400); /api/workspace switches a session to a project and back; deleting it keeps the scratch folder',
+      s248.status === 200 && s248.data.noProject === true && s248.data.project === '(none)' && same238(s248.data.dir, scratch) && fs.existsSync(scratch) && sum248.project === '(none)' && sum248.noProject === true
+      && same238(cwd238(run248.events), scratch) && /sysnone=true/.test(t248) && /syslaw=false/.test(t248) && !fs.existsSync(path.join(scratch, '.git')) && git248.status === 400 && git248.data.noProject === true && home248.status === 400 && !names248.includes('_scratch') && !names248.includes('(none)')
+      && back248.status === 200 && back248.data.project === 'start-copy' && sum248b.noProject === false && sum248b.project === 'start-copy' && none248.status === 200 && none248.data.project === '(none)' && sum248c.noProject === true && fs.existsSync(path.join(scratch, 'note.txt')),
+      `new ${s248.status} ${JSON.stringify(s248.data).slice(0, 140)} · run cwd ${cwd238(run248.events)} sysnone ${/sysnone=true/.test(t248)} syslaw ${/syslaw=true/.test(t248)} · git ${git248.status} home ${home248.status} · list ${names248} · switch ${back248.status} ${sum248b.project}/${sum248b.noProject} → ${none248.status} ${sum248c.noProject} · note kept ${fs.existsSync(path.join(scratch, 'note.txt'))}`);
+    // R249: refusals, other people, and the page
+    const unk = await call('/api/work/sessions/new', U, { project: 'no-such-project', background: true }), unkNone = await call('/api/work/sessions/new', U, { project: '../x', background: true });
+    const hubS = await call('/api/work/sessions/new', U, { project: 'viberoller', background: true });
+    const foreign = await call('/api/work/sessions', A), seenByA = (foreign.data.sessions || []).some((s) => [s247.data.id, hubS.data.id].includes(s.id));
+    const hubWt = fs.existsSync(path.join(hubS.data.dir || '', '.git'));
+    for (const id of [s247.data.id, (hubS.data || {}).id]) if (id) await call('/api/work/sessions/delete', U, { id });
+    await call('/api/forgejo/disconnect', U, {});
+    const repoCalls = (fakeForgejo.repoCalls || []).join(' | ');
+    check('R249', 'start work, the rest: a start naming an unknown or bad project is 400 and opens nothing; the hub\'s own project starts (any case) in the person\'s worktree of it; nobody else sees the session; the Forgejo calls were made as the person only; the page has the Start work panel (project list, clone address box + repos search, new project name, no project) and sends ?session= for the session on screen',
+      unk.status === 400 && unkNone.status === 400 && hubS.status === 200 && hubS.data.project === 'VibeRoller' && hubWt && !seenByA && /create tuser-fj\/start-new private/.test(repoCalls) && !/create (?!tuser-fj\/)/.test(repoCalls)
+      && /id="startPanel"/.test(html238) && /id="startProjects"/.test(html238) && /id="startUrl"/.test(html238) && /id="startRepoQ"/.test(html238) && /id="startNewName"/.test(html238) && /id="startNoneGo"/.test(html238) && /id="startWork"/.test(html238) && /\/api\/projects\/repos\?q=/.test(html238) && /\/api\/projects\/create/.test(html238) && /'session=' \+ encodeURIComponent\(SESSION\)/.test(html238),
+      `unknown ${unk.status}/${unkNone.status} · hub project ${hubS.status} ${hubS.data.project} ${hubS.data.dir} · seen by another ${seenByA} · Forgejo calls "${repoCalls.slice(0, 160)}"`);
+  } else for (const id of ['R245', 'R246', 'R247', 'R248', 'R249']) skip(id, 'one start-work flow (T-238)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};
@@ -2968,6 +3304,159 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R198', 'session limits (plans/multi-session.md § 6): with the defaults (5 per person per host, 3 per provider) a 4th working session on the same provider answers 429 (idle sessions cost nothing: the 4th exists, only its run is refused) with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R285 to R289 (T-289): other tools (Jcode PGM) report their sessions; the person's list shows them as `external`
+    const s285 = {}, now285 = Date.now();
+    const rep = (tok, body) => call('/api/work/sessions/report', tok, body);
+    const ext = async (tok) => (await call('/api/work/sessions', tok)).data || {};
+    const base = await ext(U);
+    s285.r1 = await rep(U, { source: 'jcode', device: 'r285 laptop', sessions: [
+      { id: 'jc-1', title: 'Fix the parser', state: 'working', project: 'viberoller', branch: 'work/x', host: 'laptop', updatedAt: now285 },
+      { id: 'jc-2', title: 'Ask me', state: 'waiting', updatedAt: now285 - 5000 },
+      { id: 'jc-3', title: 'Typed', state: 'draft', updatedAt: now285 - 9000 }] });
+    const g1 = await ext(U);
+    s285.list = (g1.external || []).filter((x) => x.source === 'jcode');
+    const j1 = s285.list.find((x) => x.id === 'jc-1') || {};
+    s285.fields = j1.title === 'Fix the parser' && j1.state === 'working' && j1.project === 'viberoller' && j1.branch === 'work/x' && j1.source === 'jcode' && typeof j1.updatedAt === 'number';
+    s285.ew = (g1.counts || {}).externalWorking;
+    check('R285', 'T-289 POST /api/work/sessions/report keeps another tool\'s sessions per person: GET /api/work/sessions then has `external` [{source, id, title, state, project, branch, updatedAt}] (newest first) and counts.externalWorking counts the working ones',
+      s285.r1.status === 200 && s285.r1.data.accepted === 3 && s285.list.length === 3 && s285.fields && s285.list[0].id === 'jc-1' && s285.ew === 1, `report ${s285.r1.status} accepted ${s285.r1.data.accepted} · listed ${s285.list.length} · fields ${s285.fields} · externalWorking ${s285.ew}`);
+    // R286: validation and cutting
+    s285.bad = await rep(U, { source: 'jcode', device: 'r286', sessions: [
+      { id: 'ok-1', title: 'x'.repeat(500), state: 'ready', project: 'p'.repeat(500), branch: 'b\nc', updatedAt: now285 },
+      { id: 'bad-state', title: 'no', state: 'sleeping' }, { id: '', title: 'no id', state: 'idle' }, { title: 'no id at all', state: 'idle' }] });
+    s285.noSource = await rep(U, { sessions: [] }); s285.noList = await rep(U, { source: 'jcode' }); s285.anon = await rep(null, { source: 'jcode', sessions: [] });
+    const g2 = await ext(U); const o1 = (g2.external || []).find((x) => x.id === 'ok-1') || {};
+    s285.cut = (o1.title || '').length === 120 && (o1.project || '').length === 80 && /^b ?c$/.test(o1.branch || '');
+    s285.dropped = !(g2.external || []).some((x) => x.id === 'bad-state' || x.id === '');
+    check('R286', 'T-289 the report is validated: only the six states are kept (others dropped), a session without an id is dropped, title / project / branch are cut to 120 / 80 / 80 on one line, no source or no list → 400, signed out → 401',
+      s285.cut && s285.dropped && s285.bad.data.accepted === 1 && s285.noSource.status === 400 && s285.noList.status === 400 && s285.anon.status === 401, `cut ${s285.cut} · dropped ${s285.dropped} · accepted ${s285.bad.data.accepted} · no source ${s285.noSource.status} no list ${s285.noList.status} signed out ${s285.anon.status}`);
+    // R287: per person, and a new report of the same source + device replaces the old one; another device is kept next to it
+    const dOther = await ext(D);
+    s285.rep2 = await rep(U, { source: 'jcode', device: 'r285 laptop', sessions: [{ id: 'jc-1', title: 'Now ready', state: 'ready', updatedAt: Date.now() }] });
+    const g3 = await ext(U);
+    const mine = (g3.external || []).filter((x) => x.source === 'jcode' && x.device === 'r285 laptop' || ['jc-1', 'jc-2', 'jc-3'].includes(x.id));
+    s285.replaced = mine.length === 1 && mine[0].state === 'ready' && (g3.external || []).some((x) => x.id === 'ok-1');
+    check('R287', 'T-289 reports are the person\'s own (another person\'s list has none of them), and a new report of the same source + device replaces the old one while another device\'s report stays',
+      !(dOther.external || []).some((x) => ['jc-1', 'jc-2', 'jc-3', 'ok-1'].includes(x.id)) && s285.replaced && ((g3.counts || {}).externalWorking === 0), `others see ${(dOther.external || []).length} · replaced ${s285.replaced} · externalWorking ${(g3.counts || {}).externalWorking}`);
+    // R288: a report that is not refreshed expires
+    s285.short = await rep(U, { source: 'r288', device: 'x', ttlSec: 1, sessions: [{ id: 'gone-1', title: 'soon gone', state: 'working', updatedAt: Date.now() }] });
+    const here = ((await ext(U)).external || []).some((x) => x.id === 'gone-1');
+    await sleep(1600);
+    const g4 = await ext(U); const stays = (g4.external || []).some((x) => x.id === 'ok-1');
+    check('R288', 'T-289 a report that is not refreshed expires (ttlSec 1 here; 3 minutes by default), the other reports stay, and the expired working session no longer counts',
+      here && !(g4.external || []).some((x) => x.id === 'gone-1') && stays && (g4.counts || {}).externalWorking === 0, `listed at first ${here} · after 1.6 s gone ${!(g4.external || []).some((x) => x.id === 'gone-1')} · others stay ${stays}`);
+    // R289: nothing existing changes: the hub's own sessions and counts are the same, the old fields keep their shape
+    check('R289', 'T-289 the report changes nothing of the hub\'s own list: sessions, folders and counts.working / waiting are as before, and a page that ignores `external` sees the same shape',
+      JSON.stringify((await ext(U)).sessions.map((x) => x.id)) === JSON.stringify(base.sessions.map((x) => x.id)) && typeof (g4.counts || {}).working === 'number' && (g4.counts || {}).working === (base.counts || {}).working && Array.isArray(g4.folders) && typeof g4.current === 'string', `sessions ${(g4.sessions || []).length} vs ${(base.sessions || []).length} · working ${(g4.counts || {}).working}`);
+  } else for (const [id, what] of [['R285', 'external session report'], ['R286', 'report validation'], ['R287', 'reports per person'], ['R288', 'report expiry'], ['R289', 'report leaves the list alone']]) skip(id, 'T-289 ' + what, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R300 to R304 (T-276, T-277, T-278): the planner's exact helpers as team tools: parse, existing, roles, owner, glossary
+    const plan = async (calls) => { const r = await chat(U, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
+    const excerpt = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-plan-internal', 'src', 'planner-example.md'), 'utf8');
+    const shortList = 'Person M\n\n--- fable\n[Board Archiving]\nArchive done tasks after about 48 hours and delete the archived ones after 30 days.\n';
+    const longList = '--- opus\n[Automated Task Board Archiving System]\n\nWe need the ability for the task boards to be able to archive tasks, and delete tasks that have been archived after ~30 days. Done tasks should auto archive after ~48 hours, but can be manually or AI archived.\n';
+    const runOn = 'Hey, we need a board archive so the done tab stops filling up. Also we should have a right-click menu in the web version, plus maybe a queued messages panel. Oh and the board should show who is online.';
+    const [pEx, pMerge, pRun, pEmpty] = await plan([['plan_parse', { text: excerpt }], ['plan_parse', { text: shortList + '\n' + longList }], ['plan_parse', { text: runOn }], ['plan_parse', { text: '   ' }]]);
+    const ex = (pEx && pEx.ok && pEx.result.ideas) || [];
+    const by = (t) => ex.find((i) => i.title.includes(t)) || {};
+    const hw = by('Hyper Workflows Architecture').n;
+    const blocked = ex.filter((i) => i.blockedOn.length);
+    const mg = (pMerge && pMerge.ok && pMerge.result) || { ideas: [], counts: {} };
+    const rn = (pRun && pRun.ok && pRun.result.ideas) || [];
+    check('R300', 'T-276 plan_parse on an excerpt of the 2026-10-24 idea list gives its 11 ideas with the model tag, the person section owner and the source lines (hyper workflows, REA, queued panel …), the four "blocked on" ideas point at the hyper workflows idea, and only markers / role lines are left over; a short and a long version of one idea merge into one (longer wording kept, the other model tag noted, the person kept); run-on chat is split at each new wish; an empty input is an error',
+      ex.length === 11 && by('Queued Messages').person === 'mills' && by('Queued Messages').model === 'opus' && by('Website Builder').model === 'fable' && by('REA Project').person === 'sponge' && hw > 0
+        && blocked.length === 4 && blocked.every((b) => b.blockedOnIdeas.length === 1 && b.blockedOnIdeas[0] === hw) && by('Queued Messages').sourceSpan.from < by('Queued Messages').sourceSpan.to
+        && pEx.result.leftovers.every((l) => /marker|role line/.test(l.reason)) && pEx.result.people.length === 3 && pEx.result.people.every((x) => x.known && !x.mismatch)
+        && mg.ideas.length === 1 && mg.counts.merged === 1 && mg.ideas[0].title === 'Automated Task Board Archiving System' && mg.ideas[0].model === 'opus' && mg.ideas[0].person === 'mills' && ((mg.ideas[0].differs || [])[0] || {}).other === 'fable'
+        && rn.length === 4 && /right-click/i.test(rn[1].title) && rn.every((i) => i.form === 'D') && !!pEmpty && pEmpty.ok === false,
+      `ideas ${ex.length} · blocked ${blocked.length} on ${blocked.map((b) => b.blockedOnIdeas)} (hyper ${hw}) · people ${pEx && pEx.result && pEx.result.people.map((x) => x.person + (x.mismatch ? '!' : ''))} · merged ${mg.counts.merged}/${mg.ideas.length} · run-on ${rn.map((i) => i.title)} · empty ${pEmpty && pEmpty.ok}`);
+
+    const mkTask = async (b) => ((await call('/api/board/create', U, b)).data.task || {}).id;
+    const t301 = [await mkTask({ title: 'T-184 · 1/10: Hyper workflows spec: node-based independent system', status: 'todo', labels: 'T-184' }), await mkTask({ title: 'Queued messages sidebar panel', status: 'todo' }), await mkTask({ title: 'Presence and activity for the team', status: 'todo' })];
+    await call('/api/board/complete', U, { id: t301[1] });
+    const [e1, e2, e3, e4, e5] = await plan([['plan_existing', { title: 'Node-Based Hyper Workflows Architecture' }], ['plan_existing', { title: 'Hidable Queued Messages Sidebar Panel', words: 'view queued messages' }], ['plan_existing', { title: 'Zzyzx Quuxbar Wibblewobble' }], ['plan_existing', { title: '' }], ['plan_existing', { title: 'Queued messages sidebar panel', days: 0 }]]);
+    const mt = (e) => ((e && e.ok && e.result.matches) || []);
+    check('R301', 'T-276 plan_existing finds open tasks and recently done ones by word overlap (the open hyper workflows spec for the hyper workflows idea, the done queued panel with done: true, scored best first), nothing for words the board never used, an error for an empty title, and days: 0 leaves out a done task',
+      mt(e1)[0] && mt(e1)[0].id === t301[0] && !mt(e1).some((m) => m.id === t301[2]) && mt(e2)[0] && mt(e2)[0].id === t301[1] && mt(e2)[0].done === true && mt(e2)[0].status === 'done' && mt(e2)[0].score >= 0.4 && mt(e3).length === 0 && e4 && e4.ok === false && !mt(e5).some((m) => m.id === t301[1]),
+      `hyper → ${mt(e1).map((m) => m.id + ':' + m.score)} (want ${t301[0]}) · queued → ${mt(e2).map((m) => m.id + ':' + m.done)} (want ${t301[1]}) · nonsense ${mt(e3).length} · empty ${e4 && e4.ok} · days 0 → ${mt(e5).length}`);
+
+    // roles: no note → built-in; a Roles section in plans/task-assignments.md; the roles file wins
+    const rolesFile = JSON.stringify({ fallback: 't-user', people: [{ user: 't-user', name: 'Uma', initial: 'U', specialties: ['zebra herding'], keywords: ['zebra', 'stripes'] }, { user: 't-admin', name: 'Adam', initial: 'A', specialties: ['giraffe care'], keywords: ['giraffe'] }] });
+    const assignNote = '# Assignments\n\n## Roles\n\n- **Sponge** (`sponge`): hub work.\n- **Ann** (`ann`): illustration, UI design.\n\n## Board rules\n\n1. x\n';
+    for (const x of ['plans/roles.md', 'plans/task-assignments.md']) await call('/api/notes/delete', U, { path: x });
+    const t302 = [await mkTask({ title: 'r302 zebra one', status: 'todo', assignee: 't-user' }), await mkTask({ title: 'r302 zebra two', status: 'doing', assignee: 't-user', priority: 1 }), await mkTask({ title: 'r302 zebra three', status: 'todo', assignee: 't-user' }), await mkTask({ title: 'r302 zebra four', status: 'todo', assignee: 't-user' })];
+    const r = await plan([['plan_roles', {}], ['notes_write', { path: 'plans/task-assignments.md', text: assignNote }], ['plan_roles', {}], ['notes_write', { path: 'plans/roles.md', text: '# Roles\n\n```json\n' + rolesFile + '\n```\n' }], ['plan_roles', {}]]);
+    const rr = (x) => (x && x.ok && x.result) || { people: [] };
+    const wlOf = (x, u) => (rr(x).people.find((p) => p.user === u) || {}).workload || {};
+    check('R302', 'T-277 plan_roles gives the team\'s roles and each person\'s open workload and says where they came from: built-in (sponge, mills, gee) when the Notes have nothing, the Roles section of plans/task-assignments.md when it exists, and plans/roles.md above both (its fallback, names and keywords); the workload counts a person\'s open tasks by status and priority, held ones apart (done ones not)',
+      rr(r[0]).source === 'built-in' && rr(r[0]).people.map((p) => p.user).join() === 'sponge,mills,gee' && rr(r[0]).fallback === 'mills'
+        && rr(r[2]).source === 'plans/task-assignments.md' && rr(r[2]).people.map((p) => p.user).join() === 'sponge,ann' && rr(r[2]).people[1].specialties.join() === 'illustration,UI design'
+        && rr(r[4]).source === 'plans/roles.md' && rr(r[4]).people.map((p) => p.name).join() === 'Uma,Adam' && rr(r[4]).fallback === 't-user' && rr(r[4]).people[0].keywords.includes('zebra')
+        && wlOf(r[4], 't-user').open >= 4 && wlOf(r[4], 't-user').byPriority['1'] >= 1 && wlOf(r[4], 't-user').active >= 4,
+      `sources ${rr(r[0]).source} / ${rr(r[2]).source} / ${rr(r[4]).source} · people ${rr(r[0]).people.map((p) => p.user)} / ${rr(r[2]).people.map((p) => p.user)} / ${rr(r[4]).people.map((p) => p.name)} · t-user workload ${JSON.stringify(wlOf(r[4], 't-user'))}`);
+
+    const o = await plan([['plan_roles', {}], ['plan_owner', { idea: { title: 'Anything at all', person: 'A' } }], ['plan_owner', { idea: { title: 'Zebra stripes research', body: '' } }], ['plan_owner', { idea: { title: 'Zebra giraffe parade' } }], ['plan_owner', { idea: { title: 'Qqq www eee', model: 'opus' } }], ['plan_owner', { ideas: [{ title: 'Giraffe feeding', model: 'fable', blockedOn: ['Zebra'] }, 'Zebra'] }], ['plan_owner', {}]]);
+    const wl = (u) => ((rr(o[0]).people.find((p) => p.user === u) || {}).workload || {}).load;
+    const lighter = wl('t-admin') < wl('t-user') ? 't-admin' : 't-user';
+    const ow = (x) => (x && x.ok && x.result) || {};
+    const many = (o[5] && o[5].ok && o[5].result.owners) || [];
+    check('R303', 'T-277 plan_owner takes an explicit marker first (Person A → Adam), then role keywords (zebra → Uma, giraffe → Adam), a tie or no match by the lighter open workload (the second case says needsPick), is never empty, returns the model tag as a label and a priority (a blocked idea 3), several ideas at once, and an error without an idea',
+      ow(o[1]).owner === 't-admin' && ow(o[1]).by === 'marker' && ow(o[2]).owner === 't-user' && ow(o[2]).by === 'role' && /zebra/.test(ow(o[2]).reason)
+        && ow(o[3]).by === 'workload' && ow(o[3]).owner === lighter && ow(o[4]).owner === lighter && ow(o[4]).needsPick === true && ow(o[4]).labels.includes('opus') && ow(o[4]).priority === 2
+        && many.length === 2 && many[0].owner === 't-admin' && many[0].priority === 3 && many[0].labels.includes('fable') && !!many[1].owner && !!ow(o[3]).reason && !!o[6] && o[6].ok === false,
+      `marker ${ow(o[1]).owner}/${ow(o[1]).by} · zebra ${ow(o[2]).owner}/${ow(o[2]).by} · tie ${ow(o[3]).owner}/${ow(o[3]).by} (lighter ${lighter}: ${wl('t-admin')} vs ${wl('t-user')}) · none ${ow(o[4]).owner}/${ow(o[4]).by} pick ${ow(o[4]).needsPick} · many ${many.map((m) => m.owner + ':' + m.priority)} · empty ${o[6] && o[6].ok}`);
+    for (const id of [...t301, ...t302]) await call('/api/board/delete', U, { id });
+    for (const x of ['plans/roles.md', 'plans/task-assignments.md', 'plans/glossary.md']) await call('/api/notes/delete', U, { path: x });
+
+    const glNote = '# Team glossary\n\n## Words\n\n- **Hyper workflows / hyper work:** an **independent system** of our own.\n- **"Blocked on X":** means **based on X**: built from it. (Sponge, 2026-10-24)\n\n## Decisions\n\n- **Everything private by default.** Built for the team first. (Sponge, 2026-10-24)\n';
+    const pid304 = (await call('/api/work/sessions/new', U, { title: 'r304 planner', background: true, mode: 'planner' })).data.id;
+    const nid304 = (await call('/api/work/sessions/new', U, { title: 'r304 normal', background: true })).data.id;
+    const planRes = (sid) => chat(U, 'PLANNERPLAN please', { session: sid }).then((x) => { try { return JSON.parse((texts(x.events).match(/PLANRES:(\{.*\})/) || [])[1]); } catch { return {}; } });
+    const [g0, , g1] = await plan([['plan_glossary', {}], ['notes_write', { path: 'plans/glossary.md', text: glNote }], ['plan_glossary', {}]]);
+    const pr304 = await planRes(pid304), nr304 = await planRes(nid304);
+    const gr = (x) => (x && x.ok && x.result) || { words: [], decisions: [] };
+    const jsNames = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+    const rsNames = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+    const five = ['plan_parse', 'plan_existing', 'plan_roles', 'plan_owner', 'plan_glossary'];
+    check('R304', 'T-278 plan_glossary gives the words and decisions of plans/glossary.md (aliases, meaning, source; built-in minimum when the note is missing, said in its source); a planner session\'s prompt tells it to call plan_glossary, plan_roles, plan_parse, plan_existing and plan_owner in that order and that "blocked on" means based on, and its run may call them through the relay (a normal session too); [static] both team MCP servers (team-mcp.js, mcp-tools.json) list the five tools',
+      /built-in/.test(gr(g0).source) && gr(g0).words.length >= 4 && gr(g1).source === 'plans/glossary.md' && gr(g1).words.length === 2 && gr(g1).words[0].aliases.join() === 'hyper workflows,hyper work' && /^means based on X/.test(gr(g1).words[1].meaning) && gr(g1).words[1].source === 'Sponge, 2026-10-24' && gr(g1).decisions[0].title === 'Everything private by default'
+        && pr304.order === true && pr304.basedOn === true && pr304.glossary === 2 && pr304.ideas === 1 && pr304.owner === 'sponge' && nr304.glossary === 2 && nr304.ideas === 1 && nr304.order === false
+        && five.every((t) => jsNames.includes(t) && rsNames.includes(t)),
+      `glossary ${gr(g0).source} (${gr(g0).words.length} words) / ${gr(g1).source} (${gr(g1).words.length}) · planner prompt order ${pr304.order} basedOn ${pr304.basedOn} tools ${pr304.glossary}/${pr304.ideas}/${pr304.owner} · normal ${nr304.glossary}/${nr304.ideas}/${nr304.order} · js ${five.filter((t) => jsNames.includes(t)).length} rs ${five.filter((t) => rsNames.includes(t)).length}`);
+    await call('/api/notes/delete', U, { path: 'plans/glossary.md' });
+    for (const id of [pid304, nid304]) await call('/api/work/sessions/delete', U, { id });
+  } else for (const [id, what] of [['R300', 'plan_parse'], ['R301', 'plan_existing'], ['R302', 'plan_roles'], ['R303', 'plan_owner'], ['R304', 'plan_glossary and the planner prompt']]) skip(id, 'T-276/277/278 ' + what, 'the Rust hub\'s: --rust-hub runs it');
+  { // R310 to R314 (T-208): the person's own local Ollama, found by the page (browser) or the desktop app, listed as "Local (this computer)"
+    const page208 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), main208 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'src', 'main.rs'), 'utf8');
+    const blk208 = fs.readFileSync(path.join(MILLS, 'web', 'localai.js'), 'utf8'); // T-209: the probe lives in the shared module, not in the page
+    let names208 = [], bad208 = [];
+    try {
+      const m = /const fromTags = (.*);\n/.exec(blk208), fromTags = new Function('return ' + m[1])();
+      const tags = await (await fetch(`http://127.0.0.1:${OLLAMA_PORT}/api/tags`)).json(); // the suite's fake Ollama, as a browser would be answered
+      names208 = fromTags(tags); bad208 = [fromTags(null), fromTags({ error: 'x' }), fromTags({ models: [{ size: 1 }, { model: 'b:1' }, 7] })];
+    } catch (e) { names208 = ['ERR ' + e.message]; }
+    check('R310', 'T-208 the page reads Ollama\'s /api/tags answer (the fake Ollama\'s here) into its model names, and an answer that is not Ollama\'s gives none instead of an error',
+      names208.join() === 'unity-brain:latest' && bad208[0].length === 0 && bad208[1].length === 0 && bad208[2].join() === 'b:1', `names ${names208.join()} · odd ${JSON.stringify(bad208)}`);
+    check('R311', 'T-208 the page asks 127.0.0.1:11434 /api/tags with a short timeout; a browser that is refused (CORS / private network) is told apart from "not running" by a no-cors ping, and only then is OLLAMA_ORIGINS explained (small hint, no error wall); when nothing runs, nothing is drawn',
+      /LOCAL_OLLAMA = 'http:\/\/127\.0\.0\.1:11434'/.test(blk208) && /\/api\/tags/.test(blk208) && /abort\(\), 1500\)/.test(blk208) && /mode: 'no-cors'/.test(blk208) && /r\.blocked = true/.test(blk208) && /OLLAMA_ORIGINS="' \+ \(o\.origin \|\| location\.origin\)/.test(blk208) && /wrap\.hidden = true/.test(blk208) && /if \(!r\.found && !r\.blocked\) return;/.test(blk208) && !/sys\(|sysSettings\(|alert\(/.test(blk208.split('function line')[0]) && /<script src="localai\.js"><\/script>/.test(page208) && /LOCALAI\.line\(box, d\.providers/.test(page208) && !/LOCAL_OLLAMA|api\/tags/.test(page208) && /connect-src 'self' http:\/\/127\.0\.0\.1:11434 /.test(page208), 'static check of the module and the page');
+    check('R312', 'T-208 the desktop app asks Ollama through its own program (command ollama_local, no CORS: OLLAMA_HOST or 127.0.0.1:11434) and the page uses it there; it also offers "Start this computer\'s AI host" (host_act start, or the set-up pointer) when none of the person\'s hosts lends a local model, and names where to lend it in a browser',
+      /async fn ollama_local\(\)/.test(main208) && /probe_ollama_blocking/.test(main208) && /host_status, ollama_local, host_act/.test(main208) && /native\.call\('ollama_local'\)/.test(blk208) && /native\.call\('host_act', \{ what: 'start' \}\)/.test(blk208) && /Run on this PC/.test(blk208) && /My AI hosts/.test(blk208), 'static check of the page and the app');
+    check('R313', 'T-208 the shared provider stays the default: the local list is display only (greyed, never a provider option the hub knows, no call to /api/model or /api/apikey/settings from the probe), and it is skipped when one of the person\'s own hosts already lends a local model',
+      !/\/api\/model|\/api\/apikey|\/api\/providers/.test(blk208) && /op\.disabled = true/.test(blk208.slice(blk208.indexOf('Local (this computer) · not for Work'), blk208.indexOf('Local (this computer) · not for Work') + 500)) && /localOllama\.found && localOllama\.models\.length && !ownProvider\(provs, o && o\.user\)/.test(blk208) && /LOCALAI\.group\(sel, provs/.test(page208) && /p\.kind === 'host-openai' && p\.owner === /.test(blk208), 'static check of the page');
+    const ck208 = (await call('/api/check', U)).data || {};
+    check('R314', 'T-208 a person without a local Ollama sees nothing change: /api/check lists no provider for it (the page\'s probe adds nothing on the hub), and the default provider / model fields keep their shape',
+      Array.isArray(ck208.providers) && !ck208.providers.some((p) => /local-ollama/.test(p.id || '')) && 'defaultProvider' in ck208 && Array.isArray(ck208.models), `providers ${(ck208.providers || []).length} · defaultProvider ${'defaultProvider' in ck208}`);
+  }
+  if (RUST_HUB) { // R315 (T-301): a person's own AI outside a Work run (Jcode PGM's planner) signs its board writes "<person> · Claude"
+    const t315 = ((await call('/api/board/create', U, { title: 'agent write r315', status: 'todo', asAgent: true })).data || {}).task || {};
+    const c315 = ((await call('/api/board/claim', U, { id: t315.id, asAgent: true })).data || {}).task || {};
+    const p315 = ((await call('/api/board/create', U, { title: 'person write r315', status: 'todo' })).data || {}).task || {};
+    const pc315 = ((await call('/api/board/claim', U, { id: p315.id })).data || {}).task || {};
+    check('R315', 'T-301 asAgent on the board routes: the claim of a task written with asAgent is the person\'s agent ("<name> · Claude", agent true, key <user>#agent) and the field is not stored on the task; without it the write stays the person\'s own (older callers unchanged)',
+      !!t315.id && !('asAgent' in t315) && c315.claim && c315.claim.agent === true && / · Claude$/.test(c315.claim.by || '') && /#agent$/.test(c315.claim.key || '') && pc315.claim && pc315.claim.agent === false && !/ · Claude$/.test(pc315.claim.by || ''),
+      `agent claim ${JSON.stringify(c315.claim || null)} · person claim ${JSON.stringify(pc315.claim || null)}`);
+    // leave the board as it was: the planner checks after this one weigh owners by their open workload
+    for (const t of [t315, p315]) if (t.id) { await call('/api/board/release', U, { id: t.id, asAgent: t === t315 }); await call('/api/board/delete', U, { id: t.id }); }
+  } else skip('R315', 'asAgent board writes', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
@@ -2997,6 +3486,54 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R200', 'a session\'s own worktree follows the worktree law: worktree.js check --session says FRESH with its own commit not yet in work/<user>, STALE (exit 3) once the person\'s work/<user> moved on, update --session brings that in; the session menu\'s "Merge into my work" (/api/work/sessions/home) merges the session\'s commits into work/<user>',
       ok200, `commits: session ${seen.c1 || '?'}, own ${seen.c2 || '?'} · fresh ${seen.fresh} "${(seen.freshText || '').slice(0, 160)}" · stale ${seen.stale} "${(seen.staleText || '').slice(0, 120)}" · update ${seen.update} brought own ${seen.hasOwn} · after ${seen.after} · home ${seen.home} "${(seen.homeText || '').slice(0, 120)}" came ${seen.came}`);
   } else skip('R200', 'a session\'s worktree follows the worktree law', 'the Rust hub\'s (and not on Windows): --rust-hub runs it');
+  if (RUST_HUB) { // R225-R229: git at a glance on the Work page (T-240): the person's own worktree of the open session
+    const own225 = path.join(SCRATCH, 'worktrees', 't-user');
+    const gitq = (dir, ...args) => spawnSync('git', ['-c', 'user.name=r225', '-c', 'user.email=r225@test.invalid', ...args], { cwd: dir, encoding: 'utf8' });
+    const gs = (q = '') => call('/api/work/git' + q, U);
+    await call('/api/work/git', U); // makes the person's own worktree if there is none yet
+    fs.writeFileSync(path.join(own225, 'r225-new.txt'), 'new file\n'); fs.writeFileSync(path.join(own225, 'r225-other.txt'), 'other file\n');
+    const st1 = await gs(); const f1 = ((st1.data || {}).files || []).find((f) => f.path === 'r225-new.txt') || {};
+    const sid225 = (await call('/api/work/sessions/new', U, { title: 'r225', background: true })).data.id;
+    const noWt = await gs('?session=' + sid225);
+    await chat(U, 'r225 first run', { session: sid225 }); // makes the session's worktree
+    const ss1 = await gs('?session=' + sid225); const none = await gs('?session=s-000000000000');
+    check('R225', 'git at a glance: GET /api/work/git shows the person\'s own worktree of the first session (branch, base, ahead / behind as numbers, changed files with their state: an untracked file is unstaged) and, with ?session=, that session\'s own worktree on work/<user>.<id> against work/<user> (exists false before its first run); an unknown session is 404',
+      st1.status === 200 && st1.data.branch === 'work/t-user' && st1.data.kind === 'own' && st1.data.working === false && typeof st1.data.ahead === 'number' && typeof st1.data.behind === 'number' && f1.state === 'untracked' && f1.staged === false && f1.unstaged === true
+        && noWt.status === 200 && noWt.data.exists === false && ss1.status === 200 && ss1.data.kind === 'session' && ss1.data.branch === 'work/t-user.' + sid225.slice(2) && ss1.data.base === 'work/t-user' && ss1.data.exists === true && none.status === 404,
+      `own ${st1.status} ${st1.data.branch} ahead ${st1.data.ahead} behind ${st1.data.behind} file ${JSON.stringify(f1)} · session before run exists ${noWt.data.exists}, after ${ss1.data.branch} base ${ss1.data.base} · unknown ${none.status}`);
+    const stg = await call('/api/work/git/stage', U, { files: ['r225-new.txt'] }); const fs1 = (stg.data.files || []).find((f) => f.path === 'r225-new.txt') || {};
+    const uns = await call('/api/work/git/unstage', U, { files: ['r225-new.txt'] }); const fu1 = (uns.data.files || []).find((f) => f.path === 'r225-new.txt') || {};
+    const bad = [await call('/api/work/git/stage', U, { files: ['../outside'] }), await call('/api/work/git/stage', U, { files: ['-A'] }), await call('/api/work/git/stage', U, { files: [] }), await call('/api/work/git/stage', U, { files: ['/etc/passwd'] })].map((x) => x.status);
+    check('R226', 'stage / unstage: POST /api/work/git/stage puts a file in the index (staged true), unstage takes it out again; a path outside the worktree, an option, an absolute path or no file at all is 400',
+      stg.status === 200 && fs1.staged === true && uns.status === 200 && fu1.staged === false && fu1.unstaged === true && bad.every((x) => x === 400), `stage ${stg.status} staged ${fs1.staged} · unstage ${uns.status} staged ${fu1.staged} · bad paths ${bad.join(',')}`);
+    const noMsg = await call('/api/work/git/commit', U, { message: '  ' }); const noStaged = await call('/api/work/git/commit', U, { message: 'r225 nothing' });
+    await call('/api/work/git/stage', U, { files: ['r225-new.txt'] });
+    const cm = await call('/api/work/git/commit', U, { message: 'r225: the panel commits' });
+    const log = gitq(own225, 'log', '-1', '--format=%s|%ae|%an').stdout.trim(); const left = ((await gs()).data.files || []).map((f) => f.path);
+    check('R227', 'commit: only what is staged is committed, as the person (author email <login>@viberoller.local, from their Forgejo record when they have one); no message or nothing staged is 400 and changes nothing; the unstaged file stays a change',
+      noMsg.status === 400 && noStaged.status === 400 && cm.status === 200 && /^Committed on work\/t-user/.test(cm.data.text) && log.startsWith('r225: the panel commits|') && /@viberoller\.local\|/.test(log) && left.includes('r225-other.txt') && !left.includes('r225-new.txt'),
+      `no message ${noMsg.status}, nothing staged ${noStaged.status}, commit ${cm.status} "${cm.data.text}" · last ${log} · still changed ${left.join(',')}`);
+    const b409 = {}; fs.writeFileSync(path.join(ss1.data.dir || '', 'r228.txt'), 'r228\n'); const slow225 = chat(U, 'SLOW r225 hold', { session: sid225 }); await sleep(700);
+    const S = { session: sid225 };
+    const wk = await gs('?session=' + sid225); b409.stage = (await call('/api/work/git/stage', U, { ...S, files: ['r228.txt'] })).status; b409.commit = (await call('/api/work/git/commit', U, { ...S, message: 'x' })).status; b409.merge = (await call('/api/work/git/merge', U, S)).status; b409.update = (await call('/api/work/git/update', U, S)).status;
+    const other = (await gs()).data.working; await call('/api/stop', U, S); await slow225;
+    const after409 = (await call('/api/work/git/stage', U, { ...S, files: ['r228.txt'] })).status;
+    check('R228', 'while that session\'s run is working every git action (stage, commit, update, merge) is 409 and the status says working; another session of the same person is not held by it; afterwards it works again',
+      wk.data.working === true && Object.values(b409).every((x) => x === 409) && other === false && after409 === 200, `working ${wk.data.working} · ${JSON.stringify(b409)} · other session working ${other} · after ${after409}`);
+    // a session's worktree: commit through the panel, update from work/<user>, "merge" = into work/<user> (worktree.js home); the person's own: worktree.js merge
+    fs.writeFileSync(path.join(ss1.data.dir || '', 'r229-session.txt'), 'from the session\n');
+    await call('/api/work/git/stage', U, { session: sid225, all: true }); const sc = await call('/api/work/git/commit', U, { session: sid225, message: 'r229: session work' });
+    await call('/api/work/git/stage', U, { all: true }); await call('/api/work/git/commit', U, { message: 'r229: own work moves on' });
+    const sa = await gs('?session=' + sid225);
+    const su = await call('/api/work/git/update', U, { session: sid225 }); const sa2 = await gs('?session=' + sid225);
+    const sm = await call('/api/work/git/merge', U, { session: sid225 }); const came = fs.existsSync(path.join(own225, 'r229-session.txt'));
+    const pm = await call('/api/work/git/merge', U, {});
+    const foreign = (await call('/api/work/git?session=' + sid225, A)).status;
+    await call('/api/work/sessions/delete', U, { id: sid225 });
+    check('R229', 'update and merge go only through worktree.js: a session\'s own worktree updates from work/<user> (behind 1 → 0, its commit stays) and "merge" brings its commit into work/<user> (the file arrives in the person\'s worktree); the person\'s own worktree "merge" answers with the tool\'s own words (Forgejo first, versioning law); another person never reaches this person\'s session (404)',
+      sc.status === 200 && sa.data.behind >= 1 && sa.data.ahead === 1 && su.status === 200 && sa2.data.behind === 0 && sa2.data.ahead >= 1 && sm.status === 200 && came && typeof pm.data.text === 'string' && /Merged|Nothing to merge|Not merged|CONFLICT|Forgejo|develop/.test(pm.data.text) && foreign === 404,
+      `session commit ${sc.status} · behind/ahead ${sa.data.behind}/${sa.data.ahead} · update ${su.status} → ${sa2.data.behind}/${sa2.data.ahead} · merge ${sm.status} "${(sm.data.text || '').slice(0, 90)}" came ${came} · own merge ${pm.status} "${(pm.data.text || '').slice(0, 140)}" · other person on this session ${foreign}`);
+  } else { for (const [id, what] of [['R225', 'git at a glance: status of the own / session worktree'], ['R226', 'git panel: stage / unstage'], ['R227', 'git panel: commit as the person'], ['R228', 'git panel: refused (409) while the session works'], ['R229', 'git panel: update / merge only through worktree.js']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it'); }
   if (RUST_HUB) { // R201: a PC tool call reaches the page of the session that asked, not another running session of the same person
     const b201 = (await call('/api/work/sessions/new', U, { title: 'r201', background: true })).data.id;
     let txt201 = '', slow201 = null;
@@ -3009,6 +3546,719 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R201', 'a PC tool call of a session\'s run reaches that session\'s page (its MCP relay names the session) while another session of the same person runs',
       /fake-listing: a\.txt/.test(txt201), `answer "${txt201.slice(0, 160)}"`);
   } else skip('R201', 'a PC tool call reaches the asking session', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R202 (T-288): a run that was refused a tool leaves its session waiting on its person (yellow) until they answer; presence counts working sessions
+    const c202 = (await call('/api/work/sessions/new', U, { title: 'r202', background: true })).data.id;
+    const one202 = async () => ((((await call('/api/work/sessions', U)).data.sessions) || []).find((x) => x.id === c202)) || {};
+    const seen = {};
+    if (c202) {
+      await chat(U, 'DENIED r202', { session: c202 }); const w = await one202(); seen.state = w.state; seen.kind = (w.waiting || {}).kind; seen.tools = ((w.waiting || {}).tools || []).join(',');
+      const a = call('/api/chat', U, { message: 'SLOW r202 first' }), b = chat(U, 'SLOW r202 answer', { session: c202 }); await sleep(900);
+      seen.count = ((((await call('/api/presence', D)).data.people) || []).find((p) => p.user === 't-user') || {}).workingSessions;
+      await Promise.all([a, b]); const after = await one202(); seen.after = after.state; seen.cleared = !after.waiting;
+      await call('/api/work/sessions/delete', U, { id: c202 });
+    }
+    check('R202', 'T-288 a run that stopped short of a tool it was not allowed (permission_denials) leaves its session "waiting" (yellow, which beats red) with what it needs; the next message answers it (no longer waiting); presence shows how many sessions of a person work at once (workingSessions); [static] the Work page says what was refused and sounds it',
+      /ev\.permission_denials/.test(fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8')) && seen.state === 'waiting' && seen.kind === 'permission' && seen.tools === 'Bash' && seen.count === 2 && seen.after === 'done-unseen' && seen.cleared,
+      `after the refusal ${seen.state} (${seen.kind}: ${seen.tools}) · two running: workingSessions ${seen.count} · after answering ${seen.after}, cleared ${seen.cleared}`);
+  } else skip('R202', 'a refused tool leaves the session waiting', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R203: a share shows the session that is shared (not always the first one); sharing another moves it
+    const c203 = (await call('/api/work/sessions/new', U, { title: 'r203', background: true })).data.id;
+    const seen = {};
+    if (c203) {
+      const sh = await call('/api/work/share', U, { conv: 'room', transcript: [], session: c203 }); seen.share = sh.data.session;
+      await chat(U, 'r203 in the shared session', { session: c203 });
+      await chat(U, 'r203 in the first session');
+      const log = (await call('/api/work/watch?user=t-user&after=0', D)).data;
+      const texts203 = (log.events || []).map((e) => e.text).join(' | ');
+      seen.has = /r203 in the shared session/.test(texts203); seen.leak = /r203 in the first session/.test(texts203); seen.session = log.session;
+      await call('/api/work/share', U, { conv: '' }); await call('/api/work/sessions/delete', U, { id: c203 });
+    }
+    check('R203', 'a shared Work session shows the session that was shared (POST /api/work/share {session}): its lines reach the watchers, another session\'s do not; the watch answer names it',
+      seen.share === c203 && seen.has && !seen.leak && seen.session === c203, `shared ${seen.share} · watcher sees it ${seen.has}, the first session\'s ${seen.leak} · watch names ${seen.session}`);
+  } else skip('R203', 'a share shows the shared session', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB && NATIVE_BIN.host) { // R280-R284 (T-290 = T-282 · 8/8): several people, two native hosts, many sessions: limits, restarts, a share and an older page, in one run
+    const until280 = async (fn, ms = 20000) => { const end = Date.now() + ms; let v; while (Date.now() < end) { v = await fn(); if (v) return v; await sleep(100); } return v; };
+    const list280 = async (tok) => (await call('/api/work/sessions', tok)).data || {};
+    const sum280 = async (tok, id) => ((await list280(tok)).sessions || []).find((x) => x.id === id) || {};
+    const used280 = async (tok, h) => ((((await list280(tok)).counts || {}).perHost) || {})[h.id] || {};
+    const working280 = (tok, h, n) => until280(async () => ((await used280(tok, h)).used || 0) >= n);
+    const hostSt280 = async (tok, h) => (((await call('/api/hosts/status', tok)).data || {}).hosts || []).find((x) => x.id === h.id) || null;
+    const online280 = (tok, h, pred = () => true) => until280(async () => { const x = await hostSt280(tok, h); return x && x.online && x.sessionLimits && pred(x) ? x : null; }, 40000);
+    const pid280 = async () => (await call('/api/status')).data.pid;
+    const kill280 = (p) => { try { if (WIN) execFileSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' }); else p.kill('SIGKILL'); } catch {} };
+    const ran280 = (r) => !!r && r.status === 200 && r.events.some((e) => e.type === 'result') && /relay=200:upstream ok/.test(texts(r.events)); // it finished, and its model call went through its host
+    const sysId280 = (r) => ((r.events.find((e) => e.type === 'system') || {}).session_id) || '';
+    const within280 = (p, ms) => Promise.race([p, sleep(ms).then(() => ({ status: 0, events: [], stuck: true }))]);
+    const go280 = (tok, id, tag) => chat(tok, 'SLOW r280 ' + tag, { session: id });
+    const prov280 = (h, p) => `h:${h.id}/${p}`;
+    const mine280 = []; // [token, id] of every session this block made: all deleted at the end
+    const mkSession = async (tok, h, p, title) => { const id = (await call('/api/work/sessions/new', tok, { title, background: true, provider: prov280(h, p), model: 'claude-haiku-5-5' })).data.id; if (id) mine280.push([tok, id]); return id; };
+    const mkHost = async (tok, who, name) => {
+      const made = (await call('/api/hosts/new', tok, {})).data.host || {}, c = (await call('/api/hosts/config', tok, { id: made.id })).data.config || {};
+      const dir = path.join(SCRATCH, 'r280-' + name); fs.mkdirSync(dir, { recursive: true });
+      const cfgf = path.join(dir, 'ai-node.json'), base = `http://127.0.0.1:${OLLAMA_PORT}`;
+      const prov = (id) => ({ id, kind: 'claude-relay', label: `R280 ${name} ${id}`, models: ['claude-haiku-5-5'], allowedUsers: ['t-user', 't-admin', 'mills'], configDir: path.join(SCRATCH, 'host-claude-login'), baseUrl: base + '/anthropic' });
+      fs.writeFileSync(cfgf, JSON.stringify({ hub: H, id: made.id, token: c.token, user: c.user || who, autoUpdate: false, engines: {}, providers: [prov('c1'), prov('c2')] }), { mode: 0o600 });
+      const out = fs.openSync(path.join(dir, 'out.log'), 'a');
+      const h = { id: made.id, tok, dir, exit: null, start() { h.exit = null; h.proc = spawn(NATIVE_BIN.host, ['host', '--config', cfgf], { cwd: dir, stdio: ['ignore', out, out], windowsHide: true }); h.proc.on('exit', () => { h.exit = true; }); } };
+      h.start(); return h;
+    };
+    const S = {}, hosts280 = [];
+    let mySt = null;
+    try {
+      const h1 = await mkHost(A, 't-admin', 'one'), h2 = await mkHost(D, 'mills', 'two'); hosts280.push(h1, h2);
+      S.up = !!(await online280(A, h1)) && !!(await online280(D, h2));
+      const offered = async () => { for (const tok of [A, U, D]) { const ps = ((await call('/api/check', tok)).data.providers || []).map((p) => p.id); for (const h of [h1, h2]) for (const p of ['c1', 'c2']) if (!ps.includes(prov280(h, p))) return false; } return true; };
+      S.offered = !!(await until280(offered, 30000));
+      // the first (primary) session of t-user is what an older page means: it works through host one, provider c2
+      mySt = (await call('/api/check', U)).data;
+      await call('/api/model', U, { provider: prov280(h1, 'c2'), model: 'claude-haiku-5-5' });
+      const primary = ((await list280(U)).sessions || []).find((x) => x.primary) || {};
+
+      // ---- 1. everyone at once: t-user 5 on host one (3 on c1 + 2 on c2) and 3 on host two (c1); the owners go beyond the caps on their own hosts
+      const uA = [], uB = [], uC = [], aOwn = [], dOwn = [];
+      for (let i = 0; i < 3; i++) uA.push(await mkSession(U, h1, 'c1', 'r280 u-one-c1 ' + i));
+      for (let i = 0; i < 2; i++) uB.push(await mkSession(U, h1, 'c2', 'r280 u-one-c2 ' + i));
+      for (let i = 0; i < 4; i++) uC.push(await mkSession(U, h2, 'c1', 'r280 u-two-c1 ' + i)); // the fourth only to be refused
+      const uX = await mkSession(U, h1, 'c2', 'r280 u-one-c2 refused');
+      for (let i = 0; i < 4; i++) aOwn.push(await mkSession(A, h1, 'c1', 'r280 a ' + i));
+      for (let i = 0; i < 4; i++) dOwn.push(await mkSession(D, h2, 'c1', 'r280 d ' + i));
+      const dOther = await mkSession(D, h1, 'c2', 'r280 d on one');
+      const wave = [...uA.map((id, i) => go280(U, id, 'ua' + i)), ...uB.map((id, i) => go280(U, id, 'ub' + i)), ...uC.slice(0, 3).map((id, i) => go280(U, id, 'uc' + i)),
+        ...aOwn.map((id, i) => go280(A, id, 'a' + i)), ...dOwn.map((id, i) => go280(D, id, 'd' + i)), go280(D, dOther, 'dx')];
+      S.reached = !!(await working280(U, h1, 5)) && !!(await working280(U, h2, 3));
+      S.ownersReached = !!(await working280(A, h1, 4)) && !!(await working280(D, h2, 4));
+      const r4 = await call('/api/chat', U, { message: 'SLOW r280 over the provider cap', session: uC[3] });
+      const r6 = await call('/api/chat', U, { message: 'SLOW r280 over the host cap', session: uX });
+      const old6 = await call('/api/chat', U, { message: 'SLOW r280 an older page, over the host cap' });
+      const perHost = ((await list280(U)).counts || {}).perHost || {};
+      const l4 = r4.data.limit || {}, l6 = r6.data.limit || {};
+      S.provCap = r4.status === 429 && l4.provider === prov280(h2, 'c1') && l4.used === 3 && l4.max === 3 && l4.host === h2.id && /3 of 3/.test(r4.data.error || '');
+      S.hostCap = r6.status === 429 && !l6.provider && l6.used === 5 && l6.max === 5 && l6.host === h1.id && /5 of 5/.test(r6.data.error || '');
+      S.oldCap = old6.status === 429 && /5 of 5/.test(old6.data.error || '');
+      S.perHost = [(perHost[h1.id] || {}).used, (perHost[h2.id] || {}).used].join('/');
+      S.refusedIdle = [(await sum280(U, uC[3])).state, (await sum280(U, uX)).state, (await sum280(U, primary.id)).state !== 'working'].join('/');
+      const done = await Promise.all(wave);
+      S.waveOk = done.every(ran280); S.waveBad = done.map((r, i) => (ran280(r) ? '' : i + ':' + r.status)).filter(Boolean).join(',');
+
+      // ---- 1b. the owner of a host is limited on it only when that host says so (the limits control)
+      const lim = (tok, h, limits) => call('/api/hosts/control', tok, { id: h.id, action: 'limits', limits });
+      S.notOwner = (await lim(A, h2, { perProvider: 1 })).status;
+      S.off = (await lim(D, h2, { perUser: 5, perProvider: 1, exceptions: {}, ownerBypass: false })).status;
+      S.offSeen = !!(await online280(D, h2, (x) => x.sessionLimits.ownerBypass === false && x.sessionLimits.perProvider === 1));
+      const b1 = go280(D, dOwn[0], 'b1'); await working280(D, h2, 1);
+      const bRefused = await call('/api/chat', D, { message: 'SLOW r280 owner, bypass off', session: dOwn[1] });
+      S.ownerLimited = bRefused.status === 429 && (bRefused.data.limit || {}).provider === prov280(h2, 'c1') && (bRefused.data.limit || {}).max === 1;
+      S.b1 = ran280(await b1);
+      S.on = (await lim(D, h2, { perUser: 5, perProvider: 1, exceptions: {}, ownerBypass: true })).status;
+      S.onSeen = !!(await online280(D, h2, (x) => x.sessionLimits.ownerBypass === true && x.sessionLimits.perProvider === 1));
+      const b2 = go280(D, dOwn[0], 'b2'); await working280(D, h2, 1);
+      const b3 = go280(D, dOwn[1], 'b3'); await working280(D, h2, 2);
+      S.ownerFree = ran280(await b2) && ran280(await b3);
+
+      // ---- 2. a hub restart while runs go: it waits for them (no new run meanwhile), then every session is as it was and the hosts are back with their limits
+      const U1 = uA[0], U2 = uC[0], D1 = dOwn[2], kept = [[U, U1], [U, uB[0]], [U, U2], [D, D1]];
+      const tr = (id) => [{ cls: 'me', text: 'r280 asked ' + id }, { cls: 'claude', text: 'r280 answered ' + id }, { cls: 'tool', text: 'r280 tool ' + id }];
+      for (const [tok, id] of kept) { await call('/api/work/current', tok, { session: id, transcript: tr(id) }); await call('/api/work/queue', tok, { session: id, queue: ['r280 queued a ' + id, 'r280 queued b ' + id], sendNow: 'r280 now ' + id }); }
+      const snap = async () => { const o = {}; for (const [tok, id] of kept) { const c = (await call('/api/work/current?session=' + id, tok)).data; o[id] = JSON.stringify([c.transcript, c.queue, c.sendNow]); } return o; };
+      const view = async (tok) => (((await list280(tok)).sessions) || []).map((x) => x.id + '|' + ((x.worktree || {}).path || '') + '|' + x.provider + '|' + x.title).sort().join('\n');
+      const before = await snap(), viewU = await view(U), viewD = await view(D), viewA = await view(A);
+      const wtOf = async (ids) => (await Promise.all(ids.map((id) => sum280(U, id)))).map((x) => (x.worktree || {}).path).filter((p) => p && fs.existsSync(p)).length;
+      const wt0 = await wtOf([U1, U2]);
+      await call('/api/work/share', U, { conv: 'room', transcript: [], session: U1 });
+      const w0 = (await call('/api/work/watch?user=t-user&after=0', D)).data; S.watch0 = w0.session === U1 && !w0.stopped;
+      const pid0 = await pid280();
+      const m1 = go280(U, U1, 'restart shared'), m2 = go280(U, U2, 'restart two'), m3 = go280(D, D1, 'restart d');
+      await working280(U, h1, 1); await working280(U, h2, 1); await working280(D, h2, 1);
+      S.watchRun = !!(await until280(async () => (((await call('/api/work/watch?user=t-user&after=0', D)).data.events) || []).some((e) => /restart shared/.test(e.text || '')), 10000));
+      spawnSync(process.execPath, [path.join(SB, 'restart.js')], { cwd: SB });
+      S.held = [(await call('/api/chat', A, { message: 'r280 held' })).status, (await call('/api/chat', U, { message: 'r280 held', session: uA[1] })).status].join('/');
+      const mids = await Promise.all([m1, m2, m3]); S.midRuns = mids.every(ran280);
+      let pid1 = pid0; for (let i = 0; i < 240 && (pid1 === pid0 || !pid1); i++) { await sleep(250); pid1 = await pid280(); }
+      S.restarted = !!pid1 && pid1 !== pid0;
+      S.watchStopped = (await call('/api/work/watch?user=t-user&after=0', D)).data.stopped === true;
+      const after = await snap();
+      S.sameConv = Object.keys(before).every((k) => before[k] === after[k]);
+      S.sameList = [await view(U) === viewU, await view(D) === viewD, await view(A) === viewA].join('/');
+      S.wtKept = wt0 === 2 && (await wtOf([U1, U2])) === 2;
+      S.hostsBack = !!(await online280(A, h1)) && !!(await online280(D, h2, (x) => x.sessionLimits.perProvider === 1 && x.sessionLimits.ownerBypass === true && x.sessionLimits.perUser === 5));
+      S.offered2 = !!(await until280(offered, 30000));
+      // a share lives in the hub's memory: the person shares the session again and the watcher follows it
+      await call('/api/work/share', U, { conv: 'room', transcript: [], session: U1 });
+      const p1 = await chat(U, 'r280 after restart shared', { session: U1 }), p2 = await chat(U, 'r280 after restart two', { session: U2 }), p3 = await chat(D, 'r280 after restart d', { session: D1 });
+      S.afterRuns = ran280(p1) && ran280(p2) && ran280(p3);
+      S.sameClaude = !!sysId280(p1) && sysId280(p1) === sysId280(mids[0]) && sysId280(p2) === sysId280(mids[1]) && sysId280(p3) === sysId280(mids[2]);
+      const w2 = (await call('/api/work/watch?user=t-user&after=0', D)).data, wt2 = (w2.events || []).map((e) => e.text).join(' | ');
+      S.watchAgain = w2.session === U1 && /after restart shared/.test(wt2) && !/after restart two/.test(wt2);
+      await call('/api/work/share', U, { conv: '' });
+
+      // ---- 3. a host restart while runs go: its run ends cleanly, nothing stays "working", a run while it is down says so, runs go through once it is back
+      const E1 = uA[1], E2 = uC[1];
+      const k1 = go280(U, E1, 'host dies'), k2 = go280(U, E2, 'other host');
+      await working280(U, h1, 1); await working280(U, h2, 1);
+      kill280(h1.proc); S.exited = !!(await until280(async () => h1.exit === true, 15000));
+      const [d1, d2] = await Promise.all([within280(k1, 60000), within280(k2, 60000)]);
+      S.hostRun = !d1.stuck && d1.status === 200 && d1.events.some((e) => e.type === 'bridge_done'); S.otherHostRun = ran280(d2);
+      S.idle = !!(await until280(async () => (await sum280(U, E1)).state !== 'working' && !(await used280(U, h1)).used, 15000));
+      S.goesOffline = !!(await until280(async () => { const x = await hostSt280(A, h1); return x && !x.online; }, 30000));
+      const off = await chat(U, 'r280 while it is down', { session: E1 });
+      S.downRun = off.status === 200 && off.events.some((e) => e.type === 'bridge_error' && /offline/.test(e.text || '')) && !!(await until280(async () => !(await used280(U, h1)).used, 5000));
+      h1.start(); S.backUp = !!(await online280(A, h1));
+      const again = await chat(U, 'r280 after the host restart', { session: E1 });
+      const aRun = await chat(A, 'r280 owner after the host restart', { session: aOwn[0] });
+      S.afterHost = ran280(again) && ran280(aRun);
+
+      // ---- 4. an older page (no session in its calls) keeps the first session while others run: it sees it, runs it, stops it, the others are untouched
+      await call('/api/work/current', U, { transcript: [{ cls: 'me', text: 'r280 first session marker' }] });
+      await call('/api/work/queue', U, { queue: ['r280 first session queue'], sendNow: null });
+      await call('/api/model', U, { provider: prov280(h2, 'c2'), model: 'claude-haiku-5-5' });
+      const oOther = go280(U, uA[2], 'other while old'); await working280(U, h1, 1);
+      const oOld = chat(U, 'SLOW r280 older page runs the first session'); await working280(U, h2, 1);
+      const cur = (await call('/api/work/current', U)).data, curOther = (await call('/api/work/current?session=' + uA[2], U)).data;
+      S.oldSees = JSON.stringify(cur.transcript || []).includes('first session marker') && (cur.queue || []).join() === 'r280 first session queue' && !JSON.stringify(curOther.transcript || []).includes('first session marker');
+      const att = (await call('/api/work/attach?run=&after=0', U)).data || {};
+      S.oldAttach = att.busy === true && (att.events || []).some((e) => e.type === 'bridge_run');
+      S.oldBusy = (await call('/api/chat', U, { message: 'x' })).status;
+      S.states = [(await sum280(U, primary.id)).state, (await sum280(U, uA[2])).state].join('/');
+      S.oldStop = (await call('/api/stop', U, {})).status;
+      S.oldStopped = !(await oOld).events.some((e) => e.type === 'result');
+      S.otherLeft = (await sum280(U, uA[2])).state;
+      S.otherRan = ran280(await oOther);
+    } catch (e) { S.err = String((e && e.stack) || e).slice(0, 400); }
+    // put everything back
+    await call('/api/work/share', U, { conv: '' });
+    for (const h of hosts280) if (h.proc) kill280(h.proc);
+    if (mySt) await call('/api/model', U, { provider: mySt.provider || 'host', model: mySt.model || 'claude-opus-5-5' });
+    await call('/api/work/current', U, { transcript: [] }); await call('/api/work/queue', U, { queue: [], sendNow: null });
+    for (const [tok, id] of mine280) await call('/api/work/sessions/delete', tok, { id });
+    for (const h of hosts280) await call('/api/hosts/remove', h.tok, { id: h.id });
+    const E = S.err ? ' · ERROR ' + S.err : '';
+    check('R280', 'T-290 three people (t-admin, t-user, mills) on two native hosts, up to 5 sessions each, SLOW turns at once (17 runs): t-user\'s fifth working session on a host is fine (3 on one provider + 2 on another) and the sixth is 429 naming the host (5 of 5), a fourth on one provider is 429 naming the provider (3 of 3), an older page (no session) is told the same, refused sessions stay idle, the counters say 5 and 3; each host\'s owner runs 4 on one provider on their own host (beyond 3); the owner is limited once that host sets ownerBypass off (the limits control: 429 at its provider cap, nobody else may set it) and free again when it is on',
+      !S.err && S.up && S.offered && S.reached && S.ownersReached && S.provCap && S.hostCap && S.oldCap && S.perHost === '5/3' && S.refusedIdle === 'ready/ready/true' && S.waveOk
+      && S.notOwner === 403 && S.off === 200 && S.offSeen && S.ownerLimited && S.b1 && S.on === 200 && S.onSeen && S.ownerFree,
+      `hosts up ${S.up}/${S.offered} · all running ${S.reached}/${S.ownersReached} · provider cap ${S.provCap} · host cap ${S.hostCap} · older page ${S.oldCap} · counters ${S.perHost} · refused stay ${S.refusedIdle} · runs ok ${S.waveOk} (${S.waveBad}) · limits control: not owner ${S.notOwner}, off ${S.off}/${S.offSeen}, owner refused ${S.ownerLimited}, ran ${S.b1}, on ${S.on}/${S.onSeen}, owner free ${S.ownerFree}${E}`);
+    check('R281', 'T-290 a hub restart asked while sessions of three people run on both hosts: it waits for the runs (they all finish, through their hosts) and no new run starts meanwhile (503, also for another session), then comes back with every session as it was (same list, same worktrees, each conversation, queue and "Send now"), both hosts reconnect on their own with the limits they announced, and the sessions go on in the same Claude conversation',
+      !S.err && S.held === '503/503' && S.midRuns && S.restarted && S.sameConv && S.sameList === 'true/true/true' && S.wtKept && S.hostsBack && S.offered2 && S.afterRuns && S.sameClaude,
+      `held ${S.held} · runs finished ${S.midRuns} · new pid ${S.restarted} · conversations ${S.sameConv} · lists ${S.sameList} · worktrees ${S.wtKept} · hosts back ${S.hostsBack}/${S.offered2} · runs after ${S.afterRuns} · same Claude session ${S.sameClaude}${E}`);
+    check('R282', 'T-290 a host killed while runs go: its run ends cleanly (a finished stream, the session not "working", no slot held), the other host\'s run is not disturbed, a run while it is down answers that it is offline (and holds no slot), and once it is back runs go through again (for t-user and for the host\'s owner)',
+      !S.err && S.exited && S.hostRun && S.otherHostRun && S.idle && S.goesOffline && S.downRun && S.backUp && S.afterHost,
+      `killed ${S.exited} · its run ended ${S.hostRun} · other host ${S.otherHostRun} · idle ${S.idle} · offline ${S.goesOffline} · run while down ${S.downRun} · back ${S.backUp} · runs after ${S.afterHost}${E}`);
+    check('R283', 'T-290 a shared Work session is watched by another person (mills) while it runs and across a hub restart: the watcher sees the shared session\'s lines as they are sent, the restart ends the share (it lives in the hub\'s memory) and the watcher is told it stopped, and after the owner shares the same session again the watcher sees it again, with the new lines of that session and none of the owner\'s other sessions',
+      !S.err && S.watch0 && S.watchRun && S.watchStopped && S.watchAgain,
+      `watch at once ${S.watch0} · sees the run ${S.watchRun} · stopped after the restart ${S.watchStopped} · follows it again ${S.watchAgain}${E}`);
+    check('R284', 'T-290 an older page (calls without a session) keeps meaning the first session while other sessions run: it reads that conversation and queue (not another session\'s), runs it (attach finds the run), a second message is 409, Stop ends only that run, and the other session of the same person finishes untouched',
+      !S.err && S.oldSees && S.oldAttach && S.oldBusy === 409 && S.states === 'working/working' && S.oldStop === 200 && S.oldStopped && S.otherLeft === 'working' && S.otherRan,
+      `sees its own ${S.oldSees} · attach ${S.oldAttach} · second message ${S.oldBusy} · states ${S.states} · stop ${S.oldStop} ended without an answer ${S.oldStopped} · the other still ${S.otherLeft}, finished ${S.otherRan}${E}`);
+  } else for (const [id, what] of [['R280', 'three people on two native hosts: caps and owners'], ['R281', 'a hub restart mid-run keeps every session'], ['R282', 'a host restart mid-run'], ['R283', 'a shared session across a restart'], ['R284', 'an older page next to the sessions']]) skip(id, what + ' (T-290)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
+  if (RUST_HUB) { // R210-R214 (T-245 = T-195 · 1/4): the AI asks its person (team note plans/question-protocol.md); the fake Claude's "ASKTOOL" calls ask_user like the team MCP relay
+    const askOf = (events) => { const t = texts(events).split('\n').find((l) => l.startsWith('ASK:')); try { return JSON.parse(t.slice(4)); } catch { return {}; } };
+    const sessionsOf = async () => ((await call('/api/work/sessions', U)).data.sessions) || [];
+    const primary = async () => (await sessionsOf()).find((x) => x.primary) || {};
+    // R210: a series reaches the page as an event, the session waits (yellow), the answers come back as one tool result
+    { let q = null, during = null, seenAfter = null; const seen = {};
+      const r = await chat(U, 'ASKTOOL r210', { onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => { during = await primary(); seen.stranger = (await call('/api/work/answer', D, { id: ev.id, answers: [] })).status; seen.go = (await call('/api/work/answer', U, { id: ev.id, answers: [{ id: 'which', picked: ['left', 'right'] }, { id: 'what', picked: ['b', 'zzz'], other: 'ignored' }] })).status; })(); } } });
+      const res = askOf(r.events).result || {}; seenAfter = await primary();
+      const ans = res.answers || [];
+      check('R210', 'T-245 ask_user: a question series reaches the page as a bridge_question event (kinds, options, recommended defaults), its session is "waiting" (kind question, ref = the question) while it is open, and the answers come back to the AI as one tool result (what was picked, cut to what each question allows, by: user); then the event bridge_answered closes it and the session is no longer waiting; another person cannot answer it',
+        !!q && q.questions.length === 2 && q.questions[0].kind === 'single' && q.questions[0].default[0] === 'right' && q.questions[1].kind === 'checklist' && q.questions[1].other === false && q.timeoutSec === 600
+        && during.state === 'waiting' && during.waiting.kind === 'question' && during.waiting.ref === q.id
+        && seen.stranger === 404 && seen.go === 200 && res.answered === true && res.by === 'user' && ans[0].picked.join() === 'left' && ans[1].picked.join() === 'b' && !ans[1].other && ans[1].labels.join() === 'b'
+        && r.events.some((e) => e.type === 'bridge_answered' && e.id === q.id && e.by === 'user') && seenAfter.state !== 'waiting' && !seenAfter.waiting,
+        `event ${q ? q.questions.map((x) => x.kind + ':' + (x.default || []).join('+')).join(' / ') + ' timeout ' + q.timeoutSec : 'none'} · during ${during && during.state}/${during && during.waiting && during.waiting.kind} · stranger ${seen.stranger}, answer ${seen.go} · result ${JSON.stringify(res).slice(0, 200)} · after ${seenAfter.state}`); }
+    // R211: nobody answers: after the timeout the recommended answers are used, and the AI is told so
+    { const t0 = Date.now(); const r = await chat(U, 'ASKTOOL TIMEOUT r211'); const took = Date.now() - t0, res = askOf(r.events).result || {}, ans = res.answers || [], p = await primary();
+      check('R211', 'T-245 an unanswered question times out (timeoutSec, default 10 minutes): the recommended answers are used (by: default, timedOut: true) and the AI is told so, the page gets bridge_answered by default, and the session is no longer waiting',
+        res.answered === true && res.by === 'default' && res.timedOut === true && ans[0].picked.join() === 'right' && ans[1].picked.join() === 'a,c' && ans.every((x) => x.by === 'default')
+        && r.events.some((e) => e.type === 'bridge_answered' && e.by === 'default') && took >= 1800 && took < 20000 && !p.waiting,
+        `result ${JSON.stringify(res).slice(0, 220)} · took ${took} ms · waiting after ${JSON.stringify(p.waiting)}`); }
+    // R212: a question belongs to the session whose run asked, so a person with two sessions running is asked in the right one
+    { const sid = (await call('/api/work/sessions/new', U, { title: 'r212', background: true })).data.id; const seen = {}; let q = null;
+      if (sid) {
+        const first = call('/api/chat', U, { message: 'SLOW r212 first session' }); await sleep(600);
+        const r = await chat(U, 'ASKTOOL r212', { session: sid, onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => {
+          const list = (await call('/api/work/questions?session=' + sid, U)).data.questions || []; seen.listed = list.length === 1 && list[0].id === ev.id;
+          seen.otherSession = ((await call('/api/work/questions?session=none', U)).data.questions || []).length;
+          const all = await sessionsOf(); seen.child = (all.find((x) => x.id === sid) || {}).state; seen.first = (all.find((x) => x.primary) || {}).state;
+          seen.answer = (await call('/api/work/answer', U, { id: ev.id, defaults: true })).status; })(); } } });
+        await first; const res = askOf(r.events).result || {};
+        seen.by = res.by; seen.session = q && q.session;
+        await call('/api/work/sessions/delete', U, { id: sid });
+      }
+      check('R212', 'T-245 a question is asked in the session whose run asked it (its MCP relay names the session): its event carries the session id, GET /api/work/questions lists it for that session only, that session is "waiting" while another session of the same person is "working" (not waiting); {defaults: true} answers with the recommended answers',
+        !!sid && seen.session === sid && seen.listed && seen.otherSession === 0 && seen.child === 'waiting' && seen.first === 'working' && seen.answer === 200 && seen.by === 'default',
+        `event session ${seen.session} (asked in ${sid}) · listed ${seen.listed}, other session lists ${seen.otherSession} · states: asking ${seen.child}, other ${seen.first} · answer ${seen.answer} by ${seen.by}`); }
+    // R213: a call longer than one HTTP request is held (the relay polls), and "I am on it" (activity) starts the timeout over
+    { let q = null; const seen = {};
+      const r = await chat(U, 'ASKTOOL POLL r213', { onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => {
+        await sleep(1500); const act = await call('/api/work/answer', U, { id: ev.id, activity: true }); seen.act = act.status; seen.dl = act.data.deadline;
+        await sleep(1700); seen.go = (await call('/api/work/answer', U, { id: ev.id, answers: [{ id: 'which', picked: ['right'] }] })).status; })(); } } });
+      const res = askOf(r.events).result || {}, ans = res.answers || [];
+      check('R213', 'T-245 a question may wait longer than one tool call is held: the hub answers {pending, id} after pollSec and the MCP relay asks again with {poll: id}; the answer still arrives as the tool result (picked what was sent, the unanswered question took its recommended answer: by mixed); {activity: true} says the person is on it and restarts the timeout (a new deadline)',
+        !!q && seen.act === 200 && seen.dl > q.deadline && seen.go === 200 && res.answered === true && res.by === 'mixed' && !res.timedOut && ans[0].by === 'user' && ans[1].by === 'default' && ans[1].picked.join() === 'a,c',
+        `activity ${seen.act} deadline ${seen.dl} (was ${q && q.deadline}) · answer ${seen.go} · result ${JSON.stringify(res).slice(0, 200)}`); }
+    // R214: a stopped run ends its open question; the tool is offered by the JavaScript and the native MCP servers and the page shows the event
+    { let q = null; const seen = {};
+      await chat(U, 'ASKTOOL r214', { onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => { await sleep(400); seen.during = (await primary()).state; await call('/api/stop', U, {}); })(); } } });
+      await sleep(300); const p = await primary(); seen.after = p.state; seen.waiting = p.waiting; seen.open = ((await call('/api/work/questions', U)).data.questions || []).length;
+      seen.late = q ? (await call('/api/work/answer', U, { id: q.id, defaults: true })).status : 0;
+      const nativeTools = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+      const jsTools = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+      const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      check('R214', 'T-245 stopping the run ends its open question (the session is no longer waiting, nothing is left open, a late answer finds no question: 404); [static] ask_user is offered by team-mcp.js and by the native host MCP (mcp-tools.json), and the Work page shows bridge_question and sends the answer to /api/work/answer',
+        !!q && seen.during === 'waiting' && seen.after !== 'waiting' && !seen.waiting && seen.open === 0 && seen.late === 404 && jsTools.includes('ask_user') && nativeTools.includes('ask_user') && /bridge_question/.test(page) && /\/api\/work\/answer/.test(page),
+        `while open ${seen.during} · after the stop ${seen.after} waiting ${JSON.stringify(seen.waiting)} · open ${seen.open} · late answer ${seen.late} · js tool ${jsTools.includes('ask_user')} native tool ${nativeTools.includes('ask_user')}`); }
+  } else for (const [id, l] of [['R210', 'a question series reaches the page and the answers come back'], ['R211', 'an unanswered question takes the recommended answers'], ['R212', 'a question is asked in the session that asked'], ['R213', 'a long question polls; activity restarts the timeout'], ['R214', 'a stopped run ends its question']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R240-R244 (T-246 / T-248): the question UI's page, the person's "when the AI asks" setting, the activity rule, the alert prefs
+    const askOf = (events) => { const t = texts(events).split('\n').find((l) => l.startsWith('ASK:')); try { return JSON.parse(t.slice(4)); } catch { return {}; } };
+    const askOnce = async (msg, after) => { let q = null; const seen = {};
+      const r = await chat(U, msg, { onEvent: (ev) => { if (ev.type === 'bridge_question') { q = ev; (async () => { try { await after(ev, seen); } catch {} seen.go = (await call('/api/work/answer', U, { id: ev.id, defaults: true })).status; })(); } } });
+      return { q, seen, res: askOf(r.events).result || {} }; };
+    // R240: the settings are saved (clamped, add-only: the rest of the prefs stays)
+    const nickBefore = ((await call('/api/prefs', U)).data.prefs || {}).nick;
+    const sv = await call('/api/prefs', U, { ask: { auto: true, minutes: 2, activity: false }, sound: { ask: 55 }, tts: { ask: true } });
+    const pf = (await call('/api/prefs', U)).data.prefs || {};
+    const big = (await call('/api/prefs', U, { ask: { minutes: 99999 } })).data.prefs.ask, small = (await call('/api/prefs', U, { ask: { minutes: 0 } })).data.prefs.ask;
+    await call('/api/prefs', U, { ask: { minutes: 2 } });
+    check('R240', 'T-248 the "when the AI asks" settings are saved per person (ask: auto, minutes, activity; the alert sound volume sound.ask; tts.ask), minutes are kept between 1 and 1440, and the other preferences are left as they were',
+      sv.status === 200 && pf.ask && pf.ask.auto === true && pf.ask.minutes === 2 && pf.ask.activity === false && pf.sound.ask === 55 && pf.tts.ask === true && big.minutes === 1440 && small.minutes >= 1 && pf.nick === nickBefore,
+      `saved ${JSON.stringify(pf.ask)} sound.ask ${pf.sound && pf.sound.ask} tts.ask ${pf.tts && pf.tts.ask} · 99999 -> ${big.minutes}, 0 -> ${small.minutes}`);
+    // R241: a question with no timeoutSec of its own waits as long as the person's setting says
+    { const t = await askOnce('ASKTOOL r241', async () => {});
+      check('R241', 'T-248 a question that has no timeoutSec of its own waits the minutes of the person\'s setting (2 minutes: timeoutSec 120, a deadline 120 s after it was asked), not the 10-minute default',
+        !!t.q && t.q.timeoutSec === 120 && t.q.deadline - t.q.at === 120000 && t.res.answered === true, `timeoutSec ${t.q && t.q.timeoutSec} deadline-at ${t.q && t.q.deadline - t.q.at}`); }
+    // R242: turned off = never; the tool's own timeoutSec still wins over the setting
+    { await call('/api/prefs', U, { ask: { auto: false } });
+      const off = await askOnce('ASKTOOL r242', async () => {});
+      const t0 = Date.now(); const own = await chat(U, 'ASKTOOL TIMEOUT r242'); const took = Date.now() - t0, ownRes = askOf(own.events).result || {};
+      await call('/api/prefs', U, { ask: { auto: true, minutes: 3 } });
+      check('R242', 'T-248 with "use the recommended after N minutes" turned off the question waits until answered (timeoutSec 0, no deadline); a question that brings its own timeoutSec still times out by it',
+        !!off.q && off.q.timeoutSec === 0 && off.q.deadline === null && off.res.answered === true
+        && ownRes.timedOut === true && ownRes.by === 'default' && took < 20000, `off: timeoutSec ${off.q && off.q.timeoutSec} deadline ${off.q && off.q.deadline} · own timeout: ${ownRes.timedOut} after ${took} ms`); }
+    // R243: any activity restarts the wait from the person's setting (the page sends it for a click, a key, a focus)
+    { const t = await askOnce('ASKTOOL r243', async (ev, seen) => { await sleep(1300); const a = await call('/api/work/answer', U, { id: ev.id, activity: true }); seen.act = a.status; seen.dl = a.data.deadline; });
+      check('R243', 'T-248 activity on a question restarts the wait from the person\'s setting (3 minutes): the new deadline is 180 s from the activity, later than the first one',
+        !!t.q && t.q.timeoutSec === 180 && t.seen.act === 200 && t.seen.dl > t.q.deadline && t.seen.dl - Date.now() > 170000 && t.seen.dl - Date.now() <= 180000, `first ${t.q && t.q.deadline - t.q.at} ms, after activity +${t.seen.dl - t.q.at} ms from the ask`); }
+    await call('/api/prefs', U, { ask: { auto: true, minutes: 10, activity: true }, sound: { ask: 80 }, tts: { ask: false } });
+    // R244: the page (static: no browser here)
+    { const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      check('R244', 'T-246/T-248 [static] the Work page shows a question series one at a time (Back / Next / Done, radio, checkboxes, checklist with select all / none and a filter, own answer, recommended marked, countdown, Use the recommended), restores it after a reload (GET /api/work/questions, sessionStorage), the "User action required" tone has its own kind and volume in Settings, a "When the AI asks" settings group, speech and the desktop notification respect do-not-disturb, and any activity is sent at most every 15 s',
+        /function showQuestion/.test(page) && /'Next'/.test(page) && /'Done'/.test(page) && /Select all/.test(page) && /Select none/.test(page) && /Filter the list/.test(page) && /qrec/.test(page) && /Use the recommended/.test(page) && /restoreQuestions/.test(page) && /api\/work\/questions/.test(page) && /sessionStorage/.test(page)
+        && /ask: \[0, 0\.95\]/.test(page) && /id="volAsk"/.test(page) && /id="setAskMin"/.test(page) && /When the AI asks/.test(page) && /User action required/.test(page) && /if \(dndOn\(\)\) return;\s*\n\s*if \(P\.sound\.on\) playTone\('ask'/.test(page) && /NATIVE\.call\('notify', \{ title: 'User action required'/.test(page) && /now - lastPoke < 15000/.test(page),
+        'page checked'); }
+  } else for (const [id, l] of [['R240', 'the question settings are saved'], ['R241', 'a question waits the person\'s minutes'], ['R242', 'off = never; the tool\'s own timeout wins'], ['R243', 'activity restarts the wait'], ['R244', 'the question UI on the page']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R255-R259 (T-239): the person's project index, pin / hide, remove my worktree, admin delete (to the trash)
+    const PR = path.join(SCRATCH, 'projects'), TRASH = path.join(PR, '_trash');
+    const gg = (cwd, ...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+    const mine = async (tok, q = '') => (await call('/api/projects/mine' + q, tok)).data;
+    const row = (d, n) => (d.projects || []).find((p) => p.name === n) || {};
+    const profU = path.join(SB, 'profiles', 't-user', 'projects.json');
+    await call('/api/projects', A, { name: 'idx-one' }); await call('/api/projects', A, { name: 'idx-two' });
+    await call('/api/workspace', U, { project: 'idx-one' }); await call('/api/workspace', A, { project: 'idx-one' });
+    // R255: the index
+    const u1 = await mine(U), a1 = await mine(A), fj = await mine(U, '?forgejo=1');
+    check('R255', 'T-239 GET /api/projects/mine is the person\'s index: VibeRoller first-class, a project they work in is "mine" with its worktree (branch, dirty, unmerged count) and when they last used it, one they have not touched is listed under discover, another person\'s worktree shows in "othersWorktrees"; Forgejo repos are only listed on request and say so when no token is saved',
+      row(u1, 'VibeRoller').hub === true && row(u1, 'idx-one').mine === true && row(u1, 'idx-one').lastUsed > 0 && row(u1, 'idx-one').worktree && row(u1, 'idx-one').worktree.branch === 'work/t-user' && row(u1, 'idx-one').worktree.dirty === false
+      && row(u1, 'idx-two').mine === false && u1.discover.includes('idx-two') && !u1.discover.includes('idx-one') && (row(a1, 'idx-one').othersWorktrees || []).includes('t-user') && (row(u1, 'idx-one').othersWorktrees || []).includes('t-admin')
+      && u1.forgejo === undefined && fj.forgejo && fj.forgejo.available === false && Array.isArray(fj.forgejo.repos) && u1.admin === false && a1.admin === true,
+      `idx-one ${JSON.stringify(row(u1, 'idx-one')).slice(0, 220)} discover ${JSON.stringify(u1.discover)} forgejo ${JSON.stringify(fj.forgejo).slice(0, 90)}`);
+    // R256: pin / hide, per person, stored add-only
+    const pin = await call('/api/projects/pin', U, { project: 'idx-one', on: true }), hide = await call('/api/projects/hide', U, { project: 'idx-two', on: true });
+    const u2 = await mine(U), a2 = await mine(A), bad = await call('/api/projects/pin', U, { project: 'nope-x' });
+    const stored1 = JSON.parse(fs.readFileSync(profU, 'utf8'));
+    await call('/api/projects/hide', U, { project: 'idx-two', on: false });
+    const stored2 = JSON.parse(fs.readFileSync(profU, 'utf8')), u3 = await mine(U);
+    check('R256', 'T-239 pin and hide are the person\'s own (another person\'s list is unchanged), a pinned project sorts first, a hidden one is flagged and leaves discover, they are kept in <profile>/projects.json (add-only: showing again keeps the entry and the last-used time), and an unknown project → 404',
+      pin.status === 200 && hide.status === 200 && u2.projects[0].name === 'idx-one' && row(u2, 'idx-one').pinned === true && row(u2, 'idx-two').hidden === true && !u2.discover.includes('idx-two') && row(a2, 'idx-one').pinned === false && row(a2, 'idx-two').hidden === false
+      && bad.status === 404 && stored1.projects['idx-one'].pinned === true && stored1.projects['idx-one'].usedAt > 0 && stored1.projects['idx-two'].hidden === true && stored2.projects['idx-two'] && stored2.projects['idx-two'].hidden === false && stored2.projects['idx-one'].usedAt === stored1.projects['idx-one'].usedAt && row(u3, 'idx-two').hidden === false,
+      `first ${u2.projects[0].name} pinned ${row(u2, 'idx-one').pinned} A sees pinned ${row(a2, 'idx-one').pinned} stored ${JSON.stringify(stored2.projects).slice(0, 140)} bad ${bad.status}`);
+    // R257: remove MY worktree
+    const dU = path.join(PR, 'idx-one', 't-user'), dA = path.join(PR, 'idx-one', 't-admin'), repo1 = path.join(PR, 'idx-one', '_repo');
+    fs.writeFileSync(path.join(dU, 'mine.txt'), 'committed\n'); gg(dU, 'add', '-A'); gg(dU, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-m', 'my commit');
+    fs.writeFileSync(path.join(dU, 'wip.txt'), 'uncommitted\n');
+    const slow = chat(U, 'SLOW r257 hold the project'); await sleep(900);
+    const busy = await call('/api/projects/remove-worktree', U, { project: 'idx-one' });
+    await slow;
+    const hubRm = await call('/api/projects/remove-worktree', U, { project: 'VibeRoller' }), noWt = await call('/api/projects/remove-worktree', U, { project: 'idx-two' });
+    const rm = await call('/api/projects/remove-worktree', U, { project: 'idx-one' });
+    const refs = gg(repo1, 'for-each-ref', '--format=%(refname)', 'refs/viberoller/removed/t-user/').stdout.trim().split('\n').filter(Boolean);
+    const kept = refs[0] ? gg(repo1, 'ls-tree', '-r', '--name-only', refs[0]).stdout : '';
+    const again = await call('/api/projects/remove-worktree', U, { project: 'idx-one' }), u4 = await mine(U);
+    check('R257', 'T-239 "remove my worktree": refused (409) while one of their sessions works in the project; VibeRoller → 400, no worktree → 409; otherwise their uncommitted file is committed, the unmerged branch is kept as refs/viberoller/removed/<user>/<stamp> (both files on it), the worktree folder and work/<user> go, another person\'s worktree of the project is untouched, and the project says "no worktree of mine"',
+      busy.status === 409 && /working/.test(busy.data.error || '') && hubRm.status === 400 && noWt.status === 409 && rm.status === 200 && /kept as refs\/viberoller\/removed\/t-user\//.test(rm.data.message || '') && !fs.existsSync(dU)
+      && refs.length >= 1 && /mine\.txt/.test(kept) && /wip\.txt/.test(kept) && gg(repo1, 'rev-parse', '--verify', '--quiet', 'refs/heads/work/t-user').status !== 0 && fs.existsSync(path.join(dA, '.git')) && again.status === 409 && row(u4, 'idx-one').mine === false,
+      `busy ${busy.status} ${busy.data.error} · hub ${hubRm.status} · none ${noWt.status} · removed ${rm.status} ${(rm.data.message || rm.data.error || '').slice(0, 120)} · refs ${refs.join(',')} · kept files ${kept.trim().replace(/\n/g, ',')}`);
+    // R258: delete a whole project: admin only, nobody else's worktree, moved to the trash
+    const wt258 = (...a) => spawnSync(process.execPath, [path.join(SB, 'worktree.js'), ...a], { cwd: SB, encoding: 'utf8' });
+    wt258('--project', 'idx-two', 'ensure', 't-user');
+    const delU = await call('/api/projects/delete', U, { project: 'idx-two' }), delOthers = await call('/api/projects/delete', A, { project: 'idx-two' });
+    await call('/api/projects/remove-worktree', U, { project: 'idx-two' });
+    const delHub = await call('/api/projects/delete', A, { project: 'VibeRoller' }), delNone = await call('/api/projects/delete', A, { project: 'nope-x' });
+    fs.writeFileSync(path.join(dA, 'admin-note.txt'), 'admin work\n');
+    const del = await call('/api/projects/delete', A, { project: 'idx-two' }), del1 = await call('/api/projects/delete', A, { project: 'idx-one' });
+    const trashed = fs.existsSync(TRASH) ? fs.readdirSync(TRASH) : [];
+    const t1 = trashed.find((n) => n.startsWith('idx-one-')) || '', t2 = trashed.find((n) => n.startsWith('idx-two-')) || '';
+    const a3 = await mine(A);
+    await call('/api/workspace', U, { project: 'VibeRoller' }); await call('/api/workspace', A, { project: 'VibeRoller' });
+    check('R258', 'T-239 deleting a project: only an admin (403), never VibeRoller (400), an unknown one 404, refused (409) while another person still has a worktree in it (naming them); when it is only the admin\'s own, the whole folder is MOVED to <projectsRoot>/_trash/<name>-<stamp> (nothing erased: the repo and the admin\'s uncommitted file are in it), the answer says so, and it leaves the list',
+      delU.status === 403 && delOthers.status === 409 && /t-user/.test(delOthers.data.error || '') && delHub.status === 400 && delNone.status === 404 && del.status === 200 && del1.status === 200 && /not deleted/.test(del.data.message || '')
+      && !fs.existsSync(path.join(PR, 'idx-two')) && !fs.existsSync(path.join(PR, 'idx-one')) && !!t1 && !!t2 && fs.existsSync(path.join(TRASH, t2, '_repo', '.git')) && fs.existsSync(path.join(TRASH, t1, 't-admin', 'admin-note.txt')) && !row(a3, 'idx-one').name && !row(a3, 'idx-two').name,
+      `user ${delU.status} others ${delOthers.status} ${delOthers.data.error} · hub ${delHub.status} none ${delNone.status} · two ${del.status} one ${del1.status} · trash ${trashed.join(',')}`);
+    // R259: the page (static)
+    const page259 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R259', 'T-239 [static] Settings has a "My projects" section (id projBox) that lists the index from /api/projects/mine and offers Pin / Hide, Remove my worktree and (admins) Delete project, each destructive one asking twice, shows what the trash does, and lists the Forgejo repos only when asked',
+      /id="projBox"/.test(page259) && /function renderMyProjects/.test(page259) && /\/api\/projects\/mine/.test(page259) && /\/api\/projects\/pin/.test(page259) && /\/api\/projects\/hide/.test(page259) && /\/api\/projects\/remove-worktree/.test(page259) && /\/api\/projects\/delete/.test(page259) && /Remove my worktree/.test(page259) && /Delete project/.test(page259) && /List my Forgejo repos/.test(page259) && /nothing is erased/.test(page259), 'page checked');
+  } else for (const [id, l] of [['R255', 'the person\'s project index'], ['R256', 'pin and hide'], ['R257', 'remove my worktree'], ['R258', 'delete a project (admin, to the trash)'], ['R259', 'the My projects section on the page']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R215 to R219 (T-262): presence on the task board. mills (D) holds claims; t-user (U) looks; T-Admin (A) makes tasks
+    const find215 = async (tok, id) => ((await call('/api/board', tok)).data.tasks || []).find((t) => t.id === id) || {};
+    const keep215 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+    const seen = {};
+    const t215 = (await call('/api/board/create', A, { title: 'r215 presence on a card', assignee: 'mills' })).data.task;
+    if (t215) {
+      await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
+      await call('/api/presence', D, { device: 'r215x', gone: true });
+      await call('/api/board/claim', D, { id: t215.id, minutes: 30 });
+      // R215: the live status of the holder and the assignee on the card (the board view and one task), seen by another person
+      const stopA = keep215(D, 'r215a'); await sleep(500);
+      await call('/api/presence', D, { device: 'r215a', idle: false });
+      const card = await find215(U, t215.id), one = (await call('/api/board/task?id=' + t215.id, U)).data.task || {};
+      seen.card = card; seen.one = one;
+      // R216: the claim holder goes offline (appear offline) with the claim held: the card is marked; back online, it is not
+      await call('/api/presence/me', D, { override: 'offline' }); await sleep(200);
+      seen.off = await find215(U, t215.id); const self216 = await find215(D, t215.id);
+      await call('/api/presence/me', D, { override: 'auto' }); await sleep(200);
+      seen.on = await find215(U, t215.id);
+      // R217: the assign picker data: people with available (accepting work and not offline), and what each holds
+      await call('/api/presence/me', D, { acceptingWork: true }); await sleep(200);
+      const pe = async (tok) => ((await call('/api/board', tok)).data.people || []).find((p) => p.user === 'mills') || {};
+      seen.av = await pe(U);
+      await call('/api/presence/me', D, { override: 'offline' }); await sleep(200); seen.avOff = await pe(U);
+      await call('/api/presence/me', D, { override: 'auto', acceptingWork: false }); await sleep(200); seen.avNo = await pe(U);
+      // R218: a list / one task as the board tools give them (the same operation) carries presence
+      const list = (await call('/api/board', U)).data; seen.everyone = (list.people || []).length >= 3;
+      // R219: a person whose run works while they are offline is not a stale claim: Working, not holderOffline
+      stopA(); await call('/api/presence', D, { device: 'r215a', gone: true }); await sleep(300);
+      seen.gone = await find215(U, t215.id);
+      const slow = call('/api/chat', D, { message: 'SLOW r215' }); await sleep(800);
+      seen.work = await find215(U, t215.id); await slow;
+      await call('/api/board/release', D, { id: t215.id }); await call('/api/board/delete', A, { id: t215.id });
+      seen.self = self216;
+    }
+    const h = (c) => (c && c.holder) || {};
+    check('R215', 'T-262 a card shows the live status of whoever holds its claim (holder: user, presence, label, since) and of its assignee (assigneeStatus), in the board view and in one task',
+      !!t215 && h(seen.card).user === 'mills' && h(seen.card).presence === 'online' && h(seen.card).label === 'Online' && typeof h(seen.card).since === 'number' && (seen.card.assigneeStatus || {}).user === 'mills' && h(seen.one).user === 'mills' && (seen.one.assigneeStatus || {}).label === 'Online',
+      `holder ${JSON.stringify(h(seen.card))} · assignee ${(seen.card && seen.card.assigneeStatus || {}).label} · one task holder ${h(seen.one).user}`);
+    check('R216', 'T-262 a claim whose holder is offline is marked (claim.holderOffline and holderOffline on the card) so it can be taken over; back online, the mark is gone',
+      !!t215 && seen.off.holderOffline === true && (seen.off.claim || {}).holderOffline === true && h(seen.off).presence === 'offline' && !seen.on.holderOffline && !(seen.on.claim || {}).holderOffline && !seen.card.holderOffline,
+      `offline: ${seen.off && seen.off.holderOffline} (${h(seen.off).label}) · online again: ${seen.on && seen.on.holderOffline}`);
+    check('R217', 'T-262 the board view lists people for the assign picker: available = accepting work and not offline (also what they hold and have assigned); appearing offline or not accepting makes them not available',
+      !!t215 && seen.av.available === true && seen.av.label !== 'Offline' && seen.avOff.available === false && seen.avOff.presence === 'offline' && seen.avNo.available === false && Array.isArray(seen.av.holding) && seen.av.holding.includes(t215.id) && seen.av.assignedOpen >= 1,
+      `available ${seen.av && seen.av.available} (${seen.av && seen.av.label}) · appearing offline ${seen.avOff && seen.avOff.available} · not accepting ${seen.avNo && seen.avNo.available} · holding ${JSON.stringify(seen.av && seen.av.holding)}`);
+    check('R218', 'T-262 the board tools (board_list, task_get: the same operations) carry presence, so an AI can check before assigning; [static] the tools go through board_op_presence and say so in their descriptions',
+      !!t215 && seen.everyone === true && /board_op_presence\(self,/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-hub', 'src', 'modules', 'traits.rs'), 'utf8')) && /holderOffline/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')),
+      `people on the board answer ${seen.everyone}`);
+    check('R219', 'T-262 a holder whose own run is working while they are offline shows Working and the claim is not marked stale; the person sees their own card with their real status',
+      !!t215 && h(seen.gone).presence === 'offline' && seen.gone.holderOffline === true && h(seen.work).working === true && h(seen.work).label === 'Working' && !seen.work.holderOffline && !!seen.self.holder,
+      `offline, idle: ${h(seen.gone).label} stale ${seen.gone && seen.gone.holderOffline} · running: ${h(seen.work).label} stale ${seen.work && seen.work.holderOffline}`);
+  } else for (const [id, what] of [['R215', 'a card shows its holder\'s live status'], ['R216', 'a claim whose holder is offline is marked'], ['R217', 'the assign picker lists who is available'], ['R218', 'the board tools carry presence'], ['R219', 'a working holder is not a stale claim']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R235 to R239 (T-236): device-code sign-in for tools (Jcode PGM): per-device tokens, approve / refuse / revoke
+    const s235 = {};
+    const start = async (extra) => (await call('/api/device/start', null, { client: 'jcodepgm', device: 'r235 laptop', ...(extra || {}) }));
+    const st = await start();
+    const sd = st.data || {};
+    s235.shape = st.status === 200 && typeof sd.deviceCode === 'string' && sd.deviceCode.length >= 48 && /^[A-Z]{4}-[A-Z]{4}$/.test(sd.userCode || '') && sd.expiresIn === 600 && sd.interval === 5 && /device=/.test(sd.verificationUrl || '');
+    s235.p1 = await call('/api/device/poll', null, { deviceCode: sd.deviceCode });
+    s235.p2 = await call('/api/device/poll', null, { deviceCode: sd.deviceCode }); // at once again: too fast
+    s235.wrong = await call('/api/device/approve', U, { userCode: 'BBBB-BBBB' });
+    s235.nosess = await call('/api/device/approve', null, { userCode: sd.userCode });
+    s235.ok = await call('/api/device/approve', D, { userCode: sd.userCode.toLowerCase() });
+    s235.again = await call('/api/device/approve', U, { userCode: sd.userCode });
+    s235.p3 = await call('/api/device/poll', null, { deviceCode: sd.deviceCode });
+    const tok = (s235.p3.data || {}).token;
+    s235.chk = tok ? await call('/api/check', tok) : {};
+    s235.board = tok ? await call('/api/board', tok) : {};
+    s235.notes = tok ? await call('/api/notes', tok) : {};
+    s235.p4 = await call('/api/device/poll', null, { deviceCode: sd.deviceCode }); // a delivered code is spent
+    // R236: the token acts as its person, is its own thing (not the page session), cannot approve more devices
+    s235.viaDev = tok ? await call('/api/device/approve', tok, { userCode: 'BBBB-BBBB' }) : {};
+    s235.sessionStill = (await call('/api/check', D)).status;
+    // R237: devices list: own only; another person sees none and cannot revoke it
+    s235.listD = await call('/api/devices', D); s235.listU = await call('/api/devices', U);
+    const dev = ((s235.listD.data || {}).devices || [])[0] || {};
+    s235.other = await call('/api/devices/revoke', U, { id: dev.id });
+    s235.stillWorks = tok ? (await call('/api/check', tok)).status : 0;
+    s235.listJson = JSON.stringify(s235.listD.data || {});
+    const keep = fs.existsSync(path.join(SB, 'device-tokens.json')) ? fs.readFileSync(path.join(SB, 'device-tokens.json'), 'utf8') : '';
+    s235.hashed = !!tok && keep.includes(crypto.createHash('sha256').update(tok).digest('hex')) && !keep.includes(tok) && !keep.includes(sd.deviceCode);
+    s235.revoke = await call('/api/devices/revoke', D, { id: dev.id });
+    s235.after = tok ? await call('/api/check', tok) : {}; s235.afterBoard = tok ? await call('/api/board', tok) : {};
+    s235.listAfter = await call('/api/devices', D);
+    // R238: refusal and expiry
+    const s2 = (await start()).data;
+    await call('/api/device/poll', null, { deviceCode: s2.deviceCode });
+    s235.deny = await call('/api/device/deny', D, { userCode: s2.userCode });
+    s235.dpoll = await call('/api/device/poll', null, { deviceCode: s2.deviceCode });
+    const s3 = (await start({ expiresIn: 1 })).data; await sleep(1500);
+    s235.exp = await call('/api/device/poll', null, { deviceCode: s3.deviceCode });
+    s235.expApprove = await call('/api/device/approve', D, { userCode: s3.userCode });
+    s235.junk = await call('/api/device/poll', null, { deviceCode: 'nope' });
+    // R239: secrets stay secrets: only a hash of the token is kept, the list never shows it, and the page has the box
+    s235.page = /\/api\/device\/approve/.test(fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8')) && /api\/devices\/revoke/.test(fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'));
+    const s = s235;
+    check('R235', 'T-236 device sign-in: start gives a long device code, a short user code, interval and expiry; polling says pending (428), polling too fast says slow_down (429); a wrong code is refused (404); approving needs a signed-in session (401); after the person approves, the poll gives a NEW token for that person (and the code is spent)',
+      s.shape && s.p1.status === 428 && s.p1.data.pending === true && s.p2.status === 429 && s.p2.data.error === 'slow_down' && s.wrong.status === 404 && s.nosess.status === 401 && s.ok.status === 200 && s.ok.data.client === 'jcodepgm' && s.again.status === 409 && s.p3.status === 200 && typeof tok === 'string' && tok.length >= 48 && s.p3.data.username === 'mills' && tok !== D && s.p4.status === 410,
+      `start ${st.status} shape ${s.shape} · pending ${s.p1.status} · fast ${s.p2.status} · wrong ${s.wrong.status} · no session ${s.nosess.status} · approve ${s.ok.status} · twice ${s.again.status} · poll ${s.p3.status} ${s.p3.data && s.p3.data.username} · spent ${s.p4.status}`);
+    check('R236', 'T-236 the device token works as its person on the API (/api/check, the board, the notes) while the page session goes on; but it cannot approve another device (403)',
+      s.chk.status === 200 && (s.chk.data.user || s.chk.data.username || '') !== '' && s.board.status === 200 && s.notes.status === 200 && s.viaDev.status === 403 && s.sessionStill === 200,
+      `check ${s.chk.status} · board ${s.board.status} · notes ${s.notes.status} · approve with a device token ${s.viaDev.status} · page session ${s.sessionStill}`);
+    check('R237', 'T-236 Settings lists a person\'s own devices (name, client, created, lastUsed; never the token), another person sees none and cannot revoke it (404); revoking stops the token at once on every route (401) and it leaves the list',
+      s.listD.status === 200 && (s.listD.data.devices || []).length === 1 && dev.name === 'r235 laptop' && dev.client === 'jcodepgm' && !!dev.created && dev.current === false && !s.listJson.includes(tok) && (s.listU.data.devices || []).length === 0 && s.other.status === 404 && s.stillWorks === 200 && s.revoke.status === 200 && s.after.status === 401 && s.afterBoard.status === 401 && (s.listAfter.data.devices || []).length === 0,
+      `own ${(s.listD.data.devices || []).length} · other ${(s.listU.data.devices || []).length} · other revokes ${s.other.status} · revoke ${s.revoke.status} · token after ${s.after.status}/${s.afterBoard.status} · list after ${(s.listAfter.data.devices || []).length}`);
+    check('R238', 'T-236 a refused sign-in: the poll says denied (403) and gives no token; a request past its time says expired (410) and cannot be approved; an unknown device code is 410 too',
+      s.deny.status === 200 && s.deny.data.approved === false && s.dpoll.status === 403 && s.dpoll.data.denied === true && !s.dpoll.data.token && s.exp.status === 410 && s.exp.data.expired === true && s.expApprove.status === 404 && s.junk.status === 410,
+      `deny ${s.deny.status} · poll ${s.dpoll.status} · expired ${s.exp.status} · approve expired ${s.expApprove.status} · unknown ${s.junk.status}`);
+    check('R239', 'T-236 only a hash of a device token is kept (device-tokens.json holds neither the token nor the device code); [static] the page has the user-code box (approve) and the Signed-in devices list with Revoke',
+      s.hashed && s.page, `hashed ${s.hashed} · page ${s.page}`);
+  } else for (const [id, what] of [['R235', 'device sign-in: start, pending, slow_down, approve, token'], ['R236', 'a device token works as its person'], ['R237', 'own devices listed, revoke stops the token'], ['R238', 'a refused or expired device sign-in'], ['R239', 'device tokens kept hashed; the page has the box']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R270-R274 (T-250): the Products section of the Download panel: the team's product releases through the hub, with the hub's own Forgejo token
+    const s270 = {};
+    s270.anon = await call('/api/releases'); s270.anonFile = await call('/api/releases/file?product=fake-prod&tag=v2.0.0&asset=fake-prod-windows-x86_64.zip');
+    s270.list = await call('/api/releases', U);
+    const prods = (s270.list.data || {}).products || [], fp = prods.find((x) => x.product === 'fake-prod') || {}, gone = prods.find((x) => x.product === 'fake-gone') || {};
+    const fetchFile = (q, tok) => fetch(H + '/api/releases/file?' + q, { headers: tok ? { Authorization: 'Bearer ' + tok } : {} });
+    const fr = await fetchFile('product=fake-prod&tag=v2.0.0&asset=fake-prod-windows-x86_64.zip', U), got = Buffer.from(await fr.arrayBuffer());
+    s270.file = { status: fr.status, same: got.equals(FAKE_ASSET), cd: fr.headers.get('content-disposition') || '', len: fr.headers.get('content-length') };
+    s270.unlisted = (await fetchFile('product=fake-prod&tag=v2.0.0&asset=..%2F..%2Fetc%2Fpasswd', U)).status;
+    s270.unknownProduct = (await fetchFile('product=nope&tag=v2.0.0&asset=x', U)).status;
+    s270.signedOutFile = (await fetchFile('product=fake-prod&tag=v2.0.0&asset=fake-prod-windows-x86_64.zip', '')).status;
+    const everything = JSON.stringify(s270.list.data) + [...fr.headers.entries()].join(',');
+    const hubLog = fs.existsSync(path.join(SCRATCH, 'hub.log')) ? fs.readFileSync(path.join(SCRATCH, 'hub.log'), 'utf8') : '';
+    const listCalls = () => fakeForgejo.relCalls.filter((c) => /^\/api\/v1\/repos\/UnityAILab\/fake-prod\/releases/.test(c.url)).length;
+    const before = listCalls(); await call('/api/releases', U); const cached = listCalls() === before && before === 1;
+    check('R270', 'T-250 the releases catalogue lists the fake Forgejo\'s releases for a signed-in account: product, label, versions newest first (a draft is left out), date, notes, assets with name, size and the platform guessed from the name (Windows, Linux, macOS); a product whose repo cannot be read says so and the others still list',
+      s270.list.status === 200 && fp.label === 'Fake Product' && (fp.releases || []).map((x) => x.version).join() === 'v2.0.0,v1.0.0' && fp.releases[0].date === '2026-10-20T10:00:00Z' && fp.releases[0].notes === 'Second release notes'
+      && fp.releases[0].assets.map((x) => x.platform).join() === 'Windows,Linux' && fp.releases[0].assets[0].size === FAKE_ASSET.length && fp.releases[1].assets[0].platform === 'macOS' && (gone.releases || []).length === 0 && !!gone.error,
+      `list ${s270.list.status} · ${prods.map((x) => x.product + ':' + (x.releases || []).length).join(' ')} · platforms ${((fp.releases || [{ assets: [] }])[0].assets || []).map((x) => x.platform).join()}`);
+    check('R271', 'T-250 a release file streams through the hub with exactly the right bytes (300 KB), its length and a Content-Disposition naming the file',
+      s270.file.status === 200 && s270.file.same && /attachment; filename="fake-prod-windows-x86_64\.zip"/.test(s270.file.cd) && Number(s270.file.len) === FAKE_ASSET.length,
+      `status ${s270.file.status} · same bytes ${s270.file.same} · ${s270.file.cd} · length ${s270.file.len}`);
+    check('R272', 'T-250 a signed-out request is refused (401) for the catalogue and for a file; a file that is not in the catalogue (a path trick, an unknown product) is 404 and nothing is asked of Forgejo for it',
+      s270.anon.status === 401 && s270.anonFile.status === 401 && s270.signedOutFile === 401 && s270.unlisted === 404 && s270.unknownProduct === 404 && !fakeForgejo.relCalls.some((c) => /passwd|nope/.test(c.url)),
+      `signed out ${s270.anon.status}/${s270.anonFile.status}/${s270.signedOutFile} · unlisted ${s270.unlisted} · unknown product ${s270.unknownProduct}`);
+    check('R273', 'T-250 the hub\'s Forgejo token never appears in any answer (catalogue, file headers) or in the hub log, yet Forgejo got it on every call (a private repo answers 404 without it)',
+      !everything.includes('fake-forgejo-token') && !hubLog.includes('fake-forgejo-token') && fakeForgejo.relCalls.length > 0 && fakeForgejo.relCalls.every((c) => c.auth === 'token fake-forgejo-token'),
+      `answers clean ${!everything.includes('fake-forgejo-token')} · log clean ${!hubLog.includes('fake-forgejo-token')} · calls with the token ${fakeForgejo.relCalls.filter((c) => c.auth === 'token fake-forgejo-token').length}/${fakeForgejo.relCalls.length}`);
+    const html270 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R274', 'T-250 [static] the Download panel has a Products section reading /api/releases and downloading through /api/releases/file (the person\'s platform first); the catalogue is cached (a second look makes no new call to Forgejo)',
+      /\/api\/releases'/.test(html270) && /\/api\/releases\/file\?/.test(html270) && /dlProducts/.test(html270) && cached,
+      `page ${/dlProducts/.test(html270)} · cached ${cached} (${before} call)`);
+  } else for (const [id, what] of [['R270', 'releases catalogue'], ['R271', 'a release file streams'], ['R272', 'signed out refused'], ['R273', 'token never in an answer'], ['R274', 'Products section + cache']]) skip(id, what, '--rust-hub only');
+  if (RUST_HUB) { // R295-R299 (T-244): co-view: the sharer's page says which view it shows, viewers follow it in their own page
+    const DM = 'dm:t-admin|t-user', cvPoll = async (tok, after = 0) => (await call(`/api/coview/poll?after=${after}&ver=-1`, tok)).data;
+    const s295 = {};
+    s295.start = await call('/api/coview/start', A, { conv: DM, screen: 'menu' });
+    s295.outsiderJoin = await call('/api/coview/join', D, { sharer: 't-admin' });
+    s295.outsiderSees = (await cvPoll(D)).available;
+    s295.outsiderStart = await call('/api/coview/start', D, { conv: DM });
+    s295.outsiderView = await call('/api/coview/view', D, { screen: 'board' });
+    s295.join = await call('/api/coview/join', U, { sharer: 't-admin' });
+    const ver0 = (await cvPoll(U)).ver;
+    const waiting = call(`/api/coview/poll?wait=1&after=0&ver=${ver0}`, U); // hangs until the sharer's page shows something new
+    const t0 = Date.now(); await new Promise((r) => setTimeout(r, 400));
+    s295.v1 = await call('/api/coview/view', A, { screen: 'board', item: { kind: 'board-task', id: 'T-77' }, scroll: 0.25 });
+    s295.woke = (await waiting).data; s295.wokeMs = Date.now() - t0;
+    s295.v2 = await call('/api/coview/view', A, { screen: 'notes', item: { kind: 'note', id: 'plans/next.md' } });
+    s295.same = await call('/api/coview/view', A, { screen: 'notes', item: { kind: 'note', id: 'plans/next.md' } });
+    s295.v3 = await call('/api/coview/view', A, { screen: 'shell' });
+    s295.badScreen = await call('/api/coview/view', A, { screen: 'admin' });
+    s295.viewerView = await call('/api/coview/view', U, { screen: 'cal' });
+    s295.uAll = (await cvPoll(U)).mine; s295.uTail = (await cvPoll(U, s295.v2.data.seq)).mine;
+    const seqs = (s295.uAll.views || []).map((v) => v.seq), screens = (s295.uAll.views || []).map((v) => v.screen);
+    check('R295', 'T-244 a sharer posts what the page shows and a viewer\'s waiting poll wakes with it, then gets every view in order (and only the ones after what it already has); showing the same thing twice adds nothing',
+      s295.start.status === 200 && s295.join.status === 200 && s295.woke.mine && s295.woke.mine.view.screen === 'board' && s295.woke.mine.view.item.id === 'T-77' && s295.woke.mine.view.scroll === 0.25 && s295.wokeMs >= 300 && s295.wokeMs < 5000
+      && s295.same.data.seq === s295.v2.data.seq && seqs.join() === [1, 2, 3, 4].join() && screens.join() === 'menu,board,notes,shell' && s295.uTail.views.map((v) => v.screen).join() === 'shell',
+      `woke after ${s295.wokeMs} ms · seqs ${seqs.join()} · screens ${screens.join()} · tail ${(s295.uTail.views || []).map((v) => v.screen).join()}`);
+    check('R296', 'T-244 someone outside the conversation cannot join, see, start or steer a co-view (403 / 400 / 409, and it is not even listed); an unknown screen is refused; a viewer who does not lead cannot post the view (403)',
+      s295.outsiderJoin.status === 403 && (s295.outsiderSees || []).length === 0 && s295.outsiderStart.status === 400 && s295.outsiderView.status === 409 && s295.badScreen.status === 400 && s295.viewerView.status === 403,
+      `join ${s295.outsiderJoin.status} · listed ${(s295.outsiderSees || []).length} · start ${s295.outsiderStart.status} · view ${s295.outsiderView.status} · bad screen ${s295.badScreen.status} · viewer posts ${s295.viewerView.status}`);
+    const s297 = {};
+    s297.untaken = await call('/api/coview/take', U, {}); // not invited yet
+    s297.stranger = await call('/api/coview/handover', U, { to: 't-user' }); // a viewer is not the sharer
+    s297.invite = await call('/api/coview/invite', A, { to: 't-user' });
+    s297.invited = (await cvPoll(U)).mine.invited;
+    s297.take = await call('/api/coview/take', U, {});
+    s297.uView = await call('/api/coview/view', U, { screen: 'cal' });
+    s297.aView = await call('/api/coview/view', A, { screen: 'room' });
+    s297.aState = (await cvPoll(A)).mine;
+    s297.back = await call('/api/coview/handover', A, { to: 't-admin' });
+    s297.backState = (await cvPoll(U)).mine;
+    check('R297', 'T-244 take-over moves the lead: a viewer cannot take it uninvited, the sharer invites, the viewer accepts and then leads (the sharer\'s own posts are refused and the sharer sees the viewer as lead); the sharer can hand it back and the viewer follows again',
+      s297.untaken.status === 403 && s297.stranger.status === 403 && s297.invite.status === 200 && s297.invited === true && s297.take.status === 200 && s297.take.data.mine.lead === 't-user' && s297.uView.status === 200 && s297.aView.status === 403
+      && s297.aState.lead === 't-user' && s297.aState.isLead === false && s297.aState.view.screen === 'cal' && s297.back.status === 200 && s297.backState.lead === 't-admin' && s297.backState.isLead === false,
+      `untaken ${s297.untaken.status} · invite ${s297.invite.status} · take ${s297.take.status} lead ${(s297.take.data.mine || {}).lead} · old lead posts ${s297.aView.status} · back ${s297.backState.lead}`);
+    const s299 = {};
+    s299.secretConv = await call('/api/coview/view', A, { screen: 'room', item: { kind: 'conv', id: 'dm:mills|t-admin', text: 'SECRET-BODY' } });
+    s299.u1 = await call('/api/coview/poll?after=0&ver=-1', U);
+    s299.a1 = await call('/api/coview/poll?after=0&ver=-1', A);
+    s299.work = await call('/api/coview/view', A, { screen: 'shell', item: { kind: 'work-session', id: 'mills' } });
+    s299.u2 = await call('/api/coview/poll?after=0&ver=-1', U);
+    s299.note = await call('/api/coview/view', A, { screen: 'notes', item: { kind: 'note', id: 'private/x.md', text: 'SECRET-BODY', body: 'SECRET-BODY' } });
+    s299.u3 = await call('/api/coview/poll?after=0&ver=-1', U);
+    const raw = JSON.stringify([s299.u1.data, s299.u2.data, s299.u3.data]);
+    const hiddenConv = s299.u1.data.mine.views.find((v) => v.seq === s299.secretConv.data.seq), hiddenWork = s299.u2.data.mine.views.find((v) => v.seq === s299.work.data.seq), noteItem = s299.u3.data.mine.views.find((v) => v.seq === s299.note.data.seq);
+    check('R299', 'T-244 nothing a viewer could not read is carried: a private conversation they are not in, or another person\'s Work session that is not shared with them, reaches them only as "hidden" (no id, no name); an item carries just its kind and id, never content; the sharer still sees their own',
+      s299.secretConv.status === 200 && hiddenConv.item.hidden === true && !hiddenConv.item.id && hiddenWork.item.hidden === true && !hiddenWork.item.id && !raw.includes('dm:mills|t-admin') && !raw.includes('SECRET-BODY')
+      && Object.keys(noteItem.item).sort().join() === 'id,kind' && s299.a1.data.mine.views.find((v) => v.seq === s299.secretConv.data.seq).item.id === 'dm:mills|t-admin',
+      `conv ${JSON.stringify(hiddenConv.item)} · work ${JSON.stringify(hiddenWork.item)} · note item keys ${Object.keys(noteItem.item).join()} · leaked ${raw.includes('SECRET-BODY') || raw.includes('dm:mills|t-admin')}`);
+    const s298 = {};
+    s298.leave = await call('/api/coview/stop', U, {});
+    s298.afterLeave = (await cvPoll(A)).mine;
+    s298.rejoin = await call('/api/coview/join', U, { sharer: 't-admin' });
+    s298.end = await call('/api/coview/stop', A, {});
+    s298.uState = await cvPoll(U); s298.uPost = await call('/api/coview/view', U, { screen: 'board' });
+    s298.joinEnded = await call('/api/coview/join', U, { sharer: 't-admin' });
+    check('R298', 'T-244 stop ends it: a viewer who stops leaves (the sharer sees nobody following, the co-view goes on); when the sharer ends it every viewer\'s page is told (no co-view, nothing listed), nothing can be posted and nobody can join it any more',
+      s298.leave.status === 200 && s298.afterLeave.viewers.length === 0 && s298.rejoin.status === 200 && s298.end.status === 200 && s298.uState.mine === null && (s298.uState.available || []).length === 0 && s298.uPost.status === 409 && s298.joinEnded.status === 404,
+      `viewers after leave ${s298.afterLeave.viewers.length} · after end: mine ${JSON.stringify(s298.uState.mine)} listed ${(s298.uState.available || []).length} · post ${s298.uPost.status} · join ${s298.joinEnded.status}`);
+  } else for (const [id, what] of [['R295', 'a sharer\'s views reach a viewer in order'], ['R296', 'a non-member cannot join'], ['R297', 'take-over moves the lead'], ['R298', 'stop ends a co-view'], ['R299', 'nothing a viewer could not read is carried']]) skip(id, what, '--rust-hub only');
+  { // R260 (T-241): "Reopen what I had open after a reload": a per-person pref, absent = on, kept with the other prefs; the page honours it
+    const html260 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const c0 = (await call('/api/check', U)).data || {};
+    const off = await call('/api/prefs', U, { reopen: false }), afterOff = (await call('/api/check', U)).data || {};
+    const other = await call('/api/prefs', U, { autoScroll: false }), kept = (await call('/api/check', U)).data || {}; // another pref saved: reopen stays off
+    const on = await call('/api/prefs', U, { reopen: true });
+    const page = /id="setReopen"/.test(html260) && /prefs\(\)\.reopen/.test(html260) && /reopen: \$\('setReopen'\)\.checked/.test(html260) && /reopen: p\.reopen !== false/.test(html260);
+    check('R260', 'T-241 "reopen what I had open after a reload" is a per-person setting: absent means on; saving false returns and keeps false (also after another setting is saved); saving true turns it on again; [static] the Settings checkbox exists and the page uses it for the Work conversation and the chat',
+      (c0.prefs || {}).reopen === undefined && off.status === 200 && (off.data.prefs || {}).reopen === false && (afterOff.prefs || {}).reopen === false && (kept.prefs || {}).reopen === false && (on.data.prefs || {}).reopen === true && page,
+      `default ${(c0.prefs || {}).reopen} · off ${(off.data.prefs || {}).reopen} · kept ${(kept.prefs || {}).reopen} · on ${(on.data.prefs || {}).reopen} · page ${page}`);
+  }
+  if (RUST_HUB) { // R261 (T-251): the Downloads list carries a `platform` hint from the User-Agent; the page puts the person's own platform first
+    const ua = async (s) => ((await call('/api/downloads', U, undefined, { 'User-Agent': s })).data || {}).platform;
+    const got = [await ua('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120'), await ua('Mozilla/5.0 (X11; Linux x86_64) Firefox/121'), await ua('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Safari/605'), await ua('Mozilla/5.0 (Linux; Android 14) Chrome/120'), await ua('curl/8.0')];
+    const html261 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const page = /Other platforms/.test(html261) && /d\.platform/.test(html261) && /dataset\.dlMine/.test(html261);
+    check('R261', 'T-251 /api/downloads says which platform the asker\'s User-Agent names (windows, linux, mac, android; empty when it says nothing); [static] the Downloads panel shows the person\'s own platform first and the others under "Other platforms"',
+      got.join(',') === 'windows,linux,mac,android,' && page, `hints ${JSON.stringify(got)} · page ${page}`);
+  } else skip('R261', 'the Downloads platform hint and own-platform-first panel', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R265 to R269 (T-275): planner mode in Work: a session kind whose tools only plan, enforced by the tools and by the hub
+    const probe = (sid, msg) => chat(U, msg, { session: sid }).then((r) => { const m = (texts(r.events).match(/PLANNER:(\{.*\})/) || [])[1]; try { return JSON.parse(m); } catch { return {}; } });
+    const readNote = async (p) => (await call('/api/notes/read?path=' + encodeURIComponent(p), U)).data || {};
+    const bad = await call('/api/work/sessions/new', U, { title: 'r265 bad', background: true, mode: 'nonsense' });
+    const pid = (await call('/api/work/sessions/new', U, { title: 'r265 planner', background: true, mode: 'planner' })).data.id;
+    const nid = (await call('/api/work/sessions/new', U, { title: 'r268 normal', background: true })).data.id;
+    const listed = ((await call('/api/work/sessions', U)).data.sessions || []);
+    const sumP = listed.find((x) => x.id === pid) || {}, sumN = listed.find((x) => x.id === nid) || {};
+    const pr = await probe(pid, 'PLANNERPROBE please');
+    await call('/api/work/sessions/rename', U, { id: pid, title: 'r265 renamed' }); await call('/api/work/sessions/pin', U, { id: pid });
+    const sumP2 = (((await call('/api/work/sessions', U)).data.sessions || []).find((x) => x.id === pid)) || {};
+    const toolsOf = (s) => String(s || '').split(',');
+    check('R265', 'T-275 a planner session\'s run gets no Edit / Write / NotebookEdit and no pc server in its config: POST /api/work/sessions/new {mode: "planner"} shows mode "planner" in the list (a normal one "work", an unknown mode 400, renaming / pinning never changes it); its run has only the board + team servers, Read / Glob / Grep allowed, Edit / Write / NotebookEdit / mcp__pc denied, the permission mode default and the planner segment in its prompt',
+      bad.status === 400 && sumP.mode === 'planner' && sumN.mode === 'work' && sumP2.mode === 'planner'
+        && pr.servers === 'board+team' && ['Read', 'Glob', 'Grep'].every((t) => toolsOf(pr.allowed).includes(t)) && !toolsOf(pr.allowed).some((t) => /^(Edit|Write|NotebookEdit|MultiEdit)$|mcp__pc/.test(t))
+        && ['Edit', 'Write', 'NotebookEdit', 'mcp__pc'].every((t) => toolsOf(pr.denied).includes(t)) && pr.perm === 'default' && pr.planPrompt === true,
+      `bad ${bad.status} · modes ${sumP.mode}/${sumN.mode}/${sumP2.mode} · servers ${pr.servers} · allowed ${pr.allowed} · denied ${pr.denied} · perm ${pr.perm} · prompt ${pr.planPrompt}`);
+    const inside = await readNote('plans/planner-inside-r265.md'), outside = await readNote('planner-outside-r265.md'), tricky = await readNote('planner-tricky-r265.md');
+    check('R266', 'T-275 a notes_write outside plans/ is refused for a planner session\'s run (plans/../x too) while inside plans/ it is written (the board\x27s own writes are the planner\x27s draft flow since T-279: task_create is refused with "Use plan_draft", see R305)',
+      /under plans\//.test(pr.outside || '') && /under plans\//.test(pr.tricky || '') && pr.inside === 'written' && /Use plan_draft: the person approves the plan first/.test(pr.board || '') && /plan r265/.test(inside.text || '') && !outside.text && !tricky.text,
+      `outside: ${pr.outside} · tricky: ${pr.tricky} · inside: ${pr.inside} (${(inside.text || '').slice(0, 12)}) · board ${pr.board}`);
+    await call('/api/notes/delete', U, { path: 'plans/planner-inside-r265.md' }); // the normal session writes it again below
+    const pcr = await probe(pid, 'PLANNERPC please');
+    check('R267', 'T-275 the hub refuses a pc tool from a planner session\'s run even when it is asked for directly (nothing goes to the page; the answer comes at once)',
+      /Planner mode: PC tools are not available/.test(pcr.pc || ''), `pc: ${pcr.pc}`);
+    const nr = await probe(nid, 'PLANNERPROBE please');
+    check('R268', 'T-275 a normal session is unchanged: its run has the pc, board and team servers, nothing denied, no planner prompt, a permission mode of the person\'s own, and notes_write outside plans/ works',
+      nr.servers === 'board+pc+team' && !nr.denied && nr.planPrompt === false && nr.outside === 'written' && nr.inside === 'written',
+      `servers ${nr.servers} · denied "${nr.denied}" · perm ${nr.perm} · prompt ${nr.planPrompt} · outside ${nr.outside} · inside ${nr.inside}`);
+    const pg = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R269', 'T-275 [static] the page has "New planner session" next to New chat, a visible Planner badge, a way back to a normal session, and its requests carry the planner session',
+      /id="newPlanner"[^>]*>New planner session/.test(pg) && /id="plannerBadge"/.test(pg) && /id="leavePlanner"/.test(pg) && /mode: 'planner'/.test(pg) && /planSession/.test(pg), 'index.html');
+    for (const x of ['planner-outside-r265.md', 'plans/planner-inside-r265.md', 'planner-tricky-r265.md']) await call('/api/notes/delete', U, { path: x });
+  } else for (const [id, l] of [['R265', 'a planner session\'s run gets no Edit / Write and no pc server'], ['R266', 'a notes_write outside plans/ is refused for a planner session, inside works'], ['R267', 'a pc tool is refused for a planner session'], ['R268', 'a normal session is unchanged'], ['R269', 'the page has New planner session and the Planner badge']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R305 to R309 (T-279 / T-281): a planner session drafts, the person approves, the HUB writes; the fake Claude's "PLANDRAFT" calls plan_draft through the team relay
+    const planSid = (await call('/api/work/sessions/new', U, { title: 'r305 planner', background: true, mode: 'planner' })).data.id;
+    const boardTasks = async () => (await call('/api/board', U)).data.tasks || [];
+    const taskOf = async (id) => (await call('/api/board/task?id=' + id, U)).data.task || {};
+    const noteText = async (p) => ((await call('/api/notes/read?path=' + encodeURIComponent(p), U)).data || {}).text || '';
+    const planOut = (events) => { const m = (texts(events).match(/PLAN:(\{.*\})/) || [])[1]; try { return JSON.parse(m); } catch { return {}; } };
+    const sessionNow = async () => ((await call('/api/work/sessions', U)).data.sessions || []).find((x) => x.id === planSid) || {};
+    const planRun = (msg, onPlan) => chat(U, msg, { session: planSid, onEvent: (ev) => { if (ev.type === 'bridge_plan') onPlan(ev).catch((e) => console.log('plan handler: ' + e.message)); } });
+    const planAnswer = (ev, body, tok = U) => call('/api/work/plan/answer', tok, { id: ev.id, session: ev.session, ...body });
+    const roomSeq = async () => Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+    const summaries = async (after) => { const out = []; for (const m of (await call('/api/room/messages?since=' + after, U)).data.messages || []) if (m.from === 'claude' && m.as && !m.to) out.push(await roomRead(restored, m) || ''); return out.filter((t) => /Plan "/.test(t)); };
+    const parts = {}; const part = (id, label, pass, detail) => { parts[id] = { label, pass, detail }; };
+    const exId = (await call('/api/board/create', U, { title: 'existing r305', labels: 'keep', priority: 4 })).data.task.id;
+    const mine = (re) => boardTasks().then((l) => l.filter((t) => re.test(t.title)));
+    // R305 + R306 + R309: a run with direct board writes, a draft that gets a change request, then a second draft that is rejected
+    const A = {}; let n305 = 0;
+    const rA = await planRun('PLANDRAFT PLANDIRECT PLANTWICE PLANTOPIC=r305 PLANCHANGE=' + exId, async (ev) => {
+      n305++;
+      if (n305 === 1) {
+        A.ev = ev; A.during = await sessionNow(); A.listed = (await call('/api/work/plans?session=' + planSid, U)).data.plans || [];
+        A.boardDuring = (await mine(/Alpha r305|Beta r305|Gamma r305|planner direct r305/)).length; A.noteDuring = await noteText('plans/plan-r305-original.md');
+        A.stranger = (await planAnswer(ev, { approve: 'all' }, D)).status; A.strangerSees = ((await call('/api/work/plans', D)).data.plans || []).length;
+        A.empty = (await planAnswer(ev, { approve: false, revise: true })).status; A.unknown = (await call('/api/work/plan/answer', U, { id: 'p-nope', approve: 'all' })).status;
+        A.revise = (await planAnswer(ev, { approve: false, revise: true, comment: 'split beta' })).status;
+      } else { A.ev2 = ev; A.reject = (await planAnswer(ev, { approve: false, comment: 'not now' })).status; await sleep(150); A.late = (await planAnswer(ev, { approve: 'all' })).status; }
+    });
+    await sleep(600); // the handler of the second draft finishes its late answer
+    const repA = planOut(rA.events), resA = (repA.result || {}).result || {};
+    check('R305', 'T-279 in a planner session the AI\'s own task_create / task_update are refused ("Use plan_draft: the person approves the plan first") while board_list stays allowed, and nothing reaches the board before an approval',
+      /Use plan_draft: the person approves the plan first/.test(repA.direct || '') && /Use plan_draft: the person approves the plan first/.test(repA.directUpdate || '') && repA.listOk === true && A.boardDuring === 0 && (await mine(/planner direct r305/)).length === 0,
+      `create: ${repA.direct} · update: ${repA.directUpdate} · board_list ok ${repA.listOk} · drafted tasks on the board while waiting ${A.boardDuring}`);
+    const dr = (A.ev || {}).draft || {};
+    check('R306', 'T-279 plan_draft makes the session waiting (kind plan, ref = the draft) and shows the draft on the page as a bridge_plan event (parents with owner / priority / status / blocked on, sub-tasks, the existing-task change, not planned, the source note path); GET /api/work/plans lists it for a page that was away; the draft is saved in the profile; the source note is not written before the answer',
+      A.during && A.during.state === 'waiting' && A.during.waiting && A.during.waiting.kind === 'plan' && A.during.waiting.ref === (A.ev || {}).id && (A.ev || {}).session === planSid
+      && (dr.parents || []).length === 3 && dr.parents[0].owner === 't-user' && dr.parents[0].priority === 1 && dr.parents[0].subtasks.length === 2 && dr.parents[1].status === 'backlog' && dr.parents[1].blockedOn === 'Alpha r305'
+      && (dr.existingChanges || [])[0] && dr.existingChanges[0].id === exId && (dr.notPlanned || []).length === 1 && dr.sourceNote === 'plans/plan-r305-original.md' && dr.sourceChars > 20 && !('sourceText' in dr)
+      && A.listed.length === 1 && A.listed[0].id === A.ev.id && !A.noteDuring,
+      `waiting ${JSON.stringify(A.during && A.during.waiting)} (${A.during && A.during.state}) · parents ${(dr.parents || []).length} · source ${dr.sourceNote} · listed ${(A.listed || []).length} · note before the answer "${(A.noteDuring || '').slice(0, 10)}"`);
+    const ex1 = await taskOf(exId);
+    const ansEvents = rA.events.filter((e) => e.type === 'bridge_plan_answered').map((e) => e.outcome);
+    check('R309', 'T-279 a change request ("change …", text required) goes back to the AI as the tool result and it drafts again; a reject writes nothing (no tasks, no source note, the existing task unchanged); another person cannot answer or see the draft (404, none listed); an unknown draft is 404; the answered draft cannot be answered again; the session is no longer waiting; the page gets bridge_plan_answered each time',
+      A.stranger === 404 && A.strangerSees === 0 && A.empty === 400 && A.unknown === 404 && A.revise === 200 && repA.first === 'split beta' && A.reject === 200 && [404, 409].includes(A.late) && resA.rejected === true && resA.approved === false
+      && (await mine(/Alpha r305|Beta r305|Gamma r305/)).length === 0 && !(await noteText('plans/plan-r305-original.md')) && !(await noteText('plans/plan-r305-plan.md')) && (ex1.labels || []).join() === 'keep'
+      && ansEvents.join() === 'change,rejected' && !(await sessionNow()).waiting && !!A.ev2 && A.ev2.id !== A.ev.id,
+      `stranger ${A.stranger}/${A.strangerSees} · empty change ${A.empty} · unknown ${A.unknown} · revise ${A.revise} (AI got "${repA.first}") · reject ${A.reject} · late ${A.late} · outcomes ${ansEvents} · existing labels ${(ex1.labels || []).join()}`);
+    // R307 + R308: approve two of three parents (the existing-task change waits for "all"), then approve all (blocked, change, source note appended)
+    const seqB = await roomSeq(); let evB = null; const B = {};
+    const rB = await planRun('PLANDRAFT PLANTOPIC=r307 PLANCHANGE=' + exId, async (ev) => { evB = ev; B.status = (await planAnswer(ev, { approve: [0, 2, 9], comment: 'only these' })).status; });
+    const repB = planOut(rB.events), resB = (repB.result || {}).result || {}; const pB = resB.parents || [];
+    const alpha = pB.find((p) => p.index === 0) || {}, gamma = pB.find((p) => p.index === 2) || {};
+    const alphaT = await taskOf(alpha.id), buildT = await taskOf(((alpha.subtasks || [])[1] || {}).id), specT = await taskOf(((alpha.subtasks || [])[0] || {}).id), gammaSub = await taskOf(((gamma.subtasks || [])[0] || {}).id);
+    const srcB = await noteText('plans/plan-r307-original.md'); const ex2 = await taskOf(exId);
+    check('R307', 'T-279 approve some: only the ticked parents and their sub-tasks are written by the hub as "<person> · Claude" (5 tasks, the unticked parent and an out-of-range index ignored), sub-tasks named "T-<parent> · n/m: title" with the parent id as a label and their own owner / priority, the source note holds the person\'s words word for word, the tool result lists the new ids (created, parents, partial), the existing-task change waits for "all"',
+      B.status === 200 && resB.partial === true && (resB.created || []).length === 5 && pB.length === 2 && !(await mine(/Beta r307/)).length
+      && alphaT.title === 'Alpha r307' && alphaT.assignee === 't-user' && alphaT.priority === 1 && (alphaT.labels || []).includes('viberoller') && /Claude/.test(alphaT.createdBy || '') && alphaT.body.includes('plans/plan-r307-original.md') && alphaT.body.includes(`${(alpha.subtasks[0] || {}).id} · 1/2: spec (t-user)`)
+      && specT.title === `${alpha.id} · 1/2: spec` && (specT.labels || []).includes(alpha.id) && specT.assignee === 't-user' && buildT.title === `${alpha.id} · 2/2: build` && buildT.assignee === 'mills' && buildT.priority === 3 && (buildT.labels || []).includes(alpha.id)
+      && gammaSub.title === `${gamma.id} · 1/1: only` && (gammaSub.labels || []).includes(gamma.id)
+      && srcB.includes('Idea one: the alpha.\n\nIdea two: the beta, blocked on the alpha. (r307 1)') && (resB.changes || []).length === 0 && (ex2.labels || []).join() === 'keep' && (repB.result.result.created || []).join() === (resB.created || []).join(),
+      `status ${B.status} · created ${(resB.created || []).join()} · alpha "${alphaT.title}" ${alphaT.assignee} P${alphaT.priority} · sub "${specT.title}" / "${buildT.title}" ${buildT.assignee} · gamma sub "${gammaSub.title}" · source has words ${srcB.includes('Idea two: the beta')} · existing labels ${(ex2.labels || []).join()}`);
+    const sumB = await summaries(seqB); const planNoteB = await noteText('plans/plan-r307-plan.md');
+    const seqC = await roomSeq(); const C = {};
+    const rC = await planRun('PLANDRAFT PLANTOPIC=r307 PLANCHANGE=' + exId, async (ev) => { C.status = (await planAnswer(ev, { approve: 'all' })).status; });
+    const repC = planOut(rC.events), resC = (repC.result || {}).result || {}; const pC = resC.parents || [];
+    const betaT = await taskOf((pC.find((p) => p.index === 1) || {}).id), alphaC = pC.find((p) => p.index === 0) || {}; const ex3 = await taskOf(exId);
+    const srcC = await noteText('plans/plan-r307-original.md'), planNoteC = await noteText('plans/plan-r307-plan.md'); const sumC = await summaries(seqC);
+    part('R308a', 'T-279 approve all: 3 parents + 4 sub-tasks, a parent that is blocked goes to backlog with the label blocked and names the new id of its blocker, the existing-task change is applied (labels, priority, a signed note), the source note is appended with the date instead of replaced (both wordings kept)',
+      C.status === 200 && resC.partial === false && (resC.created || []).length === 7 && betaT.status === 'backlog' && (betaT.labels || []).includes('blocked') && betaT.body.includes(`**Blocked on:** ${alphaC.id} (Alpha r307)`)
+      && (resC.changes || []).length === 1 && resC.changes[0].ok === true && (ex3.labels || []).join() === 'planned-r307' && ex3.priority === 2 && /Planned change: the plan touches it/.test(ex3.body || '')
+      && (srcC.match(/\(r307 1\)/g) || []).length === 2 && /## 20\d\d-\d\d-\d\d/.test(srcC),
+      `status ${C.status} · created ${(resC.created || []).length} · beta ${betaT.status} labels ${(betaT.labels || []).join()} · blocked line ${/Blocked on:\*\* T-\d+ \(Alpha/.test(betaT.body || '')} · change ${JSON.stringify(resC.changes)} · existing ${(ex3.labels || []).join()} P${ex3.priority} · source copies ${(srcC.match(/\(r307 1\)/g) || []).length}`);
+    const c308b = { once: sumB.length === 1 && sumC.length === 1, posted: resB.summaryPosted === true && resC.summaryPosted === true, sumIds: !!sumB[0] && sumB[0].includes(alpha.id) && sumB[0].includes(gamma.id),
+      sumSource: /Source: plans\/plan-r307-original\.md/.test(sumB[0] || ''), blocked: /Blocked: .*waits for/.test(sumC[0] || ''), waits: /Waits for .*:/.test(sumC[0] || ''),
+      noteB: planNoteB.includes(`| ${alpha.id} |`) && !planNoteB.includes(`| ${alphaC.id} |`), noteC: planNoteC.includes(`| ${alpha.id} |`) && planNoteC.includes(`| ${alphaC.id} |`), // the table cell, not a substring: the note's own header names T-281, which holds T-28 table: /\| Task \| Title \| Owner \|/.test(planNoteC),
+      owners: Object.keys(resB.newTasksFor || {}).sort().join() === 'mills,t-user', millsBuild: !!(resB.newTasksFor && resB.newTasksFor.mills && resB.newTasksFor.mills.some((t) => t.id === buildT.id)),
+      userFour: !!(resC.newTasksFor && resC.newTasksFor['t-user'] && resC.newTasksFor['t-user'].length >= 4), planNote: resB.planNote === 'plans/plan-r307-plan.md' };
+    part('R308b', 'T-281 after the write the plan summary is posted once to the team chat as "<person> · Claude" (who got what, what is blocked, what waits for Mills, the source and plan notes), the owner map is appended to plans/<topic>-plan.md with every approval, and the result hands each owner a "new tasks for you" list',
+      Object.values(c308b).every(Boolean),
+      `failing ${Object.keys(c308b).filter((k) => !c308b[k]).join(',') || 'none'} · summaries ${sumB.length}/${sumC.length} · posted ${resB.summaryPosted}/${resC.summaryPosted} · plan note has both approvals ${planNoteC.includes(alpha.id) && planNoteC.includes(alphaC.id)} · owners ${Object.keys(resB.newTasksFor || {}).sort()} · first summary "${(sumB[0] || '').replace(/\n/g, ' | ').slice(0, 160)}"`);
+    const pgPlan = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    part('R308c', 'T-279 [static] the page draws bridge_plan as a draft card (a parents table with checkboxes, Approve all / Approve N of M, Change…, Reject) posting to /api/work/plan/answer, closes it on bridge_plan_answered, and re-reads GET /api/work/plans after a reload; both MCP servers list plan_draft',
+      /ev\.type === 'bridge_plan'/.test(pgPlan) && /bridge_plan_answered/.test(pgPlan) && /\/api\/work\/plan\/answer/.test(pgPlan) && /Approve all/.test(pgPlan) && /Change…/.test(pgPlan) && /Reject/.test(pgPlan) && /restorePlans/.test(pgPlan) && /\/api\/work\/plans/.test(pgPlan)
+      && (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).some((m) => /plan_draft/.test(m)) && JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.some((t) => t.name === 'plan_draft'), 'index.html, team-mcp.js, mcp-tools.json');
+    check('R308', 'T-279 / T-281 approve all, then the hand-off: ' + ['R308a', 'R308b', 'R308c'].map((k) => parts[k].label.replace(/^T-2\d\d /, '')).join(' ;; '), ['R308a', 'R308b', 'R308c'].every((k) => parts[k].pass), ['R308a', 'R308b', 'R308c'].map((k) => (parts[k].pass ? '' : k + ' FAILED: ') + parts[k].detail).join(' || '));
+    for (const x of ['plans/plan-r305-original.md', 'plans/plan-r307-original.md', 'plans/plan-r307-plan.md']) await call('/api/notes/delete', U, { path: x });
+    await call('/api/work/sessions/delete', U, { id: planSid });
+  } else for (const [id, l] of [['R305', 'a planner session\'s direct task_create is refused'], ['R306', 'plan_draft makes the session waiting and shows the draft'], ['R307', 'approve some writes only those parents'], ['R308', 'approve all, blocked, changes, source appended'], ['R309', 'a change request, a reject, another person']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });
@@ -3741,10 +4991,22 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const forbidden = ['fs-', 'term-', 'run-', 'allow-git', 'proxy-', 'settings-', 'pick-folder', 'update-'];
       if (sm.status === 77) skip('R165', L165, sm.stdout.trim());
       else check('R165', L165,
-        sm.status === 0 && /SMOKE smoke-ok/.test(sm.stdout) && new RegExp('SMOKE smoke-main 127\\.0\\.0\\.1:' + PORT + ' \\S+ tools-tile true').test(sm.stdout)
+        sm.status === 0 && /SMOKE smoke-ok/.test(sm.stdout) && new RegExp('SMOKE smoke-main 127\\.0\\.0\\.1:' + PORT + ' \\S+ tools-tile true share-field boolean').test(sm.stdout)
         && !!hubCap && !forbidden.some((f) => hubCap.includes(f)) && /window\("main"\)/.test(hubCap) && toolsCap.windows.join() === 'tools' && !toolsCap.remote
         && /WebviewUrl::App\("tools\.html/.test(mainSrc),
         `smoke ${sm.status} "${(sm.stdout + sm.stderr).replace(/\s+/g, ' ').slice(0, 400)}"; hub capability clean ${!!hubCap && !forbidden.some((f) => hubCap.includes(f))}`);
+      // R290 (T-243): screen sharing in the app's webview is granted to the hub's own page only
+      const capSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'src', 'capture.rs'), 'utf8');
+      const toolsBuilder = (/WebviewWindowBuilder::new\(app, "tools"[^\n]*/g.exec(mainSrc) || [''])[0];
+      const home290 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+      const ut = sm.status === 77 ? { status: 77 } : spawnSync('sh', ['-c', `export RUSTUP_HOME="${home290}/.rustup" CARGO_HOME="${home290}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}" OWNER_HOME="${home290}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; cargo test --release -q -p vr-desktop capture 2>&1`], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+      const L290 = 'screen sharing in the desktop app is granted to the hub\x27s own page only (permission handler, unit tests, app_info.screenShare)';
+      if (sm.status === 77) skip('R290', L290, sm.stdout.trim());
+      else check('R290', 'screen sharing in the desktop app: the main window (the hub\'s page) answers the webview\'s permission requests through one handler that grants capture (screen, microphone, camera) only to the hub\'s own origin and refuses it to any other page, the Tools window has no such handler so it is never granted, Linux turns the WebKitGTK media stream on for the main window only, app_info carries screenShare / screenShareWhy / screenShareAudio (a boolean, read by the hub\'s page in the smoke), and the origin / permission unit tests pass; real capture needs a desktop session and is not exercised here',
+        /\.on_permission_request\(/.test(mainSrc) && /capture::decide\(/.test(mainSrc) && !/on_permission_request/.test(toolsBuilder)
+        && /capture::enable_in_webview\(&main_win\)/.test(mainSrc) && /set_enable_media_stream\(true\)/.test(capSrc) && /capture::capability\(\)/.test(mainSrc)
+        && /screenShare/.test(capSrc) && /is_hub_origin\(page, hub\)/.test(capSrc) && ut.status === 0 && /3 passed; 0 failed|test result: ok\. 3 passed/.test(ut.stdout || ''),
+        `cargo test ${ut.status} "${String(ut.stdout || ut.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
     }
   }
   const ws1 = (await call('/api/work/current', U)).data;

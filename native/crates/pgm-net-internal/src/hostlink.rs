@@ -81,6 +81,9 @@ pub struct Hello {
     pub version: String,
     pub os: String,
     pub caps: Vec<String>,
+    /// The host's own Work-session limits (T-286): { perUser, perProvider, providers, exceptions, ownerBypass }. Optional:
+    /// an older host sends none (the hub's defaults apply), an older hub ignores it.
+    #[serde(rename = "sessionLimits", skip_serializing_if = "Option::is_none")] pub session_limits: Option<Value>,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Release { #[serde(default)] pub version: String, #[serde(default)] pub commit: String }

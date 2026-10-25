@@ -1,5 +1,5 @@
 {
-  "project": "5.15.2",
+  "project": "5.25.3",
   "modules": {
     "bridge/ai-node.js": "3.4.0",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -28,10 +28,10 @@
     "bridge/providers.js": "1.4.0",
     "bridge/restart.js": "1.0.0",
     "bridge/run.js": "1.6.0",
-    "bridge/server.js": "4.2.2",
+    "bridge/server.js": "4.3.1",
     "bridge/set-password.js": "1.0.0",
     "bridge/shares.js": "1.0.0",
-    "bridge/team-mcp.js": "1.0.1",
+    "bridge/team-mcp.js": "1.1.0",
     "bridge/team.js": "1.1.1",
     "bridge/usage.js": "1.2.0",
     "bridge/user-profile.js": "1.0.0",
@@ -39,19 +39,21 @@
     "bridge/vr-host.js": "1.0.0",
     "bridge/vr-setup.js": "1.1.0",
     "bridge/work-state.js": "1.0.0",
-    "bridge/worktree.js": "2.4.0",
+    "bridge/worktree.js": "2.4.1",
     "web/app.js": "1.1.2",
     "web/attach.js": "1.1.0",
-    "web/board.js": "1.0.4",
-    "web/calls.js": "1.0.2",
+    "web/board.js": "1.0.6",
+    "web/calls.js": "1.1.1",
+    "web/coview.js": "1.0.0",
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.1.0",
-    "web/index.html": "1.19.0",
+    "web/index.html": "1.25.1",
     "web/library.js": "1.1.0",
+    "web/localai.js": "1.0.0",
     "web/md.js": "1.0.1",
-    "web/notes.js": "1.0.2",
+    "web/notes.js": "1.0.3",
     "web/polish.css": "1.0.2",
     "web/profile.js": "1.0.1",
-    "web/sw.js": "1.0.3"
+    "web/sw.js": "1.0.5"
   }
 }
