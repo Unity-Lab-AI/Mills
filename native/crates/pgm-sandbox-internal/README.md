@@ -44,6 +44,16 @@ m.stop(&me, &s.id)?;                             // container and exchange folde
 - **Delete:** before removing, the copy chmods its files so the host can delete them; Podman's `unshare rm -rf` is the
   fallback for sub-uid files.
 
+## Engine setup
+
+`Cli::with_env` / `Cli::with_args` (hub config `re.env`, an object of environment variables, and `re.engineArgs`, a list
+of global engine arguments; both default to none). Needed where the account's default container storage cannot run
+containers: on the VibeRoller server /srv/apps/VibeRoller is group-only and rootless Podman answers "OCI permission
+denied", so the hub config there is
+`"engineArgs": ["--root", "/var/tmp/gee-podman/root", "--runroot", "/var/tmp/gee-podman/run"]` (the base image is stored
+there). Hub config in full: `re: { image, maxConcurrent: 3, idleWarnHours: 4, runtime, namePrefix, exchangeDir, env,
+engineArgs, cpus, memory, pidsLimit, capAdd, allowNetwork, maxFileMb, maxQueuedPerOwner }`.
+
 ## Not here (yet)
 
 Windows Docker verification, wiring into the native apps / Jcode PGM, per-user quotas beyond the queue length.

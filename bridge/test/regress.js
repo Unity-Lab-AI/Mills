@@ -300,7 +300,7 @@ async function setup() {
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env, cpus: '1', memory: '512m' } } : {}), rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m' } } : {}), rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -405,23 +405,28 @@ const RUST_HOST = (() => {
 // already in local storage (nothing is pulled), or says why not (the checks then skip). reTestCleanup removes every
 // container the hub made under the test prefix and the image.
 const RE_T = { ok: false, why: 'the Rust hub\'s: --rust-hub runs it', env: {}, image: 'localhost/pgm-re-test:1', prefix: 'pgm-re-test-' };
-function podman(args, env) { return spawnSync('podman', args, { encoding: 'utf8', env: { ...process.env, ...(env || {}) }, timeout: 240000, windowsHide: true }); }
+// eng = { env: extra environment, pre: global engine arguments } (the hub's re.env / re.engineArgs)
+function podman(args, eng) { const e = eng || {}; return spawnSync('podman', [...(e.pre || []), ...args], { encoding: 'utf8', env: { ...process.env, ...(e.env || {}) }, timeout: 240000, windowsHide: true }); }
 function reTestSetup() {
   if (!RUST_HUB) return;
   if (WIN) { RE_T.why = 'the engine here is Docker on Windows: not run by this check (T-303 leaves the Windows path)'; return; }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 're-test-image-')); // outside the scratch copy: its main must stay clean for R109
   RE_T.dir = dir;
-  fs.writeFileSync(path.join(dir, 'Containerfile'), 'FROM docker.io/library/debian:trixie-slim\nRUN useradd -m -u 1000 re\nUSER re\n');
   let why = 'podman is not available';
-  // this account's own HOME first; its real home when the shared HOME has storage the engine cannot use (ACLs on the overlay folders)
-  for (const env of [{}, { HOME: os.userInfo().homedir }]) {
-    if (podman(['version'], env).status !== 0) { why = 'podman is not available'; break; }
-    const b = podman(['build', '--pull=never', '-q', '-t', RE_T.image, '-f', path.join(dir, 'Containerfile'), dir], env);
-    if (b.status !== 0) { why = 'no local debian:trixie-slim image to build the test image from (' + String(b.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
-    const r = podman(['run', '--rm', '--pull=never', '--network', 'none', '--cap-drop', 'ALL', RE_T.image, 'id', '-u'], env);
-    if (r.status !== 0 || r.stdout.trim() !== '1000') { why = 'podman cannot run containers here (' + String(r.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
-    RE_T.ok = true; RE_T.env = env; RE_T.why = '';
-    return;
+  // the engine settings to try, in order: this account's own storage; its real HOME (the shared HOME's overlay folders have ACLs the
+  // engine cannot use); the shared rootless storage on the server (/var/tmp/gee-podman, where the base image lives)
+  const engines = [{ env: {}, pre: [] }, { env: { HOME: os.userInfo().homedir }, pre: [] }, { env: {}, pre: ['--root', '/var/tmp/gee-podman/root', '--runroot', '/var/tmp/gee-podman/run'] }];
+  for (const eng of engines) {
+    if (podman(['version'], eng).status !== 0) { why = 'podman is not available'; break; }
+    for (const from of ['docker.io/library/debian:trixie-slim', 'localhost/pgm-re-base:1.0.0']) {
+      fs.writeFileSync(path.join(dir, 'Containerfile'), `FROM ${from}\nUSER root\nRUN id -u re >/dev/null 2>&1 || useradd -m -u 1000 re\nUSER re\n`);
+      const b = podman(['build', '--pull=never', '-q', '-t', RE_T.image, '-f', path.join(dir, 'Containerfile'), dir], eng);
+      if (b.status !== 0) { why = 'no local debian:trixie-slim image to build the test image from (' + String(b.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
+      const r = podman(['run', '--rm', '--pull=never', '--network', 'none', '--cap-drop', 'ALL', RE_T.image, 'id', '-u'], eng);
+      if (r.status !== 0 || r.stdout.trim() !== '1000') { why = 'podman cannot run containers here (' + String(r.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
+      RE_T.ok = true; RE_T.env = eng; RE_T.why = '';
+      return;
+    }
   }
   RE_T.why = why;
 }

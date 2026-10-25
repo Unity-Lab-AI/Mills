@@ -26,7 +26,8 @@ impl Re {
         let c = cfg.get("re").cloned().unwrap_or(json!({}));
         let root = c["exchangeDir"].as_str().filter(|s| !s.is_empty()).map(std::path::PathBuf::from).unwrap_or_else(|| mills.join("Re"));
         let env: Vec<(String, String)> = c["env"].as_object().map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect()).unwrap_or_default();
-        let cli = Cli::named(c["runtime"].as_str().unwrap_or("auto")).with_env(env);
+        let eargs: Vec<String> = c["engineArgs"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        let cli = Cli::named(c["runtime"].as_str().unwrap_or("auto")).with_env(env).with_args(eargs);
         Re { mgr: Arc::new(Manager::new(Box::new(cli), SbConfig::from_json(root, &c))), ready: Mutex::new(None), reconciled: Default::default() }
     }
 

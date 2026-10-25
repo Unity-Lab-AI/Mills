@@ -83,10 +83,12 @@ pub trait Runtime: Send + Sync {
 pub enum Flavour { Podman, Docker }
 
 /// The `podman` / `docker` command line.
-pub struct Cli { program: String, flavour: Flavour, env: Vec<(String, String)> }
+pub struct Cli { program: String, flavour: Flavour, env: Vec<(String, String)>, args: Vec<String> }
 impl Cli {
-    pub fn podman() -> Cli { Cli { program: "podman".into(), flavour: Flavour::Podman, env: vec![] } }
-    pub fn docker() -> Cli { Cli { program: "docker".into(), flavour: Flavour::Docker, env: vec![] } }
+    pub fn podman() -> Cli { Cli { program: "podman".into(), flavour: Flavour::Podman, env: vec![], args: vec![] } }
+    pub fn docker() -> Cli { Cli { program: "docker".into(), flavour: Flavour::Docker, env: vec![], args: vec![] } }
+    /// Global engine arguments put before every subcommand (Podman: `--root DIR --runroot DIR` for a storage this account can run containers from).
+    pub fn with_args(mut self, args: Vec<String>) -> Cli { self.args = args; self }
     /// "podman" / "docker" by name; "" or "auto": Podman on Linux and macOS, Docker on Windows.
     pub fn named(which: &str) -> Cli {
         match which.to_lowercase().as_str() { "docker" => Cli::docker(), "podman" => Cli::podman(), _ => if cfg!(windows) { Cli::docker() } else { Cli::podman() } }
@@ -95,6 +97,7 @@ impl Cli {
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Cli { self.env = env; self }
     fn cmd(&self) -> Command {
         let mut c = Command::new(&self.program);
+        c.args(&self.args);
         c.envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); } // no console window
         c.stdin(Stdio::null());
