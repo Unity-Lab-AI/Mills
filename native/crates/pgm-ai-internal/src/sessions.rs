@@ -6,7 +6,7 @@
 //! - Every other session: <profile>/work-sessions/<id>.json = { state: {work.json's keys}, current: {work-current.json's
 //!   fields} }.
 //! - The list: <profile>/work-sessions.json = { primary, current (the one open on screen), order, sessions: { id: meta } },
-//!   meta = { title, createdAt, updatedAt, lastActivityAt, folder, pinned, hidden, archived, draft, draftAt, seenAt,
+//!   meta = { mode ("planner"; none = work, T-275), title, createdAt, updatedAt, lastActivityAt, folder, pinned, hidden, archived, draft, draftAt, seenAt,
 //!   lastReplyAt, waiting, worktree, ended }. The person's folders: <profile>/work-folders.json.
 //! - A session's run is keyed by the person for the primary session (as before) and "<user>#<id>" for the others.
 use serde_json::{json, Map, Value};
@@ -38,6 +38,10 @@ fn folders_file(a: &Account) -> PathBuf { a.dir.join("work-folders.json") }
 fn session_file(a: &Account, sid: &str) -> PathBuf { a.dir.join("work-sessions").join(format!("{sid}.json")) }
 fn new_sid() -> String { format!("s-{}", pgm_core_internal::crypto::random_hex(6)) }
 fn valid_sid(x: &str) -> bool { x.len() == 14 && x.starts_with("s-") && x[2..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) }
+/// A session's mode (T-275): "work" (the default, nothing stored) or "planner" (plan-only tools, enforced by the hub).
+fn mode_of_meta(m: &Value) -> &'static str { if m["mode"] == json!("planner") { "planner" } else { "work" } }
+/// True when this session is a planner session (the tool relay and the run read it).
+pub fn is_planner(a: &Account, sid: &str) -> bool { !sid.is_empty() && index_if_any(a).map(|v| mode_of_meta(&v["sessions"][sid]) == "planner").unwrap_or(false) }
 fn meta_new(title: &str) -> Value { let now = now_ms(); json!({ "title": title, "createdAt": now, "updatedAt": now, "lastActivityAt": now, "folder": Value::Null, "pinned": false, "hidden": false, "archived": false, "draft": "", "seenAt": now, "lastReplyAt": 0 }) }
 
 /// The person's list (made the first time from what they had: one primary session).
@@ -118,7 +122,7 @@ fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
     let project = { let p = s(&st, "project"); if p.is_empty() { pgm_collab_internal::worktree::HUB_PROJECT.to_string() } else { p } };
     let mut out = json!({ "id": sid, "title": m["title"], "state": state_of(m, running, now), "running": running, "primary": sx.primary, "host": host_of(&provider), "provider": provider, "model": s(&st, "model"), "project": project,
         "harness": if s(&st, "sessionHarness").is_empty() { "claude".to_string() } else { s(&st, "sessionHarness") }, "folder": m["folder"], "pinned": m["pinned"] == json!(true), "hidden": m["hidden"] == json!(true), "archived": m["archived"] == json!(true),
-        "updatedAt": m["updatedAt"], "lastActivityAt": m["lastActivityAt"], "hasDraft": !s(m, "draft").is_empty(), "worktree": m["worktree"] });
+        "updatedAt": m["updatedAt"], "lastActivityAt": m["lastActivityAt"], "hasDraft": !s(m, "draft").is_empty(), "worktree": m["worktree"], "mode": mode_of_meta(m) });
     if m["ended"].is_object() { out["ended"] = m["ended"].clone(); }
     if m["waiting"].is_object() { out["waiting"] = m["waiting"].clone(); } // what it waits for (T-288): {kind, at, tools?}
     out
@@ -166,6 +170,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             save_file(a, &sid, &json!({ "state": st, "current": {} }));
             let background = b["background"] == json!(true);
             let mut meta = meta_new(&one_line(&b["title"], 120)); meta["folder"] = folder;
+            // the mode is chosen here and never changes (T-275): leaving planner mode means a new, normal session
+            match b["mode"].as_str().unwrap_or("work") { "planner" => { meta["mode"] = json!("planner"); } "work" | "" => {} _ => return Some(answer(400, json!({ "error": "Unknown mode (work or planner)." }))) }
             with_index(a, |v| { v["sessions"][&sid] = meta; let mut order = vec![json!(sid)]; order.extend(v["order"].as_array().cloned().unwrap_or_default()); v["order"] = json!(order); if !background { v["current"] = json!(sid); } });
             answer(200, json!({ "id": sid }))
         }

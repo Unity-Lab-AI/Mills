@@ -98,6 +98,27 @@ process.stdin.on('end', async () => {
     const d = await tool('notes_delete', { path: 'plans/Claude Plan.md' });
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'NOTES:' + JSON.stringify({ wrote: w.ok && w.result.by, listed: l.ok ? l.result.notes.map((n) => n.path) : l.error, read: r.ok ? r.result.text.includes('needle-notes-r118') : r.error, bad: bad.ok, deleted: d.ok }) }] } });
   }
+  // "PLANNERPROBE" (T-275): what this run was handed (tools, permission mode, MCP servers, whether the prompt is the planner's), then
+  // a notes_write outside plans/ and one inside it through the team relay, like a run trying a forbidden thing.
+  // "PLANNERPC": one pc "write" call through the team server's env (a planner run has no pc server; the hub must still refuse).
+  if (input.includes('PLANNERPROBE') || input.includes('PLANNERPC')) {
+    const cfg = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers;
+    const env = cfg.team.env;
+    const call = (route, name, args) => fetch(env.MILLS_BRIDGE + '/internal/' + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const rep = { servers: Object.keys(cfg).sort().join('+'), allowed: opt('--allowedTools'), denied: opt('--disallowedTools'), perm: opt('--permission-mode'), planPrompt: /PLANNER MODE/.test(opt('--append-system-prompt')) };
+    if (input.includes('PLANNERPC')) { const r = await call('pc-tool', 'write', { path: 'x.txt', content: 'x' }); rep.pc = r.ok ? 'done' : r.error; }
+    else {
+      const bad = await call('team', 'notes_write', { path: 'planner-outside-r265.md', text: 'x' });
+      const good = await call('team', 'notes_write', { path: 'plans/planner-inside-r265.md', text: '# plan r265' });
+      const tricky = await call('team', 'notes_write', { path: 'plans/../planner-tricky-r265.md', text: 'x' });
+      const board = await call('board', 'task_create', { title: 'planner task r265' });
+      Object.assign(rep, { outside: bad.ok ? 'written' : bad.error, inside: good.ok ? 'written' : good.error, tricky: tricky.ok ? 'written' : tricky.error, board: board.ok ? 'made' : board.error });
+    }
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLANNER:' + JSON.stringify(rep) }] } });
+  }
   // "TEAMMORE": the wider team tools: a channel + a group made by Claude, the hub picture, past-session search, the AIs available.
   if (input.includes('TEAMMORE')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;

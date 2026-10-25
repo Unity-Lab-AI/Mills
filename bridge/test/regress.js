@@ -3392,6 +3392,40 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R239', 'T-236 only a hash of a device token is kept (device-tokens.json holds neither the token nor the device code); [static] the page has the user-code box (approve) and the Signed-in devices list with Revoke',
       s.hashed && s.page, `hashed ${s.hashed} · page ${s.page}`);
   } else for (const [id, what] of [['R235', 'device sign-in: start, pending, slow_down, approve, token'], ['R236', 'a device token works as its person'], ['R237', 'own devices listed, revoke stops the token'], ['R238', 'a refused or expired device sign-in'], ['R239', 'device tokens kept hashed; the page has the box']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R265 to R269 (T-275): planner mode in Work: a session kind whose tools only plan, enforced by the tools and by the hub
+    const probe = (sid, msg) => chat(U, msg, { session: sid }).then((r) => { const m = (texts(r.events).match(/PLANNER:(\{.*\})/) || [])[1]; try { return JSON.parse(m); } catch { return {}; } });
+    const readNote = async (p) => (await call('/api/notes/read?path=' + encodeURIComponent(p), U)).data || {};
+    const bad = await call('/api/work/sessions/new', U, { title: 'r265 bad', background: true, mode: 'nonsense' });
+    const pid = (await call('/api/work/sessions/new', U, { title: 'r265 planner', background: true, mode: 'planner' })).data.id;
+    const nid = (await call('/api/work/sessions/new', U, { title: 'r268 normal', background: true })).data.id;
+    const listed = ((await call('/api/work/sessions', U)).data.sessions || []);
+    const sumP = listed.find((x) => x.id === pid) || {}, sumN = listed.find((x) => x.id === nid) || {};
+    const pr = await probe(pid, 'PLANNERPROBE please');
+    await call('/api/work/sessions/rename', U, { id: pid, title: 'r265 renamed' }); await call('/api/work/sessions/pin', U, { id: pid });
+    const sumP2 = (((await call('/api/work/sessions', U)).data.sessions || []).find((x) => x.id === pid)) || {};
+    const toolsOf = (s) => String(s || '').split(',');
+    check('R265', 'T-275 a planner session\'s run gets no Edit / Write / NotebookEdit and no pc server in its config: POST /api/work/sessions/new {mode: "planner"} shows mode "planner" in the list (a normal one "work", an unknown mode 400, renaming / pinning never changes it); its run has only the board + team servers, Read / Glob / Grep allowed, Edit / Write / NotebookEdit / mcp__pc denied, the permission mode default and the planner segment in its prompt',
+      bad.status === 400 && sumP.mode === 'planner' && sumN.mode === 'work' && sumP2.mode === 'planner'
+        && pr.servers === 'board+team' && ['Read', 'Glob', 'Grep'].every((t) => toolsOf(pr.allowed).includes(t)) && !toolsOf(pr.allowed).some((t) => /^(Edit|Write|NotebookEdit|MultiEdit)$|mcp__pc/.test(t))
+        && ['Edit', 'Write', 'NotebookEdit', 'mcp__pc'].every((t) => toolsOf(pr.denied).includes(t)) && pr.perm === 'default' && pr.planPrompt === true,
+      `bad ${bad.status} · modes ${sumP.mode}/${sumN.mode}/${sumP2.mode} · servers ${pr.servers} · allowed ${pr.allowed} · denied ${pr.denied} · perm ${pr.perm} · prompt ${pr.planPrompt}`);
+    const inside = await readNote('plans/planner-inside-r265.md'), outside = await readNote('planner-outside-r265.md'), tricky = await readNote('planner-tricky-r265.md');
+    check('R266', 'T-275 a notes_write outside plans/ is refused for a planner session\'s run (plans/../x too) while inside plans/ it is written and the board stays open (task_create works)',
+      /under plans\//.test(pr.outside || '') && /under plans\//.test(pr.tricky || '') && pr.inside === 'written' && pr.board === 'made' && /plan r265/.test(inside.text || '') && !outside.text && !tricky.text,
+      `outside: ${pr.outside} · tricky: ${pr.tricky} · inside: ${pr.inside} (${(inside.text || '').slice(0, 12)}) · board ${pr.board}`);
+    await call('/api/notes/delete', U, { path: 'plans/planner-inside-r265.md' }); // the normal session writes it again below
+    const pcr = await probe(pid, 'PLANNERPC please');
+    check('R267', 'T-275 the hub refuses a pc tool from a planner session\'s run even when it is asked for directly (nothing goes to the page; the answer comes at once)',
+      /Planner mode: PC tools are not available/.test(pcr.pc || ''), `pc: ${pcr.pc}`);
+    const nr = await probe(nid, 'PLANNERPROBE please');
+    check('R268', 'T-275 a normal session is unchanged: its run has the pc, board and team servers, nothing denied, no planner prompt, a permission mode of the person\'s own, and notes_write outside plans/ works',
+      nr.servers === 'board+pc+team' && !nr.denied && nr.planPrompt === false && nr.outside === 'written' && nr.inside === 'written',
+      `servers ${nr.servers} · denied "${nr.denied}" · perm ${nr.perm} · prompt ${nr.planPrompt} · outside ${nr.outside} · inside ${nr.inside}`);
+    const pg = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R269', 'T-275 [static] the page has "New planner session" next to New chat, a visible Planner badge, a way back to a normal session, and its requests carry the planner session',
+      /id="newPlanner"[^>]*>New planner session/.test(pg) && /id="plannerBadge"/.test(pg) && /id="leavePlanner"/.test(pg) && /mode: 'planner'/.test(pg) && /planSession/.test(pg), 'index.html');
+    for (const x of ['planner-outside-r265.md', 'plans/planner-inside-r265.md', 'planner-tricky-r265.md']) await call('/api/notes/delete', U, { path: x });
+  } else for (const [id, l] of [['R265', 'a planner session\'s run gets no Edit / Write and no pc server'], ['R266', 'a notes_write outside plans/ is refused for a planner session, inside works'], ['R267', 'a pc tool is refused for a planner session'], ['R268', 'a normal session is unchanged'], ['R269', 'the page has New planner session and the Planner badge']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });
