@@ -44,7 +44,7 @@ impl AiHub for Hub {
     fn name_of(&self, u: &str) -> String { self.mods.name_of(u) }
     fn work_message(&self, a: &Account, message: &str, where_: Value) -> Value { self.mods.files.work_message(a, message, where_) }
     fn board_tool(&self, op: &str, account: &str, args: &Value) -> Value {
-        let out = self.mods.board_op(op, &self.mods.actor(account, true), args);
+        let out = super::board_op_presence(self, op, &self.mods.actor(account, true), args);
         if out.status == 200 { json!({ "ok": true, "result": out.body }) } else { json!({ "ok": false, "error": out.body["error"] }) }
     }
     fn notes_tool(&self, name: &str, args: &Value, actor: &str) -> Value { self.mods.notes.tool(name, args, actor) }

@@ -85,7 +85,7 @@
  "board": [
   {
    "name": "board_list",
-   "description": "List the VibeRoller team board's tasks (no descriptions). Filter by board, status (backlog/todo/doing/review/done), or mine=true for tasks assigned to {USER} or claimed by you.",
+   "description": "List the VibeRoller team board's tasks (no descriptions). Filter by board, status (backlog/todo/doing/review/done), or mine=true for tasks assigned to {USER} or claimed by you. The answer also has `people`: each person's live presence (label, available = accepting work and not offline, what they hold) so you can check before assigning; each task has `holder` / `assigneeStatus` (live status) and `holderOffline` when its claim holder is offline.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -103,7 +103,7 @@
   },
   {
    "name": "task_get",
-   "description": "Read one task with its markdown description and recent activity.",
+   "description": "Read one task with its markdown description and recent activity. Includes the live presence of its claim holder (`holder`, `holderOffline`) and assignee (`assigneeStatus`).",
    "inputSchema": {
     "type": "object",
     "properties": {

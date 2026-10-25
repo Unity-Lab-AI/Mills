@@ -347,7 +347,7 @@ fn manual_of(hub: &dyn ChatHost, u: &str) -> Manual {
     m
 }
 /// One person's status as `viewer` sees it (themselves: with `real`, their actual presence).
-fn status_of(hub: &dyn ChatHost, u: &str, viewer: &str, now: u64) -> Value {
+pub fn status_of(hub: &dyn ChatHost, u: &str, viewer: &str, now: u64) -> Value {
     let c = hub.chat();
     let m = manual_of(hub, u).now(now);
     let (real, seen, devices) = c.real_presence(u, now);

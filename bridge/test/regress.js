@@ -3147,6 +3147,58 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         !!q && seen.during === 'waiting' && seen.after !== 'waiting' && !seen.waiting && seen.open === 0 && seen.late === 404 && jsTools.includes('ask_user') && nativeTools.includes('ask_user') && /bridge_question/.test(page) && /\/api\/work\/answer/.test(page),
         `while open ${seen.during} · after the stop ${seen.after} waiting ${JSON.stringify(seen.waiting)} · open ${seen.open} · late answer ${seen.late} · js tool ${jsTools.includes('ask_user')} native tool ${nativeTools.includes('ask_user')}`); }
   } else for (const [id, l] of [['R210', 'a question series reaches the page and the answers come back'], ['R211', 'an unanswered question takes the recommended answers'], ['R212', 'a question is asked in the session that asked'], ['R213', 'a long question polls; activity restarts the timeout'], ['R214', 'a stopped run ends its question']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R215 to R219 (T-262): presence on the task board. mills (D) holds claims; t-user (U) looks; T-Admin (A) makes tasks
+    const find215 = async (tok, id) => ((await call('/api/board', tok)).data.tasks || []).find((t) => t.id === id) || {};
+    const keep215 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+    const seen = {};
+    const t215 = (await call('/api/board/create', A, { title: 'r215 presence on a card', assignee: 'mills' })).data.task;
+    if (t215) {
+      await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
+      await call('/api/presence', D, { device: 'r215x', gone: true });
+      await call('/api/board/claim', D, { id: t215.id, minutes: 30 });
+      // R215: the live status of the holder and the assignee on the card (the board view and one task), seen by another person
+      const stopA = keep215(D, 'r215a'); await sleep(500);
+      await call('/api/presence', D, { device: 'r215a', idle: false });
+      const card = await find215(U, t215.id), one = (await call('/api/board/task?id=' + t215.id, U)).data.task || {};
+      seen.card = card; seen.one = one;
+      // R216: the claim holder goes offline (appear offline) with the claim held: the card is marked; back online, it is not
+      await call('/api/presence/me', D, { override: 'offline' }); await sleep(200);
+      seen.off = await find215(U, t215.id); const self216 = await find215(D, t215.id);
+      await call('/api/presence/me', D, { override: 'auto' }); await sleep(200);
+      seen.on = await find215(U, t215.id);
+      // R217: the assign picker data: people with available (accepting work and not offline), and what each holds
+      await call('/api/presence/me', D, { acceptingWork: true }); await sleep(200);
+      const pe = async (tok) => ((await call('/api/board', tok)).data.people || []).find((p) => p.user === 'mills') || {};
+      seen.av = await pe(U);
+      await call('/api/presence/me', D, { override: 'offline' }); await sleep(200); seen.avOff = await pe(U);
+      await call('/api/presence/me', D, { override: 'auto', acceptingWork: false }); await sleep(200); seen.avNo = await pe(U);
+      // R218: a list / one task as the board tools give them (the same operation) carries presence
+      const list = (await call('/api/board', U)).data; seen.everyone = (list.people || []).length >= 3;
+      // R219: a person whose run works while they are offline is not a stale claim: Working, not holderOffline
+      stopA(); await call('/api/presence', D, { device: 'r215a', gone: true }); await sleep(300);
+      seen.gone = await find215(U, t215.id);
+      const slow = call('/api/chat', D, { message: 'SLOW r215' }); await sleep(800);
+      seen.work = await find215(U, t215.id); await slow;
+      await call('/api/board/release', D, { id: t215.id }); await call('/api/board/delete', A, { id: t215.id });
+      seen.self = self216;
+    }
+    const h = (c) => (c && c.holder) || {};
+    check('R215', 'T-262 a card shows the live status of whoever holds its claim (holder: user, presence, label, since) and of its assignee (assigneeStatus), in the board view and in one task',
+      !!t215 && h(seen.card).user === 'mills' && h(seen.card).presence === 'online' && h(seen.card).label === 'Online' && typeof h(seen.card).since === 'number' && (seen.card.assigneeStatus || {}).user === 'mills' && h(seen.one).user === 'mills' && (seen.one.assigneeStatus || {}).label === 'Online',
+      `holder ${JSON.stringify(h(seen.card))} · assignee ${(seen.card && seen.card.assigneeStatus || {}).label} · one task holder ${h(seen.one).user}`);
+    check('R216', 'T-262 a claim whose holder is offline is marked (claim.holderOffline and holderOffline on the card) so it can be taken over; back online, the mark is gone',
+      !!t215 && seen.off.holderOffline === true && (seen.off.claim || {}).holderOffline === true && h(seen.off).presence === 'offline' && !seen.on.holderOffline && !(seen.on.claim || {}).holderOffline && !seen.card.holderOffline,
+      `offline: ${seen.off && seen.off.holderOffline} (${h(seen.off).label}) · online again: ${seen.on && seen.on.holderOffline}`);
+    check('R217', 'T-262 the board view lists people for the assign picker: available = accepting work and not offline (also what they hold and have assigned); appearing offline or not accepting makes them not available',
+      !!t215 && seen.av.available === true && seen.av.label !== 'Offline' && seen.avOff.available === false && seen.avOff.presence === 'offline' && seen.avNo.available === false && Array.isArray(seen.av.holding) && seen.av.holding.includes(t215.id) && seen.av.assignedOpen >= 1,
+      `available ${seen.av && seen.av.available} (${seen.av && seen.av.label}) · appearing offline ${seen.avOff && seen.avOff.available} · not accepting ${seen.avNo && seen.avNo.available} · holding ${JSON.stringify(seen.av && seen.av.holding)}`);
+    check('R218', 'T-262 the board tools (board_list, task_get: the same operations) carry presence, so an AI can check before assigning; [static] the tools go through board_op_presence and say so in their descriptions',
+      !!t215 && seen.everyone === true && /board_op_presence\(self,/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-hub', 'src', 'modules', 'traits.rs'), 'utf8')) && /holderOffline/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')),
+      `people on the board answer ${seen.everyone}`);
+    check('R219', 'T-262 a holder whose own run is working while they are offline shows Working and the claim is not marked stale; the person sees their own card with their real status',
+      !!t215 && h(seen.gone).presence === 'offline' && seen.gone.holderOffline === true && h(seen.work).working === true && h(seen.work).label === 'Working' && !seen.work.holderOffline && !!seen.self.holder,
+      `offline, idle: ${h(seen.gone).label} stale ${seen.gone && seen.gone.holderOffline} · running: ${h(seen.work).label} stale ${seen.work && seen.work.holderOffline}`);
+  } else for (const [id, what] of [['R215', 'a card shows its holder\'s live status'], ['R216', 'a claim whose holder is offline is marked'], ['R217', 'the assign picker lists who is available'], ['R218', 'the board tools carry presence'], ['R219', 'a working holder is not a stale claim']]) skip(id, what, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });

@@ -107,6 +107,48 @@ impl Modules {
     }
     fn actor(&self, user: &str, agent: bool) -> board::Actor { board::Actor { user: user.to_string(), agent, name: self.name_of(user) } }
 }
+/// Presence on the board (T-262): every task card in `v` (the board view, a list, one task, the calendar) gains, add-only,
+/// `holder` (the live status of whoever holds its claim: user, name, presence, label, working, since, text, offline) and
+/// `assigneeStatus`; a claim whose holder is offline and not working gets `claim.holderOffline` and `holderOffline`
+/// (a stale claim in the making). A view or list also gains `people`: who is available to give work to (`available` =
+/// accepting work and not offline), and what each holds / has assigned. `viewer` is who asks (what they see of others).
+pub fn board_presence(hub: &Hub, viewer: &str, v: &mut Value) {
+    let now = pgm_core_internal::now_ms();
+    let mut cache: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    let mut st = |u: &str| -> Value { cache.entry(u.to_string()).or_insert_with(|| chat::status_of(hub, u, viewer, now)).clone() };
+    let brief = |hub: &Hub, u: &str, s: &Value| json!({ "user": u, "name": hub.mods.name_of(u), "presence": s["presence"], "label": s["label"], "working": s["working"], "since": s["since"], "text": s["text"],
+        "offline": s["presence"] == json!("offline") && s["working"] != json!(true) });
+    let mut card = |t: &mut Value| {
+        if let Some(k) = t["claim"]["key"].as_str().map(|k| k.split('#').next().unwrap_or("").to_string()).filter(|u| !u.is_empty() && hub.mods.has(u)) {
+            let s = st(&k); let h = brief(hub, &k, &s);
+            if h["offline"] == json!(true) { t["claim"]["holderOffline"] = json!(true); t["holderOffline"] = json!(true); }
+            t["holder"] = h;
+        }
+        if let Some(u) = t["assignee"].as_str().map(String::from).filter(|u| hub.mods.has(u)) { let s = st(&u); t["assigneeStatus"] = brief(hub, &u, &s); }
+    };
+    if let Some(a) = v["tasks"].as_array_mut() { for t in a { card(t); } }
+    if let Some(a) = v["overdue"].as_array_mut() { for t in a { card(t); } }
+    if let Some(days) = v["days"].as_array_mut() { for d in days { if let Some(a) = d["tasks"].as_array_mut() { for t in a { card(t); } } } }
+    if v["task"].is_object() { card(&mut v["task"]); }
+    if v["tasks"].is_array() && v["statuses"].is_array() {
+        let hold = hub.mods.board.holdings();
+        let mut people: Vec<Value> = vec![];
+        let mut names: Vec<String> = hub.mods.auth.accounts().into_iter().map(|a| a.username).collect(); names.sort();
+        for u in names {
+            let s = st(&u); let (held, assigned) = hold.get(&u).cloned().unwrap_or_default();
+            let available = s["acceptingWork"] == json!(true) && s["presence"] != json!("offline");
+            people.push(json!({ "user": u, "name": hub.mods.name_of(&u), "presence": s["presence"], "label": s["label"], "working": s["working"], "acceptingWork": s["acceptingWork"], "dnd": s["dnd"], "text": s["text"], "since": s["since"],
+                "available": available, "holding": held, "assignedOpen": assigned }));
+        }
+        v["people"] = json!(people);
+    }
+}
+/// The board operation with presence added to its answer (people and Claude asking; not the Forgejo mirror).
+pub fn board_op_presence(hub: &Hub, op: &str, a: &board::Actor, b: &Value) -> board::Out {
+    let mut out = hub.mods.board_op(op, a, b);
+    if out.status == 200 { board_presence(hub, &a.user, &mut out.body); }
+    out
+}
 /// A background loop that outlives a panic inside it (FR1): started again after 5 s, with a log line, never silently
 /// gone. A loop that ends by itself is done.
 pub fn forever<F, Fut>(name: &'static str, f: F)
@@ -185,7 +227,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             "board/tool" => {
                 let Some(op) = board::tool_op(b["name"].as_str().unwrap_or("")) else { return answer(200, json!({ "ok": false, "error": format!("Unknown board tool: {}", b["name"].as_str().unwrap_or("")) })) };
                 if !hub.mods.has(&account) { return answer(200, json!({ "ok": false, "error": "Unknown account." })); }
-                let out = hub.mods.board_op(op, &hub.mods.actor(&account, true), &if b["args"].is_object() { b["args"].clone() } else { json!({}) });
+                let out = board_op_presence(hub, op, &hub.mods.actor(&account, true), &if b["args"].is_object() { b["args"].clone() } else { json!({}) });
                 answer(200, if out.status == 200 { json!({ "ok": true, "result": out.body }) } else { json!({ "ok": false, "error": out.body["error"] }) })
             }
             "notes/tool" => answer(200, hub.mods.notes.tool(b["name"].as_str().unwrap_or(""), &b["args"], &hub.mods.name_of(&account))),
@@ -440,12 +482,14 @@ async fn board_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(25), rx.changed()).await;
             m.board.seen(u);
         }
-        return answer(200, m.board.view(u, &|x| m.name_of(x), &|x| m.has(x), m.mirror.status()));
+        let mut view = m.board.view(u, &|x| m.name_of(x), &|x| m.has(x), m.mirror.status());
+        board_presence(hub, u, &mut view);
+        return answer(200, view);
     }
     let Some(op) = board::route_op(&r.path) else { return answer(404, json!({ "error": "Unknown endpoint" })) };
     let b = if r.method == hyper::Method::POST { if r.body.is_empty() { json!({}) } else { match serde_json::from_slice::<Value>(&r.body) { Ok(v) => v, Err(_) => return answer(400, json!({ "error": "That request is not valid JSON." })) } } }
         else { Value::Object(crate::front::url_params(&r.query).into_iter().map(|(k, v)| (k, json!(v))).collect()) };
-    let out = m.board_op(op, &m.actor(u, false), &b);
+    let out = board_op_presence(hub, op, &m.actor(u, false), &b);
     answer(out.status, out.body)
 }
 fn notes_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
