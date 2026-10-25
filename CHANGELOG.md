@@ -7,6 +7,33 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.19.0 — 2026-10-25
+
+MINOR: **the question UI, and device-code sign-in** (agent branches, reviewed and merged).
+- **The AI's questions get a real UI** (T-246, T-248).
+  - **The series:** one question at a time with Back / Next / Done.
+  - **The kinds:** radio buttons, checkboxes, a checklist with select all / none and a filter, "my own answer" fields.
+  - **The default:** the recommended answer is marked, with a countdown and "Use the recommended".
+  - **Reloads and other devices:** a half-answered series survives a reload. A closed question shows who answered it
+    (you, the default, or mixed).
+  - **Desktop app:** it notifies when a question arrives in the background.
+  - **Settings, "When the AI asks"** (prefs `ask`, add-only): wait N minutes (default 10) then use the recommended
+    answers, or never; "any activity waits". The hub takes the wait from the question's own timeoutSec, then the
+    person's setting, then config, then 600.
+  - **Sound:** a distinct "User action required" tone (`ask`, own volume), plus optional speech. Do not disturb mutes
+    sound, speech and notification.
+  - R240 to R244. bridge/server.js cleanPrefs keeps the new prefs (4.3.0).
+- **Device-code sign-in** (T-236, the hub half). A tool (Jcode PGM first) signs in without a password:
+  - **The routes:** `POST /api/device/start` gives a short user code and a link (`?device=CODE`); the person approves
+    or refuses it under Settings → Connections → Signed-in devices; `POST /api/device/poll` then gives the tool its own
+    token.
+  - **The device tokens:** separate from page sessions, kept only as a hash (new file device-tokens.json), listed with
+    their last use, and revoked in Settings (`GET /api/devices`, `POST /api/devices/revoke`). A revoked token stops
+    working on every route.
+  - **Safety:** approving needs the person's own page session; polling, start and wrong codes are rate limited; codes
+    expire after 10 minutes; an admin password reset or sign-out revokes the person's devices.
+  - R235 to R239.
+
 ## 5.18.0 — 2026-10-25
 
 MINOR: **git at a glance, and presence says where people work** (agent branches, reviewed and merged).
