@@ -10,6 +10,8 @@
 //!   Anthropic-compatible /v1 (plain + streaming, format conversion), per-person API keys
 //! - [`work`]: AI coding runs (Claude Code here, relayed to a host's login, or on an older host), their log + attach /
 //!   follow, the MCP tool relays (pc / board / team), shared sessions, projects, past sessions
+//! - [`planner`]: planner mode's deterministic helpers (parse an idea list, find what already exists, roles and owners,
+//!   the glossary) and the team MCP tools `plan_parse`, `plan_existing`, `plan_roles`, `plan_owner`, `plan_glossary`
 //! - [`unity`], [`unity_brain`], [`unity_routes`]: the assistant: her tools, her brain (a local model's tool loop or
 //!   Claude), confirmations, voice / speech / pictures, her section's routes, the chat's AI member and its queue
 //! - [`hub`]: what all of this needs from the program around it ([`hub::AiHub`])
@@ -30,6 +32,7 @@ pub mod hub;
 pub mod jcode;
 pub mod local_proxy;
 pub mod openai;
+pub mod planner;
 pub mod projects;
 pub mod questions;
 pub mod sessions;

@@ -119,6 +119,20 @@ process.stdin.on('end', async () => {
     }
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLANNER:' + JSON.stringify(rep) }] } });
   }
+  // "PLANNERPLAN" (T-276/277/278): what a planner session does first: the planner tools through the team relay (named with this
+  // session), and the order the prompt tells it to use them in.
+  if (input.includes('PLANNERPLAN')) {
+    const cfg = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers;
+    const env = cfg.team.env;
+    const call = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const prompt = opt('--append-system-prompt') || '';
+    const at = ['plan_glossary', 'plan_roles', 'plan_parse', 'plan_existing', 'plan_owner'].map((t) => prompt.indexOf(t));
+    const gl = await call('plan_glossary', {}), ps = await call('plan_parse', { text: '--- opus\n[Hub relay tests]\nCheck the hub relay with tests.\n' }), ow = await call('plan_owner', { idea: { title: 'Hub relay tests' } });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLANRES:' + JSON.stringify({ order: at.every((x) => x >= 0) && at.every((x, i) => i === 0 || x > at[i - 1]), basedOn: /blocked on[^.]*means based on/i.test(prompt), glossary: gl.ok ? gl.result.words.length : gl.error, ideas: ps.ok ? ps.result.ideas.length : ps.error, owner: ow.ok ? ow.result.owner : ow.error }) }] } });
+  }
   // "TEAMMORE": the wider team tools: a channel + a group made by Claude, the hub picture, past-session search, the AIs available.
   if (input.includes('TEAMMORE')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
