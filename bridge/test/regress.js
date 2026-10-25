@@ -3747,6 +3747,33 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         `smoke ${sm.status} "${(sm.stdout + sm.stderr).replace(/\s+/g, ' ').slice(0, 400)}"; hub capability clean ${!!hubCap && !forbidden.some((f) => hubCap.includes(f))}`);
     }
   }
+  // R401 to R406 (T-199): the Hyper Workflows library (native/crates/pgm-workflow-internal): one `cargo test` run, its
+  // tests named r401_ ... r406_ map back to the checks (a check passes when every test of its id ran and passed)
+  {
+    const home401 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const native401 = path.join(MILLS, 'native');
+    const L401 = {
+      R401: 'workflow library: a document (section 13 shape, loop fixed) round-trips with its unknown fields, an older schema is migrated on read, a newer one is refused with a message',
+      R402: 'workflow library: each validation rule of 3.3 has a case (two starts, a bad edge type, an unfed required input, an input with two edges, an unreachable node as a warning, an unknown kind, a missing law id)',
+      R403: 'workflow library: a cycle without a loop node is an error, the same cycle through a loop with a limit is valid, a loop with no limit is an error',
+      R404: 'workflow library: a sub-graph with matching input / output ports is valid, mismatched ports or a sub-graph containing itself are errors, depth 9 is refused',
+      R405: 'workflow library: diff(v1, v2) names an added node, a removed node, a changed config key and a rewired edge',
+      R406: 'workflow library: a bad json file in the store is moved aside as *.bad-<time> and the listing goes on',
+    };
+    const MIN401 = { R401: 4, R402: 10, R403: 3, R404: 5, R405: 1, R406: 2 };
+    if (!fs.existsSync(path.join(native401, 'crates', 'pgm-workflow-internal'))) for (const id of Object.keys(L401)) skip(id, L401[id], 'no crate native/crates/pgm-workflow-internal');
+    else {
+      const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home401}/.rustup" CARGO_HOME="${home401}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-internal 2>&1`], { cwd: native401, encoding: 'utf8', timeout: 1800000 });
+      const out401 = String(ut.stdout || '') + String(ut.stderr || '');
+      if (ut.status === 77) for (const id of Object.keys(L401)) skip(id, L401[id], 'no Rust toolchain here (cargo not found)');
+      else {
+        const seen = {};
+        for (const m of out401.matchAll(/^test (r40\d)_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
+        const tail = out401.replace(/\s+/g, ' ').slice(-160);
+        for (const id of Object.keys(L401)) check(id, L401[id], ut.status === 0 && (seen[id] || []).length >= MIN401[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
+      }
+    }
+  }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });
   check('R135', 'Work state survives restarts: the conversation on screen (me / claude / tool entries, its saved-session id + title) and the queue + a pending "Send now" are kept per person on the hub (their profile folder), come back unchanged after a hub restart, and are nobody else\'s; bad input refused, empty messages dropped; [static] every queue change is saved, opening Work restores the conversation and the queue and starts the queue running, New chat clears it',
