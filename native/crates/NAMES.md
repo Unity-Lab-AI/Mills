@@ -14,9 +14,11 @@ vr-host, vr-desktop) are built on them. Plan and rules: the team note plans/pgm-
 | PGM_Collab_Internal | PsyGraphMediaCollaborationInternal | `pgm-collab-internal` (`pgm_collab_internal`) | board, notes, projects / worktrees, Forgejo |
 | PGM_Context_Internal | PsyGraphMediaContextInternal | `pgm-context-internal` (`pgm_context_internal`) | fewer tokens, more cache hits: token counting per provider, the usage / cache ledger, cache-friendly prompt assembly + its volatile-text lint, tool-output shaping, repo map, replay cache, prefix-cache routing (tree-sitter feature off here) |
 | PGM_Plan_Internal | PsyGraphMediaPlanInternal | `pgm-plan-internal` (`pgm_plan_internal`) | planner mode, one library for the hub and Jcode PGM: the draft check, the parents / sub-tasks table, approve all / some / change / reject, the writer in the hub's order behind a `PlanHub` trait, the planner helpers (parse, existing, roles, owner, glossary) and helper-set detection |
+| PGM_Sandbox_Internal | PsyGraphMediaSandboxInternal | `pgm-sandbox-internal` (`pgm_sandbox_internal`) | throw-away container copies of a base image (reverse engineering, T-303): a cap on how many run, a FIFO queue, owner-only control, an exchange folder for data in / out, idle reporting, adoption after a restart; one `Runtime` trait with Podman / Docker command-line implementations |
 | PGM_Dist_Internal | PsyGraphMediaDistributionInternal | `pgm-dist-internal` (`pgm_dist_internal`) | signed releases, self-update, downloads, version stamps |
 
 Dependency order (a library only uses the ones before it): Core → Platform, Net → Identity, Collab, Dist → HCom, AI.
+Sandbox uses only Core (a program brings the engine: Podman or Docker CLI, or its own `Runtime`).
 Context uses no other PGM library; AI uses it (the Work system prompt through its lint, the usage ledger for API / Unity answers).
 HCom and AI do not use each other: what one needs from the other goes through the program around them (the hub
 implements `ChatHost` and `AiHub`). `vr-core` is VibeRoller's old shared crate: it now only re-exports from these, so

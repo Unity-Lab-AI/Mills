@@ -1,0 +1,16 @@
+[package]
+name = "pgm-sandbox-internal"
+description = "PGM_Sandbox_Internal (PsyGraphMediaSandboxInternal): throw-away container copies of a pre-set-up base image for risky work (reverse engineering): a cap on how many run, a FIFO queue, owner-only control, an exchange folder for data in and out, idle reporting, adoption after a restart; engine-agnostic (Podman / Docker CLI behind one Runtime trait)"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pgm-core-internal = { path = "../pgm-core-internal" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
