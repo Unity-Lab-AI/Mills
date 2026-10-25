@@ -24,6 +24,12 @@ modifications to the new worktree, then abandon and delete just the old worktree
   anyone active that day). It fast-forwards a clean one by itself and tells the next run what it found.
 - Never delete or reset someone else's worktree. Never `git reset --hard` or force-push to get out of a stale state:
   use update / renew.
+- **Each Work session has its own worktree** (Sponge, 2026-10-25; 5.15.0). Your first session uses yours
+  (`<username>` on `work/<username>`). Every other session gets `<username>.<id>` on `work/<username>.<id>`, made by
+  the hub at its first run from your own `work/<username>`, so two sessions never edit the same files at once. Its work
+  comes home by merging that branch into `work/<username>` in your own worktree, then merging to develop from there as
+  usual. Deleting a session commits what was left uncommitted and keeps an unmerged branch under
+  `refs/viberoller/sessions/`, so nothing is lost.
 
 ## Forgejo is the source of truth
 

@@ -7,6 +7,32 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.15.0 — 2026-10-25
+
+MINOR: **many Work sessions at once, each in its own worktree, with limits** (T-284, T-292, T-285; team note
+plans/multi-session.md). A person has many sessions; each keeps its own conversation + queue, harness session, provider
+/ model and project, and several run at the same time (a second message to the SAME session is still 409, R14).
+- **The first session** (made from what the person had) keeps its state where it always was (work.json,
+  work-current.json): older pages, the frozen JavaScript hub and every route called without a session mean it, exactly
+  as before. Other sessions: <profile>/work-sessions/<id>.json; the list in work-sessions.json; the person's folders
+  in work-folders.json (all new files, add-only).
+- **Each session its own worktree** (T-292): `<user>.<id>` on `work/<user>.<id>`, made at its first run from the
+  person's `work/<user>` (pgm-collab-internal `Worktrees::ensure_session`). Its run's system prompt says how its work
+  comes home. Deleting a session commits what was left and keeps an unmerged branch under `refs/viberoller/sessions/`
+  (`remove_session`). LAWS.md: a line in the worktree law.
+- **States** (waiting, working, done-unseen, draft, idle, ready; the first that applies) and the **liveness check**: a run
+  that sends nothing of its own for 12 minutes (config workSessions.stallAfterMs) is ended as stalled, so its session is
+  idle and frees its slot.
+- **Routes:** GET /api/work/sessions (with counts per host), POST /api/work/sessions/new | open | rename | pin | seen |
+  hide | move | archive | delete (delete force-stops its run), /api/work/folders (new | rename | delete | order),
+  /api/work/draft; /api/chat, /api/stop, /api/work/attach, /api/work/current, /api/work/queue, /api/model,
+  /api/workspace and /api/archive/save | open take an optional `session`. The run's first event names its session.
+- **Limits** (T-285): only working sessions count, 5 per person per host and 3 per provider on it (config
+  workSessions.perUser / perProvider); a host's owner is not limited on their own host; over the limit /api/chat answers
+  429 with { error, limit { host, used, max, provider? } }.
+- R197 (sessions, worktrees, states, hide, folders, delete) and R198 (limits) were written as spec() first and are plain
+  checks now.
+
 ## 5.14.0 — 2026-10-25
 
 MINOR: **presence and activity, the hub side** (T-259; team note plans/presence.md). A person is as present as their
