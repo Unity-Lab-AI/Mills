@@ -51,6 +51,7 @@ pub fn clean_prefs(p: &Value, prev: &Value) -> Value {
     if has("nick") { let t = match &p["nick"] { Value::String(x) => x.clone(), o => o.to_string() }; out["nick"] = json!(units(t.chars().filter(|c| { let n = *c as u32; n >= 0x20 && n != 0x7f }).collect::<String>().trim(), 32)); }
     if has("color") { out["color"] = int_in(&p["color"], 0, PALETTE).map(|n| json!(n)).unwrap_or(Value::Null); }
     if has("toasts") { out["toasts"] = json!(b(&p["toasts"])); }
+    if has("reopen") { out["reopen"] = json!(b(&p["reopen"])); } // T-241: reopen what was open after a reload (absent = on)
     if has("autoScroll") { out["autoScroll"] = json!(p["autoScroll"] == json!(true)); }
     if has("theme") { let t = match &p["theme"] { Value::String(x) => x.clone(), o => o.to_string() }; out["theme"] = json!(if t.len() <= 40 && t.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') { t } else { String::new() }); }
     if has("autosave") { out["autosave"] = json!(clamp(&p["autosave"], 0.0, 120.0, 0.0) as i64); }
