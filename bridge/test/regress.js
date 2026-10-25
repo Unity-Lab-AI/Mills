@@ -5138,6 +5138,29 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         `cargo test ${ut.status} "${String(ut.stdout || ut.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
     }
   }
+  // R321, R322, R340 (T-307, linked machines 1/8): the library core pgm-net-internal::machine (scope model + evaluator,
+  // path canonicaliser, safety floor), pure logic: its unit tests run once (Linux real temp dirs and symlinks; the Windows
+  // rules are pure-logic tests that run on any host)
+  {
+    const mdir = path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'machine');
+    const home321 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const env321 = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home321, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home321, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET };
+    env321.PATH = path.join(env321.CARGO_HOME, 'bin') + path.delimiter + (env321.PATH || '');
+    const ct = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', 'machine::'], { cwd: path.join(MILLS, 'native'), env: env321, encoding: 'utf8', timeout: 1800000 });
+    const L321 = 'linked machines core (T-307): scope model + evaluator in pgm-net-internal::machine::scope: Scope parses the 5.3 JSON, folder is the default, unknown keys are ignored, a newer v is refused whole, a bad or missing file allows nothing, every preset (folder, folders, read-only, full, full-ro, deny-list, no-shell, no-network, unrestricted, custom) has table-driven tests, deny beats allow, the more specific entry wins, full hides raw devices and keeps /sys and /proc/sys read-only, grants expire on a passed-in clock';
+    const L322 = 'linked machines core (T-307): the one path canonicaliser machine::paths: .., symlink escape, dangling links, \\\\?\\, UNC, another drive, C:\\x vs c:/X, alternate data streams, reserved names, and the write-through-a-swapped-link case (O_NOFOLLOW + openat re-check on Linux) all deny; the Windows rules are pure logic tested on any host';
+    const L340 = 'linked machines core (T-307): the safety floor machine::floor: under unrestricted (and every preset) the machine\'s token, device key, scope file and audit log are never readable, writable, deletable or listable, also through symlinks; fetch never sends them; the default deny list on full covers .env, *.pem, id_*, ~/.ssh and hub.json (glob matching)';
+    if (ct.error) { for (const [id, l] of [['R321', L321], ['R322', L322], ['R340', L340]]) skip(id, l, 'no Rust toolchain here (' + ct.error.code + ')'); }
+    else {
+      const out321 = String(ct.stdout || '') + String(ct.stderr || '');
+      const okN = (re) => (out321.match(new RegExp('^test machine::' + re + '[^ ]* \\.\\.\\. ok$', 'gm')) || []).length;
+      const detail321 = `cargo test ${ct.status} scope ${okN('scope::')} paths ${okN('paths::')} floor ${okN('floor::')} integration ${okN('tests::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}`;
+      const src321 = ['mod.rs', 'scope.rs', 'paths.rs', 'floor.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
+      check('R321', L321, ct.status === 0 && src321 && okN('scope::') >= 12, detail321);
+      check('R322', L322, ct.status === 0 && okN('paths::') >= 8, detail321);
+      check('R340', L340, ct.status === 0 && okN('floor::') >= 4 && okN('tests::') >= 4, detail321);
+    }
+  }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });
   check('R135', 'Work state survives restarts: the conversation on screen (me / claude / tool entries, its saved-session id + title) and the queue + a pending "Send now" are kept per person on the hub (their profile folder), come back unchanged after a hub restart, and are nobody else\'s; bad input refused, empty messages dropped; [static] every queue change is saved, opening Work restores the conversation and the queue and starts the queue running, New chat clears it',
