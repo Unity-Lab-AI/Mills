@@ -1,4 +1,4 @@
-//! The "AI asks the user" question protocol (T-245 = T-195 · 1/4; spec in docs/question-protocol.md).
+//! The "AI asks the user" question protocol (T-245 = T-195 · 1/4; spec in team note plans/question-protocol.md).
 //! This file holds the pure part: reading the `ask_user` tool's arguments into a checked list of questions, and turning
 //! what the person picked (or the recommended defaults) into the answers the tool returns. The open questions of a
 //! run, their timeout and their events live in work.rs (`Work::ask`, `Work::answer`).

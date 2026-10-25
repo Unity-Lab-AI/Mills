@@ -406,7 +406,7 @@ impl Work {
         if let Some(pid) = pid { kill_pid(pid); }
     }
 
-    // ---------- the AI asks its person (T-245; docs/question-protocol.md) ----------
+    // ---------- the AI asks its person (T-245; team note plans/question-protocol.md) ----------
     /// An open question keeps its run alive for the liveness check (a person may take longer than stallAfter).
     fn keep_alive(&self, key: &str) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { r.last = now_ms(); } }
     /// The session's dot: waiting (yellow) while any question of it is open.

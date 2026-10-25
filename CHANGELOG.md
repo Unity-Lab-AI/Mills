@@ -7,6 +7,35 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.17.0 — 2026-10-25
+
+MINOR: **the AI asks you, time accounting, and presence on the board** (built by Work-run agents in their own worktrees,
+reviewed and merged by the orchestrating run).
+- **The AI asks you** (T-245 = T-195 · 1/4; team note plans/question-protocol.md). A Work run calls the team tool
+  `ask_user` with a series of single choice, multi choice, checkbox list or text questions, each with a recommended
+  answer and "my own answer".
+  - The page gets a `bridge_question` event, the asking session turns yellow (`waiting` = question), and the person
+    answers through `POST /api/work/answer` (or "use the recommended"; `GET /api/work/questions` lists open ones).
+  - The answers return to the AI as one tool result.
+  - An unanswered question takes the recommended answers after its timeout (10 minutes by default; `timeoutSec` 0 waits).
+  - The relays loop on `{pending, id}` so no HTTP call is held for minutes. A minimal answer card is on the page; the
+    full UI is T-246. R210 to R214.
+- **Time accounting and an activity log** (T-263; plans/presence.md § 6).
+  - **Active time:** kept as spans of activity. A quiet longer than `workGapMs` (config `presence.workGapMs`, default 15
+    minutes) ends a span and is not counted.
+  - **AI time:** AI working time (`aiMs`, and `agentMs` summed over sessions) keeps adding while the person is away or
+    offline. Away time is kept too.
+  - **Storage:** per person per day in `profiles/<user>/activity/<day>.json`, with an event log of status changes and
+    working sessions.
+  - **Route:** `GET /api/presence/time?user=&from=&to=`. The team sees totals; the person sees their own spans and
+    events.
+  - The page reports input at most once a minute (`active: true`). R205 to R209.
+- **Presence on the task board** (T-262). Every card carries the live status of its claim holder (`holder`) and its
+  assignee (`assigneeStatus`), and a claim whose holder is offline and not working through a run of theirs is marked
+  (`holderOffline`). The board view and `board_list` return `people`: who is available (accepting work and not offline)
+  and what each holds. The board MCP tools return the same, so an AI can check before assigning. All optional fields.
+  web/board.js shows the holder's label and marks the assign picker. R215 to R219.
+
 ## 5.16.0 — 2026-10-25
 
 MINOR: **an AI host sets its own Work-session limits** (T-286, taken over from Gee with Sponge's word; plans/multi-session.md

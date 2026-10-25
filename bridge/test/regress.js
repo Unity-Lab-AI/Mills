@@ -3089,7 +3089,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R203', 'a shared Work session shows the session that was shared (POST /api/work/share {session}): its lines reach the watchers, another session\'s do not; the watch answer names it',
       seen.share === c203 && seen.has && !seen.leak && seen.session === c203, `shared ${seen.share} · watcher sees it ${seen.has}, the first session\'s ${seen.leak} · watch names ${seen.session}`);
   } else skip('R203', 'a share shows the shared session', 'the Rust hub\'s: --rust-hub runs it');
-  if (RUST_HUB) { // R210-R214 (T-245 = T-195 · 1/4): the AI asks its person (docs/question-protocol.md); the fake Claude's "ASKTOOL" calls ask_user like the team MCP relay
+  if (RUST_HUB) { // R210-R214 (T-245 = T-195 · 1/4): the AI asks its person (team note plans/question-protocol.md); the fake Claude's "ASKTOOL" calls ask_user like the team MCP relay
     const askOf = (events) => { const t = texts(events).split('\n').find((l) => l.startsWith('ASK:')); try { return JSON.parse(t.slice(4)); } catch { return {}; } };
     const sessionsOf = async () => ((await call('/api/work/sessions', U)).data.sessions) || [];
     const primary = async () => (await sessionsOf()).find((x) => x.primary) || {};
