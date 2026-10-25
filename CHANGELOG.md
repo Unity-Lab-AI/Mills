@@ -7,6 +7,117 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.15.2 — 2026-10-25
+
+PATCH: **a PC tool call reaches the session that asked.** With several sessions running, a run's PC tool call (the
+folder open in the person's browser) went to the first session's run if that one was running, so the page of the
+session that asked never saw it. Each session's run now gets its own MCP config naming its session (MILLS_SESSION;
+.mcp-runtime-hub-<id>.json), bridge/pc-tools-mcp.js sends it along (an older hub ignores it), and the hub hands the call
+to that session's run. R201 (written with the fix; it sends the call while the first session runs with no browser
+answering). bridge/pc-tools-mcp.js 1.0.2. R200 failed once in four runs without a recorded reason; its commits now wait
+only for a git index.lock (the hub's background freshness check runs git in the same worktrees, the likely cause) and
+its detail names each commit's outcome, so a repeat explains itself (testing law, rule 2).
+
+## 5.15.1 — 2026-10-25
+
+PATCH: **a session's worktree follows the worktree law, and its work comes home** (T-292, the rest of it).
+`node bridge/worktree.js check | auto | update | home <user> --session <id>`: a session's worktree builds on the
+person's own work/<user> (not straight on Forgejo's), so it is STALE (exit 3) when work/<user> has moved on; `update
+--session` fast-forwards or merges that in (it refuses with uncommitted changes, changing nothing); `home --session`
+merges the session's commits into work/<user> in the person's own worktree ("Merge into my work"; a conflict changes
+nothing and says what to do). The hub checks a session's worktree at each of its runs and in the background for
+sessions used that day; a session run's system prompt carries its own freshness law and its latest check. New
+`POST /api/work/sessions/home {id}` for the session menu. R200. bridge/worktree.js 2.4.0.
+
+## 5.15.0 — 2026-10-25
+
+MINOR: **many Work sessions at once, each in its own worktree, with limits** (T-284, T-292, T-285; team note
+plans/multi-session.md). A person has many sessions; each keeps its own conversation + queue, harness session, provider
+/ model and project, and several run at the same time (a second message to the SAME session is still 409, R14).
+- **The first session** (made from what the person had) keeps its state where it always was (work.json,
+  work-current.json): older pages, the frozen JavaScript hub and every route called without a session mean it, exactly
+  as before. Other sessions: <profile>/work-sessions/<id>.json; the list in work-sessions.json; the person's folders
+  in work-folders.json (all new files, add-only).
+- **Each session its own worktree** (T-292): `<user>.<id>` on `work/<user>.<id>`, made at its first run from the
+  person's `work/<user>` (pgm-collab-internal `Worktrees::ensure_session`). Its run's system prompt says how its work
+  comes home. Deleting a session commits what was left and keeps an unmerged branch under `refs/viberoller/sessions/`
+  (`remove_session`). LAWS.md: a line in the worktree law.
+- **States** (waiting, working, done-unseen, draft, idle, ready; the first that applies) and the **liveness check**: a run
+  that sends nothing of its own for 12 minutes (config workSessions.stallAfterMs) is ended as stalled, so its session is
+  idle and frees its slot.
+- **Routes:** GET /api/work/sessions (with counts per host), POST /api/work/sessions/new | open | rename | pin | seen |
+  hide | move | archive | delete (delete force-stops its run), /api/work/folders (new | rename | delete | order),
+  /api/work/draft; /api/chat, /api/stop, /api/work/attach, /api/work/current, /api/work/queue, /api/model,
+  /api/workspace and /api/archive/save | open take an optional `session`. The run's first event names its session.
+- **Limits** (T-285): only working sessions count, 5 per person per host and 3 per provider on it (config
+  workSessions.perUser / perProvider); a host's owner is not limited on their own host; over the limit /api/chat answers
+  429 with { error, limit { host, used, max, provider? } }.
+- R197 (sessions, worktrees, states, hide, folders, delete) and R198 (limits) were written as spec() first and are plain
+  checks now.
+
+## 5.14.0 — 2026-10-25
+
+MINOR: **presence and activity, the hub side** (T-259; team note plans/presence.md). A person is as present as their
+most active device: each tab sends its own `device` id on the room long poll and on `POST /api/presence` (an older page
+counts as one device, "legacy", as before), so an idle laptop no longer makes an active phone look away. Next to
+online / away / offline: **working** (any Work run of theirs; the run's start and end reach pages through the long poll)
+and **accepting work** (their own switch). The **label** others see follows plans/presence.md § 2 (Offline · Away ·
+Online · Working · Available for work · Working + available). A person can **appear away / offline** (with an until),
+set **do not disturb** (it only mutes their own sounds and desktop notifications; nothing is blocked) and a **status
+text with an until** (the profile's status line). New: `GET /api/presence` (everyone's status), `GET|POST
+/api/presence/me`; the room answer carries `status`; the old `presence` list applies appear offline / away, so older
+pages show it too; `hub_status` / `team_presence` gain label, working, acceptingWork, dnd, text. Saved in state.json
+"presence" and profile.textUntil (add-only; the JavaScript hub ignores them). The page: a device id per tab, dnd muting
+(sounds, read-aloud, desktop and reminder notifications; the settings' test sounds still play). R196 is now a check.
+web/index.html 1.19.0, web/board.js 1.0.4.
+
+## 5.13.8 — 2026-10-25
+
+PATCH: **a picture the browser kept no longer makes a page think an older build is running.** Unity's pictures
+(/api/assistant/image) are cacheable for a day (private, max-age=86400), and the Rust hub stamped them with its build
+(X-VR-Version). After 5.13.3 went live a page showed a picture kept from 5.13.2, read 5.13.2 from it, reloaded "for" it
+and then said "VibeRoller 5.13.2+a837cb1 is running, but this page still got 5.13.3+40a831f". The hub no longer names
+its build on an answer a browser may keep (pgm-net-internal `http::cacheable`), and the page ignores the build on such
+an answer (copies already kept still carry it for up to a day). R199 (written first: it failed with the build on the
+picture). web/index.html 1.18.1.
+
+## 5.13.7 — 2026-10-25
+
+PATCH: **Sponge's session and presence decisions in the specs and their checks** (T-282, T-258). Each Work session gets
+its own worktree (work/<user>.<sid>, T-292); only working sessions count against the limits, and a run that stalls or
+goes silent without saying done is ended and counts as idle; closing a session hides it; one menu (the dots and the
+right-click) with delete (force-stops its runs), archive and the person's own folders; do not disturb only mutes
+notifications; active time vs AI working time with a 15-minute gap (T-263). R197 checks per-session worktrees, open
+while running, hide / unhide, folders and delete-while-running; R198 counts working sessions. Team notes
+plans/multi-session.md and plans/presence.md. No behaviour changed.
+
+## 5.13.6 — 2026-10-25
+
+PATCH: **the specs for presence and multi-session Work, as checks first** (T-259, T-283). Team notes
+`plans/presence.md` (presence per device, most active wins × working / accepting work, the derived label and its
+order, appear away / offline, do not disturb, custom text with an until, the protocol on the existing room long poll)
+and `plans/multi-session.md` (the session model, its storage next to work-current.json as a mirror, the six states
+and which wins, the routes, limits 5 per host / 3 per provider with 429, what must keep working, compatibility).
+`spec()` checks R196 (presence), R197 (sessions) and R198 (limits) in --rust-hub; they say SPEC until T-259 / T-284 /
+T-285 build them. No behaviour changed.
+
+## 5.13.5 — 2026-10-25
+
+PATCH: **switching to the Rust hub alone is the config line and a graceful restart** (T-256). vr-run read
+`rustHub.alone` only when it started, so on the live server the graceful restart after 5.13.3 kept the JavaScript hub
+running behind the Rust one, and the swap needed a restart of the whole service (which also ends the Work run that asks
+for it). vr-run now reads it again whenever a build asks for a restart (exit 75): the next build starts with `--alone`
+and the JavaScript hub behind it stops (it stays the last resort); setting it back to false starts it behind again (both directions in R195).
+R195 (written first, under the testing law: it failed on 5.13.4 with the JavaScript hub still behind).
+
+## 5.13.4 — 2026-10-25
+
+PATCH: **the testing law** (LAWS.md). Five rules for every project's tests: check what the code does, not how it does
+it (a refactor that changes no behaviour must not break a check; static source checks only where there is nothing to
+observe); name checks like sentences; fix or delete a flaky check the same day (no retry-until-green); coverage is a
+floor (every change gets a check for what it does and how it fails); a bug gets a failing check before its fix (the
+CHANGELOG names it; a feature not built yet gets a `spec()`).
+
 ## 5.13.3 — 2026-10-24
 
 PATCH: **the Rust fallback chain actually fills up** (T-157). The auto-deploy marked a version's native build good only

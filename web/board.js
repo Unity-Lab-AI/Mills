@@ -50,7 +50,7 @@
       const b = el('b'); label(b, 'calendar', (over ? 'Overdue: ' : 'Due today: ') + t.id); tt.append(b, ' ' + t.title); tt.style.setProperty('--toast-s', '14s');
       tt.onclick = () => { tt.remove(); B.board = t.board; showScreen('board'); openDetail(t.id); };
       tt.addEventListener('animationend', () => tt.remove()); $('toasts').append(tt);
-      try { if (window.Notification && Notification.permission === 'granted') new Notification((over ? 'Overdue task: ' : 'Due today: ') + t.title, { body: t.id + ' on the ' + OPT.product + ' board' }); } catch {}
+      try { if (window.Notification && Notification.permission === 'granted' && !(window.vrDnd && window.vrDnd())) new Notification((over ? 'Overdue task: ' : 'Due today: ') + t.title, { body: t.id + ' on the ' + OPT.product + ' board' }); } catch {}
     }
     const P = typeof prefs === 'function' ? prefs() : null; if (P && P.sound.on && typeof playTone === 'function') playTone('board', P.sound.board ?? P.sound.mention); // the tick-tock pattern (5.11.0)
     store.set(key, JSON.stringify(seen));

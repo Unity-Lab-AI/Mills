@@ -1358,6 +1358,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // host switch; everything that touches the computer lives in the Tools window, the app's own page.
 const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
 let reconnecting = false;
+const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '').toLowerCase(); return !/no-store|no-cache/.test(cc) && /max-age=([1-9]\d*)/.test(cc); };
 async function api(path, opts = {}) {
   if (!base) throw new Error('VibeRoller is offline — ask the admin to start it.');
   const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
@@ -1366,7 +1367,8 @@ async function api(path, opts = {}) {
     try { res = await fetch(base + path, init); } catch {}
     if (res && ![502, 503, 504, 530].includes(res.status)) {
       if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
-      const hubBuild = res.headers.get('x-vr-version');
+      // a cacheable answer (Unity's pictures) may be a copy the browser kept from an older build: its build says nothing (R199)
+      const hubBuild = cacheable(res) ? '' : res.headers.get('x-vr-version');
       if (hubBuild && me && (me.build || me.version) && hubBuild !== (me.build || me.version)) pageUpdateAvailable(hubBuild, path);
       if (res.status === 401 && path !== '/api/login') { signOut(); throw new Error('Session expired — sign in again.'); }
       return res;
@@ -1684,7 +1686,7 @@ function assistNotice(n) {
   d.onclick = () => d.remove();
   $('assistNotice').appendChild(d);
   if (!$('assist').hidden) assistSys('Reminder: ' + n.text);
-  try { if (window.Notification && Notification.permission === 'granted') new Notification('VibeRoller reminder', { body: n.text }); } catch {}
+  try { if (window.Notification && Notification.permission === 'granted' && !dndOn()) new Notification('VibeRoller reminder', { body: n.text }); } catch {}
   setTimeout(() => d.remove(), 120000);
 }
 function startAssistNotices() {
@@ -2906,6 +2908,7 @@ async function applyRoom(d) {
   seenMap = d.seen || {};
   onShares(d.shares || []);
   presenceMap = Object.fromEntries((d.presence || []).map((p) => [p.user, p]));
+  statusMap = Object.fromEntries((d.status || []).map((p) => [p.user, p])); // plans/presence.md: label, working, accepting, dnd, text (newer hubs)
   onlineSet = new Set((d.presence || []).filter((p) => p.online).map((p) => p.user)); typingList = d.typing || []; renderPresence();
   for (const m of d.messages) await ingest(m, roomLoaded);
   roomLoaded = true;
@@ -2936,7 +2939,7 @@ async function roomLoop(gen) {
   // the long poll is held outside the queue (it may wait 25 s); its answer is applied through the queue
   while (me && gen === roomGen) {
     try {
-      const d = await json('/api/room/messages?rev=' + roomRev + '&wait=1&ver=' + roomVer);
+      const d = await json('/api/room/messages?rev=' + roomRev + '&wait=1&ver=' + roomVer + '&device=' + DEVICE);
       if (gen !== roomGen) return;
       const run = roomQueue.then(() => applyRoom(d)); roomQueue = run.catch(() => {}); await run;
     } catch { await sleep(3000); }
@@ -3128,8 +3131,8 @@ const PATTERNS = {
   board: [[1568, 0, 0.06, 'square', 0.35], [1175, 0.2, 0.06, 'square', 0.3], [1568, 0.4, 0.06, 'square', 0.35], [880, 0.58, 0.4, 'triangle', 0.8]],
 };
 function soundSet() { try { return prefs().sound.set === 'classic' ? 'classic' : 'patterns'; } catch { return 'patterns'; } }
-function playTone(kind, volume, set = soundSet()) {
-  if (!volume) return;
+function playTone(kind, volume, set = soundSet(), test = false) {
+  if (!volume || (!test && dndOn())) return; // do not disturb mutes every sound but the settings' own test buttons
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -3169,7 +3172,7 @@ function notify(rec) {
   if (P.sound.on && !watching) playTone(kind, P.sound[kind]);
   if (P.toasts && !$('shell').hidden && !(roomVisible() && c === currentConv)) toast(rec, kind);
   const who = authorOf(m), how = kind === 'reply' ? ' replied' : m.to ? ' privately' : '';
-  const readIt = P.tts.on && !watching && (P.tts.scope === 'all' || kind !== 'message');
+  const readIt = P.tts.on && !watching && !dndOn() && (P.tts.scope === 'all' || kind !== 'message');
   if (rec.audio) {
     if (readIt) speak(`${who}${how} sent a voice clip${rec.text ? ': ' + rec.text : ''}`);
     if (P.clips.autoplay && !watching) enqueueClip(rec);
@@ -3398,7 +3401,7 @@ $('recSend').onclick = () => stopClip(false);
 $('recCancel').onclick = () => stopClip(true);
 function toast(rec, kind) {
   // in the desktop app with its window hidden or in the background: a desktop notification as well
-  if (NATIVE && (document.visibilityState !== 'visible' || !document.hasFocus())) NATIVE.call('notify', { title: authorOf(rec.m) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : ''), body: snippet(rec) }).catch(() => {});
+  if (NATIVE && !dndOn() && (document.visibilityState !== 'visible' || !document.hasFocus())) NATIVE.call('notify', { title: authorOf(rec.m) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : ''), body: snippet(rec) }).catch(() => {});
   const t = document.createElement('div'); t.className = 'toast ' + kind; t.style.borderLeftColor = authorColor(rec.m);
   const b = document.createElement('b'); b.style.color = authorColor(rec.m);
   b.textContent = authorOf(rec.m) + (rec.m.to ? ' (private)' : '') + (kind === 'reply' ? ' replied' : '') + ': ';
@@ -3611,13 +3614,19 @@ function insertMention(u) {
 }
 $('roomInput').addEventListener('input', updateMentionList);
 // ── Presence: who is online, who is typing (renewed every 2.5 s while keys are pressed; lapses in 6 s) ──
-let onlineSet = new Set(), presenceMap = {}, typingList = [], typingSentAt = 0, typingOn = false, typingTimer = null;
+let onlineSet = new Set(), presenceMap = {}, statusMap = {}, typingList = [], typingSentAt = 0, typingOn = false, typingTimer = null;
 // Hub-wide presence: the page tells the hub which screen it is on, whether it is idle (tab hidden or
 // 5 min without input), and that it is going away; online / offline itself comes from the open long poll.
+// Each tab is one device (plans/presence.md): its id rides on the long poll and on every presence post, so a person is
+// as present as their most active tab or device (an idle laptop no longer makes an active phone look away).
 const IDLE_MS = 5 * 60000;
+const DEVICE = (() => { try { let d = sessionStorage.getItem(NS + 'vr.device'); if (!d) { d = 'd' + Math.random().toString(36).slice(2, 12); sessionStorage.setItem(NS + 'vr.device', d); } return d; } catch { return 'd' + Math.random().toString(36).slice(2, 12); } })();
+// Do not disturb (plans/presence.md): mutes sounds and desktop notifications on this person's own devices; nothing is blocked
+const dndOn = () => { const s = me && statusMap[me.username]; return !!(s && s.dnd && (!s.dndUntil || Date.now() < s.dndUntil)); };
+window.vrDnd = dndOn;
 let lastInput = Date.now(), sentIdle = null, sentScreen = '';
 const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin', notes: 'Notes', assist: 'Unity' };
-function postPresence(body) { if (me && token && base) json('/api/presence', { method: 'POST', body: JSON.stringify(body) }).catch(() => {}); }
+function postPresence(body) { if (me && token && base) json('/api/presence', { method: 'POST', body: JSON.stringify({ ...body, device: DEVICE }) }).catch(() => {}); }
 function presenceTick() {
   if (!me) return;
   const idle = document.visibilityState === 'hidden' || Date.now() - lastInput > IDLE_MS;
@@ -3628,7 +3637,7 @@ for (const ev of ['pointerdown', 'keydown', 'pointermove', 'wheel', 'touchstart'
 document.addEventListener('visibilitychange', presenceTick);
 setInterval(presenceTick, 15000);
 window.addEventListener('pagehide', () => { // closing the tab: offline at once instead of after the timeout
-  if (me && token && base) fetch(base + '/api/presence', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ gone: true }) }).catch(() => {});
+  if (me && token && base) fetch(base + '/api/presence', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ gone: true, device: DEVICE }) }).catch(() => {});
 });
 const ago = (ms) => { const s = Math.round((Date.now() - ms) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago'; };
 function statusOf(u) { // 'on' | 'idle' | 'off', with a sentence for tooltips and the menu
@@ -4099,7 +4108,7 @@ $('ttsTest').onclick = () => { // test with the values on screen, before saving
   speechSynthesis.speak(u);
 };
 // a test plays in the style picked right now (before saving), so the two can be compared
-document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply', call: 'volCall', board: 'volBoard' }[b.dataset.test]).value), $('soundSet').value); });
+document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply', call: 'volCall', board: 'volBoard' }[b.dataset.test]).value), $('soundSet').value, true); });
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({

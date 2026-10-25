@@ -30,7 +30,7 @@ process.stdin.on('end', async () => {
     const r = await fetch(env.MILLS_BRIDGE + '/internal/pc-tool', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
-      body: JSON.stringify({ name: 'list', args: { path: '' } }),
+      body: JSON.stringify({ name: 'list', args: { path: '' }, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }), // as pc-tools-mcp.js sends it
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
   }

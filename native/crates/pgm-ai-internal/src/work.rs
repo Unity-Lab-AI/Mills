@@ -18,6 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::hub::{answer, AiHub, Resp};
+use crate::sessions::{self, Sx};
 use pgm_collab_internal::worktree::{Worktrees, Wt, HUB_PROJECT};
 use pgm_core_internal::config::Config;
 use pgm_core_internal::now_ms;
@@ -29,7 +30,9 @@ const AI_OFF_TEXT: &str = "The host's AI is switched off right now (its host pau
 const HOST_JCODE: &str = "host-jcode";
 const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSessionWhere", "ctx", "project", "lastRunAt"];
 
-struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog }
+/// A run of one session (its key: the person for the primary session, "<user>#<id>" for the others). `last` = when it
+/// last sent something of its own (not the hub's pings): the liveness check ends a run silent for too long.
+struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String }
 /// Everything a run has sent, so a page that reloads (or a second tab) can join it again: GET /api/work/attach.
 /// `base` = how many of the oldest events were dropped (a run keeps its last RUN_LOG_MAX).
 #[derive(Default, Clone)]
@@ -65,6 +68,10 @@ pub struct Work {
     pub busy_changed: Notify,
 }
 use pgm_core_internal::json::{read_json, s, write_json};
+/// The freshness note's key: the person's worktree of a project, or one of their sessions'.
+fn fresh_key(u: &str, pj: &str, hex: Option<&str>) -> String { match hex { Some(h) => format!("{u}|{pj}|{h}"), None => format!("{u}|{pj}") } }
+/// The session a worktree belongs to (its branch work/<user>.<hex>), None for the person's own.
+fn session_of(u: &str, wd: &Wt) -> Option<String> { wd.branch.strip_prefix(&format!("work/{u}.")).map(String::from) }
 fn line(v: Value) -> Result<Bytes, String> { Ok(Bytes::from(v.to_string() + "\n")) }
 fn iso() -> String { pgm_core_internal::time::iso_now() }
 
@@ -85,6 +92,7 @@ impl Work {
         self.states.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), v.clone());
         v
     }
+    pub(crate) fn update_state(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) -> Value { self.update(a, f) }
     fn update(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) -> Value {
         let mut v = self.state(a); if !v.is_object() { v = json!({}); }
         f(v.as_object_mut().unwrap());
@@ -96,7 +104,12 @@ impl Work {
     pub fn secret_for(&self, account: &str) -> String { pgm_core_internal::crypto::hmac_hex(self.secret.as_bytes(), account.as_bytes()) }
     pub fn forget(&self, u: &str) { self.states.lock().unwrap_or_else(|e| e.into_inner()).remove(u); }
     pub fn drop_provider(&self, a: &Account, id: &str) { if self.state(a)["provider"] == json!(id) { self.update(a, |m| { m.remove("provider"); }); } }
-    pub fn busy(&self, u: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(u) }
+    /// Is any session of theirs running (the primary one's run is keyed by the person, the others' by "<user>#<id>")?
+    pub fn busy(&self, u: &str) -> bool { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).keys().any(|k| k == u || k.starts_with(&p)) }
+    /// Is this one session running (its run key)?
+    pub fn busy_key(&self, key: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key) }
+    /// The run key of a run of theirs that waits for something from their browser: the primary session's first.
+    fn run_key_of(&self, u: &str) -> Option<String> { let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.contains_key(u) { return Some(u.to_string()); } let p = format!("{u}#"); runs.keys().find(|k| k.starts_with(&p)).cloned() }
     pub fn any_busy(&self) -> bool { !self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() }
     pub fn default_model_of(&self, a: &Account) -> String { self.default_model(a) }
     fn default_model(&self, a: &Account) -> String {
@@ -104,6 +117,22 @@ impl Work {
         s(&c, "model")
     }
     pub fn effective_model(&self, a: &Account) -> String { let m = s(&self.state(a), "model"); if m.is_empty() { self.default_model(a) } else { m } }
+    /// A session's project (the first session's is project_of).
+    pub fn project_in(&self, a: &Account, sx: &Sx) -> String { let p = s(&sessions::sstate(self, a, sx), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
+    /// The session limits on a host (T-285; plans/multi-session.md § 6): working sessions per person, and per provider
+    /// on it. Config workSessions { perUser 5, perProvider 3 } (a host's own settings come with T-286).
+    pub fn session_limits(&self, _host: &str) -> (u64, u64) {
+        let c = self.cfg.get("workSessions").cloned().unwrap_or(json!({}));
+        (c["perUser"].as_u64().filter(|n| *n > 0).unwrap_or(5), c["perProvider"].as_u64().filter(|n| *n > 0).unwrap_or(3))
+    }
+    /// How many of this person's sessions work on that host now, and how many of them through that provider.
+    pub fn working_on(&self, u: &str, host: &str, prov: &str) -> (u64, u64) {
+        let pre = format!("{u}#"); let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        let mine: Vec<&Run> = runs.iter().filter(|(k, _)| *k == u || k.starts_with(&pre)).map(|(_, r)| r).collect();
+        (mine.iter().filter(|r| sessions::host_of(&r.prov) == host).count() as u64, mine.iter().filter(|r| r.prov == prov).count() as u64)
+    }
+    /// How long a run may send nothing of its own before it counts as stalled (config workSessions.stallAfterMs).
+    pub fn stall_after(&self) -> u64 { self.cfg.get("workSessions").and_then(|w| w["stallAfterMs"].as_u64()).filter(|x| *x >= 10_000).unwrap_or(720_000) }
     pub fn project_of(&self, a: &Account) -> String { let p = s(&self.state(a), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
     pub fn project_list(&self) -> Value {
         let mut c = self.projects.lock().unwrap_or_else(|e| e.into_inner());
@@ -173,13 +202,16 @@ impl Work {
     }
 
     // ---------- worktree freshness (the worktree law): checked in the background, never holding a run up ----------
-    pub fn check_fresh(self: &Arc<Self>, a: &Account) {
-        let pj = self.project_of(a); let key = format!("{}|{pj}", a.username);
+    pub fn check_fresh(self: &Arc<Self>, a: &Account) { let pj = self.project_of(a); self.check_fresh_in(a, &pj, None); }
+    /// The background freshness check of a worktree: the person's own (None) or one of their sessions' (its id's hex).
+    pub fn check_fresh_in(self: &Arc<Self>, a: &Account, pj: &str, hex: Option<&str>) {
+        let pj = pj.to_string(); let hex = hex.map(String::from); let key = fresh_key(&a.username, &pj, hex.as_deref());
         { let mut f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()); let cur = f.get(&key).cloned().unwrap_or_default(); if cur.busy || (cur.at > 0 && now_ms() - cur.at < 60000) { return; } f.insert(key.clone(), Fresh { busy: true, ..cur }); }
         let (w, user) = (self.clone(), a.username.clone());
         tokio::task::spawn_blocking(move || {
             let mut env = w.work_env(&user); env.push(("GIT_TERMINAL_PROMPT".into(), "0".into()));
-            let (_, out, err) = w.wt.tool(&["--project", &pj, "auto", &user], &env);
+            let mut args: Vec<&str> = vec!["--project", &pj, "auto", &user]; if let Some(h) = &hex { args.push("--session"); args.push(h); }
+            let (_, out, err) = w.wt.tool(&args, &env);
             let raw = if out.trim().is_empty() { err } else { out };
             let lines: Vec<&str> = raw.trim().lines().collect();
             let text: String = lines[lines.len().saturating_sub(2)..].join(" ").chars().take(600).collect();
@@ -190,6 +222,7 @@ impl Work {
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let cmd = if wd.hub { "node bridge/worktree.js".to_string() } else { format!("node {script} --project {}", wd.project) };
         let u = &a.username;
+        if let Some(h) = session_of(u, wd) { return format!("Worktree law: never build on a stale worktree. This session's worktree builds on {u}'s own work/{u} (never touch that branch from here). Before changing anything, check it: {cmd} check {u} --session {h} (exit code 3 = stale: work/{u} has moved on). If it is STALE, run {cmd} update {u} --session {h}: it fast-forwards or merges work/{u} into this branch. When {u} asks to bring the work home: {cmd} home {u} --session {h} (it merges this branch into work/{u} in their own worktree). The latest background check of this worktree is at the end of each message."); }
         // the law itself is the same every run (it stays in the cached system prefix); the latest check result is
         // volatile ("N min ago") and travels with the turn (fresh_note), so it never busts the prompt cache
         format!("Worktree law: never build on a stale worktree. Before changing anything, check it: {cmd} check {u} (it fetches Forgejo first; exit code 3 = stale). If it is STALE, run {cmd} update {u}: it fast-forwards, merges Forgejo's {} into your own commits, or makes a NEW worktree from Forgejo with your commits, uncommitted changes and untracked files carried over and then deletes just the old one ({cmd} renew {u} does that directly). The latest background check of this worktree is at the end of each message.", wd.main)
@@ -197,7 +230,7 @@ impl Work {
     /// The latest background freshness check, for the turn (not the system prompt: pgm-context's lint would flag the
     /// "N min ago" there, and every run would pay the whole system prompt again).
     fn fresh_note(&self, a: &Account, wd: &Wt) -> String {
-        let f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()).get(&format!("{}|{}", a.username, wd.project)).cloned();
+        let f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()).get(&fresh_key(&a.username, &wd.project, session_of(&a.username, wd).as_deref())).cloned();
         f.filter(|f| !f.text.is_empty()).map(|f| format!("[Worktree: latest background check ({} min ago): {}]", ((now_ms() - f.at) as f64 / 60000.0).round().max(1.0), f.text)).unwrap_or_default()
     }
     fn hub_laws(&self) -> String { ["LAWS.md", "CLAUDE.md"].iter().filter_map(|f| std::fs::read_to_string(self.mills.join(f)).ok().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n") }
@@ -211,7 +244,8 @@ impl Work {
             format!("For work on the VibeRoller project itself you are in {name}'s OWN git worktree: {dir}, branch {b}."),
             format!("Commit only on {b}; never check out other branches here and never touch other people's worktrees in {}.", self.wt.wt_root.display()),
             "Before committing, run the regression suite from the worktree: node bridge/test/regress.js --no-prod (it must report 0 failed).".into(),
-            format!("Only when {name} asks you to merge into develop, run from the worktree: node bridge/worktree.js commit {u} \"<message>\" then node bridge/worktree.js merge {u}"),
+            if wd.branch != format!("work/{u}") { format!("This is one of {name}'s Work sessions with its own worktree and branch (others may run in parallel in theirs). Only when {name} asks to bring it home: commit here, then in their own worktree {} run git merge {b}, and from there, when they ask to merge into develop, node bridge/worktree.js commit {u} \"<message>\" then node bridge/worktree.js merge {u}", wd.root.join(u.as_str()).display()) }
+            else { format!("Only when {name} asks you to merge into develop, run from the worktree: node bridge/worktree.js commit {u} \"<message>\" then node bridge/worktree.js merge {u}") },
             format!("(it merges onto Forgejo's develop and pushes to Forgejo first; on a conflict run \"node bridge/worktree.js update {u}\", resolve, commit, merge again). Going live (node bridge/worktree.js live: Forgejo's develop → main, pushed first; the server's auto-deploy ships it, health-checks it and rolls back by itself) only when asked."),
             self.fresh_law(a, wd),
             format!("Other projects live in the shared projects area {} (one folder per project, _repo = its main checkout, one worktree per person); {name} switches projects in Work's header. \"node bridge/worktree.js projects\" lists them.", self.wt.projects_root.display()),
@@ -257,15 +291,16 @@ impl Work {
         render_prompt(&segs)
     }
     /// The MCP servers of a run here: PC files, the board, the team chat (bridge/*-mcp.js), with this hub's secret.
-    fn mcp_json(&self, a: &Account) -> Value {
+    fn mcp_json(&self, a: &Account, sx: &Sx) -> Value {
         let node = std::env::var("VR_NODE").unwrap_or_else(|_| "node".into());
-        let env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret_for(&a.username), "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
+        let mut env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret_for(&a.username), "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
+        if !sx.primary { env["MILLS_SESSION"] = json!(sx.sid); } // its PC tools reach the page of THIS session's run
         let srv = |js: &str| json!({ "command": node, "args": [std::path::absolute(self.root.join(js)).unwrap_or_default().display().to_string()], "env": env });
         json!({ "mcpServers": { "pc": srv("pc-tools-mcp.js"), "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } })
     }
-    fn mcp_config(&self, a: &Account) -> PathBuf {
-        let f = a.dir.join(".mcp-runtime-hub.json");
-        write_json(&f, &self.mcp_json(a));
+    fn mcp_config(&self, a: &Account, sx: &Sx) -> PathBuf {
+        let f = if sx.primary { a.dir.join(".mcp-runtime-hub.json") } else { a.dir.join(format!(".mcp-runtime-hub-{}.json", sx.hex())) };
+        write_json(&f, &self.mcp_json(a, sx));
         pgm_core_internal::fs::private(&f);
         f
     }
@@ -284,32 +319,36 @@ impl Work {
     }
 
     // ---------- the run's stream ----------
-    fn emit(&self, u: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(u) { let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
-    fn on_event(&self, hub: &dyn AiHub, a: &Account, ev: Value, source: &str) {
+    fn emit(&self, key: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { if ev["type"] != json!("ping") { r.last = now_ms(); } let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
+    fn on_event(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, ev: Value, source: &str) {
         // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
         // fields as they came plus the `hub` object the page reads first (harness.rs, WORKPLAN 9b)
         let ev = crate::harness::wire(ev);
-        if let Some(sid) = ev["session_id"].as_str().filter(|s| !s.is_empty()) { let sid = sid.to_string(); self.update(a, |m| { m.insert("claudeSessionId".into(), json!(sid)); }); }
+        if let Some(sid) = ev["session_id"].as_str().filter(|s| !s.is_empty()) { let sid = sid.to_string(); sessions::supdate(self, a, sx, |m| { m.insert("claudeSessionId".into(), json!(sid)); }); }
         let usage = &hub.ai().usage;
         let t = ev["type"].as_str().unwrap_or("");
         if !source.is_empty() { usage.note_event(&ev, source); } else if !t.contains("rate_limit") { usage.note_event(&ev, "hub"); }
         if t == "assistant" || t == "result" {
-            let st = self.state(a); let mut ctx = st["ctx"].clone(); let before = ctx.clone();
+            let st = sessions::sstate(self, a, sx); let mut ctx = st["ctx"].clone(); let before = ctx.clone();
             crate::usage::note_context(&mut ctx, &ev, st["claudeSessionId"].as_str().unwrap_or(""));
-            if ctx != before { self.update(a, |m| { m.insert("ctx".into(), ctx); }); }
+            if ctx != before { sessions::supdate(self, a, sx, |m| { m.insert("ctx".into(), ctx); }); }
         }
-        self.share_event(&a.username, &ev);
-        self.emit(&a.username, ev);
+        if t == "result" { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx.key) { r.answered = true; } }
+        if sx.primary { self.share_event(&a.username, &ev); } // a share shows the person's first session (plans/multi-session.md § 7)
+        self.emit(&sx.key, ev);
     }
-    fn finish(&self, a: &Account, run_id: &str, code: Value) {
-        let run = { let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.get(&a.username).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&a.username) } else { None } };
+    fn finish(&self, a: &Account, sx: &Sx, run_id: &str, code: Value) {
+        let run = { let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.get(&sx.key).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&sx.key) } else { None } };
         let Some(mut r) = run else { return };
         for (_, p) in r.pending { let _ = p.send(json!({ "ok": false, "error": "Run ended" })); }
         let done = json!({ "type": "bridge_done", "code": code });
         let _ = r.tx.send(line(done.clone()));
         r.ev.push(done);
         // a page reloading just now still sees how it ended (for a few minutes)
-        self.ended.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), (r.id.clone(), r.ev, now_ms()));
+        self.ended.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), (r.id.clone(), r.ev, now_ms()));
+        // the session's dot: red (done, not seen yet) when it answered
+        let answered = r.answered; let now = now_ms();
+        sessions::touch(a, &sx.sid, |m| { if answered { m.insert("lastReplyAt".into(), json!(now)); } m.insert("lastActivityAt".into(), json!(now)); });
         self.busy_changed.notify_one();
     }
     /// GET /api/work/attach?run=<id>&after=<n>: the person's run so far and as it goes (a long poll, 25 s): the events
@@ -358,26 +397,30 @@ fn one_line(v: Value) -> Resp { hyper::Response::builder().status(200).header("c
 /// POST /api/chat: one message to Claude in Work.
 async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let w = hub.work();
-    if w.busy(&a.username) { return answer(409, json!({ "error": "Claude is already working. Stop it first." })); }
+    let b = r.json();
+    // the session it goes to (plans/multi-session.md; none named = the first one, as older pages send it)
+    let Some(sx) = sessions::resolve(a, &sessions::wanted(r, &b)) else { return answer(404, json!({ "error": "No such session." })) };
+    if w.busy_key(&sx.key) { return answer(409, json!({ "error": "Claude is already working. Stop it first." })); }
     // a requested restart wins the gap between two replies (the page retries a 503 by itself)
     if std::env::var("MILLS_SUPERVISED").is_ok() && hub.root().join(".restart").exists() { return answer(503, json!({ "error": "VibeRoller is restarting; your message goes through in a moment." })); }
-    let b = r.json();
     let Some(message) = b["message"].as_str().filter(|m| !m.is_empty()).map(String::from) else { return answer(400, json!({ "error": "Empty message." })) };
     let context: String = b["context"].as_str().unwrap_or("").chars().take(20000).collect();
     let fresh = b["fresh"].as_bool().unwrap_or(false) || (b["fresh"].is_number() && b["fresh"] != json!(0)) || b["fresh"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
-    if fresh { w.update(a, |m| { m.remove("claudeSessionId"); m.remove("ctx"); }); }
-    w.share_line(&a.username, "user", &message);
-    let pj = w.project_of(a);
-    let wd = match w.wt.ensure(&a.username, &pj) { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
-    w.update(a, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
-    w.check_fresh(a);
-    let st = w.state(a);
+    if fresh { sessions::supdate(w, a, &sx, |m| { m.remove("claudeSessionId"); m.remove("ctx"); }); }
+    if sx.primary { w.share_line(&a.username, "user", &message); }
+    let pj = w.project_in(a, &sx);
+    // each session its own worktree (T-292): the first one the person's, the others <user>.<id> on work/<user>.<id>
+    let wd = match if sx.primary { w.wt.ensure(&a.username, &pj) } else { w.wt.ensure_session(&a.username, sx.hex(), &pj) } { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
+    sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
+    { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); }); }
+    if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
+    let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
-    let mcp_config = w.mcp_config(a);
+    let mcp_config = w.mcp_config(a, &sx);
     let system_prompt = w.system_prompt(a, &wd);
     let mut tools: Vec<String> = hub.cfg().get("allowedTools").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     if !wd.hub { tools.push(format!("Bash(node {}:*)", w.wt.script.display().to_string().replace('\\', "/"))); }
-    let model = w.effective_model(a);
+    let model = { let m = s(&st, "model"); if m.is_empty() { w.default_model_of(a) } else { m } };
     let ai = hub.ai();
     let Some(prov) = w.effective(ai, &a.username, &s(&st, "provider")) else { return one_line(json!({ "type": "bridge_error", "text": "No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings." })) };
     let Some(harness) = Work::harness_of(&prov) else { return one_line(json!({ "type": "bridge_error", "text": "Your chosen AI provider can run neither Claude Code nor Jcode PGM, so it cannot run Work. Pick a Claude or a Jcode PGM model in the dropdown." })) };
@@ -399,13 +442,21 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if hjcode && owner != a.username {
         return one_line(json!({ "type": "bridge_error", "text": format!("{nick} runs Work through Jcode PGM on {} computer, and only its owner may work on that computer. Pick another AI in the dropdown.", if owner.is_empty() { "its own".to_string() } else { format!("{}'s", hub.name_of(&owner)) }) }));
     }
+    // the limits (T-285): only working sessions count, per host and per provider on it; a host's owner is not limited on it
+    { let pfull = s(&prov, "id"); let host = sessions::host_of(&pfull);
+      if owner.is_empty() || owner != a.username {
+        let (max_u, max_p) = w.session_limits(&host); let (used, used_p) = w.working_on(&a.username, &host, &pfull);
+        let where_ = if host == "hub" { "This hub".to_string() } else if nick.is_empty() { host.clone() } else { nick.clone() };
+        if used >= max_u { return answer(429, json!({ "error": format!("{where_}: {used} of {max_u} sessions working. Wait for one, stop one, or use another AI host."), "limit": { "host": host, "used": used, "max": max_u } })); }
+        if used_p >= max_p { return answer(429, json!({ "error": format!("{where_} / {pfull}: {used_p} of {max_p} sessions working on it. Wait for one, stop one, or pick another AI."), "limit": { "host": host, "used": used_p, "max": max_p, "provider": pfull } })); }
+      } }
     let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else { String::new() };
     // a Claude session lives where it ran (relayed runs run here, on this hub); a Jcode PGM host's, on that host
     let wher = if (kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work") || hjcode { host_id.clone() } else { "hub".to_string() };
     // a session is resumed only where it ran and by the harness that made it (a Jcode PGM session id means nothing to Claude Code)
     let resume = !fresh && !s(&st, "claudeSessionId").is_empty() && { let w0 = s(&st, "claudeSessionWhere"); (if w0.is_empty() { "hub".to_string() } else { w0 }) == wher }
         && { let h0 = s(&st, "sessionHarness"); (if h0.is_empty() { crate::jcode::CLAUDE_HARNESS.to_string() } else { h0 }) == harness };
-    { let wh = wher.clone(); w.update(a, |m| { m.insert("claudeSessionWhere".into(), json!(wh)); m.insert("sessionHarness".into(), json!(harness)); if !resume { m.remove("claudeSessionId"); } }); }
+    { let wh = wher.clone(); sessions::supdate(w, a, &sx, |m| { m.insert("claudeSessionWhere".into(), json!(wh)); m.insert("sessionHarness".into(), json!(harness)); if !resume { m.remove("claudeSessionId"); } }); }
     // attached files (the marker block at the end of the message): Claude gets their paths and may read that folder
     let wm = hub.work_message(a, &message, json!({ "project": wd.project }));
     let add_dirs: Vec<String> = wm["dirs"].as_array().cloned().unwrap_or_default().iter().filter_map(|d| d.as_str().map(String::from)).collect();
@@ -415,18 +466,30 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default() });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id") });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
-    w.emit(&a.username, json!({ "type": "bridge_run", "id": run_id }));
+    w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     w.busy_changed.notify_one();
     // the page hears something every 15 s while Claude thinks
-    { let (h, u, id) = (hub.clone(), a.username.clone(), run_id.clone()); tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(15)).await; let alive = h.work().runs.lock().unwrap_or_else(|e| e.into_inner()).get(&u).map(|r| r.id == id).unwrap_or(false); if !alive { return; } h.work().emit(&u, json!({ "type": "ping" })); } }); }
+    // and every 15 s the run is checked: a run that sent nothing of its own for stallAfter (12 minutes: longer than the
+    // longest quiet tool call) is ended as silent, so its session counts as idle and frees its slot (plans/multi-session.md § 3)
+    { let (h, u, id, sid, a2) = (hub.clone(), sx.key.clone(), run_id.clone(), sx.sid.clone(), a.clone()); let stall = w.stall_after(); tokio::spawn(async move { loop {
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        let last = h.work().runs.lock().unwrap_or_else(|e| e.into_inner()).get(&u).filter(|r| r.id == id).map(|r| r.last);
+        let Some(last) = last else { return };
+        if now_ms().saturating_sub(last) > stall {
+            h.work().emit(&u, json!({ "type": "bridge_error", "text": format!("The run sent nothing for {} minutes, so it was ended (stalled). Send again to go on.", stall / 60_000) }));
+            sessions::touch(&a2, &sid, |m| { m.insert("ended".into(), json!({ "why": "silent", "at": now_ms() })); });
+            h.work().stop(&*h, &u); return;
+        }
+        h.work().emit(&u, json!({ "type": "ping" }));
+    } }); }
     let mut relay_env: Vec<(String, String)> = vec![];
     if kind == "host-claude" && s(&prov, "remoteKind") != "claude-cli-work" {
         // a host's Claude login, shared as AI only: Claude Code runs HERE, only its model calls travel to the host
         let tok = w.llm_token(&a.username, &host_id, &prov_id);
         relay_env = vec![("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{}/llm/{tok}", hub.cfg().port)), ("ANTHROPIC_AUTH_TOKEN".into(), "viberoller-relay".into()), ("ANTHROPIC_API_KEY".into(), String::new()), ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into())];
-        w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Using {nick}{}; the work happens here on the server.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI)", hub.name_of(&owner)) }) }));
+        w.emit(&sx.key, json!({ "type": "bridge_info", "text": format!("Using {nick}{}; the work happens here on the server.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI)", hub.name_of(&owner)) }) }));
     } else if kind == "host-claude" || hjcode {
         // legacy: Claude Code runs on the host (only for a host that allows work); or Jcode PGM there (hjcode, the host
         // announced work-jcode: `harness` and `stateModel` are the optional fields it reads)
@@ -434,21 +497,21 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
             "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": hub.cfg().get("permissionMode"), "allowedTools": hub.cfg().get("allowedTools"), "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
         if hjcode { payload["harness"] = json!(harness); payload["stateModel"] = json!(s(&st, "model")); }
         match ai.run_work(&host_id, &prov_id, payload) {
-            Err(e) => { w.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&a.username); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
+            Err(e) => { w.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&sx.key); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
             Ok((job, _token, mut events)) => {
-                if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&a.username) { r.remote = job; }
-                w.emit(&a.username, json!({ "type": "bridge_info", "text": format!("Running on {nick}{}{}.", if owner.is_empty() { " (AI host)".to_string() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }, if hjcode { ", through Jcode PGM" } else { "" }) }));
-                let (h, a2, id) = (hub.clone(), a.clone(), run_id.clone());
+                if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx.key) { r.remote = job; }
+                w.emit(&sx.key, json!({ "type": "bridge_info", "text": format!("Running on {nick}{}{}.", if owner.is_empty() { " (AI host)".to_string() } else { format!(" ({}'s AI host)", hub.name_of(&owner)) }, if hjcode { ", through Jcode PGM" } else { "" }) }));
+                let (h, a2, id, sx2) = (hub.clone(), a.clone(), run_id.clone(), sx.clone());
                 tokio::spawn(async move {
                     let w = h.work();
                     while let Some(m) = events.recv().await {
                         match m {
-                            crate::ai_hosts::WorkMsg::Event(ev) => w.on_event(&*h, &a2, ev, &source),
-                            crate::ai_hosts::WorkMsg::Done(c) => { w.finish(&a2, &id, json!(c)); return; }
-                            crate::ai_hosts::WorkMsg::Error(t) => { w.emit(&a2.username, json!({ "type": "bridge_error", "text": t })); w.finish(&a2, &id, json!(1)); return; }
+                            crate::ai_hosts::WorkMsg::Event(ev) => w.on_event(&*h, &a2, &sx2, ev, &source),
+                            crate::ai_hosts::WorkMsg::Done(c) => { w.finish(&a2, &sx2, &id, json!(c)); return; }
+                            crate::ai_hosts::WorkMsg::Error(t) => { w.emit(&sx2.key, json!({ "type": "bridge_error", "text": t })); w.finish(&a2, &sx2, &id, json!(1)); return; }
                         }
                     }
-                    w.finish(&a2, &id, json!(1));
+                    w.finish(&a2, &sx2, &id, json!(1));
                 });
                 drop(tx);
                 return ndjson(rx);
@@ -460,14 +523,14 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // argument, a private jcode home with the hub's MCP servers and the system prompt as its overlay)
     let hkind = Work::harness_kind(&prov);
     let mut hx = crate::harness::harness_for(hkind, &prov, &s(&st, "model"));
-    let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a) } else { Value::Null };
+    let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a, &sx) } else { Value::Null };
     let sid = s(&st, "claudeSessionId");
     let claude_command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
     let claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     let state_model = s(&st, "model");
     let spec = hx.command(&crate::harness::RunContext { prov: &prov, input: &input, resume: if resume { Some(sid.as_str()) } else { None }, model: &model, state_model: &state_model, acct_dir: &a.dir, cwd: &wd.dir,
         system_prompt: &system_prompt, mcp_json: &mcp_json, mcp_config: &mcp_config, permission_mode: &permission_mode, allowed_tools: &tools, add_dirs: &add_dirs, claude_command: &claude_command, claude_args: &claude_args });
-    if let Some(b) = hx.banner() { w.emit(&a.username, json!({ "type": "bridge_info", "text": b })); }
+    if let Some(b) = hx.banner() { w.emit(&sx.key, json!({ "type": "bridge_info", "text": b })); }
     let (command, harness_env, input) = (spec.program.clone(), spec.env.clone(), spec.stdin.clone());
     let mut cmd = tokio::process::Command::new(&command);
     cmd.args(&spec.args).current_dir(&spec.cwd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(false);
@@ -476,28 +539,28 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     for (k, v) in prov_env.iter().chain(relay_env.iter()).chain(harness_env.iter()).chain(fe.iter()).chain(fj_env.iter()) { cmd.env(k, v); }
     #[cfg(windows)]
     { cmd.creation_flags(0x0800_0000); }
-    let (h, a2, id) = (hub.clone(), a.clone(), run_id.clone());
+    let (h, a2, id, sx2) = (hub.clone(), a.clone(), run_id.clone(), sx.clone());
     drop(tx);
     tokio::spawn(async move {
         let w = h.work();
         let mut child = match cmd.spawn() {
             Ok(c) => c,
-            Err(e) => { w.emit(&a2.username, json!({ "type": "bridge_error", "text": format!("Could not start {command}: {e}") })); w.finish(&a2, &id, json!(-2)); return; }
+            Err(e) => { w.emit(&sx2.key, json!({ "type": "bridge_error", "text": format!("Could not start {command}: {e}") })); w.finish(&a2, &sx2, &id, json!(-2)); return; }
         };
-        if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&a2.username) { r.pid = child.id(); }
+        if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx2.key) { r.pid = child.id(); }
         if let Some(mut stdin) = child.stdin.take() { let inp = input.clone(); tokio::spawn(async move { let _ = stdin.write_all(inp.as_bytes()).await; let _ = stdin.shutdown().await; }); }
-        let err_task = child.stderr.take().map(|e| { let (h, u) = (h.clone(), a2.username.clone()); tokio::spawn(async move { use tokio::io::AsyncReadExt; let mut e = e; let mut buf = vec![0u8; 8192]; while let Ok(n) = e.read(&mut buf).await { if n == 0 { break; } h.work().emit(&u, json!({ "type": "stderr", "text": String::from_utf8_lossy(&buf[..n]) })); } }) });
+        let err_task = child.stderr.take().map(|e| { let (h, u) = (h.clone(), sx2.key.clone()); tokio::spawn(async move { use tokio::io::AsyncReadExt; let mut e = e; let mut buf = vec![0u8; 8192]; while let Ok(n) = e.read(&mut buf).await { if n == 0 { break; } h.work().emit(&u, json!({ "type": "stderr", "text": String::from_utf8_lossy(&buf[..n]) })); } }) });
         if let Some(out) = child.stdout.take() {
             let mut lines = tokio::io::BufReader::new(out).lines();
             while let Ok(Some(l)) = lines.next_line().await {
                 for e in hx.map_line(&l) {
-                    match e { crate::harness::HubEvent::Raw(_) => w.emit(&a2.username, e.into_value()), e => w.on_event(&*h, &a2, e.into_value(), &source) }
+                    match e { crate::harness::HubEvent::Raw(_) => w.emit(&sx2.key, e.into_value()), e => w.on_event(&*h, &a2, &sx2, e.into_value(), &source) }
                 }
             }
         }
         let code = child.wait().await.ok().and_then(|s| s.code()).map(|c| json!(c)).unwrap_or(Value::Null);
         if let Some(t) = err_task { let _ = t.await; }
-        w.finish(&a2, &id, code);
+        w.finish(&a2, &sx2, &id, code);
     });
     ndjson(rx)
 }
@@ -536,12 +599,14 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
     }
     let id = pgm_core_internal::crypto::random_hex(8);
     let (otx, orx) = oneshot::channel();
-    { let mut runs = w.runs.lock().unwrap_or_else(|e| e.into_inner()); match runs.get_mut(account) { Some(r) => { r.pending.insert(id.clone(), otx); } None => return json!({ "ok": false, "error": format!("{}'s browser is not connected (and no AI host of theirs offers their computer).", a.display) }) } }
-    w.emit(account, json!({ "type": "pc_tool", "id": id, "name": name, "args": args }));
+    // the session that asked (its MCP relay names it, 5.15.2), else the person's run that is going
+    let key = sessions::resolve(&a, b["session"].as_str().unwrap_or("")).filter(|sx| !s(b, "session").is_empty() && w.busy_key(&sx.key)).map(|sx| sx.key).or_else(|| w.run_key_of(account)).unwrap_or_else(|| account.to_string());
+    { let mut runs = w.runs.lock().unwrap_or_else(|e| e.into_inner()); match runs.get_mut(&key) { Some(r) => { r.pending.insert(id.clone(), otx); } None => return json!({ "ok": false, "error": format!("{}'s browser is not connected (and no AI host of theirs offers their computer).", a.display) }) } }
+    w.emit(&key, json!({ "type": "pc_tool", "id": id, "name": name, "args": args }));
     match tokio::time::timeout(Duration::from_secs(120), orx).await {
         Ok(Ok(v)) => v,
         Ok(Err(_)) => json!({ "ok": false, "error": "Run ended" }),
-        Err(_) => { if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(account) { r.pending.remove(&id); } json!({ "ok": false, "error": "Timed out waiting for the browser." }) }
+        Err(_) => { if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&key) { r.pending.remove(&id); } json!({ "ok": false, "error": "Timed out waiting for the browser." }) }
     }
 }
 /// Everything a person may pick (bridge/providers.js list): this hub's Claude, the own / shared ones, the hosts'.
@@ -594,6 +659,18 @@ pub fn archive_search(a: &Account, mills: &Path, q: &str) -> Vec<Value> {
 }
 fn clean_title(t: &str) -> String { let t: String = t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect(); if t.is_empty() { "Untitled conversation".into() } else { t } }
 fn archive_file(dir: &Path, id: &str) -> Option<PathBuf> { if id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) { Some(dir.join(format!("{id}.json"))) } else { None } }
+/// Saves a conversation into Past sessions: the entry `id` (a new one when "" or not an id) with its title, its harness
+/// session and its transcript; returns its id (a session being archived, T-284).
+pub(crate) fn archive_put(a: &Account, mills: &Path, root: &Path, id: &str, title: &str, sid: &str, tr: &[Value]) -> String {
+    let dir = archive_dir(a, mills, root);
+    let id = if archive_file(&dir, id).is_some() { id.to_string() } else { pgm_core_internal::crypto::random_hex(8) };
+    let Some(f) = archive_file(&dir, &id) else { return String::new() };
+    let prev = read_json(&f).unwrap_or(json!({}));
+    let _ = std::fs::create_dir_all(&dir);
+    let title = clean_title(if title.is_empty() { prev["title"].as_str().unwrap_or("") } else { title });
+    write_json(&f, &json!({ "id": id, "title": title, "savedAt": iso(), "sessionId": sid, "transcript": tr.iter().filter(|t| t["cls"].is_string() && t["text"].is_string()).cloned().collect::<Vec<_>>() }));
+    id
+}
 
 // ---------- shared Work sessions (watch-only) ----------
 impl Work {
@@ -629,18 +706,22 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let w = hub.work(); let u = &a.username;
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let p = r.path.as_str();
+    if let Some(resp) = sessions::route(hub, r, a).await { return Some(resp); }
+    // the session a request names (plans/multi-session.md; none = the first one, as older pages send it)
+    let sess = |b: &Value| sessions::resolve(a, &sessions::wanted(r, b));
+    let no_session = || answer(404, json!({ "error": "No such session." }));
     Some(match p {
         "/api/chat" if post => chat(hub, a, r).await,
-        "/api/stop" if post => { w.stop(&**hub, u); answer(200, json!({ "ok": true })) }
+        "/api/stop" if post => { let Some(sx) = sess(&r.json()) else { return Some(no_session()) }; w.stop(&**hub, &sx.key); answer(200, json!({ "ok": true })) }
         "/api/pc-result" if post => {
-            let b = r.json();
-            let entry = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(u).and_then(|run| run.pending.remove(&s(&b, "id")));
+            let b = r.json(); let pre = format!("{u}#");
+            let entry = w.runs.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().filter(|(k, _)| *k == u || k.starts_with(&pre)).find_map(|(_, run)| run.pending.remove(&s(&b, "id")));
             if let Some(tx) = entry { let mut v = json!({ "ok": b["ok"].as_bool().unwrap_or(false) || (!b["ok"].is_null() && b["ok"] != json!(false) && b["ok"] != json!(0) && b["ok"] != json!("")) }); for k in ["result", "error"] { if let Some(x) = b.get(k) { v[k] = x.clone(); } } let _ = tx.send(v); }
             answer(200, json!({ "ok": true }))
         }
         "/api/usage" if get => answer(200, w.usage_status(&**hub, a)),
         "/api/model" if post => {
-            let b = r.json(); let st = w.state(a); let ai = hub.ai();
+            let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let st = sessions::sstate(w, a, &sx); let ai = hub.ai();
             let want = if b.get("provider").is_none() { s(&st, "provider") } else { s(&b, "provider") };
             let prov = if !want.is_empty() && want != "host" { w.provider_get(ai, &want, u) } else { w.default_for(ai, u).or_else(|| w.provider_get(ai, "host", "")) };
             let Some(prov) = prov else { return Some(answer(400, json!({ "error": "Unknown provider." }))) };
@@ -651,13 +732,14 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let open = prov["kind"] == json!(crate::jcode::KIND) && ids.is_empty();
             if !model.is_empty() && !open && !ids.contains(&model) { return Some(answer(400, json!({ "error": "Unknown model." }))); }
             let pid = s(&prov, "id");
-            let st = w.update(a, |m| {
+            let st = sessions::supdate(w, a, &sx, |m| {
                 if model.is_empty() { m.remove("model"); } else { m.insert("model".into(), json!(model)); }
                 if want.is_empty() || want == "host" { m.remove("provider"); } else { m.insert("provider".into(), json!(pid)); }
                 if m.contains_key("provider") && model.is_empty() { if let Some(f) = ids.first() { m.insert("model".into(), json!(f)); } }
             });
             let eff = w.effective(ai, u, &s(&st, "provider")).map(|p| s(&p, "id")).unwrap_or_default();
-            answer(200, json!({ "model": s(&st, "model"), "provider": if s(&st, "provider").is_empty() { "host".into() } else { s(&st, "provider") }, "effective": w.effective_model(a), "effectiveProvider": eff }))
+            let effective = if s(&st, "model").is_empty() { w.default_model_of(a) } else { s(&st, "model") };
+            answer(200, json!({ "model": s(&st, "model"), "provider": if s(&st, "provider").is_empty() { "host".into() } else { s(&st, "provider") }, "effective": effective, "effectiveProvider": eff }))
         }
         "/api/projects" if get => answer(200, json!({ "projects": w.project_list(), "project": w.project_of(a) })),
         // { name } = start a new project; { url, name? } = pull in a repo (bridge/worktree.js new / clone, as this person)
@@ -676,18 +758,19 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let b = r.json();
             let want = if !s(&b, "project").is_empty() { s(&b, "project") } else if !b["workspace"].is_null() && b["workspace"] != json!("") { HUB_PROJECT.into() } else { String::new() };
             let pj = match w.wt.project(&want) { Ok(p) => p, Err(e) => return Some(answer(400, json!({ "error": e }))) };
-            if w.busy(u) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
-            let wd = match w.wt.ensure(u, &pj.name) { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
-            let switched = w.project_of(a) != pj.name;
-            w.update(a, |m| { if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
+            let Some(sx) = sess(&b) else { return Some(no_session()) };
+            if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
+            let wd = match if sx.primary { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.hex(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
+            let switched = w.project_in(a, &sx) != pj.name;
+            sessions::supdate(w, a, &sx, |m| { if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
             w.check_fresh(a);
             answer(200, json!({ "project": pj.name, "dir": wd.dir.display().to_string(), "branch": wd.branch }))
         }
         // ----- the Work conversation + queue, kept across restarts -----
-        "/api/work/current" if get => answer(200, work_current(a)),
-        "/api/work/attach" if get => answer(200, w.attach(u, &r.param("run").unwrap_or_default(), r.param("after").and_then(|x| x.parse().ok()).unwrap_or(0)).await),
+        "/api/work/current" if get => { let Some(sx) = sess(&json!({})) else { return Some(no_session()) }; answer(200, sessions::scurrent(a, &sx)) }
+        "/api/work/attach" if get => { let Some(sx) = sess(&json!({})) else { return Some(no_session()) }; answer(200, w.attach(&sx.key, &r.param("run").unwrap_or_default(), r.param("after").and_then(|x| x.parse().ok()).unwrap_or(0)).await) }
         "/api/work/current" if post => {
-            let b = r.json(); let mut st = work_current(a);
+            let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let mut st = sessions::scurrent(a, &sx);
             let Some(list) = b["transcript"].as_array() else { return Some(answer(400, json!({ "error": "transcript must be a list." }))) };
             let mut out: Vec<Value> = list.iter().skip(list.len().saturating_sub(3000)).filter(|t| ["me", "claude", "tool"].contains(&t["cls"].as_str().unwrap_or("")) && t["text"].is_string()).map(|t| json!({ "cls": t["cls"], "text": s(t, "text").chars().take(200 * 1024).collect::<String>() })).collect();
             let mut total = 0usize; let mut keep = 0usize;
@@ -699,17 +782,17 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             st["archiveTitle"] = b["archiveTitle"].as_str().filter(|x| !x.is_empty()).map(|x| json!(x.chars().take(200).collect::<String>())).unwrap_or(Value::Null);
             // how far into a running reply this transcript goes (the page joins the run from there after a reload)
             st["run"] = match (b["run"]["id"].as_str(), b["run"]["n"].as_u64()) { (Some(id), Some(n)) if id.len() <= 32 && id.bytes().all(|c| c.is_ascii_hexdigit()) => json!({ "id": id, "n": n }), _ => Value::Null };
-            save_work_current(a, &mut st);
+            sessions::save_scurrent(a, &sx, &mut st);
             answer(200, json!({ "ok": true, "items": n }))
         }
         "/api/work/queue" if post => {
-            let b = r.json(); let mut st = work_current(a);
+            let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let mut st = sessions::scurrent(a, &sx);
             let Some(q) = b["queue"].as_array() else { return Some(answer(400, json!({ "error": "queue must be a list." }))) };
             let clean = |m: &Value| m.as_str().filter(|x| !x.trim().is_empty()).map(|x| json!(x.chars().take(50 * 1024).collect::<String>()));
             st["queue"] = json!(q.iter().filter_map(clean).take(50).collect::<Vec<_>>());
             st["sendNow"] = clean(&b["sendNow"]).unwrap_or(Value::Null);
             let n = st["queue"].as_array().map(|x| x.len()).unwrap_or(0);
-            save_work_current(a, &mut st);
+            sessions::save_scurrent(a, &sx, &mut st);
             answer(200, json!({ "ok": true, "queue": n }))
         }
         // ----- shared Work sessions -----
@@ -761,7 +844,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                 "/api/archive/search" => answer(200, json!({ "items": archive_search(a, &hub.mills_dir(), &s(&b, "q").chars().take(200).collect::<String>()) })),
                 "/api/archive/save" => {
                     let Some(tr) = b["transcript"].as_array().filter(|t| !t.is_empty()) else { return Some(answer(400, json!({ "error": "Nothing to save yet." }))) };
-                    let sid = s(&w.state(a), "claudeSessionId");
+                    let Some(sx) = sess(&b) else { return Some(no_session()) };
+                    let sid = s(&sessions::sstate(w, a, &sx), "claudeSessionId");
                     if sid.is_empty() { return Some(answer(400, json!({ "error": "This conversation has no Claude session yet." }))); }
                     let id = if s(&b, "id").is_empty() { pgm_core_internal::crypto::random_hex(8) } else { s(&b, "id") };
                     let Some(f) = archive_file(&dir, &id) else { return Some(answer(400, json!({ "error": "Bad conversation id." }))) };
@@ -773,10 +857,11 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                     answer(200, json!({ "id": id, "title": title }))
                 }
                 "/api/archive/open" => {
-                    if w.busy(u) { return Some(answer(409, json!({ "error": "Claude is still working on your current conversation (Work shows it live). Wait for it, or stop it there, then open this one." }))); }
+                    let Some(sx) = sess(&b) else { return Some(no_session()) };
+                    if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Claude is still working on your current conversation (Work shows it live). Wait for it, or stop it there, then open this one." }))); }
                     let Some(f) = archive_file(&dir, &s(&b, "id")) else { return Some(answer(400, json!({ "error": "Bad conversation id." }))) };
                     let Some(entry) = read_json(&f) else { return Some(answer(404, json!({ "error": "Conversation not found." }))) };
-                    let sid = entry["sessionId"].clone(); w.update(a, |m| { m.insert("claudeSessionId".into(), sid); });
+                    let sid = entry["sessionId"].clone(); sessions::supdate(w, a, &sx, |m| { m.insert("claudeSessionId".into(), sid); });
                     answer(200, entry)
                 }
                 "/api/archive/rename" => {
@@ -793,12 +878,13 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     })
 }
 fn work_current_file(a: &Account) -> PathBuf { a.dir.join("work-current.json") }
-fn work_current(a: &Account) -> Value {
-    let s0 = read_json(&work_current_file(a)).filter(Value::is_object).unwrap_or(json!({}));
+pub(crate) fn work_current(a: &Account) -> Value { current_of(&read_json(&work_current_file(a)).unwrap_or(json!({}))) }
+/// A conversation + queue as the page reads it, whatever was stored.
+pub(crate) fn current_of(s0: &Value) -> Value {
     let or_null = |k: &str| if s0[k].is_null() || s0[k] == json!("") { Value::Null } else { s0[k].clone() };
     json!({ "transcript": if s0["transcript"].is_array() { s0["transcript"].clone() } else { json!([]) }, "archiveId": or_null("archiveId"), "archiveTitle": or_null("archiveTitle"), "run": if s0["run"].is_object() { s0["run"].clone() } else { Value::Null }, "queue": if s0["queue"].is_array() { s0["queue"].clone() } else { json!([]) }, "sendNow": or_null("sendNow"), "updatedAt": or_null("updatedAt") })
 }
-fn save_work_current(a: &Account, st: &mut Value) {
+pub(crate) fn save_work_current(a: &Account, st: &mut Value) {
     st["updatedAt"] = json!(iso());
     let f = work_current_file(a); let tmp = f.with_extension("json.tmp");
     if std::fs::write(&tmp, st.to_string()).is_ok() { let _ = std::fs::rename(&tmp, &f); }
@@ -831,7 +917,15 @@ pub fn start(hub: &Arc<dyn AiHub>) {
     let h = hub.clone();
     tokio::spawn(async move { loop {
         tokio::time::sleep(Duration::from_secs(300)).await;
-        for a in h.accounts() { let last = h.work().state(&a)["lastRunAt"].as_u64().unwrap_or(0); if last > 0 && now_ms() - last < 86_400_000 { h.work().check_fresh(&a); } }
+        for a in h.accounts() {
+            let last = h.work().state(&a)["lastRunAt"].as_u64().unwrap_or(0); if last > 0 && now_ms() - last < 86_400_000 { h.work().check_fresh(&a); }
+            // and the worktrees of their sessions used that day
+            let Some(ix) = sessions::index_if_any(&a) else { continue };
+            for (sid, m) in ix["sessions"].as_object().cloned().unwrap_or_default() {
+                if sid == s(&ix, "primary") || !m["worktree"].is_object() || now_ms().saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > 86_400_000 { continue; }
+                h.work().check_fresh_in(&a, &s(&m["worktree"], "project"), Some(sid.trim_start_matches("s-")));
+            }
+        }
     } });
     // the shared sessions to the JavaScript hub (its room poll lists them; pages follow through it)
     let h = hub.clone();
@@ -844,7 +938,8 @@ pub fn start(hub: &Arc<dyn AiHub>) {
     let h = hub.clone();
     tokio::spawn(async move { loop {
         h.work().busy_changed.notified().await;
-        let busy = h.work().any_busy() || h.api().busy() || h.unity().busy() || crate::unity_routes::room_busy(&*h);
+        h.chat_room_changed(); // presence's "working" (plans/presence.md) reaches the pages
+        let busy =h.work().any_busy() || h.api().busy() || h.unity().busy() || crate::unity_routes::room_busy(&*h);
         h.internal("/internal/front/work-busy", json!({ "busy": busy }).to_string()).await;
     } });
 }

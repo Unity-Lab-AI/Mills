@@ -24,6 +24,13 @@ modifications to the new worktree, then abandon and delete just the old worktree
   anyone active that day). It fast-forwards a clean one by itself and tells the next run what it found.
 - Never delete or reset someone else's worktree. Never `git reset --hard` or force-push to get out of a stale state:
   use update / renew.
+- **Each Work session has its own worktree** (Sponge, 2026-10-25; 5.15.0). Your first session uses yours
+  (`<username>` on `work/<username>`). Every other session gets `<username>.<id>` on `work/<username>.<id>`, made by
+  the hub at its first run from your own `work/<username>`, so two sessions never edit the same files at once. It builds
+  on your `work/<username>`: `node bridge/worktree.js check <username> --session <id>` says STALE (exit 3) when that has
+  moved on, and `update <username> --session <id>` brings it in. Its work comes home with `home <username> --session
+  <id>` (the session menu's "Merge into my work"), then you merge to develop from your own worktree as usual. Deleting a session commits what was left uncommitted and keeps an unmerged branch under
+  `refs/viberoller/sessions/`, so nothing is lost.
 
 ## Forgejo is the source of truth
 
@@ -134,6 +141,34 @@ middle of development."*
   final tree: announce it, merge, go live, and stay in the run until the deploy log says the new version is verified
   (the graceful restart waits for the shipping run to end, so the check is the next run's first step if it has not
   happened yet). Then the AI hosts update by themselves.
+
+## Testing law: tests check what the code does
+
+Sponge, 2026-10-25, adopting five testing rules: *"Can we implement some things like this as laws?"* They hold for
+every project: the hub's suite (`bridge/test/regress.js`), the cargo tests, and the tests of Jcode PGM and the PGM
+products.
+
+0. **Test what the code does, not how it does it.** A check drives the real thing (the scratch hub over HTTP, the real
+   binary, a real git remote) and looks at what comes out. If a refactor that changes no behaviour breaks a check, the
+   check was wrong: rewrite it to watch the behaviour. Don't re-match the new source. A static check (a regex over a
+   source file) is only for things with nothing to observe at run time: a law's text, the `.gitignore` whitelist, "the
+   hub's page is never given command X". Don't add a new one where a behaviour check is possible.
+1. **Name checks like sentences.** A check's label says what should happen, in the words of the person it happens to:
+   "a merge never pushes to upstream", not "R193 pushAll". The R-number is its id, not its name. The detail says what
+   was actually seen, so a red line explains itself without opening the code.
+2. **Fix or delete a flaky check the same day.** A check that fails now and then teaches everyone to ignore red,
+   including the red that matters. Never run the suite again until it happens to pass and ship that. Never paper over
+   it with a retry or a longer sleep you can't explain. Find the race and fix it (in the check or in the code; a flaky
+   check often points at a real race). If it can't be fixed today, take it out and put a board task on it. "0 failed"
+   only means something when every failure is real.
+3. **Coverage is a floor, not the goal.** "0 failed" and the number of checks say the known cases still work, not that
+   the change is right. Every change adds or extends a check for what it does, and especially for how it fails: the
+   bad input, the older AI host, the push that is refused, the deploy that rolls back. A passing suite with no check
+   for the new behaviour is not done.
+4. **A bug gets a failing check before its fix.** First write the check that reproduces the bug and watch it fail on
+   the current code. Then fix it and watch it pass. That proves the fix works and keeps the bug from sneaking back. The
+   CHANGELOG names the check (R193 for the push to upstream, R194 for the fallback builds). A feature not built yet gets
+   a `spec()` the same way (it says SPEC until the feature makes it pass).
 
 ## Library law: reused code lives in a library
 

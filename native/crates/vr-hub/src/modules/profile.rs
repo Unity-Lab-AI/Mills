@@ -24,7 +24,7 @@ pub fn clean_profile(p: &Value, prev: &Value) -> Result<Value, String> {
     if !p.is_object() { return Ok(out); }
     if p.get("bio").is_some() { out["bio"] = json!(regex::Regex::new(r"\n{3,}").unwrap().replace_all(&text(&p["bio"], 300), "\n\n")); }
     if p.get("pronouns").is_some() { out["pronouns"] = json!(one_line(&p["pronouns"], 40)); }
-    if p.get("status").is_some() { out["status"] = json!(one_line(&p["status"], 80)); }
+    if p.get("status").is_some() { out["status"] = json!(one_line(&p["status"], 80)); if let Some(o) = out.as_object_mut() { o.remove("textUntil"); } } // a status typed on the profile card has no end (plans/presence.md)
     if p.get("location").is_some() { out["location"] = json!(one_line(&p["location"], 60)); }
     if p.get("links").is_some() {
         let list: Vec<String> = match &p["links"] { Value::Array(a) => a.iter().map(|x| match x { Value::String(t) => t.trim().to_string(), o => o.to_string() }).collect(), o => one_line(o, 2000).split(|c: char| c == ',' || c.is_whitespace()).map(|x| x.trim().to_string()).collect() };

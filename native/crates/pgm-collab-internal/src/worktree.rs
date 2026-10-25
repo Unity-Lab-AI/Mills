@@ -61,7 +61,23 @@ impl Worktrees {
     pub fn ensure(&self, user: &str, project: &str) -> Result<Wt, String> {
         if !valid_user(user) { return Err("Usage: a username (lowercase letters, digits, dashes).".into()); }
         let p = self.project(project)?;
-        let dir = p.root.join(user); let branch = format!("work/{user}");
+        self.ensure_at(&p, user, &format!("work/{user}"), &p.main.clone())
+    }
+    /// The worktree of one of that person's Work sessions (plans/multi-session.md § 2a): <project>/<user>.<sid> on
+    /// work/<user>.<sid>, made on first use from the person's own work/<user> (so it carries their unmerged work; from
+    /// the integration branch while they have none). The dot keeps it apart from people's worktrees.
+    pub fn ensure_session(&self, user: &str, sid: &str, project: &str) -> Result<Wt, String> {
+        if !valid_user(user) { return Err("Usage: a username (lowercase letters, digits, dashes).".into()); }
+        if sid.is_empty() || sid.len() > 16 || !sid.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) { return Err("Bad session id.".into()); }
+        let p = self.project(project)?;
+        let own = format!("work/{user}");
+        let base = if Self::branch_exists(&p.repo, &own) { own } else { p.main.clone() };
+        self.ensure_at(&p, &format!("{user}.{sid}"), &format!("work/{user}.{sid}"), &base)
+    }
+    /// The session's worktree path and branch, whether it exists or not (None for a bad name or project).
+    pub fn session_path(&self, user: &str, sid: &str, project: &str) -> Option<(PathBuf, String, PathBuf)> { let p = self.project(project).ok()?; Some((p.root.join(format!("{user}.{sid}")), format!("work/{user}.{sid}"), p.repo)) }
+    fn ensure_at(&self, p: &Project, name: &str, branch: &str, base: &str) -> Result<Wt, String> {
+        let dir = p.root.join(name); let branch = branch.to_string();
         let listed = git(&p.repo, &["worktree", "list", "--porcelain"]).unwrap_or_default();
         let mut cur: Option<(PathBuf, String)> = None; let mut found: Option<String> = None;
         for line in listed.lines().chain(std::iter::once("")) {
@@ -78,8 +94,28 @@ impl Worktrees {
         let _ = std::fs::create_dir_all(&p.root);
         let _ = git(&p.repo, &["worktree", "prune"]);
         let d = dir.display().to_string();
-        if Self::branch_exists(&p.repo, &branch) { git(&p.repo, &["worktree", "add", &d, &branch])?; } else { git(&p.repo, &["worktree", "add", "-b", &branch, &d, &p.main])?; }
+        if Self::branch_exists(&p.repo, &branch) { git(&p.repo, &["worktree", "add", &d, &branch])?; } else { git(&p.repo, &["worktree", "add", "-b", &branch, &d, base])?; }
         Ok(mk(branch))
+    }
+    /// Removes a session's worktree (the session was deleted). Uncommitted work is committed first; a branch with commits
+    /// the person's work/<user> does not have is kept as refs/viberoller/sessions/<user>/<sid>, so nothing is lost (the
+    /// worktree law). Says what happened ("" = there was nothing).
+    pub fn remove_session(&self, user: &str, sid: &str, project: &str) -> String {
+        let Some((dir, branch, repo)) = self.session_path(user, sid, project) else { return String::new() };
+        if !Self::branch_exists(&repo, &branch) && !dir.exists() { return String::new(); }
+        if dir.exists() && git(&dir, &["status", "--porcelain"]).map(|s| !s.is_empty()).unwrap_or(false) {
+            let _ = git(&dir, &["add", "-A"]);
+            let _ = git(&dir, &["-c", "user.name=VibeRoller hub", "-c", "user.email=hub@viberoller.invalid", "commit", "-q", "-m", "Work in progress (its Work session was deleted)"]);
+        }
+        let own = format!("work/{user}");
+        let base = if Self::branch_exists(&repo, &own) { own } else { Self::integration(&repo) };
+        let unmerged = Self::branch_exists(&repo, &branch) && git(&repo, &["rev-list", "--count", &format!("{base}..{branch}")]).map(|n| n != "0").unwrap_or(true);
+        let kept = if unmerged { let r = format!("refs/viberoller/sessions/{user}/{sid}"); git(&repo, &["update-ref", &r, &branch]).ok().map(|_| r) } else { None };
+        if unmerged && kept.is_none() { return format!("kept {} (its branch could not be saved elsewhere)", dir.display()); }
+        if dir.exists() { let _ = git(&repo, &["worktree", "remove", "--force", &dir.display().to_string()]); }
+        let _ = git(&repo, &["worktree", "prune"]);
+        let _ = git(&repo, &["branch", "-D", &branch]);
+        match kept { Some(r) => format!("its unmerged work is kept as {r}"), None => "removed (everything on it was merged)".into() }
     }
     /// worktree.js itself, for what stays there (new / clone a project; the background freshness check).
     pub fn tool(&self, args: &[&str], env: &[(String, String)]) -> (bool, String, String) {

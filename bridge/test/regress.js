@@ -391,7 +391,7 @@ async function call(p, token, body, extraHeaders = {}, retry = true) {
 const login = (username, password, deviceId) => call('/api/login', null, { username, password, deviceId });
 // Run a chat to completion; answers pc_tool events like a browser would.
 async function chat(token, message, opts = {}) {
-  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}) }) });
+  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}) }) });
   if (r.status !== 200) return { status: r.status, events: [] };
   const events = []; let buf = '';
   const reader = r.body.getReader(), dec = new TextDecoder();
@@ -2773,7 +2773,7 @@ async function run() {
     fs.writeFileSync(fakeHub, `const http = require('http'), fs = require('fs'); const commit = process.argv[2], port = Number(process.argv[process.argv.indexOf('--port') + 1]);
 const mode = () => { try { return fs.readFileSync(process.argv[3], 'utf8').trim(); } catch { return 'ok'; } };
 if (mode() === 'crash') process.exit(1);
-http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit, serving: process.env.VR_SERVING || '' })); }).listen(port, '127.0.0.1');\n`);
+http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit, serving: process.env.VR_SERVING || '', alone: process.argv.includes('--alone') })); }).listen(port, '127.0.0.1');\n`);
     const scenario = async (name, builds, cur, good, expect, change, withJs, extraArgs = []) => { // builds: commit → mode; cur = the newest; good = the good list newest first; withJs: a stand-in bridge/server.js (the JavaScript hub) in the root
       if (built177.status !== 0) return { name, ok: false, why: 'vr-run not built' };
       const dir = path.join(SCRATCH, 'dist177-' + name); fs.mkdirSync(dir, { recursive: true });
@@ -2816,6 +2816,42 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R192', 'T-157 the fallback chain: /api/status names what serves (rust → rust-fallback-1 → rust-fallback-2 → javascript-fallback, also with --alone); two previous good builds are kept (keep-builds.sh); the real JavaScript hub started alone boots and serves the basics (status, page, sign-in gate + sign-in, chat room, board, one Work run with the fake Claude, the AI host link)',
       built177.status === 0 && fine.serving === 'rust' && crash.serving === 'rust-fallback-1' && deep192.ok && deep192.serving === 'rust-fallback-2' && aloneJs192.ok && aloneJs192.serving === 'javascript-fallback' && aloneOk192.ok && aloneOk192.serving === 'rust' && /-ge 2/.test(keep192) && js192.ok,
       `serving: fine ${fine.serving} · crash ${crash.serving} · 3 deep ${deep192.seen}/${deep192.serving} · --alone all bad ${aloneJs192.seen}/${aloneJs192.serving} · --alone fine ${aloneOk192.serving} · JavaScript hub alone: ${js192.why}`);
+    // R195: switching the live hub to the Rust hub alone is a config line and a graceful restart (deploy/full-rust-swap.md).
+    // 2026-10-25 vr-run read rustHub.alone only when it started, so the graceful restart (exit 75) kept the JavaScript hub
+    // running behind the Rust one and the swap needed a restart of the whole service.
+    let r195 = { before: '', after: '', back: '', backBefore: false, backAfter: true, backBack: false };
+    if (built177.status === 0) {
+      const back195 = async (p) => { try { const r = await fetch(`http://127.0.0.1:${p}/api/status`, { signal: AbortSignal.timeout(1000) }); return (await r.json()).commit === 'js-behind'; } catch { return false; } };
+      const front195 = async (p) => { try { const r = await fetch(`http://127.0.0.1:${p}/api/status`, { signal: AbortSignal.timeout(1000) }); return await r.json(); } catch { return {}; } };
+      const dir = path.join(SCRATCH, 'dist195'), root = path.join(SCRATCH, 'root195', 'bridge'); fs.mkdirSync(path.join(dir, 'n1'), { recursive: true }); fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, 'server.js'), `const http = require('http'); const port = Number(process.env.VR_BACK_PORT || process.env.MILLS_PORT || 0); if (!port) process.exit(1);
+http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, commit: process.env.VR_BACK_PORT ? 'js-behind' : 'js-alone' })); }).listen(port, '127.0.0.1');\n`);
+      fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1 }));
+      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'); fs.writeFileSync(path.join(dir, 'n1', 'vr-hub'), `#!/bin/sh\nexec "${process.execPath}" "${fakeHub}" n1 "${path.join(dir, 'n1', 'mode')}" "$@"\n`, { mode: 0o755 });
+      fs.writeFileSync(path.join(dir, 'current'), 'n1\n');
+      const port = await freePort(PORT + 360), backPort = await freePort(port + 2);
+      const log = fs.openSync(path.join(SCRATCH, 'vr-run-r195.log'), 'a');
+      const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--back', String(backPort), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
+      let s = {}; for (let i = 0; i < 60 && !(s.commit === 'n1' && (r195.backBefore = await back195(backPort))); i++) { await sleep(300); s = await front195(port); }
+      r195.before = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`;
+      fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1, rustHub: { enabled: true, backPort, alone: true } }));
+      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500);
+      const pid0 = s.pid;
+      for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid0) break; }
+      await sleep(1500); // the JavaScript hub would have been started again by now
+      r195.after = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`; r195.backAfter = await back195(backPort);
+      // and back (the rollback in deploy/full-rust-swap.md): alone false + a graceful restart starts the JavaScript hub behind again
+      fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1, rustHub: { enabled: true, backPort, alone: false } }));
+      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500);
+      const pid1 = s.pid;
+      for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid1) break; }
+      for (let i = 0; i < 20 && !(r195.backBack = await back195(backPort)); i++) await sleep(300);
+      r195.back = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`;
+      proc.kill('SIGTERM'); await sleep(500); try { proc.kill('SIGKILL'); } catch { /* gone */ }
+    }
+    check('R195', 'switching to the Rust hub alone needs only the config line and a graceful restart: vr-run reads rustHub.alone again when a build asks for a restart (exit 75), starts the next build with --alone and stops the JavaScript hub behind it (it stays the last resort); setting it back to false and a graceful restart starts the JavaScript hub behind again (the rollback)',
+      built177.status === 0 && r195.before === 'n1' && r195.backBefore && r195.after === 'n1 --alone' && !r195.backAfter && r195.back === 'n1' && r195.backBack,
+      `before: ${r195.before}, JavaScript hub behind ${r195.backBefore} · after the restart: ${r195.after}, JavaScript hub behind ${r195.backAfter} · rolled back: ${r195.back || 'nobody'}, JavaScript hub behind ${r195.backBack}`);
   }
   if (!WIN) { // R194: the chain fills up the way the auto-deploy runs it (5.13.3: no build was ever marked good, so every deploy deleted the previous builds)
     const dist194 = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-r194-')), nat194 = path.join(MILLS, 'native'), seen194 = [];
@@ -2831,6 +2867,161 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen194.join(' / ') === 'c1 / c1,c2 / c1,c2,c3 / c2,c3,c4' && serves194 === 'c4' && /trial\.sh[^\n]*then sh '\$APP\/native\/mark-good\.sh'[^\n]*use-build\.sh/.test(ad194),
       `builds after each deploy: ${seen194.join(' / ')} · in service ${serves194}`);
   }
+  // ---- presence + activity (team note plans/presence.md, T-259) and multi-session Work (plans/multi-session.md, T-283):
+  // written as spec() first, plain checks since the Rust hub built them (T-259 5.14.0, T-284 / T-285 5.15.0). New routes are the Rust hub's.
+  if (RUST_HUB) { // R196: presence per device (most active wins) × working / accepting work, the label, override, text with expiry
+    const st196 = async (tok, u) => (((await call('/api/presence', tok)).data.people || []).find((p) => p.user === u)) || {};
+    const keep196 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+    const seen = {}; let ok196 = false;
+    const has196 = (await call('/api/presence', D)).status === 200;
+    if (has196) {
+      const stopA = keep196(D, 'r196a'), stopB = keep196(D, 'r196b');
+      await sleep(400);
+      await call('/api/presence', D, { device: 'r196a', idle: false, screen: 'work' }); await call('/api/presence', D, { device: 'r196b', idle: true });
+      await sleep(200); seen.mixed = await st196(U, 'mills');
+      await call('/api/presence', D, { device: 'r196a', idle: true }); await sleep(200); seen.bothIdle = await st196(U, 'mills');
+      stopA(); await call('/api/presence', D, { device: 'r196a', gone: true }); await sleep(200); seen.oneGone = await st196(U, 'mills'); // (its poll loop stops first, so the page that closed does not poll again)
+      await call('/api/presence', D, { device: 'r196b', idle: false });
+      const slow = call('/api/chat', D, { message: 'SLOW r196' }); await sleep(800); seen.run = await st196(U, 'mills');
+      await call('/api/presence/me', D, { acceptingWork: true }); await sleep(200); seen.runAccept = await st196(U, 'mills');
+      await slow; await sleep(300); seen.accept = await st196(U, 'mills');
+      seen.badOverride = (await call('/api/presence/me', D, { override: 'invisible' })).status; seen.badText = (await call('/api/presence/me', D, { text: 'x'.repeat(81) })).status;
+      const ver0 = (await call('/api/room/messages?rev=0', U)).data.ver;
+      const me = await call('/api/presence/me', D, { override: 'offline', overrideUntil: Date.now() + 1500, text: 'r196 heads down', textUntil: Date.now() + 1500 });
+      seen.meReal = me.data.real; seen.off = await st196(U, 'mills');
+      const room = (await call('/api/room/messages?rev=0', U)).data; seen.verMoved = room.ver !== ver0; seen.inRoom = (room.status || []).some((p) => p.user === 'mills');
+      seen.oldList = (room.presence || []).find((p) => p.user === 'mills') || {};
+      await sleep(2000); seen.back = await st196(U, 'mills'); seen.profile = ((await call('/api/profile', D)).data.profile || {}).status;
+      await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
+      stopB(); await call('/api/presence', D, { device: 'r196b', gone: true }); await sleep(200); seen.allGone = await st196(U, 'mills');
+      ok196 = seen.mixed.presence === 'online' && seen.mixed.label === 'Online' && seen.mixed.devices === 2 && seen.bothIdle.presence === 'away' && seen.bothIdle.label === 'Away' && seen.oneGone.presence === 'away'
+        && seen.run.working === true && seen.run.label === 'Working' && seen.runAccept.label === 'Working + available' && seen.accept.working === false && seen.accept.label === 'Available for work'
+        && seen.badOverride === 400 && seen.badText === 400 && seen.meReal === 'online' && seen.off.presence === 'offline' && seen.off.label === 'Offline' && !seen.off.text && seen.oldList.online === false
+        && seen.verMoved && seen.inRoom && seen.back.presence !== 'offline' && !seen.back.text && seen.profile === '' && seen.allGone.presence === 'offline';
+    }
+    const l196 = (x) => x ? `${x.presence || '?'}/${x.label || '?'}` : '?';
+    check('R196', 'presence and activity (plans/presence.md): a person is as present as their most active device (one active + one idle → online, both idle → away, the last one gone → offline); a run of theirs makes them Working; the accept-work switch makes them Available for work (Working + available during a run); appear offline shows Offline to everyone (also in the old presence list) while they see their real presence, and it ends at its until; the custom text (profile.status) ends at its until; bad override / too-long text → 400; a change reaches pages through the room long poll (status, ver)',
+      ok196, has196 ? `mixed ${l196(seen.mixed)} (${seen.mixed.devices} devices) · both idle ${l196(seen.bothIdle)} · one gone ${l196(seen.oneGone)} · run ${l196(seen.run)} · run+accept ${l196(seen.runAccept)} · accept ${l196(seen.accept)} · bad ${seen.badOverride}/${seen.badText} · appear offline: others ${l196(seen.off)} text "${seen.off.text || ''}", old list online ${seen.oldList.online}, self real ${seen.meReal} · room ver moved ${seen.verMoved} status ${seen.inRoom} · after until ${l196(seen.back)} text "${seen.back.text || ''}" · all gone ${l196(seen.allGone)}` : 'GET /api/presence does not exist yet');
+  } else skip('R196', 'presence and activity (plans/presence.md)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
+    const ss197 = async () => (await call('/api/work/sessions', U)).data;
+    const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};
+    const cwd197 = (events) => ((texts(events).match(/cwd=(.+?)(?: \||$)/m) || [])[1] || '').trim();
+    const has197 = (await call('/api/work/sessions', U)).status === 200;
+    const seen = {}; let ok197 = false;
+    if (has197) {
+      const cur0 = (await ss197()).current;
+      const a = (await call('/api/work/sessions/new', U, { title: 'r197 a', background: true })).data.id, b = (await call('/api/work/sessions/new', U, { title: 'r197 b', background: true })).data.id;
+      seen.stillCurrent = (await ss197()).current === cur0;
+      const ra = chat(U, 'SLOW r197 a', { session: a }), rb = chat(U, 'SLOW r197 b', { session: b });
+      await sleep(900);
+      const mid = await ss197(); seen.a = (mid.sessions || []).find((s) => s.id === a) || {}; seen.b = (mid.sessions || []).find((s) => s.id === b) || {}; seen.working = (mid.counts || {}).working;
+      seen.again = (await call('/api/chat', U, { message: 'x', session: a })).status;
+      seen.openBusy = (await call('/api/work/sessions/open', U, { id: b })).status; seen.openedB = (await ss197()).current === b; await call('/api/work/sessions/open', U, { id: cur0 });
+      const [ea, eb] = await Promise.all([ra, rb]); await sleep(300);
+      // each session its own worktree (Sponge: "each session gets its own worktree"): the runs happened in two folders on two session branches
+      const wa = (await one197(a)).worktree || {}, wb = (await one197(b)).worktree || {};
+      seen.cwdA = cwd197(ea.events); seen.cwdB = cwd197(eb.events); seen.brA = wa.branch || ''; seen.brB = wb.branch || '';
+      seen.ownTrees = !!seen.cwdA && !!seen.cwdB && path.resolve(seen.cwdA) !== path.resolve(seen.cwdB) && !!wa.path && path.resolve(wa.path) === path.resolve(seen.cwdA)
+        && /^work\/t-user\.[0-9a-f]+$/.test(seen.brA) && /^work\/t-user\.[0-9a-f]+$/.test(seen.brB) && seen.brA !== seen.brB;
+      seen.aDone = (await one197(a)).state;
+      await call('/api/work/draft', U, { session: a, draft: 'half typed r197' }); seen.aDraftUnseen = (await one197(a)).state;
+      await call('/api/work/sessions/seen', U, { id: a }); seen.aDraft = (await one197(a)).state;
+      await call('/api/work/draft', U, { session: a, draft: '' }); seen.aReady = (await one197(a)).state;
+      await call('/api/work/current', U, { session: a, transcript: [{ cls: 'me', text: 'only in r197 a' }] });
+      const curA = await call('/api/work/current?session=' + a, U), cur = await call('/api/work/current', U);
+      seen.aOwn = curA.status === 200 && JSON.stringify(curA.data.transcript || []).includes('only in r197 a') && !JSON.stringify(cur.data.transcript || []).includes('only in r197 a');
+      // closing = hiding: still listed (hidden), back with unhide
+      await call('/api/work/sessions/hide', U, { id: a, hidden: true }); const hid = await one197(a); seen.hidden = hid.id === a && hid.hidden === true;
+      await call('/api/work/sessions/hide', U, { id: a, hidden: false }); seen.unhidden = (await one197(a)).hidden === false;
+      // folders: the person's own; deleting one moves its sessions out
+      const f = (await call('/api/work/folders/new', U, { name: 'r197 folder' })).data.id;
+      await call('/api/work/sessions/move', U, { id: b, folder: f }); seen.inFolder = !!f && (await one197(b)).folder === f;
+      seen.othersFolders = JSON.stringify((await call('/api/work/sessions', D)).data.folders || []).includes('r197 folder');
+      await call('/api/work/folders/delete', U, { id: f }); const bOut = await one197(b); seen.folderGone = bOut.id === b && !bOut.folder;
+      // delete force-stops a running session
+      const rc = chat(U, 'SLOW r197 c', { session: b }); await sleep(800);
+      seen.del = (await call('/api/work/sessions/delete', U, { id: b })).status; const ec = await rc;
+      seen.delStopped = !ec.events.some((e) => e.type === 'result'); seen.bGone = !((await ss197()).sessions || []).some((s) => s.id === b);
+      await call('/api/work/sessions/delete', U, { id: a });
+      ok197 = !!a && !!b && a !== b && seen.stillCurrent && seen.a.state === 'working' && seen.b.state === 'working' && seen.working >= 2 && seen.again === 409 && seen.openBusy === 200 && seen.openedB
+        && seen.ownTrees && seen.aDone === 'done-unseen' && seen.aDraftUnseen === 'done-unseen' && seen.aDraft === 'draft' && seen.aReady === 'ready' && seen.aOwn
+        && seen.hidden && seen.unhidden && seen.inFolder && !seen.othersFolders && seen.folderGone && seen.del === 200 && seen.delStopped && seen.bGone;
+    }
+    check('R197', 'many Work sessions per person (plans/multi-session.md): a new session in the background leaves the current one current; two sessions run at the same time (both "working", the counter says 2), each in its own worktree on its own work/<user>.<sid> branch, while a second message to the same session is still 409; opening another session is allowed while they run; a finished run is done-unseen until seen, which beats a draft; seen + draft → draft; no draft → ready; each session has its own conversation; closing hides (still listed, unhide brings it back); the person\'s own folders hold sessions and deleting one moves them out; delete force-stops a running session and removes it',
+      ok197, has197 ? `a ${seen.a.state} b ${seen.b.state} counter ${seen.working} · same session again ${seen.again} · open while running ${seen.openBusy} (current ${seen.openedB}) · worktrees ${seen.cwdA || '?'} (${seen.brA || '?'}) vs ${seen.cwdB || '?'} (${seen.brB || '?'}) · after the run ${seen.aDone} · + draft ${seen.aDraftUnseen} · seen ${seen.aDraft} · no draft ${seen.aReady} · own conversation ${seen.aOwn} · hide ${seen.hidden} unhide ${seen.unhidden} · folder ${seen.inFolder} (seen by others ${seen.othersFolders}) folder deleted ${seen.folderGone} · delete while running ${seen.del} stopped ${seen.delStopped} gone ${seen.bGone}` : 'GET /api/work/sessions does not exist yet');
+  } else skip('R197', 'many Work sessions per person (plans/multi-session.md)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R198: the limits: only working sessions count, 3 per provider on a host (5 per host) by default; over the limit → 429 with what limit
+    const has198 = (await call('/api/work/sessions', U)).status === 200;
+    const seen = {}; let ok198 = false;
+    if (has198) {
+      const ids = []; for (let i = 0; i < 4; i++) ids.push((await call('/api/work/sessions/new', U, { title: 'r198 ' + i, background: true })).data.id);
+      const runs = ids.slice(0, 3).map((id) => call('/api/chat', U, { message: 'SLOW r198', session: id }));
+      await sleep(900);
+      const fourth = await call('/api/chat', U, { message: 'SLOW r198 four', session: ids[3] });
+      seen.status = fourth.status; seen.limit = fourth.data.limit || {}; seen.error = fourth.data.error || '';
+      seen.perHost = ((await call('/api/work/sessions', U)).data.counts || {}).perHost || {};
+      await Promise.all(runs);
+      for (const id of ids) await call('/api/work/sessions/delete', U, { id });
+      ok198 = seen.status === 429 && seen.limit.max === 3 && seen.limit.used === 3 && !!seen.limit.provider && /3 of 3/.test(seen.error) && Object.values(seen.perHost).some((h) => h.used === 3);
+    }
+    check('R198', 'session limits (plans/multi-session.md § 6): with the defaults (5 per person per host, 3 per provider) a 4th working session on the same provider answers 429 (idle sessions cost nothing: the 4th exists, only its run is refused) with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
+      ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
+  } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
+    const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
+    const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
+    // the hub's background freshness check (worktree.js auto, started with each run) runs git in these same worktrees, so
+    // a commit here can meet its index.lock: wait for that lock only (and say so), never for anything else
+    const g200 = (dir, ...args) => { let r; for (let i = 0; i < 20; i++) { r = spawnSync('git', ['-c', 'user.name=r200', '-c', 'user.email=r200@test.invalid', ...args], { cwd: dir, encoding: 'utf8' }); if (r.status === 0 || !/index\.lock/.test(r.stderr || '')) break; spawnSync('sleep', ['0.25']); } return r; };
+    const commit200 = (dir, file, text, msg) => { fs.writeFileSync(path.join(dir, file), text); const a = g200(dir, 'add', file), c = g200(dir, 'commit', '-q', '-m', msg); return a.status === 0 && c.status === 0 ? 'ok' : `failed: ${((c.stderr || a.stderr) || '').trim().slice(0, 120)}`; };
+    const seen = {}; let ok200 = false;
+    const id = (await call('/api/work/sessions/new', U, { title: 'r200', background: true })).data.id;
+    if (id) {
+      await chat(U, 'r200 first run', { session: id }); // makes the session's worktree
+      const sm = (((await call('/api/work/sessions', U)).data.sessions) || []).find((x) => x.id === id) || {};
+      const dir = (sm.worktree || {}).path || '', hex = id.slice(2);
+      if (dir && fs.existsSync(dir)) {
+        seen.c1 = commit200(dir, 'r200-session.txt', 'from the session\n', 'r200 session work');
+        const c1 = run200('check', 't-user', '--session', hex); seen.fresh = c1.status; seen.freshText = (c1.stdout || c1.stderr).trim();
+        seen.c2 = commit200(own200, 'r200-own.txt', 'from my own worktree\n', 'r200 own work');
+        const c2 = run200('check', 't-user', '--session', hex); seen.stale = c2.status; seen.staleText = (c2.stdout || c2.stderr).trim();
+        const up = run200('update', 't-user', '--session', hex); seen.update = up.status; seen.hasOwn = fs.existsSync(path.join(dir, 'r200-own.txt'));
+        seen.after = run200('check', 't-user', '--session', hex).status;
+        const home = await call('/api/work/sessions/home', U, { id }); seen.home = home.status; seen.homeText = home.data.text || home.data.error || '';
+        seen.came = fs.existsSync(path.join(own200, 'r200-session.txt'));
+        ok200 = seen.fresh === 0 && /1 commit\(s\) not in work\/t-user/.test(seen.freshText) && seen.stale === 3 && /behind work\/t-user/.test(seen.staleText) && seen.update === 0 && seen.hasOwn && seen.after === 0 && seen.home === 200 && seen.came;
+      } else seen.freshText = 'no session worktree at ' + dir;
+      await call('/api/work/sessions/delete', U, { id });
+    }
+    check('R200', 'a session\'s own worktree follows the worktree law: worktree.js check --session says FRESH with its own commit not yet in work/<user>, STALE (exit 3) once the person\'s work/<user> moved on, update --session brings that in; the session menu\'s "Merge into my work" (/api/work/sessions/home) merges the session\'s commits into work/<user>',
+      ok200, `commits: session ${seen.c1 || '?'}, own ${seen.c2 || '?'} · fresh ${seen.fresh} "${(seen.freshText || '').slice(0, 160)}" · stale ${seen.stale} "${(seen.staleText || '').slice(0, 120)}" · update ${seen.update} brought own ${seen.hasOwn} · after ${seen.after} · home ${seen.home} "${(seen.homeText || '').slice(0, 120)}" came ${seen.came}`);
+  } else skip('R200', 'a session\'s worktree follows the worktree law', 'the Rust hub\'s (and not on Windows): --rust-hub runs it');
+  if (RUST_HUB) { // R201: a PC tool call reaches the page of the session that asked, not another running session of the same person
+    const b201 = (await call('/api/work/sessions/new', U, { title: 'r201', background: true })).data.id;
+    let txt201 = '', slow201 = null;
+    if (b201) {
+      slow201 = call('/api/chat', U, { message: 'SLOW r201 first session' }); await sleep(700); // the first session runs meanwhile, with no browser answering its PC calls (the old routing sent them there)
+      const pc = await Promise.race([chat(U, 'PCTOOL r201', { session: b201 }), sleep(30000).then(() => ({ events: [] }))]);
+      txt201 = texts(pc.events);
+      await slow201; await call('/api/work/sessions/delete', U, { id: b201 });
+    }
+    check('R201', 'a PC tool call of a session\'s run reaches that session\'s page (its MCP relay names the session) while another session of the same person runs',
+      /fake-listing: a\.txt/.test(txt201), `answer "${txt201.slice(0, 160)}"`);
+  } else skip('R201', 'a PC tool call reaches the asking session', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
+    // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
+    const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });
+    fs.writeFileSync(path.join(img199, 'r199-test.png'), Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fe0d4c2bba0000000049454e44ae426082', 'hex'));
+    const pic199 = await fetch(H + '/api/assistant/image?ref=room%2Fr199-test', { headers: { Authorization: 'Bearer ' + U } }).catch(() => null);
+    const chk199 = await fetch(H + '/api/check', { headers: { Authorization: 'Bearer ' + U } }).catch(() => null);
+    const hd = (r, k) => (r && r.headers.get(k)) || '';
+    const page199 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R199', 'an answer the browser may keep (Unity\'s pictures: cache-control private, max-age) does not name the hub\'s build, so a copy kept from an older build never makes a page think that build is running; a normal answer (no-store) still names it; [static] the page reads the build only from answers that are not cacheable',
+      !!pic199 && pic199.status === 200 && /max-age=\d+/.test(hd(pic199, 'cache-control')) && !hd(pic199, 'x-vr-version') && !!chk199 && !!hd(chk199, 'x-vr-version') && /cacheable\(res\)/.test(page199),
+      `picture ${pic199 ? pic199.status : 'no answer'} cache "${hd(pic199, 'cache-control')}" build "${hd(pic199, 'x-vr-version')}" · /api/check build "${hd(chk199, 'x-vr-version')}" · page checks ${/cacheable\(res\)/.test(page199)}`);
+    fs.rmSync(path.join(img199, 'r199-test.png'), { force: true });
+  } else skip('R199', 'a cacheable answer does not name the build', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB && !WIN) { // R178 (FR5): deploy/trial.sh tries a build on a side port against a copy of the data before it is swapped in
     const tr = path.join(MILLS, 'deploy', 'trial.sh');
     const before178 = fs.readdirSync(require('os').tmpdir()).filter((d) => /^vr-trial-/.test(d)).length;
