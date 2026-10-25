@@ -2867,6 +2867,90 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen194.join(' / ') === 'c1 / c1,c2 / c1,c2,c3 / c2,c3,c4' && serves194 === 'c4' && /trial\.sh[^\n]*then sh '\$APP\/native\/mark-good\.sh'[^\n]*use-build\.sh/.test(ad194),
       `builds after each deploy: ${seen194.join(' / ')} · in service ${serves194}`);
   }
+  // ---- presence + activity (team note plans/presence.md, T-259) and multi-session Work (plans/multi-session.md, T-283):
+  // spec() until the Rust hub side is built (T-259, T-284, T-285), then plain checks. New routes are the Rust hub's.
+  if (RUST_HUB) { // R196: presence per device (most active wins) × working / accepting work, the label, override, text with expiry
+    const st196 = async (tok, u) => (((await call('/api/presence', tok)).data.people || []).find((p) => p.user === u)) || {};
+    const keep196 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+    const seen = {}; let ok196 = false;
+    const has196 = (await call('/api/presence', D)).status === 200;
+    if (has196) {
+      const stopA = keep196(D, 'r196a'), stopB = keep196(D, 'r196b');
+      await sleep(400);
+      await call('/api/presence', D, { device: 'r196a', idle: false, screen: 'work' }); await call('/api/presence', D, { device: 'r196b', idle: true });
+      await sleep(200); seen.mixed = await st196(U, 'mills');
+      await call('/api/presence', D, { device: 'r196a', idle: true }); await sleep(200); seen.bothIdle = await st196(U, 'mills');
+      await call('/api/presence', D, { device: 'r196a', gone: true }); await sleep(200); seen.oneGone = await st196(U, 'mills');
+      await call('/api/presence', D, { device: 'r196a', idle: false });
+      const slow = call('/api/chat', D, { message: 'SLOW r196' }); await sleep(800); seen.run = await st196(U, 'mills');
+      await call('/api/presence/me', D, { acceptingWork: true }); await sleep(200); seen.runAccept = await st196(U, 'mills');
+      await slow; await sleep(300); seen.accept = await st196(U, 'mills');
+      seen.badOverride = (await call('/api/presence/me', D, { override: 'invisible' })).status; seen.badText = (await call('/api/presence/me', D, { text: 'x'.repeat(81) })).status;
+      const ver0 = (await call('/api/room/messages?rev=0', U)).data.ver;
+      const me = await call('/api/presence/me', D, { override: 'offline', overrideUntil: Date.now() + 1500, text: 'r196 heads down', textUntil: Date.now() + 1500 });
+      seen.meReal = me.data.real; seen.off = await st196(U, 'mills');
+      const room = (await call('/api/room/messages?rev=0', U)).data; seen.verMoved = room.ver !== ver0; seen.inRoom = (room.status || []).some((p) => p.user === 'mills');
+      seen.oldList = (room.presence || []).find((p) => p.user === 'mills') || {};
+      await sleep(2000); seen.back = await st196(U, 'mills'); seen.profile = ((await call('/api/profile', D)).data.profile || {}).status;
+      await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
+      await call('/api/presence', D, { device: 'r196a', gone: true }); await call('/api/presence', D, { device: 'r196b', gone: true }); await sleep(200); seen.allGone = await st196(U, 'mills');
+      stopA(); stopB();
+      ok196 = seen.mixed.presence === 'online' && seen.mixed.label === 'Online' && seen.mixed.devices === 2 && seen.bothIdle.presence === 'away' && seen.bothIdle.label === 'Away' && seen.oneGone.presence === 'away'
+        && seen.run.working === true && seen.run.label === 'Working' && seen.runAccept.label === 'Working + available' && seen.accept.working === false && seen.accept.label === 'Available for work'
+        && seen.badOverride === 400 && seen.badText === 400 && seen.meReal === 'online' && seen.off.presence === 'offline' && seen.off.label === 'Offline' && !seen.off.text && seen.oldList.online === false
+        && seen.verMoved && seen.inRoom && seen.back.presence !== 'offline' && !seen.back.text && seen.profile === '' && seen.allGone.presence === 'offline';
+    }
+    const l196 = (x) => x ? `${x.presence || '?'}/${x.label || '?'}` : '?';
+    spec('R196', 'presence and activity (plans/presence.md): a person is as present as their most active device (one active + one idle → online, both idle → away, the last one gone → offline); a run of theirs makes them Working; the accept-work switch makes them Available for work (Working + available during a run); appear offline shows Offline to everyone (also in the old presence list) while they see their real presence, and it ends at its until; the custom text (profile.status) ends at its until; bad override / too-long text → 400; a change reaches pages through the room long poll (status, ver)',
+      ok196, has196 ? `mixed ${l196(seen.mixed)} (${seen.mixed.devices} devices) · both idle ${l196(seen.bothIdle)} · one gone ${l196(seen.oneGone)} · run ${l196(seen.run)} · run+accept ${l196(seen.runAccept)} · accept ${l196(seen.accept)} · bad ${seen.badOverride}/${seen.badText} · appear offline: others ${l196(seen.off)} text "${seen.off.text || ''}", old list online ${seen.oldList.online}, self real ${seen.meReal} · room ver moved ${seen.verMoved} status ${seen.inRoom} · after until ${l196(seen.back)} text "${seen.back.text || ''}" · all gone ${l196(seen.allGone)}` : 'GET /api/presence does not exist yet');
+  } else skip('R196', 'presence and activity (plans/presence.md)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs in different sessions, states with their precedence, the old routes mean the current one
+    const ss197 = async () => (await call('/api/work/sessions', U)).data;
+    const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};
+    const has197 = (await call('/api/work/sessions', U)).status === 200;
+    const seen = {}; let ok197 = false;
+    if (has197) {
+      const cur0 = (await ss197()).current;
+      const a = (await call('/api/work/sessions/new', U, { title: 'r197 a', background: true })).data.id, b = (await call('/api/work/sessions/new', U, { title: 'r197 b', background: true })).data.id;
+      seen.stillCurrent = (await ss197()).current === cur0;
+      const ra = call('/api/chat', U, { message: 'SLOW r197 a', session: a }), rb = call('/api/chat', U, { message: 'SLOW r197 b', session: b });
+      await sleep(900);
+      const mid = await ss197(); seen.a = (mid.sessions || []).find((s) => s.id === a) || {}; seen.b = (mid.sessions || []).find((s) => s.id === b) || {}; seen.working = (mid.counts || {}).working;
+      seen.again = (await call('/api/chat', U, { message: 'x', session: a })).status;
+      seen.switchBusy = (await call('/api/work/sessions/switch', U, { id: b })).status; await call('/api/work/sessions/switch', U, { id: cur0 });
+      await Promise.all([ra, rb]); await sleep(300);
+      seen.aDone = (await one197(a)).state;
+      await call('/api/work/draft', U, { session: a, draft: 'half typed r197' }); seen.aDraftUnseen = (await one197(a)).state;
+      await call('/api/work/sessions/seen', U, { id: a }); seen.aDraft = (await one197(a)).state;
+      await call('/api/work/draft', U, { session: a, draft: '' }); seen.aReady = (await one197(a)).state;
+      await call('/api/work/current', U, { session: a, transcript: [{ cls: 'me', text: 'only in r197 a' }] });
+      const curA = await call('/api/work/current?session=' + a, U), cur = await call('/api/work/current', U);
+      seen.aOwn = curA.status === 200 && JSON.stringify(curA.data.transcript || []).includes('only in r197 a') && !JSON.stringify(cur.data.transcript || []).includes('only in r197 a');
+      seen.closeA = (await call('/api/work/sessions/close', U, { id: a })).status; await call('/api/work/sessions/close', U, { id: b });
+      seen.left = ((await ss197()).sessions || []).some((s) => s.id === a || s.id === b);
+      ok197 = !!a && !!b && a !== b && seen.stillCurrent && seen.a.state === 'working' && seen.b.state === 'working' && seen.working >= 2 && seen.again === 409 && seen.switchBusy === 200
+        && seen.aDone === 'done-unseen' && seen.aDraftUnseen === 'done-unseen' && seen.aDraft === 'draft' && seen.aReady === 'ready' && seen.aOwn && seen.closeA === 200 && !seen.left;
+    }
+    spec('R197', 'many Work sessions per person (plans/multi-session.md): a new session in the background leaves the current one current; two sessions run at the same time (both "working", the counter says 2) while a second message to the same session is still 409; switching is allowed while sessions run; a finished run is done-unseen until seen, which beats a draft; seen + draft → draft; no draft → ready; each session has its own conversation (/api/work/current?session=); close archives it off the list',
+      ok197, has197 ? `a ${seen.a.state} b ${seen.b.state} counter ${seen.working} · same session again ${seen.again} · switch while running ${seen.switchBusy} · after the run ${seen.aDone} · + draft ${seen.aDraftUnseen} · seen ${seen.aDraft} · no draft ${seen.aReady} · close ${seen.closeA}, still listed ${seen.left}` : 'GET /api/work/sessions does not exist yet');
+  } else skip('R197', 'many Work sessions per person (plans/multi-session.md)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R198: the limits: 3 running sessions per provider on a host (5 per host) by default; over the limit → 429 with what limit
+    const has198 = (await call('/api/work/sessions', U)).status === 200;
+    const seen = {}; let ok198 = false;
+    if (has198) {
+      const ids = []; for (let i = 0; i < 4; i++) ids.push((await call('/api/work/sessions/new', U, { title: 'r198 ' + i, background: true })).data.id);
+      const runs = ids.slice(0, 3).map((id) => call('/api/chat', U, { message: 'SLOW r198', session: id }));
+      await sleep(900);
+      const fourth = await call('/api/chat', U, { message: 'SLOW r198 four', session: ids[3] });
+      seen.status = fourth.status; seen.limit = fourth.data.limit || {}; seen.error = fourth.data.error || '';
+      seen.perHost = ((await call('/api/work/sessions', U)).data.counts || {}).perHost || {};
+      await Promise.all(runs);
+      for (const id of ids) await call('/api/work/sessions/close', U, { id });
+      ok198 = seen.status === 429 && seen.limit.max === 3 && seen.limit.used === 3 && !!seen.limit.provider && /3 of 3/.test(seen.error) && Object.values(seen.perHost).some((h) => h.used === 3);
+    }
+    spec('R198', 'session limits (plans/multi-session.md § 5): with the defaults (5 per person per host, 3 per provider) a 4th running session on the same provider answers 429 with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
+      ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
+  } else skip('R198', 'session limits (plans/multi-session.md § 5)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB && !WIN) { // R178 (FR5): deploy/trial.sh tries a build on a side port against a copy of the data before it is swapped in
     const tr = path.join(MILLS, 'deploy', 'trial.sh');
     const before178 = fs.readdirSync(require('os').tmpdir()).filter((d) => /^vr-trial-/.test(d)).length;

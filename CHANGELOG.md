@@ -7,6 +7,16 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.6 — 2026-10-25
+
+PATCH: **the specs for presence and multi-session Work, as checks first** (T-259, T-283). Team notes
+`plans/presence.md` (presence per device, most active wins × working / accepting work, the derived label and its
+order, appear away / offline, do not disturb, custom text with an until, the protocol on the existing room long poll)
+and `plans/multi-session.md` (the session model, its storage next to work-current.json as a mirror, the six states
+and which wins, the routes, limits 5 per host / 3 per provider with 429, what must keep working, compatibility).
+`spec()` checks R196 (presence), R197 (sessions) and R198 (limits) in --rust-hub; they say SPEC until T-259 / T-284 /
+T-285 build them. No behaviour changed.
+
 ## 5.13.5 — 2026-10-25
 
 PATCH: **switching to the Rust hub alone is the config line and a graceful restart** (T-256). vr-run read
