@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.22.0 — 2026-10-25
+
+MINOR: **my projects, reopen-after-reload, own platform first** (agent branches, reviewed and merged).
+- **My projects** (T-239). Settings has a My projects section, a per-person index of the shared projects area.
+  - **Per project:** whether you have a worktree, when you last used it, uncommitted / unmerged work, and who else has
+    a worktree there.
+  - **Pin or hide** a project in your own list (`<profile>/projects.json`, add-only).
+  - **Discovery:** the area's other projects and your Forgejo repos are listed, never cloned.
+  - **Remove my worktree:** takes away only your own. Uncommitted work is committed first and unmerged work is kept
+    under `refs/viberoller/removed/<user>/`; refused while a session of yours works there.
+  - **Delete a project:** an admin can delete one that nobody else has a worktree in. It is moved to `_trash` inside
+    the projects root, never erased.
+  - Routes: `/api/projects/mine`, `/pin`, `/hide`, `/remove-worktree`, `/delete`. R255 to R259.
+- **Reopen after a reload** (T-241). A setting, "Reopen what I had open after a reload" (prefs `reopen`, default on).
+  Off, a reload starts fresh on the menu and the team room; the conversation stays on the hub. The Rust and the frozen
+  JavaScript prefs keep the key (bridge/server.js 4.3.1). R260.
+- **Your platform first** (T-251). Downloads shows your own platform first and the others under "Other platforms";
+  `/api/downloads` carries a `platform` hint from the User-Agent. The updaters already pick their own OS / arch: the
+  desktop app and vr-host ask for their build-time target. R261.
+
 ## 5.21.0 — 2026-10-25
 
 MINOR: **start work, and team-only product downloads** (agent branches, reviewed and merged).
