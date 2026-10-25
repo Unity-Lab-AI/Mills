@@ -7,6 +7,15 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.5 — 2026-10-25
+
+PATCH: **switching to the Rust hub alone is the config line and a graceful restart** (T-256). vr-run read
+`rustHub.alone` only when it started, so on the live server the graceful restart after 5.13.3 kept the JavaScript hub
+running behind the Rust one, and the swap needed a restart of the whole service (which also ends the Work run that asks
+for it). vr-run now reads it again whenever a build asks for a restart (exit 75): the next build starts with `--alone`
+and the JavaScript hub behind it stops (it stays the last resort); setting it back to false starts it behind again.
+R195 (written first, under the testing law: it failed on 5.13.4 with the JavaScript hub still behind).
+
 ## 5.13.4 — 2026-10-25
 
 PATCH: **the testing law** (LAWS.md). Five rules for every project's tests: check what the code does, not how it does

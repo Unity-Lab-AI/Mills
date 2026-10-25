@@ -2773,7 +2773,7 @@ async function run() {
     fs.writeFileSync(fakeHub, `const http = require('http'), fs = require('fs'); const commit = process.argv[2], port = Number(process.argv[process.argv.indexOf('--port') + 1]);
 const mode = () => { try { return fs.readFileSync(process.argv[3], 'utf8').trim(); } catch { return 'ok'; } };
 if (mode() === 'crash') process.exit(1);
-http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit, serving: process.env.VR_SERVING || '' })); }).listen(port, '127.0.0.1');\n`);
+http.createServer((req, res) => { if (mode() === 'hang') return; if (mode() === 'exit75') { res.end('{}'); return setTimeout(() => process.exit(75), 100); } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, pid: process.pid, commit, serving: process.env.VR_SERVING || '', alone: process.argv.includes('--alone') })); }).listen(port, '127.0.0.1');\n`);
     const scenario = async (name, builds, cur, good, expect, change, withJs, extraArgs = []) => { // builds: commit → mode; cur = the newest; good = the good list newest first; withJs: a stand-in bridge/server.js (the JavaScript hub) in the root
       if (built177.status !== 0) return { name, ok: false, why: 'vr-run not built' };
       const dir = path.join(SCRATCH, 'dist177-' + name); fs.mkdirSync(dir, { recursive: true });
@@ -2816,6 +2816,35 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R192', 'T-157 the fallback chain: /api/status names what serves (rust → rust-fallback-1 → rust-fallback-2 → javascript-fallback, also with --alone); two previous good builds are kept (keep-builds.sh); the real JavaScript hub started alone boots and serves the basics (status, page, sign-in gate + sign-in, chat room, board, one Work run with the fake Claude, the AI host link)',
       built177.status === 0 && fine.serving === 'rust' && crash.serving === 'rust-fallback-1' && deep192.ok && deep192.serving === 'rust-fallback-2' && aloneJs192.ok && aloneJs192.serving === 'javascript-fallback' && aloneOk192.ok && aloneOk192.serving === 'rust' && /-ge 2/.test(keep192) && js192.ok,
       `serving: fine ${fine.serving} · crash ${crash.serving} · 3 deep ${deep192.seen}/${deep192.serving} · --alone all bad ${aloneJs192.seen}/${aloneJs192.serving} · --alone fine ${aloneOk192.serving} · JavaScript hub alone: ${js192.why}`);
+    // R195: switching the live hub to the Rust hub alone is a config line and a graceful restart (deploy/full-rust-swap.md).
+    // 2026-10-25 vr-run read rustHub.alone only when it started, so the graceful restart (exit 75) kept the JavaScript hub
+    // running behind the Rust one and the swap needed a restart of the whole service.
+    let r195 = { before: '', after: '', backBefore: false, backAfter: true };
+    if (built177.status === 0) {
+      const back195 = async (p) => { try { const r = await fetch(`http://127.0.0.1:${p}/api/status`, { signal: AbortSignal.timeout(1000) }); return (await r.json()).commit === 'js-behind'; } catch { return false; } };
+      const front195 = async (p) => { try { const r = await fetch(`http://127.0.0.1:${p}/api/status`, { signal: AbortSignal.timeout(1000) }); return await r.json(); } catch { return {}; } };
+      const dir = path.join(SCRATCH, 'dist195'), root = path.join(SCRATCH, 'root195', 'bridge'); fs.mkdirSync(path.join(dir, 'n1'), { recursive: true }); fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, 'server.js'), `const http = require('http'); const port = Number(process.env.VR_BACK_PORT || process.env.MILLS_PORT || 0); if (!port) process.exit(1);
+http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, commit: process.env.VR_BACK_PORT ? 'js-behind' : 'js-alone' })); }).listen(port, '127.0.0.1');\n`);
+      fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1 }));
+      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'); fs.writeFileSync(path.join(dir, 'n1', 'vr-hub'), `#!/bin/sh\nexec "${process.execPath}" "${fakeHub}" n1 "${path.join(dir, 'n1', 'mode')}" "$@"\n`, { mode: 0o755 });
+      fs.writeFileSync(path.join(dir, 'current'), 'n1\n');
+      const port = await freePort(PORT + 360), backPort = await freePort(port + 2);
+      const log = fs.openSync(path.join(SCRATCH, 'vr-run-r195.log'), 'a');
+      const proc = spawn(vrRun, ['--root', root, '--port', String(port), '--back', String(backPort), '--builds', dir, '--health-every', '1', '--health-timeout', '1'], { stdio: ['ignore', log, log] });
+      let s = {}; for (let i = 0; i < 60 && !(s.commit === 'n1' && (r195.backBefore = await back195(backPort))); i++) { await sleep(300); s = await front195(port); }
+      r195.before = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`;
+      fs.writeFileSync(path.join(root, 'config.local.json'), JSON.stringify({ port: 1, rustHub: { enabled: true, backPort, alone: true } }));
+      fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'exit75'); setTimeout(() => fs.writeFileSync(path.join(dir, 'n1', 'mode'), 'ok'), 1500);
+      const pid0 = s.pid;
+      for (let i = 0; i < 60; i++) { await sleep(300); s = await front195(port); if (s.pid && s.pid !== pid0) break; }
+      await sleep(1500); // the JavaScript hub would have been started again by now
+      r195.after = `${s.commit || 'nobody'}${s.alone ? ' --alone' : ''}`; r195.backAfter = await back195(backPort);
+      proc.kill('SIGTERM'); await sleep(500); try { proc.kill('SIGKILL'); } catch { /* gone */ }
+    }
+    check('R195', 'switching to the Rust hub alone needs only the config line and a graceful restart: vr-run reads rustHub.alone again when a build asks for a restart (exit 75), starts the next build with --alone and stops the JavaScript hub behind it (it stays the last resort)',
+      built177.status === 0 && r195.before === 'n1' && r195.backBefore && r195.after === 'n1 --alone' && !r195.backAfter,
+      `before: ${r195.before}, JavaScript hub behind ${r195.backBefore} · after the restart: ${r195.after}, JavaScript hub behind ${r195.backAfter}`);
   }
   if (!WIN) { // R194: the chain fills up the way the auto-deploy runs it (5.13.3: no build was ever marked good, so every deploy deleted the previous builds)
     const dist194 = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-r194-')), nat194 = path.join(MILLS, 'native'), seen194 = [];
