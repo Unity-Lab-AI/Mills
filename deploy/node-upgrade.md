@@ -12,8 +12,8 @@ server ran 22.23.3). Details: https://nodejs.org/en/blog/vulnerability/october-2
 | **24 "Krypton"** | **v24.22.1** | Maintenance LTS since 2026-10-20 (newest LTS today) | 2028-04-30 |
 | 26 | v26.12.1 | Current; **becomes LTS on 2026-10-28**, Maintenance 2027-10-20 | 2029-04-30 |
 
-The suite (normal mode, `--rust-hub`, the JS fallback) passes on 24.22.1; 26.12.1 was run in normal mode too (results in
-the T-304 commit note). Node 22 keeps working: nothing in the code needs a newer Node than 22 (no engines check, the
+Suite results (2026-10-25, throw-away hubs): Node 24.22.1 normal 196/0, --rust-hub 305/0, js-fallback OK; Node 26.12.1
+normal 196/0; Node 22.23.3 (old) normal 196/0. Node 22 keeps working: nothing in the code needs a newer Node than 22 (no engines check, the
 launchers only test that `node` exists), so AI hosts on 22 stay supported.
 
 Downloaded and verified (linux-x64, SHASUMS256.txt from nodejs.org, and its GPG signature against the nodejs/release-keys
