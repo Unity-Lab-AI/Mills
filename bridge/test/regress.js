@@ -489,7 +489,7 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['localai.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -1547,7 +1547,7 @@ async function run() {
 
   const csp = (/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html) || [])[1] || '';
   const missing66 = [
-    [/default-src 'none'/.test(csp) && /connect-src 'self' https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com ipc: http:\/\/ipc\.localhost __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
+    [/default-src 'none'/.test(csp) && /connect-src 'self' http:\/\/127\.0\.0\.1:11434 https:\/\/\*\.trycloudflare\.com https:\/\/api\.github\.com ipc: http:\/\/ipc\.localhost __MILLS_HUB_HOST__;/.test(csp) && /object-src 'none'/.test(csp) && /img-src 'self' https: data: blob:/.test(csp) && !/script-src[^;]*https:/.test(csp), 'CSP (images over https only; scripts never)'],
     [/: \/\^https:\\\/\\\/\[a-z0-9-\]\+\\\.trycloudflare\\\.com\$\/;/.test(html) && /store\.set\('mills\.hub'/.test(html) && /const HUB_HOST = /.test(html), 'hub address pinned + cached (quick tunnel, or the named tunnel host injected at deploy)'],
     [/function trustedPub\(/.test(html) && /changedKeys\.has\(m\.username\)\) continue; \/\/ never encrypt to an unverified key/.test(html) && /Trust new key/.test(html), 'key pinning'],
     [/streams: \[call\.local\]/.test(html) && /sender\.setStreams\(isScreenTransceiver\(peer\.pc, t\) \? call\.screenStream : call\.local\)/.test(html) && /e\.streams && e\.streams\[0\]/.test(html), 'call lip-sync streams'],
@@ -3427,26 +3427,36 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   } else for (const [id, what] of [['R300', 'plan_parse'], ['R301', 'plan_existing'], ['R302', 'plan_roles'], ['R303', 'plan_owner'], ['R304', 'plan_glossary and the planner prompt']]) skip(id, 'T-276/277/278 ' + what, 'the Rust hub\'s: --rust-hub runs it');
   { // R310 to R314 (T-208): the person's own local Ollama, found by the page (browser) or the desktop app, listed as "Local (this computer)"
     const page208 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), main208 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'src', 'main.rs'), 'utf8');
-    const a208 = page208.indexOf('// ── This computer\'s own Ollama (T-208)'), b208 = page208.indexOf('// ── Settings → My AI hosts, monitor and control');
-    const blk208 = a208 >= 0 && b208 > a208 ? page208.slice(a208, b208) : '';
+    const blk208 = fs.readFileSync(path.join(MILLS, 'web', 'localai.js'), 'utf8'); // T-209: the probe lives in the shared module, not in the page
     let names208 = [], bad208 = [];
     try {
-      const m = /const ollamaFromTags = (.*);\n/.exec(blk208), fromTags = new Function('return ' + m[1])();
+      const m = /const fromTags = (.*);\n/.exec(blk208), fromTags = new Function('return ' + m[1])();
       const tags = await (await fetch(`http://127.0.0.1:${OLLAMA_PORT}/api/tags`)).json(); // the suite's fake Ollama, as a browser would be answered
       names208 = fromTags(tags); bad208 = [fromTags(null), fromTags({ error: 'x' }), fromTags({ models: [{ size: 1 }, { model: 'b:1' }, 7] })];
     } catch (e) { names208 = ['ERR ' + e.message]; }
     check('R310', 'T-208 the page reads Ollama\'s /api/tags answer (the fake Ollama\'s here) into its model names, and an answer that is not Ollama\'s gives none instead of an error',
       names208.join() === 'unity-brain:latest' && bad208[0].length === 0 && bad208[1].length === 0 && bad208[2].join() === 'b:1', `names ${names208.join()} · odd ${JSON.stringify(bad208)}`);
     check('R311', 'T-208 the page asks 127.0.0.1:11434 /api/tags with a short timeout; a browser that is refused (CORS / private network) is told apart from "not running" by a no-cors ping, and only then is OLLAMA_ORIGINS explained (small hint, no error wall); when nothing runs, nothing is drawn',
-      /LOCAL_OLLAMA = 'http:\/\/127\.0\.0\.1:11434'/.test(blk208) && /\/api\/tags/.test(blk208) && /abort\(\), 1500\)/.test(blk208) && /mode: 'no-cors'/.test(blk208) && /r\.blocked = true/.test(blk208) && /OLLAMA_ORIGINS="' \+ location\.origin/.test(blk208) && /wrap\.hidden = true/.test(blk208) && /if \(!r\.found && !r\.blocked\) return;/.test(blk208) && !/sys\(|sysSettings\(|alert\(/.test(blk208.split('function renderLocalOllama')[0]), 'static check of the page');
+      /LOCAL_OLLAMA = 'http:\/\/127\.0\.0\.1:11434'/.test(blk208) && /\/api\/tags/.test(blk208) && /abort\(\), 1500\)/.test(blk208) && /mode: 'no-cors'/.test(blk208) && /r\.blocked = true/.test(blk208) && /OLLAMA_ORIGINS="' \+ \(o\.origin \|\| location\.origin\)/.test(blk208) && /wrap\.hidden = true/.test(blk208) && /if \(!r\.found && !r\.blocked\) return;/.test(blk208) && !/sys\(|sysSettings\(|alert\(/.test(blk208.split('function line')[0]) && /<script src="localai\.js"><\/script>/.test(page208) && /LOCALAI\.line\(box, d\.providers/.test(page208) && !/LOCAL_OLLAMA|api\/tags/.test(page208) && /connect-src 'self' http:\/\/127\.0\.0\.1:11434 /.test(page208), 'static check of the module and the page');
     check('R312', 'T-208 the desktop app asks Ollama through its own program (command ollama_local, no CORS: OLLAMA_HOST or 127.0.0.1:11434) and the page uses it there; it also offers "Start this computer\'s AI host" (host_act start, or the set-up pointer) when none of the person\'s hosts lends a local model, and names where to lend it in a browser',
-      /async fn ollama_local\(\)/.test(main208) && /probe_ollama_blocking/.test(main208) && /host_status, ollama_local, host_act/.test(main208) && /NATIVE\.call\('ollama_local'\)/.test(blk208) && /NATIVE\.call\('host_act', \{ what: 'start' \}\)/.test(blk208) && /Run on this PC/.test(blk208) && /My AI hosts/.test(blk208), 'static check of the page and the app');
+      /async fn ollama_local\(\)/.test(main208) && /probe_ollama_blocking/.test(main208) && /host_status, ollama_local, host_act/.test(main208) && /native\.call\('ollama_local'\)/.test(blk208) && /native\.call\('host_act', \{ what: 'start' \}\)/.test(blk208) && /Run on this PC/.test(blk208) && /My AI hosts/.test(blk208), 'static check of the page and the app');
     check('R313', 'T-208 the shared provider stays the default: the local list is display only (greyed, never a provider option the hub knows, no call to /api/model or /api/apikey/settings from the probe), and it is skipped when one of the person\'s own hosts already lends a local model',
-      !/\/api\/model|\/api\/apikey|\/api\/providers/.test(blk208) && /o\.disabled = true/.test(page208.slice(page208.indexOf('Local (this computer) · not for Work'), page208.indexOf('Local (this computer) · not for Work') + 400)) && /localOllama\.found && localOllama\.models\.length && !ownLocalProvider\(provs\)/.test(page208) && /p\.kind === 'host-openai' && p\.owner === /.test(blk208), 'static check of the page');
+      !/\/api\/model|\/api\/apikey|\/api\/providers/.test(blk208) && /op\.disabled = true/.test(blk208.slice(blk208.indexOf('Local (this computer) · not for Work'), blk208.indexOf('Local (this computer) · not for Work') + 500)) && /localOllama\.found && localOllama\.models\.length && !ownProvider\(provs, o && o\.user\)/.test(blk208) && /LOCALAI\.group\(sel, provs/.test(page208) && /p\.kind === 'host-openai' && p\.owner === /.test(blk208), 'static check of the page');
     const ck208 = (await call('/api/check', U)).data || {};
     check('R314', 'T-208 a person without a local Ollama sees nothing change: /api/check lists no provider for it (the page\'s probe adds nothing on the hub), and the default provider / model fields keep their shape',
       Array.isArray(ck208.providers) && !ck208.providers.some((p) => /local-ollama/.test(p.id || '')) && 'defaultProvider' in ck208 && Array.isArray(ck208.models), `providers ${(ck208.providers || []).length} · defaultProvider ${'defaultProvider' in ck208}`);
   }
+  if (RUST_HUB) { // R315 (T-301): a person's own AI outside a Work run (Jcode PGM's planner) signs its board writes "<person> · Claude"
+    const t315 = ((await call('/api/board/create', U, { title: 'agent write r315', status: 'todo', asAgent: true })).data || {}).task || {};
+    const c315 = ((await call('/api/board/claim', U, { id: t315.id, asAgent: true })).data || {}).task || {};
+    const p315 = ((await call('/api/board/create', U, { title: 'person write r315', status: 'todo' })).data || {}).task || {};
+    const pc315 = ((await call('/api/board/claim', U, { id: p315.id })).data || {}).task || {};
+    check('R315', 'T-301 asAgent on the board routes: the claim of a task written with asAgent is the person\'s agent ("<name> · Claude", agent true, key <user>#agent) and the field is not stored on the task; without it the write stays the person\'s own (older callers unchanged)',
+      !!t315.id && !('asAgent' in t315) && c315.claim && c315.claim.agent === true && / · Claude$/.test(c315.claim.by || '') && /#agent$/.test(c315.claim.key || '') && pc315.claim && pc315.claim.agent === false && !/ · Claude$/.test(pc315.claim.by || ''),
+      `agent claim ${JSON.stringify(c315.claim || null)} · person claim ${JSON.stringify(pc315.claim || null)}`);
+    // leave the board as it was: the planner checks after this one weigh owners by their open workload
+    for (const t of [t315, p315]) if (t.id) { await call('/api/board/release', U, { id: t.id, asAgent: t === t315 }); await call('/api/board/delete', U, { id: t.id }); }
+  } else skip('R315', 'asAgent board writes', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
@@ -4233,16 +4243,19 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && (resC.changes || []).length === 1 && resC.changes[0].ok === true && (ex3.labels || []).join() === 'planned-r307' && ex3.priority === 2 && /Planned change: the plan touches it/.test(ex3.body || '')
       && (srcC.match(/\(r307 1\)/g) || []).length === 2 && /## 20\d\d-\d\d-\d\d/.test(srcC),
       `status ${C.status} · created ${(resC.created || []).length} · beta ${betaT.status} labels ${(betaT.labels || []).join()} · blocked line ${/Blocked on:\*\* T-\d+ \(Alpha/.test(betaT.body || '')} · change ${JSON.stringify(resC.changes)} · existing ${(ex3.labels || []).join()} P${ex3.priority} · source copies ${(srcC.match(/\(r307 1\)/g) || []).length}`);
+    const c308b = { once: sumB.length === 1 && sumC.length === 1, posted: resB.summaryPosted === true && resC.summaryPosted === true, sumIds: !!sumB[0] && sumB[0].includes(alpha.id) && sumB[0].includes(gamma.id),
+      sumSource: /Source: plans\/plan-r307-original\.md/.test(sumB[0] || ''), blocked: /Blocked: .*waits for/.test(sumC[0] || ''), waits: /Waits for .*:/.test(sumC[0] || ''),
+      noteB: planNoteB.includes(`| ${alpha.id} |`) && !planNoteB.includes(`| ${alphaC.id} |`), noteC: planNoteC.includes(`| ${alpha.id} |`) && planNoteC.includes(`| ${alphaC.id} |`), // the table cell, not a substring: the note's own header names T-281, which holds T-28 table: /\| Task \| Title \| Owner \|/.test(planNoteC),
+      owners: Object.keys(resB.newTasksFor || {}).sort().join() === 'mills,t-user', millsBuild: !!(resB.newTasksFor && resB.newTasksFor.mills && resB.newTasksFor.mills.some((t) => t.id === buildT.id)),
+      userFour: !!(resC.newTasksFor && resC.newTasksFor['t-user'] && resC.newTasksFor['t-user'].length >= 4), planNote: resB.planNote === 'plans/plan-r307-plan.md' };
     part('R308b', 'T-281 after the write the plan summary is posted once to the team chat as "<person> · Claude" (who got what, what is blocked, what waits for Mills, the source and plan notes), the owner map is appended to plans/<topic>-plan.md with every approval, and the result hands each owner a "new tasks for you" list',
-      sumB.length === 1 && sumC.length === 1 && resB.summaryPosted === true && resC.summaryPosted === true && sumB[0].includes(alpha.id) && sumB[0].includes(gamma.id) && /Source: plans\/plan-r307-original\.md/.test(sumB[0])
-      && /Blocked: .*waits for/.test(sumC[0]) && /Waits for .*:/.test(sumC[0]) && planNoteB.includes(alpha.id) && !planNoteB.includes(alphaC.id) && planNoteC.includes(alpha.id) && planNoteC.includes(alphaC.id) && /\| Task \| Title \| Owner \|/.test(planNoteC)
-      && Object.keys(resB.newTasksFor || {}).sort().join() === 'mills,t-user' && resB.newTasksFor.mills.some((t) => t.id === buildT.id) && resC.newTasksFor['t-user'].length >= 4 && resB.planNote === 'plans/plan-r307-plan.md',
-      `summaries ${sumB.length}/${sumC.length} · posted ${resB.summaryPosted}/${resC.summaryPosted} · plan note has both approvals ${planNoteC.includes(alpha.id) && planNoteC.includes(alphaC.id)} · owners ${Object.keys(resB.newTasksFor || {}).sort()} · first summary "${(sumB[0] || '').replace(/\n/g, ' | ').slice(0, 160)}"`);
+      Object.values(c308b).every(Boolean),
+      `failing ${Object.keys(c308b).filter((k) => !c308b[k]).join(',') || 'none'} · summaries ${sumB.length}/${sumC.length} · posted ${resB.summaryPosted}/${resC.summaryPosted} · plan note has both approvals ${planNoteC.includes(alpha.id) && planNoteC.includes(alphaC.id)} · owners ${Object.keys(resB.newTasksFor || {}).sort()} · first summary "${(sumB[0] || '').replace(/\n/g, ' | ').slice(0, 160)}"`);
     const pgPlan = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
     part('R308c', 'T-279 [static] the page draws bridge_plan as a draft card (a parents table with checkboxes, Approve all / Approve N of M, Change…, Reject) posting to /api/work/plan/answer, closes it on bridge_plan_answered, and re-reads GET /api/work/plans after a reload; both MCP servers list plan_draft',
       /ev\.type === 'bridge_plan'/.test(pgPlan) && /bridge_plan_answered/.test(pgPlan) && /\/api\/work\/plan\/answer/.test(pgPlan) && /Approve all/.test(pgPlan) && /Change…/.test(pgPlan) && /Reject/.test(pgPlan) && /restorePlans/.test(pgPlan) && /\/api\/work\/plans/.test(pgPlan)
       && (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).some((m) => /plan_draft/.test(m)) && JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.some((t) => t.name === 'plan_draft'), 'index.html, team-mcp.js, mcp-tools.json');
-    check('R308', 'T-279 / T-281 approve all, then the hand-off: ' + ['R308a', 'R308b', 'R308c'].map((k) => parts[k].label.replace(/^T-2\d\d /, '')).join(' ;; '), ['R308a', 'R308b', 'R308c'].every((k) => parts[k].pass), ['R308a', 'R308b', 'R308c'].map((k) => parts[k].detail).join(' || '));
+    check('R308', 'T-279 / T-281 approve all, then the hand-off: ' + ['R308a', 'R308b', 'R308c'].map((k) => parts[k].label.replace(/^T-2\d\d /, '')).join(' ;; '), ['R308a', 'R308b', 'R308c'].every((k) => parts[k].pass), ['R308a', 'R308b', 'R308c'].map((k) => (parts[k].pass ? '' : k + ' FAILED: ') + parts[k].detail).join(' || '));
     for (const x of ['plans/plan-r305-original.md', 'plans/plan-r307-original.md', 'plans/plan-r307-plan.md']) await call('/api/notes/delete', U, { path: x });
     await call('/api/work/sessions/delete', U, { id: planSid });
   } else for (const [id, l] of [['R305', 'a planner session\'s direct task_create is refused'], ['R306', 'plan_draft makes the session waiting and shows the draft'], ['R307', 'approve some writes only those parents'], ['R308', 'approve all, blocked, changes, source appended'], ['R309', 'a change request, a reject, another person']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');

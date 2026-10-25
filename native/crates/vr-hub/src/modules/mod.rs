@@ -524,7 +524,9 @@ async fn board_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {
     let Some(op) = board::route_op(&r.path) else { return answer(404, json!({ "error": "Unknown endpoint" })) };
     let b = if r.method == hyper::Method::POST { if r.body.is_empty() { json!({}) } else { match serde_json::from_slice::<Value>(&r.body) { Ok(v) => v, Err(_) => return answer(400, json!({ "error": "That request is not valid JSON." })) } } }
         else { Value::Object(crate::front::url_params(&r.query).into_iter().map(|(k, v)| (k, json!(v))).collect()) };
-    let out = board_op_presence(hub, op, &m.actor(u, false), &b);
+    // a person's own AI outside a Work run (Jcode PGM's planner, T-301) says so with asAgent: the write is signed
+    // "<person> · Claude" like a Work run's; it is still that person's account and rights (an optional field: older hubs ignore it)
+    let out = board_op_presence(hub, op, &m.actor(u, b["asAgent"].as_bool() == Some(true)), &b);
     answer(out.status, out.body)
 }
 fn notes_http(hub: &Arc<Hub>, r: &Req, u: &str) -> Routed {

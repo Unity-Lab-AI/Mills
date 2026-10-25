@@ -7,6 +7,23 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.25.3 — 2026-10-25
+
+PATCH: **the local Ollama probe works in a browser, and is one shared module** (T-209).
+- **Fix:** T-208's browser probe could never work, because the page's CSP `connect-src` did not allow
+  `http://127.0.0.1:11434`. The fetch and the "running but blocked" ping were refused, and only the desktop app's path
+  worked. The CSP now allows it (R95 and R311 check it).
+- **One module:** the probe, the blocked-ping hint, the desktop `ollama_local` call, the tags parser and the "Local (this
+  computer)" render helpers move out of the page into `web/localai.js` 1.0.0. It needs no page globals; the page passes
+  its hooks in. The same file is in the pgm-libs web kit (5.22.0) and Hyper Prod Man 0.4.0, so there is no second copy.
+- web/index.html 1.25.1, web/sw.js 1.0.5. R310 to R314 now read the module.
+- **A person's own AI signs as itself outside Work** (T-301 follow-up). The board routes take an optional `asAgent: true`.
+  The write is then signed "<person> · Claude" (claim key `<user>#agent`), like a Work run's. It is still that person's
+  account and rights, and the field is not stored. Jcode PGM's planner sends it; older hubs ignore it. R315.
+- **Suite:** R308 matched a task id as a substring, and the plan note's own header names T-281, which holds "T-28". It
+  failed as soon as the second approval's first task became T-28. It now matches the table cell, and the check names
+  which of its conditions failed.
+
 ## 5.25.2 — 2026-10-25
 
 PATCH: **planner mode is one library** (T-301, the library law).
