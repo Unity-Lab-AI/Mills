@@ -357,10 +357,15 @@ async function startShare(choice) {
   showScreenTile(me.username, call.screenStream, true);
   updateCallButtons(); pushCallState();
 }
+// The desktop app says whether this platform can share (T-243: app_info.screenShare / screenShareWhy); a page in a
+// browser, or an older app without the field, just tries getDisplayMedia.
+let appShare = null;
+try { if (typeof NATIVE !== 'undefined' && NATIVE) NATIVE.call('app_info').then((i) => { if (i && typeof i.screenShare === 'boolean') appShare = i; }).catch(() => {}); } catch {}
 $('callScreen').onclick = () => {
   if (!call.conv) return;
   if (call.screen) return stopScreen();
   if (call.nostream) return callMsg('You may not share your screen here.');
+  if (appShare && appShare.screenShare === false) return callMsg('This app cannot share a screen on this computer' + (appShare.screenShareWhy ? ': ' + appShare.screenShareWhy : '.'));
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return callMsg('This browser cannot share a screen (needs Chrome, Edge or Firefox on a computer).');
   $('shareOpts').hidden = !$('shareOpts').hidden; // the audio choice first; the browser's picker opens from the button in it (it needs a fresh click)
 };
@@ -414,7 +419,7 @@ function updateCallButtons() {
   label($('callCam'), 'camera', camOn ? 'Camera on' : 'Camera off');
   $('callCam').classList.toggle('off', !camOn);
   label($('callScreen'), 'share', call.screen ? 'Stop sharing' : 'Share screen'); $('callScreen').classList.toggle('on', !!call.screen);
-  $('callScreen').hidden = !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  $('callScreen').hidden = !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) || !!(appShare && appShare.screenShare === false);
   label($('callTheater'), 'eye', theaterOn() ? 'Exit theater' : 'Theater'); $('callTheater').classList.toggle('on', theaterOn());
   const st = selfTile();
   if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; const l = st.querySelector('.lbl'); l.textContent = 'You'; if (!micOn) l.append(ic('mic-off', 'trail')); }

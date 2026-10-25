@@ -1,5 +1,5 @@
 {
-  "project": "5.23.0",
+  "project": "5.23.1",
   "modules": {
     "bridge/ai-node.js": "3.4.0",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -43,7 +43,7 @@
     "web/app.js": "1.1.2",
     "web/attach.js": "1.1.0",
     "web/board.js": "1.0.5",
-    "web/calls.js": "1.1.0",
+    "web/calls.js": "1.1.1",
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.1.0",
     "web/index.html": "1.23.2",

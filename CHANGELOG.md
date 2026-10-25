@@ -7,6 +7,21 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.23.1 — 2026-10-25
+
+PATCH: **screen sharing in the desktop app** (T-243, an agent branch, reviewed and merged).
+- **Permissions:** the app's main window grants screen capture, microphone and camera only to the hub's own page
+  (scheme, host and port must match exactly), through WebView2's permission event on Windows and WebKitGTK's permission
+  signal on Linux. On Linux, media streams are switched on for that window only. The Tools window never gets capture.
+- **The page can tell:** `app_info` says whether this platform can share (`screenShare`, `screenShareWhy`,
+  `screenShareAudio`). Linux needs WebKitGTK 2.38+ with PipeWire and xdg-desktop-portal; the platform matrix is in
+  native/crates/vr-desktop/src/capture.rs.
+- **Calls:** web/calls.js reads that flag, hiding the Share button and saying why when the app cannot share
+  (web/calls.js 1.1.1).
+- R290, and R165's smoke check requires the new field.
+- **Suite:** native/smoke-desktop.sh lets Xvfb pick a free display itself (`-displayfd`), so suites running side by side
+  no longer collide on one display (R165 failed once that way).
+
 ## 5.23.0 — 2026-10-25
 
 MINOR: **planner mode, screen sharing with sound, and other tools' sessions** (agent branches, reviewed and merged).
