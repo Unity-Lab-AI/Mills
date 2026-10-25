@@ -3492,6 +3492,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgm-workflow-engine-internal"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "pgm-workflow-internal",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "pgm-workflow-internal"
 version = "0.1.0"
 dependencies = [

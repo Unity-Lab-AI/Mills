@@ -69,8 +69,9 @@ pushed to `pgm_core_internal::notices` when it does.
 
 These answer the spec's section 19 questions for Gee (1 to 3) so that T-199 could be built; each is easy to change.
 
-1. **One crate, not several.** Model, validation, expressions, versions and the store are one library
-   (`pgm-workflow-internal`); the modules are the seams if it is ever split (the likely first split is `expr`).
+1. **The model is one crate, the engine a second.** Model, validation, expressions, versions and the store are one
+   library (`pgm-workflow-internal`, no async runtime); the engine that runs a graph is `pgm-workflow-engine-internal`
+   (T-200), so an editor or a viewer needs only this one.
 2. **Our own tiny expression language**, no dependency: `{{path}}` templates and a one-line condition language
    (`expr.rs`: about 400 lines, regex subset included). Nothing in it can run code, read a file or loop.
 3. **Data ports only, with `flow` as a port type.** There is no separate "flow port" kind of wire: a flow port is a

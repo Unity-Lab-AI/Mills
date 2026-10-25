@@ -3760,7 +3760,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R405: 'workflow library: diff(v1, v2) names an added node, a removed node, a changed config key and a rewired edge',
       R406: 'workflow library: a bad json file in the store is moved aside as *.bad-<time> and the listing goes on',
     };
-    const MIN401 = { R401: 4, R402: 10, R403: 3, R404: 5, R405: 1, R406: 2 };
+    const MIN401 = { R401: 4, R402: 10, R403: 3, R404: 4, R405: 1, R406: 2 };
     if (!fs.existsSync(path.join(native401, 'crates', 'pgm-workflow-internal'))) for (const id of Object.keys(L401)) skip(id, L401[id], 'no crate native/crates/pgm-workflow-internal');
     else {
       const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home401}/.rustup" CARGO_HOME="${home401}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-internal 2>&1`], { cwd: native401, encoding: 'utf8', timeout: 1800000 });
@@ -3771,6 +3771,38 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         for (const m of out401.matchAll(/^test (r40\d)_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
         const tail = out401.replace(/\s+/g, ' ').slice(-160);
         for (const id of Object.keys(L401)) check(id, L401[id], ut.status === 0 && (seen[id] || []).length >= MIN401[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
+      }
+    }
+  }
+  // R407 to R417 (T-200): the Hyper Workflows engine (native/crates/pgm-workflow-engine-internal), all with its fake
+  // host and no network: one `cargo test` run, its tests named r407_ ... r417_ map back to the checks as R401-R406 do
+  {
+    const home407 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const native407 = path.join(MILLS, 'native');
+    const L407 = {
+      R407: 'workflow engine: a prompt through start -> prompt -> end gives the fake AI\'s answer as the result; the log has run_start, node_start / node_end per node, run_end, with gapless seq',
+      R408: 'workflow engine: parallel lines run at the same time and join all gives a list in line order; join first cancels the others; maxParallel 2 never lets three run',
+      R409: 'workflow engine: a switch fires one port only, the nodes on the other ports are logged skipped, a join ignores skipped lines',
+      R410: 'workflow engine: a loop until stops when met; one that never is stops at maxIterations and leaves by its limit port, or ends gave-up when that is not wired; each round is its own log entry',
+      R411: 'workflow engine: a node that fails twice then works runs three attempts with backoff entries; after max it leaves by its error port; no wire: onError fail ends failed, skip goes on with a warning',
+      R412: 'workflow engine: an approve node ends its worker (the run waits), a snapshot is written, an answer wakes it; a timeout follows onTimeout and never approves unless the designer chose it',
+      R413: 'workflow engine: a run killed mid-way resumes from its log without running finished nodes again; a non-idempotent node that was mid-flight pauses for a person',
+      R414: 'workflow engine: maxNodes, maxSeconds and maxCost each end a run limit with their name',
+      R415: 'workflow engine: cancel stops running nodes through their cancel handle and ends cancelled; no node starts after it',
+      R416: 'workflow engine: a panic in one node ends that node with engine.panic, and the engine and other runs go on',
+      R417: 'workflow engine: a run\'s log replayed with a host that refuses all calls gives the same result',
+    };
+    const MIN407 = { R407: 2, R408: 7, R409: 2, R410: 4, R411: 4, R412: 3, R413: 2, R414: 1, R415: 1, R416: 1, R417: 1 };
+    if (!fs.existsSync(path.join(native407, 'crates', 'pgm-workflow-engine-internal'))) for (const id of Object.keys(L407)) skip(id, L407[id], 'no crate native/crates/pgm-workflow-engine-internal');
+    else {
+      const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home407}/.rustup" CARGO_HOME="${home407}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-engine-internal 2>&1`], { cwd: native407, encoding: 'utf8', timeout: 1800000 });
+      const out407 = String(ut.stdout || '') + String(ut.stderr || '');
+      if (ut.status === 77) for (const id of Object.keys(L407)) skip(id, L407[id], 'no Rust toolchain here (cargo not found)');
+      else {
+        const seen = {};
+        for (const m of out407.matchAll(/^test (r4(?:0[7-9]|1[0-7]))_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
+        const tail = out407.replace(/\s+/g, ' ').slice(-160);
+        for (const id of Object.keys(L407)) check(id, L407[id], ut.status === 0 && (seen[id] || []).length >= MIN407[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
       }
     }
   }

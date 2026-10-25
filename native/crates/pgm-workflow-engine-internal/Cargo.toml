@@ -1,0 +1,21 @@
+[package]
+name = "pgm-workflow-engine-internal"
+description = "PGM_WorkflowEngine_Internal (PsyGraphMediaWorkflowEngineInternal): the Hyper Workflows engine: runs a pgm-workflow document as tokens on wires (sequential, parallel lines and joins, switch, bounded loops, sub-graphs, for-each), per-node retries / timeouts / failure paths, approvals, run limits, cancel, an append-only run log, resume and replay from that log; everything outside itself through the WorkflowHost trait, a fake host for tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pgm-workflow-internal = { path = "../pgm-workflow-internal" }
+futures-util = "0.3.34"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tokio = { version = "1.54.0", features = ["rt", "sync", "time", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1.54.0", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
