@@ -3024,10 +3024,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R227', 'commit: only what is staged is committed, as the person (author email <login>@viberoller.local, from their Forgejo record when they have one); no message or nothing staged is 400 and changes nothing; the unstaged file stays a change',
       noMsg.status === 400 && noStaged.status === 400 && cm.status === 200 && /^Committed on work\/t-user/.test(cm.data.text) && log.startsWith('r225: the panel commits|') && /@viberoller\.local\|/.test(log) && left.includes('r225-other.txt') && !left.includes('r225-new.txt'),
       `no message ${noMsg.status}, nothing staged ${noStaged.status}, commit ${cm.status} "${cm.data.text}" · last ${log} · still changed ${left.join(',')}`);
-    const b409 = {}; const slow225 = chat(U, 'SLOW r225 hold'); await sleep(700);
-    const wk = await gs(); b409.stage = (await call('/api/work/git/stage', U, { files: ['r225-other.txt'] })).status; b409.commit = (await call('/api/work/git/commit', U, { message: 'x' })).status; b409.merge = (await call('/api/work/git/merge', U, {})).status; b409.update = (await call('/api/work/git/update', U, {})).status;
-    const other = (await gs('?session=' + sid225)).data.working; await call('/api/stop', U, {}); await slow225;
-    const after409 = (await call('/api/work/git/stage', U, { files: ['r225-other.txt'] })).status;
+    const b409 = {}; fs.writeFileSync(path.join(ss1.data.dir || '', 'r228.txt'), 'r228\n'); const slow225 = chat(U, 'SLOW r225 hold', { session: sid225 }); await sleep(700);
+    const S = { session: sid225 };
+    const wk = await gs('?session=' + sid225); b409.stage = (await call('/api/work/git/stage', U, { ...S, files: ['r228.txt'] })).status; b409.commit = (await call('/api/work/git/commit', U, { ...S, message: 'x' })).status; b409.merge = (await call('/api/work/git/merge', U, S)).status; b409.update = (await call('/api/work/git/update', U, S)).status;
+    const other = (await gs()).data.working; await call('/api/stop', U, S); await slow225;
+    const after409 = (await call('/api/work/git/stage', U, { ...S, files: ['r228.txt'] })).status;
     check('R228', 'while that session\'s run is working every git action (stage, commit, update, merge) is 409 and the status says working; another session of the same person is not held by it; afterwards it works again',
       wk.data.working === true && Object.values(b409).every((x) => x === 409) && other === false && after409 === 200, `working ${wk.data.working} · ${JSON.stringify(b409)} · other session working ${other} · after ${after409}`);
     // a session's worktree: commit through the panel, update from work/<user>, "merge" = into work/<user> (worktree.js home); the person's own: worktree.js merge
