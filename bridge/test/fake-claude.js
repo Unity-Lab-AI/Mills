@@ -5,6 +5,7 @@
 //   message contains "ASSISTTOOL" → adds a task through the Unity section's tool relay
 //   message contains "PCTOOL" → calls the pc "list" tool through the hub, like the real MCP relay
 //   message contains "CLAUDETOOL" → runs one fake tool (Bash) before answering
+//   message contains "DENIED" → the result says a tool was refused for want of permission (permission_denials)
 //   message contains "USAGE"  → reports token usage (54,000 of a 200,000 context window) and a
 //                               5-hour rate-limit event (42% used, resets in 2 h), like the real stream
 // The answer echoes the model and the working folder (cwd) so the runner can check both.
@@ -157,5 +158,6 @@ process.stdin.on('end', async () => {
     ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
   // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
   out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
-    ...(usage ? { modelUsage: { [model]: { inputTokens: 4000, outputTokens: 300, contextWindow: 200000 } } } : {}) });
+    ...(usage ? { modelUsage: { [model]: { inputTokens: 4000, outputTokens: 300, contextWindow: 200000 } } } : {}),
+    ...(input.includes('DENIED') ? { permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_denied', tool_input: { command: 'rm -rf build' } }] } : {}) });
 });

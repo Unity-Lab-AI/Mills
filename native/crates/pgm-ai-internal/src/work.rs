@@ -43,7 +43,8 @@ impl RunLog {
     fn next(&self) -> usize { self.base + self.events.len() }
     fn since(&self, after: usize) -> Vec<Value> { self.events.iter().skip(after.saturating_sub(self.base)).cloned().collect() }
 }
-struct Share { conv: String, since: String, n: u64, log: Vec<Value>, live: Value, ver: u64, woke: Arc<Notify> }
+/// A shared Work session: `sid` = which of the owner's sessions it shows (plans/multi-session.md § 7).
+struct Share { conv: String, since: String, n: u64, log: Vec<Value>, live: Value, ver: u64, woke: Arc<Notify>, sid: String, key: String }
 #[derive(Clone, Default)]
 struct Fresh { text: String, at: u64, busy: bool }
 
@@ -106,6 +107,8 @@ impl Work {
     pub fn drop_provider(&self, a: &Account, id: &str) { if self.state(a)["provider"] == json!(id) { self.update(a, |m| { m.remove("provider"); }); } }
     /// Is any session of theirs running (the primary one's run is keyed by the person, the others' by "<user>#<id>")?
     pub fn busy(&self, u: &str) -> bool { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).keys().any(|k| k == u || k.starts_with(&p)) }
+    /// How many of their sessions run now (presence shows it, T-288).
+    pub fn working_count(&self, u: &str) -> u64 { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).keys().filter(|k| *k == u || k.starts_with(&p)).count() as u64 }
     /// Is this one session running (its run key)?
     pub fn busy_key(&self, key: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key) }
     /// The run key of a run of theirs that waits for something from their browser: the primary session's first.
@@ -333,8 +336,13 @@ impl Work {
             crate::usage::note_context(&mut ctx, &ev, st["claudeSessionId"].as_str().unwrap_or(""));
             if ctx != before { sessions::supdate(self, a, sx, |m| { m.insert("ctx".into(), ctx); }); }
         }
-        if t == "result" { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx.key) { r.answered = true; } }
-        if sx.primary { self.share_event(&a.username, &ev); } // a share shows the person's first session (plans/multi-session.md § 7)
+        if t == "result" {
+            if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx.key) { r.answered = true; }
+            // it stopped short of a tool it was not allowed: the session waits on its person (yellow, T-288) until they answer
+            let denied: Vec<String> = ev["permission_denials"].as_array().map(|d| d.iter().filter_map(|x| x["tool_name"].as_str().map(String::from)).collect()).unwrap_or_default();
+            if !denied.is_empty() { let now = now_ms(); sessions::touch(a, &sx.sid, |m| { m.insert("waiting".into(), json!({ "kind": "permission", "at": now, "tools": denied })); }); }
+        }
+        if self.shares_session(&a.username, &sx.sid) { self.share_event(&a.username, &ev); } // only the session that is shared (plans/multi-session.md § 7)
         self.emit(&sx.key, ev);
     }
     fn finish(&self, a: &Account, sx: &Sx, run_id: &str, code: Value) {
@@ -407,12 +415,13 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let context: String = b["context"].as_str().unwrap_or("").chars().take(20000).collect();
     let fresh = b["fresh"].as_bool().unwrap_or(false) || (b["fresh"].is_number() && b["fresh"] != json!(0)) || b["fresh"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
     if fresh { sessions::supdate(w, a, &sx, |m| { m.remove("claudeSessionId"); m.remove("ctx"); }); }
-    if sx.primary { w.share_line(&a.username, "user", &message); }
+    if w.shares_session(&a.username, &sx.sid) { w.share_line(&a.username, "user", &message); }
     let pj = w.project_in(a, &sx);
     // each session its own worktree (T-292): the first one the person's, the others <user>.<id> on work/<user>.<id>
     let wd = match if sx.primary { w.wt.ensure(&a.username, &pj) } else { w.wt.ensure_session(&a.username, sx.hex(), &pj) } { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
     sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
-    { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); }); }
+    // a new message answers whatever the session waited for (T-288)
+    { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); m.remove("waiting"); }); }
     if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
@@ -674,6 +683,8 @@ pub(crate) fn archive_put(a: &Account, mills: &Path, root: &Path, id: &str, titl
 
 // ---------- shared Work sessions (watch-only) ----------
 impl Work {
+    /// Is this session of the owner's the one they share?
+    fn shares_session(&self, owner: &str, sid: &str) -> bool { self.shares.lock().unwrap_or_else(|e| e.into_inner()).get(owner).map(|s| s.sid == sid).unwrap_or(false) }
     fn share_line(&self, owner: &str, t: &str, text: &str) {
         if text.is_empty() { return; }
         let mut sh = self.shares.lock().unwrap_or_else(|e| e.into_inner()); let Some(s) = sh.get_mut(owner) else { return };
@@ -799,6 +810,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/work/share" if post => {
             let b = r.json(); let conv = s(&b, "conv");
             if conv.is_empty() { w.share_stop(u); return Some(answer(200, json!({ "share": "" }))); }
+            // which session it shows (none named = the first one); sharing another one moves the share
+            let Some(sx) = sess(&b) else { return Some(no_session()) };
             if conv != "room" { return Some(answer(400, json!({ "error": "A Work session can only be shared with everyone." }))); }
             let since = iso();
             let kinds = |c: &str| match c { "me" => Some("user"), "claude" => Some("claude"), "tool" => Some("tool"), "sys" => Some("sys"), _ => None };
@@ -807,9 +820,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             for t in tr.iter().skip(tr.len().saturating_sub(150)) { if let (Some(k), Some(text)) = (kinds(t["cls"].as_str().unwrap_or("")), t["text"].as_str()) { n += 1; log.push(json!({ "n": n, "t": k, "text": text.chars().take(20000).collect::<String>(), "ts": since })); } }
             { let mut sh = w.shares.lock().unwrap_or_else(|e| e.into_inner()); let prev = sh.remove(u); let live = prev.as_ref().map(|p| p.live.clone()).unwrap_or(json!({ "typing": "", "queue": [] }));
               if let Some(p) = &prev { p.woke.notify_waiters(); }
-              sh.insert(u.clone(), Share { conv: conv.clone(), since, n, log, live, ver: 0, woke: prev.map(|p| p.woke).unwrap_or_default() }); }
+              sh.insert(u.clone(), Share { conv: conv.clone(), since, n, log, live, ver: 0, woke: prev.map(|p| p.woke).unwrap_or_default(), sid: sx.sid.clone(), key: sx.key.clone() }); }
             w.shares_changed.notify_one();
-            answer(200, json!({ "share": conv }))
+            answer(200, json!({ "share": conv, "session": sx.sid }))
         }
         "/api/work/live" if post => {
             let b = r.json(); let mut sh = w.shares.lock().unwrap_or_else(|e| e.into_inner());
@@ -826,7 +839,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                 let Some(sv) = sh.get(&owner).filter(|_| owner != *u) else { return (json!({ "stopped": true }), true) };
                 let restart = since != sv.since;
                 let ready = restart || sv.log.iter().any(|e| e["n"].as_u64().unwrap_or(0) > after) || ver != Some(sv.ver);
-                (json!({ "since": sv.since, "conv": sv.conv, "busy": w.busy(&owner), "live": sv.live, "ver": sv.ver, "events": sv.log.iter().filter(|e| restart || e["n"].as_u64().unwrap_or(0) > after).cloned().collect::<Vec<_>>(), "after": sv.n, "restart": restart }), ready)
+                (json!({ "since": sv.since, "conv": sv.conv, "busy": w.busy_key(&sv.key), "session": sv.sid, "live": sv.live, "ver": sv.ver, "events": sv.log.iter().filter(|e| restart || e["n"].as_u64().unwrap_or(0) > after).cloned().collect::<Vec<_>>(), "after": sv.n, "restart": restart }), ready)
             };
             let woke = w.shares.lock().unwrap_or_else(|e| e.into_inner()).get(&owner).map(|s| s.woke.clone());
             if let Some(woke) = woke {

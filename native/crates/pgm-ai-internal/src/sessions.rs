@@ -120,6 +120,7 @@ fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
         "harness": if s(&st, "sessionHarness").is_empty() { "claude".to_string() } else { s(&st, "sessionHarness") }, "folder": m["folder"], "pinned": m["pinned"] == json!(true), "hidden": m["hidden"] == json!(true), "archived": m["archived"] == json!(true),
         "updatedAt": m["updatedAt"], "lastActivityAt": m["lastActivityAt"], "hasDraft": !s(m, "draft").is_empty(), "worktree": m["worktree"] });
     if m["ended"].is_object() { out["ended"] = m["ended"].clone(); }
+    if m["waiting"].is_object() { out["waiting"] = m["waiting"].clone(); } // what it waits for (T-288): {kind, at, tools?}
     out
 }
 /// GET /api/work/sessions: the list, the folders, what is running.

@@ -2240,6 +2240,9 @@ function handleEvent(ev) {
     runOutcome = hv.error ? { state: 'failed', text: 'Stopped with an error' } : { state: 'done', text: 'Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + ' s' : '') };
     if (hv.error) sys('Claude stopped with an error: ' + (hv.text || hv.subtype), true);
     else sys('Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
+    // it stopped short of a tool it was not allowed: the session waits on you (T-288), said and sounded once
+    const denied = Array.isArray(ev.permission_denials) ? [...new Set(ev.permission_denials.map((d) => d && d.tool_name).filter(Boolean))] : [];
+    if (denied.length) { sys(`Claude was not allowed to use ${denied.join(', ')}, so it stopped short. Answer to go on: say whether it may, or what to do instead.`, true); const P = prefs(); if (P.sound && P.sound.on) playTone('mention', P.sound.mention); }
   } else if (ev.type === 'stderr') stderrText = (stderrText + ev.text).slice(-600);
   else if (ev.type === 'bridge_error') { sys(ev.text, true); runOutcome = { state: 'failed', text: 'Failed: ' + ev.text }; }
   else if (ev.type === 'bridge_info') sys(ev.text); // e.g. which AI host runs this reply

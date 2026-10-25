@@ -46,6 +46,8 @@ pub trait ChatHost: Send + Sync {
     /// Is any run or session of this person's busy (presence's "working"; plans/presence.md)? Its changes must reach
     /// [`Chat::room_changed`].
     fn working(&self, _u: &str) -> bool { false }
+    /// How many of this person's sessions work now (shown next to "working").
+    fn working_count(&self, u: &str) -> u64 { u64::from(self.working(u)) }
 }
 /// An answer.
 pub type Resp = hyper::Response<Body>;
@@ -337,7 +339,7 @@ fn status_of(hub: &dyn ChatHost, u: &str, viewer: &str, now: u64) -> Value {
     let label = label_of(shown, &m.over, working, m.accepting);
     let since = { let mut l = c.labels.lock().unwrap_or_else(|e| e.into_inner()); let e = l.entry(u.to_string()).or_insert_with(|| (label.to_string(), now)); if e.0 != label { *e = (label.to_string(), now); } e.1 };
     let hidden = m.over == "offline"; // appear offline: nothing else is shown
-    let mut v = json!({ "user": u, "presence": shown, "label": label, "working": working && !hidden, "acceptingWork": m.accepting && !hidden, "dnd": m.dnd && !hidden,
+    let mut v = json!({ "user": u, "presence": shown, "label": label, "working": working && !hidden, "workingSessions": if hidden || !working { 0 } else { hub.working_count(u) }, "acceptingWork": m.accepting && !hidden, "dnd": m.dnd && !hidden,
         "text": if hidden { String::new() } else { m.text.clone() }, "since": since, "seen": if hidden { 0 } else { seen }, "devices": if hidden { 0 } else { devices } });
     if viewer == u { v["real"] = json!(real); v["override"] = json!(m.over); v["overrideUntil"] = json!(m.over_until); v["dndUntil"] = json!(m.dnd_until); v["textUntil"] = json!(m.text_until); v["hideWhere"] = json!(m.hide_where); if hidden { v["text"] = json!(m.text); } }
     v

@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.15.3 — 2026-10-25
+
+PATCH: **a session waiting on you** (T-288, the part that has a source today). When a run stops short of a tool it was
+not allowed (Claude Code's permission_denials), its session is **waiting** (yellow, which beats red) with what it needs
+({kind: "permission", tools}); the next message to that session answers it. The Work page now says so ("Claude was not
+allowed to use Bash, so it stopped short. Answer to go on") and plays the mention sound (do not disturb mutes it).
+Presence's status gains workingSessions (how many of a person's sessions work at once). Questions (T-195) and plan
+approvals (T-273) will set the same waiting state when they exist. R202. web/index.html 1.19.1.
+Also: **a share shows the session that is shared.** `POST /api/work/share` takes an optional `session` (none = the first
+one, as before); only that session's lines reach the watchers, sharing another session moves the share, and the watch
+answer names it and says whether that session is busy. R203.
+
 ## 5.15.2 — 2026-10-25
 
 PATCH: **a PC tool call reaches the session that asked.** With several sessions running, a run's PC tool call (the

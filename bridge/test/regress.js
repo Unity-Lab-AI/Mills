@@ -3009,6 +3009,36 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R201', 'a PC tool call of a session\'s run reaches that session\'s page (its MCP relay names the session) while another session of the same person runs',
       /fake-listing: a\.txt/.test(txt201), `answer "${txt201.slice(0, 160)}"`);
   } else skip('R201', 'a PC tool call reaches the asking session', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R202 (T-288): a run that was refused a tool leaves its session waiting on its person (yellow) until they answer; presence counts working sessions
+    const c202 = (await call('/api/work/sessions/new', U, { title: 'r202', background: true })).data.id;
+    const one202 = async () => ((((await call('/api/work/sessions', U)).data.sessions) || []).find((x) => x.id === c202)) || {};
+    const seen = {};
+    if (c202) {
+      await chat(U, 'DENIED r202', { session: c202 }); const w = await one202(); seen.state = w.state; seen.kind = (w.waiting || {}).kind; seen.tools = ((w.waiting || {}).tools || []).join(',');
+      const a = call('/api/chat', U, { message: 'SLOW r202 first' }), b = chat(U, 'SLOW r202 answer', { session: c202 }); await sleep(900);
+      seen.count = ((((await call('/api/presence', D)).data.people) || []).find((p) => p.user === 't-user') || {}).workingSessions;
+      await Promise.all([a, b]); const after = await one202(); seen.after = after.state; seen.cleared = !after.waiting;
+      await call('/api/work/sessions/delete', U, { id: c202 });
+    }
+    check('R202', 'T-288 a run that stopped short of a tool it was not allowed (permission_denials) leaves its session "waiting" (yellow, which beats red) with what it needs; the next message answers it (no longer waiting); presence shows how many sessions of a person work at once (workingSessions); [static] the Work page says what was refused and sounds it',
+      /ev\.permission_denials/.test(fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8')) && seen.state === 'waiting' && seen.kind === 'permission' && seen.tools === 'Bash' && seen.count === 2 && seen.after === 'done-unseen' && seen.cleared,
+      `after the refusal ${seen.state} (${seen.kind}: ${seen.tools}) · two running: workingSessions ${seen.count} · after answering ${seen.after}, cleared ${seen.cleared}`);
+  } else skip('R202', 'a refused tool leaves the session waiting', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R203: a share shows the session that is shared (not always the first one); sharing another moves it
+    const c203 = (await call('/api/work/sessions/new', U, { title: 'r203', background: true })).data.id;
+    const seen = {};
+    if (c203) {
+      const sh = await call('/api/work/share', U, { conv: 'room', transcript: [], session: c203 }); seen.share = sh.data.session;
+      await chat(U, 'r203 in the shared session', { session: c203 });
+      await chat(U, 'r203 in the first session');
+      const log = (await call('/api/work/watch?user=t-user&after=0', D)).data;
+      const texts203 = (log.events || []).map((e) => e.text).join(' | ');
+      seen.has = /r203 in the shared session/.test(texts203); seen.leak = /r203 in the first session/.test(texts203); seen.session = log.session;
+      await call('/api/work/share', U, { conv: '' }); await call('/api/work/sessions/delete', U, { id: c203 });
+    }
+    check('R203', 'a shared Work session shows the session that was shared (POST /api/work/share {session}): its lines reach the watchers, another session\'s do not; the watch answer names it',
+      seen.share === c203 && seen.has && !seen.leak && seen.session === c203, `shared ${seen.share} · watcher sees it ${seen.has}, the first session\'s ${seen.leak} · watch names ${seen.session}`);
+  } else skip('R203', 'a share shows the shared session', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });
