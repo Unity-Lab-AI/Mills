@@ -26,9 +26,10 @@ modifications to the new worktree, then abandon and delete just the old worktree
   use update / renew.
 - **Each Work session has its own worktree** (Sponge, 2026-10-25; 5.15.0). Your first session uses yours
   (`<username>` on `work/<username>`). Every other session gets `<username>.<id>` on `work/<username>.<id>`, made by
-  the hub at its first run from your own `work/<username>`, so two sessions never edit the same files at once. Its work
-  comes home by merging that branch into `work/<username>` in your own worktree, then merging to develop from there as
-  usual. Deleting a session commits what was left uncommitted and keeps an unmerged branch under
+  the hub at its first run from your own `work/<username>`, so two sessions never edit the same files at once. It builds
+  on your `work/<username>`: `node bridge/worktree.js check <username> --session <id>` says STALE (exit 3) when that has
+  moved on, and `update <username> --session <id>` brings it in. Its work comes home with `home <username> --session
+  <id>` (the session menu's "Merge into my work"), then you merge to develop from your own worktree as usual. Deleting a session commits what was left uncommitted and keeps an unmerged branch under
   `refs/viberoller/sessions/`, so nothing is lost.
 
 ## Forgejo is the source of truth

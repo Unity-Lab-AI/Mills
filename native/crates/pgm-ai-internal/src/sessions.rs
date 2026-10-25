@@ -45,6 +45,8 @@ pub fn index(a: &Account) -> Value {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     index_unlocked(a)
 }
+/// The person's list if they have one (nothing is made: the background check reads it).
+pub fn index_if_any(a: &Account) -> Option<Value> { read_json(&index_file(a)).filter(|v| v["sessions"].is_object()) }
 fn index_unlocked(a: &Account) -> Value {
     if let Some(v) = read_json(&index_file(a)).filter(|v| v["primary"].as_str().map(valid_sid).unwrap_or(false) && v["sessions"].is_object()) { return v; }
     let sid = new_sid();
@@ -208,6 +210,18 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let _ = std::fs::remove_file(session_file(a, &sx.sid));
             with_index(a, |v| { if let Some(o) = v["sessions"].as_object_mut() { o.remove(&sx.sid); } let order: Vec<Value> = v["order"].as_array().cloned().unwrap_or_default().into_iter().filter(|x| x != &json!(sx.sid)).collect(); v["order"] = json!(order); if v["current"] == json!(sx.sid) { v["current"] = v["primary"].clone(); } });
             answer(200, json!({ "ok": true, "worktree": tree }))
+        }
+        // "Merge into my work" (plans/multi-session.md § 2a): the session's commits into work/<user> (worktree.js home)
+        "/api/work/sessions/home" if post => {
+            let Some(sx) = resolve(a, &id).filter(|_| !id.is_empty()) else { return Some(answer(404, json!({ "error": "No such session." }))) };
+            if sx.primary { return Some(answer(400, json!({ "error": "Your first session works in your own worktree already." }))); }
+            let project = { let p = s(&sstate(w, a, &sx), "project"); if p.is_empty() { pgm_collab_internal::worktree::HUB_PROJECT.to_string() } else { p } };
+            let mut env = w.work_env(&a.username); env.push(("GIT_TERMINAL_PROMPT".into(), "0".into()));
+            let (u, hex) = (a.username.clone(), sx.hex().to_string()); let wt = &w.wt;
+            let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&["--project", &project, "home", &u, "--session", &hex], &env));
+            let text = if out.trim().is_empty() { err.trim().to_string() } else { out.trim().to_string() };
+            let merged = ok && !text.contains("does not merge cleanly");
+            answer(if merged { 200 } else { 409 }, json!({ "ok": merged, "text": text }))
         }
         "/api/work/draft" if post => {
             let Some(sx) = resolve(a, &wanted(r, &b)) else { return Some(answer(404, json!({ "error": "No such session." }))) };

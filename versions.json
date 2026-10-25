@@ -1,5 +1,5 @@
 {
-  "project": "5.15.0",
+  "project": "5.15.1",
   "modules": {
     "bridge/ai-node.js": "3.4.0",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -39,7 +39,7 @@
     "bridge/vr-host.js": "1.0.0",
     "bridge/vr-setup.js": "1.1.0",
     "bridge/work-state.js": "1.0.0",
-    "bridge/worktree.js": "2.3.1",
+    "bridge/worktree.js": "2.4.0",
     "web/app.js": "1.1.2",
     "web/attach.js": "1.1.0",
     "web/board.js": "1.0.4",

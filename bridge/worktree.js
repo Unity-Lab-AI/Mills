@@ -281,6 +281,57 @@ function describe(f) {
   bits.push(!f.stale ? 'FRESH' : !f.rightBranch || f.changes.length ? 'STALE: "update" renews it (your changes come along)' : 'STALE: "update" brings it level');
   return bits.join(' · ');
 }
+// ---------- a Work session's own worktree (LAWS.md, worktree law; plans/multi-session.md § 2a) ----------
+// <root>/<username>.<id> on work/<username>.<id>, made by the hub at the session's first run from the person's own
+// work/<username>. It builds on that branch (not straight on Forgejo's): it is stale when work/<username> has moved
+// on, "update --session" brings that in, and "home --session" merges the session's work into work/<username>.
+const SESSION_RE = /^[0-9a-f]{12}$/;
+function sessionWt(username, sid, projectName) {
+  checkUser(username); if (!SESSION_RE.test(sid || '')) throw new Error('Usage: --session <id> (the 12 letters and digits after "s-").');
+  const p = project(projectName), dir = path.join(p.root, `${username}.${sid}`), branch = `work/${username}.${sid}`;
+  if (!fs.existsSync(dir) || !tryGit(dir, 'rev-parse', '--git-dir').ok) throw new Error(`That session has no worktree in ${p.name} yet (${dir}); the hub makes it at the session's first run.`);
+  return { p, dir, branch, base: `work/${username}`, project: p.name };
+}
+function sessionFreshness(username, sid, projectName) {
+  const s = sessionWt(username, sid, projectName);
+  const actual = tryGit(s.dir, 'symbolic-ref', '--short', '-q', 'HEAD').out;
+  const hasBase = branchExists(s.p.repo, s.base);
+  const behind = hasBase ? count(s.dir, `HEAD..${s.base}`) : 0, own = hasBase ? count(s.dir, `${s.base}..HEAD`) : 0;
+  const changes = git(s.dir, 'status', '--porcelain').split('\n').filter(Boolean);
+  return { ...s, actual, behind, own, changes, rightBranch: actual === s.branch, stale: behind > 0 || actual !== s.branch };
+}
+function describeSession(f) {
+  const bits = [`${f.project}: ${f.dir} on ${f.actual || '(detached)'} (a Work session)`];
+  bits.push(f.behind ? `${f.behind} commit(s) behind ${f.base}` : `level with ${f.base}`);
+  if (f.own) bits.push(`${f.own} commit(s) not in ${f.base} yet ("home" brings them there)`);
+  if (f.changes.length) bits.push(`${f.changes.length} uncommitted change(s)`);
+  if (!f.rightBranch) bits.push(`on the wrong branch (should be ${f.branch})`);
+  bits.push(f.stale ? 'STALE: "update --session" brings it level' : 'FRESH');
+  return bits.join(' · ');
+}
+function sessionUpdate(username, sid, projectName) {
+  const f = sessionFreshness(username, sid, projectName);
+  if (!f.stale) return [`${f.branch} is level with ${f.base}. Nothing to do.`];
+  if (!f.rightBranch) throw new Error(`${f.dir} is on ${f.actual || 'no branch'}, not ${f.branch}. Check out ${f.branch} there first (nothing was changed).`);
+  if (f.changes.length) throw new Error(`${f.dir} has ${f.changes.length} uncommitted change(s). Commit them first, then update again (nothing was changed).`);
+  if (!f.own) { const r = tryGit(f.dir, 'merge', '--ff-only', '-q', f.base); if (r.ok) return [`${f.branch} fast-forwarded to ${f.base}.`]; }
+  const r = tryGit(f.dir, ...identity(f.dir, username), 'merge', '--no-edit', '-q', f.base);
+  if (r.ok) return [`${f.base} merged into ${f.branch}; the session's ${f.own} commit(s) stay on top.`];
+  tryGit(f.dir, 'merge', '--abort');
+  return [`${f.base} does not merge cleanly into ${f.branch} (nothing was changed). Merge it by hand in ${f.dir} and resolve the conflicts, then commit.`, lastLine(r.out)];
+}
+// "Merge into my work": the session's commits into work/<username>, in the person's own worktree
+function sessionHome(username, sid, projectName) {
+  const f = sessionFreshness(username, sid, projectName);
+  if (f.changes.length) throw new Error(`${f.dir} has ${f.changes.length} uncommitted change(s). Commit them in the session first (nothing was changed).`);
+  if (!f.own) return [`${f.branch} has nothing that ${f.base} lacks. Nothing to do.`];
+  const w = ensure(username, projectName);
+  if (dirty(w.dir)) throw new Error(`Your own worktree ${w.dir} has uncommitted changes. Commit them first (nothing was changed).`);
+  const r = tryGit(w.dir, ...identity(w.dir, username), 'merge', '--no-edit', '-q', f.branch);
+  if (r.ok) return [`${f.own} commit(s) of ${f.branch} merged into ${f.base} (${w.dir}). Merge to the integration branch from there as usual.`];
+  tryGit(w.dir, 'merge', '--abort');
+  return [`${f.branch} does not merge cleanly into ${f.base} (nothing was changed). Update the session first ("update --session ${sid}"), resolve there, commit, and bring it home again.`, lastLine(r.out)];
+}
 function update(username, projectName) {
   const p = project(projectName), lines = [];
   const fetched = fetchOrigin(p.repo);
@@ -593,12 +644,12 @@ async function tag(name, pj, message = '') {
   return `Tagged ${m[1]}/${m[2]} ${t.name || name} at ${target.slice(0, 7)} (${p.main} on Forgejo).`;
 }
 
-module.exports = { ensure, repair, project, listProjects, create, clone, freshness, describe, update, renew, fjRepos, fjCreate, publish, tag, pushAll, WT_ROOT, REPO, PROJECTS_ROOT, HUB_PROJECT };
+module.exports = { ensure, repair, project, listProjects, create, clone, freshness, describe, update, renew, sessionFreshness, sessionUpdate, sessionHome, fjRepos, fjCreate, publish, tag, pushAll, WT_ROOT, REPO, PROJECTS_ROOT, HUB_PROJECT };
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const take = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv.splice(i, 2)[1] || '' : ''; };
-  const repoArg = take('--repo'), pj = take('--project') || undefined, desc = take('--description');
+  const repoArg = take('--repo'), pj = take('--project') || undefined, desc = take('--description'), sid = take('--session');
   const priv = argv.includes('--private'); if (priv) argv.splice(argv.indexOf('--private'), 1);
   const [cmd, user, ...rest] = argv;
   const fail = (e) => { console.error(e.message); process.exit(1); };
@@ -609,6 +660,16 @@ if (require.main === module) {
   } else if (cmd === 'repo-create') fjCreate(user, { priv, description: desc }).then((r) => console.log(`Made ${r.full_name} (${r.private ? 'private' : 'public'}): ${r.clone_url}`), fail);
   else if (cmd === 'publish') publish(user, pj, { priv, description: desc }).then((l) => console.log(l.join('\n')), fail);
   else if (cmd === 'tag') tag(user, pj, rest.join(' ')).then(console.log, fail);
+  else if (sid && ['check', 'auto', 'update', 'home'].includes(cmd)) try { // a Work session's own worktree
+    if (cmd === 'check') { const f = sessionFreshness(user, sid, pj); console.log(describeSession(f)); process.exitCode = f.stale ? 3 : 0; }
+    else if (cmd === 'auto') { // the hub's background check: fast-forward only a clean session with nothing of its own
+      let f = sessionFreshness(user, sid, pj); const done = [];
+      if (f.stale && f.rightBranch && !f.changes.length && !f.own && tryGit(f.dir, 'merge', '--ff-only', '-q', f.base).ok) { done.push(`fast-forwarded to ${f.base} by itself`); f = sessionFreshness(user, sid, pj); }
+      console.log([describeSession(f), ...done].join(' · '));
+    }
+    else if (cmd === 'update') console.log(sessionUpdate(user, sid, pj).join('\n'));
+    else console.log(sessionHome(user, sid, pj).join('\n'));
+  } catch (e) { console.error(e.message); process.exit(1); }
   else try {
     if (cmd === 'status') console.log(status(pj));
     else if (cmd === 'projects') console.log(projectsText());
@@ -632,6 +693,6 @@ if (require.main === module) {
     else if (cmd === 'sync') console.log(sync(user, pj));
     else if (cmd === 'merge') console.log(merge(user, pj));
     else if (cmd === 'live') { if (pj && pj.toLowerCase() !== HUB_PROJECT.toLowerCase()) throw new Error('live is for VibeRoller itself; other projects are pushed by merge.'); console.log(live({ restart: process.argv.includes('--restart') }).join('\n')); }
-    else { console.error('Usage: node bridge/worktree.js [--project <name>] projects | new <name> | clone <url> [name] | status | repair [--repo <host folder>] | ensure <username> | check <username> | update <username> | renew <username> | commit <username> [message] | sync <username> | merge <username> | live [--restart] | repos [words] | repo-create <owner/name> [--private] [--description text] | publish <owner/name> [--private] [--description text] | tag <name> [message]'); process.exit(1); }
+    else { console.error('Usage: node bridge/worktree.js [--project <name>] projects | new <name> | clone <url> [name] | status | repair [--repo <host folder>] | ensure <username> | check <username> | update <username> | renew <username> | check / auto / update / home <username> --session <id> | commit <username> [message] | sync <username> | merge <username> | live [--restart] | repos [words] | repo-create <owner/name> [--private] [--description text] | publish <owner/name> [--private] [--description text] | tag <name> [message]'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }
 }

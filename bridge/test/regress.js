@@ -2968,6 +2968,32 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R198', 'session limits (plans/multi-session.md § 6): with the defaults (5 per person per host, 3 per provider) a 4th working session on the same provider answers 429 (idle sessions cost nothing: the 4th exists, only its run is refused) with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
+    const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
+    const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
+    const g200 = (dir, ...args) => spawnSync('git', ['-c', 'user.name=r200', '-c', 'user.email=r200@test.invalid', ...args], { cwd: dir, encoding: 'utf8' });
+    const seen = {}; let ok200 = false;
+    const id = (await call('/api/work/sessions/new', U, { title: 'r200', background: true })).data.id;
+    if (id) {
+      await chat(U, 'r200 first run', { session: id }); // makes the session's worktree
+      const sm = (((await call('/api/work/sessions', U)).data.sessions) || []).find((x) => x.id === id) || {};
+      const dir = (sm.worktree || {}).path || '', hex = id.slice(2);
+      if (dir && fs.existsSync(dir)) {
+        fs.writeFileSync(path.join(dir, 'r200-session.txt'), 'from the session\n'); g200(dir, 'add', 'r200-session.txt'); g200(dir, 'commit', '-q', '-m', 'r200 session work');
+        const c1 = run200('check', 't-user', '--session', hex); seen.fresh = c1.status; seen.freshText = (c1.stdout || c1.stderr).trim();
+        fs.writeFileSync(path.join(own200, 'r200-own.txt'), 'from my own worktree\n'); g200(own200, 'add', 'r200-own.txt'); g200(own200, 'commit', '-q', '-m', 'r200 own work');
+        const c2 = run200('check', 't-user', '--session', hex); seen.stale = c2.status; seen.staleText = (c2.stdout || c2.stderr).trim();
+        const up = run200('update', 't-user', '--session', hex); seen.update = up.status; seen.hasOwn = fs.existsSync(path.join(dir, 'r200-own.txt'));
+        seen.after = run200('check', 't-user', '--session', hex).status;
+        const home = await call('/api/work/sessions/home', U, { id }); seen.home = home.status; seen.homeText = home.data.text || home.data.error || '';
+        seen.came = fs.existsSync(path.join(own200, 'r200-session.txt'));
+        ok200 = seen.fresh === 0 && /1 commit\(s\) not in work\/t-user/.test(seen.freshText) && seen.stale === 3 && /behind work\/t-user/.test(seen.staleText) && seen.update === 0 && seen.hasOwn && seen.after === 0 && seen.home === 200 && seen.came;
+      } else seen.freshText = 'no session worktree at ' + dir;
+      await call('/api/work/sessions/delete', U, { id });
+    }
+    check('R200', 'a session\'s own worktree follows the worktree law: worktree.js check --session says FRESH with its own commit not yet in work/<user>, STALE (exit 3) once the person\'s work/<user> moved on, update --session brings that in; the session menu\'s "Merge into my work" (/api/work/sessions/home) merges the session\'s commits into work/<user>',
+      ok200, `fresh ${seen.fresh} "${(seen.freshText || '').slice(0, 160)}" · stale ${seen.stale} "${(seen.staleText || '').slice(0, 120)}" · update ${seen.update} brought own ${seen.hasOwn} · after ${seen.after} · home ${seen.home} "${(seen.homeText || '').slice(0, 120)}" came ${seen.came}`);
+  } else skip('R200', 'a session\'s worktree follows the worktree law', 'the Rust hub\'s (and not on Windows): --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });

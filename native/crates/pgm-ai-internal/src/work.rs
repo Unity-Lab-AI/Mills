@@ -68,6 +68,10 @@ pub struct Work {
     pub busy_changed: Notify,
 }
 use pgm_core_internal::json::{read_json, s, write_json};
+/// The freshness note's key: the person's worktree of a project, or one of their sessions'.
+fn fresh_key(u: &str, pj: &str, hex: Option<&str>) -> String { match hex { Some(h) => format!("{u}|{pj}|{h}"), None => format!("{u}|{pj}") } }
+/// The session a worktree belongs to (its branch work/<user>.<hex>), None for the person's own.
+fn session_of(u: &str, wd: &Wt) -> Option<String> { wd.branch.strip_prefix(&format!("work/{u}.")).map(String::from) }
 fn line(v: Value) -> Result<Bytes, String> { Ok(Bytes::from(v.to_string() + "\n")) }
 fn iso() -> String { pgm_core_internal::time::iso_now() }
 
@@ -198,13 +202,16 @@ impl Work {
     }
 
     // ---------- worktree freshness (the worktree law): checked in the background, never holding a run up ----------
-    pub fn check_fresh(self: &Arc<Self>, a: &Account) {
-        let pj = self.project_of(a); let key = format!("{}|{pj}", a.username);
+    pub fn check_fresh(self: &Arc<Self>, a: &Account) { let pj = self.project_of(a); self.check_fresh_in(a, &pj, None); }
+    /// The background freshness check of a worktree: the person's own (None) or one of their sessions' (its id's hex).
+    pub fn check_fresh_in(self: &Arc<Self>, a: &Account, pj: &str, hex: Option<&str>) {
+        let pj = pj.to_string(); let hex = hex.map(String::from); let key = fresh_key(&a.username, &pj, hex.as_deref());
         { let mut f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()); let cur = f.get(&key).cloned().unwrap_or_default(); if cur.busy || (cur.at > 0 && now_ms() - cur.at < 60000) { return; } f.insert(key.clone(), Fresh { busy: true, ..cur }); }
         let (w, user) = (self.clone(), a.username.clone());
         tokio::task::spawn_blocking(move || {
             let mut env = w.work_env(&user); env.push(("GIT_TERMINAL_PROMPT".into(), "0".into()));
-            let (_, out, err) = w.wt.tool(&["--project", &pj, "auto", &user], &env);
+            let mut args: Vec<&str> = vec!["--project", &pj, "auto", &user]; if let Some(h) = &hex { args.push("--session"); args.push(h); }
+            let (_, out, err) = w.wt.tool(&args, &env);
             let raw = if out.trim().is_empty() { err } else { out };
             let lines: Vec<&str> = raw.trim().lines().collect();
             let text: String = lines[lines.len().saturating_sub(2)..].join(" ").chars().take(600).collect();
@@ -215,6 +222,7 @@ impl Work {
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let cmd = if wd.hub { "node bridge/worktree.js".to_string() } else { format!("node {script} --project {}", wd.project) };
         let u = &a.username;
+        if let Some(h) = session_of(u, wd) { return format!("Worktree law: never build on a stale worktree. This session's worktree builds on {u}'s own work/{u} (never touch that branch from here). Before changing anything, check it: {cmd} check {u} --session {h} (exit code 3 = stale: work/{u} has moved on). If it is STALE, run {cmd} update {u} --session {h}: it fast-forwards or merges work/{u} into this branch. When {u} asks to bring the work home: {cmd} home {u} --session {h} (it merges this branch into work/{u} in their own worktree). The latest background check of this worktree is at the end of each message."); }
         // the law itself is the same every run (it stays in the cached system prefix); the latest check result is
         // volatile ("N min ago") and travels with the turn (fresh_note), so it never busts the prompt cache
         format!("Worktree law: never build on a stale worktree. Before changing anything, check it: {cmd} check {u} (it fetches Forgejo first; exit code 3 = stale). If it is STALE, run {cmd} update {u}: it fast-forwards, merges Forgejo's {} into your own commits, or makes a NEW worktree from Forgejo with your commits, uncommitted changes and untracked files carried over and then deletes just the old one ({cmd} renew {u} does that directly). The latest background check of this worktree is at the end of each message.", wd.main)
@@ -222,7 +230,7 @@ impl Work {
     /// The latest background freshness check, for the turn (not the system prompt: pgm-context's lint would flag the
     /// "N min ago" there, and every run would pay the whole system prompt again).
     fn fresh_note(&self, a: &Account, wd: &Wt) -> String {
-        let f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()).get(&format!("{}|{}", a.username, wd.project)).cloned();
+        let f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()).get(&fresh_key(&a.username, &wd.project, session_of(&a.username, wd).as_deref())).cloned();
         f.filter(|f| !f.text.is_empty()).map(|f| format!("[Worktree: latest background check ({} min ago): {}]", ((now_ms() - f.at) as f64 / 60000.0).round().max(1.0), f.text)).unwrap_or_default()
     }
     fn hub_laws(&self) -> String { ["LAWS.md", "CLAUDE.md"].iter().filter_map(|f| std::fs::read_to_string(self.mills.join(f)).ok().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n") }
@@ -404,7 +412,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let wd = match if sx.primary { w.wt.ensure(&a.username, &pj) } else { w.wt.ensure_session(&a.username, sx.hex(), &pj) } { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
     sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
     { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); }); }
-    w.check_fresh(a);
+    if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
     let mcp_config = w.mcp_config(a);
@@ -907,7 +915,15 @@ pub fn start(hub: &Arc<dyn AiHub>) {
     let h = hub.clone();
     tokio::spawn(async move { loop {
         tokio::time::sleep(Duration::from_secs(300)).await;
-        for a in h.accounts() { let last = h.work().state(&a)["lastRunAt"].as_u64().unwrap_or(0); if last > 0 && now_ms() - last < 86_400_000 { h.work().check_fresh(&a); } }
+        for a in h.accounts() {
+            let last = h.work().state(&a)["lastRunAt"].as_u64().unwrap_or(0); if last > 0 && now_ms() - last < 86_400_000 { h.work().check_fresh(&a); }
+            // and the worktrees of their sessions used that day
+            let Some(ix) = sessions::index_if_any(&a) else { continue };
+            for (sid, m) in ix["sessions"].as_object().cloned().unwrap_or_default() {
+                if sid == s(&ix, "primary") || !m["worktree"].is_object() || now_ms().saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > 86_400_000 { continue; }
+                h.work().check_fresh_in(&a, &s(&m["worktree"], "project"), Some(sid.trim_start_matches("s-")));
+            }
+        }
     } });
     // the shared sessions to the JavaScript hub (its room poll lists them; pages follow through it)
     let h = hub.clone();

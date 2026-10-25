@@ -7,6 +7,17 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.15.1 — 2026-10-25
+
+PATCH: **a session's worktree follows the worktree law, and its work comes home** (T-292, the rest of it).
+`node bridge/worktree.js check | auto | update | home <user> --session <id>`: a session's worktree builds on the
+person's own work/<user> (not straight on Forgejo's), so it is STALE (exit 3) when work/<user> has moved on; `update
+--session` fast-forwards or merges that in (it refuses with uncommitted changes, changing nothing); `home --session`
+merges the session's commits into work/<user> in the person's own worktree ("Merge into my work"; a conflict changes
+nothing and says what to do). The hub checks a session's worktree at each of its runs and in the background for
+sessions used that day; a session run's system prompt carries its own freshness law and its latest check. New
+`POST /api/work/sessions/home {id}` for the session menu. R200. bridge/worktree.js 2.4.0.
+
 ## 5.15.0 — 2026-10-25
 
 MINOR: **many Work sessions at once, each in its own worktree, with limits** (T-284, T-292, T-285; team note
