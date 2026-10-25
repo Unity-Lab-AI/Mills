@@ -117,6 +117,60 @@ impl Worktrees {
         let _ = git(&repo, &["branch", "-D", &branch]);
         match kept { Some(r) => format!("its unmerged work is kept as {r}"), None => "removed (everything on it was merged)".into() }
     }
+    /// Whose worktrees a project holds: the owner of every folder in it that is a git worktree (a session's
+    /// <user>.<sid> counts for <user>), sorted, each once.
+    pub fn owners(&self, p: &Project) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(&p.root).map(|r| r.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|d| d != REPO_DIR && p.root.join(d).join(".git").exists()).filter_map(|d| { let o = d.split('.').next().unwrap_or("").to_string(); if valid_user(&o) { Some(o) } else { None } }).collect()).unwrap_or_default();
+        v.sort(); v.dedup(); v
+    }
+    /// Removes that person's OWN worktree of a project (never anyone else's, never VibeRoller's): uncommitted work is
+    /// committed first, an unmerged branch is kept as refs/viberoller/removed/<user>/<stamp> (the worktree law: nothing is
+    /// lost). Ok = what happened.
+    pub fn remove_own(&self, user: &str, project: &str) -> Result<String, String> {
+        if !valid_user(user) { return Err("Bad username.".into()); }
+        let p = self.project(project)?;
+        if p.hub { return Err("VibeRoller's own worktree is not removed from here.".into()); }
+        let dir = p.root.join(user);
+        if !dir.join(".git").exists() { return Err(format!("You have no worktree of {}.", p.name)); }
+        let listed = git(&p.repo, &["worktree", "list", "--porcelain"]).unwrap_or_default();
+        if !listed.lines().filter_map(|l| l.strip_prefix("worktree ")).any(|d| same(Path::new(d), &dir)) { return Err(format!("{} is not a git worktree of {}; nothing was changed.", dir.display(), p.name)); }
+        let mut notes: Vec<String> = vec![];
+        if git(&dir, &["status", "--porcelain"]).map(|s| !s.is_empty()).unwrap_or(true) {
+            git(&dir, &["add", "-A"]).map_err(|e| format!("Could not save your uncommitted work, so nothing was removed: {e}"))?;
+            git(&dir, &["-c", "user.name=VibeRoller hub", "-c", "user.email=hub@viberoller.invalid", "commit", "-q", "-m", "Work in progress (worktree removed)"]).map_err(|e| format!("Could not commit your uncommitted work, so nothing was removed: {e}"))?;
+            notes.push("your uncommitted work was committed first".into());
+        }
+        let branch = format!("work/{user}"); let base = p.main.clone();
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let unmerged = |rev: &str| git(&p.repo, &["rev-list", "--count", &format!("{base}..{rev}")]).map(|n| n != "0").unwrap_or(true);
+        let head = git(&dir, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let mut keep: Vec<(String, String)> = vec![];
+        if Self::branch_exists(&p.repo, &branch) && unmerged(&branch) { keep.push((format!("refs/viberoller/removed/{user}/{stamp}"), branch.clone())); }
+        let tip = git(&p.repo, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap_or_default();
+        if !head.is_empty() && head != tip && unmerged(&head) { keep.push((format!("refs/viberoller/removed/{user}/{stamp}-head"), head)); }
+        for (r, to) in &keep { git(&p.repo, &["update-ref", r, to]).map_err(|e| format!("Could not keep your unmerged work as {r}, so nothing was removed: {e}"))?; notes.push(format!("unmerged work kept as {r}")); }
+        git(&p.repo, &["worktree", "remove", "--force", &dir.display().to_string()]).map_err(|e| format!("Could not remove the worktree: {e}"))?;
+        let _ = git(&p.repo, &["worktree", "prune"]);
+        if Self::branch_exists(&p.repo, &branch) { let _ = git(&p.repo, &["branch", "-D", &branch]); }
+        if keep.is_empty() { notes.push("everything on it was already merged".into()); }
+        Ok(format!("Removed your worktree of {} ({}).", p.name, notes.join("; ")))
+    }
+    /// Moves a whole project aside to <projects root>/_trash/<name>-<stamp> (never deleted). Refused for VibeRoller and
+    /// while anyone but `by` has a worktree in it. Ok = where it went.
+    pub fn trash_project(&self, project: &str, by: &str) -> Result<PathBuf, String> {
+        let p = self.project(project)?;
+        if p.hub { return Err("VibeRoller is not a project that can be deleted.".into()); }
+        let others: Vec<String> = self.owners(&p).into_iter().filter(|o| o != by).collect();
+        if !others.is_empty() { return Err(format!("{} still has worktrees of {}: they remove those first.", p.name, others.join(", "))); }
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let trash = self.projects_root.join("_trash");
+        std::fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
+        let to = trash.join(format!("{}-{stamp}", p.name));
+        if to.exists() { return Err("That trash folder exists already; try again in a second.".into()); }
+        std::fs::rename(&p.root, &to).map_err(|e| format!("Could not move it aside: {e}"))?;
+        Ok(to)
+    }
     /// worktree.js itself, for what stays there (new / clone a project; the background freshness check).
     pub fn tool(&self, args: &[&str], env: &[(String, String)]) -> (bool, String, String) {
         let mut c = std::process::Command::new(&self.node);

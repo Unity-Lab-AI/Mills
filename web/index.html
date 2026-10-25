@@ -997,6 +997,8 @@
         <div id="provBox" class="provBox"></div></div>
       <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
         <div id="fjBox" class="apiBox"></div></div>
+      <div class="setSection"><b>My projects</b> — the projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.
+        <div id="projBox" class="apiBox"></div></div>
      </div>
      <!-- the native programs, pre-built, handed out by the Rust hub to people with an account (vr-hub downloads.rs) -->
      <div data-setpane="downloads" hidden>
@@ -4087,7 +4089,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderDevices(); renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderSource(); renderHosts();
+  renderDevices(); renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderMyProjects(); renderSource(); renderHosts();
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
@@ -4096,6 +4098,36 @@ function renderAbout() { // Settings → App settings: "VibeRoller x.y.z" (+ eve
   sum.textContent = 'VibeRoller ' + (me.version || 'unknown') + (APP_MODE ? ' · VibeRoller Chat app' : '') + ' · module versions';
   box.textContent = '';
   for (const [m, v] of Object.entries(me.versions || {})) { const r = document.createElement('div'); r.className = 'row'; const a = document.createElement('code'); a.textContent = m; const b = document.createElement('small'); b.textContent = v; r.append(a, b); box.append(r); }
+}
+// ── Settings → My projects (T-239): your index of the shared projects area, pin / hide, remove my worktree, admin delete ──
+async function renderMyProjects(forgejo) {
+  const box = $('projBox'); if (!box) return;
+  let d; try { d = await json('/api/projects/mine' + (forgejo ? '?forgejo=1' : '')); } catch (e) { box.textContent = e.message; return; }
+  box.textContent = '';
+  const note = document.createElement('div'); note.className = 'status'; note.textContent = window.projNote || ''; window.projNote = '';
+  const act = (path, project, extra) => json(path, { method: 'POST', body: JSON.stringify({ project, ...extra }) }).then((r) => { if (r.message) window.projNote = r.message; renderMyProjects(forgejo); return r; }).catch((e) => { note.textContent = e.message; });
+  const arm = (b, label, fn) => { b.onclick = () => { if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Click again: ' + label; return; } fn(); }; };
+  const mk = (txt, fn, cls) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; if (cls) b.className = cls; if (fn) b.onclick = fn; return b; };
+  const ago = (t) => t ? new Date(t).toLocaleString() : 'not yet';
+  const section = (title, rows) => { if (!rows.length) return; const h = document.createElement('small'); h.textContent = title; box.append(h); rows.forEach((r) => box.append(r)); };
+  const row = (p) => {
+    const r = document.createElement('div'); r.className = 'row';
+    const n = document.createElement('b'); n.textContent = (p.pinned ? '[pinned] ' : '') + p.name;
+    const i = document.createElement('small'); i.textContent = (p.mine ? 'my worktree' + (p.worktree ? (p.worktree.dirty ? ' (uncommitted changes)' : '') + (p.worktree.ahead ? ', ' + p.worktree.ahead + ' unmerged commit(s)' : '') : '') : 'no worktree of mine yet') + ' · last used ' + ago(p.lastUsed) + (p.working ? ' · working now' : '') + (p.othersWorktrees && p.othersWorktrees.length ? ' · also: ' + p.othersWorktrees.join(', ') : '');
+    r.append(n, i, mk(p.pinned ? 'Unpin' : 'Pin', () => act('/api/projects/pin', p.name, { on: !p.pinned }), 'ghost'), mk(p.hidden ? 'Show' : 'Hide', () => act('/api/projects/hide', p.name, { on: !p.hidden }), 'ghost'));
+    if (p.mine && !p.hub) { const b = mk('Remove my worktree', null, 'ghost'); if (p.working) b.disabled = true; arm(b, 'remove it', () => act('/api/projects/remove-worktree', p.name).then((x) => { if (x && x.message) note.textContent = x.message; })); r.append(b); }
+    if (p.canDelete) { const b = mk('Delete project…', null, 'ghost'); if (p.working || (p.othersWorktrees || []).length) { b.disabled = true; b.title = 'Only a project without anyone else\'s worktree can be deleted.'; } arm(b, 'move it to the trash', () => act('/api/projects/delete', p.name).then((x) => { if (x && x.message) note.textContent = x.message; })); r.append(b); }
+    return r;
+  };
+  section('Your projects', d.projects.filter((p) => !p.hidden).map(row));
+  const disc = d.projects.filter((p) => d.discover.includes(p.name));
+  if (disc.length) { const h = document.createElement('small'); h.textContent = 'New for you in the shared area (pick one in the Work project list to start working in it): ' + disc.map((p) => p.name).join(', '); box.append(h); }
+  section('Hidden', d.projects.filter((p) => p.hidden).map(row));
+  const fr = document.createElement('div'); fr.className = 'row';
+  if (!forgejo) fr.append(mk('List my Forgejo repos', () => renderMyProjects(true), 'ghost'));
+  else if (d.forgejo) { const t = document.createElement('small'); t.textContent = d.forgejo.error || d.forgejo.note || ''; fr.append(t); for (const g of d.forgejo.repos || []) { const s = document.createElement('small'); s.textContent = g.name + (g.private ? ' (private)' : '') + (g.inArea ? ' (already in the area)' : ''); s.title = g.url; fr.append(s); } }
+  box.append(fr, note);
+  if (d.admin) { const t = document.createElement('small'); t.textContent = 'Deleted projects are moved to ' + d.trash + ' (nothing is erased).'; box.append(t); }
 }
 // ── Settings → My Forgejo: this person's own Forgejo token (the hub checks it and never sends it back) ──
 async function renderForgejo() {

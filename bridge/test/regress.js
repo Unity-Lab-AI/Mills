@@ -3281,6 +3281,68 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && /ask: \[0, 0\.95\]/.test(page) && /id="volAsk"/.test(page) && /id="setAskMin"/.test(page) && /When the AI asks/.test(page) && /User action required/.test(page) && /if \(dndOn\(\)\) return;\s*\n\s*if \(P\.sound\.on\) playTone\('ask'/.test(page) && /NATIVE\.call\('notify', \{ title: 'User action required'/.test(page) && /now - lastPoke < 15000/.test(page),
         'page checked'); }
   } else for (const [id, l] of [['R240', 'the question settings are saved'], ['R241', 'a question waits the person\'s minutes'], ['R242', 'off = never; the tool\'s own timeout wins'], ['R243', 'activity restarts the wait'], ['R244', 'the question UI on the page']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R255-R259 (T-239): the person's project index, pin / hide, remove my worktree, admin delete (to the trash)
+    const PR = path.join(SCRATCH, 'projects'), TRASH = path.join(PR, '_trash');
+    const gg = (cwd, ...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+    const mine = async (tok, q = '') => (await call('/api/projects/mine' + q, tok)).data;
+    const row = (d, n) => (d.projects || []).find((p) => p.name === n) || {};
+    const profU = path.join(SB, 'profiles', 't-user', 'projects.json');
+    await call('/api/projects', A, { name: 'idx-one' }); await call('/api/projects', A, { name: 'idx-two' });
+    await call('/api/workspace', U, { project: 'idx-one' }); await call('/api/workspace', A, { project: 'idx-one' });
+    // R255: the index
+    const u1 = await mine(U), a1 = await mine(A), fj = await mine(U, '?forgejo=1');
+    check('R255', 'T-239 GET /api/projects/mine is the person\'s index: VibeRoller first-class, a project they work in is "mine" with its worktree (branch, dirty, unmerged count) and when they last used it, one they have not touched is listed under discover, another person\'s worktree shows in "othersWorktrees"; Forgejo repos are only listed on request and say so when no token is saved',
+      row(u1, 'VibeRoller').hub === true && row(u1, 'idx-one').mine === true && row(u1, 'idx-one').lastUsed > 0 && row(u1, 'idx-one').worktree && row(u1, 'idx-one').worktree.branch === 'work/t-user' && row(u1, 'idx-one').worktree.dirty === false
+      && row(u1, 'idx-two').mine === false && u1.discover.includes('idx-two') && !u1.discover.includes('idx-one') && (row(a1, 'idx-one').othersWorktrees || []).includes('t-user') && (row(u1, 'idx-one').othersWorktrees || []).includes('t-admin')
+      && u1.forgejo === undefined && fj.forgejo && fj.forgejo.available === false && Array.isArray(fj.forgejo.repos) && u1.admin === false && a1.admin === true,
+      `idx-one ${JSON.stringify(row(u1, 'idx-one')).slice(0, 220)} discover ${JSON.stringify(u1.discover)} forgejo ${JSON.stringify(fj.forgejo).slice(0, 90)}`);
+    // R256: pin / hide, per person, stored add-only
+    const pin = await call('/api/projects/pin', U, { project: 'idx-one', on: true }), hide = await call('/api/projects/hide', U, { project: 'idx-two', on: true });
+    const u2 = await mine(U), a2 = await mine(A), bad = await call('/api/projects/pin', U, { project: 'nope-x' });
+    const stored1 = JSON.parse(fs.readFileSync(profU, 'utf8'));
+    await call('/api/projects/hide', U, { project: 'idx-two', on: false });
+    const stored2 = JSON.parse(fs.readFileSync(profU, 'utf8')), u3 = await mine(U);
+    check('R256', 'T-239 pin and hide are the person\'s own (another person\'s list is unchanged), a pinned project sorts first, a hidden one is flagged and leaves discover, they are kept in <profile>/projects.json (add-only: showing again keeps the entry and the last-used time), and an unknown project → 404',
+      pin.status === 200 && hide.status === 200 && u2.projects[0].name === 'idx-one' && row(u2, 'idx-one').pinned === true && row(u2, 'idx-two').hidden === true && !u2.discover.includes('idx-two') && row(a2, 'idx-one').pinned === false && row(a2, 'idx-two').hidden === false
+      && bad.status === 404 && stored1.projects['idx-one'].pinned === true && stored1.projects['idx-one'].usedAt > 0 && stored1.projects['idx-two'].hidden === true && stored2.projects['idx-two'] && stored2.projects['idx-two'].hidden === false && stored2.projects['idx-one'].usedAt === stored1.projects['idx-one'].usedAt && row(u3, 'idx-two').hidden === false,
+      `first ${u2.projects[0].name} pinned ${row(u2, 'idx-one').pinned} A sees pinned ${row(a2, 'idx-one').pinned} stored ${JSON.stringify(stored2.projects).slice(0, 140)} bad ${bad.status}`);
+    // R257: remove MY worktree
+    const dU = path.join(PR, 'idx-one', 't-user'), dA = path.join(PR, 'idx-one', 't-admin'), repo1 = path.join(PR, 'idx-one', '_repo');
+    fs.writeFileSync(path.join(dU, 'mine.txt'), 'committed\n'); gg(dU, 'add', '-A'); gg(dU, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-m', 'my commit');
+    fs.writeFileSync(path.join(dU, 'wip.txt'), 'uncommitted\n');
+    const slow = chat(U, 'SLOW r257 hold the project'); await sleep(900);
+    const busy = await call('/api/projects/remove-worktree', U, { project: 'idx-one' });
+    await slow;
+    const hubRm = await call('/api/projects/remove-worktree', U, { project: 'VibeRoller' }), noWt = await call('/api/projects/remove-worktree', U, { project: 'idx-two' });
+    const rm = await call('/api/projects/remove-worktree', U, { project: 'idx-one' });
+    const refs = gg(repo1, 'for-each-ref', '--format=%(refname)', 'refs/viberoller/removed/t-user/').stdout.trim().split('\n').filter(Boolean);
+    const kept = refs[0] ? gg(repo1, 'ls-tree', '-r', '--name-only', refs[0]).stdout : '';
+    const again = await call('/api/projects/remove-worktree', U, { project: 'idx-one' }), u4 = await mine(U);
+    check('R257', 'T-239 "remove my worktree": refused (409) while one of their sessions works in the project; VibeRoller → 400, no worktree → 409; otherwise their uncommitted file is committed, the unmerged branch is kept as refs/viberoller/removed/<user>/<stamp> (both files on it), the worktree folder and work/<user> go, another person\'s worktree of the project is untouched, and the project says "no worktree of mine"',
+      busy.status === 409 && /working/.test(busy.data.error || '') && hubRm.status === 400 && noWt.status === 409 && rm.status === 200 && /kept as refs\/viberoller\/removed\/t-user\//.test(rm.data.message || '') && !fs.existsSync(dU)
+      && refs.length >= 1 && /mine\.txt/.test(kept) && /wip\.txt/.test(kept) && gg(repo1, 'rev-parse', '--verify', '--quiet', 'refs/heads/work/t-user').status !== 0 && fs.existsSync(path.join(dA, '.git')) && again.status === 409 && row(u4, 'idx-one').mine === false,
+      `busy ${busy.status} ${busy.data.error} · hub ${hubRm.status} · none ${noWt.status} · removed ${rm.status} ${(rm.data.message || rm.data.error || '').slice(0, 120)} · refs ${refs.join(',')} · kept files ${kept.trim().replace(/\n/g, ',')}`);
+    // R258: delete a whole project: admin only, nobody else's worktree, moved to the trash
+    const wt258 = (...a) => spawnSync(process.execPath, [path.join(SB, 'worktree.js'), ...a], { cwd: SB, encoding: 'utf8' });
+    wt258('--project', 'idx-two', 'ensure', 't-user');
+    const delU = await call('/api/projects/delete', U, { project: 'idx-two' }), delOthers = await call('/api/projects/delete', A, { project: 'idx-two' });
+    await call('/api/projects/remove-worktree', U, { project: 'idx-two' });
+    const delHub = await call('/api/projects/delete', A, { project: 'VibeRoller' }), delNone = await call('/api/projects/delete', A, { project: 'nope-x' });
+    fs.writeFileSync(path.join(dA, 'admin-note.txt'), 'admin work\n');
+    const del = await call('/api/projects/delete', A, { project: 'idx-two' }), del1 = await call('/api/projects/delete', A, { project: 'idx-one' });
+    const trashed = fs.existsSync(TRASH) ? fs.readdirSync(TRASH) : [];
+    const t1 = trashed.find((n) => n.startsWith('idx-one-')) || '', t2 = trashed.find((n) => n.startsWith('idx-two-')) || '';
+    const a3 = await mine(A);
+    await call('/api/workspace', U, { project: 'VibeRoller' }); await call('/api/workspace', A, { project: 'VibeRoller' });
+    check('R258', 'T-239 deleting a project: only an admin (403), never VibeRoller (400), an unknown one 404, refused (409) while another person still has a worktree in it (naming them); when it is only the admin\'s own, the whole folder is MOVED to <projectsRoot>/_trash/<name>-<stamp> (nothing erased: the repo and the admin\'s uncommitted file are in it), the answer says so, and it leaves the list',
+      delU.status === 403 && delOthers.status === 409 && /t-user/.test(delOthers.data.error || '') && delHub.status === 400 && delNone.status === 404 && del.status === 200 && del1.status === 200 && /not deleted/.test(del.data.message || '')
+      && !fs.existsSync(path.join(PR, 'idx-two')) && !fs.existsSync(path.join(PR, 'idx-one')) && !!t1 && !!t2 && fs.existsSync(path.join(TRASH, t2, '_repo', '.git')) && fs.existsSync(path.join(TRASH, t1, 't-admin', 'admin-note.txt')) && !row(a3, 'idx-one').name && !row(a3, 'idx-two').name,
+      `user ${delU.status} others ${delOthers.status} ${delOthers.data.error} · hub ${delHub.status} none ${delNone.status} · two ${del.status} one ${del1.status} · trash ${trashed.join(',')}`);
+    // R259: the page (static)
+    const page259 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    check('R259', 'T-239 [static] Settings has a "My projects" section (id projBox) that lists the index from /api/projects/mine and offers Pin / Hide, Remove my worktree and (admins) Delete project, each destructive one asking twice, shows what the trash does, and lists the Forgejo repos only when asked',
+      /id="projBox"/.test(page259) && /function renderMyProjects/.test(page259) && /\/api\/projects\/mine/.test(page259) && /\/api\/projects\/pin/.test(page259) && /\/api\/projects\/hide/.test(page259) && /\/api\/projects\/remove-worktree/.test(page259) && /\/api\/projects\/delete/.test(page259) && /Remove my worktree/.test(page259) && /Delete project/.test(page259) && /List my Forgejo repos/.test(page259) && /nothing is erased/.test(page259), 'page checked');
+  } else for (const [id, l] of [['R255', 'the person\'s project index'], ['R256', 'pin and hide'], ['R257', 'remove my worktree'], ['R258', 'delete a project (admin, to the trash)'], ['R259', 'the My projects section on the page']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R215 to R219 (T-262): presence on the task board. mills (D) holds claims; t-user (U) looks; T-Admin (A) makes tasks
     const find215 = async (tok, id) => ((await call('/api/board', tok)).data.tasks || []).find((t) => t.id === id) || {};
     const keep215 = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };

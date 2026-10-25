@@ -30,6 +30,7 @@ pub mod hub;
 pub mod jcode;
 pub mod local_proxy;
 pub mod openai;
+pub mod projects;
 pub mod questions;
 pub mod sessions;
 pub mod unity;
