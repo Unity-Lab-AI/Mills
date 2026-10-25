@@ -42,7 +42,7 @@
     "bridge/worktree.js": "2.4.0",
     "web/app.js": "1.1.2",
     "web/attach.js": "1.1.0",
-    "web/board.js": "1.0.4",
+    "web/board.js": "1.0.5",
     "web/calls.js": "1.0.2",
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.1.0",

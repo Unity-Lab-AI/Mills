@@ -141,7 +141,7 @@
     if (t.assignee) { const a = el('span', 'bdAva', personName(t.assignee).slice(0, 1).toUpperCase()); a.title = 'Assigned to ' + personName(t.assignee); a.style.background = colorOf(t.assignee); top.append(a); }
     c.append(top, el('div', 'bdTitle', t.title));
     if (t.labels.length) { const l = el('div', 'bdLabels'); for (const x of t.labels) l.append(el('span', 'bdLabel', x)); c.append(l); }
-    if (t.claim) { const h = el('div', 'bdClaim' + (t.claim.agent ? ' agent' : '')); h.append(ic(t.claim.agent ? 'bot' : 'flag', 'lead'), t.claim.by + ' · ' + minsLeft(t.claim.until) + ' min'); c.append(h); }
+    if (t.claim) { const h = el('div', 'bdClaim' + (t.claim.agent ? ' agent' : '')); h.append(ic(t.claim.agent ? 'bot' : 'flag', 'lead'), t.claim.by + ' · ' + minsLeft(t.claim.until) + ' min' + (t.holder && t.holder.label ? ' · ' + t.holder.label : '') + (t.holderOffline ? ' · offline, may be stale' : '')); if (t.holderOffline) h.classList.add('stale'); c.append(h); }
     else if (t.stale) { const h = el('div', 'bdClaim stale'); h.append(ic('warn', 'lead'), 'claim lapsed'); c.append(h); }
     c.onclick = () => openDetail(t.id);
     c.addEventListener('dragstart', (e) => { dragging = t; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', t.id); c.classList.add('drag'); });
@@ -202,7 +202,7 @@
     const due = mini('Due', el('input')); due.type = 'date'; if (t.dueAt) { const d = new Date(t.dueAt); due.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
     const recur = mini('Repeats', el('select')); for (const [v, l] of [['', 'never'], ...Object.entries(RECUR_LABEL)]) { const o = el('option', '', l); o.value = v; recur.append(o); } recur.value = t.recur || '';
     const row2 = el('div', 'bdRow'); p.append(row2);
-    const assignee = el('select'); { const o = el('option', '', 'nobody'); o.value = ''; assignee.append(o); for (const m of B.members) { const q = el('option', '', m.nick || m.display); q.value = m.username; assignee.append(q); } assignee.value = t.assignee || ''; }
+    const assignee = el('select'); { const o = el('option', '', 'nobody'); o.value = ''; assignee.append(o); for (const m of B.members) { const pp = ((B.data && B.data.people) || []).find((x) => x.user === m.username); const q = el('option', '', (m.nick || m.display) + (pp ? (pp.available ? ' · available' : ' · ' + String(pp.label || '').toLowerCase()) : '')); q.value = m.username; assignee.append(q); } assignee.value = t.assignee || ''; }
     const fa = el('label', 'bdField'); fa.append(el('span', '', 'Assignee'), assignee); row2.append(fa);
     const pri = el('div', 'bdPriRow'); let priority = t.priority;
     for (let i = 0; i <= 5; i++) { const b = el('button', 'ghost' + (i === priority ? ' on' : ''), i ? 'P' + i : '–'); b.type = 'button'; b.onclick = () => { priority = i; pri.querySelectorAll('button').forEach((y, k) => y.classList.toggle('on', k === i)); dirty(); }; pri.append(b); }
