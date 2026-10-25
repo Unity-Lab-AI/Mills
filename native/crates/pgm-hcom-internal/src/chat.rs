@@ -122,6 +122,8 @@ pub struct Chat {
     manual: Mutex<HashMap<String, Manual>>,
     /// each person's last label and since when (the label's `since`)
     labels: Mutex<HashMap<String, (String, u64)>>,
+    /// time accounting + activity log (activity.rs)
+    acct: Mutex<crate::activity::Tracker>,
     typing: Mutex<HashMap<String, (String, u64)>>,
     agent_key: ChatKey,
     agent_pub: Value,
@@ -181,7 +183,7 @@ impl Chat {
         let home = cfg.get("homeServerName").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).unwrap_or("VibeRoller");
         let g = Guilds::new(&dir, root.join("server-owners.json"), &agent_name, home, users);
         Chat { dir, store: Mutex::new(Store { messages, seq, rev }), keys: Mutex::new(keys), seen: Mutex::new(seen), seen_dirty: Notify::new(), guilds: g, room_ver: AtomicU64::new(1), keys_ver: AtomicU64::new(1), room_woke: Notify::new(),
-            presence: Mutex::default(), manual: Mutex::default(), labels: Mutex::default(), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
+            presence: Mutex::default(), manual: Mutex::default(), labels: Mutex::default(), acct: Mutex::default(), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
     }
     pub fn room_changed(&self) { self.room_ver.fetch_add(1, Ordering::SeqCst); self.room_woke.notify_waiters(); }
     pub fn keys_changed(&self) { self.keys_ver.fetch_add(1, Ordering::SeqCst); self.avatars.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.manual.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.room_changed(); }
@@ -319,6 +321,21 @@ fn typing_for(hub: &dyn ChatHost, user: &str, us: &[(String, String, bool)]) -> 
     let mut out: Vec<Value> = list.into_iter().filter(|(u, conv)| u != user && conv_member(hub, conv, user, us)).map(|(u, conv)| json!({ "user": u, "conv": conv })).collect();
     if let Some((target, conv)) = c.agent_busy.lock().unwrap_or_else(|e| e.into_inner()).clone() { if c.agent_enabled(us) && (target.is_empty() || target == user) { out.push(json!({ "user": AGENT, "conv": if target.is_empty() { if conv.is_empty() { "room".to_string() } else { conv } } else { let mut v = [AGENT.to_string(), user.to_string()]; v.sort(); format!("dm:{}|{}", v[0], v[1]) } })); } }
     out
+}
+
+// ---------- time accounting (activity.rs, plans/presence.md section 6) ----------
+/// How long a quiet ends an active span (config presence.workGapMs, default 15 minutes).
+fn gap_ms(hub: &dyn ChatHost) -> u64 { hub.cfg().get("presence").and_then(|p| p["workGapMs"].as_u64()).filter(|x| *x >= 100).unwrap_or(crate::activity::DEFAULT_GAP_MS) }
+/// They did something: input on a device (active: true) or a message.
+fn note_active(hub: &dyn ChatHost, a: &Account) { hub.chat().acct.lock().unwrap_or_else(|e| e.into_inner()).touch(&a.username, &a.dir, now_ms(), gap_ms(hub)); }
+/// Once a second: AI time, away time and the log of status changes, for every account.
+fn account_tick(hub: &dyn ChatHost) {
+    let now = now_ms(); let gap = gap_ms(hub); let c = hub.chat();
+    for a in hub.accounts() {
+        let (real, _, _) = c.real_presence(&a.username, now);
+        let label = status_of(hub, &a.username, &a.username, now)["label"].as_str().unwrap_or("").to_string();
+        c.acct.lock().unwrap_or_else(|e| e.into_inner()).tick(&a.username, &a.dir, now, gap, real != "offline", hub.working_count(&a.username), &label);
+    }
 }
 
 // ---------- the status (plans/presence.md): presence × working / accepting work, the label, what a person set ----------
@@ -512,6 +529,8 @@ pub fn calls_leave(hub: &dyn ChatHost, user: &str) {
 /// The chat's background work: calls nobody polls for a minute end, temporary members who went offline leave, receipts
 /// are saved, a rolled-back deploy is announced.
 pub fn start(hub: Arc<dyn ChatHost>) {
+    let h = hub.clone();
+    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(1)).await; account_tick(&*h); } });
     // browsers long-poll at least every 25 s while in a call; 60 s of silence = gone
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(10)).await; let now = now_ms(); let mut changed = vec![];
@@ -575,7 +594,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
     let c = &hub.chat(); let u = a.username.as_str();
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let p = r.path.as_str();
-    if !(p.starts_with("/api/room/") || p == "/api/presence" || p == "/api/presence/me" || p.starts_with("/api/call/") || p == "/api/guilds" || p.starts_with("/api/guilds/") || p == "/api/admin/room/clear") { return None; }
+    if !(p.starts_with("/api/room/") || p == "/api/presence" || p == "/api/presence/me" || p == "/api/presence/time" || p.starts_with("/api/call/") || p == "/api/guilds" || p.starts_with("/api/guilds/") || p == "/api/admin/room/clear") { return None; }
     let us = users(hub); let agent_on = c.agent_enabled(&us);
     let b = r.json();
     Some(match p {
@@ -619,7 +638,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             for (k, val) in [("ts", json!(iso())), ("fromPub", mine), ("iv", b["iv"].clone()), ("ct", b["ct"].clone()), ("keys", Value::Object(slots))] { msg[k] = val; }
             if b["blob"].as_str().map(|x| !x.is_empty()).unwrap_or(false) { msg["blob"] = b["blob"].clone(); }
             if !file_ids.is_empty() { msg["files"] = json!(file_ids); }
-            c.append(msg.clone());
+            c.append(msg.clone()); note_active(hub, a);
             if to.is_empty() { c.guilds.note_post_by(if conv.is_empty() { "room" } else { &conv }, u); }
             agent_hear(hub, &msg).await;
             answer(200, json!({ "seq": seqn }))
@@ -696,8 +715,15 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             let truthy = |x: &Value| !(x.is_null() || *x == json!(false) || *x == json!(0) || *x == json!(""));
             let named = b["device"].as_str().map(|x| !x.trim().is_empty()).unwrap_or(false); let dev = device_id(b["device"].as_str());
             if truthy(&b["gone"]) { if named { c.device_gone(u, &dev); } else { c.gone(u); } } // an older page without a device id: everything, as before
-            else { let screen = b["screen"].as_str().map(|x| guilds::take_units(x, 12)); let idle = b.get("idle").map(truthy); let locked = b.get("locked").map(truthy); c.pres_set(u, |pr| { if let Some(sc) = screen { pr.screen = sc; } let d = pr.dev(&dev); if let Some(i) = idle { d.idle = i; } if let Some(l) = locked { d.locked = l; } d.seen = now_ms(); }); }
+            else { let screen = b["screen"].as_str().map(|x| guilds::take_units(x, 12)); let idle = b.get("idle").map(truthy); let locked = b.get("locked").map(truthy); c.pres_set(u, |pr| { if let Some(sc) = screen { pr.screen = sc; } let d = pr.dev(&dev); if let Some(i) = idle { d.idle = i; } if let Some(l) = locked { d.locked = l; } d.seen = now_ms(); }); if truthy(&b["active"]) { note_active(hub, a); } }
             answer(200, json!({ "ok": true }))
+        }
+        "/api/presence/time" if get => {
+            let target = r.param("user").filter(|x| !x.is_empty()).unwrap_or_else(|| u.to_string());
+            let Some(acc) = hub.account(&target) else { return Some(answer(404, json!({ "error": "No such person." }))); };
+            let today = crate::activity::day_of(now_ms()); let (from, to) = (r.param("from").filter(|x| !x.is_empty()).unwrap_or_else(|| today.clone()), r.param("to").filter(|x| !x.is_empty()).unwrap_or(today));
+            c.acct.lock().unwrap_or_else(|e| e.into_inner()).flush(now_ms());
+            match crate::activity::days(&acc.dir, &from, &to, target == u) { Ok(days) => answer(200, json!({ "user": target, "from": from, "to": to, "workGapMs": gap_ms(hub), "days": days })), Err(e) => answer(400, json!({ "error": e })) }
         }
         "/api/presence" if get => answer(200, json!({ "people": status_list(hub, u, &us) })),
         "/api/presence/me" if get => answer(200, status_of(hub, u, u, now_ms())),

@@ -3627,16 +3627,17 @@ const DEVICE = (() => { try { let d = sessionStorage.getItem(NS + 'vr.device'); 
 // Do not disturb (plans/presence.md): mutes sounds and desktop notifications on this person's own devices; nothing is blocked
 const dndOn = () => { const s = me && statusMap[me.username]; return !!(s && s.dnd && (!s.dndUntil || Date.now() < s.dndUntil)); };
 window.vrDnd = dndOn;
-let lastInput = Date.now(), sentIdle = null, sentScreen = '';
+let lastInput = Date.now(), sentIdle = null, sentScreen = '', inputSince = false, sentActive = 0;
 const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin', notes: 'Notes', assist: 'Unity' };
 function postPresence(body) { if (me && token && base) json('/api/presence', { method: 'POST', body: JSON.stringify({ ...body, device: DEVICE }) }).catch(() => {}); }
 function presenceTick() {
   if (!me) return;
   const idle = document.visibilityState === 'hidden' || Date.now() - lastInput > IDLE_MS;
   const screen = ['menu', 'shell', 'room', 'board', 'cal', 'admin', 'notes', 'assist'].find((id) => !$(id).hidden) || '';
-  if (idle !== sentIdle || screen !== sentScreen) { sentIdle = idle; sentScreen = screen; postPresence({ screen, idle }); }
+  const active = inputSince && Date.now() - sentActive >= 60000; // time accounting (plans/presence.md § 6): input since the last report, at most once a minute
+  if (idle !== sentIdle || screen !== sentScreen || active) { sentIdle = idle; sentScreen = screen; const body = { screen, idle }; if (active) { body.active = true; inputSince = false; sentActive = Date.now(); } postPresence(body); }
 }
-for (const ev of ['pointerdown', 'keydown', 'pointermove', 'wheel', 'touchstart']) document.addEventListener(ev, () => { lastInput = Date.now(); if (sentIdle) presenceTick(); }, { passive: true, capture: true });
+for (const ev of ['pointerdown', 'keydown', 'pointermove', 'wheel', 'touchstart']) document.addEventListener(ev, () => { lastInput = Date.now(); inputSince = true; if (sentIdle) presenceTick(); }, { passive: true, capture: true });
 document.addEventListener('visibilitychange', presenceTick);
 setInterval(presenceTick, 15000);
 window.addEventListener('pagehide', () => { // closing the tab: offline at once instead of after the timeout
