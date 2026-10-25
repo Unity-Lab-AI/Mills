@@ -10,7 +10,21 @@
 // all decoded natively by the browser. Camera always starts OFF; the microphone uses the noise
 // suppression / echo cancellation / auto level settings (on by default). A shared screen travels as a
 // third sender on every connection; Theater gives the call most of the window with the chat on the left.
-const call = { conv: null, peers: new Map(), mic: null, cam: null, screen: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map(),
+// Screen share, browser differences (getDisplayMedia, as each browser documents it):
+//  - Chrome / Edge (Windows): the picker offers screen / window / tab; "Share system audio" (screen) or
+//    "Share tab audio" (tab) gives an audio track; a window share never has audio.
+//  - Chrome / Edge (Linux): audio only for a TAB; screen and window shares carry no system audio. Under
+//    Wayland the screen / window picker is the PipeWire portal (xdg-desktop-portal) and must be running;
+//    without it the share fails with NotFoundError / NotAllowedError.
+//  - Firefox: screen / window / tab video; no tab or system audio at all (audio:true is ignored).
+//  - Safari: screen / window video, no audio; getDisplayMedia needs a fresh click (we call it from one).
+//  - When the browser gives no audio track we say so and share the picture only. The desktop app (Tauri)
+//    has its own capture path (T-243), not covered here.
+// The share's sound is a 4th sender (audio) on every connection; the offerer adds it "inactive" and turns
+// it on once the other page says it knows it (signal field sa:1), so older pages never see it. With the
+// mic mixed in, an AudioContext sums the display audio and the mic into one track (muting still works;
+// note the others then hear your voice twice, once as voice and once with the share).
+const call = { conv: null, peers: new Map(), mic: null, cam: null, screen: null, screenAudio: null, shareCtx: null, ice: [], after: 0, ver: -1, polling: false, state: {}, gone: new Map(),
   local: typeof MediaStream === 'function' ? new MediaStream() : null, // the one stream id our audio + video are sent under (lip-sync)
   screenStream: typeof MediaStream === 'function' ? new MediaStream() : null }; // a second, constant stream id for the shared screen (3rd sender on every connection)
 let callInit = false;
@@ -54,7 +68,8 @@ async function onCallState(state) {
     for (const p of others) if (!call.peers.has(p.user)) connectPeer(p.user);
     if (!restarted) for (const u of [...call.peers.keys()]) if (!others.some((p) => p.user === u)) dropPeer(u);
     for (const p of others) { const peer = call.peers.get(p.user); if (peer) { peer.tile.classList.toggle('nocam', !p.cam); const l = peer.tile.querySelector('.lbl'); l.textContent = nickOf(p.user); if (!p.mic) l.append(ic('mic-off', 'trail')); if (p.screen) l.append(ic('share', 'trail')); } }
-    $('callInfo').textContent = convLabel(call.conv) + ' · ' + list.length + ' in call';
+    const sharing = list.filter((p) => p.screen).map((p) => p.user === me.username ? 'you' : nickOf(p.user));
+    $('callInfo').textContent = convLabel(call.conv) + ' · ' + list.length + ' in call' + (sharing.length ? ' · ' + sharing.join(', ') + ' sharing a screen' : '');
   }
   renderCallBanner();
 }
@@ -110,6 +125,7 @@ async function leaveCall(quiet) {
   if (call.mic) call.mic.stop();
   if (call.cam) call.cam.stop(); // camera light goes off
   if (call.screen) { call.screen.onended = null; call.screen.stop(); if (call.screenStream) call.screenStream.removeTrack(call.screen); }
+  dropShareAudio();
   call.mic = call.cam = call.screen = null; call.conv = null;
   placeCall(); renderCallBanner();
   if (!quiet || me) json('/api/call/leave', { method: 'POST', body: '{}' }).catch(() => {});
@@ -200,6 +216,8 @@ function tuneSdp(desc) { // ask the other side for Opus with forward error corre
 // sends nothing until someone shares). Older pages have two; the third is simply absent for them.
 const videoTransceivers = (pc) => pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video');
 const isScreenTransceiver = (pc, t) => videoTransceivers(pc)[1] === t;
+const screenAudioTransceiver = (pc) => pc.getTransceivers().filter((t) => t.receiver.track.kind === 'audio')[1]; // the share's audio sender (absent on older pages)
+const isScreenAudio = (pc, t) => screenAudioTransceiver(pc) === t;
 function tuneSenders(peer) {
   const [, , fps, kbps] = VQ[prefs().call.quality] || VQ.medium;
   for (const t of peer.pc.getTransceivers()) {
@@ -216,10 +234,11 @@ function tuneSenders(peer) {
 async function attachLocal(peer) { // put our current mic / camera / shared screen on this connection's senders
   const ts = peer.pc.getTransceivers();
   for (const t of ts) { // synchronously, before any offer / answer is made
-    t.direction = 'sendrecv'; preferCodecs(t, t.receiver.track.kind);
+    if (!isScreenAudio(peer.pc, t) || !peer.offerer) t.direction = 'sendrecv'; // (answerer: its answer is clipped to what the offer allowed; the offerer turns the share's audio on itself)
+    preferCodecs(t, t.receiver.track.kind);
     if (t.sender.setStreams) try { t.sender.setStreams(isScreenTransceiver(peer.pc, t) ? call.screenStream : call.local); } catch {}
   }
-  for (const t of ts) { try { await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? call.mic : isScreenTransceiver(peer.pc, t) ? call.screen : call.cam); } catch {} }
+  for (const t of ts) { try { await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? (isScreenAudio(peer.pc, t) ? call.screenAudio : call.mic) : isScreenTransceiver(peer.pc, t) ? call.screen : call.cam); } catch {} }
 }
 function connectPeer(user) {
   if (call.peers.has(user)) return call.peers.get(user);
@@ -234,6 +253,12 @@ function connectPeer(user) {
       const show = () => showScreenTile(user, stream, false), hide = () => removeScreenTile(user);
       e.track.onunmute = show; e.track.onmute = hide; e.track.onended = hide;
       if (!e.track.muted) show();
+      return;
+    }
+    if (e.track.kind === 'audio' && isScreenAudio(pc, e.transceiver)) { // the sound that comes with their shared screen: plays in the screen tile
+      const stream = (e.streams && e.streams[0]) || new MediaStream();
+      if (!stream.getTracks().includes(e.track)) stream.addTrack(e.track);
+      const t = screenTile(user); if (t) { const sv = t.querySelector('video'); sv.srcObject = stream; applyPersonAudio(t); sv.play().catch(() => {}); }
       return;
     }
     const v = peer.tile.querySelector('video');
@@ -259,8 +284,10 @@ function connectPeer(user) {
     pc.addTransceiver('audio', { direction: 'sendrecv', streams: [call.local] });
     pc.addTransceiver('video', { direction: 'sendrecv', streams: [call.local] });
     pc.addTransceiver('video', { direction: 'sendrecv', streams: [call.screenStream] }); // the shared screen (silent until someone shares)
+    pc.addTransceiver('audio', { direction: 'inactive', streams: [call.screenStream] }); // its sound; inactive until the other page says it understands it (sa)
     attachLocal(peer);
     pc.onnegotiationneeded = async () => {
+      if (pc.signalingState !== 'stable') return;
       try { await pc.setLocalDescription(); await sendSignal(user, { d: tuneSdp(pc.localDescription) }); } catch {}
     };
   }
@@ -282,36 +309,64 @@ function showScreenTile(user, stream, self) {
     t = document.createElement('div'); t.className = 'tile screenTile'; t.dataset.user = user; t.style.borderColor = colorOf(user);
     const v = document.createElement('video'); v.autoplay = true; v.playsInline = true; v.muted = true;
     const l = document.createElement('div'); l.className = 'lbl'; l.append(ic('share', 'lead'), (self ? 'Your' : nickOf(user) + "'s") + ' screen');
-    t.append(v, l); t.title = 'Click for theater view'; t.onclick = () => { if (!theaterOn()) setTheater(true); };
+    t.append(v, l); t.title = 'Click to enlarge (click again or Esc to shrink)'; t.onclick = () => t.classList.toggle('big');
     $('callTiles').prepend(t);
   }
   const v = t.querySelector('video'); if (v.srcObject !== stream) v.srcObject = stream; v.play().catch(() => {});
+  if (!self) applyPersonAudio(t); // a remote share's sound follows that person's volume / mute
 }
 function removeScreenTile(user) { const t = screenTile(user); if (t) t.remove(); }
 async function stopScreen() {
   if (!call.screen) return;
   call.screen.onended = null; call.screen.stop();
   if (call.screenStream) call.screenStream.removeTrack(call.screen);
-  call.screen = null;
+  call.screen = null; dropShareAudio();
   for (const p of call.peers.values()) await attachLocal(p); // the third sender goes quiet: their tile disappears
   if (me) removeScreenTile(me.username);
   updateCallButtons(); pushCallState();
 }
-$('callScreen').onclick = async () => {
-  if (!call.conv) return;
-  if (call.screen) return stopScreen();
-  if (call.nostream) return callMsg('You may not share your screen here.');
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return callMsg('This browser cannot share a screen (needs Chrome, Edge or Firefox on a computer).');
+function dropShareAudio() {
+  if (call.screenAudio) { call.screenAudio.stop(); if (call.screenStream) call.screenStream.removeTrack(call.screenAudio); call.screenAudio = null; }
+  if (call.shareDisplayAudio) { call.shareDisplayAudio.stop(); call.shareDisplayAudio = null; }
+  if (call.shareCtx) { try { call.shareCtx.close(); } catch {} call.shareCtx = null; }
+}
+// One audio track out of what the browser gave (tab / system audio) and, if asked, the microphone.
+function shareAudioTrack(display, withMic) {
+  const dt = display.getAudioTracks()[0];
+  if (!withMic || !call.mic || !window.AudioContext) return dt || null;
+  const ctx = new AudioContext(), dest = ctx.createMediaStreamDestination();
+  if (dt) ctx.createMediaStreamSource(new MediaStream([dt])).connect(dest);
+  ctx.createMediaStreamSource(new MediaStream([call.mic])).connect(dest); // a muted mic stays silent here too
+  call.shareCtx = ctx; call.shareDisplayAudio = dt || null;
+  return dest.stream.getAudioTracks()[0] || null;
+}
+async function startShare(choice) {
   let s;
-  try { s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false }); }
+  try { s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: choice !== 'none' }); }
   catch (e) { return callMsg(e.name === 'NotAllowedError' ? 'Screen sharing was cancelled.' : 'Screen share: ' + e.message); }
   call.screen = s.getVideoTracks()[0]; call.screen.contentHint = 'detail';
   call.screen.onended = () => stopScreen(); // the browser's own "Stop sharing" bar
   call.screenStream.addTrack(call.screen); // same stream id as always, so no renegotiation is needed
+  if (choice !== 'none') {
+    const got = s.getAudioTracks().length > 0;
+    call.screenAudio = shareAudioTrack(s, choice === 'sysmic');
+    if (call.screenAudio) call.screenStream.addTrack(call.screenAudio);
+    callMsg(got ? '' : choice === 'sysmic' && call.screenAudio ? 'This browser gave no tab / system audio for that source: sharing your microphone only.' : 'This browser gave no tab / system audio for that source (Chrome on Linux: tabs only; Firefox: none): sharing the picture only.');
+  }
   for (const p of call.peers.values()) { await attachLocal(p); tuneSenders(p); }
   showScreenTile(me.username, call.screenStream, true);
   updateCallButtons(); pushCallState();
+}
+$('callScreen').onclick = () => {
+  if (!call.conv) return;
+  if (call.screen) return stopScreen();
+  if (call.nostream) return callMsg('You may not share your screen here.');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return callMsg('This browser cannot share a screen (needs Chrome, Edge or Firefox on a computer).');
+  $('shareOpts').hidden = !$('shareOpts').hidden; // the audio choice first; the browser's picker opens from the button in it (it needs a fresh click)
 };
+$('shareCancel').onclick = () => { $('shareOpts').hidden = true; };
+$('shareGo').onclick = () => { const c = (document.querySelector('input[name="shareAudio"]:checked') || {}).value || 'none'; $('shareOpts').hidden = true; startShare(c); };
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const b = document.querySelector('.screenTile.big'); if (b) b.classList.remove('big'); } });
 // ── Theater: the call takes most of the screen, the chat stays on the left ──
 const theaterOn = () => store.get('mills.theater') === '1';
 function setTheater(on) { store.set('mills.theater', on ? '1' : ''); placeCall(); updateCallButtons(); }
@@ -322,7 +377,7 @@ async function sendSignal(user, body) {
   const k = await pairKey(user);
   if (!k || !call.conv) return;
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(JSON.stringify({ conv: call.conv, from: me.username, to: user, ...body })));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(JSON.stringify({ conv: call.conv, from: me.username, to: user, sa: 1, ...body })));
   await json('/api/call/signal', { method: 'POST', body: JSON.stringify({ to: user, conv: call.conv, iv: toB64(iv), ct: toB64(ct) }) }).catch(() => {});
 }
 async function onSignal(s) {
@@ -338,6 +393,10 @@ async function onSignal(s) {
       await pc.setRemoteDescription(msg.d);
       if (msg.d.type === 'offer') { await attachLocal(peer); await pc.setLocalDescription(); await sendSignal(s.from, { d: tuneSdp(pc.localDescription) }); }
       for (const c of peer.pendingIce.splice(0)) { try { await pc.addIceCandidate(c); } catch {} }
+      if (msg.sa && peer.offerer && msg.d.type === 'answer' && !peer.saOn) { // an up-to-date page: turn the share's audio line on (one more offer from us)
+        const t = screenAudioTransceiver(pc);
+        if (t && pc.signalingState === 'stable') { peer.saOn = true; t.direction = 'sendrecv'; }
+      }
     } else if (msg.c || Array.isArray(msg.cs)) { // one candidate (older pages) or a batch
       for (const c of msg.cs || [msg.c]) {
         if (pc.remoteDescription) { try { await pc.addIceCandidate(c); } catch {} } else peer.pendingIce.push(c);
