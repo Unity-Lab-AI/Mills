@@ -1,0 +1,15 @@
+[package]
+name = "pgm-plan-internal"
+description = "PGM_Plan_Internal (PsyGraphMediaPlanInternal): planner mode as ONE library for the VibeRoller hub and Jcode PGM, pure and tested: the draft check and its messages, the parents / sub-tasks table, the approve all / some / change / reject state machine and its questions, the writer in the hub order (source note, parents, sub-tasks, changes, owner map, chat summary) behind the PlanHub trait, the planner helpers (plan_parse, plan_existing, plan_roles, plan_owner, plan_glossary with the roles / glossary fallbacks) and the helper-set detection with its by-hand fallback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+regex = "1"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }

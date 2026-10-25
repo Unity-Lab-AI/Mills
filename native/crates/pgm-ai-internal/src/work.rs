@@ -18,6 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::hub::{answer, AiHub, Resp};
+use crate::plan;
 use crate::questions;
 use crate::sessions::{self, Sx};
 use pgm_collab_internal::worktree::{Worktrees, Wt, HUB_PROJECT, NO_PROJECT};
@@ -644,28 +645,19 @@ impl Work {
         if let Some(r) = &res { return if r["ok"] == json!(false) { (404, json!({ "error": "No such open draft (its run ended)." })) } else { (409, json!({ "error": "That draft was answered already." })) }; }
         if writing { return (409, json!({ "error": "That draft is being written." })); }
         let n = draft["parents"].as_array().map(|p| p.len()).unwrap_or(0);
-        let picked: Vec<usize> = match &b["approve"] {
-            Value::String(t) if t == "all" => (0..n).collect(),
-            Value::Bool(true) => (0..n).collect(),
-            Value::Array(l) => { let mut v: Vec<usize> = l.iter().filter_map(|x| x.as_u64().map(|x| x as usize)).filter(|x| *x < n).collect(); v.sort(); v.dedup(); v }
-            _ => vec![],
+        // what the person answered is read by the shared library (pgm-plan-internal, also Jcode PGM's): all / some / change / reject
+        let (picked, with_changes): (Vec<usize>, bool) = match plan::Decision::from_body(b, n) {
+            Err(e) => return (400, json!({ "error": e })),
+            Ok(plan::Decision::Change(c)) => { self.plan_settle(a, &id, json!({ "ok": true, "result": plan::change_result(&c) }), "change", &[], &c); return (200, json!({ "ok": true, "outcome": "change" })); }
+            Ok(plan::Decision::Reject(c)) => { self.plan_settle(a, &id, json!({ "ok": true, "result": plan::reject_result(&c) }), "rejected", &[], &c); return (200, json!({ "ok": true, "outcome": "rejected" })); }
+            Ok(plan::Decision::Dismissed) => { self.plan_settle(a, &id, json!({ "ok": true, "result": plan::reject_result("") }), "rejected", &[], ""); return (200, json!({ "ok": true, "outcome": "rejected" })); }
+            Ok(plan::Decision::ApproveAll) => ((0..n).collect(), true),
+            Ok(plan::Decision::ApproveSome { parents, changes }) => (parents, changes),
         };
-        if picked.is_empty() {
-            let revise = b["revise"] == json!(true) || b["revise"] == json!(1);
-            if revise && comment.is_empty() { return (400, json!({ "error": "Say what to change." })); }
-            let (result, outcome) = if revise { (json!({ "ok": true, "result": { "approved": false, "changeRequested": true, "comment": comment, "message": "Nothing was written. The person wants this changed: revise the draft and call plan_draft again." } }), "change") }
-                else { (json!({ "ok": true, "result": { "approved": false, "rejected": true, "comment": comment, "message": "The person rejected the draft. Nothing was written." } }), "rejected") };
-            self.plan_settle(a, &id, result, outcome, &[], &comment);
-            return (200, json!({ "ok": true, "outcome": outcome }));
-        }
         // approved: claim the write (one answer wins), write in the order of rule 12, hand the task ids back to the AI and the page
         { let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner()); match m.get_mut(&id) { Some(x) if x.result.is_none() && !x.writing => x.writing = true, _ => return (409, json!({ "error": "That draft was answered already." })) } }
-        let with_changes = picked.len() == n || b["changes"] == json!(true);
-        let mut out = crate::plan::write_plan(hub, a, &draft, &picked, with_changes);
-        out["partial"] = json!(picked.len() < n); out["approvedParents"] = json!(picked);
-        if !comment.is_empty() { out["comment"] = json!(comment); }
+        let out = plan::approve(&plan::HubPlan::new(hub, &a.username), &draft, &picked, with_changes, &comment, &plan::day());
         let created: Vec<String> = out["created"].as_array().map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-        out["message"] = json!(format!("Approved and written by the hub: {}. Do not write these again.", if created.is_empty() { "nothing could be created (see errors)".to_string() } else { created.join(", ") }));
         self.plan_settle(a, &id, json!({ "ok": true, "result": out.clone() }), "approved", &created, &comment);
         (200, out)
     }
