@@ -26,6 +26,8 @@ impl ChatHost for Hub {
     fn agent_called(&self, target: String, caller: String, conv: String) { if let Some(h) = self.me() { pgm_ai_internal::unity_routes::run_agent(&h, target, caller, conv); } }
     fn working(&self, u: &str) -> bool { self.mods.work.busy(u) }
     fn working_count(&self, u: &str) -> u64 { self.mods.work.working_count(u) }
+    fn working_where(&self, u: &str) -> Option<(String, String, u64)> { self.mods.work.working_where(u) }
+    fn held_task(&self, u: &str) -> Option<(String, String, u64)> { self.mods.board.held_by(u) }
 }
 
 impl AiHub for Hub {
