@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.25.2 — 2026-10-25
+
+PATCH: **planner mode is one library** (T-301, the library law).
+- **New crate:** `pgm-plan-internal` (pgm-libs 5.23.0, mirrored into native/crates and Jcode PGM's pgm/libs). It holds:
+  - the draft check, the parents / sub-tasks table and the approve / change / reject state machine;
+  - the writer, in the hub's order, behind a `PlanHub` trait;
+  - the planner helpers (plan_parse, plan_existing, plan_roles, plan_owner, plan_glossary, with fallbacks) and the
+    helper-set detection.
+- **One copy:** pgm-ai-internal's plan.rs and planner.rs are now thin adapters over it (the hub implements `PlanHub` over
+  its own stores), and Jcode PGM implements the same trait over the signed-in hub's routes. Nothing is copied any more.
+- **Behaviour is unchanged:** R300 to R309 pass. The planner fixtures moved into the crate.
+
 ## 5.25.1 — 2026-10-25
 
 PATCH: **the context meter no longer shows 200 %+ on a 1M model** (T-302, Gee's report).
