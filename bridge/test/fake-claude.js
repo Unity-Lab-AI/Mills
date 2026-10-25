@@ -50,6 +50,35 @@ process.stdin.on('end', async () => {
     while (r.ok && r.result && r.result.pending) r = await tool({ poll: r.result.id, ...(poll ? { pollSec: 1 } : {}) });
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'ASK:' + JSON.stringify(r) }] } });
   }
+  // "PLANDRAFT" (T-279): a planner run shows a draft through the team relay's plan_draft and prints the result (the hub writes it once approved).
+  // "PLANTOPIC=<word>" names the plan; "PLANCHANGE=T-n" adds a change to that existing task (tied to the 1st parent when "PLANCHANGEPARENT");
+  // "PLANDIRECT" first tries task_create itself (refused for a planner); "PLANTWICE": when the person asks for a change, drafts again.
+  if (input.includes('PLANDRAFT')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const call = (route, name, args) => fetch(env.MILLS_BRIDGE + '/internal/' + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const topic = (input.match(/PLANTOPIC=([a-z0-9]+)/) || [])[1] || 'r305';
+    const change = (input.match(/PLANCHANGE=(T-\d+)/) || [])[1];
+    const rep = {};
+    if (input.includes('PLANDIRECT')) { const d = await call('board', 'task_create', { title: 'planner direct ' + topic }); rep.direct = d.ok ? 'made' : d.error; const m = await call('board', 'task_update', { id: change || 'T-1', title: 'x' }); rep.directUpdate = m.ok ? 'done' : m.error; const g = await call('board', 'board_list', {}); rep.listOk = g.ok; }
+    const draft = (n) => ({ title: 'Plan ' + topic, sourceText: 'Idea one: the alpha.\n\nIdea two: the beta, blocked on the alpha. (' + topic + ' ' + n + ')', parents: [
+      { title: 'Alpha ' + topic, body: 'What: alpha.', owner: 't-user', labels: ['viberoller'], priority: 1, subtasks: [{ title: 'spec', owner: 't-user' }, { title: 'build', owner: 'mills', priority: 3 }] },
+      { title: 'Beta ' + topic, body: 'What: beta.', owner: 'mills', priority: 3, blockedOn: 'Alpha ' + topic, subtasks: [{ title: 'ui' }] },
+      { title: 'Gamma ' + topic, body: 'What: gamma.', owner: 't-user', subtasks: [{ title: 'only' }] }],
+      existingChanges: change ? [{ id: change, change: { labels: ['planned-' + topic], priority: 2 }, reason: 'the plan touches it', ...(input.includes('PLANCHANGEPARENT') ? { parent: 0 } : {}) }] : [],
+      notPlanned: [{ text: 'a vague wish', why: 'too vague' }] });
+    let r = await call('team', 'plan_draft', draft(1));
+    while (r.ok && r.result && r.result.pending) r = await call('team', 'plan_draft', { poll: r.result.id });
+    if (input.includes('PLANTWICE') && r.ok && r.result && r.result.changeRequested) {
+      rep.first = r.result.comment;
+      r = await call('team', 'plan_draft', draft(2));
+      while (r.ok && r.result && r.result.pending) r = await call('team', 'plan_draft', { poll: r.result.id });
+    }
+    rep.result = r;
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLAN:' + JSON.stringify(rep) }] } });
+  }
   // "BOARDTOOL": act on the team board through the board MCP relay, like Claude in a Work run:
   // create a task, claim it, add a progress note.
   if (input.includes('BOARDTOOL')) {

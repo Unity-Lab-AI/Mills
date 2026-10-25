@@ -4125,8 +4125,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && ['Edit', 'Write', 'NotebookEdit', 'mcp__pc'].every((t) => toolsOf(pr.denied).includes(t)) && pr.perm === 'default' && pr.planPrompt === true,
       `bad ${bad.status} · modes ${sumP.mode}/${sumN.mode}/${sumP2.mode} · servers ${pr.servers} · allowed ${pr.allowed} · denied ${pr.denied} · perm ${pr.perm} · prompt ${pr.planPrompt}`);
     const inside = await readNote('plans/planner-inside-r265.md'), outside = await readNote('planner-outside-r265.md'), tricky = await readNote('planner-tricky-r265.md');
-    check('R266', 'T-275 a notes_write outside plans/ is refused for a planner session\'s run (plans/../x too) while inside plans/ it is written and the board stays open (task_create works)',
-      /under plans\//.test(pr.outside || '') && /under plans\//.test(pr.tricky || '') && pr.inside === 'written' && pr.board === 'made' && /plan r265/.test(inside.text || '') && !outside.text && !tricky.text,
+    check('R266', 'T-275 a notes_write outside plans/ is refused for a planner session\'s run (plans/../x too) while inside plans/ it is written (the board\x27s own writes are the planner\x27s draft flow since T-279: task_create is refused with "Use plan_draft", see R305)',
+      /under plans\//.test(pr.outside || '') && /under plans\//.test(pr.tricky || '') && pr.inside === 'written' && /Use plan_draft: the person approves the plan first/.test(pr.board || '') && /plan r265/.test(inside.text || '') && !outside.text && !tricky.text,
       `outside: ${pr.outside} · tricky: ${pr.tricky} · inside: ${pr.inside} (${(inside.text || '').slice(0, 12)}) · board ${pr.board}`);
     await call('/api/notes/delete', U, { path: 'plans/planner-inside-r265.md' }); // the normal session writes it again below
     const pcr = await probe(pid, 'PLANNERPC please');
@@ -4141,6 +4141,89 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       /id="newPlanner"[^>]*>New planner session/.test(pg) && /id="plannerBadge"/.test(pg) && /id="leavePlanner"/.test(pg) && /mode: 'planner'/.test(pg) && /planSession/.test(pg), 'index.html');
     for (const x of ['planner-outside-r265.md', 'plans/planner-inside-r265.md', 'planner-tricky-r265.md']) await call('/api/notes/delete', U, { path: x });
   } else for (const [id, l] of [['R265', 'a planner session\'s run gets no Edit / Write and no pc server'], ['R266', 'a notes_write outside plans/ is refused for a planner session, inside works'], ['R267', 'a pc tool is refused for a planner session'], ['R268', 'a normal session is unchanged'], ['R269', 'the page has New planner session and the Planner badge']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R305 to R309 (T-279 / T-281): a planner session drafts, the person approves, the HUB writes; the fake Claude's "PLANDRAFT" calls plan_draft through the team relay
+    const planSid = (await call('/api/work/sessions/new', U, { title: 'r305 planner', background: true, mode: 'planner' })).data.id;
+    const boardTasks = async () => (await call('/api/board', U)).data.tasks || [];
+    const taskOf = async (id) => (await call('/api/board/task?id=' + id, U)).data.task || {};
+    const noteText = async (p) => ((await call('/api/notes/read?path=' + encodeURIComponent(p), U)).data || {}).text || '';
+    const planOut = (events) => { const m = (texts(events).match(/PLAN:(\{.*\})/) || [])[1]; try { return JSON.parse(m); } catch { return {}; } };
+    const sessionNow = async () => ((await call('/api/work/sessions', U)).data.sessions || []).find((x) => x.id === planSid) || {};
+    const planRun = (msg, onPlan) => chat(U, msg, { session: planSid, onEvent: (ev) => { if (ev.type === 'bridge_plan') onPlan(ev).catch((e) => console.log('plan handler: ' + e.message)); } });
+    const planAnswer = (ev, body, tok = U) => call('/api/work/plan/answer', tok, { id: ev.id, session: ev.session, ...body });
+    const roomSeq = async () => Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+    const summaries = async (after) => { const out = []; for (const m of (await call('/api/room/messages?since=' + after, U)).data.messages || []) if (m.from === 'claude' && m.as && !m.to) out.push(await roomRead(restored, m) || ''); return out.filter((t) => /Plan "/.test(t)); };
+    const parts = {}; const part = (id, label, pass, detail) => { parts[id] = { label, pass, detail }; };
+    const exId = (await call('/api/board/create', U, { title: 'existing r305', labels: 'keep', priority: 4 })).data.task.id;
+    const mine = (re) => boardTasks().then((l) => l.filter((t) => re.test(t.title)));
+    // R305 + R306 + R309: a run with direct board writes, a draft that gets a change request, then a second draft that is rejected
+    const A = {}; let n305 = 0;
+    const rA = await planRun('PLANDRAFT PLANDIRECT PLANTWICE PLANTOPIC=r305 PLANCHANGE=' + exId, async (ev) => {
+      n305++;
+      if (n305 === 1) {
+        A.ev = ev; A.during = await sessionNow(); A.listed = (await call('/api/work/plans?session=' + planSid, U)).data.plans || [];
+        A.boardDuring = (await mine(/Alpha r305|Beta r305|Gamma r305|planner direct r305/)).length; A.noteDuring = await noteText('plans/plan-r305-original.md');
+        A.stranger = (await planAnswer(ev, { approve: 'all' }, D)).status; A.strangerSees = ((await call('/api/work/plans', D)).data.plans || []).length;
+        A.empty = (await planAnswer(ev, { approve: false, revise: true })).status; A.unknown = (await call('/api/work/plan/answer', U, { id: 'p-nope', approve: 'all' })).status;
+        A.revise = (await planAnswer(ev, { approve: false, revise: true, comment: 'split beta' })).status;
+      } else { A.ev2 = ev; A.reject = (await planAnswer(ev, { approve: false, comment: 'not now' })).status; await sleep(150); A.late = (await planAnswer(ev, { approve: 'all' })).status; }
+    });
+    await sleep(600); // the handler of the second draft finishes its late answer
+    const repA = planOut(rA.events), resA = (repA.result || {}).result || {};
+    check('R305', 'T-279 in a planner session the AI\'s own task_create / task_update are refused ("Use plan_draft: the person approves the plan first") while board_list stays allowed, and nothing reaches the board before an approval',
+      /Use plan_draft: the person approves the plan first/.test(repA.direct || '') && /Use plan_draft: the person approves the plan first/.test(repA.directUpdate || '') && repA.listOk === true && A.boardDuring === 0 && (await mine(/planner direct r305/)).length === 0,
+      `create: ${repA.direct} · update: ${repA.directUpdate} · board_list ok ${repA.listOk} · drafted tasks on the board while waiting ${A.boardDuring}`);
+    const dr = (A.ev || {}).draft || {};
+    check('R306', 'T-279 plan_draft makes the session waiting (kind plan, ref = the draft) and shows the draft on the page as a bridge_plan event (parents with owner / priority / status / blocked on, sub-tasks, the existing-task change, not planned, the source note path); GET /api/work/plans lists it for a page that was away; the draft is saved in the profile; the source note is not written before the answer',
+      A.during && A.during.state === 'waiting' && A.during.waiting && A.during.waiting.kind === 'plan' && A.during.waiting.ref === (A.ev || {}).id && (A.ev || {}).session === planSid
+      && (dr.parents || []).length === 3 && dr.parents[0].owner === 't-user' && dr.parents[0].priority === 1 && dr.parents[0].subtasks.length === 2 && dr.parents[1].status === 'backlog' && dr.parents[1].blockedOn === 'Alpha r305'
+      && (dr.existingChanges || [])[0] && dr.existingChanges[0].id === exId && (dr.notPlanned || []).length === 1 && dr.sourceNote === 'plans/plan-r305-original.md' && dr.sourceChars > 20 && !('sourceText' in dr)
+      && A.listed.length === 1 && A.listed[0].id === A.ev.id && !A.noteDuring,
+      `waiting ${JSON.stringify(A.during && A.during.waiting)} (${A.during && A.during.state}) · parents ${(dr.parents || []).length} · source ${dr.sourceNote} · listed ${(A.listed || []).length} · note before the answer "${(A.noteDuring || '').slice(0, 10)}"`);
+    const ex1 = await taskOf(exId);
+    const ansEvents = rA.events.filter((e) => e.type === 'bridge_plan_answered').map((e) => e.outcome);
+    check('R309', 'T-279 a change request ("change …", text required) goes back to the AI as the tool result and it drafts again; a reject writes nothing (no tasks, no source note, the existing task unchanged); another person cannot answer or see the draft (404, none listed); an unknown draft is 404; the answered draft cannot be answered again; the session is no longer waiting; the page gets bridge_plan_answered each time',
+      A.stranger === 404 && A.strangerSees === 0 && A.empty === 400 && A.unknown === 404 && A.revise === 200 && repA.first === 'split beta' && A.reject === 200 && [404, 409].includes(A.late) && resA.rejected === true && resA.approved === false
+      && (await mine(/Alpha r305|Beta r305|Gamma r305/)).length === 0 && !(await noteText('plans/plan-r305-original.md')) && !(await noteText('plans/plan-r305-plan.md')) && (ex1.labels || []).join() === 'keep'
+      && ansEvents.join() === 'change,rejected' && !(await sessionNow()).waiting && !!A.ev2 && A.ev2.id !== A.ev.id,
+      `stranger ${A.stranger}/${A.strangerSees} · empty change ${A.empty} · unknown ${A.unknown} · revise ${A.revise} (AI got "${repA.first}") · reject ${A.reject} · late ${A.late} · outcomes ${ansEvents} · existing labels ${(ex1.labels || []).join()}`);
+    // R307 + R308: approve two of three parents (the existing-task change waits for "all"), then approve all (blocked, change, source note appended)
+    const seqB = await roomSeq(); let evB = null; const B = {};
+    const rB = await planRun('PLANDRAFT PLANTOPIC=r307 PLANCHANGE=' + exId, async (ev) => { evB = ev; B.status = (await planAnswer(ev, { approve: [0, 2, 9], comment: 'only these' })).status; });
+    const repB = planOut(rB.events), resB = (repB.result || {}).result || {}; const pB = resB.parents || [];
+    const alpha = pB.find((p) => p.index === 0) || {}, gamma = pB.find((p) => p.index === 2) || {};
+    const alphaT = await taskOf(alpha.id), buildT = await taskOf(((alpha.subtasks || [])[1] || {}).id), specT = await taskOf(((alpha.subtasks || [])[0] || {}).id), gammaSub = await taskOf(((gamma.subtasks || [])[0] || {}).id);
+    const srcB = await noteText('plans/plan-r307-original.md'); const ex2 = await taskOf(exId);
+    check('R307', 'T-279 approve some: only the ticked parents and their sub-tasks are written by the hub as "<person> · Claude" (5 tasks, the unticked parent and an out-of-range index ignored), sub-tasks named "T-<parent> · n/m: title" with the parent id as a label and their own owner / priority, the source note holds the person\'s words word for word, the tool result lists the new ids (created, parents, partial), the existing-task change waits for "all"',
+      B.status === 200 && resB.partial === true && (resB.created || []).length === 5 && pB.length === 2 && !(await mine(/Beta r307/)).length
+      && alphaT.title === 'Alpha r307' && alphaT.assignee === 't-user' && alphaT.priority === 1 && (alphaT.labels || []).includes('viberoller') && /Claude/.test(alphaT.createdBy || '') && alphaT.body.includes('plans/plan-r307-original.md') && alphaT.body.includes(`${(alpha.subtasks[0] || {}).id} · 1/2: spec (t-user)`)
+      && specT.title === `${alpha.id} · 1/2: spec` && (specT.labels || []).includes(alpha.id) && specT.assignee === 't-user' && buildT.title === `${alpha.id} · 2/2: build` && buildT.assignee === 'mills' && buildT.priority === 3 && (buildT.labels || []).includes(alpha.id)
+      && gammaSub.title === `${gamma.id} · 1/1: only` && (gammaSub.labels || []).includes(gamma.id)
+      && srcB.includes('Idea one: the alpha.\n\nIdea two: the beta, blocked on the alpha. (r307 1)') && (resB.changes || []).length === 0 && (ex2.labels || []).join() === 'keep' && (repB.result.result.created || []).join() === (resB.created || []).join(),
+      `status ${B.status} · created ${(resB.created || []).join()} · alpha "${alphaT.title}" ${alphaT.assignee} P${alphaT.priority} · sub "${specT.title}" / "${buildT.title}" ${buildT.assignee} · gamma sub "${gammaSub.title}" · source has words ${srcB.includes('Idea two: the beta')} · existing labels ${(ex2.labels || []).join()}`);
+    const sumB = await summaries(seqB); const planNoteB = await noteText('plans/plan-r307-plan.md');
+    const seqC = await roomSeq(); const C = {};
+    const rC = await planRun('PLANDRAFT PLANTOPIC=r307 PLANCHANGE=' + exId, async (ev) => { C.status = (await planAnswer(ev, { approve: 'all' })).status; });
+    const repC = planOut(rC.events), resC = (repC.result || {}).result || {}; const pC = resC.parents || [];
+    const betaT = await taskOf((pC.find((p) => p.index === 1) || {}).id), alphaC = pC.find((p) => p.index === 0) || {}; const ex3 = await taskOf(exId);
+    const srcC = await noteText('plans/plan-r307-original.md'), planNoteC = await noteText('plans/plan-r307-plan.md'); const sumC = await summaries(seqC);
+    part('R308a', 'T-279 approve all: 3 parents + 4 sub-tasks, a parent that is blocked goes to backlog with the label blocked and names the new id of its blocker, the existing-task change is applied (labels, priority, a signed note), the source note is appended with the date instead of replaced (both wordings kept)',
+      C.status === 200 && resC.partial === false && (resC.created || []).length === 7 && betaT.status === 'backlog' && (betaT.labels || []).includes('blocked') && betaT.body.includes(`**Blocked on:** ${alphaC.id} (Alpha r307)`)
+      && (resC.changes || []).length === 1 && resC.changes[0].ok === true && (ex3.labels || []).join() === 'planned-r307' && ex3.priority === 2 && /Planned change: the plan touches it/.test(ex3.body || '')
+      && (srcC.match(/\(r307 1\)/g) || []).length === 2 && /## 20\d\d-\d\d-\d\d/.test(srcC),
+      `status ${C.status} · created ${(resC.created || []).length} · beta ${betaT.status} labels ${(betaT.labels || []).join()} · blocked line ${/Blocked on:\*\* T-\d+ \(Alpha/.test(betaT.body || '')} · change ${JSON.stringify(resC.changes)} · existing ${(ex3.labels || []).join()} P${ex3.priority} · source copies ${(srcC.match(/\(r307 1\)/g) || []).length}`);
+    part('R308b', 'T-281 after the write the plan summary is posted once to the team chat as "<person> · Claude" (who got what, what is blocked, what waits for Mills, the source and plan notes), the owner map is appended to plans/<topic>-plan.md with every approval, and the result hands each owner a "new tasks for you" list',
+      sumB.length === 1 && sumC.length === 1 && resB.summaryPosted === true && resC.summaryPosted === true && sumB[0].includes(alpha.id) && sumB[0].includes(gamma.id) && /Source: plans\/plan-r307-original\.md/.test(sumB[0])
+      && /Blocked: .*waits for/.test(sumC[0]) && /Waits for .*:/.test(sumC[0]) && planNoteB.includes(alpha.id) && !planNoteB.includes(alphaC.id) && planNoteC.includes(alpha.id) && planNoteC.includes(alphaC.id) && /\| Task \| Title \| Owner \|/.test(planNoteC)
+      && Object.keys(resB.newTasksFor || {}).sort().join() === 'mills,t-user' && resB.newTasksFor.mills.some((t) => t.id === buildT.id) && resC.newTasksFor['t-user'].length >= 4 && resB.planNote === 'plans/plan-r307-plan.md',
+      `summaries ${sumB.length}/${sumC.length} · posted ${resB.summaryPosted}/${resC.summaryPosted} · plan note has both approvals ${planNoteC.includes(alpha.id) && planNoteC.includes(alphaC.id)} · owners ${Object.keys(resB.newTasksFor || {}).sort()} · first summary "${(sumB[0] || '').replace(/\n/g, ' | ').slice(0, 160)}"`);
+    const pgPlan = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    part('R308c', 'T-279 [static] the page draws bridge_plan as a draft card (a parents table with checkboxes, Approve all / Approve N of M, Change…, Reject) posting to /api/work/plan/answer, closes it on bridge_plan_answered, and re-reads GET /api/work/plans after a reload; both MCP servers list plan_draft',
+      /ev\.type === 'bridge_plan'/.test(pgPlan) && /bridge_plan_answered/.test(pgPlan) && /\/api\/work\/plan\/answer/.test(pgPlan) && /Approve all/.test(pgPlan) && /Change…/.test(pgPlan) && /Reject/.test(pgPlan) && /restorePlans/.test(pgPlan) && /\/api\/work\/plans/.test(pgPlan)
+      && (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).some((m) => /plan_draft/.test(m)) && JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.some((t) => t.name === 'plan_draft'), 'index.html, team-mcp.js, mcp-tools.json');
+    check('R308', 'T-279 / T-281 approve all, then the hand-off: ' + ['R308a', 'R308b', 'R308c'].map((k) => parts[k].label.replace(/^T-2\d\d /, '')).join(' ;; '), ['R308a', 'R308b', 'R308c'].every((k) => parts[k].pass), ['R308a', 'R308b', 'R308c'].map((k) => parts[k].detail).join(' || '));
+    for (const x of ['plans/plan-r305-original.md', 'plans/plan-r307-original.md', 'plans/plan-r307-plan.md']) await call('/api/notes/delete', U, { path: x });
+    await call('/api/work/sessions/delete', U, { id: planSid });
+  } else for (const [id, l] of [['R305', 'a planner session\'s direct task_create is refused'], ['R306', 'plan_draft makes the session waiting and shows the draft'], ['R307', 'approve some writes only those parents'], ['R308', 'approve all, blocked, changes, source appended'], ['R309', 'a change request, a reject, another person']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });

@@ -296,7 +296,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if p == "/api/status" && r.method == hyper::Method::GET { return answer(200, site::status(hub, r)); }
     // moving house (bridge/handoff.js pack writes bridge/.maintenance): every change answers "moved", reading and the
     // Work run doing the move go on (the JavaScript hub's rule, for everything answered here and there)
-    if r.method == hyper::Method::POST && !matches!(p, "/api/chat" | "/api/stop" | "/api/pc-result" | "/api/work/answer") && p != "/api/status" {
+    if r.method == hyper::Method::POST && !matches!(p, "/api/chat" | "/api/stop" | "/api/pc-result" | "/api/work/answer" | "/api/work/plan/answer") && p != "/api/status" {
         if let Some(w) = maintenance(hub) { return answer(503, json!({ "error": format!("VibeRoller has moved to {w}: open it there and sign in as usual. This copy is read-only now.") })); }
     }
     let a = &hub.mods.auth;

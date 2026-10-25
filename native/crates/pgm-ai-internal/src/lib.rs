@@ -32,6 +32,7 @@ pub mod hub;
 pub mod jcode;
 pub mod local_proxy;
 pub mod openai;
+pub mod plan;
 pub mod planner;
 pub mod projects;
 pub mod questions;

@@ -48,6 +48,8 @@ impl RunLog {
 struct Share { conv: String, since: String, n: u64, log: Vec<Value>, live: Value, ver: u64, woke: Arc<Notify>, sid: String, key: String }
 /// A question the AI asked (T-245): waits in `Work::asks` for its person, the timeout, or the end of the run.
 struct Ask { user: String, key: String, sid: String, title: String, qs: Vec<Value>, at: u64, timeout_ms: u64, deadline: u64, result: Option<Value>, notify: Arc<Notify> }
+/// A plan the planner AI drafted (T-279): waits in `Work::plans` for its person to approve, change or reject it.
+struct PlanDraft { user: String, key: String, sid: String, draft: Value, at: u64, result: Option<Value>, writing: bool, notify: Arc<Notify> }
 #[derive(Clone, Default)]
 struct Fresh { text: String, at: u64, busy: bool }
 
@@ -67,6 +69,8 @@ pub struct Work {
     shares: Mutex<HashMap<String, Share>>,
     /// the questions the AI of a run asked and nobody answered yet (by id)
     asks: Mutex<HashMap<String, Ask>>,
+    /// the plan drafts of planner sessions that nobody answered yet (by id)
+    plans: Mutex<HashMap<String, PlanDraft>>,
     projects: Mutex<(u64, Value)>,
     /// the shared sessions changed (the JavaScript hub's room poll lists them)
     pub shares_changed: Notify,
@@ -83,7 +87,7 @@ fn iso() -> String { pgm_core_internal::time::iso_now() }
 
 impl Work {
     pub fn new(root: &Path, cfg: &Config) -> Work {
-        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: pgm_core_internal::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
+        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: pgm_core_internal::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), plans: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
     }
     // ---------- each person's Work state ----------
     fn state_file(a: &Account) -> PathBuf { a.dir.join("work.json") }
@@ -401,6 +405,7 @@ impl Work {
         let Some(mut r) = run else { return };
         for (_, p) in r.pending { let _ = p.send(json!({ "ok": false, "error": "Run ended" })); }
         self.ask_end(a, sx); // its open questions end with it (the session is no longer waiting on them)
+        self.plan_end(a, sx); // so does an open plan draft (T-279)
         let done = json!({ "type": "bridge_done", "code": code });
         let _ = r.tx.send(line(done.clone()));
         r.ev.push(done);
@@ -549,6 +554,125 @@ impl Work {
         let want = if session.is_empty() { String::new() } else { session.to_string() };
         let mut v: Vec<(u64, Value)> = self.asks.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.result.is_none() && (want.is_empty() || x.sid == want))
             .map(|(id, x)| (x.at, json!({ "id": id, "session": x.sid, "title": x.title, "questions": x.qs, "timeoutSec": x.timeout_ms / 1000, "at": x.at, "deadline": if x.timeout_ms > 0 { json!(x.deadline) } else { Value::Null } }))).collect();
+        v.sort_by_key(|x| x.0); v.into_iter().map(|x| x.1).collect()
+    }
+
+    // ---------- the planner's draft: draft, approve, then the hub writes (T-279 / T-281; plans/planner-mode.md § 6) ----------
+    /// The draft as the page and the saved file get it: the source text cut to an excerpt (the whole text is kept in memory for the note).
+    fn page_draft(d: &Value) -> Value {
+        let mut o = d.clone(); let src = s(d, "sourceText");
+        o["sourceChars"] = json!(src.chars().count()); o["sourceExcerpt"] = json!(src.chars().take(600).collect::<String>());
+        if let Some(m) = o.as_object_mut() { m.remove("sourceText"); } o
+    }
+    /// The person's drafts, a small file in their profile (the last 20: open ones and how the others ended).
+    fn plan_record(a: &Account, id: &str, f: impl FnOnce(&mut Value)) {
+        let file = a.dir.join("plan-drafts.json");
+        let mut m = read_json(&file).filter(Value::is_object).unwrap_or_else(|| json!({}));
+        if !m[id].is_object() { m[id] = json!({}); }
+        f(&mut m[id]);
+        if let Some(o) = m.as_object_mut() { if o.len() > 20 { let mut ks: Vec<(u64, String)> = o.iter().map(|(k, v)| (v["at"].as_u64().unwrap_or(0), k.clone())).collect(); ks.sort(); for (_, k) in ks.into_iter().take(o.len() - 20) { o.remove(&k); } } }
+        write_json(&file, &m);
+    }
+    fn plan_waiting(&self, a: &Account, sid: &str) {
+        let first = self.plans.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.sid == sid && x.result.is_none()).map(|(id, x)| (x.at, id.clone())).min();
+        sessions::touch(a, sid, |m| match first {
+            Some((at, id)) => { m.insert("waiting".into(), json!({ "kind": "plan", "at": at, "ref": id })); }
+            None => { if m.get("waiting").map(|w| w["kind"] == json!("plan")).unwrap_or(false) { m.remove("waiting"); } }
+        });
+    }
+    /// The tool `plan_draft` (team MCP): shows the draft to the person and waits for their answer; or, with `poll: <id>`, waits on one already open.
+    async fn plan_draft(&self, a: &Account, b: &Value, args: &Value) -> Value {
+        let err = |e: String| json!({ "ok": false, "error": e });
+        let poll = args["pollSec"].as_u64().unwrap_or(240).clamp(1, 240);
+        if let Some(id) = args["poll"].as_str() { return self.plan_wait(a, id, poll).await; }
+        let draft = match crate::plan::normalize(args) { Ok(d) => d, Err(e) => return err(e) };
+        let want = s(b, "session");
+        let sx = sessions::resolve(a, &want).filter(|sx| !want.is_empty() && self.busy_key(&sx.key))
+            .or_else(|| self.run_key_of(&a.username).and_then(|k| sessions::resolve(a, k.split_once('#').map(|x| x.1).unwrap_or(""))));
+        let Some(sx) = sx else { return err("No run of yours is going, so there is nobody to show the draft to.".into()) };
+        if !sessions::is_planner(a, &sx.sid) { return err("plan_draft is for planner sessions (open one with \"New planner session\"); a normal session writes the board itself.".into()); }
+        let now = now_ms(); let id = format!("p-{}", pgm_core_internal::crypto::random_hex(6));
+        {
+            let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner());
+            m.retain(|_, x| now.saturating_sub(x.at) < 2 * 86_400_000);
+            if m.values().any(|x| x.key == sx.key && x.result.is_none()) { return err("A draft of yours is still waiting for its answer in this session; wait for it (or for the change request) before drafting again.".into()); }
+            m.insert(id.clone(), PlanDraft { user: a.username.clone(), key: sx.key.clone(), sid: sx.sid.clone(), draft: draft.clone(), at: now, result: None, writing: false, notify: Arc::new(Notify::new()) });
+        }
+        let shown = Self::page_draft(&draft);
+        { let (sid, shown2) = (sx.sid.clone(), shown.clone()); Self::plan_record(a, &id, |r| { *r = json!({ "session": sid, "at": now, "state": "open", "draft": shown2 }); }); }
+        self.plan_waiting(a, &sx.sid);
+        self.emit(&sx.key, json!({ "type": "bridge_plan", "id": id, "session": sx.sid, "draft": shown, "at": now }));
+        self.plan_wait(a, &id, poll).await
+    }
+    async fn plan_wait(&self, a: &Account, id: &str, poll: u64) -> Value {
+        let end = std::time::Instant::now() + Duration::from_secs(poll);
+        let gone = || json!({ "ok": false, "error": "No such open draft (it was answered, or the run ended)." });
+        loop {
+            let Some(notify) = self.plans.lock().unwrap_or_else(|e| e.into_inner()).get(id).filter(|x| x.user == a.username).map(|x| x.notify.clone()) else { return gone() };
+            let nf = notify.notified(); tokio::pin!(nf); nf.as_mut().enable();
+            let snap = self.plans.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|x| (x.result.clone(), x.key.clone()));
+            let Some((res, key)) = snap else { return gone() };
+            if let Some(r) = res { self.plans.lock().unwrap_or_else(|e| e.into_inner()).remove(id); return r; }
+            self.keep_alive(&key); // a person may take a long time to read a plan
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() { return json!({ "ok": true, "result": { "pending": true, "id": id } }); }
+            let _ = tokio::time::timeout(left.min(Duration::from_secs(2)), nf).await;
+        }
+    }
+    /// The draft is answered (or its run ended): the waiting tool call gets `result`; the page is told.
+    fn plan_settle(&self, a: &Account, id: &str, result: Value, outcome: &str, created: &[String], comment: &str) {
+        let (key, sid) = { let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner()); let Some(x) = m.get_mut(id) else { return }; x.result = Some(result); x.writing = false; x.notify.notify_waiters(); (x.key.clone(), x.sid.clone()) };
+        let (o, c) = (outcome.to_string(), created.to_vec());
+        Self::plan_record(a, id, |r| { r["state"] = json!(o); r["created"] = json!(c); });
+        self.plan_waiting(a, &sid);
+        self.emit(&key, json!({ "type": "bridge_plan_answered", "id": id, "session": sid, "outcome": outcome, "created": created, "comment": comment }));
+    }
+    fn plan_end(&self, a: &Account, sx: &Sx) {
+        let mut any = false; let mut ended: Vec<String> = vec![];
+        { let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner());
+          let mine: Vec<String> = m.iter().filter(|(_, x)| x.key == sx.key).map(|(id, _)| id.clone()).collect();
+          for id in mine { let open = m.get(&id).map(|x| x.result.is_none()).unwrap_or(false); if open { any = true; ended.push(id.clone()); if let Some(x) = m.get_mut(&id) { x.result = Some(json!({ "ok": false, "error": "Run ended" })); x.notify.notify_waiters(); } } else { m.remove(&id); } } }
+        for id in ended { Self::plan_record(a, &id, |r| { r["state"] = json!("ended"); }); }
+        if any { self.plan_waiting(a, &sx.sid); }
+    }
+    /// POST /api/work/plan/answer {session?, id, approve: "all" | [parent indexes, 0-based] | false, comment?, revise?, changes?}:
+    /// approve writes (the hub, as "<person> · Claude"); false with `revise` sends the comment back to the AI as a change request, else rejects.
+    fn plan_answer(&self, hub: &dyn AiHub, a: &Account, b: &Value) -> (u16, Value) {
+        let id = s(b, "id"); let comment: String = s(b, "comment").trim().chars().take(4000).collect();
+        let snap = self.plans.lock().unwrap_or_else(|e| e.into_inner()).get(&id).filter(|x| x.user == a.username && (s(b, "session").is_empty() || s(b, "session") == x.sid)).map(|x| (x.result.clone(), x.writing, x.draft.clone()));
+        let Some((res, writing, draft)) = snap else { return (404, json!({ "error": "No such open draft." })) };
+        if let Some(r) = &res { return if r["ok"] == json!(false) { (404, json!({ "error": "No such open draft (its run ended)." })) } else { (409, json!({ "error": "That draft was answered already." })) }; }
+        if writing { return (409, json!({ "error": "That draft is being written." })); }
+        let n = draft["parents"].as_array().map(|p| p.len()).unwrap_or(0);
+        let picked: Vec<usize> = match &b["approve"] {
+            Value::String(t) if t == "all" => (0..n).collect(),
+            Value::Bool(true) => (0..n).collect(),
+            Value::Array(l) => { let mut v: Vec<usize> = l.iter().filter_map(|x| x.as_u64().map(|x| x as usize)).filter(|x| *x < n).collect(); v.sort(); v.dedup(); v }
+            _ => vec![],
+        };
+        if picked.is_empty() {
+            let revise = b["revise"] == json!(true) || b["revise"] == json!(1);
+            if revise && comment.is_empty() { return (400, json!({ "error": "Say what to change." })); }
+            let (result, outcome) = if revise { (json!({ "ok": true, "result": { "approved": false, "changeRequested": true, "comment": comment, "message": "Nothing was written. The person wants this changed: revise the draft and call plan_draft again." } }), "change") }
+                else { (json!({ "ok": true, "result": { "approved": false, "rejected": true, "comment": comment, "message": "The person rejected the draft. Nothing was written." } }), "rejected") };
+            self.plan_settle(a, &id, result, outcome, &[], &comment);
+            return (200, json!({ "ok": true, "outcome": outcome }));
+        }
+        // approved: claim the write (one answer wins), write in the order of rule 12, hand the task ids back to the AI and the page
+        { let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner()); match m.get_mut(&id) { Some(x) if x.result.is_none() && !x.writing => x.writing = true, _ => return (409, json!({ "error": "That draft was answered already." })) } }
+        let with_changes = picked.len() == n || b["changes"] == json!(true);
+        let mut out = crate::plan::write_plan(hub, a, &draft, &picked, with_changes);
+        out["partial"] = json!(picked.len() < n); out["approvedParents"] = json!(picked);
+        if !comment.is_empty() { out["comment"] = json!(comment); }
+        let created: Vec<String> = out["created"].as_array().map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        out["message"] = json!(format!("Approved and written by the hub: {}. Do not write these again.", if created.is_empty() { "nothing could be created (see errors)".to_string() } else { created.join(", ") }));
+        self.plan_settle(a, &id, json!({ "ok": true, "result": out.clone() }), "approved", &created, &comment);
+        (200, out)
+    }
+    /// The drafts of theirs that wait now (a page that was away asks), of one session when named.
+    fn open_plans(&self, a: &Account, session: &str) -> Vec<Value> {
+        let mut v: Vec<(u64, Value)> = self.plans.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.result.is_none() && (session.is_empty() || x.sid == session))
+            .map(|(id, x)| (x.at, json!({ "id": id, "session": x.sid, "draft": Self::page_draft(&x.draft), "at": x.at }))).collect();
         v.sort_by_key(|x| x.0); v.into_iter().map(|x| x.1).collect()
     }
 }
@@ -764,6 +888,7 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
         if name.starts_with("notes_") { return hub.notes_tool(&name, &args, &hub.name_of(account)); }
         match name.as_str() {
             "ask_user" => return w.ask(&a, b, &args).await, // T-245: a question series for the person of the run
+            "plan_draft" => return w.plan_draft(&a, b, &args).await, // T-279: the planner's draft; the hub writes it once the person approved
             "sessions_search" => {
                 let q: String = args["q"].as_str().or(args["query"].as_str()).unwrap_or("").chars().take(200).collect();
                 let me = hub.name_of(account);
@@ -925,6 +1050,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         // the AI's question (T-245): the page answers it, or says the person is busy with it (the timeout starts over)
         "/api/work/answer" if post => { let (st, v) = w.answer(a, &r.json()); answer(st, v) }
+        // the planner's draft (T-279): approve all / some, ask for a change, or reject; the hub writes what was approved
+        "/api/work/plan/answer" if post => { let (st, v) = w.plan_answer(&**hub, a, &r.json()); answer(st, v) }
+        "/api/work/plans" if get => answer(200, json!({ "plans": w.open_plans(a, &r.param("session").unwrap_or_default()) })),
         "/api/work/questions" if get => answer(200, json!({ "questions": w.open_questions(a, &r.param("session").unwrap_or_default()) })),
         "/api/usage" if get => answer(200, w.usage_status(&**hub, a)),
         "/api/model" if post => {
@@ -1199,7 +1327,7 @@ pub fn start(hub: &Arc<dyn AiHub>) {
 }
 // ---------- planner mode (T-275; team note plans/planner-mode.md § 1, 2, 6) ----------
 /// The planner's one job, said first whatever the note holds.
-const PLANNER_HEAD: &str = "You only plan: you put tasks on the board (decomposed, owned, linked) and write planning notes under plans/; you never work on them, never edit or create files elsewhere, never run builds, tests or git writes, never claim or work a task, never delete a task and never change one someone holds. Work in this order, using the planner tools (they only read, and they are exact where guessing is not): 1) plan_glossary FIRST, every time (the team's words and decisions: \"blocked on X\" means based on X, so X comes first and the task goes to backlog with the label blocked); 2) plan_roles (who does what, and each person's open workload; also the laws in your prompt and the open board with board_list, done tasks of the last 30 days too); 3) plan_parse on the person's input (it splits the ideas, merges a short and a long version of the same list, and shows what is not an idea: check its titles, models, markers and blockedOn); 4) plan_existing for every idea, and scope the task to what is left; 5) plan_owner for every idea and every sub-task (a marker, then role, then the lighter workload; it never answers empty: \"mills to pick\" is asked, not guessed); 6) draft. A correction the person makes about a word or a decision goes into plans/glossary.md at once, so it is never asked twice. Ask, do not guess (ask_user, only what changes the plan). Show a draft (parents with owner, priority, status, blocked on; their sub-tasks; what already exists; what is not planned and why) and write nothing to the board or plans/ until the person approves it.";
+const PLANNER_HEAD: &str = "You only plan: you put tasks on the board (decomposed, owned, linked) and write planning notes under plans/; you never work on them, never edit or create files elsewhere, never run builds, tests or git writes, never claim or work a task, never delete a task and never change one someone holds. Work in this order, using the planner tools (they only read, and they are exact where guessing is not): 1) plan_glossary FIRST, every time (the team's words and decisions: \"blocked on X\" means based on X, so X comes first and the task goes to backlog with the label blocked); 2) plan_roles (who does what, and each person's open workload; also the laws in your prompt and the open board with board_list, done tasks of the last 30 days too); 3) plan_parse on the person's input (it splits the ideas, merges a short and a long version of the same list, and shows what is not an idea: check its titles, models, markers and blockedOn); 4) plan_existing for every idea, and scope the task to what is left; 5) plan_owner for every idea and every sub-task (a marker, then role, then the lighter workload; it never answers empty: \"mills to pick\" is asked, not guessed); 6) plan_draft. A correction the person makes about a word or a decision goes into plans/glossary.md at once, so it is never asked twice. Ask, do not guess (ask_user, only what changes the plan). Show the draft with the tool plan_draft (parents with owner, priority, status, blocked on; their sub-tasks; changes to existing tasks; what is not planned and why; the person's words as sourceText) and write nothing until the person approves it: task_create, task_update, task_move and task_delete are refused here, the hub writes the approved draft itself (the source note, the parents, the sub-tasks, the changes, then the summary in the chat) and plan_draft returns the new task ids. If the person asks for a change, revise and call plan_draft again.";
 /// Used when the hub's Notes folder has no plans/planner-mode.md.
 const PLANNER_SUMMARY: &str = "Allowed: read files and repos, search the board, notes, chat and past sessions, ask the person, write board tasks and planning notes under plans/, and post one chat message after a plan is written. Refused: writing or editing files, shell and builds, git writes, go-lives, PC tools. Tools, in order: plan_glossary, plan_roles, plan_parse, plan_existing, plan_owner (\"blocked on\" means based on). Owners: an explicit person marker wins, else by role (design / UI / decomposition / docs: Mills; hub / protocol / infrastructure / spec / testing: Sponge; architecture / research / creative / workflows: Gee). Priority 1 unblocks others, 2 normal, 3-4 later or polish, 5 someday. A task blocked on another goes to backlog with the label blocked. The person's input goes word for word into a source note plans/<topic>-original.md first.";
 /// The rulebook up to its re-assessment section (what a plan run needs), at most 14 000 characters.
@@ -1228,6 +1356,8 @@ pub fn planner_refusal(which: &str, name: &str, args: &Value) -> String {
             if p.starts_with("plans/") && p.len() > 6 && !p.split('/').any(|seg| seg == ".." || seg == ".") { String::new() }
             else { "Planner mode: notes_write is allowed only for paths under plans/ (this one is refused).".into() }
         }
+        // T-279: the board is written by the hub once the person approved a draft; the AI reads it (board_list, task_get, board_calendar)
+        ("board", "task_create" | "task_update" | "task_move" | "task_delete" | "task_claim" | "task_renew" | "task_release" | "task_complete" | "board_new") => format!("{} ({name} refused)", crate::plan::REFUSAL),
         _ => String::new(),
     }
 }
@@ -1300,7 +1430,7 @@ mod tests {
         for bad in ["x.md", "notes/plans/x.md", "plans/../x.md", "plans/", "../plans/x.md", "/etc/x", "plans\\..\\x.md"] { assert!(!w(bad).is_empty(), "{bad}"); }
         assert!(!planner_refusal("pc", "write", &json!({})).is_empty());
         assert!(!planner_refusal("team", "notes_delete", &json!({})).is_empty());
-        assert!(planner_refusal("board", "task_create", &json!({})).is_empty() && planner_refusal("team", "ask_user", &json!({})).is_empty() && planner_refusal("team", "team_say", &json!({})).is_empty());
+        assert!(planner_refusal("board", "task_create", &json!({})).contains("Use plan_draft: the person approves the plan first") && planner_refusal("board", "task_move", &json!({})).contains("plan_draft") && planner_refusal("board", "task_get", &json!({})).is_empty() && planner_refusal("board", "board_list", &json!({})).is_empty() && planner_refusal("team", "plan_draft", &json!({})).is_empty() && planner_refusal("team", "ask_user", &json!({})).is_empty() && planner_refusal("team", "team_say", &json!({})).is_empty());
         let t = planner_allowed_tools(&["Edit".into(), "Write".into(), "Bash(node x:*)".into(), "WebFetch".into(), "mcp__pc__write".into()]);
         assert!(t.contains(&"Read".into()) && t.contains(&"WebFetch".into()) && t.contains(&"Bash(git log:*)".into()));
         assert!(!t.iter().any(|x| x == "Edit" || x == "Write" || x.contains("mcp__pc") || x.contains("node x")));
