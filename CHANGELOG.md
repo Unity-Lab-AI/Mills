@@ -7,6 +7,20 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.20.0 — 2026-10-25
+
+MINOR: **presence for AIs and tools** (T-264, an agent branch, reviewed and merged).
+- **Full status in the team tools:** `team_presence` and `hub_status` return the whole status: presence, label,
+  working and workingSessions, acceptingWork, dnd, text, since, where. The older fields are unchanged.
+- **"Tell me when …":** new team tools `notify_when_available {user, what: available | back | online | free,
+  message?}`, `notify_list` and `notify_cancel`. A person's Claude asks to be told when someone is available; the asker
+  then gets a private message from "<asker> · Claude".
+  - Up to 5 per asker, kept for 24 h (Chat/notify-watches.json, a new file).
+  - They honour appear offline and never say more than the status shows the asker.
+- **A status-change event:** `Chat::subscribe_status()`, which notify uses first and workflow triggers (T-186) can use
+  later.
+- R250 to R254. bridge/team-mcp.js 1.0.3.
+
 ## 5.19.0 — 2026-10-25
 
 MINOR: **the question UI, and device-code sign-in** (agent branches, reviewed and merged).
