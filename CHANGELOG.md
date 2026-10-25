@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.18.0 — 2026-10-25
+
+MINOR: **git at a glance, and presence says where people work** (agent branches, reviewed and merged).
+- **Git at a glance** (T-240). The Work page has a Git panel for your own worktree of the open session:
+  - what it shows: the branch, ahead / behind, and the changed files with stage checkboxes;
+  - commit: what is ticked, as you (your Forgejo login if any);
+  - Update and Merge: they run only through `bridge/worktree.js`, so Forgejo-first and the versioning law stay in force.
+    For a session's own worktree, Merge brings its commits home into your `work/<user>` (`home --session`).
+  - Every action is refused (409) while that session works.
+  - Routes: `GET /api/work/git` and `POST /api/work/git/{stage,unstage,commit,update,merge}`, with an optional
+    `session`. No raw push, no reset. R225 to R229.
+- **Where people work** (T-260). Status carries an optional `where` {project, branch, task?, since, source}, from:
+  - the person's running Work session (`work`);
+  - their held board claim (the task);
+  - live reports from other sources (`POST /api/presence {device, source, where}`, e.g. Jcode PGM or the desktop app
+    later).
+  It is hidden by "hide where" and by appearing offline; the person always sees their own. The team tools carry it too,
+  and the page's tooltip reads "on <project> · <task>". Board claims now record when they were made (add-only).
+  R230 to R234.
+
 ## 5.17.0 — 2026-10-25
 
 MINOR: **the AI asks you, time accounting, and presence on the board** (built by Work-run agents in their own worktrees,
