@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.13.4 — 2026-10-25
+
+PATCH: **the testing law** (LAWS.md). Five rules for every project's tests: check what the code does, not how it does
+it (a refactor that changes no behaviour must not break a check; static source checks only where there is nothing to
+observe); name checks like sentences; fix or delete a flaky check the same day (no retry-until-green); coverage is a
+floor (every change gets a check for what it does and how it fails); a bug gets a failing check before its fix (the
+CHANGELOG names it; a feature not built yet gets a `spec()`).
+
 ## 5.13.3 — 2026-10-24
 
 PATCH: **the Rust fallback chain actually fills up** (T-157). The auto-deploy marked a version's native build good only
