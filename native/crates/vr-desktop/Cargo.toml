@@ -24,5 +24,9 @@ tokio = { version = "1.54.0", features = ["full"] }
 vr-core = { version = "0.1.0", path = "../vr-core" }
 pgm-ai-internal = { path = "../pgm-ai-internal" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# the same WebKitGTK binding tauri's webview uses (media-stream settings, version check: capture.rs)
+webkit2gtk = "2.0.2"
+
 [build-dependencies]
 tauri-build = "2.6.3"

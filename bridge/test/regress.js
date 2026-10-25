@@ -4555,10 +4555,22 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const forbidden = ['fs-', 'term-', 'run-', 'allow-git', 'proxy-', 'settings-', 'pick-folder', 'update-'];
       if (sm.status === 77) skip('R165', L165, sm.stdout.trim());
       else check('R165', L165,
-        sm.status === 0 && /SMOKE smoke-ok/.test(sm.stdout) && new RegExp('SMOKE smoke-main 127\\.0\\.0\\.1:' + PORT + ' \\S+ tools-tile true').test(sm.stdout)
+        sm.status === 0 && /SMOKE smoke-ok/.test(sm.stdout) && new RegExp('SMOKE smoke-main 127\\.0\\.0\\.1:' + PORT + ' \\S+ tools-tile true share-field boolean').test(sm.stdout)
         && !!hubCap && !forbidden.some((f) => hubCap.includes(f)) && /window\("main"\)/.test(hubCap) && toolsCap.windows.join() === 'tools' && !toolsCap.remote
         && /WebviewUrl::App\("tools\.html/.test(mainSrc),
         `smoke ${sm.status} "${(sm.stdout + sm.stderr).replace(/\s+/g, ' ').slice(0, 400)}"; hub capability clean ${!!hubCap && !forbidden.some((f) => hubCap.includes(f))}`);
+      // R290 (T-243): screen sharing in the app's webview is granted to the hub's own page only
+      const capSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'src', 'capture.rs'), 'utf8');
+      const toolsBuilder = (/WebviewWindowBuilder::new\(app, "tools"[^\n]*/g.exec(mainSrc) || [''])[0];
+      const home290 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+      const ut = sm.status === 77 ? { status: 77 } : spawnSync('sh', ['-c', `export RUSTUP_HOME="${home290}/.rustup" CARGO_HOME="${home290}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}" OWNER_HOME="${home290}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; cargo test --release -q -p vr-desktop capture 2>&1`], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+      const L290 = 'screen sharing in the desktop app is granted to the hub\x27s own page only (permission handler, unit tests, app_info.screenShare)';
+      if (sm.status === 77) skip('R290', L290, sm.stdout.trim());
+      else check('R290', 'screen sharing in the desktop app: the main window (the hub\'s page) answers the webview\'s permission requests through one handler that grants capture (screen, microphone, camera) only to the hub\'s own origin and refuses it to any other page, the Tools window has no such handler so it is never granted, Linux turns the WebKitGTK media stream on for the main window only, app_info carries screenShare / screenShareWhy / screenShareAudio (a boolean, read by the hub\'s page in the smoke), and the origin / permission unit tests pass; real capture needs a desktop session and is not exercised here',
+        /\.on_permission_request\(/.test(mainSrc) && /capture::decide\(/.test(mainSrc) && !/on_permission_request/.test(toolsBuilder)
+        && /capture::enable_in_webview\(&main_win\)/.test(mainSrc) && /set_enable_media_stream\(true\)/.test(capSrc) && /capture::capability\(\)/.test(mainSrc)
+        && /screenShare/.test(capSrc) && /is_hub_origin\(page, hub\)/.test(capSrc) && ut.status === 0 && /3 passed; 0 failed|test result: ok\. 3 passed/.test(ut.stdout || ''),
+        `cargo test ${ut.status} "${String(ut.stdout || ut.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
     }
   }
   const ws1 = (await call('/api/work/current', U)).data;
