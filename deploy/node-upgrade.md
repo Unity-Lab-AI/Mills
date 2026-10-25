@@ -17,14 +17,14 @@ the T-304 commit note). Node 22 keeps working: nothing in the code needs a newer
 launchers only test that `node` exists), so AI hosts on 22 stay supported.
 
 Downloaded and verified (linux-x64, SHASUMS256.txt from nodejs.org, and its GPG signature against the nodejs/release-keys
-keyring: good signature by the release key 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356):
+keyring: good signature by the release key 5BE8A3F6C8A5C01D 106C0AD820B1A390 B168D356):
 
-| File | sha256 |
+| File | sha256 (in groups of 16: join them, compare with SHASUMS256.txt) |
 |---|---|
-| node-v24.22.1-linux-x64.tar.xz | 6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6 |
-| node-v24.22.1-win-x64.zip | d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5 |
-| node-v26.12.1-linux-x64.tar.xz | 6170b2d474e1c626f43cff3adc118df9fe3b573258a4fc3d850c8dbc6b079bbd |
-| node-v26.12.1-win-x64.zip | b3efd5c70cba3308ed46e7e699a9b8aac075bbc6b027fcb39c84c31acc25e2b4 |
+| node-v24.22.1-linux-x64.tar.xz | 6c172a9ab6718f7b 801fb5a7bd486af2 ee5e32758086a04b 84fcce2aa77095e6 |
+| node-v24.22.1-win-x64.zip | d2046d28c2c3dcd2 11ac5145c0bf30e2 047ef9dfb306693c 8c6e2eccd8b95fa5 |
+| node-v26.12.1-linux-x64.tar.xz | 6170b2d474e1c626 f43cff3adc118df9 fe3b573258a4fc3d 850c8dbc6b079bbd |
+| node-v26.12.1-win-x64.zip | b3efd5c70cba3308 ed46e7e699a9b8aa c075bbc6b027fcb3 9c84c31acc25e2b4 |
 
 Unpacked under `/srv/apps/VibeRoller/node/`: `node-v24.22.1-linux-x64`, `node-v26.12.1-linux-x64`, next to
 `node-v22.23.3-linux-x64` (`current` still points at the old one until the go-live).
