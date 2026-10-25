@@ -495,10 +495,66 @@
   },
   {
    "name": "team_presence",
-   "description": "Who is in VibeRoller right now: every account with online / away / offline, where they are and when they were last seen.",
+   "description": "Who is in VibeRoller right now: every account with online / away / offline, where they are and when they were last seen. Each person also has presence, label (Working + available / Working / Away / Available for work / Online / Offline), working (+ workingSessions), acceptingWork, dnd, text, since and where (project, branch, task), as far as they let the team see it.",
    "inputSchema": {
     "type": "object",
     "properties": {}
+   }
+  },
+  {
+   "name": "notify_when_available",
+   "description": "Tell me when a person is available: your Claude is told in a private chat message as soon as their status matches (what: \"available\" = accepting work and not offline, \"back\" = online again after being away / offline, \"online\" = online or away, \"free\" = not working). Remembered up to 24 hours, 5 at most; if it already holds you are told at once. Appear offline hides the change.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "user": {
+      "type": "string",
+      "description": "username"
+     },
+     "what": {
+      "type": "string",
+      "enum": [
+       "available",
+       "back",
+       "online",
+       "free"
+      ],
+      "description": "default \"available\""
+     },
+     "message": {
+      "type": "string",
+      "description": "a note to add when it is told (max 200)"
+     }
+    },
+    "required": [
+     "user"
+    ]
+   }
+  },
+  {
+   "name": "notify_list",
+   "description": "The \"tell me when\" requests that are waiting (notify_when_available), with their ids.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "notify_cancel",
+   "description": "Cancel a waiting \"tell me when\" request: by id (from notify_list), by user, or all: true.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "user": {
+      "type": "string"
+     },
+     "all": {
+      "type": "boolean"
+     }
+    }
    }
   },
   {
