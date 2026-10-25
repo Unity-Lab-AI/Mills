@@ -7,6 +7,29 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.23.0 — 2026-10-25
+
+MINOR: **planner mode, screen sharing with sound, and other tools' sessions** (agent branches, reviewed and merged).
+- **Planner mode in Work** (T-275; team note plans/planner-mode.md). A session can be a planner session
+  (`POST /api/work/sessions/new {mode: "planner"}`, "New planner session" on the page, a Planner badge, "Leave
+  planner").
+  - **Tools:** its runs get read-only tools (Read, Glob, Grep; WebFetch / WebSearch and read-only git only if the
+    config allows them) plus the board and team servers. No PC tools, and Edit, Write and NotebookEdit are denied; the
+    permission mode is forced to "default".
+  - **The hub enforces it too:** the relay refuses PC tools, notes_delete and channel / group creation for those runs,
+    and notes_write outside `plans/`.
+  - **The prompt** carries the planner rulebook, read from the note at run time.
+  - Normal sessions are unchanged. R265 to R269.
+- **Screen sharing with an audio choice** (T-242). "Share screen" asks for the audio first: none, tab / system audio,
+  or that plus the microphone, mixed into one track. The share's sound is a fourth sender, switched on only between
+  up-to-date pages (signal field `sa`), so older pages are unaffected. The call line says who is sharing; a shared
+  screen can be enlarged (Esc to shrink). Browser differences are documented in web/calls.js (1.1.0). R275 to R279.
+- **Other tools' sessions in the list** (T-289, the hub part). `POST /api/work/sessions/report {source, device?,
+  sessions[]}` lets a tool (Jcode PGM first) report its sessions in the six states. They are kept in memory for 3
+  minutes unless refreshed, and the person's `GET /api/work/sessions` gains `external[]` and `counts.externalWorking`
+  (optional fields). R285 to R289.
+- Merging: the page's own session (T-238) and planner mode now combine; planner mode's session wins while it is on.
+
 ## 5.22.0 — 2026-10-25
 
 MINOR: **my projects, reopen-after-reload, own platform first** (agent branches, reviewed and merged).
