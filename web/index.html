@@ -122,6 +122,14 @@
   #editor { flex: 1; border: 0; border-radius: 0; resize: none; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; line-height: 1.45; tab-size: 2; }
 
   /* usage bar: 5h / 7d windows + context window meter (green → orange → yellow → red, purple = out of usage) */
+  #gitBox { border-bottom: 1px solid var(--line); padding: .35rem .7rem; font-size: .78rem; display: flex; flex-direction: column; gap: .3rem; max-height: 40%; overflow: auto; }
+  #gitBox[hidden] { display: none; }
+  #gitBox .gitHead, #gitBox .gitCommit { display: flex; align-items: center; gap: .4rem; } #gitBox .grow { flex: 1; }
+  #gitBox .muted { color: var(--muted); } #gitBox .gitHead button { padding: .15rem .5rem; font-size: .74rem; }
+  #gitBox .gitFile { display: flex; align-items: center; gap: .4rem; min-width: 0; } #gitBox .gitFile span.p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  #gitBox .gitFile .st { color: var(--muted); font-size: .7rem; min-width: 4.8rem; } #gitBox .gitFile .st.conflict { color: var(--bad); }
+  #gitBox .gitCommit input { flex: 1; min-width: 0; } #gitBox pre { margin: 0; white-space: pre-wrap; font-size: .72rem; color: var(--muted); max-height: 7rem; overflow: auto; }
+  #gitBox pre.bad { color: var(--bad); }
   #usageBar { display: flex; align-items: center; gap: .9rem; padding: .35rem .7rem; border-bottom: 1px solid var(--line); font-size: .74rem; font-variant-numeric: tabular-nums; background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 70%, transparent), transparent); }
   .uItem { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
   .uLbl { color: var(--muted); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: .66rem; }
@@ -1160,8 +1168,18 @@
     <section id="chat">
       <div class="bar"><span id="convTitle" title="Click to rename">Unsaved session</span>
         <button type="button" class="ghost" id="shareBtn" title="Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue"><svg class="ic lead"><use href="#i-share"/></svg>Share with everyone</button>
+        <button type="button" class="ghost" id="gitBtn" title="Git at a glance: what changed in your own worktree, stage, commit, update, merge">Git</button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
-      <div id="usageBar" title="Claude usage of the host account (shared by everyone) and this session's context window">
+      <div id="gitBox" hidden>
+        <div class="gitHead"><b id="gitBranch">…</b><span id="gitAB" class="muted"></span><span class="grow"></span>
+          <button type="button" class="ghost" id="gitUpdate" title="Bring the integration branch (or, in a session worktree, your own work branch) into this branch (worktree.js update)">Update</button>
+          <button type="button" class="ghost" id="gitMerge" title="Merge into the integration branch and push it to Forgejo first (worktree.js merge: version law applies). In a session's own worktree: merge into your own work branch.">Merge</button>
+          <button type="button" class="ghost" id="gitRefresh" title="Refresh" aria-label="Refresh">&#8635;</button></div>
+        <div id="gitFiles"></div>
+        <div class="gitCommit"><input id="gitMsg" placeholder="Commit message (what is ticked is committed)" maxlength="500"><button type="button" id="gitCommit">Commit</button></div>
+        <pre id="gitOut" hidden></pre>
+      </div>
+      <div id="usageBar"title="Claude usage of the host account (shared by everyone) and this session's context window">
         <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--:--:--</span></div>
         <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--d --h --m</span></div>
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
@@ -2070,8 +2088,50 @@ $('model').onchange = async () => {
 let busy = false, fresh = false, sendNowMessage = null;
 const queue = []; // { message, el }
 function updateStopButton() { $('stop').textContent = busy && $('input').value.trim() ? 'Send now' : 'Stop'; }
-function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); }
+function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); gitRefresh(); }
 $('input').addEventListener('input', updateStopButton);
+
+// Git at a glance (T-240): your own worktree of this Work session. Stage / commit are plain git; Update and Merge only
+// run bridge/worktree.js on the hub (Forgejo first, the version law), and everything waits while Claude is working.
+let gitState = null;
+const gitShow = (text, bad) => { const o = $('gitOut'); o.hidden = !text; o.textContent = text || ''; o.className = bad ? 'bad' : ''; };
+function gitRender(s) {
+  gitState = s; const working = !!s.working || busy;
+  $('gitBranch').textContent = s.branch || '…'; $('gitBranch').title = s.dir || '';
+  $('gitAB').textContent = s.exists === false ? (s.note || '') : (s.noBase ? '' : `${s.ahead} ahead · ${s.behind} behind ${s.base}`) + (s.rightBranch === false ? ' · on the wrong branch' : '') + (working ? ' · Claude is working' : '');
+  const box = $('gitFiles'); box.textContent = '';
+  const files = s.files || [];
+  if (!files.length) { const d = document.createElement('div'); d.className = 'muted'; d.textContent = s.exists === false ? '' : 'Nothing changed' + (s.last ? ' · last: ' + s.last : ''); box.appendChild(d); }
+  for (const f of files) {
+    const row = document.createElement('label'); row.className = 'gitFile';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!f.staged; cb.disabled = working;
+    cb.onchange = () => gitAct(cb.checked ? 'stage' : 'unstage', { files: [f.path] });
+    const st = document.createElement('span'); st.className = 'st' + (f.state === 'conflict' ? ' conflict' : ''); st.textContent = f.state + (f.staged && f.unstaged && f.state !== 'untracked' ? ' +' : '');
+    const p = document.createElement('span'); p.className = 'p'; p.textContent = f.path; p.title = f.from ? f.from + ' → ' + f.path : f.path;
+    row.append(cb, st, p); box.appendChild(row);
+  }
+  const none = s.exists === false;
+  for (const id of ['gitUpdate', 'gitMerge', 'gitCommit']) $(id).disabled = working || none;
+  $('gitMerge').textContent = s.primary === false ? 'Merge into my work' : 'Merge';
+}
+async function gitRefresh() {
+  if ($('gitBox').hidden) return;
+  try { gitRender(await json('/api/work/git')); } catch (err) { gitShow(err.message, true); }
+}
+async function gitAct(what, body) {
+  gitShow(what === 'update' || what === 'merge' ? 'Running worktree.js ' + what + '…' : '');
+  try {
+    const d = await json('/api/work/git/' + what, { method: 'POST', body: JSON.stringify(body || {}) });
+    gitRender(d); gitShow(['commit', 'update', 'merge'].includes(what) ? d.text : '');
+    if (what === 'commit') $('gitMsg').value = '';
+  } catch (err) { gitShow(err.message, true); gitRefresh(); }
+}
+$('gitBtn').onclick = () => { $('gitBox').hidden = !$('gitBox').hidden; gitRefresh(); };
+$('gitRefresh').onclick = () => { gitShow(''); gitRefresh(); };
+$('gitUpdate').onclick = () => gitAct('update');
+$('gitMerge').onclick = () => gitAct('merge');
+$('gitCommit').onclick = () => { const m = $('gitMsg').value.trim(); if (!m) { gitShow('A commit needs a message.', true); return; } gitAct('commit', { message: m }); };
+$('gitMsg').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('gitCommit').click(); } };
 
 // Attachments in Work: uploaded to this person's own area on the hub first (Claude reads them there); the message
 // carries them as a marker block at its end, so the queue, the saved conversation and Past sessions keep them as text.
