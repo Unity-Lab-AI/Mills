@@ -967,6 +967,7 @@
         <div class="status">Off: the AI waits for you as long as it takes. The alert sound has its own volume above.</div>
       </details>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
+      <label class="chk"><input type="checkbox" id="setReopen"> Reopen what I had open after a reload (the previous Work conversation and the chat you were in; off: a reload starts fresh on the menu, nothing is deleted)</label>
       <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
       <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
       <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
@@ -1812,7 +1813,7 @@ async function enter() {
   renderProjects();
   myShare = me.share || '';
   loadLayout();
-  currentConv = store.get('mills.conv.' + me.username) || 'room';
+  currentConv = (prefs().reopen && store.get('mills.conv.' + me.username)) || 'room'; // T-241: "Reopen what I had open" off = start on the team room
   showScreen(APP_MODE ? 'room' : 'menu'); // the installed VibeRoller Chat app is the chat and nothing else
   startRoomPolling();
   callPollLoop();
@@ -2785,7 +2786,8 @@ async function restoreWork() { // opening Work: the previous conversation, then 
     if (cur) { if (l.current !== l.primary) SESSION = l.current; me.project = cur.project; renderProjects(); }
   } catch { $('startWork').hidden = true; }
   let s; try { s = await json('/api/work/current'); } catch { return; }
-  if ((s.transcript || []).length && !transcript.length) {
+  // T-241: with "Reopen what I had open" off the conversation stays on the hub (the next reload with it on brings it back) but a reload starts fresh
+  if ((s.transcript || []).length && !transcript.length && prefs().reopen) {
     for (const t of s.transcript) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
     archiveId = s.archiveId; archiveTitle = s.archiveTitle; transcript = s.transcript; savedLen = s.transcript.length;
     if (archiveTitle) label($('convTitle'), 'archive', archiveTitle); else $('convTitle').textContent = 'Unsaved session';
@@ -3114,7 +3116,7 @@ const snippet = (rec) => (rec.m.deleted ? 'message deleted'
   : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
 function prefs() {
   const p = (me && me.prefs) || {};
-  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
+  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, reopen: p.reopen !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
     sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70, ask: (p.sound && p.sound.ask) ?? 80 },
     tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ask: false, ...(p.tts || {}) }, // all = master switch
     ask: { auto: true, minutes: 10, activity: true, ...(p.ask || {}) }, // when the AI asks (T-248): wait N minutes without you, then its recommended answers; any activity waits
@@ -4199,7 +4201,7 @@ function openSettings() {
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
   $('volCall').value = P.sound.call; $('volBoard').value = P.sound.board; $('soundSet').value = P.sound.set === 'classic' ? 'classic' : 'patterns';
   $('volAsk').value = P.sound.ask; $('setAskAuto').checked = P.ask.auto !== false; $('setAskMin').value = P.ask.minutes; $('setAskActivity').checked = P.ask.activity !== false; $('setAskTts').checked = !!P.tts.ask;
-  $('setToasts').checked = P.toasts; $('setAutoScroll').checked = P.autoScroll;
+  $('setToasts').checked = P.toasts; $('setReopen').checked = P.reopen; $('setAutoScroll').checked = P.autoScroll;
   $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
   $('ttsRateVal').textContent = (P.tts.rate / 100).toFixed(1) + '×';
@@ -4548,7 +4550,7 @@ document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => play
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
-      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
+      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, reopen: $('setReopen').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
       sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), ask: Number($('volAsk').value), set: $('soundSet').value },
       ask: { auto: $('setAskAuto').checked, minutes: Math.max(1, Math.min(1440, Math.round(Number($('setAskMin').value) || 10))), activity: $('setAskActivity').checked },
       tts: { ask: $('setAskTts').checked, all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
@@ -4585,7 +4587,8 @@ async function renderDownloads() {
   if (typeof renderAppCard === 'function') renderAppCard();
   let d; try { d = await json('/api/downloads'); } catch (e) { box.textContent = e.message; return; }
   box.textContent = '';
-  const os = typeof appOs === 'function' ? appOs() : '';
+  let os = typeof appOs === 'function' ? appOs() : ''; // T-251: navigator.userAgentData / userAgent; the hub's hint (d.platform) when the browser says nothing
+  if (!['Windows', 'Linux', 'macOS', 'Android'].includes(os) && d.platform) os = d.platform === 'windows' ? 'Windows' : d.platform === 'linux' ? 'Linux' : d.platform === 'mac' ? 'macOS' : os;
   const note = document.createElement('div'); note.className = 'status'; box.append(note);
   const grab = async (it, b) => {
     b.disabled = true; note.textContent = 'Preparing ' + it.file + '…';
@@ -4609,14 +4612,22 @@ async function renderDownloads() {
     const p = document.createElement('div'); p.className = 'status';
     p.textContent = GROUPS[group][1];
     sec.append(p);
-    const row = document.createElement('div'); row.className = 'row';
-    for (const it of d.items.filter((i) => i.group === group)) {
+    // T-251: the person's own platform first (the browser's word, else the hub's hint from the User-Agent), the others under "Other platforms"
+    const mine = d.items.filter((i) => i.group === group && i.os === os), others = d.items.filter((i) => i.group === group && i.os !== os);
+    const mk = (it) => {
       const b = document.createElement('button'); b.type = 'button'; if (it.os !== os) b.className = 'ghost';
       b.append(ic('download', 'lead'), document.createTextNode(it.os + ' · ' + it.file + ' (' + (it.bytes >= 1048576 ? (it.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(it.bytes / 1024)) + ' KB') + ')'));
-      b.onclick = () => grab(it, b);
-      row.append(b);
+      b.onclick = () => grab(it, b); return b;
+    };
+    const row = document.createElement('div'); row.className = 'row'; row.dataset.dlMine = '1';
+    for (const it of mine) row.append(mk(it));
+    if (!mine.length && os !== 'your computer') { const n = document.createElement('div'); n.className = 'status'; n.textContent = 'No ' + os + ' build of this on the hub' + (os === 'macOS' || os === 'Android' ? ' (builds are for Windows and Linux)' : ' yet') + '.'; row.append(n); }
+    if (mine.length || os !== 'your computer') sec.append(row);
+    if (others.length) {
+      const det = document.createElement('details'); det.open = !mine.length;
+      const sm = document.createElement('summary'); sm.textContent = mine.length ? 'Other platforms' : 'Platforms available'; det.append(sm);
+      const r2 = document.createElement('div'); r2.className = 'row'; for (const it of others) r2.append(mk(it)); det.append(r2); sec.append(det);
     }
-    sec.append(row);
     box.append(sec);
   }
   renderProducts(box, note); // the team's other products (T-250)

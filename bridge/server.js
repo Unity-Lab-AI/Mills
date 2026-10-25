@@ -451,6 +451,7 @@ function cleanPrefs(p, prev = {}) {
   if (p.nick !== undefined) out.nick = String(p.nick).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 32);
   if (p.color !== undefined) out.color = Number.isInteger(p.color) && p.color >= 0 && p.color < PALETTE_SIZE ? p.color : null;
   if (p.toasts !== undefined) out.toasts = !!p.toasts;
+  if (p.reopen !== undefined) out.reopen = !!p.reopen; // T-241: reopen the previous conversation after a reload (absent = on)
   if (p.autoScroll !== undefined) out.autoScroll = p.autoScroll === true; // follow new messages even when scrolled up (off by default)
   if (p.theme !== undefined) out.theme = /^[\w-]{0,40}$/.test(String(p.theme)) ? String(p.theme) : ''; // app setting: follows the person to every browser ('' = VibeRoller default)
   if (p.autosave !== undefined) out.autosave = Math.max(0, Math.min(120, Math.round(Number(p.autosave) || 0))); // minutes, 0 = off

@@ -3638,6 +3638,25 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       /\/api\/releases'/.test(html270) && /\/api\/releases\/file\?/.test(html270) && /dlProducts/.test(html270) && cached,
       `page ${/dlProducts/.test(html270)} · cached ${cached} (${before} call)`);
   } else for (const [id, what] of [['R270', 'releases catalogue'], ['R271', 'a release file streams'], ['R272', 'signed out refused'], ['R273', 'token never in an answer'], ['R274', 'Products section + cache']]) skip(id, what, '--rust-hub only');
+  { // R260 (T-241): "Reopen what I had open after a reload": a per-person pref, absent = on, kept with the other prefs; the page honours it
+    const html260 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const c0 = (await call('/api/check', U)).data || {};
+    const off = await call('/api/prefs', U, { reopen: false }), afterOff = (await call('/api/check', U)).data || {};
+    const other = await call('/api/prefs', U, { autoScroll: false }), kept = (await call('/api/check', U)).data || {}; // another pref saved: reopen stays off
+    const on = await call('/api/prefs', U, { reopen: true });
+    const page = /id="setReopen"/.test(html260) && /prefs\(\)\.reopen/.test(html260) && /reopen: \$\('setReopen'\)\.checked/.test(html260) && /reopen: p\.reopen !== false/.test(html260);
+    check('R260', 'T-241 "reopen what I had open after a reload" is a per-person setting: absent means on; saving false returns and keeps false (also after another setting is saved); saving true turns it on again; [static] the Settings checkbox exists and the page uses it for the Work conversation and the chat',
+      (c0.prefs || {}).reopen === undefined && off.status === 200 && (off.data.prefs || {}).reopen === false && (afterOff.prefs || {}).reopen === false && (kept.prefs || {}).reopen === false && (on.data.prefs || {}).reopen === true && page,
+      `default ${(c0.prefs || {}).reopen} · off ${(off.data.prefs || {}).reopen} · kept ${(kept.prefs || {}).reopen} · on ${(on.data.prefs || {}).reopen} · page ${page}`);
+  }
+  if (RUST_HUB) { // R261 (T-251): the Downloads list carries a `platform` hint from the User-Agent; the page puts the person's own platform first
+    const ua = async (s) => ((await call('/api/downloads', U, undefined, { 'User-Agent': s })).data || {}).platform;
+    const got = [await ua('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120'), await ua('Mozilla/5.0 (X11; Linux x86_64) Firefox/121'), await ua('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Safari/605'), await ua('Mozilla/5.0 (Linux; Android 14) Chrome/120'), await ua('curl/8.0')];
+    const html261 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const page = /Other platforms/.test(html261) && /d\.platform/.test(html261) && /dataset\.dlMine/.test(html261);
+    check('R261', 'T-251 /api/downloads says which platform the asker\'s User-Agent names (windows, linux, mac, android; empty when it says nothing); [static] the Downloads panel shows the person\'s own platform first and the others under "Other platforms"',
+      got.join(',') === 'windows,linux,mac,android,' && page, `hints ${JSON.stringify(got)} · page ${page}`);
+  } else skip('R261', 'the Downloads platform hint and own-platform-first panel', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R199: an answer the browser may keep (Unity's pictures: private, max-age) never names the build. 2026-10-25 a page
     // showed a picture cached under 5.13.2 after 5.13.3 went live, read its X-VR-Version and said "5.13.2 is running"
     const img199 = path.join(SCRATCH, 'Images', 'room'); fs.mkdirSync(img199, { recursive: true });

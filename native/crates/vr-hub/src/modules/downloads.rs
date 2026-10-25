@@ -64,6 +64,11 @@ impl Downloads {
 fn hub_version(hub: &Hub) -> String { super::ai_hosts::release_now(&hub.root).0 }
 fn hub_url(hub: &Hub) -> String { hub.mods.public_url(&hub.cfg) }
 fn zip_answer(z: &[u8], file: &str) -> Routed { Routed::Answer(hyper::Response::builder().status(200).header("content-type", "application/zip").header("content-length", z.len()).header("content-disposition", format!("attachment; filename=\"{file}\"")).header("cache-control", "no-store").body(crate::front::full(z.to_vec())).expect("response")) }
+/// The platform a User-Agent names: windows, linux, mac, android, or "" when it says nothing useful.
+pub fn platform_of(ua: &str) -> &'static str {
+    let u = ua.to_ascii_lowercase();
+    if u.contains("android") { "android" } else if u.contains("windows") { "windows" } else if u.contains("iphone") || u.contains("ipad") || u.contains("mac os") || u.contains("macintosh") { "mac" } else if u.contains("linux") || u.contains("x11") { "linux" } else { "" }
+}
 /// /api/pub/*: these were public until 4.0.0; now everything here needs an account (whoever asks, signed in or not).
 pub fn gone(r: &Req) -> Option<Routed> {
     if !r.path.starts_with("/api/pub/") { return None; }
@@ -88,7 +93,8 @@ pub fn route(hub: &Arc<Hub>, r: &Req, user: &str) -> Option<Routed> {
     let d = &hub.mods.downloads; let (hv, url) = (hub_version(hub), hub_url(hub));
     if p == "/api/downloads" {
         let items: Vec<Value> = IDS.iter().filter(|id| d.available(id)).map(|id| { let pk = pkg(id).unwrap(); let (z, v) = d.built(&hv, id, &url, None); json!({ "id": id, "group": pk.group, "os": pk.os, "title": pk.title, "file": pk.file, "bytes": z.len(), "version": v, "native": true }) }).collect();
-        return Some(answer(200, json!({ "items": items, "version": hv, "native": hub.mods.native.list(&hub.mods.ai.release()) })));
+        // T-251: `platform` = what the asker's User-Agent says it runs on (windows / linux / mac / android / ""); a hint, the page's own detection wins
+        return Some(answer(200, json!({ "items": items, "version": hv, "platform": platform_of(r.header("user-agent").unwrap_or("")), "native": hub.mods.native.list(&hub.mods.ai.release()) })));
     }
     let id = p.strip_prefix("/api/downloads/").and_then(|x| x.strip_suffix(".zip")).unwrap_or("");
     let Some(pk) = pkg(id) else { return Some(answer(404, json!({ "error": "No such download." }))) };
