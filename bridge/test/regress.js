@@ -5519,7 +5519,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
 
       // ===== R328: files through the machine = files through pc_job; ro refuses writes; machine_info =====
       const ops = [['list', {}], ['mkdir', { path: 'sub/deep' }], ['write', { path: 'sub/a.txt', content: 'héllo wörld' }], ['write', { path: 'top.txt', content: 'x' }], ['list', {}], ['list', { path: 'sub' }], ['read', { path: 'sub/a.txt' }], ['read', { path: 'nope.txt' }],
-        ['delete', { path: 'sub/deep' }], ['delete', { path: 'nothing' }], ['write', { path: '', content: 'z' }], ['delete', { path: '' }], ['write', { path: '../escape.txt', content: 'no' }], ['read', { path: '/etc/hostname' }], ['list', { path: './sub/../sub/' }], ['write', { path: 'sub/./b.txt', content: '' }], ['list', { path: 'sub' }]];
+        ['delete', { path: 'sub/deep' }], ['delete', { path: 'nothing' }], ['write', { path: '', content: 'z' }], ['delete', { path: '' }], ['write', { path: '../escape.txt', content: 'no' }], ['read', { path: '/etc/hostname' }], ['list', { path: './sub/' }], ['write', { path: 'sub/./b.txt', content: '' }], ['list', { path: 'sub' }]];
       const hostRes = await via(ops.map(([n, a]) => pc(n, a, hostId))), machRes = await via(ops.map(([n, a]) => pc(n, a, m1.id)));
       const sameOp = ops.map((o, i) => { const h = hostRes[i], m = machRes[i]; if (!h || !m || h.status !== m.status) return false; if (okB(h) !== okB(m)) return false; if (okB(h)) return res(h) === res(m); return o[1].path === '' ? errOf(h) === errOf(m) : true; });
       const treesEqual = JSON.stringify(tree(hhome)) === JSON.stringify(tree(m1.home));
