@@ -3352,6 +3352,7 @@ dependencies = [
  "pgm-dist-internal",
  "pgm-identity-internal",
  "pgm-net-internal",
+ "pgm-plan-internal",
  "pgm-platform-internal",
  "regex",
  "reqwest",
@@ -3485,6 +3486,14 @@ name = "pgm-orchestrator-internal"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pgm-plan-internal"
+version = "0.1.0"
+dependencies = [
+ "regex",
  "serde_json",
 ]
 
@@ -6131,6 +6140,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "vr-core",
+ "webkit2gtk",
 ]
 
 [[package]]

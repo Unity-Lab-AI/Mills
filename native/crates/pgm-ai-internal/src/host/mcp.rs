@@ -35,10 +35,18 @@ pub async fn serve(which: &str) -> i32 {
                 let (name, args) = (msg["params"]["name"].clone(), msg["params"].get("arguments").cloned().unwrap_or(json!({})));
                 let id = id.clone();
                 tokio::spawn(async move {
-                    let r = http.post(format!("{bridge}/internal/{route}")).header("X-Mills-Internal", &secret).header("X-Mills-Account", &account).json(&json!({ "name": name, "args": args })).timeout(std::time::Duration::from_secs(300)).send().await;
-                    let result = match r { Ok(r) => match r.json::<Value>().await {
+                    // the session of this run (MILLS_SESSION, set for a session that is not the first), so the hub knows whose question / PC call it is
+                    let session = std::env::var("MILLS_SESSION").unwrap_or_default();
+                    let once = |a: Value| {
+                        let mut body = json!({ "name": name, "args": a }); if !session.is_empty() { body["session"] = json!(session); }
+                        let req = http.post(format!("{bridge}/internal/{route}")).header("X-Mills-Internal", &secret).header("X-Mills-Account", &account).json(&body).timeout(std::time::Duration::from_secs(300));
+                        async move { match req.send().await { Ok(r) => r.json::<Value>().await.map_err(|e| e.to_string()), Err(e) => Err(e.to_string()) } }
+                    };
+                    let mut res = once(args.clone()).await;
+                    // ask_user (T-245) and plan_draft (T-279): a question may wait longer than one call is held; the hub answers {pending, id} every few minutes and we ask again
+                    if name == json!("ask_user") || name == json!("plan_draft") { while let Ok(out) = &res { if out["ok"].as_bool() == Some(true) && out["result"]["pending"] == json!(true) && out["result"]["id"].is_string() { let id = out["result"]["id"].clone(); res = once(json!({ "poll": id })).await; } else { break; } } }
+                    let result = match res {
                         Ok(out) => { let ok = out["ok"].as_bool() == Some(true); let text = if ok { if which_is_pc(route) && out["result"].is_string() { out["result"].as_str().unwrap_or("").to_string() } else { serde_json::to_string_pretty(&out["result"]).unwrap_or_default() } } else { format!("Error: {}", out["error"].as_str().unwrap_or("failed")) }; json!({ "content": [{ "type": "text", "text": text }], "isError": !ok }) }
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Hub unreachable: {e}") }], "isError": true }) },
                         Err(e) => json!({ "content": [{ "type": "text", "text": format!("Hub unreachable: {e}") }], "isError": true }) };
                     say(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
                 });

@@ -7,6 +7,320 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.25.3 — 2026-10-25
+
+PATCH: **the local Ollama probe works in a browser, and is one shared module** (T-209).
+- **Fix:** T-208's browser probe could never work, because the page's CSP `connect-src` did not allow
+  `http://127.0.0.1:11434`. The fetch and the "running but blocked" ping were refused, and only the desktop app's path
+  worked. The CSP now allows it (R95 and R311 check it).
+- **One module:** the probe, the blocked-ping hint, the desktop `ollama_local` call, the tags parser and the "Local (this
+  computer)" render helpers move out of the page into `web/localai.js` 1.0.0. It needs no page globals; the page passes
+  its hooks in. The same file is in the pgm-libs web kit (5.22.0) and Hyper Prod Man 0.4.0, so there is no second copy.
+- web/index.html 1.25.1, web/sw.js 1.0.5. R310 to R314 now read the module.
+- **A person's own AI signs as itself outside Work** (T-301 follow-up). The board routes take an optional `asAgent: true`.
+  The write is then signed "<person> · Claude" (claim key `<user>#agent`), like a Work run's. It is still that person's
+  account and rights, and the field is not stored. Jcode PGM's planner sends it; older hubs ignore it. R315.
+- **Suite:** R308 matched a task id as a substring, and the plan note's own header names T-281, which holds "T-28". It
+  failed as soon as the second approval's first task became T-28. It now matches the table cell, and the check names
+  which of its conditions failed.
+
+## 5.25.2 — 2026-10-25
+
+PATCH: **planner mode is one library** (T-301, the library law).
+- **New crate:** `pgm-plan-internal` (pgm-libs 5.23.0, mirrored into native/crates and Jcode PGM's pgm/libs). It holds:
+  - the draft check, the parents / sub-tasks table and the approve / change / reject state machine;
+  - the writer, in the hub's order, behind a `PlanHub` trait;
+  - the planner helpers (plan_parse, plan_existing, plan_roles, plan_owner, plan_glossary, with fallbacks) and the
+    helper-set detection.
+- **One copy:** pgm-ai-internal's plan.rs and planner.rs are now thin adapters over it (the hub implements `PlanHub` over
+  its own stores), and Jcode PGM implements the same trait over the signed-in hub's routes. Nothing is copied any more.
+- **Behaviour is unchanged:** R300 to R309 pass. The planner fixtures moved into the crate.
+
+## 5.25.1 — 2026-10-25
+
+PATCH: **the context meter no longer shows 200 %+ on a 1M model** (T-302, Gee's report).
+- **What happened:** the hub showed a 200 000-token window until a run's result reported its own window, and believed a
+  result that said 200 000 even for a 1M model. A long first run, or a 1M model whose result reports 200k, showed the
+  tokens far past the window (200 %+, and "full: start a New chat").
+- **Now** the window shown (`/api/usage` `context.window`) is:
+  - what the result reported, else the configured default;
+  - at least 1M for a model id tagged `[1m]`;
+  - never less than what the session already holds: past the window it moves to the 1M tier, and past that to the
+    tokens themselves.
+- `usage::context_window` is unit-tested. The Jcode PGM side of the same bug is fixed separately.
+
+## 5.25.0 — 2026-10-25
+
+MINOR: **the planner drafts before it writes, with exact helpers, and the person's own Ollama is found** (agent branches,
+reviewed and merged).
+- **Planner helpers** (T-276, T-277, T-278): five team tools the planner calls instead of guessing.
+  - `plan_parse` splits a rough idea list into ideas, each with its model, person, blocked-on and source lines. It
+    handles `---` blocks, person sections, a short plus a long version of the same list, and run-on chat.
+  - `plan_existing` finds matching open tasks and tasks done in the last 30 days.
+  - `plan_roles` and `plan_owner` assign an owner by marker, then by role keywords, then by the lighter workload. They
+    never leave the owner empty ("mills to pick" is asked).
+  - `plan_glossary` reads plans/glossary.md.
+  - The planner prompt now says to use them in that order, and that "blocked on" means based on.
+  - The roles are read from plans/roles.md (a json block), then from the Roles part of plans/task-assignments.md, then
+    from a built-in list. The note is proposed, not written.
+  - Checks R300 to R304.
+- **Approve, then write** (T-279, T-281).
+  - **The draft:** a planner session shows its whole plan with `plan_draft`. The session turns yellow and the page shows
+    a draft card. The person can approve all, approve some parents, ask for a change or reject
+    (`POST /api/work/plan/answer`; `GET /api/work/plans` restores open drafts after a reload).
+  - **The write:** only then does the hub write, as "<person> · Claude", in this order:
+    - the source note, word for word, to plans/<topic>-original.md;
+    - the parents, then the sub-tasks named `T-<parent> · n/m`;
+    - then the changes to existing tasks. It never deletes or completes a task.
+  - **Refused in a planner session:** the AI's own task_create, task_update, task_move, task_delete, claim and complete.
+  - **Afterwards:** one plan summary goes to the chat, the owner map is appended to plans/<topic>-plan.md, and the tool
+    result lists the new tasks for each owner.
+  - Checks R305 to R309; R266 now expects the refusal.
+- **Local Ollama** (T-208). The page and the desktop app look for the person's own Ollama and list its models as "Local
+  (this computer)" in Settings → AI source and, greyed, in the Work model list.
+  - **Desktop app:** asks Ollama directly (`ollama_local`).
+  - **Browser:** asks 127.0.0.1:11434. If Ollama runs but the page is not allowed, it shows a one-line `OLLAMA_ORIGINS`
+    hint.
+  - **When no AI host of theirs lends it:** the desktop app offers "Start this computer's AI host".
+  - **Without Ollama:** nothing shows, and the default stays as it was. R310 to R314.
+- **Fix:** co-view now starts in the page. web/coview.js's `COVIEW` is a top-level const, not on `window`, so the page's
+  `window.COVIEW` check never started it (found while moving co-view into the pgm-libs kit, T-194).
+- **Merge fix:** the planner helper dispatcher answered every `plan_*` tool, so `plan_draft` never reached the Work relay
+  once both branches were in ("Unknown planner tool"). It now passes `plan_draft` through. R305 to R309 caught it.
+- web/index.html 1.25.0, bridge/team-mcp.js 1.1.0.
+
+## 5.24.0 — 2026-10-25
+
+MINOR: **co-view (look at the same thing together) and multi-session Work proven end to end** (agent branches, reviewed
+and merged).
+- **Co-view** (T-244). Co-view shares the product view itself, not pixels.
+  - **How it works:** the sharer's page posts WHICH view it shows (a screen plus an item such as a board task, a note,
+    a conversation or a shared Work session; `/api/coview/*`). Each viewer's page opens the same view itself, through
+    the normal routes and with its own permissions.
+  - **Privacy:** what a viewer may not read reaches them only as "hidden", with no id and no content, and they see "Not
+    shared with you".
+  - **Controls:** the sharer can invite a viewer to take over and can take the lead back. A viewer can stop following;
+    the sharer can end the co-view for everyone.
+  - **Older pages and hubs:** an older hub (and the JavaScript fallback) answers "Unknown endpoint", so the buttons stay
+    hidden.
+  - **Files:** web/coview.js 1.0.0, web/board.js 1.0.6, web/notes.js 1.0.3. R295 to R299.
+  - **Still to do:** moving it into the shared kit for Hyper Prod Man and ShaDow.
+- **Multi-session Work proven end to end** (T-290). R280 to R284 cover three people on two native hosts with up to 5
+  sessions each:
+  - the per-user and per-provider limits, and the owner's bypass;
+  - a hub restart mid-run (every session comes back as it was);
+  - a host killed mid-run;
+  - a shared session across a restart;
+  - an older page next to the sessions.
+  - **Fix found by it:** limits an owner sets from the page are now kept in the host's stored hello, so they survive a
+    hub restart. Before, the hub went back to the limits of the host's last hello.
+  - **Still to do:** the Windows host run.
+
+## 5.23.1 — 2026-10-25
+
+PATCH: **screen sharing in the desktop app** (T-243, an agent branch, reviewed and merged).
+- **Permissions:** the app's main window grants screen capture, microphone and camera only to the hub's own page
+  (scheme, host and port must match exactly), through WebView2's permission event on Windows and WebKitGTK's permission
+  signal on Linux. On Linux, media streams are switched on for that window only. The Tools window never gets capture.
+- **The page can tell:** `app_info` says whether this platform can share (`screenShare`, `screenShareWhy`,
+  `screenShareAudio`). Linux needs WebKitGTK 2.38+ with PipeWire and xdg-desktop-portal; the platform matrix is in
+  native/crates/vr-desktop/src/capture.rs.
+- **Calls:** web/calls.js reads that flag, hiding the Share button and saying why when the app cannot share
+  (web/calls.js 1.1.1).
+- R290, and R165's smoke check requires the new field.
+- **Suite:** native/smoke-desktop.sh lets Xvfb pick a free display itself (`-displayfd`), so suites running side by side
+  no longer collide on one display (R165 failed once that way).
+
+## 5.23.0 — 2026-10-25
+
+MINOR: **planner mode, screen sharing with sound, and other tools' sessions** (agent branches, reviewed and merged).
+- **Planner mode in Work** (T-275; team note plans/planner-mode.md). A session can be a planner session
+  (`POST /api/work/sessions/new {mode: "planner"}`, "New planner session" on the page, a Planner badge, "Leave
+  planner").
+  - **Tools:** its runs get read-only tools (Read, Glob, Grep; WebFetch / WebSearch and read-only git only if the
+    config allows them) plus the board and team servers. No PC tools, and Edit, Write and NotebookEdit are denied; the
+    permission mode is forced to "default".
+  - **The hub enforces it too:** the relay refuses PC tools, notes_delete and channel / group creation for those runs,
+    and notes_write outside `plans/`.
+  - **The prompt** carries the planner rulebook, read from the note at run time.
+  - Normal sessions are unchanged. R265 to R269.
+- **Screen sharing with an audio choice** (T-242). "Share screen" asks for the audio first: none, tab / system audio,
+  or that plus the microphone, mixed into one track. The share's sound is a fourth sender, switched on only between
+  up-to-date pages (signal field `sa`), so older pages are unaffected. The call line says who is sharing; a shared
+  screen can be enlarged (Esc to shrink). Browser differences are documented in web/calls.js (1.1.0). R275 to R279.
+- **Other tools' sessions in the list** (T-289, the hub part). `POST /api/work/sessions/report {source, device?,
+  sessions[]}` lets a tool (Jcode PGM first) report its sessions in the six states. They are kept in memory for 3
+  minutes unless refreshed, and the person's `GET /api/work/sessions` gains `external[]` and `counts.externalWorking`
+  (optional fields). R285 to R289.
+- Merging: the page's own session (T-238) and planner mode now combine; planner mode's session wins while it is on.
+
+## 5.22.0 — 2026-10-25
+
+MINOR: **my projects, reopen-after-reload, own platform first** (agent branches, reviewed and merged).
+- **My projects** (T-239). Settings has a My projects section, a per-person index of the shared projects area.
+  - **Per project:** whether you have a worktree, when you last used it, uncommitted / unmerged work, and who else has
+    a worktree there.
+  - **Pin or hide** a project in your own list (`<profile>/projects.json`, add-only).
+  - **Discovery:** the area's other projects and your Forgejo repos are listed, never cloned.
+  - **Remove my worktree:** takes away only your own. Uncommitted work is committed first and unmerged work is kept
+    under `refs/viberoller/removed/<user>/`; refused while a session of yours works there.
+  - **Delete a project:** an admin can delete one that nobody else has a worktree in. It is moved to `_trash` inside
+    the projects root, never erased.
+  - Routes: `/api/projects/mine`, `/pin`, `/hide`, `/remove-worktree`, `/delete`. R255 to R259.
+- **Reopen after a reload** (T-241). A setting, "Reopen what I had open after a reload" (prefs `reopen`, default on).
+  Off, a reload starts fresh on the menu and the team room; the conversation stays on the hub. The Rust and the frozen
+  JavaScript prefs keep the key (bridge/server.js 4.3.1). R260.
+- **Your platform first** (T-251). Downloads shows your own platform first and the others under "Other platforms";
+  `/api/downloads` carries a `platform` hint from the User-Agent. The updaters already pick their own OS / arch: the
+  desktop app and vr-host ask for their build-time target. R261.
+
+## 5.21.0 — 2026-10-25
+
+MINOR: **start work, and team-only product downloads** (agent branches, reviewed and merged).
+- **Start work** (T-238). Opening Work with nothing going on, or the new "New session" button, offers one flow with four
+  starts:
+  1. pick a project you have;
+  2. clone a repo, by address or from a searchable list of the Forgejo repos you can see
+     (`GET /api/projects/repos?q=`, run as you; it says when your Forgejo token is missing);
+  3. start a new empty project, made private on Forgejo and published so origin is Forgejo
+     (`POST /api/projects/create {name}`: repo-create, new, publish; bad name 400, taken 409);
+  4. go straight to the AI with no project (a session with `none: true` works in your own scratch folder
+     `<projectsRoot>/_scratch/<user>`, with no git and no worktree law).
+  Each start opens a new Work session in your own worktree (`sessions/new` makes it at once and returns where it is).
+  The page remembers the open session. R245 to R249, with the runner's fake Forgejo now answering repo search, create
+  and git smart-HTTP. bridge/worktree.js 2.4.1.
+- **Team-only product downloads** (T-250). The Download panel gets a Products section: every product and version
+  (ShaDow Chat, Hyper Prod Man, Prod Suit, Jcode PGM; config `releases`), with your platform first.
+  - The hub reads the releases from Forgejo with its own token (env `VR_FORGEJO_TOKEN`, else forgejo.json
+    `releaseToken` / `token`), caches them for 5 minutes, and streams each file to signed-in people only
+    (`GET /api/releases`, `GET /api/releases/file?product&tag&asset`).
+  - Only assets in the catalogue can be asked for. No token reaches the page or the log.
+  - This lets the release repos go private (plans/release-audit.md). R270 to R274.
+- **No flaky restarts in the suite:** R195 and R177 no longer switch the fake build back after a fixed 1.5 s; they wait
+  until the restart was seen, and their until-waits go up to 60 s (testing law, rule 2: R195 had failed once under load).
+
+## 5.20.0 — 2026-10-25
+
+MINOR: **presence for AIs and tools** (T-264, an agent branch, reviewed and merged).
+- **Full status in the team tools:** `team_presence` and `hub_status` return the whole status: presence, label,
+  working and workingSessions, acceptingWork, dnd, text, since, where. The older fields are unchanged.
+- **"Tell me when …":** new team tools `notify_when_available {user, what: available | back | online | free,
+  message?}`, `notify_list` and `notify_cancel`. A person's Claude asks to be told when someone is available; the asker
+  then gets a private message from "<asker> · Claude".
+  - Up to 5 per asker, kept for 24 h (Chat/notify-watches.json, a new file).
+  - They honour appear offline and never say more than the status shows the asker.
+- **A status-change event:** `Chat::subscribe_status()`, which notify uses first and workflow triggers (T-186) can use
+  later.
+- R250 to R254. bridge/team-mcp.js 1.0.3.
+
+## 5.19.0 — 2026-10-25
+
+MINOR: **the question UI, and device-code sign-in** (agent branches, reviewed and merged).
+- **The AI's questions get a real UI** (T-246, T-248).
+  - **The series:** one question at a time with Back / Next / Done.
+  - **The kinds:** radio buttons, checkboxes, a checklist with select all / none and a filter, "my own answer" fields.
+  - **The default:** the recommended answer is marked, with a countdown and "Use the recommended".
+  - **Reloads and other devices:** a half-answered series survives a reload. A closed question shows who answered it
+    (you, the default, or mixed).
+  - **Desktop app:** it notifies when a question arrives in the background.
+  - **Settings, "When the AI asks"** (prefs `ask`, add-only): wait N minutes (default 10) then use the recommended
+    answers, or never; "any activity waits". The hub takes the wait from the question's own timeoutSec, then the
+    person's setting, then config, then 600.
+  - **Sound:** a distinct "User action required" tone (`ask`, own volume), plus optional speech. Do not disturb mutes
+    sound, speech and notification.
+  - R240 to R244. bridge/server.js cleanPrefs keeps the new prefs (4.3.0).
+- **Device-code sign-in** (T-236, the hub half). A tool (Jcode PGM first) signs in without a password:
+  - **The routes:** `POST /api/device/start` gives a short user code and a link (`?device=CODE`); the person approves
+    or refuses it under Settings → Connections → Signed-in devices; `POST /api/device/poll` then gives the tool its own
+    token.
+  - **The device tokens:** separate from page sessions, kept only as a hash (new file device-tokens.json), listed with
+    their last use, and revoked in Settings (`GET /api/devices`, `POST /api/devices/revoke`). A revoked token stops
+    working on every route.
+  - **Safety:** approving needs the person's own page session; polling, start and wrong codes are rate limited; codes
+    expire after 10 minutes; an admin password reset or sign-out revokes the person's devices.
+  - R235 to R239.
+
+## 5.18.0 — 2026-10-25
+
+MINOR: **git at a glance, and presence says where people work** (agent branches, reviewed and merged).
+- **Git at a glance** (T-240). The Work page has a Git panel for your own worktree of the open session:
+  - what it shows: the branch, ahead / behind, and the changed files with stage checkboxes;
+  - commit: what is ticked, as you (your Forgejo login if any);
+  - Update and Merge: they run only through `bridge/worktree.js`, so Forgejo-first and the versioning law stay in force.
+    For a session's own worktree, Merge brings its commits home into your `work/<user>` (`home --session`).
+  - Every action is refused (409) while that session works.
+  - Routes: `GET /api/work/git` and `POST /api/work/git/{stage,unstage,commit,update,merge}`, with an optional
+    `session`. No raw push, no reset. R225 to R229.
+- **Where people work** (T-260). Status carries an optional `where` {project, branch, task?, since, source}, from:
+  - the person's running Work session (`work`);
+  - their held board claim (the task);
+  - live reports from other sources (`POST /api/presence {device, source, where}`, e.g. Jcode PGM or the desktop app
+    later).
+  It is hidden by "hide where" and by appearing offline; the person always sees their own. The team tools carry it too,
+  and the page's tooltip reads "on <project> · <task>". Board claims now record when they were made (add-only).
+  R230 to R234.
+
+## 5.17.0 — 2026-10-25
+
+MINOR: **the AI asks you, time accounting, and presence on the board** (built by Work-run agents in their own worktrees,
+reviewed and merged by the orchestrating run).
+- **The AI asks you** (T-245 = T-195 · 1/4; team note plans/question-protocol.md). A Work run calls the team tool
+  `ask_user` with a series of single choice, multi choice, checkbox list or text questions, each with a recommended
+  answer and "my own answer".
+  - The page gets a `bridge_question` event, the asking session turns yellow (`waiting` = question), and the person
+    answers through `POST /api/work/answer` (or "use the recommended"; `GET /api/work/questions` lists open ones).
+  - The answers return to the AI as one tool result.
+  - An unanswered question takes the recommended answers after its timeout (10 minutes by default; `timeoutSec` 0 waits).
+  - The relays loop on `{pending, id}` so no HTTP call is held for minutes. A minimal answer card is on the page; the
+    full UI is T-246. R210 to R214.
+- **Time accounting and an activity log** (T-263; plans/presence.md § 6).
+  - **Active time:** kept as spans of activity. A quiet longer than `workGapMs` (config `presence.workGapMs`, default 15
+    minutes) ends a span and is not counted.
+  - **AI time:** AI working time (`aiMs`, and `agentMs` summed over sessions) keeps adding while the person is away or
+    offline. Away time is kept too.
+  - **Storage:** per person per day in `profiles/<user>/activity/<day>.json`, with an event log of status changes and
+    working sessions.
+  - **Route:** `GET /api/presence/time?user=&from=&to=`. The team sees totals; the person sees their own spans and
+    events.
+  - The page reports input at most once a minute (`active: true`). R205 to R209.
+- **Presence on the task board** (T-262). Every card carries the live status of its claim holder (`holder`) and its
+  assignee (`assigneeStatus`), and a claim whose holder is offline and not working through a run of theirs is marked
+  (`holderOffline`). The board view and `board_list` return `people`: who is available (accepting work and not offline)
+  and what each holds. The board MCP tools return the same, so an AI can check before assigning. All optional fields.
+  web/board.js shows the holder's label and marks the assign picker. R215 to R219.
+
+## 5.16.0 — 2026-10-25
+
+MINOR: **an AI host sets its own Work-session limits** (T-286, taken over from Gee with Sponge's word; plans/multi-session.md
+§ 6). New host settings (ai-node.json, shown and changed in the `vr-host` control app like every other):
+`sessions.perUser` (working sessions per person, default 5), `sessions.perProvider` (default 3), per provider
+`provider.<id>.maxSessions`, `sessions.exceptions` (per-person limits, `name=n, …`) and `sessions.ownerBypass` (default on:
+the owner is not limited on their own host).
+- **The host announces them in hello** as `sessionLimits` (optional: an older host sends none and gets the hub's
+  defaults; an older hub ignores it). The hub uses them for the 429 of T-285: a person's exception first, then the
+  provider's own limit, then the host's; the owner bypass only when the host allows it.
+- **Its owner sets them from Settings → My AI hosts**: a new control action `limits` (POST /api/hosts/control
+  {id, action: "limits", limits: {...}}, owner only like the other controls). The host saves them in its own settings
+  file (the same checks as the control app: 1 to 100, user names) and the hub shows them at once. GET /api/hosts/status
+  names each host's `sessionLimits`; /api/work/sessions' per-host counts use them.
+- **Page** (web/index.html 1.19.2): the host's live line says its limits; a "Session limits…" button opens a small form
+  (per person, per provider, exceptions, "I may exceed them on my own host").
+- **Tests:** a unit test of the host settings (defaults, setting, validation, clearing); R204 (a native host in the
+  scratch setup announces the defaults, its owner sets new limits from the page, the host saves them, a bad value and a
+  non-owner are refused).
+
+## 5.15.3 — 2026-10-25
+
+PATCH: **a session waiting on you** (T-288, the part that has a source today). When a run stops short of a tool it was
+not allowed (Claude Code's permission_denials), its session is **waiting** (yellow, which beats red) with what it needs
+({kind: "permission", tools}); the next message to that session answers it. The Work page now says so ("Claude was not
+allowed to use Bash, so it stopped short. Answer to go on") and plays the mention sound (do not disturb mutes it).
+Presence's status gains workingSessions (how many of a person's sessions work at once). Questions (T-195) and plan
+approvals (T-273) will set the same waiting state when they exist. R202. web/index.html 1.19.1.
+Also: **a share shows the session that is shared.** `POST /api/work/share` takes an optional `session` (none = the first
+one, as before); only that session's lines reach the watchers, sharing another session moves the share, and the watch
+answer names it and says whether that session is busy. R203.
+
 ## 5.15.2 — 2026-10-25
 
 PATCH: **a PC tool call reaches the session that asked.** With several sessions running, a run's PC tool call (the

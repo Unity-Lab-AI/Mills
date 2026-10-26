@@ -39,7 +39,8 @@ enum Waiting { Whole(oneshot::Sender<Result<Relayed, HostErr>>), Stream(mpsc::Se
 struct Pending { kind: String, host: String, waiting: Option<Waiting>, token: String, account: String, display: String, provider: String, last: u64, picked: bool, project: String, started: u64 }
 
 #[derive(Default)]
-struct Live { status: Value, status_at: u64, seen: u64, queue: Vec<Value>, waiters: usize, cancel: HashSet<String>, hello: Option<Value>, key: Option<HostKey>, kid: String, usage: Map<String, Value>, relay_ok: Map<String, Value>, notify: Arc<Notify> }
+/// `limits`: the session limits its owner just set from the page (T-286), until its next hello says them itself.
+struct Live { status: Value, status_at: u64, seen: u64, queue: Vec<Value>, waiters: usize, cancel: HashSet<String>, hello: Option<Value>, key: Option<HostKey>, kid: String, usage: Map<String, Value>, relay_ok: Map<String, Value>, notify: Arc<Notify>, limits: Option<Value> }
 
 pub struct AiHosts {
     root: PathBuf,
@@ -507,9 +508,9 @@ impl AiHosts {
                 // its computer (PC tools) only for the owner the hub registered it to (Settings → My AI hosts / "Run on
                 // this PC"), never for a name a host says it belongs to: only Gee works on Gee's computer
                 let pc = b["pc"] == json!(true) && !r["user"].as_str().unwrap_or("").is_empty();
-                let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"], &caps), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps });
+                let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"], &caps), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps, "sessionLimits": clean_limits(&b["sessionLimits"]) });
                 let kid = key.id();
-                { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }
+                { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.limits = None; n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }
                 self.save_sessions();
                 println!("[ai-host] {} ({}) connected: {} provider(s), engines {}, key {kid}{}", r["nickname"].as_str().unwrap_or(""), if hello["user"].as_str().unwrap_or("").is_empty() { "no owner" } else { hello["user"].as_str().unwrap_or("") }, hello["providers"].as_array().map(|a| a.len()).unwrap_or(0), if hello["engines"].as_array().map(|a| a.is_empty()).unwrap_or(true) { "none".to_string() } else { hello["engines"].as_array().unwrap().iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(", ") }, if caps.is_empty() { ", an older host".to_string() } else { format!(", can {}", caps.join(" ")) });
                 if !caps.iter().any(|c| c == "relay") { self.probe_relays(id.clone()); }
@@ -731,7 +732,7 @@ impl AiHosts {
             let caps: Vec<Value> = n.and_then(|n| n.hello.as_ref().and_then(|h| h["caps"].as_array().cloned())).unwrap_or_default();
             let fresh = n.map(|n| now_ms().saturating_sub(n.status_at) < 60_000).unwrap_or(false);
             json!({ "id": id, "nickname": r["nickname"], "online": base["online"], "paused": base["paused"], "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null),
-                "seen": base["seen"], "version": base["version"], "os": base["os"], "caps": caps, "control": can_control(&caps),
+                "seen": base["seen"], "version": base["version"], "os": base["os"], "caps": caps, "control": can_control(&caps), "sessionLimits": n.and_then(limits_of), // (from the entry held here: session_limits() would take the same lock again)
                 "status": n.map(|n| n.status.clone()).filter(|s| s.is_object()).unwrap_or(Value::Null), "statusAgeMs": n.filter(|n| n.status_at > 0).map(|n| now_ms().saturating_sub(n.status_at)).unwrap_or(0), "statusFresh": fresh,
                 "queued": n.map(|n| n.queue.len()).unwrap_or(0), "inUse": pend.iter().filter(|(h, _)| h == id).map(|(_, v)| v.clone()).collect::<Vec<_>>(),
                 "providers": base["providers"].as_array().map(|a| a.iter().map(|p| json!({ "id": p["id"], "label": p["label"], "kind": p["kind"], "usage": p["usage"], "max5h": p["max5h"], "max7d": p["max7d"], "capped": p["capped"] })).collect::<Vec<_>>()).unwrap_or_default() })
@@ -739,13 +740,20 @@ impl AiHosts {
     }
     /// Asks one of the person's own hosts to pause / resume / restart / update / send its log. Owner only (an admin is
     /// not the owner), only for a host that announced `control`, and only while it is connected.
-    pub async fn control(self: &Arc<Self>, user: &str, id: &str, action: &str) -> Result<Value, HostErr> {
+    /// The Work-session limits a host set (T-286): what its owner set from the page, else what its hello said; None = the
+    /// host says nothing (an older host): the hub's defaults apply.
+    pub fn session_limits(&self, id: &str) -> Option<Value> {
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        live.get(id).and_then(limits_of)
+    }
+    pub async fn control(self: &Arc<Self>, user: &str, id: &str, action: &str, extra: &Value) -> Result<Value, HostErr> {
         let r = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).cloned().filter(|r| !user.is_empty() && r["user"] == json!(user)).ok_or_else(|| herr(403, "Not your host: only the person who owns an AI host can control it (admins too)."))?;
         let (caps, connected) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(id); (n.and_then(|n| n.hello.as_ref().and_then(|h| h["caps"].as_array().cloned())).unwrap_or_default(), n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false)) };
         check_control(&caps, action).map_err(|(s, m)| herr(s, m))?;
         let nick = r["nickname"].as_str().unwrap_or(id).to_string();
         if !connected { return Err(herr(503, format!("{nick} is offline right now: it cannot be controlled from here until it connects."))); }
-        let body = json!({ "action": action }).to_string().into_bytes();
+        let mut body = json!({ "action": action }); if action == "limits" { body["limits"] = extra.clone(); }
+        let body = body.to_string().into_bytes();
         let ans = tokio::time::timeout(Duration::from_secs(20), self.relay(id, "control", "/control", "POST", vec![("content-type".into(), "application/json".into())], body, "control", false)).await
             .map_err(|_| herr(504, format!("{nick} did not answer in time.")))??;
         let status = ans.status;
@@ -753,16 +761,32 @@ impl AiHosts {
         if status >= 400 || out["ok"] != json!(true) { return Err(herr(if status >= 400 { status } else { 502 }, out["result"].as_str().or(out["error"]["message"].as_str()).unwrap_or("The host refused.").to_string())); }
         // pause / resume are visible at once; the host's own report follows
         if action == "pause" || action == "resume" { if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(id) { if !n.status.is_object() { n.status = json!({}); } n.status["paused"] = json!(action == "pause"); n.status["pausedBy"] = json!(if action == "pause" { "hub" } else { "" }); n.status_at = now_ms(); } }
+        // what its owner set also goes into the hello kept for a hub restart: a host that keeps its session does not say hello
+        // again, so without this the hub would go back to the limits of that host's last hello (found by T-290)
+        if action == "limits" && out["limits"].is_object() {
+            if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(id) { n.limits = Some(out["limits"].clone()); if let Some(h) = n.hello.as_mut().and_then(Value::as_object_mut) { h.insert("sessionLimits".into(), clean_limits(&out["limits"])); } }
+            self.save_sessions();
+        }
         println!("[ai-host] {} ({user}) asked {nick} to {action} from the page", id);
         self.changed();
-        Ok(json!({ "ok": true, "result": out["result"], "lines": out["lines"] }))
+        Ok(json!({ "ok": true, "result": out["result"], "lines": out["lines"], "limits": out["limits"] }))
     }
 }
+/// A host's announced session limits, kept only in their known shape (numbers 1 to 100, real names); None = none sent.
+fn clean_limits(v: &Value) -> Value {
+    if !v.is_object() { return Value::Null; }
+    let n = |x: &Value| x.as_u64().filter(|n| (1..=100).contains(n));
+    let name = |k: &str| !k.is_empty() && k.len() <= 32 && k.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let map = |m: &Value| -> Map<String, Value> { m.as_object().map(|o| o.iter().filter(|(k, _)| name(k)).filter_map(|(k, x)| n(x).map(|x| (k.clone(), json!(x)))).collect()).unwrap_or_default() };
+    json!({ "perUser": n(&v["perUser"]).unwrap_or(5), "perProvider": n(&v["perProvider"]).unwrap_or(3), "providers": map(&v["providers"]), "exceptions": map(&v["exceptions"]), "ownerBypass": v["ownerBypass"] != json!(false) })
+}
+/// A host's session limits from its live entry: what its owner set from the page, else what its hello said.
+fn limits_of(n: &Live) -> Option<Value> { n.limits.clone().or_else(|| n.hello.as_ref().and_then(|h| h.get("sessionLimits").cloned())).filter(Value::is_object) }
 /// Does a host's hello say it takes control jobs?
 pub fn can_control(caps: &[Value]) -> bool { caps.iter().any(|c| c == pgm_net_internal::hostlink::CAP_CONTROL) }
 /// May this action go to a host with these caps? An older host gets a clear message, not a job it cannot read.
 pub fn check_control(caps: &[Value], action: &str) -> Result<(), (u16, String)> {
-    if !["pause", "resume", "restart", "update", "logs"].contains(&action) { return Err((400, format!("Unknown action {action:?}: pause, resume, restart, update or logs."))); }
+    if !["pause", "resume", "restart", "update", "logs", "limits"].contains(&action) { return Err((400, format!("Unknown action {action:?}: pause, resume, restart, update, logs or limits."))); }
     if !can_control(caps) { return Err((400, "This host is older than 5.13: update it to control it from here.".into())); }
     Ok(())
 }

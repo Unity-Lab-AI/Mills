@@ -9,7 +9,7 @@
      are fetched without a referrer. The page script is inline: the hub serves this page with 'unsafe-inline'
      replaced by that script's own sha256 (bridge/server.js pinScripts), so no other inline script or
      inline event handler can run; only a static copy of the file (no hub in front) still says 'unsafe-inline'. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.trycloudflare.com https://api.github.com ipc: http://ipc.localhost __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:11434 https://*.trycloudflare.com https://api.github.com ipc: http://ipc.localhost __MILLS_HUB_HOST__; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; frame-src https://www.youtube-nocookie.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>VibeRoller</title>
 <!-- VibeRoller Chat as an installable app (index.html?app=1): manifest + icons; app.js registers the service worker -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -122,6 +122,14 @@
   #editor { flex: 1; border: 0; border-radius: 0; resize: none; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; line-height: 1.45; tab-size: 2; }
 
   /* usage bar: 5h / 7d windows + context window meter (green → orange → yellow → red, purple = out of usage) */
+  #gitBox { border-bottom: 1px solid var(--line); padding: .35rem .7rem; font-size: .78rem; display: flex; flex-direction: column; gap: .3rem; max-height: 40%; overflow: auto; }
+  #gitBox[hidden] { display: none; }
+  #gitBox .gitHead, #gitBox .gitCommit { display: flex; align-items: center; gap: .4rem; } #gitBox .grow { flex: 1; }
+  #gitBox .muted { color: var(--muted); } #gitBox .gitHead button { padding: .15rem .5rem; font-size: .74rem; }
+  #gitBox .gitFile { display: flex; align-items: center; gap: .4rem; min-width: 0; } #gitBox .gitFile span.p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  #gitBox .gitFile .st { color: var(--muted); font-size: .7rem; min-width: 4.8rem; } #gitBox .gitFile .st.conflict { color: var(--bad); }
+  #gitBox .gitCommit input { flex: 1; min-width: 0; } #gitBox pre { margin: 0; white-space: pre-wrap; font-size: .72rem; color: var(--muted); max-height: 7rem; overflow: auto; }
+  #gitBox pre.bad { color: var(--bad); }
   #usageBar { display: flex; align-items: center; gap: .9rem; padding: .35rem .7rem; border-bottom: 1px solid var(--line); font-size: .74rem; font-variant-numeric: tabular-nums; background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 70%, transparent), transparent); }
   .uItem { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
   .uLbl { color: var(--muted); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: .66rem; }
@@ -298,6 +306,28 @@
   .tool { font-size: .8rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; padding: .2rem .5rem; border-left: 2px solid var(--accent); word-break: break-all; }
   .sys { font-size: .8rem; color: var(--muted); text-align: center; }
   .sys.bad { color: var(--bad); }
+  /* the AI asks you (T-246): a series, one question at a time */
+  .qcard { align-self: center; width: min(640px, 94%); margin: .5rem auto; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: .7rem .85rem; display: flex; flex-direction: column; gap: .5rem; outline: none; box-shadow: 0 4px 18px rgba(0,0,0,.25); }
+  .qcard:focus-within { border-color: var(--accent); }
+  .qcard.plan { width: min(860px, 96%); }
+  .plantbl { width: 100%; border-collapse: collapse; font-size: .85rem; margin: .4rem 0; }
+  .plantbl th, .plantbl td { text-align: left; padding: .2rem .4rem; border-bottom: 1px solid var(--line); }
+  .plantbl .planparent td { font-weight: 600; } .plantbl .plansub td { color: var(--muted); } .plantbl .plansub .plantitle { padding-left: 1.2rem; }
+  .planhead { margin-top: .5rem; font-size: .85rem; color: var(--muted); } .planlist { margin: .2rem 0 0 1.2rem; padding: 0; font-size: .85rem; }
+  .qcard.closed { box-shadow: none; border-left-color: var(--line); color: var(--muted); font-size: .85rem; }
+  .qhead { display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+  .qtitle { font-weight: 600; flex: 1; min-width: 8rem; }
+  .qstep, .qclock, .qhint, .qcount { font-size: .75rem; color: var(--muted); }
+  .qbar { height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; } .qbar::after { content: ''; display: block; height: 100%; width: calc(var(--qleft, 1) * 100%); background: var(--accent); transition: width 1s linear; }
+  .qtext { font-size: .95rem; line-height: 1.4; white-space: pre-wrap; margin-bottom: .3rem; }
+  .qopts { display: flex; flex-direction: column; gap: .15rem; } .qopts.long { max-height: 15rem; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: .3rem; }
+  .qopt { display: flex; align-items: baseline; gap: .5rem; padding: .3rem .45rem; border-radius: 6px; cursor: pointer; flex-wrap: wrap; } .qopt:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); } .qopt[hidden] { display: none; }
+  .qopt input { width: auto; flex: none; margin: 0; } .qopt kbd { font: inherit; font-size: .7rem; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 .3rem; }
+  .qrec { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: var(--on-accent); background: var(--accent); border-radius: 999px; padding: .02rem .45rem; }
+  .qtools { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-bottom: .3rem; } .qtools input { flex: 1; min-width: 8rem; padding: .35rem .55rem; } .qtools button { padding: .3rem .6rem; font-size: .8rem; }
+  .qown { margin-top: .4rem; } .qerr { color: var(--bad); font-size: .8rem; } .qerr:empty { display: none; }
+  .qfoot { display: flex; gap: .5rem; align-items: center; } .qgrow { flex: 1; }
+  .qsum { display: flex; flex-direction: column; margin-top: .25rem; } .qsq { font-size: .78rem; } .qsa { color: var(--text); }
   #composer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--line); }
   #composer textarea { resize: none; height: 4.2rem; }
   .sendCol { display: flex; flex-direction: column; gap: .4rem; }
@@ -335,6 +365,13 @@
   .apiKeyShow { display: flex; gap: .4rem; align-items: center; } .apiKeyShow input { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
   .provItem { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--line); }
   .provItem:first-child { border-top: 0; } .provItem small { color: var(--muted); }
+  .startCard { display: flex; flex-direction: column; gap: .45rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem; }
+  .startCard h3 { margin: 0; font-size: .95rem; } .startCard small { color: var(--muted); }
+  .startCard .row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; } .startCard .row input { flex: 1; min-width: 9rem; }
+  .startList { display: flex; flex-direction: column; gap: .25rem; max-height: 11rem; overflow: auto; }
+  .startList button { text-align: left; background: transparent; border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: .3rem .5rem; font-size: .85rem; }
+  .startList button small { margin-left: .4rem; }
+  #startMsg { font-size: .85rem; color: var(--muted); min-height: 1.1rem; } #startMsg.err { color: #e5534b; }
   #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
   .archiveSearch { padding: .5rem .75rem 0; } .archiveSearch input { font-size: .9rem; }
   .conv .snip { font-size: .76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .15rem; }
@@ -575,6 +612,11 @@
   .tile.screenTile { grid-column: 1 / -1; aspect-ratio: auto; max-height: 62vh; min-height: 120px; background: #000; cursor: pointer; }
   .tile.screenTile video { object-fit: contain; max-height: 62vh; transform: none; }
   #callSideHost .tile.screenTile { max-height: 160px; }
+  /* click a shared screen to enlarge it over the page (click again or Esc to shrink) */
+  .tile.screenTile.big { position: fixed; inset: 2vh 2vw; z-index: 60; max-height: none; aspect-ratio: auto; border-width: 3px; box-shadow: 0 0 0 100vmax rgba(0,0,0,.8); }
+  .tile.screenTile.big video { max-height: none; width: 100%; height: 100%; }
+  #shareOpts { display: flex; flex-direction: column; gap: .3rem; margin-top: .4rem; padding: .5rem; border: 1px solid var(--line); border-radius: 8px; font-size: .85rem; }
+  #shareOpts label { display: flex; gap: .4rem; align-items: center; cursor: pointer; } .shareBtns { display: flex; gap: .4rem; margin-top: .2rem; }
   @media (max-width: 700px) {
     #roomCore.theater { flex-direction: column; }
     #roomCore.theater .roomMain { flex: 1 1 40%; min-width: 0; }
@@ -882,8 +924,16 @@
       <button type="button" class="ghost" id="callMic" title="Mute / unmute your microphone"><svg class="ic lead"><use href="#i-mic"/></svg>Mic on</button>
       <button type="button" class="ghost" id="callCam" title="Turn your camera on / off (starts off)"><svg class="ic lead"><use href="#i-camera"/></svg>Camera off</button>
       <button type="button" class="ghost" id="callScreen" title="Share your screen, a window or a tab with the call (shows as its own tile for everyone)"><svg class="ic lead"><use href="#i-share"/></svg>Share screen</button>
+      <button type="button" class="ghost" id="callCoview" hidden title="Co-view: the people in this call follow what you have open (screen, board task, note, chat) live in their own page">Co-view</button>
       <button type="button" class="ghost" id="callTheater" title="Theater: the call fills the screen and the chat stays on the left (Esc leaves it)"><svg class="ic lead"><use href="#i-eye"/></svg>Theater</button>
       <button type="button" id="callLeave" title="Leave the call">Leave</button>
+    </div>
+    <div id="shareOpts" hidden>
+      <b>Share with the call</b>
+      <label><input type="radio" name="shareAudio" value="none" checked> No audio</label>
+      <label><input type="radio" name="shareAudio" value="sys"> Tab / system audio (if your browser offers it)</label>
+      <label><input type="radio" name="shareAudio" value="sysmic"> Tab / system audio + my microphone</label>
+      <div class="shareBtns"><button type="button" id="shareGo">Choose what to share</button><button type="button" class="ghost" id="shareCancel">Cancel</button></div>
     </div>
     <div id="callMsg"></div>
   </div>
@@ -925,8 +975,17 @@
       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+      <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
       <label class="row">Sound style <select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
+      <details class="setSection" open><summary>When the AI asks</summary>
+        <label class="chk"><input type="checkbox" id="setAskAuto"> If I do not respond, use the recommended answers (marked "chosen by default")</label>
+        <label class="row">…after this many minutes <input type="number" id="setAskMin" min="1" max="1440" step="1" style="width:6rem"></label>
+        <label class="chk"><input type="checkbox" id="setAskActivity"> Any activity on the page while a question is open (a click, a key, coming back to the window) makes it wait for me again</label>
+        <label class="chk"><input type="checkbox" id="setAskTts"> Say "User action required" and the question aloud (needs the text to speech master switch below; Do not disturb mutes it)</label>
+        <div class="status">Off: the AI waits for you as long as it takes. The alert sound has its own volume above.</div>
+      </details>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
+      <label class="chk"><input type="checkbox" id="setReopen"> Reopen what I had open after a reload (the previous Work conversation and the chat you were in; off: a reload starts fresh on the menu, nothing is deleted)</label>
       <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
       <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
       <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
@@ -954,6 +1013,8 @@
      <div data-setpane="connections" hidden>
       <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
         <div id="apiBox" class="apiBox"></div></div>
+      <div class="setSection"><b>Signed-in devices</b> — tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.
+        <div id="devBox" class="apiBox"></div></div>
       <div class="setSection"><b>AI source</b> — whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).
         <div id="srcBox" class="apiBox"></div></div>
       <div class="setSection"><b>My AI hosts</b> — your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.
@@ -962,6 +1023,8 @@
         <div id="provBox" class="provBox"></div></div>
       <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
         <div id="fjBox" class="apiBox"></div></div>
+      <div class="setSection"><b>My projects</b> — the projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.
+        <div id="projBox" class="apiBox"></div></div>
      </div>
      <!-- the native programs, pre-built, handed out by the Rust hub to people with an account (vr-hub downloads.rs) -->
      <div data-setpane="downloads" hidden>
@@ -1123,7 +1186,9 @@
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
+    <button class="ghost" id="startWork" hidden title="Start work: a new session on a project you have, a repo cloned, a new empty project, or just the AI">New session</button>
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
+    <button class="ghost" id="newPlanner" title="A planner session: Claude only plans onto the board and under plans/ in the notes; it cannot edit files, run builds or use your PC (the hub enforces it)">New planner session</button>
     <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
     <button class="ghost" id="openArchive" title="Your saved Claude sessions">Past sessions</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
@@ -1159,9 +1224,22 @@
     </section>
     <section id="chat">
       <div class="bar"><span id="convTitle" title="Click to rename">Unsaved session</span>
+        <span id="plannerBadge" hidden title="Planner mode: Claude only plans (board tasks and notes under plans/); it cannot edit files, run builds or use your PC" style="background:#6d4aff;color:#fff;border-radius:.6rem;padding:.1rem .55rem;font-size:.75rem;font-weight:600">Planner</span>
+        <button type="button" class="ghost" id="leavePlanner" hidden title="Leave planner mode: back to your normal Work session">Leave planner</button>
         <button type="button" class="ghost" id="shareBtn" title="Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue"><svg class="ic lead"><use href="#i-share"/></svg>Share with everyone</button>
+        <button type="button" class="ghost" id="coviewBtn" hidden title="Co-view: everyone you pick follows what you have open (screen, board task, note, chat) live in their own page">Co-view</button>
+        <button type="button" class="ghost" id="gitBtn" title="Git at a glance: what changed in your own worktree, stage, commit, update, merge">Git</button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
-      <div id="usageBar" title="Claude usage of the host account (shared by everyone) and this session's context window">
+      <div id="gitBox" hidden>
+        <div class="gitHead"><b id="gitBranch">…</b><span id="gitAB" class="muted"></span><span class="grow"></span>
+          <button type="button" class="ghost" id="gitUpdate" title="Bring the integration branch (or, in a session worktree, your own work branch) into this branch (worktree.js update)">Update</button>
+          <button type="button" class="ghost" id="gitMerge" title="Merge into the integration branch and push it to Forgejo first (worktree.js merge: version law applies). In a session's own worktree: merge into your own work branch.">Merge</button>
+          <button type="button" class="ghost" id="gitRefresh" title="Refresh" aria-label="Refresh">&#8635;</button></div>
+        <div id="gitFiles"></div>
+        <div class="gitCommit"><input id="gitMsg" placeholder="Commit message (what is ticked is committed)" maxlength="500"><button type="button" id="gitCommit">Commit</button></div>
+        <pre id="gitOut" hidden></pre>
+      </div>
+      <div id="usageBar"title="Claude usage of the host account (shared by everyone) and this session's context window">
         <div class="uItem" id="u5h"><span class="uLbl">5h</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--:--:--</span></div>
         <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--d --h --m</span></div>
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
@@ -1205,7 +1283,31 @@
   </div>
 </div>
 
+<div id="startPanel" class="modal" hidden>
+  <div class="box">
+    <div class="bar"><span>Start work</span><button class="ghost" id="startClose">Close</button></div>
+    <div class="setBody">
+      <section class="startCard" id="startPick"><h3>1 · A project you have</h3>
+        <small>Each start is a new session in your own worktree of the project (branch work/you).</small>
+        <div class="startList" id="startProjects"></div></section>
+      <section class="startCard" id="startClone"><h3>2 · Clone a repo</h3>
+        <div class="row"><input id="startUrl" type="text" placeholder="https://github.com/owner/repo.git or a Forgejo address" spellcheck="false" autocomplete="off"><input id="startCloneName" type="text" placeholder="name (optional)" spellcheck="false" autocomplete="off"><button id="startCloneGo">Clone and start</button></div>
+        <div class="row"><input id="startRepoQ" type="search" placeholder="…or search the Forgejo repos you can see" spellcheck="false" autocomplete="off"></div>
+        <small id="startRepoNote"></small>
+        <div class="startList" id="startRepos"></div></section>
+      <section class="startCard" id="startNew"><h3>3 · A new, empty project</h3>
+        <small>Made private on Forgejo as you, so everyone's worktrees and merges have a home from the first minute.</small>
+        <div class="row"><input id="startNewName" type="text" placeholder="project name (letters, digits, dots, dashes, underscores)" spellcheck="false" autocomplete="off"><button id="startNewGo">Create and start</button></div></section>
+      <section class="startCard" id="startNone"><h3>4 · No project</h3>
+        <small>Just the AI: a scratch folder of your own, no git, nothing shared.</small>
+        <div class="row"><button id="startNoneGo">Start with no project</button></div></section>
+      <div id="startMsg" role="status"></div>
+    </div>
+  </div>
+</div>
+
 <script src="md.js"></script>
+<script src="localai.js"></script>
 <script src="attach.js"></script>
 <script src="board.js"></script>
 <script>
@@ -1359,7 +1461,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
 let reconnecting = false;
 const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '').toLowerCase(); return !/no-store|no-cache/.test(cc) && /max-age=([1-9]\d*)/.test(cc); };
+// The Work session on screen ('' = the first one, as older pages and hubs know it): the calls that belong to one
+// session carry ?session=<id> (T-238: Start work opens a new session of its own).
+let SESSION = '';
+const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|work\/(current|queue|attach|git|share|draft))(\/|\?|$)/;
+const withSession = (path) => (SESSION && SESSION_PATHS.test(path) && !/[?&]session=/.test(path) ? path + (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(SESSION) : path);
+// Planner mode (T-275): the id of the planner session open here ('' = the normal Work session). Its requests name it (?session=).
+const PLAN_KEY = NS + 'vr.planSession';
+let planSession = (() => { try { return sessionStorage.getItem(PLAN_KEY) || ''; } catch { return ''; } })();
+const PLAN_PATHS = /^\/api\/(chat|stop|work\/(current|queue|questions|attach|git))(\?|$)/;
 async function api(path, opts = {}) {
+  // planner mode (T-275) first: its session wins over the one on screen (T-238)
+  if (planSession && PLAN_PATHS.test(path) && !/[?&]session=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(planSession);
+  path = withSession(path);
   if (!base) throw new Error('VibeRoller is offline — ask the admin to start it.');
   const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
   for (let attempt = 1; ; attempt++) {
@@ -1720,6 +1834,7 @@ async function enter() {
   if (me.prefs && typeof me.prefs.theme === 'string') { if (me.prefs.theme !== (store.get('mills.theme') || '')) { const m = me; me = null; applyTheme(m.prefs.theme); me = m; } } // (no chat re-render yet: it is drawn next)
   else if (store.get('mills.theme')) saveThemeChoice(store.get('mills.theme'));
   USER_NAME = me.display;
+  try { const dc = new URLSearchParams(location.search).get('device'); if (dc) setTimeout(() => { openSettings(); const b = document.querySelector('[data-settab="connections"]'); if (b) b.click(); renderDevices(dc.slice(0, 9)); }, 400); } catch {} // a tool's link: ?device=CODE opens the box with the code in it
   document.title = `${APP_NAME} · ${me.display}`;
   $('brand').textContent = `${APP_NAME} · ${me.display}`;
   $('menuUser').textContent = me.username;
@@ -1729,11 +1844,12 @@ async function enter() {
   renderProjects();
   myShare = me.share || '';
   loadLayout();
-  currentConv = store.get('mills.conv.' + me.username) || 'room';
+  currentConv = (prefs().reopen && store.get('mills.conv.' + me.username)) || 'room'; // T-241: "Reopen what I had open" off = start on the team room
   showScreen(APP_MODE ? 'room' : 'menu'); // the installed VibeRoller Chat app is the chat and nothing else
   startRoomPolling();
   callPollLoop();
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
+  if (typeof COVIEW !== 'undefined') COVIEW.start(); // web/coview.js (T-244)
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
   restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
@@ -1771,7 +1887,7 @@ function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes']) $(id).hidden = true;
-  BOARD.stop(); NOTES.stop();
+  BOARD.stop(); NOTES.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
@@ -1996,6 +2112,8 @@ const NOT_WORK = (p) => p.kind === 'openai' || p.kind === 'host-openai' || p.kin
 const modelName = (id) => (id ? modelLabels[id] || id : 'Claude Code default');
 // The dropdown lists the host's Claude models, then every Claude-capable provider the person may use
 // (their own, or one a teammate shared): option value = "<provider id>|<model>" ("" = the host default).
+// this computer's own Ollama (T-208): web/localai.js, given what only the page knows
+const localAiOpts = () => ({ native: NATIVE, user: me && me.username, origin: location.origin, onChange: () => { if (me && me.models) showModels(me); }, refresh: () => refreshProviders() });
 function showModels(d) {
   const sel = $('model');
   if (!Array.isArray(d.models)) { sel.hidden = true; return; } // bridge from before the picker existed
@@ -2019,9 +2137,12 @@ function showModels(d) {
     for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); o.disabled = true; g.append(o); }
     sel.append(g);
   }
+  // this computer's own Ollama, when found and not already lent by one of the person's hosts (T-208): shown, never selectable
+  LOCALAI.group(sel, provs, localAiOpts()); // web/localai.js
   sel.value = d.provider && d.provider !== 'host' ? d.provider + '|' + (d.model || '') : d.model || '';
   if (sel.selectedIndex < 0) sel.value = '';
   sel.hidden = false;
+  LOCALAI.probe(localAiOpts()); // cached for 30 s; a change re-draws this list once
 }
 // The project picker (Work header): every project in the shared projects area, VibeRoller first; each is worked on in
 // your own worktree of it. The two last entries start a new project or pull in an existing repo by its address.
@@ -2031,14 +2152,22 @@ function renderProjects() {
   sel.textContent = '';
   const opt = (v, l, title) => { const o = document.createElement('option'); o.value = v; o.textContent = l; if (title) o.title = title; sel.append(o); };
   for (const p of me.projects) opt(p.name, p.name + ' · my worktree', p.dir + (p.remote ? '  ←  ' + p.remote : '') + (p.people.length ? '  ·  worktrees: ' + p.people.join(', ') : ''));
+  opt('__none', '◌ No project (the AI only)');
   opt('__new', '＋ New project…'); opt('__clone', '⤓ Pull in a repo…');
-  sel.value = me.project || 'VibeRoller';
+  sel.value = me.project === '(none)' ? '__none' : (me.project || 'VibeRoller');
   sel.hidden = false;
 }
 $('workspace').onchange = async () => {
-  const sel = $('workspace'), want = sel.value, before = me.project || 'VibeRoller';
+  const sel = $('workspace'), want = sel.value, before = me.project === '(none)' ? '__none' : (me.project || 'VibeRoller');
+  if ((want === '__new' || want === '__clone') && SESSIONS_OK) { sel.value = before; return startOpen(); } // one start flow (T-238)
   try {
     let project = want;
+    if (want === '__none') {
+      const d = await json('/api/workspace', { method: 'POST', body: JSON.stringify({ none: true }) });
+      me.project = d.project; renderProjects(); fresh = true;
+      sys('Working with no project: only the AI, in your scratch folder ' + d.dir + ' (no git). Next message starts a new chat.');
+      return;
+    }
     if (want === '__new' || want === '__clone') {
       const url = want === '__clone' ? (prompt('Address of the repo to pull in (https://host/owner/repo.git or git@host:owner/repo.git). Your saved Forgejo token is used for the lab\'s Forgejo.') || '').trim() : '';
       if (want === '__clone' && !url) { sel.value = before; return; }
@@ -2054,6 +2183,80 @@ $('workspace').onchange = async () => {
     sys('Working on ' + d.project + ' in your own worktree: ' + d.dir + ' (branch ' + d.branch + '). Ask Claude to "merge" when your change is done. Next message starts a new chat.');
   } catch (err) { sel.value = before; sys(err.message, true); }
 };
+// ---------- Start work (T-238): one flow for every way to begin ----------
+// pick a project / clone (an address, or a repo from Forgejo) / a new empty project (private on Forgejo) / no project.
+// Each start opens a NEW Work session (POST /api/work/sessions/new) that lands in your own worktree of it.
+let SESSIONS_OK = false, startAuto = false, startRepoTimer = null, startBusy = false;
+const startMsg = (t, err) => { const m = $('startMsg'); m.textContent = t || ''; m.className = err ? 'err' : ''; };
+function startOpen() {
+  if (!me || !SESSIONS_OK) return;
+  $('startPanel').hidden = false; startMsg('');
+  const box = $('startProjects'); box.textContent = '';
+  for (const p of me.projects || []) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = p.name;
+    const sm = document.createElement('small'); sm.textContent = p.remote || 'no remote yet'; b.append(sm);
+    b.onclick = () => startSession({ project: p.name }); box.append(b);
+  }
+  startRepos();
+}
+function startClose() { $('startPanel').hidden = true; }
+async function startRepos() {
+  const q = $('startRepoQ').value.trim(), box = $('startRepos'), note = $('startRepoNote');
+  try {
+    const d = await json('/api/projects/repos?q=' + encodeURIComponent(q));
+    if (q !== $('startRepoQ').value.trim()) return;
+    box.textContent = ''; note.textContent = d.repos.length ? '' : 'No repo matches.';
+    for (const r of d.repos.slice(0, 200)) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = r.name;
+      const sm = document.createElement('small'); sm.textContent = [r.private ? 'private' : '', r.fork ? 'fork' : '', r.description].filter(Boolean).join(' · '); b.append(sm);
+      b.onclick = () => startClone(r.url, ''); box.append(b);
+    }
+  } catch (err) { box.textContent = ''; note.textContent = err.message; }
+}
+async function startClone(url, name) {
+  if (startBusy) return;
+  if (!url) return startMsg('Give the repo\'s address (https://…).', true);
+  startMsg('Cloning ' + url + '…');
+  try {
+    const made = await json('/api/projects', { method: 'POST', body: JSON.stringify(name ? { url, name } : { url }) });
+    me.projects = made.projects; renderProjects();
+    await startSession({ project: made.project });
+  } catch (err) { startMsg(err.message, true); }
+}
+async function startCreate(name) {
+  if (startBusy) return;
+  if (!name) return startMsg('Give the new project a name.', true);
+  startMsg('Making ' + name + ' on Forgejo (private) and here…');
+  try {
+    const made = await json('/api/projects/create', { method: 'POST', body: JSON.stringify({ name }) });
+    me.projects = made.projects; renderProjects();
+    await startSession({ project: made.project });
+  } catch (err) { startMsg(err.message, true); }
+}
+async function startSession(body) {
+  if (startBusy) return;
+  if (busy || queue.length || sendNowMessage) return startMsg('Claude is working here: stop it (and clear the queue) first, or let it finish.', true);
+  startBusy = true;
+  try {
+    startMsg('Opening a new session…');
+    const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify(body.none ? { none: true } : body) });
+    SESSION = d.id; fresh = true; log.innerHTML = ''; setConversation(null, null, []);
+    me.project = d.project; renderProjects();
+    if (usageData) { usageData.context = null; paintUsage(); }
+    startClose(); gitRefresh();
+    sys(d.noProject ? 'New session with no project: only the AI, in your scratch folder ' + d.dir + ' (no git).'
+      : 'New session on ' + d.project + ' in your own worktree: ' + d.dir + ' (branch ' + d.branch + '). Ask Claude to "merge" when your change is done.');
+  } catch (err) { startMsg(err.message, true); }
+  startBusy = false;
+}
+$('startWork').onclick = startOpen; $('startClose').onclick = startClose;
+$('startPanel').addEventListener('click', (e) => { if (e.target === $('startPanel')) startClose(); });
+$('startCloneGo').onclick = () => startClone($('startUrl').value.trim(), $('startCloneName').value.trim());
+$('startUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('startCloneGo').click(); });
+$('startNewGo').onclick = () => startCreate($('startNewName').value.trim());
+$('startNewName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('startNewGo').click(); });
+$('startNoneGo').onclick = () => startSession({ none: true });
+$('startRepoQ').addEventListener('input', () => { clearTimeout(startRepoTimer); startRepoTimer = setTimeout(startRepos, 350); });
 $('model').onchange = async () => {
   try {
     const [provider, model] = $('model').value.includes('|') ? $('model').value.split('|') : ['host', $('model').value];
@@ -2070,8 +2273,50 @@ $('model').onchange = async () => {
 let busy = false, fresh = false, sendNowMessage = null;
 const queue = []; // { message, el }
 function updateStopButton() { $('stop').textContent = busy && $('input').value.trim() ? 'Send now' : 'Stop'; }
-function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); }
+function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); gitRefresh(); }
 $('input').addEventListener('input', updateStopButton);
+
+// Git at a glance (T-240): your own worktree of this Work session. Stage / commit are plain git; Update and Merge only
+// run bridge/worktree.js on the hub (Forgejo first, the version law), and everything waits while Claude is working.
+let gitState = null;
+const gitShow = (text, bad) => { const o = $('gitOut'); o.hidden = !text; o.textContent = text || ''; o.className = bad ? 'bad' : ''; };
+function gitRender(s) {
+  gitState = s; const working = !!s.working || busy;
+  $('gitBranch').textContent = s.branch || '…'; $('gitBranch').title = s.dir || '';
+  $('gitAB').textContent = s.exists === false ? (s.note || '') : (s.noBase ? '' : `${s.ahead} ahead · ${s.behind} behind ${s.base}`) + (s.rightBranch === false ? ' · on the wrong branch' : '') + (working ? ' · Claude is working' : '');
+  const box = $('gitFiles'); box.textContent = '';
+  const files = s.files || [];
+  if (!files.length) { const d = document.createElement('div'); d.className = 'muted'; d.textContent = s.exists === false ? '' : 'Nothing changed' + (s.last ? ' · last: ' + s.last : ''); box.appendChild(d); }
+  for (const f of files) {
+    const row = document.createElement('label'); row.className = 'gitFile';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!f.staged; cb.disabled = working;
+    cb.onchange = () => gitAct(cb.checked ? 'stage' : 'unstage', { files: [f.path] });
+    const st = document.createElement('span'); st.className = 'st' + (f.state === 'conflict' ? ' conflict' : ''); st.textContent = f.state + (f.staged && f.unstaged && f.state !== 'untracked' ? ' +' : '');
+    const p = document.createElement('span'); p.className = 'p'; p.textContent = f.path; p.title = f.from ? f.from + ' → ' + f.path : f.path;
+    row.append(cb, st, p); box.appendChild(row);
+  }
+  const none = s.exists === false;
+  for (const id of ['gitUpdate', 'gitMerge', 'gitCommit']) $(id).disabled = working || none;
+  $('gitMerge').textContent = s.primary === false ? 'Merge into my work' : 'Merge';
+}
+async function gitRefresh() {
+  if ($('gitBox').hidden) return;
+  try { gitRender(await json('/api/work/git')); } catch (err) { gitShow(err.message, true); }
+}
+async function gitAct(what, body) {
+  gitShow(what === 'update' || what === 'merge' ? 'Running worktree.js ' + what + '…' : '');
+  try {
+    const d = await json('/api/work/git/' + what, { method: 'POST', body: JSON.stringify(body || {}) });
+    gitRender(d); gitShow(['commit', 'update', 'merge'].includes(what) ? d.text : '');
+    if (what === 'commit') $('gitMsg').value = '';
+  } catch (err) { gitShow(err.message, true); gitRefresh(); }
+}
+$('gitBtn').onclick = () => { $('gitBox').hidden = !$('gitBox').hidden; gitRefresh(); };
+$('gitRefresh').onclick = () => { gitShow(''); gitRefresh(); };
+$('gitUpdate').onclick = () => gitAct('update');
+$('gitMerge').onclick = () => gitAct('merge');
+$('gitCommit').onclick = () => { const m = $('gitMsg').value.trim(); if (!m) { gitShow('A commit needs a message.', true); return; } gitAct('commit', { message: m }); };
+$('gitMsg').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('gitCommit').click(); } };
 
 // Attachments in Work: uploaded to this person's own area on the hub first (Claude reads them there); the message
 // carries them as a marker block at its end, so the queue, the saved conversation and Past sessions keep them as text.
@@ -2222,9 +2467,226 @@ function hubView(ev) {
     default: return null;
   }
 }
+// The AI asks you (T-245 protocol, T-246 UI, T-248 timing and alert; docs in plans/question-protocol.md). A series is shown one
+// question at a time (Back / Next, Done at the end: the answers go back together); single = radio buttons, multi = checkboxes,
+// checklist = a long scrollable checkbox list with all / none and a filter, "my own answer" fields, the recommended answer
+// ticked and marked, a countdown to the moment the recommended answers are used, "Use the recommended". A half-answered
+// series survives a reload (typed answers in sessionStorage, the open questions re-read from GET /api/work/questions).
+// Enter = Next, the digits pick an option. Any activity tells the hub you are on it, so the wait starts over (T-248).
+const openQuestions = new Map(); // question id → { card, stop() }
+const qMk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const qStore = {
+  get: (id) => { try { return JSON.parse(sessionStorage.getItem(NS + 'vr.q.' + id)) || null; } catch { return null; } },
+  set: (id, v) => { try { sessionStorage.setItem(NS + 'vr.q.' + id, JSON.stringify(v)); } catch {} },
+  del: (id) => { try { sessionStorage.removeItem(NS + 'vr.q.' + id); } catch {} },
+};
+const qClock = (ms) => { const s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const qAnswered = (q, a) => (q.kind === 'text' ? !!(a.text || '').trim() : !!((a.picked || []).length || (a.other || '').trim()));
+function showQuestion(ev, quiet) {
+  if (openQuestions.has(ev.id)) return;
+  const qs = ev.questions || []; if (!qs.length) return;
+  const saved = qStore.get(ev.id), st = { i: 0, a: {}, v: [] };
+  if (saved && saved.a) { st.i = Math.max(0, Math.min(saved.i | 0, qs.length - 1)); st.a = saved.a; st.v = Array.isArray(saved.v) ? saved.v : []; }
+  for (const q of qs) {
+    const a = st.a[q.id] = st.a[q.id] || {};
+    if (q.kind === 'text') { if (typeof a.text !== 'string') a.text = q.default || ''; }
+    else { if (!Array.isArray(a.picked)) a.picked = Array.isArray(q.default) ? q.default.slice() : []; if (typeof a.other !== 'string') a.other = ''; }
+  }
+  const save = () => qStore.set(ev.id, st);
+  const card = qMk('div', 'qcard'); card.tabIndex = -1; card.setAttribute('role', 'group'); card.setAttribute('aria-label', 'Claude asks you');
+  const head = qMk('div', 'qhead'), titleEl = qMk('div', 'qtitle', ev.title || 'Claude asks you'), stepEl = qMk('div', 'qstep'), clockEl = qMk('div', 'qclock');
+  const bar = qMk('div', 'qbar'); head.append(titleEl, stepEl, clockEl);
+  const body = qMk('div', 'qbody'), errEl = qMk('div', 'qerr'), foot = qMk('div', 'qfoot');
+  const back = qMk('button', 'ghost', 'Back'), rec = qMk('button', 'ghost', 'Use the recommended'), next = qMk('button', '', 'Next');
+  back.type = rec.type = next.type = 'button'; rec.title = 'Take the recommended answer of every question';
+  foot.append(back, qMk('span', 'qgrow'), rec, next);
+  card.append(head, bar, body, errEl, foot);
+  // the clock: when the recommended answers are used if nobody answers; activity starts it over
+  const timeoutMs = (ev.timeoutSec || 0) * 1000; let deadline = ev.deadline || null, lastPoke = 0, done = false;
+  const tick = () => {
+    if (!deadline) { clockEl.textContent = 'Waits until you answer'; bar.hidden = true; return; }
+    const left = deadline - Date.now();
+    clockEl.textContent = left > 0 ? 'Recommended answers in ' + qClock(left) : 'Using the recommended answers…';
+    bar.hidden = !timeoutMs; if (timeoutMs) bar.style.setProperty('--qleft', Math.max(0, Math.min(1, left / timeoutMs)));
+  };
+  const timer = setInterval(tick, 1000);
+  const poke = () => { // any activity: the wait starts over (at most every 15 s)
+    const now = Date.now(); if (done || now - lastPoke < 15000) return; lastPoke = now;
+    if (timeoutMs) deadline = now + timeoutMs; tick();
+    api('/api/work/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, activity: true }) }).then((r) => r.json()).then((d) => { if (d && d.deadline) { deadline = d.deadline; tick(); } }).catch(() => {});
+  };
+  const onAny = () => { if (prefs().ask.activity) poke(); };
+  const ownActivity = () => poke(); // inside the card, always
+  for (const t of ['click', 'keydown', 'input', 'focusin']) card.addEventListener(t, ownActivity);
+  for (const t of ['pointerdown', 'keydown']) document.addEventListener(t, onAny, true);
+  window.addEventListener('focus', onAny);
+  const unhook = () => { done = true; clearInterval(timer); for (const t of ['pointerdown', 'keydown']) document.removeEventListener(t, onAny, true); window.removeEventListener('focus', onAny); };
+  // one question
+  const draw = () => {
+    const q = qs[st.i], a = st.a[q.id]; if (!st.v.includes(q.id)) st.v.push(q.id); save();
+    body.textContent = ''; errEl.textContent = '';
+    stepEl.textContent = qs.length > 1 ? 'Question ' + (st.i + 1) + ' of ' + qs.length : '';
+    back.hidden = st.i === 0; next.textContent = st.i === qs.length - 1 ? 'Done' : 'Next';
+    body.appendChild(qMk('div', 'qtext', q.text + (q.required ? ' *' : '')));
+    if (q.kind === 'text') {
+      const t = qMk('textarea'); t.rows = 3; t.value = a.text; t.placeholder = 'Your answer'; t.oninput = () => { a.text = t.value; save(); };
+      body.appendChild(t); if (q.default) body.appendChild(qMk('div', 'qhint', 'Recommended: ' + q.default));
+      return;
+    }
+    const def = Array.isArray(q.default) ? q.default : [], single = q.kind === 'single', list = qMk('div', 'qopts' + (q.kind === 'checklist' ? ' long' : '')), rows = [];
+    let own = null, count = null;
+    const refresh = () => { for (const r of rows) r.c.checked = a.picked.includes(r.o.id); if (count) count.textContent = a.picked.length + ' of ' + (q.options || []).length + ' ticked'; };
+    const setPick = (id, on) => {
+      if (single) { a.picked = on ? [id] : []; if (on && own) { own.value = ''; a.other = ''; } }
+      else { a.picked = a.picked.filter((x) => x !== id); if (on) a.picked.push(id); }
+      save(); refresh();
+    };
+    if (q.kind === 'checklist') {
+      const tools = qMk('div', 'qtools'), filt = qMk('input'); filt.placeholder = 'Filter the list'; filt.type = 'search'; count = qMk('span', 'qcount');
+      const all = qMk('button', 'ghost', 'Select all'), none = qMk('button', 'ghost', 'Select none'); all.type = none.type = 'button';
+      const visible = () => rows.filter((r) => !r.el.hidden).map((r) => r.o.id);
+      all.onclick = () => { for (const id of visible()) if (!a.picked.includes(id)) a.picked.push(id); save(); refresh(); };
+      none.onclick = () => { const v = visible(); a.picked = a.picked.filter((x) => !v.includes(x)); save(); refresh(); };
+      filt.oninput = () => { const f = filt.value.trim().toLowerCase(); for (const r of rows) r.el.hidden = !!f && !(r.o.label + ' ' + (r.o.hint || '')).toLowerCase().includes(f); };
+      tools.append(filt, all, none, count); body.appendChild(tools);
+    }
+    (q.options || []).forEach((o, n) => {
+      const el = qMk('label', 'qopt'), c = qMk('input'); c.type = single ? 'radio' : 'checkbox'; c.name = ev.id + '-' + q.id;
+      c.onchange = () => setPick(o.id, c.checked);
+      el.appendChild(c);
+      if (n < 9 && q.kind !== 'checklist') el.appendChild(qMk('kbd', '', String(n + 1)));
+      const t = qMk('span', 'qlabel', o.label); el.appendChild(t);
+      if (def.includes(o.id)) el.appendChild(qMk('span', 'qrec', 'recommended'));
+      if (o.hint) el.appendChild(qMk('span', 'qhint', o.hint));
+      list.appendChild(el); rows.push({ el, c, o });
+    });
+    body.appendChild(list);
+    if (q.other) {
+      own = qMk('input', 'qown'); own.placeholder = q.otherLabel || 'my own answer'; own.value = a.other;
+      own.oninput = () => { a.other = own.value; if (single && own.value) a.picked = []; save(); refresh(); };
+      body.appendChild(own);
+    }
+    refresh();
+  };
+  const problem = (q) => (q.required && !qAnswered(q, st.a[q.id]) ? 'Please answer this one first.' : '');
+  const send = (payload) => { next.disabled = rec.disabled = back.disabled = true; return api('/api/work/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, ...payload }) })
+    .then(async (r) => { if (!r.ok && r.status !== 409 && r.status !== 404) { const d = await r.json().catch(() => ({})); throw new Error(d.error || r.statusText); } })
+    .catch((e) => { next.disabled = rec.disabled = back.disabled = false; errEl.textContent = 'Could not send the answer: ' + e.message; }); };
+  next.onclick = () => {
+    const q = qs[st.i], p = problem(q); if (p) { errEl.textContent = p; return; }
+    if (st.i < qs.length - 1) { st.i++; draw(); card.focus({ preventScroll: true }); return; }
+    const miss = qs.find((x) => problem(x)); if (miss) { st.i = qs.indexOf(miss); draw(); errEl.textContent = 'Please answer this one first.'; return; }
+    send({ answers: qs.filter((x) => st.v.includes(x.id)).map((x) => { const a = st.a[x.id]; return x.kind === 'text' ? { id: x.id, text: a.text } : { id: x.id, picked: a.picked, other: a.other }; }) });
+  };
+  back.onclick = () => { if (st.i > 0) { st.i--; draw(); card.focus({ preventScroll: true }); } };
+  rec.onclick = () => send({ defaults: true });
+  card.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (e.target.tagName || '').toLowerCase(), typing = tag === 'textarea' || (tag === 'input' && !['radio', 'checkbox'].includes(e.target.type));
+    if (e.key === 'Enter' && tag !== 'textarea' && tag !== 'button') { e.preventDefault(); next.click(); return; }
+    if (e.key === 'Enter' && tag === 'textarea' && !e.shiftKey && qs.length > 1) { e.preventDefault(); next.click(); return; }
+    if (!typing && /^[1-9]$/.test(e.key)) {
+      const q = qs[st.i], o = (q.options || [])[Number(e.key) - 1]; if (!o || q.kind === 'checklist') return;
+      e.preventDefault(); const a = st.a[q.id]; const on = q.kind === 'single' ? true : !a.picked.includes(o.id);
+      if (q.kind === 'single') { a.picked = [o.id]; a.other = ''; } else { a.picked = a.picked.filter((x) => x !== o.id); if (on) a.picked.push(o.id); }
+      draw();
+    }
+  });
+  draw();
+  log.appendChild(card);
+  openQuestions.set(ev.id, { card, stop: unhook });
+  if (!quiet) qAlert(ev);
+}
+// "User action required": the alert tone (its own volume in Settings), optionally spoken, and in the desktop app a
+// notification when the window is in the background. Do-not-disturb mutes all of it. Each question alerts once per page.
+const qAlerted = new Set();
+function qAlert(ev) {
+  if (qAlerted.has(ev.id) || (ev.at && Date.now() - ev.at > 30000)) return; qAlerted.add(ev.id);
+  const P = prefs(), title = ev.title || ((ev.questions || [])[0] || {}).text || 'Claude asks you';
+  if (dndOn()) return;
+  if (P.sound.on) playTone('ask', P.sound.ask);
+  if (P.tts.ask) speak('User action required. ' + title);
+  if (NATIVE && (document.visibilityState !== 'visible' || !document.hasFocus())) NATIVE.call('notify', { title: 'User action required', body: title }).catch(() => {});
+}
+function closeQuestion(ev) {
+  const o = openQuestions.get(ev.id); if (!o) return; openQuestions.delete(ev.id); o.stop(); qStore.del(ev.id);
+  const card = o.card; card.textContent = ''; card.className = 'qcard closed';
+  const by = ev.by === 'gone' ? 'Closed (answered elsewhere, or the run ended)' : ev.by === 'user' ? 'You answered' : ev.by === 'mixed' ? 'You answered part of it; the rest took the recommended answers' : 'Nobody answered in time: the recommended answers were used (chosen by default)';
+  card.appendChild(qMk('div', 'qtitle', (ev.title || 'Claude\'s question') + ' · ' + by));
+  for (const x of ev.answers || []) {
+    const what = x.kind === 'text' ? (x.text || '') : [...(x.labels || []), ...(x.other ? ['“' + x.other + '”'] : [])].join(', ');
+    const row = qMk('div', 'qsum'); row.append(qMk('span', 'qsq', x.question || x.id), qMk('span', 'qsa', (what || '(nothing)') + (x.by === 'default' && ev.by !== 'default' ? ' · by default' : '')));
+    card.appendChild(row);
+  }
+}
+// A page that was away (reload, a second device): the questions still open come back with what was typed so far.
+async function restoreQuestions() {
+  let d; try { d = await json('/api/work/questions'); } catch { return; }
+  const open = d.questions || [];
+  for (const q of open) showQuestion({ ...q, type: 'bridge_question' }, true);
+  for (const [id, o] of openQuestions) if (!open.some((q) => q.id === id)) closeQuestion({ id, by: 'gone', answers: [] });
+}
+// The planner's draft (T-279; plans/planner-mode.md § 6): nothing reaches the board before you approve it here. A table of parents with
+// their sub-tasks, owners, priorities and blocked-on, the changes to existing tasks, what is not planned, and the source note.
+// Approve all / approve the ticked parents / Change… (your text goes back to the AI, which drafts again) / Reject. The hub writes
+// what you approved (POST /api/work/plan/answer {id, session, approve: "all" | [parent indexes], comment?, revise?}).
+const openPlans = new Map(); // draft id → card
+function showPlan(ev) {
+  if (openPlans.has(ev.id)) return;
+  const d = ev.draft || {}, ps = d.parents || [], card = qMk('div', 'qcard plan'); card.dataset.plan = ev.id;
+  card.appendChild(qMk('div', 'qtitle', 'Draft plan: ' + (d.title || 'untitled') + ' (nothing is written until you approve)'));
+  const tbl = qMk('table', 'plantbl'), hd = qMk('tr'); for (const h of ['', '#', 'Task', 'Owner', 'Priority', 'Status', 'Blocked on']) hd.appendChild(qMk('th', '', h)); tbl.appendChild(hd);
+  const boxes = [];
+  ps.forEach((p, i) => {
+    const tr = qMk('tr', 'planparent'), c = qMk('td'), cb = qMk('input'); cb.type = 'checkbox'; cb.checked = true; cb.dataset.parent = String(i); boxes.push(cb); c.appendChild(cb); tr.appendChild(c);
+    tr.append(qMk('td', '', String(i + 1)), qMk('td', 'plantitle', p.title || ''), qMk('td', '', p.owner || ''), qMk('td', '', 'P' + p.priority), qMk('td', '', p.status || ''), qMk('td', '', p.blockedOn || '-'));
+    tbl.appendChild(tr);
+    (p.subtasks || []).forEach((s, n) => { const sr = qMk('tr', 'plansub'); sr.append(qMk('td'), qMk('td'), qMk('td', 'plantitle', (n + 1) + '/' + p.subtasks.length + ': ' + (s.title || '')), qMk('td', '', s.owner || ''), qMk('td', '', 'P' + s.priority), qMk('td', '', 'todo'), qMk('td')); tbl.appendChild(sr); });
+  });
+  card.appendChild(tbl);
+  const list = (head, items) => { if (!items.length) return; card.appendChild(qMk('div', 'planhead', head)); const ul = qMk('ul', 'planlist'); for (const t of items) ul.appendChild(qMk('li', '', t)); card.appendChild(ul); };
+  list('Changes to existing tasks (with everything approved, or with their parent)', (d.existingChanges || []).map((c) => c.id + ': ' + (Object.keys(c.change || {}).join(', ')) + (c.reason ? ' - ' + c.reason : '') + (c.parent != null ? ' (with parent ' + (c.parent + 1) + ')' : '')));
+  list('Not planned, because', (d.notPlanned || []).map((n) => n.text + (n.why ? ' - ' + n.why : '')));
+  if (d.sourceNote) card.appendChild(qMk('div', 'planhead', 'Your words are kept word for word in the note ' + d.sourceNote + (d.sourceChars ? ' (' + d.sourceChars + ' characters)' : '')));
+  const errEl = qMk('div', 'qerr'), row = qMk('div', 'qfoot'), ok = qMk('button', 'primary', 'Approve all'), chg = qMk('button', '', 'Change…'), rej = qMk('button', '', 'Reject');
+  const note = qMk('textarea', 'qown'); note.rows = 2; note.placeholder = 'What should be changed?'; note.hidden = true;
+  const sendNow = qMk('button', 'primary', 'Send the change'); sendNow.hidden = true;
+  const sync = () => { const n = boxes.filter((b) => b.checked).length; ok.textContent = n === boxes.length ? 'Approve all' : 'Approve ' + n + ' of ' + boxes.length; ok.disabled = n === 0; };
+  boxes.forEach((b) => { b.onchange = sync; });
+  const send = (payload) => { for (const b of [ok, chg, rej, sendNow]) b.disabled = true; errEl.textContent = '';
+    return api('/api/work/plan/answer', { method: 'POST', body: JSON.stringify({ id: ev.id, session: ev.session, ...payload }) })
+      .then(async (r) => { if (!r.ok && r.status !== 404 && r.status !== 409) { const x = await r.json().catch(() => ({})); throw new Error(x.error || r.statusText); } })
+      .catch((e) => { for (const b of [ok, chg, rej, sendNow]) b.disabled = false; sync(); errEl.textContent = 'Could not send the answer: ' + e.message; }); };
+  ok.onclick = () => { const on = boxes.filter((b) => b.checked).map((b) => Number(b.dataset.parent)); send({ approve: on.length === boxes.length ? 'all' : on }); };
+  rej.onclick = () => send({ approve: false });
+  chg.onclick = () => { note.hidden = sendNow.hidden = false; note.focus(); };
+  sendNow.onclick = () => { if (!note.value.trim()) { errEl.textContent = 'Say what to change.'; return; } send({ approve: false, revise: true, comment: note.value.trim() }); };
+  row.append(ok, chg, rej); card.append(row, note, sendNow, errEl);
+  log.appendChild(card); openPlans.set(ev.id, card); sync();
+  qAlert({ id: ev.id, at: ev.at, title: 'Review the draft plan: ' + (d.title || '') });
+}
+function closePlan(ev) {
+  const card = openPlans.get(ev.id); if (!card) return; openPlans.delete(ev.id);
+  const head = (card.querySelector('.qtitle') || {}).textContent || 'Draft plan';
+  card.className = 'qcard plan closed';
+  for (const el of [...card.querySelectorAll('.qfoot, textarea, .qerr, button')]) el.remove();
+  for (const b of card.querySelectorAll('input[type=checkbox]')) b.disabled = true;
+  const t = card.querySelector('.qtitle'); if (t) t.textContent = head.replace(/ \(nothing is written until you approve\)$/, '') + ' · ' + ({ approved: 'approved and written', rejected: 'rejected, nothing written', change: 'you asked for a change, nothing written', ended: 'closed (the run ended)', gone: 'closed' }[ev.outcome] || 'closed')
+    + (ev.created && ev.created.length ? ': ' + ev.created.join(', ') : '');
+}
+async function restorePlans() {
+  let d; try { d = await json('/api/work/plans'); } catch { return; }
+  const open = d.plans || [];
+  for (const p of open) showPlan({ ...p, type: 'bridge_plan' });
+  for (const [id] of openPlans) if (!open.some((p) => p.id === id)) closePlan({ id, outcome: 'gone' });
+}
 function handleEvent(ev) {
   if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; return; }
-  if (ev.type === 'bridge_done') runEnded = true;
+  if (ev.type === 'bridge_plan') { showPlan(ev); scroll(); return; }
+  if (ev.type === 'bridge_plan_answered') { closePlan(ev); return; }
+  if (ev.type === 'bridge_question') { showQuestion(ev); scroll(); return; }
+  if (ev.type === 'bridge_answered') { closeQuestion(ev); return; }
+  if (ev.type === 'bridge_done') { runEnded = true; for (const id of [...openQuestions.keys()]) closeQuestion({ id, by: 'gone', answers: [] }); for (const id of [...openPlans.keys()]) closePlan({ id, outcome: 'ended' }); }
   if (ev.type === 'pc_tool') return runPcTool(ev);
   const hv = hubView(ev), hk = hv ? hv.kind : '';
   // the hub records usage from these before passing them on: re-read it right away so the bars move with the reply
@@ -2240,6 +2702,9 @@ function handleEvent(ev) {
     runOutcome = hv.error ? { state: 'failed', text: 'Stopped with an error' } : { state: 'done', text: 'Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + ' s' : '') };
     if (hv.error) sys('Claude stopped with an error: ' + (hv.text || hv.subtype), true);
     else sys('Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
+    // it stopped short of a tool it was not allowed: the session waits on you (T-288), said and sounded once
+    const denied = Array.isArray(ev.permission_denials) ? [...new Set(ev.permission_denials.map((d) => d && d.tool_name).filter(Boolean))] : [];
+    if (denied.length) { sys(`Claude was not allowed to use ${denied.join(', ')}, so it stopped short. Answer to go on: say whether it may, or what to do instead.`, true); const P = prefs(); if (P.sound && P.sound.on) playTone('mention', P.sound.mention); }
   } else if (ev.type === 'stderr') stderrText = (stderrText + ev.text).slice(-600);
   else if (ev.type === 'bridge_error') { sys(ev.text, true); runOutcome = { state: 'failed', text: 'Failed: ' + ev.text }; }
   else if (ev.type === 'bridge_info') sys(ev.text); // e.g. which AI host runs this reply
@@ -2429,6 +2894,32 @@ $('newChat').onclick = () => {
   sys('New conversation — Claude starts fresh on your next message.');
 };
 
+// Planner mode (T-275): a planner session is made on the hub (mode "planner": plan-only tools, enforced there); the badge shows while
+// it is open, in the header of the conversation and over the input box. "Leave planner" goes back to the normal session; a session
+// never changes its mode.
+function paintPlanner() {
+  const on = !!planSession;
+  $('plannerBadge').hidden = !on; $('leavePlanner').hidden = !on;
+  $('input').placeholder = on ? 'Planner: tell Claude what to plan (it adds tasks to the board, it does not build)…  (Enter to send)' : 'Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)';
+  $('composer').style.outline = on ? '2px solid #6d4aff' : '';
+}
+async function enterPlanner(id) {
+  planSession = id; try { if (id) sessionStorage.setItem(PLAN_KEY, id); else sessionStorage.removeItem(PLAN_KEY); } catch {}
+  fresh = false; log.innerHTML = ''; setConversation(null, null, []); paintPlanner();
+  await restoreWork();
+  if (id) { $('convTitle').textContent = 'Planner session'; if (!transcript.length) sys('Planner mode: Claude only plans. It can read, search the board, notes and chat, ask you, add board tasks and write notes under plans/. It cannot edit files, run builds or use your PC.'); }
+}
+$('newPlanner').onclick = async () => {
+  if (busy) return sys('Stop Claude before starting a planner session.', true);
+  try { const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify({ mode: 'planner', title: 'Planner' }) }); await enterPlanner(d.id); }
+  catch (err) { sys('Could not start a planner session: ' + err.message, true); }
+};
+$('leavePlanner').onclick = async () => {
+  if (busy) return sys('Stop Claude before leaving planner mode.', true);
+  await enterPlanner(''); sys('Back in your normal Work session.');
+};
+if (planSession) setTimeout(paintPlanner, 0);
+
 // ---------- usage bar: 5h (hh:mm:ss left), 7d (dd/hh/mm left), context window meter ----------
 const USAGE_STOPS = [[0, [46, 204, 113]], [33, [255, 159, 26]], [66, [255, 212, 59]], [100, [255, 59, 59]]]; // green → orange → yellow → red
 const OUT_COLOR = 'rgb(160, 90, 255)'; // purple: out of usage
@@ -2502,8 +2993,15 @@ function saveCurrentSoon() { clearTimeout(currentSaveTimer); currentSaveTimer = 
 function saveCurrent() { clearTimeout(currentSaveTimer); if (me) json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle, run: curRun }) }).catch(() => {}); }
 function record(cls, text) { transcript.push({ cls, text }); saveCurrentSoon(); }
 async function restoreWork() { // opening Work: the previous conversation, then the queue (which starts running)
+  // which session is open (hubs with many sessions): the page keeps to it; older hubs have only the one
+  try {
+    const l = await json('/api/work/sessions'); SESSIONS_OK = Array.isArray(l.sessions); $('startWork').hidden = !SESSIONS_OK;
+    const cur = (l.sessions || []).find((x) => x.id === l.current);
+    if (cur) { if (l.current !== l.primary) SESSION = l.current; me.project = cur.project; renderProjects(); }
+  } catch { $('startWork').hidden = true; }
   let s; try { s = await json('/api/work/current'); } catch { return; }
-  if ((s.transcript || []).length && !transcript.length) {
+  // T-241: with "Reopen what I had open" off the conversation stays on the hub (the next reload with it on brings it back) but a reload starts fresh
+  if ((s.transcript || []).length && !transcript.length && prefs().reopen) {
     for (const t of s.transcript) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
     archiveId = s.archiveId; archiveTitle = s.archiveTitle; transcript = s.transcript; savedLen = s.transcript.length;
     if (archiveTitle) label($('convTitle'), 'archive', archiveTitle); else $('convTitle').textContent = 'Unsaved session';
@@ -2516,8 +3014,13 @@ async function restoreWork() { // opening Work: the previous conversation, then 
   // a reply still going (the page was reloaded meanwhile): shown live from where this page was, to its end; the queue
   // waits for it (sending now would be refused and the message lost)
   if (!busy) { await followRun(s.run); curRun = null; saveCurrentSoon(); }
+  restoreQuestions(); // a question still open (a half-answered series comes back with what was typed)
+  restorePlans(); // a draft plan still waiting for approval (T-279)
   if (!busy && (sendNowMessage || queue.length)) drain();
+  // Work opens with nothing going on: offer the ways to start (once per page load; "Close" keeps this session)
+  if (SESSIONS_OK && !startAuto && !busy && !transcript.length && !queue.length && !sendNowMessage) { startAuto = true; startOpen(); }
 }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && me && !$('shell').hidden) restoreQuestions(); });
 function setConversation(id, title, items) {
   archiveId = id; archiveTitle = title; transcript = items; saveCurrentSoon();
   savedLen = items.length; // what is on screen now counts as saved (a fresh chat, an opened session, or a just-deleted one)
@@ -2828,9 +3331,10 @@ const snippet = (rec) => (rec.m.deleted ? 'message deleted'
   : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
 function prefs() {
   const p = (me && me.prefs) || {};
-  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
-    sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70 },
-    tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ...(p.tts || {}) }, // all = master switch
+  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, reopen: p.reopen !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
+    sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70, ask: (p.sound && p.sound.ask) ?? 80 },
+    tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ask: false, ...(p.tts || {}) }, // all = master switch
+    ask: { auto: true, minutes: 10, activity: true, ...(p.ask || {}) }, // when the AI asks (T-248): wait N minutes without you, then its recommended answers; any activity waits
     clips: { volume: 90, autoplay: false, ...(p.clips || {}) },
     audio: { noise: true, echo: true, agc: true, ...(p.audio || {}) }, // noise suppression on by default
     call: { volume: 100, quality: 'medium', ...(p.call || {}) } };
@@ -3217,8 +3721,10 @@ let audioCtx = null;
 // to you, a ringing trill that repeats for an incoming call, a tick-tock for a board reminder. Notes are
 // [frequency Hz, start s, length s, wave, loudness 0..1]; every note gets a soft attack, a long-ish decay, a quiet
 // overtone an octave up (bell-like, never harsh) and a low-pass so nothing is shrill. All under two seconds.
-const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]], call: [[880, 0, 0.12], [1100, 0.14, 0.12], [880, 0.5, 0.12], [1100, 0.64, 0.12]], board: [[988, 0, 0.12], [740, 0.16, 0.16]] };
+const TONES = { message: [[660, 0, 0.16]], mention: [[880, 0, 0.11], [1320, 0.12, 0.18]], reply: [[784, 0, 0.1], [988, 0.11, 0.1], [1319, 0.22, 0.2]], call: [[880, 0, 0.12], [1100, 0.14, 0.12], [880, 0.5, 0.12], [1100, 0.64, 0.12]], board: [[988, 0, 0.12], [740, 0.16, 0.16]], ask: [[523, 0, 0.1], [659, 0.12, 0.1], [784, 0.24, 0.1], [1047, 0.36, 0.2], [523, 0.9, 0.1], [659, 1.02, 0.1], [784, 1.14, 0.1], [1047, 1.26, 0.2]] };
 const PATTERNS = {
+  // "User action required": a rising three-note call and a high held note, said twice, so it is not mistaken for a message
+  ask: [0, 0.95].flatMap((t) => [[523, t, 0.11, 'triangle', 0.85], [659, t + 0.12, 0.11, 'triangle', 0.9], [784, t + 0.24, 0.11, 'triangle', 0.95], [1047, t + 0.36, 0.38, 'square', 0.5]]),
   message: [[784, 0, 0.32, 'triangle', 1], [587, 0.13, 0.5, 'triangle', 0.85]],
   mention: [[659, 0, 0.12, 'triangle', 0.8], [784, 0.07, 0.12, 'triangle', 0.85], [988, 0.14, 0.12, 'triangle', 0.9], [1319, 0.21, 0.42, 'triangle', 1]],
   reply: [[784, 0, 0.14, 'sine', 0.9], [988, 0.13, 0.22, 'sine', 1], [659, 0.46, 0.14, 'triangle', 0.75], [784, 0.59, 0.36, 'triangle', 0.85]],
@@ -3719,27 +4225,33 @@ const DEVICE = (() => { try { let d = sessionStorage.getItem(NS + 'vr.device'); 
 // Do not disturb (plans/presence.md): mutes sounds and desktop notifications on this person's own devices; nothing is blocked
 const dndOn = () => { const s = me && statusMap[me.username]; return !!(s && s.dnd && (!s.dndUntil || Date.now() < s.dndUntil)); };
 window.vrDnd = dndOn;
-let lastInput = Date.now(), sentIdle = null, sentScreen = '';
+let lastInput = Date.now(), sentIdle = null, sentScreen = '', inputSince = false, sentActive = 0;
 const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin', notes: 'Notes', assist: 'Unity' };
 function postPresence(body) { if (me && token && base) json('/api/presence', { method: 'POST', body: JSON.stringify({ ...body, device: DEVICE }) }).catch(() => {}); }
 function presenceTick() {
   if (!me) return;
   const idle = document.visibilityState === 'hidden' || Date.now() - lastInput > IDLE_MS;
   const screen = ['menu', 'shell', 'room', 'board', 'cal', 'admin', 'notes', 'assist'].find((id) => !$(id).hidden) || '';
-  if (idle !== sentIdle || screen !== sentScreen) { sentIdle = idle; sentScreen = screen; postPresence({ screen, idle }); }
+  const active = inputSince && Date.now() - sentActive >= 60000; // time accounting (plans/presence.md § 6): input since the last report, at most once a minute
+  if (idle !== sentIdle || screen !== sentScreen || active) { sentIdle = idle; sentScreen = screen; const body = { screen, idle }; if (active) { body.active = true; inputSince = false; sentActive = Date.now(); } postPresence(body); }
 }
-for (const ev of ['pointerdown', 'keydown', 'pointermove', 'wheel', 'touchstart']) document.addEventListener(ev, () => { lastInput = Date.now(); if (sentIdle) presenceTick(); }, { passive: true, capture: true });
+for (const ev of ['pointerdown', 'keydown', 'pointermove', 'wheel', 'touchstart']) document.addEventListener(ev, () => { lastInput = Date.now(); inputSince = true; if (sentIdle) presenceTick(); }, { passive: true, capture: true });
 document.addEventListener('visibilitychange', presenceTick);
 setInterval(presenceTick, 15000);
 window.addEventListener('pagehide', () => { // closing the tab: offline at once instead of after the timeout
   if (me && token && base) fetch(base + '/api/presence', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ gone: true, device: DEVICE }) }).catch(() => {});
 });
 const ago = (ms) => { const s = Math.round((Date.now() - ms) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago'; };
+function whereText(u) { // "on <project> · <task>" from the status's `where` (newer hubs; hidden by its person, then absent); Mills' T-261 has the full UI
+  const w = (typeof statusMap === 'object' && statusMap[u] || {}).where; if (!w) return '';
+  const bits = [w.project, w.task && (w.task.id + (w.task.title ? ' ' + w.task.title : ''))].filter(Boolean);
+  return bits.length ? ' · on ' + bits.join(' · ') : '';
+}
 function statusOf(u) { // 'on' | 'idle' | 'off', with a sentence for tooltips and the menu
   const p = presenceMap[u];
-  if (!p || !p.online) return { cls: 'off', text: p && p.seen ? 'offline · last seen ' + ago(p.seen) : 'offline' };
-  if (p.idle) return { cls: 'idle', text: 'away' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') };
-  return { cls: 'on', text: 'online' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') };
+  if (!p || !p.online) return { cls: 'off', text: (p && p.seen ? 'offline · last seen ' + ago(p.seen) : 'offline') + whereText(u) };
+  if (p.idle) return { cls: 'idle', text: 'away' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') + whereText(u) };
+  return { cls: 'on', text: 'online' + (p.screen ? ' · in ' + (SCREEN_NAMES[p.screen] || p.screen) : '') + whereText(u) };
 }
 function renderWho() { // the main menu's "Who's here" strip
   const box = $('menuWho'); if (!box || !me) return;
@@ -3903,7 +4415,8 @@ function openSettings() {
   mark();
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
   $('volCall').value = P.sound.call; $('volBoard').value = P.sound.board; $('soundSet').value = P.sound.set === 'classic' ? 'classic' : 'patterns';
-  $('setToasts').checked = P.toasts; $('setAutoScroll').checked = P.autoScroll;
+  $('volAsk').value = P.sound.ask; $('setAskAuto').checked = P.ask.auto !== false; $('setAskMin').value = P.ask.minutes; $('setAskActivity').checked = P.ask.activity !== false; $('setAskTts').checked = !!P.tts.ask;
+  $('setToasts').checked = P.toasts; $('setReopen').checked = P.reopen; $('setAutoScroll').checked = P.autoScroll;
   $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
   $('ttsRateVal').textContent = (P.tts.rate / 100).toFixed(1) + '×';
@@ -3918,7 +4431,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderSource(); renderHosts();
+  renderDevices(); renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderMyProjects(); renderSource(); renderHosts();
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
@@ -3927,6 +4440,36 @@ function renderAbout() { // Settings → App settings: "VibeRoller x.y.z" (+ eve
   sum.textContent = 'VibeRoller ' + (me.version || 'unknown') + (APP_MODE ? ' · VibeRoller Chat app' : '') + ' · module versions';
   box.textContent = '';
   for (const [m, v] of Object.entries(me.versions || {})) { const r = document.createElement('div'); r.className = 'row'; const a = document.createElement('code'); a.textContent = m; const b = document.createElement('small'); b.textContent = v; r.append(a, b); box.append(r); }
+}
+// ── Settings → My projects (T-239): your index of the shared projects area, pin / hide, remove my worktree, admin delete ──
+async function renderMyProjects(forgejo) {
+  const box = $('projBox'); if (!box) return;
+  let d; try { d = await json('/api/projects/mine' + (forgejo ? '?forgejo=1' : '')); } catch (e) { box.textContent = e.message; return; }
+  box.textContent = '';
+  const note = document.createElement('div'); note.className = 'status'; note.textContent = window.projNote || ''; window.projNote = '';
+  const act = (path, project, extra) => json(path, { method: 'POST', body: JSON.stringify({ project, ...extra }) }).then((r) => { if (r.message) window.projNote = r.message; renderMyProjects(forgejo); return r; }).catch((e) => { note.textContent = e.message; });
+  const arm = (b, label, fn) => { b.onclick = () => { if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Click again: ' + label; return; } fn(); }; };
+  const mk = (txt, fn, cls) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; if (cls) b.className = cls; if (fn) b.onclick = fn; return b; };
+  const ago = (t) => t ? new Date(t).toLocaleString() : 'not yet';
+  const section = (title, rows) => { if (!rows.length) return; const h = document.createElement('small'); h.textContent = title; box.append(h); rows.forEach((r) => box.append(r)); };
+  const row = (p) => {
+    const r = document.createElement('div'); r.className = 'row';
+    const n = document.createElement('b'); n.textContent = (p.pinned ? '[pinned] ' : '') + p.name;
+    const i = document.createElement('small'); i.textContent = (p.mine ? 'my worktree' + (p.worktree ? (p.worktree.dirty ? ' (uncommitted changes)' : '') + (p.worktree.ahead ? ', ' + p.worktree.ahead + ' unmerged commit(s)' : '') : '') : 'no worktree of mine yet') + ' · last used ' + ago(p.lastUsed) + (p.working ? ' · working now' : '') + (p.othersWorktrees && p.othersWorktrees.length ? ' · also: ' + p.othersWorktrees.join(', ') : '');
+    r.append(n, i, mk(p.pinned ? 'Unpin' : 'Pin', () => act('/api/projects/pin', p.name, { on: !p.pinned }), 'ghost'), mk(p.hidden ? 'Show' : 'Hide', () => act('/api/projects/hide', p.name, { on: !p.hidden }), 'ghost'));
+    if (p.mine && !p.hub) { const b = mk('Remove my worktree', null, 'ghost'); if (p.working) b.disabled = true; arm(b, 'remove it', () => act('/api/projects/remove-worktree', p.name).then((x) => { if (x && x.message) note.textContent = x.message; })); r.append(b); }
+    if (p.canDelete) { const b = mk('Delete project…', null, 'ghost'); if (p.working || (p.othersWorktrees || []).length) { b.disabled = true; b.title = 'Only a project without anyone else\'s worktree can be deleted.'; } arm(b, 'move it to the trash', () => act('/api/projects/delete', p.name).then((x) => { if (x && x.message) note.textContent = x.message; })); r.append(b); }
+    return r;
+  };
+  section('Your projects', d.projects.filter((p) => !p.hidden).map(row));
+  const disc = d.projects.filter((p) => d.discover.includes(p.name));
+  if (disc.length) { const h = document.createElement('small'); h.textContent = 'New for you in the shared area (pick one in the Work project list to start working in it): ' + disc.map((p) => p.name).join(', '); box.append(h); }
+  section('Hidden', d.projects.filter((p) => p.hidden).map(row));
+  const fr = document.createElement('div'); fr.className = 'row';
+  if (!forgejo) fr.append(mk('List my Forgejo repos', () => renderMyProjects(true), 'ghost'));
+  else if (d.forgejo) { const t = document.createElement('small'); t.textContent = d.forgejo.error || d.forgejo.note || ''; fr.append(t); for (const g of d.forgejo.repos || []) { const s = document.createElement('small'); s.textContent = g.name + (g.private ? ' (private)' : '') + (g.inArea ? ' (already in the area)' : ''); s.title = g.url; fr.append(s); } }
+  box.append(fr, note);
+  if (d.admin) { const t = document.createElement('small'); t.textContent = 'Deleted projects are moved to ' + d.trash + ' (nothing is erased).'; box.append(t); }
 }
 // ── Settings → My Forgejo: this person's own Forgejo token (the hub checks it and never sends it back) ──
 async function renderForgejo() {
@@ -3950,6 +4493,28 @@ async function renderForgejo() {
     row.append(rm);
   }
   row.append(msg); box.append(row);
+}
+// ── Settings → Signed-in devices (T-236): approve / refuse a tool's code, list and revoke its devices ──
+async function renderDevices(prefill) {
+  const box = $('devBox'); if (!box) return;
+  let d; try { d = await json('/api/devices'); } catch (e) { box.textContent = e.message; return; }
+  const typed = prefill || ($('devCode') && $('devCode').value) || '';
+  box.textContent = '';
+  const row = document.createElement('div'); row.className = 'row';
+  const code = document.createElement('input'); code.id = 'devCode'; code.placeholder = 'ABCD-EFGH'; code.maxLength = 9; code.autocomplete = 'off'; code.value = typed;
+  const msg = document.createElement('span'); msg.className = 'status';
+  const act = (path, ok) => async () => { try { const r = await json(path, { method: 'POST', body: JSON.stringify({ userCode: code.value }) }); msg.textContent = (ok ? 'Approved ' : 'Refused ') + (r.device || r.client || 'the device') + '.'; code.value = ''; renderDevices(); setTimeout(() => { msg.textContent = ''; }, 4000); } catch (e) { msg.textContent = e.message; } };
+  const yes = document.createElement('button'); yes.type = 'button'; yes.textContent = 'Approve'; yes.onclick = act('/api/device/approve', true);
+  const no = document.createElement('button'); no.type = 'button'; no.className = 'ghost'; no.textContent = 'Refuse'; no.onclick = act('/api/device/deny', false);
+  row.append(code, yes, no, msg); box.append(row);
+  if (!(d.devices || []).length) { const n = document.createElement('div'); n.className = 'status'; n.textContent = 'No signed-in devices.'; box.append(n); }
+  for (const dv of d.devices || []) {
+    const r = document.createElement('div'); r.className = 'row';
+    const t = document.createElement('span'); t.textContent = `${dv.name || dv.client} · ${dv.client || ''} · signed in ${new Date(dv.created).toLocaleString()} · ${dv.lastUsed ? 'last used ' + new Date(dv.lastUsed).toLocaleString() : 'not used yet'}`;
+    const rv = document.createElement('button'); rv.type = 'button'; rv.className = 'ghost'; rv.textContent = 'Revoke';
+    rv.onclick = () => json('/api/devices/revoke', { method: 'POST', body: JSON.stringify({ id: dv.id }) }).then(() => renderDevices()).catch((e) => { msg.textContent = e.message; });
+    r.append(t, rv); box.append(r);
+  }
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
@@ -4064,6 +4629,7 @@ async function renderSource() {
   const note = document.createElement('div'); note.className = 'status';
   note.textContent = (d.hubClaude === false ? 'This hub has no Claude of its own: Work and the API run on an AI host. ' : '') + 'AI hosts show up here when they are connected; their owners choose who may use them (My AI hosts).';
   box.append(note);
+  LOCALAI.line(box, d.providers, localAiOpts());
 }
 // ── Settings → My AI hosts, monitor and control (5.12.0): a live line per host (refreshed every 10 s while the panel is open) and Pause / Resume / Restart / Update now / Show log; an older host shows what the hub knows and a note ──
 const hostAgo = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : s < 172800 ? Math.round(s / 3600) + ' h' : Math.round(s / 86400) + ' days'; };
@@ -4078,8 +4644,27 @@ function hostLiveText(h, now) {
   for (const [pid, msg] of Object.entries(st.logins || {})) if (msg) bits.push('login ' + pid + ': ' + msg);
   if (st.lastUpdate) bits.push('last update: ' + st.lastUpdate + (st.lastUpdateAt ? ' (' + hostAgo(now - st.lastUpdateAt) + ' ago)' : ''));
   if (st.pending) bits.push(st.pending);
+  const sl = h.sessionLimits; // T-286: the host's own Work-session limits
+  if (sl) { const ex = Object.entries(sl.exceptions || {}).map(([u, n]) => nickOf(u) + ' ' + n); bits.push('Work sessions: ' + sl.perUser + ' per person, ' + sl.perProvider + ' per provider' + (ex.length ? ' (' + ex.join(', ') + ')' : '') + (sl.ownerBypass ? ', you may exceed them' : '')); }
   if (h.control && h.online && !h.statusFresh && h.statusAgeMs) bits.push('status ' + hostAgo(h.statusAgeMs) + ' old');
   return bits.join(' · ');
+}
+// the owner sets the host's Work-session limits (T-286): saved in the host's own settings, as its control app would
+function hostLimitsForm(h, note, done) {
+  const sl = h.sessionLimits || { perUser: 5, perProvider: 3, exceptions: {}, ownerBypass: true };
+  const f = document.createElement('div'); f.className = 'row hostLimits'; f.style.flexWrap = 'wrap';
+  const num = (label, v) => { const l = document.createElement('label'); const i = document.createElement('input'); i.type = 'number'; i.min = 1; i.max = 100; i.value = v; i.style.width = '4.5em'; l.append(label + ' ', i); f.append(l); return i; };
+  const pu = num('Working sessions per person', sl.perUser), pp = num('per provider', sl.perProvider);
+  const exl = document.createElement('label'), ex = document.createElement('input'); ex.placeholder = 'name=n, …'; ex.value = Object.entries(sl.exceptions || {}).map(([u, n]) => u + '=' + n).join(', '); exl.append('Exceptions ', ex); f.append(exl);
+  const byl = document.createElement('label'), by = document.createElement('input'); by.type = 'checkbox'; by.checked = sl.ownerBypass !== false; byl.append(by, ' I may exceed them on my own host'); f.append(byl);
+  const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save limits'; f.append(save);
+  save.onclick = async () => {
+    const exceptions = {}; for (const part of ex.value.split(',').map((x) => x.trim()).filter(Boolean)) { const [u, n] = part.split('='); exceptions[(u || '').trim().toLowerCase()] = Number(n); }
+    save.disabled = true; note.textContent = '…';
+    try { const r = await json('/api/hosts/control', { method: 'POST', body: JSON.stringify({ id: h.id, action: 'limits', limits: { perUser: Number(pu.value), perProvider: Number(pp.value), exceptions, ownerBypass: by.checked } }) }); note.textContent = r.result || 'Saved.'; f.remove(); done(); }
+    catch (e) { note.textContent = e.message; save.disabled = false; }
+  };
+  return f;
 }
 function hostLiveBox(h) {
   const box = document.createElement('div'); box.className = 'hostLive'; box.dataset.host = h.id;
@@ -4102,6 +4687,9 @@ function hostLiveBox(h) {
   mk('restart', 'Restart', 'Restart the host program once nothing is in flight');
   mk('update', 'Update now', 'Look for a new host program now and restart on it once nothing is in flight');
   mk('logs', 'Show log', 'The last 50 lines of the host\'s log, with tokens and keys removed');
+  const lb = document.createElement('button'); lb.type = 'button'; lb.className = 'ghost'; lb.dataset.action = 'limits'; lb.textContent = 'Session limits…'; lb.title = 'How many Work sessions each person may have working at once through this host';
+  lb.onclick = () => { const open = box.querySelector('.hostLimits'); if (open) { open.remove(); return; } box.insertBefore(hostLimitsForm(box._host || h, note, () => setTimeout(refreshHostLive, 800)), note); };
+  row.append(lb);
   box.append(line, row, note, logbox); return box;
 }
 async function refreshHostLive() {
@@ -4110,6 +4698,7 @@ async function refreshHostLive() {
   const by = {}; for (const h of d.hosts || []) by[h.id] = h;
   for (const box of boxes) {
     const h = by[box.dataset.host]; if (!h) continue;
+    box._host = h; // the limits form starts from what the host says now
     box.querySelector('.hostLiveLine').textContent = hostLiveText(h, d.now);
     const row = box.querySelector('.hostLiveBtns'), note = box.querySelector('.hostLiveNote'), reach = h.online || h.paused;
     row.hidden = !h.control;
@@ -4203,13 +4792,14 @@ $('ttsTest').onclick = () => { // test with the values on screen, before saving
   speechSynthesis.speak(u);
 };
 // a test plays in the style picked right now (before saving), so the two can be compared
-document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply', call: 'volCall', board: 'volBoard' }[b.dataset.test]).value), $('soundSet').value, true); });
+document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => playTone(b.dataset.test, Number($({ message: 'volMessage', mention: 'volMention', reply: 'volReply', call: 'volCall', board: 'volBoard', ask: 'volAsk' }[b.dataset.test]).value), $('soundSet').value, true); });
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
-      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
-      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), set: $('soundSet').value },
-      tts: { all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
+      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, reopen: $('setReopen').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
+      sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), ask: Number($('volAsk').value), set: $('soundSet').value },
+      ask: { auto: $('setAskAuto').checked, minutes: Math.max(1, Math.min(1440, Math.round(Number($('setAskMin').value) || 10))), activity: $('setAskActivity').checked },
+      tts: { ask: $('setAskTts').checked, all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
       clips: { volume: Number($('clipVolume').value), autoplay: $('clipAuto').checked },
       audio: { noise: $('audNoise').checked, echo: $('audEcho').checked, agc: $('audAgc').checked },
       call: { volume: Number($('callVolume').value), quality: $('callQuality').value },
@@ -4243,7 +4833,8 @@ async function renderDownloads() {
   if (typeof renderAppCard === 'function') renderAppCard();
   let d; try { d = await json('/api/downloads'); } catch (e) { box.textContent = e.message; return; }
   box.textContent = '';
-  const os = typeof appOs === 'function' ? appOs() : '';
+  let os = typeof appOs === 'function' ? appOs() : ''; // T-251: navigator.userAgentData / userAgent; the hub's hint (d.platform) when the browser says nothing
+  if (!['Windows', 'Linux', 'macOS', 'Android'].includes(os) && d.platform) os = d.platform === 'windows' ? 'Windows' : d.platform === 'linux' ? 'Linux' : d.platform === 'mac' ? 'macOS' : os;
   const note = document.createElement('div'); note.className = 'status'; box.append(note);
   const grab = async (it, b) => {
     b.disabled = true; note.textContent = 'Preparing ' + it.file + '…';
@@ -4267,15 +4858,61 @@ async function renderDownloads() {
     const p = document.createElement('div'); p.className = 'status';
     p.textContent = GROUPS[group][1];
     sec.append(p);
-    const row = document.createElement('div'); row.className = 'row';
-    for (const it of d.items.filter((i) => i.group === group)) {
+    // T-251: the person's own platform first (the browser's word, else the hub's hint from the User-Agent), the others under "Other platforms"
+    const mine = d.items.filter((i) => i.group === group && i.os === os), others = d.items.filter((i) => i.group === group && i.os !== os);
+    const mk = (it) => {
       const b = document.createElement('button'); b.type = 'button'; if (it.os !== os) b.className = 'ghost';
       b.append(ic('download', 'lead'), document.createTextNode(it.os + ' · ' + it.file + ' (' + (it.bytes >= 1048576 ? (it.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(it.bytes / 1024)) + ' KB') + ')'));
-      b.onclick = () => grab(it, b);
-      row.append(b);
+      b.onclick = () => grab(it, b); return b;
+    };
+    const row = document.createElement('div'); row.className = 'row'; row.dataset.dlMine = '1';
+    for (const it of mine) row.append(mk(it));
+    if (!mine.length && os !== 'your computer') { const n = document.createElement('div'); n.className = 'status'; n.textContent = 'No ' + os + ' build of this on the hub' + (os === 'macOS' || os === 'Android' ? ' (builds are for Windows and Linux)' : ' yet') + '.'; row.append(n); }
+    if (mine.length || os !== 'your computer') sec.append(row);
+    if (others.length) {
+      const det = document.createElement('details'); det.open = !mine.length;
+      const sm = document.createElement('summary'); sm.textContent = mine.length ? 'Other platforms' : 'Platforms available'; det.append(sm);
+      const r2 = document.createElement('div'); r2.className = 'row'; for (const it of others) r2.append(mk(it)); det.append(r2); sec.append(det);
     }
-    sec.append(row);
     box.append(sec);
+  }
+  renderProducts(box, note); // the team's other products (T-250)
+}
+// Products (T-250): every product and version the team has released, through the hub (the hub holds the Forgejo token).
+// This person's platform first; kept apart from the app's own platform detection.
+async function renderProducts(box, note) {
+  const sec = document.createElement('div'); sec.className = 'setSection'; sec.id = 'dlProducts';
+  const h = document.createElement('b'); h.textContent = 'Products'; sec.append(h);
+  const info = document.createElement('div'); info.className = 'status'; info.textContent = 'Loading the team\'s products…'; sec.append(info);
+  box.append(sec);
+  let c; try { c = await json('/api/releases'); } catch (e) { info.textContent = 'The products could not be listed: ' + e.message; return; }
+  const mine = /android/i.test(navigator.userAgent) ? 'Android' : /Win/i.test(navigator.platform || navigator.userAgent) ? 'Windows' : /Mac/i.test(navigator.platform || '') ? 'macOS' : /Linux|X11/i.test(navigator.platform || navigator.userAgent) ? 'Linux' : '';
+  const size = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const grabFile = async (p, v, a, b) => {
+    b.disabled = true; note.textContent = 'Fetching ' + a.name + '…';
+    try {
+      const r = await api('/api/releases/file?product=' + encodeURIComponent(p.product) + '&tag=' + encodeURIComponent(v.version) + '&asset=' + encodeURIComponent(a.name)); if (!r.ok) throw new Error('The download failed (' + r.status + ').');
+      const l = document.createElement('a'); l.href = URL.createObjectURL(await r.blob()); l.download = a.name; document.body.append(l); l.click(); l.remove();
+      setTimeout(() => URL.revokeObjectURL(l.href), 60000); note.textContent = a.name + ' downloaded.';
+    } catch (e) { note.textContent = e.message; }
+    b.disabled = false;
+  };
+  info.textContent = (c.products || []).some((p) => (p.releases || []).length) ? 'Every product and version the team has released. Your platform comes first.' : 'No product releases yet.';
+  for (const p of c.products || []) {
+    const d = document.createElement('details'); const s = document.createElement('summary');
+    s.textContent = (p.label || p.product) + (p.releases && p.releases.length ? ' · ' + p.releases[0].version + ' (' + p.releases.length + ' version' + (p.releases.length === 1 ? '' : 's') + ')' : p.error ? ' · unavailable' : ' · no releases'); d.append(s);
+    if (p.releases && p.releases.length) d.open = p === c.products.find((x) => x.releases && x.releases.length);
+    for (const v of p.releases || []) {
+      const vb = document.createElement('div'); vb.className = 'status'; vb.textContent = v.version + (v.date ? ' · ' + v.date.slice(0, 10) : '') + (v.notes ? ' · ' + v.notes.split('\n')[0].slice(0, 120) : ''); d.append(vb);
+      const row = document.createElement('div'); row.className = 'row';
+      for (const a of (v.assets || []).slice().sort((x, y) => (y.platform === mine) - (x.platform === mine))) {
+        const b = document.createElement('button'); b.type = 'button'; if (a.platform !== mine) b.className = 'ghost';
+        b.append(ic('download', 'lead'), document.createTextNode((a.platform ? a.platform + ' · ' : '') + a.name + ' (' + size(a.size) + ')'));
+        b.onclick = () => grabFile(p, v, a, b); row.append(b);
+      }
+      d.append(row);
+    }
+    sec.append(d);
   }
 }
 document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = openDownloads; });
@@ -4533,6 +5170,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 </script>
 <!-- voice / video calls, theater and screen share: web/calls.js (loaded after the page script, uses its helpers) -->
 <script src="calls.js"></script>
+<!-- co-view: share the product view itself, viewers follow in their own page (T-244): web/coview.js -->
+<script src="coview.js"></script>
 <!-- servers, channels, groups, member column: web/guilds.js · app mode + install: web/app.js -->
 <script src="guilds.js"></script>
 <!-- Server Settings, join / invitations, channel + group dialogs: web/guild-settings.js -->

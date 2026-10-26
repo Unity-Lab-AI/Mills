@@ -18,8 +18,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::hub::{answer, AiHub, Resp};
+use crate::plan;
+use crate::questions;
 use crate::sessions::{self, Sx};
-use pgm_collab_internal::worktree::{Worktrees, Wt, HUB_PROJECT};
+use pgm_collab_internal::worktree::{Worktrees, Wt, HUB_PROJECT, NO_PROJECT};
 use pgm_core_internal::config::Config;
 use pgm_core_internal::now_ms;
 use pgm_identity_internal::Account;
@@ -32,7 +34,7 @@ const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSe
 
 /// A run of one session (its key: the person for the primary session, "<user>#<id>" for the others). `last` = when it
 /// last sent something of its own (not the hub's pings): the liveness check ends a run silent for too long.
-struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String }
+struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String, project: String, branch: String, started: u64 }
 /// Everything a run has sent, so a page that reloads (or a second tab) can join it again: GET /api/work/attach.
 /// `base` = how many of the oldest events were dropped (a run keeps its last RUN_LOG_MAX).
 #[derive(Default, Clone)]
@@ -43,7 +45,12 @@ impl RunLog {
     fn next(&self) -> usize { self.base + self.events.len() }
     fn since(&self, after: usize) -> Vec<Value> { self.events.iter().skip(after.saturating_sub(self.base)).cloned().collect() }
 }
-struct Share { conv: String, since: String, n: u64, log: Vec<Value>, live: Value, ver: u64, woke: Arc<Notify> }
+/// A shared Work session: `sid` = which of the owner's sessions it shows (plans/multi-session.md § 7).
+struct Share { conv: String, since: String, n: u64, log: Vec<Value>, live: Value, ver: u64, woke: Arc<Notify>, sid: String, key: String }
+/// A question the AI asked (T-245): waits in `Work::asks` for its person, the timeout, or the end of the run.
+struct Ask { user: String, key: String, sid: String, title: String, qs: Vec<Value>, at: u64, timeout_ms: u64, deadline: u64, result: Option<Value>, notify: Arc<Notify> }
+/// A plan the planner AI drafted (T-279): waits in `Work::plans` for its person to approve, change or reject it.
+struct PlanDraft { user: String, key: String, sid: String, draft: Value, at: u64, result: Option<Value>, writing: bool, notify: Arc<Notify> }
 #[derive(Clone, Default)]
 struct Fresh { text: String, at: u64, busy: bool }
 
@@ -61,6 +68,10 @@ pub struct Work {
     llm: Mutex<HashMap<String, (String, String, String, u64)>>,
     fresh: Mutex<HashMap<String, Fresh>>,
     shares: Mutex<HashMap<String, Share>>,
+    /// the questions the AI of a run asked and nobody answered yet (by id)
+    asks: Mutex<HashMap<String, Ask>>,
+    /// the plan drafts of planner sessions that nobody answered yet (by id)
+    plans: Mutex<HashMap<String, PlanDraft>>,
     projects: Mutex<(u64, Value)>,
     /// the shared sessions changed (the JavaScript hub's room poll lists them)
     pub shares_changed: Notify,
@@ -77,7 +88,7 @@ fn iso() -> String { pgm_core_internal::time::iso_now() }
 
 impl Work {
     pub fn new(root: &Path, cfg: &Config) -> Work {
-        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: pgm_core_internal::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
+        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: pgm_core_internal::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), plans: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
     }
     // ---------- each person's Work state ----------
     fn state_file(a: &Account) -> PathBuf { a.dir.join("work.json") }
@@ -106,10 +117,21 @@ impl Work {
     pub fn drop_provider(&self, a: &Account, id: &str) { if self.state(a)["provider"] == json!(id) { self.update(a, |m| { m.remove("provider"); }); } }
     /// Is any session of theirs running (the primary one's run is keyed by the person, the others' by "<user>#<id>")?
     pub fn busy(&self, u: &str) -> bool { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).keys().any(|k| k == u || k.starts_with(&p)) }
+    /// How many of their sessions run now (presence shows it, T-288).
+    pub fn working_count(&self, u: &str) -> u64 { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).keys().filter(|k| *k == u || k.starts_with(&p)).count() as u64 }
+    /// Where their most recently started running session works: (project, worktree branch, started at ms). Presence shows it (T-260).
+    pub fn working_where(&self, u: &str) -> Option<(String, String, u64)> { let p = format!("{u}#"); self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(k, _)| *k == u || k.starts_with(&p)).map(|(_, r)| r).max_by_key(|r| r.started).map(|r| (r.project.clone(), r.branch.clone(), r.started)) }
+    /// Does a run work in this project now: one of that person's (Some), or anyone's (None)? (project management, T-239)
+    pub fn working_in(&self, user: Option<&str>, project: &str) -> bool {
+        let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        runs.iter().any(|(k, r)| r.project.eq_ignore_ascii_case(project) && user.map(|u| k == u || k.starts_with(&format!("{u}#"))).unwrap_or(true))
+    }
     /// Is this one session running (its run key)?
     pub fn busy_key(&self, key: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key) }
     /// The run key of a run of theirs that waits for something from their browser: the primary session's first.
     fn run_key_of(&self, u: &str) -> Option<String> { let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.contains_key(u) { return Some(u.to_string()); } let p = format!("{u}#"); runs.keys().find(|k| k.starts_with(&p)).cloned() }
+    /// The session (not the first one) whose run is this host job, for the tools its MCP relay calls ("" = none / the first).
+    pub fn session_of_job(&self, job: &str) -> String { if job.is_empty() { return String::new(); } self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(_, r)| r.remote == job).and_then(|(k, _)| k.split_once('#').map(|x| x.1.to_string())).unwrap_or_default() }
     pub fn any_busy(&self) -> bool { !self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() }
     pub fn default_model_of(&self, a: &Account) -> String { self.default_model(a) }
     fn default_model(&self, a: &Account) -> String {
@@ -118,12 +140,18 @@ impl Work {
     }
     pub fn effective_model(&self, a: &Account) -> String { let m = s(&self.state(a), "model"); if m.is_empty() { self.default_model(a) } else { m } }
     /// A session's project (the first session's is project_of).
-    pub fn project_in(&self, a: &Account, sx: &Sx) -> String { let p = s(&sessions::sstate(self, a, sx), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
-    /// The session limits on a host (T-285; plans/multi-session.md § 6): working sessions per person, and per provider
-    /// on it. Config workSessions { perUser 5, perProvider 3 } (a host's own settings come with T-286).
-    pub fn session_limits(&self, _host: &str) -> (u64, u64) {
+    pub fn project_in(&self, a: &Account, sx: &Sx) -> String { if self.is_none(a, sx) { return NO_PROJECT.into(); } let p = s(&sessions::sstate(self, a, sx), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
+    /// The session limits on a host for a person (T-285, T-286; plans/multi-session.md § 6): working sessions per
+    /// person, per provider on it, and whether the host's owner may exceed them. The host's own settings (its hello, or
+    /// what its owner set from the page) first; else config workSessions { perUser 5, perProvider 3 }.
+    pub fn session_limits(&self, ai: &crate::ai_hosts::AiHosts, host: &str, user: &str, prov: &str) -> (u64, u64, bool) {
         let c = self.cfg.get("workSessions").cloned().unwrap_or(json!({}));
-        (c["perUser"].as_u64().filter(|n| *n > 0).unwrap_or(5), c["perProvider"].as_u64().filter(|n| *n > 0).unwrap_or(3))
+        let (du, dp) = (c["perUser"].as_u64().filter(|n| *n > 0).unwrap_or(5), c["perProvider"].as_u64().filter(|n| *n > 0).unwrap_or(3));
+        let Some(l) = (if host == "hub" { None } else { ai.session_limits(host) }) else { return (du, dp, true) };
+        let short = prov.rsplit('/').next().unwrap_or(prov);
+        let per_user = l["exceptions"][user].as_u64().or(l["perUser"].as_u64()).filter(|n| *n > 0).unwrap_or(du);
+        let per_prov = l["providers"][short].as_u64().or(l["perProvider"].as_u64()).filter(|n| *n > 0).unwrap_or(dp);
+        (per_user, per_prov, l["ownerBypass"] != json!(false))
     }
     /// How many of this person's sessions work on that host now, and how many of them through that provider.
     pub fn working_on(&self, u: &str, host: &str, prov: &str) -> (u64, u64) {
@@ -133,7 +161,16 @@ impl Work {
     }
     /// How long a run may send nothing of its own before it counts as stalled (config workSessions.stallAfterMs).
     pub fn stall_after(&self) -> u64 { self.cfg.get("workSessions").and_then(|w| w["stallAfterMs"].as_u64()).filter(|x| *x >= 10_000).unwrap_or(720_000) }
-    pub fn project_of(&self, a: &Account) -> String { let p = s(&self.state(a), "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
+    /// Is this a session with no project (T-238: the AI only, in the person's scratch folder)?
+    pub fn is_none(&self, a: &Account, sx: &Sx) -> bool { sessions::sstate(self, a, sx)["noProject"] == json!(true) }
+    /// Where a session's run happens: the person's worktree of its project (the first session's own, the others' their
+    /// own <user>.<id>), or the scratch folder of a session with no project.
+    pub fn session_wt(&self, a: &Account, sx: &Sx) -> Result<Wt, String> {
+        if self.is_none(a, sx) { return self.wt.scratch(&a.username); }
+        let pj = self.project_in(a, sx);
+        if sx.primary { self.wt.ensure(&a.username, &pj) } else { self.wt.ensure_session(&a.username, sx.hex(), &pj) }
+    }
+    pub fn project_of(&self, a: &Account) -> String { let st = self.state(a); if st["noProject"] == json!(true) { return NO_PROJECT.into(); } let p = s(&st, "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
     pub fn project_list(&self) -> Value {
         let mut c = self.projects.lock().unwrap_or_else(|e| e.into_inner());
         if now_ms() - c.0 > 5000 { *c = (now_ms(), json!(self.wt.list())); }
@@ -193,6 +230,7 @@ impl Work {
     // ---------- the person's Forgejo token (bridge/forgejo.js keeps it) ----------
     fn forgejo_url(&self) -> String { read_json(&self.root.join("forgejo.json")).and_then(|c| c["url"].as_str().map(String::from)).or_else(|| self.cfg.get("forgejoUrl").and_then(Value::as_str).map(String::from)).unwrap_or_else(|| "https://git.unityailab.com".into()).trim_end_matches('/').to_string() }
     fn forgejo_rec(&self, u: &str) -> Option<Value> { read_json(&self.root.join("forgejo-users.json")).and_then(|v| v["users"].get(u).cloned()).filter(Value::is_object) }
+    pub fn forgejo_login(&self, u: &str) -> Option<String> { self.forgejo_rec(u).map(|r| s(&r, "login")).filter(|l| !l.is_empty()) }
     pub fn work_env(&self, u: &str) -> Vec<(String, String)> {
         let Some(r) = self.forgejo_rec(u) else { return vec![] };
         use base64::Engine;
@@ -205,6 +243,7 @@ impl Work {
     pub fn check_fresh(self: &Arc<Self>, a: &Account) { let pj = self.project_of(a); self.check_fresh_in(a, &pj, None); }
     /// The background freshness check of a worktree: the person's own (None) or one of their sessions' (its id's hex).
     pub fn check_fresh_in(self: &Arc<Self>, a: &Account, pj: &str, hex: Option<&str>) {
+        if pj == NO_PROJECT { return; }
         let pj = pj.to_string(); let hex = hex.map(String::from); let key = fresh_key(&a.username, &pj, hex.as_deref());
         { let mut f = self.fresh.lock().unwrap_or_else(|e| e.into_inner()); let cur = f.get(&key).cloned().unwrap_or_default(); if cur.busy || (cur.at > 0 && now_ms() - cur.at < 60000) { return; } f.insert(key.clone(), Fresh { busy: true, ..cur }); }
         let (w, user) = (self.clone(), a.username.clone());
@@ -236,11 +275,17 @@ impl Work {
     fn hub_laws(&self) -> String { ["LAWS.md", "CLAUDE.md"].iter().filter_map(|f| std::fs::read_to_string(self.mills.join(f)).ok().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n") }
     /// The stable segments of the Work system prompt (pgm-context assembly): the person's own lines are the same for the
     /// whole session (Session), the laws the same for everyone (Static). Nothing volatile may be in them (the lint).
-    pub fn system_segments(&self, a: &Account, wd: &Wt) -> Vec<Segment> {
+    pub fn system_segments(&self, a: &Account, wd: &Wt) -> Vec<Segment> { self.system_segments_for(a, wd, None) }
+    /// The segments of a run; `planner` = Some(the rulebook's text, "" = use the built-in summary) for a planner session (T-275).
+    pub fn system_segments_for(&self, a: &Account, wd: &Wt, planner: Option<&str>) -> Vec<Segment> {
         let (name, u) = (&a.display, &a.username);
         let script = self.wt.script.display().to_string().replace('\\', "/");
         let dir = wd.dir.display(); let b = &wd.branch;
-        let wher: Vec<String> = if wd.hub { vec![
+        let wher: Vec<String> = if wd.project == NO_PROJECT { vec![
+            format!("{name} started this session with NO PROJECT: there is no git repository and no worktree. Your working folder is {dir}, a scratch folder that only {name} uses on this hub (nothing in it is shared, versioned or backed up)."),
+            "Use it for notes, drafts, experiments and one-off scripts; never touch the VibeRoller checkout, any project's folders or other people's folders. The worktree law (check / update / merge) is for real projects and does not apply here.".to_string(),
+            format!("If the work turns into a project, tell {name}: Work's Start work panel starts a new private project on Forgejo or clones one, in their own worktree; then copy over what is worth keeping."),
+        ] } else if wd.hub { vec![
             format!("For work on the VibeRoller project itself you are in {name}'s OWN git worktree: {dir}, branch {b}."),
             format!("Commit only on {b}; never check out other branches here and never touch other people's worktrees in {}.", self.wt.wt_root.display()),
             "Before committing, run the regression suite from the worktree: node bridge/test/regress.js --no-prod (it must report 0 failed).".into(),
@@ -260,6 +305,17 @@ impl Work {
             format!("You are talking with {name} (username \"{u}\"{}, Unity AI Lab engineer) through the VibeRoller web interface, running on the host's Claude account.", if a.admin { ", admin" } else { "" }),
             format!("Every message in this conversation comes from {name}; address them by name and keep their work separate from everyone else's."),
         ];
+        if let Some(note) = planner {
+            // the planner segment replaces the building instructions (worktree commits, PC tools, merges): this session only plans.
+            // Its text is the same for the whole session, so it is a Session segment (the cache-lint holds it to the same rules).
+            let rules = if note.trim().is_empty() { PLANNER_SUMMARY.to_string() } else { format!("{PLANNER_HEAD} The team's rulebook (plans/planner-mode.md) follows.\n\n{}", note.trim()) };
+            let planner_seg = format!("PLANNER MODE: {name} opened this as a planner session. {rules} You are in the project worktree {} (branch {}) for reading only: your tools cannot write files, run builds or run git writes, and the hub refuses PC tools, notes outside plans/ and anything else a planner may not do. The board is available through the mcp__board__* tools (act as \"{name} · Claude\"), team notes and chat through mcp__team__* (notes_write only under plans/), and ask_user asks {name} a question.", wd.dir.display(), wd.branch);
+            return vec![
+                Segment::new("1-intro", Class::Session, intro.join(" ")),
+                Segment::new("2-planner", Class::Session, planner_seg),
+                Segment::new("4-laws", Class::Static, self.hub_laws()),
+            ];
+        }
         let mut parts: Vec<String> = vec![];
         parts.extend([
             format!("{name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools"),
@@ -282,8 +338,8 @@ impl Work {
     }
     /// The system prompt a run gets: the segments joined (the person's lines with a space, the laws after a blank line).
     /// The same bytes every run, so the provider's prompt cache can hit (R181); logs any lint hit once per hub process.
-    fn system_prompt(&self, a: &Account, wd: &Wt) -> String {
-        let segs = self.system_segments(a, wd);
+    fn system_prompt(&self, a: &Account, wd: &Wt, planner: Option<&str>) -> String {
+        let segs = self.system_segments_for(a, wd, planner);
         static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !DONE.swap(true, Ordering::SeqCst) {
             for h in lint_segments(&segs) { eprintln!("[work] system prompt segment \"{}\" ({:?}) has {}: \"{}\"; it busts the prompt cache, move it to the turn (R181)", h.segment, h.class, h.pattern, h.snippet); }
@@ -294,8 +350,11 @@ impl Work {
     fn mcp_json(&self, a: &Account, sx: &Sx) -> Value {
         let node = std::env::var("VR_NODE").unwrap_or_else(|_| "node".into());
         let mut env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret_for(&a.username), "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
-        if !sx.primary { env["MILLS_SESSION"] = json!(sx.sid); } // its PC tools reach the page of THIS session's run
+        let planner = sessions::is_planner(a, &sx.sid);
+        if !sx.primary || planner { env["MILLS_SESSION"] = json!(sx.sid); } // its PC tools reach the page of THIS session's run (and the relay knows a planner session)
         let srv = |js: &str| json!({ "command": node, "args": [std::path::absolute(self.root.join(js)).unwrap_or_default().display().to_string()], "env": env });
+        // a planner session (T-275) has no PC tools at all: it plans, it does not build
+        if planner { return json!({ "mcpServers": { "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } }); }
         json!({ "mcpServers": { "pc": srv("pc-tools-mcp.js"), "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } })
     }
     fn mcp_config(&self, a: &Account, sx: &Sx) -> PathBuf {
@@ -333,14 +392,21 @@ impl Work {
             crate::usage::note_context(&mut ctx, &ev, st["claudeSessionId"].as_str().unwrap_or(""));
             if ctx != before { sessions::supdate(self, a, sx, |m| { m.insert("ctx".into(), ctx); }); }
         }
-        if t == "result" { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx.key) { r.answered = true; } }
-        if sx.primary { self.share_event(&a.username, &ev); } // a share shows the person's first session (plans/multi-session.md § 7)
+        if t == "result" {
+            if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx.key) { r.answered = true; }
+            // it stopped short of a tool it was not allowed: the session waits on its person (yellow, T-288) until they answer
+            let denied: Vec<String> = ev["permission_denials"].as_array().map(|d| d.iter().filter_map(|x| x["tool_name"].as_str().map(String::from)).collect()).unwrap_or_default();
+            if !denied.is_empty() { let now = now_ms(); sessions::touch(a, &sx.sid, |m| { m.insert("waiting".into(), json!({ "kind": "permission", "at": now, "tools": denied })); }); }
+        }
+        if self.shares_session(&a.username, &sx.sid) { self.share_event(&a.username, &ev); } // only the session that is shared (plans/multi-session.md § 7)
         self.emit(&sx.key, ev);
     }
     fn finish(&self, a: &Account, sx: &Sx, run_id: &str, code: Value) {
         let run = { let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.get(&sx.key).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&sx.key) } else { None } };
         let Some(mut r) = run else { return };
         for (_, p) in r.pending { let _ = p.send(json!({ "ok": false, "error": "Run ended" })); }
+        self.ask_end(a, sx); // its open questions end with it (the session is no longer waiting on them)
+        self.plan_end(a, sx); // so does an open plan draft (T-279)
         let done = json!({ "type": "bridge_done", "code": code });
         let _ = r.tx.send(line(done.clone()));
         r.ev.push(done);
@@ -383,6 +449,224 @@ impl Work {
         if !remote.is_empty() { hub.ai().cancel_work(&remote); return; }
         if let Some(pid) = pid { kill_pid(pid); }
     }
+
+    // ---------- the AI asks its person (T-245; team note plans/question-protocol.md) ----------
+    /// An open question keeps its run alive for the liveness check (a person may take longer than stallAfter).
+    fn keep_alive(&self, key: &str) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { r.last = now_ms(); } }
+    /// The session's dot: waiting (yellow) while any question of it is open.
+    fn ask_waiting(&self, a: &Account, sid: &str) {
+        let open: Vec<(u64, String)> = self.asks.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.sid == sid && x.result.is_none()).map(|(id, x)| (x.at, id.clone())).collect();
+        let first = open.iter().min().cloned();
+        sessions::touch(a, sid, |m| {
+            match first {
+                Some((at, id)) => { m.insert("waiting".into(), json!({ "kind": "question", "at": at, "ref": id, "count": open.len() })); }
+                None => { if m.get("waiting").map(|w| w["kind"] == json!("question")).unwrap_or(false) { m.remove("waiting"); } }
+            }
+        });
+    }
+    /// Answers a question (the person, the timeout, or the end of the run): the waiting tool call gets `result`. False = it was not open.
+    fn settle(&self, a: &Account, id: &str, result: Value) -> bool {
+        let (key, sid) = { let mut m = self.asks.lock().unwrap_or_else(|e| e.into_inner()); let Some(x) = m.get_mut(id) else { return false }; if x.result.is_some() { return false; } let by = result["result"]["by"].clone(); let answers = result["result"]["answers"].clone(); x.result = Some(result); x.notify.notify_waiters(); (x.key.clone(), (x.sid.clone(), by, answers)) };
+        let (sid, by, answers) = sid;
+        self.ask_waiting(a, &sid);
+        self.emit(&key, json!({ "type": "bridge_answered", "id": id, "session": sid, "by": by, "answers": answers }));
+        true
+    }
+    /// A run ended: its open questions end with it.
+    fn ask_end(&self, a: &Account, sx: &Sx) {
+        let mut any = false;
+        { let mut m = self.asks.lock().unwrap_or_else(|e| e.into_inner());
+          let mine: Vec<String> = m.iter().filter(|(_, x)| x.key == sx.key).map(|(id, _)| id.clone()).collect();
+          for id in mine { let open = m.get(&id).map(|x| x.result.is_none()).unwrap_or(false); if open { any = true; if let Some(x) = m.get_mut(&id) { x.result = Some(json!({ "ok": false, "error": "Run ended" })); x.notify.notify_waiters(); } } else { m.remove(&id); } } }
+        if any { self.ask_waiting(a, &sx.sid); }
+    }
+    /// The tool `ask_user` (team MCP): opens a question series for the session that asked and waits for the answers; or,
+    /// with `poll: <id>`, waits on one already open (the MCP relay asks again every few minutes, so no HTTP call is held for 10).
+    async fn ask(&self, a: &Account, b: &Value, args: &Value) -> Value {
+        let err = |e: String| json!({ "ok": false, "error": e });
+        let poll = args["pollSec"].as_u64().unwrap_or(240).clamp(1, 240);
+        if let Some(id) = args["poll"].as_str() { return self.ask_wait(a, id, poll).await; }
+        let (title, qs) = match questions::normalize(args) { Ok(x) => x, Err(e) => return err(format!("ask_user: {e}")) };
+        let want = s(b, "session");
+        let sx = sessions::resolve(a, &want).filter(|sx| !want.is_empty() && self.busy_key(&sx.key))
+            .or_else(|| self.run_key_of(&a.username).and_then(|k| sessions::resolve(a, k.split_once('#').map(|x| x.1).unwrap_or(""))));
+        let Some(sx) = sx else { return err("No run of yours is going, so there is nobody to ask.".into()) };
+        // the wait: the tool's own timeoutSec, else the person's setting (prefs.ask: auto off = never, or minutes), else config, else 10 minutes
+        let person = read_json(&a.dir.join("state.json")).map(|st| st["prefs"]["ask"].clone()).filter(Value::is_object).and_then(|p| if p["auto"] == json!(false) { Some(0) } else { p["minutes"].as_f64().filter(|m| *m >= 1.0).map(|m| (m.min(1440.0) * 60.0) as u64) });
+        let sec = questions::timeout_sec(args, person.unwrap_or_else(|| self.cfg.get("questionTimeoutSec").and_then(Value::as_u64).unwrap_or(questions::DEFAULT_TIMEOUT_SEC)));
+        let now = now_ms(); let id = format!("q-{}", pgm_core_internal::crypto::random_hex(6));
+        let deadline = if sec > 0 { now + sec * 1000 } else { u64::MAX };
+        {
+            let mut m = self.asks.lock().unwrap_or_else(|e| e.into_inner());
+            m.retain(|_, x| now.saturating_sub(x.at) < 2 * 86_400_000);
+            if m.values().any(|x| x.key == sx.key && x.result.is_none()) { return err("A question of yours is still waiting for its answer in this session; wait for it before asking another.".into()); }
+            m.insert(id.clone(), Ask { user: a.username.clone(), key: sx.key.clone(), sid: sx.sid.clone(), title: title.clone(), qs: qs.clone(), at: now, timeout_ms: sec * 1000, deadline, result: None, notify: Arc::new(Notify::new()) });
+        }
+        self.ask_waiting(a, &sx.sid);
+        self.emit(&sx.key, json!({ "type": "bridge_question", "id": id, "session": sx.sid, "title": title, "questions": qs, "timeoutSec": sec, "at": now, "deadline": if sec > 0 { json!(deadline) } else { Value::Null } }));
+        self.ask_wait(a, &id, poll).await
+    }
+    async fn ask_wait(&self, a: &Account, id: &str, poll: u64) -> Value {
+        let end = std::time::Instant::now() + Duration::from_secs(poll);
+        let gone = || json!({ "ok": false, "error": "No such open question (it was answered, or the run ended)." });
+        loop {
+            let Some(notify) = self.asks.lock().unwrap_or_else(|e| e.into_inner()).get(id).filter(|x| x.user == a.username).map(|x| x.notify.clone()) else { return gone() };
+            let nf = notify.notified(); tokio::pin!(nf); nf.as_mut().enable(); // before the look below: an answer in between still wakes us
+            let snap = self.asks.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|x| (x.result.clone(), x.key.clone(), x.timeout_ms, x.deadline));
+            let Some((res, key, tmo, deadline)) = snap else { return gone() };
+            if let Some(r) = res { self.asks.lock().unwrap_or_else(|e| e.into_inner()).remove(id); return r; }
+            self.keep_alive(&key);
+            let now = now_ms();
+            if tmo > 0 && now >= deadline {
+                let qs = self.asks.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|x| x.qs.clone()).unwrap_or_default();
+                self.settle(a, id, json!({ "ok": true, "result": { "answered": true, "by": "default", "timedOut": true, "answers": questions::default_answers(&qs) } }));
+                continue;
+            }
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() { return json!({ "ok": true, "result": { "pending": true, "id": id } }); }
+            let mut wait = left.min(Duration::from_secs(2));
+            if tmo > 0 { wait = wait.min(Duration::from_millis(deadline.saturating_sub(now)).max(Duration::from_millis(1))); }
+            let _ = tokio::time::timeout(wait, nf).await;
+        }
+    }
+    /// POST /api/work/answer {id, answers: [{id, picked, other?, text?}]} (or {id, defaults: true}, or {id, activity: true}
+    /// = the person is busy with it: the timeout starts over).
+    fn answer(&self, a: &Account, b: &Value) -> (u16, Value) {
+        let id = s(b, "id");
+        let snap = self.asks.lock().unwrap_or_else(|e| e.into_inner()).get(&id).filter(|x| x.user == a.username).map(|x| (x.result.is_some(), x.qs.clone(), x.key.clone(), x.result.as_ref().map(|r| r["ok"] == json!(false)).unwrap_or(false)));
+        let Some((done, qs, key, ended)) = snap else { return (404, json!({ "error": "No such open question." })) };
+        if ended { return (404, json!({ "error": "No such open question (its run ended)." })); }
+        if done { return (409, json!({ "error": "That question was answered already." })); }
+        let yes = |k: &str| b[k] == json!(true) || b[k] == json!(1);
+        if yes("activity") {
+            let mut m = self.asks.lock().unwrap_or_else(|e| e.into_inner());
+            let dl = m.get_mut(&id).map(|x| { if x.timeout_ms > 0 { x.deadline = now_ms() + x.timeout_ms; } x.deadline }).unwrap_or(0);
+            drop(m); self.keep_alive(&key);
+            return (200, json!({ "ok": true, "deadline": if dl == u64::MAX { Value::Null } else { json!(dl) } }));
+        }
+        let answers = if yes("defaults") { questions::default_answers(&qs) } else { questions::answers_from(&qs, &b["answers"]) };
+        let list = answers.as_array().cloned().unwrap_or_default();
+        let by = if list.iter().all(|x| x["by"] == json!("user")) { "user" } else if list.iter().all(|x| x["by"] == json!("default")) { "default" } else { "mixed" };
+        if !self.settle(a, &id, json!({ "ok": true, "result": { "answered": true, "by": by, "answers": answers } })) { return (409, json!({ "error": "That question was answered already." })); }
+        (200, json!({ "ok": true, "by": by }))
+    }
+    /// The questions of theirs that wait now (a page that was away asks), of one session when named.
+    fn open_questions(&self, a: &Account, session: &str) -> Vec<Value> {
+        let want = if session.is_empty() { String::new() } else { session.to_string() };
+        let mut v: Vec<(u64, Value)> = self.asks.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.result.is_none() && (want.is_empty() || x.sid == want))
+            .map(|(id, x)| (x.at, json!({ "id": id, "session": x.sid, "title": x.title, "questions": x.qs, "timeoutSec": x.timeout_ms / 1000, "at": x.at, "deadline": if x.timeout_ms > 0 { json!(x.deadline) } else { Value::Null } }))).collect();
+        v.sort_by_key(|x| x.0); v.into_iter().map(|x| x.1).collect()
+    }
+
+    // ---------- the planner's draft: draft, approve, then the hub writes (T-279 / T-281; plans/planner-mode.md § 6) ----------
+    /// The draft as the page and the saved file get it: the source text cut to an excerpt (the whole text is kept in memory for the note).
+    fn page_draft(d: &Value) -> Value {
+        let mut o = d.clone(); let src = s(d, "sourceText");
+        o["sourceChars"] = json!(src.chars().count()); o["sourceExcerpt"] = json!(src.chars().take(600).collect::<String>());
+        if let Some(m) = o.as_object_mut() { m.remove("sourceText"); } o
+    }
+    /// The person's drafts, a small file in their profile (the last 20: open ones and how the others ended).
+    fn plan_record(a: &Account, id: &str, f: impl FnOnce(&mut Value)) {
+        let file = a.dir.join("plan-drafts.json");
+        let mut m = read_json(&file).filter(Value::is_object).unwrap_or_else(|| json!({}));
+        if !m[id].is_object() { m[id] = json!({}); }
+        f(&mut m[id]);
+        if let Some(o) = m.as_object_mut() { if o.len() > 20 { let mut ks: Vec<(u64, String)> = o.iter().map(|(k, v)| (v["at"].as_u64().unwrap_or(0), k.clone())).collect(); ks.sort(); for (_, k) in ks.into_iter().take(o.len() - 20) { o.remove(&k); } } }
+        write_json(&file, &m);
+    }
+    fn plan_waiting(&self, a: &Account, sid: &str) {
+        let first = self.plans.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.sid == sid && x.result.is_none()).map(|(id, x)| (x.at, id.clone())).min();
+        sessions::touch(a, sid, |m| match first {
+            Some((at, id)) => { m.insert("waiting".into(), json!({ "kind": "plan", "at": at, "ref": id })); }
+            None => { if m.get("waiting").map(|w| w["kind"] == json!("plan")).unwrap_or(false) { m.remove("waiting"); } }
+        });
+    }
+    /// The tool `plan_draft` (team MCP): shows the draft to the person and waits for their answer; or, with `poll: <id>`, waits on one already open.
+    async fn plan_draft(&self, a: &Account, b: &Value, args: &Value) -> Value {
+        let err = |e: String| json!({ "ok": false, "error": e });
+        let poll = args["pollSec"].as_u64().unwrap_or(240).clamp(1, 240);
+        if let Some(id) = args["poll"].as_str() { return self.plan_wait(a, id, poll).await; }
+        let draft = match crate::plan::normalize(args) { Ok(d) => d, Err(e) => return err(e) };
+        let want = s(b, "session");
+        let sx = sessions::resolve(a, &want).filter(|sx| !want.is_empty() && self.busy_key(&sx.key))
+            .or_else(|| self.run_key_of(&a.username).and_then(|k| sessions::resolve(a, k.split_once('#').map(|x| x.1).unwrap_or(""))));
+        let Some(sx) = sx else { return err("No run of yours is going, so there is nobody to show the draft to.".into()) };
+        if !sessions::is_planner(a, &sx.sid) { return err("plan_draft is for planner sessions (open one with \"New planner session\"); a normal session writes the board itself.".into()); }
+        let now = now_ms(); let id = format!("p-{}", pgm_core_internal::crypto::random_hex(6));
+        {
+            let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner());
+            m.retain(|_, x| now.saturating_sub(x.at) < 2 * 86_400_000);
+            if m.values().any(|x| x.key == sx.key && x.result.is_none()) { return err("A draft of yours is still waiting for its answer in this session; wait for it (or for the change request) before drafting again.".into()); }
+            m.insert(id.clone(), PlanDraft { user: a.username.clone(), key: sx.key.clone(), sid: sx.sid.clone(), draft: draft.clone(), at: now, result: None, writing: false, notify: Arc::new(Notify::new()) });
+        }
+        let shown = Self::page_draft(&draft);
+        { let (sid, shown2) = (sx.sid.clone(), shown.clone()); Self::plan_record(a, &id, |r| { *r = json!({ "session": sid, "at": now, "state": "open", "draft": shown2 }); }); }
+        self.plan_waiting(a, &sx.sid);
+        self.emit(&sx.key, json!({ "type": "bridge_plan", "id": id, "session": sx.sid, "draft": shown, "at": now }));
+        self.plan_wait(a, &id, poll).await
+    }
+    async fn plan_wait(&self, a: &Account, id: &str, poll: u64) -> Value {
+        let end = std::time::Instant::now() + Duration::from_secs(poll);
+        let gone = || json!({ "ok": false, "error": "No such open draft (it was answered, or the run ended)." });
+        loop {
+            let Some(notify) = self.plans.lock().unwrap_or_else(|e| e.into_inner()).get(id).filter(|x| x.user == a.username).map(|x| x.notify.clone()) else { return gone() };
+            let nf = notify.notified(); tokio::pin!(nf); nf.as_mut().enable();
+            let snap = self.plans.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|x| (x.result.clone(), x.key.clone()));
+            let Some((res, key)) = snap else { return gone() };
+            if let Some(r) = res { self.plans.lock().unwrap_or_else(|e| e.into_inner()).remove(id); return r; }
+            self.keep_alive(&key); // a person may take a long time to read a plan
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() { return json!({ "ok": true, "result": { "pending": true, "id": id } }); }
+            let _ = tokio::time::timeout(left.min(Duration::from_secs(2)), nf).await;
+        }
+    }
+    /// The draft is answered (or its run ended): the waiting tool call gets `result`; the page is told.
+    fn plan_settle(&self, a: &Account, id: &str, result: Value, outcome: &str, created: &[String], comment: &str) {
+        let (key, sid) = { let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner()); let Some(x) = m.get_mut(id) else { return }; x.result = Some(result); x.writing = false; x.notify.notify_waiters(); (x.key.clone(), x.sid.clone()) };
+        let (o, c) = (outcome.to_string(), created.to_vec());
+        Self::plan_record(a, id, |r| { r["state"] = json!(o); r["created"] = json!(c); });
+        self.plan_waiting(a, &sid);
+        self.emit(&key, json!({ "type": "bridge_plan_answered", "id": id, "session": sid, "outcome": outcome, "created": created, "comment": comment }));
+    }
+    fn plan_end(&self, a: &Account, sx: &Sx) {
+        let mut any = false; let mut ended: Vec<String> = vec![];
+        { let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner());
+          let mine: Vec<String> = m.iter().filter(|(_, x)| x.key == sx.key).map(|(id, _)| id.clone()).collect();
+          for id in mine { let open = m.get(&id).map(|x| x.result.is_none()).unwrap_or(false); if open { any = true; ended.push(id.clone()); if let Some(x) = m.get_mut(&id) { x.result = Some(json!({ "ok": false, "error": "Run ended" })); x.notify.notify_waiters(); } } else { m.remove(&id); } } }
+        for id in ended { Self::plan_record(a, &id, |r| { r["state"] = json!("ended"); }); }
+        if any { self.plan_waiting(a, &sx.sid); }
+    }
+    /// POST /api/work/plan/answer {session?, id, approve: "all" | [parent indexes, 0-based] | false, comment?, revise?, changes?}:
+    /// approve writes (the hub, as "<person> · Claude"); false with `revise` sends the comment back to the AI as a change request, else rejects.
+    fn plan_answer(&self, hub: &dyn AiHub, a: &Account, b: &Value) -> (u16, Value) {
+        let id = s(b, "id"); let comment: String = s(b, "comment").trim().chars().take(4000).collect();
+        let snap = self.plans.lock().unwrap_or_else(|e| e.into_inner()).get(&id).filter(|x| x.user == a.username && (s(b, "session").is_empty() || s(b, "session") == x.sid)).map(|x| (x.result.clone(), x.writing, x.draft.clone()));
+        let Some((res, writing, draft)) = snap else { return (404, json!({ "error": "No such open draft." })) };
+        if let Some(r) = &res { return if r["ok"] == json!(false) { (404, json!({ "error": "No such open draft (its run ended)." })) } else { (409, json!({ "error": "That draft was answered already." })) }; }
+        if writing { return (409, json!({ "error": "That draft is being written." })); }
+        let n = draft["parents"].as_array().map(|p| p.len()).unwrap_or(0);
+        // what the person answered is read by the shared library (pgm-plan-internal, also Jcode PGM's): all / some / change / reject
+        let (picked, with_changes): (Vec<usize>, bool) = match plan::Decision::from_body(b, n) {
+            Err(e) => return (400, json!({ "error": e })),
+            Ok(plan::Decision::Change(c)) => { self.plan_settle(a, &id, json!({ "ok": true, "result": plan::change_result(&c) }), "change", &[], &c); return (200, json!({ "ok": true, "outcome": "change" })); }
+            Ok(plan::Decision::Reject(c)) => { self.plan_settle(a, &id, json!({ "ok": true, "result": plan::reject_result(&c) }), "rejected", &[], &c); return (200, json!({ "ok": true, "outcome": "rejected" })); }
+            Ok(plan::Decision::Dismissed) => { self.plan_settle(a, &id, json!({ "ok": true, "result": plan::reject_result("") }), "rejected", &[], ""); return (200, json!({ "ok": true, "outcome": "rejected" })); }
+            Ok(plan::Decision::ApproveAll) => ((0..n).collect(), true),
+            Ok(plan::Decision::ApproveSome { parents, changes }) => (parents, changes),
+        };
+        // approved: claim the write (one answer wins), write in the order of rule 12, hand the task ids back to the AI and the page
+        { let mut m = self.plans.lock().unwrap_or_else(|e| e.into_inner()); match m.get_mut(&id) { Some(x) if x.result.is_none() && !x.writing => x.writing = true, _ => return (409, json!({ "error": "That draft was answered already." })) } }
+        let out = plan::approve(&plan::HubPlan::new(hub, &a.username), &draft, &picked, with_changes, &comment, &plan::day());
+        let created: Vec<String> = out["created"].as_array().map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        self.plan_settle(a, &id, json!({ "ok": true, "result": out.clone() }), "approved", &created, &comment);
+        (200, out)
+    }
+    /// The drafts of theirs that wait now (a page that was away asks), of one session when named.
+    fn open_plans(&self, a: &Account, session: &str) -> Vec<Value> {
+        let mut v: Vec<(u64, Value)> = self.plans.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, x)| x.user == a.username && x.result.is_none() && (session.is_empty() || x.sid == session))
+            .map(|(id, x)| (x.at, json!({ "id": id, "session": x.sid, "draft": Self::page_draft(&x.draft), "at": x.at }))).collect();
+        v.sort_by_key(|x| x.0); v.into_iter().map(|x| x.1).collect()
+    }
 }
 /// Asks a process to stop (pgm-platform-internal since 5.0.0).
 pub use pgm_platform_internal::proc::kill_pid;
@@ -407,19 +691,26 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let context: String = b["context"].as_str().unwrap_or("").chars().take(20000).collect();
     let fresh = b["fresh"].as_bool().unwrap_or(false) || (b["fresh"].is_number() && b["fresh"] != json!(0)) || b["fresh"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
     if fresh { sessions::supdate(w, a, &sx, |m| { m.remove("claudeSessionId"); m.remove("ctx"); }); }
-    if sx.primary { w.share_line(&a.username, "user", &message); }
+    if w.shares_session(&a.username, &sx.sid) { w.share_line(&a.username, "user", &message); }
     let pj = w.project_in(a, &sx);
     // each session its own worktree (T-292): the first one the person's, the others <user>.<id> on work/<user>.<id>
-    let wd = match if sx.primary { w.wt.ensure(&a.username, &pj) } else { w.wt.ensure_session(&a.username, sx.hex(), &pj) } { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
+    let none = pj == NO_PROJECT;
+    let wd = match w.session_wt(a, &sx) { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
     sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
-    { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); }); }
-    if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
+    // a new message answers whatever the session waited for (T-288)
+    { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); m.remove("waiting"); }); }
+    if none { } else if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
     let mcp_config = w.mcp_config(a, &sx);
-    let system_prompt = w.system_prompt(a, &wd);
+    // a planner session (T-275): read-only tools, no PC server, its own prompt segment; the relay enforces the same
+    let planner = sessions::is_planner(a, &sx.sid);
+    let planner_note: Option<String> = if planner { Some(planner_rules(hub.notes_tool("notes_read", &json!({ "path": "plans/planner-mode.md" }), &a.display)["result"]["text"].as_str().unwrap_or(""))) } else { None };
+    let system_prompt = w.system_prompt(a, &wd, planner_note.as_deref());
     let mut tools: Vec<String> = hub.cfg().get("allowedTools").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-    if !wd.hub { tools.push(format!("Bash(node {}:*)", w.wt.script.display().to_string().replace('\\', "/"))); }
+    if planner { tools = planner_allowed_tools(&tools); }
+    else if !wd.hub { tools.push(format!("Bash(node {}:*)", w.wt.script.display().to_string().replace('\\', "/"))); }
+    let permission_mode: String = if planner { "default".into() } else { permission_mode };
     let model = { let m = s(&st, "model"); if m.is_empty() { w.default_model_of(a) } else { m } };
     let ai = hub.ai();
     let Some(prov) = w.effective(ai, &a.username, &s(&st, "provider")) else { return one_line(json!({ "type": "bridge_error", "text": "No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings." })) };
@@ -442,10 +733,14 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if hjcode && owner != a.username {
         return one_line(json!({ "type": "bridge_error", "text": format!("{nick} runs Work through Jcode PGM on {} computer, and only its owner may work on that computer. Pick another AI in the dropdown.", if owner.is_empty() { "its own".to_string() } else { format!("{}'s", hub.name_of(&owner)) }) }));
     }
+    // a session with no project works in a folder on THIS hub: a host's computer has no such folder
+    if none && (hjcode || (kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work")) {
+        return one_line(json!({ "type": "bridge_error", "text": format!("{nick} runs Work on another computer, but a session with no project works in your scratch folder on this hub. Pick the hub's Claude or a Claude shared as AI only, or give this session a project.") }));
+    }
     // the limits (T-285): only working sessions count, per host and per provider on it; a host's owner is not limited on it
     { let pfull = s(&prov, "id"); let host = sessions::host_of(&pfull);
-      if owner.is_empty() || owner != a.username {
-        let (max_u, max_p) = w.session_limits(&host); let (used, used_p) = w.working_on(&a.username, &host, &pfull);
+      let (max_u, max_p, bypass) = w.session_limits(ai, &host, &a.username, &pfull);
+      if owner.is_empty() || owner != a.username || !bypass { let (used, used_p) = w.working_on(&a.username, &host, &pfull);
         let where_ = if host == "hub" { "This hub".to_string() } else if nick.is_empty() { host.clone() } else { nick.clone() };
         if used >= max_u { return answer(429, json!({ "error": format!("{where_}: {used} of {max_u} sessions working. Wait for one, stop one, or use another AI host."), "limit": { "host": host, "used": used, "max": max_u } })); }
         if used_p >= max_p { return answer(429, json!({ "error": format!("{where_} / {pfull}: {used_p} of {max_p} sessions working on it. Wait for one, stop one, or pick another AI."), "limit": { "host": host, "used": used_p, "max": max_p, "provider": pfull } })); }
@@ -466,7 +761,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id") });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms() });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     w.busy_changed.notify_one();
@@ -493,8 +788,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     } else if kind == "host-claude" || hjcode {
         // legacy: Claude Code runs on the host (only for a host that allows work); or Jcode PGM there (hjcode, the host
         // announced work-jcode: `harness` and `stateModel` are the optional fields it reads)
-        let mut payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": w.system_prompt(a, &wd), "model": model,
-            "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": hub.cfg().get("permissionMode"), "allowedTools": hub.cfg().get("allowedTools"), "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
+        let mut payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": system_prompt, "model": model,
+            "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": if planner { json!("default") } else { hub.cfg().get("permissionMode").cloned().unwrap_or(Value::Null) }, "allowedTools": if planner { json!(tools) } else { hub.cfg().get("allowedTools").cloned().unwrap_or(Value::Null) }, "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
         if hjcode { payload["harness"] = json!(harness); payload["stateModel"] = json!(s(&st, "model")); }
         match ai.run_work(&host_id, &prov_id, payload) {
             Err(e) => { w.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&sx.key); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
@@ -526,7 +821,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a, &sx) } else { Value::Null };
     let sid = s(&st, "claudeSessionId");
     let claude_command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
-    let claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    let mut claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    if planner { claude_args.extend(["--disallowedTools".to_string(), PLANNER_DENIED.to_string()]); } // deny beats allow and any permission mode
     let state_model = s(&st, "model");
     let spec = hx.command(&crate::harness::RunContext { prov: &prov, input: &input, resume: if resume { Some(sid.as_str()) } else { None }, model: &model, state_model: &state_model, acct_dir: &a.dir, cwd: &wd.dir,
         system_prompt: &system_prompt, mcp_json: &mcp_json, mcp_config: &mcp_config, permission_mode: &permission_mode, allowed_tools: &tools, add_dirs: &add_dirs, claude_command: &claude_command, claude_args: &claude_args });
@@ -568,6 +864,10 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
 /// The MCP tools of a run (here: /internal/<tool> with this hub's secret; on a host: /node/job/<id>/internal/<tool>).
 pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -> Value {
     let (name, args) = (s(b, "name"), if b["args"].is_object() { b["args"].clone() } else { json!({}) });
+    // a planner session's run (its relay names the session): the hub refuses what a planner may not do, whatever the tool list said (T-275)
+    if let Some(a) = hub.account(account) { if sessions::is_planner(&a, b["session"].as_str().unwrap_or("")) {
+        let why = planner_refusal(which, &name, &args); if !why.is_empty() { return json!({ "ok": false, "error": why }); }
+    } }
     if which == "board" {
         let Some(op) = pgm_collab_internal::board::tool_op(&name) else { return json!({ "ok": false, "error": format!("Unknown board tool: {name}") }) };
         if hub.account(account).is_none() { return json!({ "ok": false, "error": "Unknown account." }); }
@@ -576,8 +876,11 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
     let Some(a) = hub.account(account) else { return json!({ "ok": false, "error": "Unknown account." }) };
     let w = hub.work();
     if which == "team" {
+        if let Some(v) = crate::planner::tool(&**hub, account, &name, &args) { return v; } // T-276/277/278: plan_parse, plan_existing, plan_roles, plan_owner, plan_glossary
         if name.starts_with("notes_") { return hub.notes_tool(&name, &args, &hub.name_of(account)); }
         match name.as_str() {
+            "ask_user" => return w.ask(&a, b, &args).await, // T-245: a question series for the person of the run
+            "plan_draft" => return w.plan_draft(&a, b, &args).await, // T-279: the planner's draft; the hub writes it once the person approved
             "sessions_search" => {
                 let q: String = args["q"].as_str().or(args["query"].as_str()).unwrap_or("").chars().take(200).collect();
                 let me = hub.name_of(account);
@@ -674,6 +977,8 @@ pub(crate) fn archive_put(a: &Account, mills: &Path, root: &Path, id: &str, titl
 
 // ---------- shared Work sessions (watch-only) ----------
 impl Work {
+    /// Is this session of the owner's the one they share?
+    fn shares_session(&self, owner: &str, sid: &str) -> bool { self.shares.lock().unwrap_or_else(|e| e.into_inner()).get(owner).map(|s| s.sid == sid).unwrap_or(false) }
     fn share_line(&self, owner: &str, t: &str, text: &str) {
         if text.is_empty() { return; }
         let mut sh = self.shares.lock().unwrap_or_else(|e| e.into_inner()); let Some(s) = sh.get_mut(owner) else { return };
@@ -701,12 +1006,28 @@ impl Work {
     pub fn share_stop(&self, owner: &str) { let gone = self.shares.lock().unwrap_or_else(|e| e.into_inner()).remove(owner); if let Some(s) = gone { s.woke.notify_waiters(); self.shares_changed.notify_one(); } }
 }
 
+const NO_FORGEJO_TOKEN: &str = "Save your own Forgejo token first (Settings → My Forgejo): the repos you can see, and a new private repo, are asked of Forgejo as you.";
+/// worktree.js repos' lines → [{ name, private, fork, mirror, url, description }].
+fn parse_repos(out: &str) -> Vec<Value> {
+    let re = regex::Regex::new(r"^(\S+/\S+?)((?: \((?:private|fork|mirror)\))*)  (\S+)\s*$").unwrap();
+    let mut v: Vec<Value> = vec![];
+    for line in out.lines() {
+        if let Some(c) = re.captures(line) {
+            let tags = &c[2];
+            v.push(json!({ "name": &c[1], "private": tags.contains("(private)"), "fork": tags.contains("(fork)"), "mirror": tags.contains("(mirror)"), "url": &c[3], "description": "" }));
+        } else if line.starts_with("    ") { if let Some(last) = v.last_mut() { last["description"] = json!(line.trim()); } }
+    }
+    v
+}
+
 /// The Work routes (signed in as `a`); None = not one of them.
 pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let w = hub.work(); let u = &a.username;
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let p = r.path.as_str();
     if let Some(resp) = sessions::route(hub, r, a).await { return Some(resp); }
+    if let Some(resp) = crate::gitpanel::route(hub, r, a).await { return Some(resp); }
+    if let Some(resp) = crate::projects::route(hub, r, a).await { return Some(resp); }
     // the session a request names (plans/multi-session.md; none = the first one, as older pages send it)
     let sess = |b: &Value| sessions::resolve(a, &sessions::wanted(r, b));
     let no_session = || answer(404, json!({ "error": "No such session." }));
@@ -719,6 +1040,12 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             if let Some(tx) = entry { let mut v = json!({ "ok": b["ok"].as_bool().unwrap_or(false) || (!b["ok"].is_null() && b["ok"] != json!(false) && b["ok"] != json!(0) && b["ok"] != json!("")) }); for k in ["result", "error"] { if let Some(x) = b.get(k) { v[k] = x.clone(); } } let _ = tx.send(v); }
             answer(200, json!({ "ok": true }))
         }
+        // the AI's question (T-245): the page answers it, or says the person is busy with it (the timeout starts over)
+        "/api/work/answer" if post => { let (st, v) = w.answer(a, &r.json()); answer(st, v) }
+        // the planner's draft (T-279): approve all / some, ask for a change, or reject; the hub writes what was approved
+        "/api/work/plan/answer" if post => { let (st, v) = w.plan_answer(&**hub, a, &r.json()); answer(st, v) }
+        "/api/work/plans" if get => answer(200, json!({ "plans": w.open_plans(a, &r.param("session").unwrap_or_default()) })),
+        "/api/work/questions" if get => answer(200, json!({ "questions": w.open_questions(a, &r.param("session").unwrap_or_default()) })),
         "/api/usage" if get => answer(200, w.usage_status(&**hub, a)),
         "/api/model" if post => {
             let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let st = sessions::sstate(w, a, &sx); let ai = hub.ai();
@@ -754,16 +1081,61 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                 None => { let e = err.trim().lines().last().unwrap_or("").trim_start_matches("Error: ").to_string(); let e = if e.is_empty() { out.trim().lines().last().unwrap_or("Could not make the project.").to_string() } else { e }; answer(if e.contains("exists already") { 409 } else { 400 }, json!({ "error": e })) }
             }
         }
+        // the Forgejo repos this person can see, to clone from (T-238): worktree.js repos, as them; it needs their own token
+        "/api/projects/repos" if get => {
+            let env = w.work_env(u);
+            if env.is_empty() { return Some(answer(400, json!({ "error": NO_FORGEJO_TOKEN, "needsToken": true }))); }
+            let q: String = r.param("q").unwrap_or_default().chars().filter(|c| !c.is_control()).take(80).collect::<String>().split_whitespace().map(|x| x.trim_start_matches('-')).filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" ");
+            let mut args: Vec<&str> = vec!["repos"]; args.extend(q.split(' ').filter(|x| !x.is_empty()));
+            let wt = &w.wt; let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&args, &env));
+            if !ok { let e = err.trim().lines().last().unwrap_or("Forgejo did not answer.").to_string(); return Some(answer(502, json!({ "error": e }))); }
+            answer(200, json!({ "repos": parse_repos(&out), "q": q }))
+        }
+        // a new empty project, private on Forgejo (T-238), in this order: the checks (name, taken, token), the repo on
+        // Forgejo (repo-create, as them), the local project (new), and publish (origin = Forgejo, every branch pushed)
+        "/api/projects/create" if post => {
+            let b = r.json(); let name = s(&b, "name").trim().to_string();
+            if !pgm_collab_internal::worktree::Worktrees::valid_name(&name) { return Some(answer(400, json!({ "error": "A project name is 1-64 characters: letters, digits, dots, dashes and underscores, starting with a letter or digit." }))); }
+            if w.wt.name_taken(&name) { return Some(answer(409, json!({ "error": format!("A project named \"{name}\" exists already.") }))); }
+            let mut env = w.work_env(u);
+            let Some(login) = w.forgejo_login(u).filter(|_| !env.is_empty()) else { return Some(answer(400, json!({ "error": NO_FORGEJO_TOKEN, "needsToken": true }))) };
+            let owner = { let o = s(&b, "owner"); if o.is_empty() { login } else { o } };
+            if !owner.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) || owner.is_empty() || owner.len() > 100 { return Some(answer(400, json!({ "error": "That owner name is not valid." }))); }
+            let full = format!("{owner}/{name}");
+            let desc: String = s(&b, "description").chars().filter(|c| !c.is_control()).take(200).collect();
+            let wt = &w.wt;
+            let fail = |out: &str, err: &str, what: &str| -> (u16, String) { let e = err.trim().lines().last().unwrap_or("").trim_start_matches("Error: ").to_string(); let e = if e.is_empty() { out.trim().lines().last().unwrap_or(what).to_string() } else { e }; (if e.contains("409") || e.contains("already exists") || e.contains("exists already") { 409 } else { 502 }, e) };
+            let mut rc: Vec<&str> = vec!["repo-create", full.as_str(), "--private"]; if !desc.is_empty() { rc.push("--description"); rc.push(desc.as_str()); }
+            let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&rc, &env));
+            if !ok { let (st, e) = fail(&out, &err, "Forgejo did not make the repo."); return Some(answer(st, json!({ "error": e, "stage": "repo-create" }))); }
+            env.push(("USERNAME".into(), u.clone())); env.push(("USER".into(), u.clone()));
+            let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&["new", name.as_str()], &env));
+            if !ok { let (st, e) = fail(&out, &err, "Could not make the project."); return Some(answer(st, json!({ "error": format!("{e} ({full} was made on Forgejo; it is empty and yours to delete or reuse.)"), "stage": "new", "repo": full }))); }
+            let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&["--project", name.as_str(), "publish", full.as_str(), "--private"], &env));
+            w.projects_changed();
+            if !ok { let (st, e) = fail(&out, &err, "Could not publish the project."); return Some(answer(st, json!({ "error": format!("{e} (the project {name} exists here; \"publish\" can be run again.)"), "stage": "publish", "project": name, "repo": full }))); }
+            answer(200, json!({ "project": name, "repo": full, "private": true, "log": out.trim(), "projects": w.project_list() }))
+        }
         "/api/workspace" if post => {
             let b = r.json();
+            // no project: the AI only, in the person's scratch folder (T-238)
+            if b["none"] == json!(true) || s(&b, "project") == NO_PROJECT {
+                let Some(sx) = sess(&b) else { return Some(no_session()) };
+                if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
+                let wd = match w.wt.scratch(u) { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": e }))) };
+                let switched = !w.is_none(a, &sx);
+                sessions::supdate(w, a, &sx, |m| { if switched { m.remove("claudeSessionId"); } m.remove("project"); m.insert("noProject".into(), json!(true)); });
+                return Some(answer(200, json!({ "project": NO_PROJECT, "none": true, "dir": wd.dir.display().to_string(), "branch": "" })));
+            }
             let want = if !s(&b, "project").is_empty() { s(&b, "project") } else if !b["workspace"].is_null() && b["workspace"] != json!("") { HUB_PROJECT.into() } else { String::new() };
             let pj = match w.wt.project(&want) { Ok(p) => p, Err(e) => return Some(answer(400, json!({ "error": e }))) };
             let Some(sx) = sess(&b) else { return Some(no_session()) };
             if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
             let wd = match if sx.primary { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.hex(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
             let switched = w.project_in(a, &sx) != pj.name;
-            sessions::supdate(w, a, &sx, |m| { if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
+            sessions::supdate(w, a, &sx, |m| { m.remove("noProject"); if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
             w.check_fresh(a);
+            crate::projects::used(a, &pj.name);
             answer(200, json!({ "project": pj.name, "dir": wd.dir.display().to_string(), "branch": wd.branch }))
         }
         // ----- the Work conversation + queue, kept across restarts -----
@@ -799,6 +1171,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/work/share" if post => {
             let b = r.json(); let conv = s(&b, "conv");
             if conv.is_empty() { w.share_stop(u); return Some(answer(200, json!({ "share": "" }))); }
+            // which session it shows (none named = the first one); sharing another one moves the share
+            let Some(sx) = sess(&b) else { return Some(no_session()) };
             if conv != "room" { return Some(answer(400, json!({ "error": "A Work session can only be shared with everyone." }))); }
             let since = iso();
             let kinds = |c: &str| match c { "me" => Some("user"), "claude" => Some("claude"), "tool" => Some("tool"), "sys" => Some("sys"), _ => None };
@@ -807,9 +1181,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             for t in tr.iter().skip(tr.len().saturating_sub(150)) { if let (Some(k), Some(text)) = (kinds(t["cls"].as_str().unwrap_or("")), t["text"].as_str()) { n += 1; log.push(json!({ "n": n, "t": k, "text": text.chars().take(20000).collect::<String>(), "ts": since })); } }
             { let mut sh = w.shares.lock().unwrap_or_else(|e| e.into_inner()); let prev = sh.remove(u); let live = prev.as_ref().map(|p| p.live.clone()).unwrap_or(json!({ "typing": "", "queue": [] }));
               if let Some(p) = &prev { p.woke.notify_waiters(); }
-              sh.insert(u.clone(), Share { conv: conv.clone(), since, n, log, live, ver: 0, woke: prev.map(|p| p.woke).unwrap_or_default() }); }
+              sh.insert(u.clone(), Share { conv: conv.clone(), since, n, log, live, ver: 0, woke: prev.map(|p| p.woke).unwrap_or_default(), sid: sx.sid.clone(), key: sx.key.clone() }); }
             w.shares_changed.notify_one();
-            answer(200, json!({ "share": conv }))
+            answer(200, json!({ "share": conv, "session": sx.sid }))
         }
         "/api/work/live" if post => {
             let b = r.json(); let mut sh = w.shares.lock().unwrap_or_else(|e| e.into_inner());
@@ -826,7 +1200,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                 let Some(sv) = sh.get(&owner).filter(|_| owner != *u) else { return (json!({ "stopped": true }), true) };
                 let restart = since != sv.since;
                 let ready = restart || sv.log.iter().any(|e| e["n"].as_u64().unwrap_or(0) > after) || ver != Some(sv.ver);
-                (json!({ "since": sv.since, "conv": sv.conv, "busy": w.busy(&owner), "live": sv.live, "ver": sv.ver, "events": sv.log.iter().filter(|e| restart || e["n"].as_u64().unwrap_or(0) > after).cloned().collect::<Vec<_>>(), "after": sv.n, "restart": restart }), ready)
+                (json!({ "since": sv.since, "conv": sv.conv, "busy": w.busy_key(&sv.key), "session": sv.sid, "live": sv.live, "ver": sv.ver, "events": sv.log.iter().filter(|e| restart || e["n"].as_u64().unwrap_or(0) > after).cloned().collect::<Vec<_>>(), "after": sv.n, "restart": restart }), ready)
             };
             let woke = w.shares.lock().unwrap_or_else(|e| e.into_inner()).get(&owner).map(|s| s.woke.clone());
             if let Some(woke) = woke {
@@ -943,6 +1317,42 @@ pub fn start(hub: &Arc<dyn AiHub>) {
         h.internal("/internal/front/work-busy", json!({ "busy": busy }).to_string()).await;
     } });
 }
+// ---------- planner mode (T-275; team note plans/planner-mode.md § 1, 2, 6) ----------
+/// The planner's one job, said first whatever the note holds.
+const PLANNER_HEAD: &str = "You only plan: you put tasks on the board (decomposed, owned, linked) and write planning notes under plans/; you never work on them, never edit or create files elsewhere, never run builds, tests or git writes, never claim or work a task, never delete a task and never change one someone holds. Work in this order, using the planner tools (they only read, and they are exact where guessing is not): 1) plan_glossary FIRST, every time (the team's words and decisions: \"blocked on X\" means based on X, so X comes first and the task goes to backlog with the label blocked); 2) plan_roles (who does what, and each person's open workload; also the laws in your prompt and the open board with board_list, done tasks of the last 30 days too); 3) plan_parse on the person's input (it splits the ideas, merges a short and a long version of the same list, and shows what is not an idea: check its titles, models, markers and blockedOn); 4) plan_existing for every idea, and scope the task to what is left; 5) plan_owner for every idea and every sub-task (a marker, then role, then the lighter workload; it never answers empty: \"mills to pick\" is asked, not guessed); 6) plan_draft. A correction the person makes about a word or a decision goes into plans/glossary.md at once, so it is never asked twice. Ask, do not guess (ask_user, only what changes the plan). Show the draft with the tool plan_draft (parents with owner, priority, status, blocked on; their sub-tasks; changes to existing tasks; what is not planned and why; the person's words as sourceText) and write nothing until the person approves it: task_create, task_update, task_move and task_delete are refused here, the hub writes the approved draft itself (the source note, the parents, the sub-tasks, the changes, then the summary in the chat) and plan_draft returns the new task ids. If the person asks for a change, revise and call plan_draft again.";
+/// Used when the hub's Notes folder has no plans/planner-mode.md.
+const PLANNER_SUMMARY: &str = "Allowed: read files and repos, search the board, notes, chat and past sessions, ask the person, write board tasks and planning notes under plans/, and post one chat message after a plan is written. Refused: writing or editing files, shell and builds, git writes, go-lives, PC tools. Tools, in order: plan_glossary, plan_roles, plan_parse, plan_existing, plan_owner (\"blocked on\" means based on). Owners: an explicit person marker wins, else by role (design / UI / decomposition / docs: Mills; hub / protocol / infrastructure / spec / testing: Sponge; architecture / research / creative / workflows: Gee). Priority 1 unblocks others, 2 normal, 3-4 later or polish, 5 someday. A task blocked on another goes to backlog with the label blocked. The person's input goes word for word into a source note plans/<topic>-original.md first.";
+/// The rulebook up to its re-assessment section (what a plan run needs), at most 14 000 characters.
+pub fn planner_rules(note: &str) -> String { let cut = note.find("\n## 7.").map(|i| &note[..i]).unwrap_or(note); cut.chars().take(14_000).collect() }
+/// Read-only tools a planner run may be given from the person's allowedTools: Read / Glob / Grep always, Web tools only when
+/// the config allows them, read-only git only when it allows Bash at all, MCP board / team tools (never mcp__pc__*).
+pub fn planner_allowed_tools(cfg_tools: &[String]) -> Vec<String> {
+    let has = |t: &str| cfg_tools.iter().any(|x| x == t);
+    let mut out: Vec<String> = ["Read", "Glob", "Grep"].iter().map(|x| x.to_string()).collect();
+    for t in ["WebFetch", "WebSearch"] { if has(t) { out.push(t.into()); } }
+    if cfg_tools.iter().any(|x| x == "Bash" || x.starts_with("Bash(")) { for g in ["log", "status", "diff", "show", "branch", "ls-files", "grep"] { out.push(format!("Bash(git {g}:*)")); } }
+    out.extend(cfg_tools.iter().filter(|x| (x.starts_with("mcp__board__") || x.starts_with("mcp__team__")) && !x.starts_with("mcp__pc__")).cloned());
+    for t in ["mcp__board", "mcp__team"] { if !out.iter().any(|x| x == t) { out.push(t.into()); } }
+    out
+}
+/// What a planner run is denied whatever the permission mode (Claude's --disallowedTools; deny wins over allow and over bypass).
+pub const PLANNER_DENIED: &str = "Edit,MultiEdit,Write,NotebookEdit,mcp__pc";
+/// Why a tool call from a planner session's run is refused ("" = allowed): no PC tools, no deleting notes or making channels,
+/// notes written only under plans/ (case-insensitive, no "..").
+pub fn planner_refusal(which: &str, name: &str, args: &Value) -> String {
+    match (which, name) {
+        ("pc", _) => format!("Planner mode: PC tools are not available (this session only plans; {name} refused)."),
+        ("team", "notes_delete" | "team_channel_create" | "team_group_create") => format!("Planner mode: {name} is not available to a planner session."),
+        ("team", "notes_write") => {
+            let p = args["path"].as_str().unwrap_or("").replace('\\', "/").to_lowercase(); let p = p.trim_start_matches('/');
+            if p.starts_with("plans/") && p.len() > 6 && !p.split('/').any(|seg| seg == ".." || seg == ".") { String::new() }
+            else { "Planner mode: notes_write is allowed only for paths under plans/ (this one is refused).".into() }
+        }
+        // T-279: the board is written by the hub once the person approved a draft; the AI reads it (board_list, task_get, board_calendar)
+        ("board", "task_create" | "task_update" | "task_move" | "task_delete" | "task_claim" | "task_renew" | "task_release" | "task_complete" | "board_new") => format!("{} ({name} refused)", crate::plan::REFUSAL),
+        _ => String::new(),
+    }
+}
 /// The prompt a run sends: the person's segments joined with a space, the Static laws after a blank line.
 pub fn render_prompt(segs: &[Segment]) -> String {
     let own: Vec<&str> = segs.iter().filter(|s| s.class != Class::Static).map(|s| s.text.as_str()).collect();
@@ -982,11 +1392,41 @@ mod tests {
                 let hits = lint_segments(&segs);
                 assert!(hits.is_empty(), "the Work system prompt has volatile text: {:?}", hits.iter().map(|h| format!("{} / {}: {}", h.segment, h.pattern, h.snippet)).collect::<Vec<_>>());
                 let p = render_prompt(&segs);
-                assert_eq!(p, w.system_prompt(&a, &wd), "built twice: the same bytes");
+                assert_eq!(p, w.system_prompt(&a, &wd, None), "built twice: the same bytes");
                 assert!(p.starts_with("You are talking with Sponge") && p.contains("OWN git worktree") && p.contains("\n\n"));
             }
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+    #[test]
+    fn a_planner_prompt_is_stable_and_has_no_building_instructions() {
+        let (w, _) = work_here();
+        let tmp = std::env::temp_dir().join(format!("vr-prompt-plan-{}", std::process::id())); let _ = std::fs::create_dir_all(&tmp);
+        let a = Account { username: "sponge".into(), dir: tmp.clone(), admin: false, display: "Sponge".into() };
+        let wd = wt(true, &tmp);
+        for note in ["", "## 1. What it may do\nread only\n## 7. Re-assess\nlater"] {
+            let segs = w.system_segments_for(&a, &wd, Some(&planner_rules(note)));
+            assert_eq!(segs.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["1-intro", "2-planner", "4-laws"]);
+            assert!(lint_segments(&segs).is_empty());
+            let p = render_prompt(&segs);
+            assert!(p.contains("PLANNER MODE") && !p.contains("mcp__pc__") && !p.contains("OWN git worktree"));
+            assert_eq!(p, w.system_prompt(&a, &wd, Some(&planner_rules(note))));
+        }
+        assert!(!planner_rules("a\n## 7. x\nsecret").contains("secret"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+    #[test]
+    fn a_planner_may_only_write_notes_under_plans_and_never_use_pc_tools() {
+        let w = |p: &str| planner_refusal("team", "notes_write", &json!({ "path": p }));
+        assert!(w("plans/x.md").is_empty() && w("Plans/Sub/X.md").is_empty());
+        for bad in ["x.md", "notes/plans/x.md", "plans/../x.md", "plans/", "../plans/x.md", "/etc/x", "plans\\..\\x.md"] { assert!(!w(bad).is_empty(), "{bad}"); }
+        assert!(!planner_refusal("pc", "write", &json!({})).is_empty());
+        assert!(!planner_refusal("team", "notes_delete", &json!({})).is_empty());
+        assert!(planner_refusal("board", "task_create", &json!({})).contains("Use plan_draft: the person approves the plan first") && planner_refusal("board", "task_move", &json!({})).contains("plan_draft") && planner_refusal("board", "task_get", &json!({})).is_empty() && planner_refusal("board", "board_list", &json!({})).is_empty() && planner_refusal("team", "plan_draft", &json!({})).is_empty() && planner_refusal("team", "ask_user", &json!({})).is_empty() && planner_refusal("team", "team_say", &json!({})).is_empty());
+        let t = planner_allowed_tools(&["Edit".into(), "Write".into(), "Bash(node x:*)".into(), "WebFetch".into(), "mcp__pc__write".into()]);
+        assert!(t.contains(&"Read".into()) && t.contains(&"WebFetch".into()) && t.contains(&"Bash(git log:*)".into()));
+        assert!(!t.iter().any(|x| x == "Edit" || x == "Write" || x.contains("mcp__pc") || x.contains("node x")));
+        assert!(!planner_allowed_tools(&[]).iter().any(|x| x.starts_with("Bash") || x == "WebFetch"));
     }
     #[test]
     fn the_lint_names_the_segment_when_volatile_text_creeps_in() {

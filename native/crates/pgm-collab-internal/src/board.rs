@@ -129,6 +129,14 @@ impl Board {
         self.ver.send_modify(|v| *v += 1);
     }
     pub fn version(&self) -> u64 { *self.ver.borrow() }
+    /// The task this person holds a claim on (their own or their Claude's): the most recently claimed live one, as
+    /// (id, title, claimed at ms). Presence shows it (T-260).
+    pub fn held_by(&self, user: &str) -> Option<(String, String, u64)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms() as i64;
+        let at = |t: &Value| t["claim"]["at"].as_i64().unwrap_or(t["updatedAt"].as_i64().unwrap_or(0));
+        db["tasks"].as_array()?.iter().filter(|t| live(t) && claim_active(t, now) && t["claim"]["user"] == json!(user)).max_by_key(|t| at(t))
+            .map(|t| (t["id"].as_str().unwrap_or("").to_string(), t["title"].as_str().unwrap_or("").to_string(), at(t).max(0) as u64))
+    }
     pub fn seen(&self, user: &str) { self.viewers.lock().unwrap_or_else(|e| e.into_inner()).insert(user.to_string(), now_ms() as i64); }
     /// A board with that id exists after this (made with `name` if it did not; an existing one is renamed to `name`):
     /// a program whose boards stand for something else (a chat's servers) keeps them in step this way.
@@ -265,7 +273,7 @@ impl Board {
                 let renew = claim_active(t, now) && t["claim"]["key"] == json!(a.key());
                 let t = find_mut(db, &id).unwrap();
                 let until = now + (minutes * 60_000.0) as i64;
-                t["claim"] = json!({ "key": a.key(), "by": a.label(), "agent": a.agent, "user": a.user, "until": until });
+                t["claim"] = json!({ "key": a.key(), "by": a.label(), "agent": a.agent, "user": a.user, "until": until, "at": if renew { t["claim"]["at"].as_i64().unwrap_or(now) } else { now } });
                 if !renew && (t["status"] == json!("todo") || t["status"] == json!("backlog")) { t["status"] = json!("doing"); }
                 touch(t, now);
                 let tc = t.clone();
@@ -351,6 +359,17 @@ impl Board {
     }
     pub fn external(&self, id: &str) -> Option<Value> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); db["tasks"].as_array()?.iter().find(|t| t["id"] == json!(id)).and_then(|t| t.get("forgejo").cloned()).filter(|v| !v.is_null()) }
     pub fn by_external(&self, number: i64) -> Option<Value> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); db["tasks"].as_array()?.iter().find(|t| live(t) && t["forgejo"]["number"].as_i64() == Some(number)).cloned() }
+    /// What each person holds right now (live claims, their own or their Claude's) and how many open tasks are
+    /// assigned to them: user → (held task ids, assigned open tasks). For the presence on the board (T-262).
+    pub fn holdings(&self) -> HashMap<String, (Vec<String>, usize)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms() as i64;
+        let mut m: HashMap<String, (Vec<String>, usize)> = HashMap::new();
+        for t in db["tasks"].as_array().into_iter().flatten().filter(|t| live(t) && t["status"] != json!("done")) {
+            if claim_active(t, now) { if let Some(u) = t["claim"]["user"].as_str() { m.entry(u.to_string()).or_default().0.push(t["id"].as_str().unwrap_or("").to_string()); } }
+            if let Some(u) = t["assignee"].as_str() { m.entry(u.to_string()).or_default().1 += 1; }
+        }
+        m
+    }
     pub fn get(&self, id: &str) -> Option<Value> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); db["tasks"].as_array()?.iter().find(|t| t["id"] == json!(id)).cloned() }
 }
 

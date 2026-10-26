@@ -10,6 +10,7 @@
 //!   long poll, calls (set-up relay, who is in which call), the chat's AI member (her key, what she is sent, her queue
 //!   per conversation), the team tools; what it needs around it: [`chat::ChatHost`]
 
+pub mod activity;
 pub mod chat;
 pub mod e2e;
 pub mod files;

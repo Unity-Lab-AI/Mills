@@ -21,6 +21,8 @@ pub struct Provider {
     pub allowed_users: Vec<String>,
     pub max5h: Option<f64>,
     pub max7d: Option<f64>,
+    /// Work sessions working at once per person through this provider (None = the host's per-provider limit; T-286).
+    pub max_sessions: Option<u64>,
     pub base_url: String,
     pub api_key: String,
     pub config_dir: String,
@@ -41,7 +43,7 @@ impl Provider {
         let kind = if s("harness") == "jcode" { "jcode".to_string() } else { s("kind") };
         Some(Provider { id, kind, label: s("label"), models: list("models"), enabled: v.get("enabled").and_then(Value::as_bool) != Some(false),
             share_with_group: v.get("shareWithGroup").and_then(Value::as_bool) == Some(true), allowed_users: list("allowedUsers"),
-            max5h: v.get("max5h").and_then(Value::as_f64), max7d: v.get("max7d").and_then(Value::as_f64),
+            max5h: v.get("max5h").and_then(Value::as_f64), max7d: v.get("max7d").and_then(Value::as_f64), max_sessions: v.get("maxSessions").and_then(Value::as_u64).filter(|n| *n >= 1),
             base_url: s("baseUrl"), api_key: s("apiKey"), config_dir: s("configDir"), codex_home: s("codexHome"), command: s("command"),
             jcode_command: s("jcodeCommand"), jcode_provider: s("jcodeProvider"), jcode_args: list("jcodeArgs") })
     }
@@ -96,6 +98,28 @@ impl HostSettings {
     pub fn update_check_ms(&self) -> u64 { (clamp(self.obj("update").and_then(|o| o.get("checkMinutes")), 1.0, 60.0, 5.0) * 60000.0) as u64 }
     pub fn allow_insecure_hub(&self) -> bool { self.obj("security").and_then(|o| o.get("allowInsecureHub")).and_then(Value::as_bool) == Some(true) }
     pub fn engine_guard(&self) -> bool { self.obj("security").and_then(|o| o.get("engineGuard")).and_then(Value::as_bool) != Some(false) }
+    /// The session limits this host sets (T-286; plans/multi-session.md § 6): Work sessions working at once per person,
+    /// per provider (and per provider id), per-person exceptions, and whether its owner may exceed them on it. Sent to
+    /// the hub in hello as `sessionLimits` (an older hub ignores it; a host without it gets the hub's defaults).
+    pub fn session_limits(&self) -> Value {
+        let o = self.obj("sessions");
+        let per_user = clamp(o.and_then(|o| o.get("perUser")), 1.0, 100.0, 5.0) as u64;
+        let per_provider = clamp(o.and_then(|o| o.get("perProvider")), 1.0, 100.0, 3.0) as u64;
+        let mut provs = Map::new(); for p in self.all_providers() { if let Some(n) = p.max_sessions { provs.insert(p.id, json!(n)); } }
+        let exceptions: Map<String, Value> = o.and_then(|o| o.get("exceptions")).and_then(Value::as_object).map(|m| m.iter().filter_map(|(k, v)| v.as_u64().filter(|n| (1..=100).contains(n)).map(|n| (k.clone(), json!(n)))).collect()).unwrap_or_default();
+        let bypass = o.and_then(|o| o.get("ownerBypass")).and_then(Value::as_bool) != Some(false);
+        json!({ "perUser": per_user, "perProvider": per_provider, "providers": provs, "exceptions": exceptions, "ownerBypass": bypass })
+    }
+    /// Sets the session limits from what the hub's page sent (the `limits` control): each given field through `set`.
+    pub fn set_session_limits(&mut self, l: &Value) -> Result<()> {
+        let num = |v: &Value| v.as_u64().map(|n| n.to_string()).or_else(|| v.as_str().map(String::from)).unwrap_or_default();
+        if let Some(v) = l.get("perUser") { self.set("sessions.perUser", &num(v))?; }
+        if let Some(v) = l.get("perProvider") { self.set("sessions.perProvider", &num(v))?; }
+        if let Some(v) = l.get("ownerBypass") { self.set("sessions.ownerBypass", if v.as_bool() == Some(true) { "on" } else { "off" })?; }
+        if let Some(m) = l.get("exceptions").and_then(Value::as_object) { let t: Vec<String> = m.iter().map(|(k, v)| format!("{k}={}", num(v))).collect(); self.set("sessions.exceptions", &t.join(", "))?; }
+        if let Some(m) = l.get("providers").and_then(Value::as_object) { for (id, v) in m { self.set(&format!("provider.{id}.maxSessions"), &if v.is_null() { String::new() } else { num(v) })?; } }
+        Ok(())
+    }
     pub fn pc_folder(&self) -> Option<PathBuf> { self.obj("pc").and_then(|o| o.get("folder")).and_then(Value::as_str).filter(|s| !s.is_empty()).map(|s| std::path::absolute(s).unwrap_or_else(|_| PathBuf::from(s))) }
     pub fn work(&self) -> Map<String, Value> { self.obj("work").cloned().unwrap_or_default() }
     /// The engines lent to the hub by name → their local address (the ones switched off live under "enginesOff").
@@ -125,6 +149,11 @@ impl HostSettings {
         out.push(("update.quietMinutes".into(), "Update / restart only after this many quiet minutes".into(), (self.update_quiet_ms() / 60000).to_string()));
         out.push(("update.checkMinutes".into(), "Look for updates every N minutes".into(), (self.update_check_ms() / 60000).to_string()));
         out.push(("reconnect.maxDelaySeconds".into(), "Reconnect: longest wait between tries (seconds)".into(), (self.reconnect_max_ms() / 1000).to_string()));
+        let sl = self.session_limits();
+        out.push(("sessions.perUser".into(), "Work sessions: working at once per person on this host".into(), sl["perUser"].to_string()));
+        out.push(("sessions.perProvider".into(), "Work sessions: working at once per person per provider".into(), sl["perProvider"].to_string()));
+        out.push(("sessions.exceptions".into(), "Work sessions: per-person limits (name=n, …)".into(), { let e: Vec<String> = sl["exceptions"].as_object().map(|m| m.iter().map(|(k, v)| format!("{k}={v}")).collect()).unwrap_or_default(); if e.is_empty() { "(none)".into() } else { e.join(", ") } }));
+        out.push(("sessions.ownerBypass".into(), "Work sessions: I may exceed them on my own host".into(), on(sl["ownerBypass"] == json!(true))));
         for p in self.all_providers() {
             let name = if p.label.is_empty() { p.id.clone() } else { p.label.clone() };
             out.push((format!("provider.{}.enabled", p.id), format!("{name} ({}): offered", p.kind), on(p.enabled)));
@@ -132,6 +161,7 @@ impl HostSettings {
             out.push((format!("provider.{}.allowedUsers", p.id), format!("{name}: shared with these users (comma list)"), if p.allowed_users.is_empty() { "(none)".into() } else { p.allowed_users.join(", ") }));
             out.push((format!("provider.{}.max5h", p.id), format!("{name}: 5-hour usage cap (%)"), p.max5h.unwrap_or(90.0).to_string()));
             out.push((format!("provider.{}.max7d", p.id), format!("{name}: 7-day usage cap (%)"), p.max7d.unwrap_or(90.0).to_string()));
+            out.push((format!("provider.{}.maxSessions", p.id), format!("{name}: Work sessions working at once per person"), p.max_sessions.map(|n| n.to_string()).unwrap_or_else(|| "(host default)".into())));
             if p.is_jcode() {
                 out.push((format!("provider.{}.jcodeCommand", p.id), format!("{name}: the jcodepgm program that runs Work (empty = jcodepgm on the PATH)"), if p.jcode_command.is_empty() { "(jcodepgm)".into() } else { p.jcode_command.clone() }));
                 out.push((format!("provider.{}.jcodeProvider", p.id), format!("{name}: jcode provider profile (-p; empty = jcode's own)"), if p.jcode_provider.is_empty() { "(none)".into() } else { p.jcode_provider.clone() }));
@@ -160,7 +190,7 @@ impl HostSettings {
     }
     /// Is this setting a switch (on / off, yes / no) the control app flips instead of asking for text?
     pub fn is_switch(key: &str) -> bool {
-        matches!(key, "autoUpdate" | "allowWork" | "security.allowInsecureHub" | "security.engineGuard")
+        matches!(key, "autoUpdate" | "allowWork" | "security.allowInsecureHub" | "security.engineGuard" | "sessions.ownerBypass")
             || (key.starts_with("provider.") && (key.ends_with(".enabled") || key.ends_with(".shareWithGroup"))) || (key.starts_with("engine.") && key.ends_with(".enabled"))
     }
     /// One line saying what a setting does (shown under the list in the control app).
@@ -172,6 +202,10 @@ impl HostSettings {
             "update.quietMinutes" => "An update or restart waits for this many minutes with nothing in flight (after 30 minutes of waiting it takes any gap).",
             "update.checkMinutes" => "How often the host asks the hub whether there is a newer version.",
             "reconnect.maxDelaySeconds" => "When the hub cannot be reached the host retries with growing waits, at most this long.",
+            "sessions.perUser" => "How many Work sessions one person may have working at once through this host (an idle session counts for nothing).",
+            "sessions.perProvider" => "How many of one person's working sessions may use the same provider of this host at once (a provider can set its own).",
+            "sessions.exceptions" => "Per-person limits instead of the one above: name=n, comma separated (e.g. mills=8, guest=1). Empty = none.",
+            "sessions.ownerBypass" => "On: you (this host's owner) are not limited on your own host. Off: the limits apply to you too.",
             "allowWork" => "SECURITY: lets Work runs from VibeRoller execute their tools on THIS machine. Off = only AI answers are shared.",
             "pc.folder" => "SECURITY: one folder your own Work runs may read and write directly. Empty = off.",
             "security.allowInsecureHub" => "SECURITY: lets the host use a plain-http hub on another machine (the token would travel unencrypted). Keep off.",
@@ -183,6 +217,7 @@ impl HostSettings {
             k if k.starts_with("provider.") && k.ends_with(".jcodeProvider") => "The jcode provider profile (jcodepgm -p) its Work turns use. Empty = jcode's own default.",
             k if k.starts_with("provider.") && k.ends_with(".max5h") => "This host stops lending the login once its 5-hour usage reaches this percent.",
             k if k.starts_with("provider.") && k.ends_with(".max7d") => "This host stops lending the login once its 7-day usage reaches this percent.",
+            k if k.starts_with("provider.") && k.ends_with(".maxSessions") => "Work sessions one person may have working at once through this provider. Empty = the host's per-provider limit.",
             k if k.starts_with("engine.") => "An engine (a local AI server such as Ollama) lent to Unity; off keeps the address but stops lending it.",
             _ => "",
         }
@@ -246,6 +281,21 @@ impl HostSettings {
             }
             "security.allowInsecureHub" => sub(self, "security", "allowInsecureHub", json!(yes(v))),
             "security.engineGuard" => sub(self, "security", "engineGuard", json!(yes(v))),
+            "sessions.perUser" => { let n = range(1.0, 100.0)?; sub(self, "sessions", "perUser", json!(n as u64)); }
+            "sessions.perProvider" => { let n = range(1.0, 100.0)?; sub(self, "sessions", "perProvider", json!(n as u64)); }
+            "sessions.ownerBypass" => sub(self, "sessions", "ownerBypass", json!(yes(v))),
+            "sessions.exceptions" => {
+                let mut m = Map::new();
+                if !(v.is_empty() || v == "(none)") {
+                    for part in v.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+                        let (name, n) = part.split_once('=').ok_or_else(|| Error::msg("Write name=n, comma separated (e.g. mills=8, guest=1)."))?;
+                        let name = name.trim().to_ascii_lowercase(); let n: u64 = n.trim().parse().ok().filter(|n| (1..=100).contains(n)).ok_or_else(|| Error::msg("Each limit is 1 to 100."))?;
+                        if name.is_empty() || name.len() > 32 || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') { return Err(Error::msg(format!("\"{name}\" is not a user name."))); }
+                        m.insert(name, json!(n));
+                    }
+                }
+                sub(self, "sessions", "exceptions", Value::Object(m));
+            }
             k if k.starts_with("provider.") => {
                 let rest = &k["provider.".len()..];
                 let (id, field) = rest.rsplit_once('.').ok_or_else(|| Error::msg(format!("No setting \"{k}\".")))?;
@@ -256,6 +306,7 @@ impl HostSettings {
                     "jcodeCommand" | "jcodeProvider" => json!(if v == "(jcodepgm)" || v == "(none)" { "" } else { v }),
                     "models" => Value::Array(csv(v).into_iter().map(Value::String).collect()),
                     "max5h" | "max7d" => json!(range(1.0, 100.0)?),
+                    "maxSessions" => if v.is_empty() || v == "(host default)" { Value::Null } else { json!(range(1.0, 100.0)? as u64) },
                     _ => return Err(Error::msg(format!("No setting \"{k}\"."))),
                 };
                 let p = self.raw.get_mut("providers").and_then(Value::as_array_mut).and_then(|a| a.iter_mut().find(|p| p.get("id").and_then(Value::as_str) == Some(id)))
@@ -290,6 +341,21 @@ mod tests {
             "providers": [{ "id": "claude", "kind": "claude-cli", "label": "My Claude", "models": ["m1"] }, { "id": "off", "kind": "openai", "enabled": false }],
             "engines": { "ollama": "http://127.0.0.1:11434" } })).unwrap();
         s
+    }
+    #[test]
+    fn session_limits_have_defaults_and_take_settings() {
+        let mut s = sample();
+        let l = s.session_limits();
+        assert_eq!((l["perUser"].clone(), l["perProvider"].clone(), l["ownerBypass"].clone()), (json!(5), json!(3), json!(true)));
+        s.set("sessions.perUser", "2").unwrap(); s.set("sessions.exceptions", "mills=8, guest=1").unwrap();
+        s.set("provider.claude.maxSessions", "1").unwrap(); s.set("sessions.ownerBypass", "off").unwrap();
+        let l = s.session_limits();
+        assert_eq!(l["perUser"], json!(2)); assert_eq!(l["exceptions"]["mills"], json!(8)); assert_eq!(l["providers"]["claude"], json!(1)); assert_eq!(l["ownerBypass"], json!(false));
+        assert!(s.set("sessions.exceptions", "mills=0").is_err() && s.set("sessions.exceptions", "Bad Name=2").is_err() && s.set("sessions.perUser", "0").is_err());
+        s.set("provider.claude.maxSessions", "").unwrap(); assert!(s.session_limits()["providers"].get("claude").is_none());
+        s.set_session_limits(&json!({ "perProvider": 4, "providers": { "claude": 2 }, "ownerBypass": true })).unwrap();
+        let l = s.session_limits(); assert_eq!((l["perProvider"].clone(), l["providers"]["claude"].clone(), l["ownerBypass"].clone()), (json!(4), json!(2), json!(true)));
+        assert!(s.list().iter().any(|(k, _, v)| k == "sessions.perUser" && v == "2") && HostSettings::is_switch("sessions.ownerBypass") && !HostSettings::explain("sessions.exceptions").is_empty());
     }
     #[test]
     fn defaults_and_checks() {
