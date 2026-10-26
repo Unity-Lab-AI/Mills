@@ -155,7 +155,7 @@ impl Directory for HubDir {
     fn changed(&self, user: &str, event: &Value) {
         if event["type"] == "hyper_question" { println!("[vr-hub] hyperwork: {user}'s run {} waits for an answer ({})", event["run"].as_str().unwrap_or(""), event["key"].as_str().unwrap_or("")); }
     }
-    fn default_tools(&self) -> Vec<String> { READ_TOOLS.iter().map(|s| s.to_string()).collect() }
+    fn default_tools(&self) -> Vec<String> { READ_TOOLS.iter().chain(RE_TOOLS).map(|s| s.to_string()).collect() }
     /// The board's own repeats (month-end aware, this machine's local time): one scheduler's rules, not two.
     fn next_due(&self, ms: u64, recur: &str) -> Option<u64> {
         pgm_collab_internal::board::next_due(ms as i64, if recur == "nightly" { "daily" } else { recur }, 0).map(|x| x as u64)
@@ -181,8 +181,11 @@ impl Directory for HubDir {
     }
 }
 
-/// The tools a run may use when its scope's policy names none: reading the board and the notes.
+/// The tools a run may use when its scope's policy names none: reading the board and the notes, and REA's containers
+/// (anyone on the team may use them, no approval; each copy is the run owner's own, within the hub's cap).
 const READ_TOOLS: &[&str] = &["board_list", "task_get", "board_calendar", "notes_list", "notes_read"];
+/// What a `rea` node uses (T-255): the RE container tools a Work run has.
+const RE_TOOLS: &[&str] = &["re_start", "re_status", "re_list", "re_put", "re_exec", "re_get", "re_skill", "re_tools", "re_call", "re_stop"];
 
 /// A run's way out, as one person: their AI providers (spec 5.4), the board and notes tools, HTTP to the hosts the
 /// config allows (`hyperworkNetwork`), the hub's workflow secrets (`hyperworkSecrets`).
@@ -233,6 +236,8 @@ impl WorkflowHost for HubHost {
             let ai: &dyn AiHub = &*h;
             let out = if let Some(op) = pgm_collab_internal::board::tool_op(&name) { ai.board_tool(op, &self.user, &args) }
                 else if name.starts_with("notes_") { ai.notes_tool(&name, &args, &h.mods.name_of(&self.user)) }
+                // REA (T-255): the same RE containers as the re_* tools of a Work run, as the run's owner (never as an admin)
+                else if RE_TOOLS.contains(&name.as_str()) { h.mods.re.tool_as(&name, &args, &self.user).await }
                 else { return Err(NodeError::fatal("engine.tool-denied", format!("the hub has no tool `{name}` for workflows"))) };
             if out["ok"] == json!(false) { return Err(NodeError::new("engine.tool", out["error"].as_str().unwrap_or("the tool failed").to_string())); }
             Ok(out.get("result").cloned().unwrap_or(out))

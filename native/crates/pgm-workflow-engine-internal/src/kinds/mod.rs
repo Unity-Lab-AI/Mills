@@ -1,5 +1,5 @@
 //! The built-in node kinds that call the outside (T-201; spec 5): `prompt`, `chat`, `summarise`, `jev` (ai.rs), `tool`
-//! with custom HTTP calls, `agent` (tools.rs), `script` (script.rs), `orchestrate` (orchestrate.rs). They reach the
+//! with custom HTTP calls, `agent` (tools.rs), `script` (script.rs), `orchestrate` (orchestrate.rs), `rea` (rea.rs: the host's standalone RE tools). They reach the
 //! world only through the [`WorkflowHost`], so a test drives them with the fake host and the hub with its AI hosts and
 //! providers. [`crate::Engine::with_builtins`] is an engine with all of them.
 use crate::host::{BoxFut, ModelAnswer, ModelRequest, NodeCall, NodeError, WorkflowHost};
@@ -8,6 +8,7 @@ use serde_json::{json, Map, Value};
 
 pub mod ai;
 pub mod orchestrate;
+pub mod rea;
 pub mod script;
 pub mod tools;
 

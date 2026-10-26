@@ -203,6 +203,13 @@ fn builtins() -> Vec<KindManifest> {
         kind("tool", "Tools", "Tool call", vec![p("args", "json")], vec![p("result", "json"), err()], json!({ "type": "object", "properties": { "tool": { "type": "string" } } })),
         kind("script", "Tools", "Script", vec![p("in", "json")], vec![err()],
             json!({ "type": "object", "properties": { "lang": { "type": "string" }, "code": { "type": "string" }, "outputs": { "type": "array" } } })),
+        // reverse engineering (T-255): the host's standalone RE tools (re_*), one throw-away copy per node unless kept
+        kind("rea", "Tools", "Reverse engineering (REA)", vec![p("args", "json"), p("copy", "text")],
+            vec![p("result", "json"), p("text", "text"), p("output", "json"), p("files", "json"), p("copy", "text"), err()],
+            json!({ "type": "object", "properties": { "tool": { "type": "string" }, "args": { "type": "object" }, "exec": { "type": ["string", "array"] },
+                "files": { "type": "array", "items": { "type": "object", "required": ["path"], "properties": { "path": { "type": "string" }, "text": { "type": "string" }, "base64": { "type": "string" } } } },
+                "get": { "type": "array", "items": { "type": "string" } }, "purpose": { "type": "string" }, "copy": { "type": "string" }, "keep": { "type": "boolean" }, "stop": { "type": "boolean" },
+                "timeoutSec": { "type": "integer", "minimum": 1 }, "queueSec": { "type": "integer", "minimum": 0 }, "failOnExit": { "type": "boolean" } }, "additionalProperties": false })),
         // agents and orchestration (5.5)
         kind("agent", "Agents", "Agent", vec![p("task", "text").required()], vec![p("result", "json"), p("text", "text"), err()], json!({ "type": "object", "properties": { "timeoutSec": { "type": "number", "minimum": 1 } } })),
         kind("orchestrate", "Agents", "Orchestrate", vec![p("goal", "text").required()], vec![p("result", "json"), err()], any.clone()),

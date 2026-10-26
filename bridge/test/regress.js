@@ -4029,6 +4029,30 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const left = ctrs(); if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
     }
   } else for (const id of ['R341', 'R342', 'R343', 'R344', 'R345']) skip(id, 'REA tools inside a container (T-254: re_tools, re_call, re_skill, owner only, closes on stop)', RE_T.why);
+  // R485 (T-255): a workflow's `rea` node is REA through the same RE containers as the re_* tools (no second way in): the
+  // run starts its owner's copy, puts a file in, calls REA's tool, takes the file out, and the copy is gone afterwards
+  const L485 = 'a workflow with a rea node runs a REA step as its owner: a copy of the RE image starts, the file goes in, REA\'s tool answers with the run\'s arguments, the file comes back out, and no container is left afterwards; the owner\'s RE list is empty again';
+  if (RE_T.ok) {
+    const ctrs = () => (podman(['ps', '-a', '--filter', 'name=' + RE_T.prefix, '--format', '{{.Names}}'], RE_T.env).stdout || '').split('\n').filter(Boolean);
+    const hw = (p, tok, body) => call('/api/hyperwork/' + p, tok, body);
+    const before = ctrs().length;
+    const doc485 = { schema: 1, name: 'r485-rea', nodes: [{ id: 's', kind: 'start' },
+      { id: 'r', kind: 'rea', config: { tool: 'echo', args: { sample: 'r485 {{prompt}}' }, files: [{ path: 'in/note.txt', text: 'note for {{prompt}}' }], get: ['in/note.txt'], purpose: 'r485 workflow' } },
+      { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'r.args' }, { id: 'e2', from: 'r.text', to: 'e.result' }] };
+    const sv = await hw('save', U, { doc: doc485 }), wid = (sv.data || {}).id;
+    const pub = await hw('publish', U, { id: wid, message: 'r485' });
+    const go = await hw('run', U, { id: wid, prompt: 'app.bin' }), run = (go.data || {}).run;
+    let m = {}; for (let i = 0; i < 240 && run; i++) { m = (await hw('run?id=' + run, U)).data || {}; if (m.status && m.status !== 'running') break; await sleep(250); }
+    const log = run ? (await fetch(`${H}/api/hyperwork/log?id=${run}`, { headers: { Authorization: 'Bearer ' + U } }).then((r) => r.text()).catch(() => '')).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } }) : [];
+    const end = log.filter((e) => e.type === 'node_end' && e.node === 'r').pop() || {};
+    const outFile = (((end.outputs || {}).files || {})['in/note.txt'] || {}).text;
+    const mine = ((await call('/api/re/list', U)).data.sandboxes || []).filter((s) => s.owner === 't-user' && s.state !== 'gone');
+    const result = String(m.result || '');
+    check('R485', L485, sv.status === 200 && pub.status === 200 && go.status === 202 && m.status === 'ok' && /\[untrusted content\]/.test(result) && /"sample": ?"r485 app\.bin"/.test(result)
+      && outFile === 'note for app.bin' && ctrs().length === before && mine.length === 0,
+      `save ${sv.status} publish ${pub.status} run ${go.status} → ${m.status} ${JSON.stringify(m.error || '')} · result ${result.slice(0, 160)} · file out ${JSON.stringify(outFile)} · containers ${before} → ${ctrs().length} · own copies left ${mine.length}`);
+    for (const left of ctrs().slice(before)) podman(['rm', '-f', '-t', '0', left], RE_T.env);
+  } else skip('R485', L485, RE_T.why);
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });

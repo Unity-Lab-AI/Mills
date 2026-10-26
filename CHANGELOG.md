@@ -7,6 +7,33 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.31.0 — 2026-10-26
+
+MINOR: **REA in Hyper Workflows** (T-255). A new built-in node kind, `rea`, runs a reverse-engineering step in a
+workflow. REA stays one thing: the node uses the same standalone RE tools as everything else (`re_start`, `re_put`,
+`re_exec`, `re_call`, `re_get`, `re_stop`), the ones a Work run, Jcode PGM's `/re` and the products already use, and
+those keep working unchanged.
+- **What a node does:**
+  - starts a throw-away copy of the RE image as the run's owner, waiting while it is queued (`queueSec`, default 600);
+  - puts `files` in, runs an `exec` command, calls the REA `tool` with `args` (templated, or from the `args` wire);
+  - takes the `get` files out;
+  - stops the copy.
+- **Outputs:** `result` (REA's answer), `text` (its text), `output` (the command's), `files`, and `error` (REA's
+  `isError`, a non-zero exit unless `failOnExit: false`, a full queue, a refused tool).
+- **Keeping a copy for several steps:** `keep: true` hands the copy on through the `copy` port; the next node works in
+  it and `stop: true` ends it.
+- **Cleanup:** a copy the node started is deleted on every failure and on a cancel.
+- **Where it lives:** in the workflow libraries (`pgm-workflow-internal` for the shape, `pgm-workflow-engine-internal`
+  for the behaviour), so any program that runs workflows and has the `re_*` tools runs `rea` nodes.
+- **On this hub:**
+  - a workflow's `re_*` calls go to the same RE containers as the owner's own, never with admin rights;
+  - the RE tools are in the default tool list of a scope that names none (Sponge's decision: anyone on the team may use
+    REA, no approval; the hub's cap of 3 copies applies);
+  - a scope whose policy lists its tools without them refuses `rea` nodes (`engine.tool-denied`).
+- The editor's static kinds list has `rea` (web/editor/kinds-workflow.js 1.1.0).
+- **Checks:** six engine tests (`tests/rea.rs`, a stand-in host plays the RE tools), and R485, a real scratch hub running
+  a `rea` workflow against the test RE image, with no container left afterwards.
+
 ## 5.30.1 — 2026-10-26
 
 PATCH: test only. The Work-prompt test in pgm-ai-internal checks the laws segment only where the hub's LAWS.md exists,

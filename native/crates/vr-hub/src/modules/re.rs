@@ -86,9 +86,12 @@ impl Re {
     }
 
     /// An agent tool (`re_start` … `re_stop`) for a person: `{ ok, result }` / `{ ok: false, error }`.
-    pub async fn tool(self: &Arc<Self>, name: &str, args: &Value, a: &Account) -> Value {
+    pub async fn tool(self: &Arc<Self>, name: &str, args: &Value, a: &Account) -> Value { self.tool_for(name, args, Actor::new(&a.username, a.admin)).await }
+    /// The same for a workflow run (T-255): as its owner, with no admin rights whoever the owner is.
+    pub async fn tool_as(self: &Arc<Self>, name: &str, args: &Value, user: &str) -> Value { self.tool_for(name, args, Actor::new(user, false)).await }
+    async fn tool_for(self: &Arc<Self>, name: &str, args: &Value, who: Actor) -> Value {
         let Some(op) = name.strip_prefix("re_").filter(|o| matches!(*o, "start" | "list" | "status" | "exec" | "put" | "get" | "stop" | "skill" | "tools" | "call")) else { return json!({ "ok": false, "error": format!("Unknown team tool: {name}") }) };
-        let (me, op, args, who) = (self.clone(), op.to_string(), args.clone(), Actor::new(&a.username, a.admin));
+        let (me, op, args) = (self.clone(), op.to_string(), args.clone());
         match tokio::task::spawn_blocking(move || me.op(&op, &args, &who)).await {
             Ok(Ok(v)) => json!({ "ok": true, "result": v }),
             Ok(Err(e)) => json!({ "ok": false, "error": e.msg }),
