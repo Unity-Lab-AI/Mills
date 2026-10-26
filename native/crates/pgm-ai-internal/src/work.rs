@@ -389,6 +389,7 @@ impl Work {
             format!("Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search ({name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create."),
         ]);
         if self.forgejo_rec(u).map(|r| !s(&r, "token").is_empty()).unwrap_or(false) { parts.push(format!("Forgejo ({}): {name} saved their own token, so git pushes / fetches to that host authenticate as them, FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token), and fj (the Forgejo CLI) is signed in as them in this run. node bridge/worktree.js repos [words] lists the repos they can see (private ones too), repo-create <owner/name> makes one, publish <owner/name> --project <name> puts a project on Forgejo (a GitHub origin kept as upstream).", self.forgejo_url())); }
+        parts.push("Reverse engineering: re_start gives you a throw-away container with REA and the RE tools; its answer says what to call next. Stop it with re_stop when done.".into());
         parts.push("Team notes (markdown files in folders, shared by everyone): notes_list (with a search), notes_read, notes_write (path like \"plans/next-week.md\"; whole text), notes_delete (only when asked). Good for plans, meeting notes, decisions, how-tos.".into());
         parts.push(format!("The team chat is reachable through the mcp__team__* tools: team_say posts a message to # Everyone (or privately with to=<username>) as \"{name} · Claude\", team_presence tells you who is online. Announce in the chat BEFORE any hub restart and when you finish something the team should know about."));
         vec![
@@ -1438,7 +1439,7 @@ pub fn planner_refusal(which: &str, name: &str, args: &Value) -> String {
     match (which, name) {
         ("pc", _) => format!("Planner mode: PC tools are not available (this session only plans; {name} refused)."),
         ("team", "notes_delete" | "team_channel_create" | "team_group_create") => format!("Planner mode: {name} is not available to a planner session."),
-        ("team", "re_start" | "re_exec" | "re_put" | "re_stop") => format!("Planner mode: {name} is not available to a planner session (RE containers run code; a planner only plans)."),
+        ("team", "re_start" | "re_exec" | "re_put" | "re_stop" | "re_call" | "re_tools" | "re_skill") => format!("Planner mode: {name} is not available to a planner session (RE containers run code; a planner only plans)."),
         ("team", "notes_write") => {
             let p = args["path"].as_str().unwrap_or("").replace('\\', "/").to_lowercase(); let p = p.trim_start_matches('/');
             if p.starts_with("plans/") && p.len() > 6 && !p.split('/').any(|seg| seg == ".." || seg == ".") { String::new() }

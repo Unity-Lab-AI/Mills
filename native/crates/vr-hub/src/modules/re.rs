@@ -49,7 +49,7 @@ impl Re {
                 self.ready().map_err(|e| Error::new(503, e))?;
                 let s = m.start(who, a["purpose"].as_str().unwrap_or(""), &StartOpts { network: a["network"].as_bool() == Some(true), image: None })?;
                 if s.state == State::Gone { return Err(Error::new(502, s.error.unwrap_or_else(|| "The copy did not start.".into()))); }
-                Ok(json!({ "sandbox": s, "hint": if s.state == State::Queued { "Queued: poll re_status until its state is running." } else { "Running: use re_put, re_exec, re_get; re_stop when you are done (it is deleted entirely)." } }))
+                Ok(json!({ "sandbox": s, "hint": if s.state == State::Queued { "Queued: poll re_status until its state is running." } else { "Running. REA (reverse engineering agent) is inside it: call re_skill now (its workflow, read it before you start), then re_tools (its tools; filter to search) and re_call to use them. Samples go in with re_put, shell commands with re_exec, results out with re_get; re_stop when you are done (it is deleted entirely)." } }))
             }
             "list" => {
                 let (active, queued, max) = m.counts();
@@ -76,6 +76,10 @@ impl Re {
                 if v.get("text").is_none() { v["base64"] = json!(pgm_core_internal::b64(&bytes)); }
                 Ok(v)
             }
+            // T-254: REA's MCP server inside the copy (one session kept per copy, ended with the copy)
+            "skill" => m.skill(who, &id, a["file"].as_str().unwrap_or("")),
+            "tools" => m.mcp_tools(who, &id, a["filter"].as_str().unwrap_or(""), a["tool"].as_str().unwrap_or("")),
+            "call" => m.mcp_call(who, &id, a["tool"].as_str().unwrap_or(""), &a["args"], a["timeoutSec"].as_u64()),
             "stop" => Ok(json!({ "sandbox": m.stop(who, &id)?, "deleted": true })),
             _ => Err(Error::new(404, "Unknown endpoint")),
         }
@@ -83,7 +87,7 @@ impl Re {
 
     /// An agent tool (`re_start` … `re_stop`) for a person: `{ ok, result }` / `{ ok: false, error }`.
     pub async fn tool(self: &Arc<Self>, name: &str, args: &Value, a: &Account) -> Value {
-        let Some(op) = name.strip_prefix("re_").filter(|o| matches!(*o, "start" | "list" | "status" | "exec" | "put" | "get" | "stop")) else { return json!({ "ok": false, "error": format!("Unknown team tool: {name}") }) };
+        let Some(op) = name.strip_prefix("re_").filter(|o| matches!(*o, "start" | "list" | "status" | "exec" | "put" | "get" | "stop" | "skill" | "tools" | "call")) else { return json!({ "ok": false, "error": format!("Unknown team tool: {name}") }) };
         let (me, op, args, who) = (self.clone(), op.to_string(), args.clone(), Actor::new(&a.username, a.admin));
         match tokio::task::spawn_blocking(move || me.op(&op, &args, &who)).await {
             Ok(Ok(v)) => json!({ "ok": true, "result": v }),
@@ -107,7 +111,12 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
             let n = rest.to_string();
             blocking(Box::new(move || re.op(&n, &args, &who))).await
         }
-        "start" | "exec" | "stop" if post => { let (n, b) = (rest.to_string(), r.json()); blocking(Box::new(move || re.op(&n, &b, &who))).await }
+        "skill" | "tools" if get => {
+            let args = json!({ "id": r.param("id").unwrap_or_default(), "file": r.param("file").unwrap_or_default(), "filter": r.param("filter").unwrap_or_default(), "tool": r.param("tool").unwrap_or_default() });
+            let n = rest.to_string();
+            blocking(Box::new(move || re.op(&n, &args, &who))).await
+        }
+        "start" | "exec" | "stop" | "call" if post => { let (n, b) = (rest.to_string(), r.json()); blocking(Box::new(move || re.op(&n, &b, &who))).await }
         // a file in: JSON { id, path, text | base64 }, or the raw body with ?id=&path=
         "put" if post => {
             if let (Some(id), Some(path)) = (r.param("id"), r.param("path")) {

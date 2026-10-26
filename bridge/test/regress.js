@@ -300,7 +300,7 @@ async function setup() {
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m' } } : {}), rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -405,7 +405,7 @@ const RUST_HOST = (() => {
 // 2-line Containerfile (a non-root user, so the exchange folder's sub-uid files are exercised) from a Debian image that is
 // already in local storage (nothing is pulled), or says why not (the checks then skip). reTestCleanup removes every
 // container the hub made under the test prefix and the image.
-const RE_T = { ok: false, why: 'the Rust hub\'s: --rust-hub runs it', env: {}, image: 'localhost/pgm-re-test:1', prefix: 'pgm-re-test-' };
+const RE_T = { ok: false, why: 'the Rust hub\'s: --rust-hub runs it', env: {}, image: 'localhost/pgm-re-test:p' + process.pid, prefix: 'pgm-re-test-' + process.pid + '-' }; // per suite run: two suites on one engine (shared storage) must not take each other's image or containers
 // eng = { env: extra environment, pre: global engine arguments } (the hub's re.env / re.engineArgs)
 function podman(args, eng) { const e = eng || {}; return spawnSync('podman', [...(e.pre || []), ...args], { encoding: 'utf8', env: { ...process.env, ...(e.env || {}) }, timeout: 240000, windowsHide: true }); }
 function reTestSetup() {
@@ -413,6 +413,11 @@ function reTestSetup() {
   if (WIN) { RE_T.why = 'the engine here is Docker on Windows: not run by this check (T-303 leaves the Windows path)'; return; }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 're-test-image-')); // outside the scratch copy: its main must stay clean for R109
   RE_T.dir = dir;
+  // T-254: a fake MCP stdio server and a small skill folder, where the hub's re.mcpCommand / re.skillDir point (see R341 to R345)
+  fs.mkdirSync(path.join(dir, 'fake-rea', 'skill', 'references'), { recursive: true });
+  fs.copyFileSync(path.join(MILLS, 'native', 'crates', 'pgm-sandbox-internal', 'tests', 'fake-mcp.sh'), path.join(dir, 'fake-rea', 'mcp.sh'));
+  fs.writeFileSync(path.join(dir, 'fake-rea', 'skill', 'SKILL.md'), '# Fake REA skill\n\nUse the tools; read references/environments.md for the environments (héllo).\n');
+  fs.writeFileSync(path.join(dir, 'fake-rea', 'skill', 'references', 'environments.md'), '# Environments\n\nA reference file.\n');
   let why = 'podman is not available';
   // the engine settings to try, in order: this account's own storage; its real HOME (the shared HOME's overlay folders have ACLs the
   // engine cannot use); the shared rootless storage on the server (/var/tmp/gee-podman, where the base image lives)
@@ -420,7 +425,7 @@ function reTestSetup() {
   for (const eng of engines) {
     if (podman(['version'], eng).status !== 0) { why = 'podman is not available'; break; }
     for (const from of ['docker.io/library/debian:trixie-slim', 'localhost/pgm-re-base:1.0.0']) {
-      fs.writeFileSync(path.join(dir, 'Containerfile'), `FROM ${from}\nUSER root\nRUN id -u re >/dev/null 2>&1 || useradd -m -u 1000 re\nUSER re\n`);
+      fs.writeFileSync(path.join(dir, 'Containerfile'), `FROM ${from}\nUSER root\nRUN id -u re >/dev/null 2>&1 || useradd -m -u 1000 re\nCOPY fake-rea /opt/fake-rea\nRUN chmod -R a+rX /opt/fake-rea\nUSER re\n`);
       const b = podman(['build', '--pull=never', '-q', '-t', RE_T.image, '-f', path.join(dir, 'Containerfile'), dir], eng);
       if (b.status !== 0) { why = 'no local debian:trixie-slim image to build the test image from (' + String(b.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
       const r = podman(['run', '--rm', '--pull=never', '--network', 'none', '--cap-drop', 'ALL', RE_T.image, 'id', '-u'], eng);
@@ -3588,6 +3593,79 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const left = ctrs(); if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
     }
   } else for (const id of ['R316', 'R317', 'R318', 'R319', 'R320']) skip(id, 'RE containers (T-303: cap of 3 + queue, put / exec / get, stop deletes everything, owner rules, restart adoption)', RE_T.why);
+  // R341 to R345 (T-254): REA's MCP tools inside a container, through three proxy tools (re_skill, re_tools, re_call). The test image
+  // carries a fake MCP stdio server (native/crates/pgm-sandbox-internal/tests/fake-mcp.sh, plain sh) and a two-file skill folder,
+  // and the hub's re.mcpCommand / re.skillDir point at them: the real 2.25 GB image is not needed
+  if (RE_T.ok) {
+    const prefix = RE_T.prefix;
+    const ctrs = () => (podman(['ps', '-a', '--filter', 'name=' + prefix, '--format', '{{.Names}}'], RE_T.env).stdout || '').split('\n').filter(Boolean).sort();
+    const re = (p, t, body) => call('/api/re/' + p, t, body);
+    const tools = async (token, calls) => { const r = await chat(token, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
+    const ok = (x) => (x && x.ok && x.result) || {};
+    const fakeProcs = (id) => { const x = spawnSync('podman', [...(RE_T.env.pre || []), 'exec', prefix + id, 'sh', '-c', 'grep -la "[m]cp.sh" /proc/[0-9]*/cmdline 2>/dev/null | wc -l'], { encoding: 'utf8', env: { ...process.env, ...(RE_T.env.env || {}) } }); return parseInt((x.stdout || '').trim(), 10); };
+    const hostClients = (id) => (spawnSync('ps', ['-eo', 'args'], { encoding: 'utf8' }).stdout || '').split('\n').filter((l) => l.includes('exec -i -w /work ' + prefix + id)).length;
+    const started = [];
+    let id = '';
+    try {
+      const st = await re('start', U, { purpose: 'r341 rea tools' });
+      id = ((st.data || {}).sandbox || {}).id || ''; if (id) started.push(id);
+      const hint = (st.data || {}).hint || '';
+      const before = id ? fakeProcs(id) : -1; // nothing of REA runs until the first use
+      const [t0, t1, t2, t3, t4] = await tools(U, [['re_tools', { id }], ['re_tools', { id, filter: 'FAIL' }], ['re_tools', { id, tool: 'echo' }], ['re_tools', { id, tool: 'nonesuch' }], ['re_tools', { id: 'zzzzzzzz' }]]);
+      const after = fakeProcs(id);
+      check('R341', 'T-254 re_tools lists REA\'s tools from inside the container: re_start\'s answer says to call re_skill and re_tools next, nothing of REA runs in the copy before the first use, the first re_tools starts its MCP server in the copy (one process) and answers the fake\'s three tool names (names only, with the server\'s name), filter gives the matching ones with the first line of their description, tool gives one tool\'s full schema, an unknown tool or copy is an error',
+        st.status === 200 && /re_skill/.test(hint) && /re_tools/.test(hint) && /re_call/.test(hint) && before === 0 && after === 1
+        && ok(t0).count === 3 && ok(t0).of === 3 && ok(t0).server && ok(t0).server.name === 'fake-rea' && ok(t0).names.join() === 'echo,big,nope' && !ok(t0).tools
+        && ok(t1).count === 1 && ok(t1).tools[0].name === 'nope' && ok(t1).tools[0].description === 'Always fails.' && ok(t2).tool && ok(t2).tool.inputSchema.type === 'object' && t3 && t3.ok === false && /nonesuch/.test(t3.error) && t4 && t4.ok === false,
+        `hint ${/re_skill/.test(hint)}/${/re_tools/.test(hint)} before ${before} after ${after} · list ${JSON.stringify(ok(t0)).slice(0, 200)} · filter ${ok(t1).count} · tool ${!!ok(t2).tool} · bad ${t3 && t3.error} / ${t4 && t4.error}`);
+
+      const args = { path: '/work/in/a "quoted".exe', n: [1, 2, 3], deep: { k: 'v', u: 'héllo' } };
+      const [c1, c2, c3, c4] = await tools(U, [['re_call', { id, tool: 'echo', args }], ['re_call', { id, tool: 'echo' }], ['re_call', { id, tool: 'nope', args: {} }], ['re_call', { id, tool: 'nonesuch', args: {} }]]);
+      const bigR = await re('call', U, { id, tool: 'big', args: {} });
+      const head = (((bigR.data || {}).content || [])[0] || {}).text || '';
+      const full = (bigR.data || {}).savedTo ? await re('get', U, { id, path: bigR.data.savedTo.replace('/work/', '') }) : {};
+      const txt1 = (((ok(c1).content || [])[0]) || {}).text || '', txt2 = (((ok(c2).content || [])[0]) || {}).text || '';
+      const pidOf = (t) => (t.match(/pid=(\d+)/) || [])[1];
+      let echoed = null; try { echoed = JSON.parse(txt1.slice(txt1.indexOf('args=') + 5)); } catch {}
+      check('R342', 'T-254 re_call round-trips: the arguments (quotes, nesting, non-ASCII) reach REA\'s tool exactly and its result comes back unchanged (its untrusted-content marker kept), two calls are served by the same long-lived MCP process (same pid, one process in the copy), an isError result passes through as REA gave it, an unknown tool is an error, and a result over the cap (100000 characters) comes back as a head with truncated, its size and a path in /work/out/mcp-results/ where the whole is saved and can be taken out with re_get',
+        c1 && c1.ok === true && /^\[untrusted content\] pid=/.test(txt1) && JSON.stringify(echoed) === JSON.stringify(args) && pidOf(txt1) && pidOf(txt1) === pidOf(txt2) && fakeProcs(id) === 1
+        && c3.ok === true && ok(c3).isError === true && /it failed/.test(JSON.stringify(ok(c3).content)) && c4.ok === false && /Unknown tool/.test(c4.error)
+        && bigR.status === 200 && bigR.data.truncated === true && bigR.data.bytes > 100000 && head.startsWith('[untrusted content]') && head.length <= 40000 && /^\/work\/out\/mcp-results\/big-\d+\.json$/.test(bigR.data.savedTo || '') && full.status === 200 && ((full.data || {}).size || 0) === bigR.data.bytes,
+        `echo ${JSON.stringify(echoed)} pids ${pidOf(txt1)}/${pidOf(txt2)} procs ${fakeProcs(id)} · nope ${ok(c3).isError} · unknown ${c4 && c4.error} · big ${bigR.status} ${bigR.data && bigR.data.truncated} ${bigR.data && bigR.data.bytes} head ${head.length} saved ${bigR.data && bigR.data.savedTo} ${(full.data || {}).size}`);
+
+      const skillFx = fs.readFileSync(path.join(RE_T.dir, 'fake-rea', 'skill', 'SKILL.md'), 'utf8'), refFx = fs.readFileSync(path.join(RE_T.dir, 'fake-rea', 'skill', 'references', 'environments.md'), 'utf8');
+      const [s0, s1, s2, s3] = await tools(U, [['re_skill', { id }], ['re_skill', { id, file: 'references/environments.md' }], ['re_skill', { id, file: '../../etc/passwd' }], ['re_skill', { id, file: 'references/none.md' }]]);
+      check('R343', 'T-254 re_skill returns REA\'s skill text from inside the container: SKILL.md by default, with the list of the other files (references/…), or one of them by path; a path that leaves the skill folder or does not exist is an error (nothing of the host is read)',
+        s0 && s0.ok === true && ok(s0).file === 'SKILL.md' && ok(s0).text === skillFx && (ok(s0).files || []).join() === 'SKILL.md,references/environments.md'
+        && ok(s1).file === 'references/environments.md' && ok(s1).text === refFx && s2 && s2.ok === false && !/root:/.test(JSON.stringify(s2)) && s3 && s3.ok === false,
+        `default ${ok(s0).file} ${(ok(s0).text || '').length}b files ${(ok(s0).files || []).join()} · ref ${ok(s1).text === refFx} · escape ${s2 && s2.ok} · missing ${s3 && s3.ok}`);
+
+      // owner only: another person (even an admin) is refused, by the routes (403) and by the tools; the owner still can
+      const other = [await re('tools?id=' + id, D), await re('skill?id=' + id, D), await re('call', D, { id, tool: 'echo', args: {} }), await re('tools?id=' + id, A), await re('call', A, { id, tool: 'echo', args: {} })];
+      const [o1, o2, o3] = await tools(D, [['re_tools', { id }], ['re_call', { id, tool: 'echo', args: {} }], ['re_skill', { id }]]);
+      const mine = await re('call', U, { id, tool: 'echo', args: { again: 1 } });
+      check('R344', 'T-254 REA\'s tools are the owner\'s only: another person gets 403 from the routes (tools, skill, call) and an error from the three tools, an admin too, nothing of the copy is revealed to them; the owner still can',
+        other.every((r) => r.status === 403) && [o1, o2, o3].every((x) => x && x.ok === false && /owner/.test(x.error) && !/fake-rea|echo/.test(x.error)) && mine.status === 200 && /again/.test(JSON.stringify(mine.data)),
+        `routes ${other.map((r) => r.status)} tools ${[o1, o2, o3].map((x) => x && x.ok)} owner ${mine.status}`);
+
+      // stop: the MCP session ends with the copy, nothing is left running (container, host-side client), nothing answers afterwards
+      const clientsBefore = hostClients(id), procsBefore = fakeProcs(id);
+      const stop = await tools(U, [['re_stop', { id }]]);
+      const left = [await re('call', U, { id, tool: 'echo', args: {} }), await re('tools?id=' + id, U), await re('skill?id=' + id, U)];
+      await sleep(300);
+      const planner = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'work.rs'), 'utf8').match(/\("team", "re_start"[^=]*=>/);
+      const names = ['re_skill', 're_tools', 're_call'], jsNames = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+      const rsNames = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+      const jsRe = new RegExp(fs.readFileSync(path.join(BRIDGE, 'team.js'), 'utf8').match(/\/\^(re_\([^$]*\))\$\/\.test\(name\)/)[1]);
+      check('R345', 'T-254 stopping the copy ends its MCP session and leaves nothing running: before the stop one MCP server in the copy and one exec client on the host, after it the container is gone and no client process is left, REA\'s tools and skill answer 404 / 409 afterwards; [static] both team MCP servers list re_skill, re_tools and re_call, the JavaScript hub answers them "not available", and a planner session may not use them',
+        clientsBefore === 1 && procsBefore === 1 && stop[0] && stop[0].ok === true && !ctrs().includes(prefix + id) && hostClients(id) === 0 && left.every((r) => r.status === 404 || r.status === 409)
+        && names.every((n) => jsNames.includes(n) && rsNames.includes(n) && jsRe.test(n)) && !!planner && names.every((n) => planner[0].includes('"' + n + '"')),
+        `before ${clientsBefore}/${procsBefore} stop ${stop[0] && stop[0].ok} container ${ctrs().includes(prefix + id)} clients ${hostClients(id)} after ${left.map((r) => r.status)} · names js ${names.map((n) => jsNames.includes(n))} rs ${names.map((n) => rsNames.includes(n))} planner ${!!planner}`);
+    } finally {
+      for (const x of started) await re('stop', A, { id: x });
+      const left = ctrs(); if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
+    }
+  } else for (const id of ['R341', 'R342', 'R343', 'R344', 'R345']) skip(id, 'REA tools inside a container (T-254: re_tools, re_call, re_skill, owner only, closes on stop)', RE_T.why);
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });

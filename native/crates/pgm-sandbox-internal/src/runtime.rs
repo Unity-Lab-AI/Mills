@@ -1,6 +1,6 @@
 //! The container engine behind one trait. [`Cli`] drives the `podman` or `docker` command line (Docker on Windows,
 //! Podman on Linux); a program or a test may bring its own [`Runtime`].
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -60,6 +60,15 @@ impl RunSpec {
     }
 }
 
+/// A long-running command inside a copy with its three pipes held open (`exec -i`): what an MCP stdio server needs.
+/// `kill` ends it (and reaps it); dropping the struct without calling it leaves that to the engine (the copy is removed).
+pub struct Proc {
+    pub stdin: Box<dyn Write + Send>,
+    pub stdout: Box<dyn Read + Send>,
+    pub stderr: Box<dyn Read + Send>,
+    pub kill: Box<dyn FnMut() + Send>,
+}
+
 /// The container engine.
 pub trait Runtime: Send + Sync {
     /// "podman" or "docker" (for messages).
@@ -71,6 +80,11 @@ pub trait Runtime: Send + Sync {
     fn run(&self, spec: &RunSpec) -> Result<(), String>;
     /// Run a command inside, passing its output to `sink` as it comes; killed when `timeout` passes.
     fn exec(&self, name: &str, argv: &[String], timeout: Duration, sink: &mut dyn FnMut(Stream, &[u8])) -> Result<ExecEnd, String>;
+    /// Start a command inside and keep its pipes open (`exec -i`); the caller talks to it until `kill`. An engine that cannot say so.
+    fn spawn(&self, _name: &str, _argv: &[String]) -> Result<Proc, String> { Err("This engine cannot keep a command open.".into()) }
+    /// The full command line (program and arguments) that `spawn` runs, for a program that starts the process itself
+    /// (Jcode's MCP config entry). None where the engine is not a command line.
+    fn exec_line(&self, _name: &str, _argv: &[String]) -> Option<Vec<String>> { None }
     /// Remove the copy (forced). Ok when it is already gone.
     fn remove(&self, name: &str) -> Result<(), String>;
     /// The containers whose name starts with `prefix`.
@@ -148,6 +162,16 @@ impl Runtime for Cli {
         // what arrived while the last poll was waiting
         while let Ok((w, bytes)) = rx.try_recv() { sink(w, &bytes); }
         Ok(ExecEnd { code: status.and_then(|s| s.code()), timed_out })
+    }
+    fn exec_line(&self, name: &str, argv: &[String]) -> Option<Vec<String>> {
+        let mut l = vec![self.program.clone()]; l.extend(self.args.iter().cloned());
+        l.extend(["exec", "-i", "-w", "/work", name].iter().map(|s| s.to_string())); l.extend(argv.iter().cloned());
+        Some(l)
+    }
+    fn spawn(&self, name: &str, argv: &[String]) -> Result<Proc, String> {
+        let mut child = self.cmd().args(["exec", "-i", "-w", "/work", name]).args(argv).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("{} is not available: {e}", self.program))?;
+        let (stdin, stdout, stderr) = (child.stdin.take().ok_or("no stdin")?, child.stdout.take().ok_or("no stdout")?, child.stderr.take().ok_or("no stderr")?);
+        Ok(Proc { stdin: Box::new(stdin), stdout: Box::new(stdout), stderr: Box::new(stderr), kill: Box::new(move || { let _ = child.kill(); let _ = child.wait(); }) })
     }
     fn remove(&self, name: &str) -> Result<(), String> {
         let (ok, _, err) = self.out(&["rm", "-f", "-t", "0", name])?;

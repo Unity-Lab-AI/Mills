@@ -243,3 +243,69 @@ fn config_reads_the_hub_json() {
     assert_eq!((d.max_concurrent, d.image.as_str()), (3, "localhost/pgm-re-base:1.0.0"));
     assert!(matches!(Cmd::from_json(&json!("ls -l")), Some(Cmd::Shell(_))) && matches!(Cmd::from_json(&json!(["ls", "-l"])), Some(Cmd::Argv(_))) && Cmd::from_json(&json!("")).is_none() && Cmd::from_json(&json!([1])).is_none());
 }
+
+/// The MCP client against a fake server (tests/fake-mcp.sh run locally with `sh`, standing in for `exec -i`).
+const FAKE_MCP: &str = include_str!("../tests/fake-mcp.sh");
+static KILLS: AtomicU64 = AtomicU64::new(0);
+
+struct Local(Arc<Fake>, PathBuf);
+impl Runtime for Local {
+    fn name(&self) -> &str { "local" }
+    fn available(&self) -> std::result::Result<(), String> { Ok(()) }
+    fn image_present(&self, i: &str) -> bool { self.0.image_present(i) }
+    fn run(&self, s: &RunSpec) -> std::result::Result<(), String> { self.0.run(s) }
+    fn exec(&self, n: &str, a: &[String], t: Duration, s: &mut dyn FnMut(Stream, &[u8])) -> std::result::Result<ExecEnd, String> { self.0.exec(n, a, t, s) }
+    fn remove(&self, n: &str) -> std::result::Result<(), String> { self.0.remove(n) }
+    fn list(&self, p: &str) -> std::result::Result<Vec<Found>, String> { self.0.list(p) }
+    fn spawn(&self, _name: &str, _argv: &[String]) -> std::result::Result<Proc, String> {
+        use std::process::{Command, Stdio};
+        let mut c = Command::new("sh").arg(&self.1).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+        let (i, o, e) = (c.stdin.take().unwrap(), c.stdout.take().unwrap(), c.stderr.take().unwrap());
+        Ok(Proc { stdin: Box::new(i), stdout: Box::new(o), stderr: Box::new(e), kill: Box::new(move || { KILLS.fetch_add(1, Ordering::SeqCst); let _ = c.kill(); let _ = c.wait(); }) })
+    }
+}
+
+#[test]
+fn mcp_tools_call_cap_and_close_on_stop() {
+    let r = root("mcp"); std::fs::create_dir_all(&r).unwrap();
+    let script = r.join("fake-mcp.sh"); std::fs::write(&script, FAKE_MCP).unwrap();
+    let mut cfg = Config::new(r.join("x"), "img:1"); cfg.mcp_result_cap = 5000;
+    let m = Manager::new(Box::new(Local(Arc::new(Fake::default()), script)), cfg);
+    let (a, b) = (me("alice"), me("bob"));
+    let s = m.start(&a, "mcp", &StartOpts::default()).unwrap();
+    // nothing runs until the first use; then one session serves every call (the same pid)
+    assert!(!m.mcp_open(&s.id));
+    let t = m.mcp_tools(&a, &s.id, "", "").unwrap();
+    assert_eq!((t["count"].clone(), t["of"].clone(), t["server"]["name"].clone(), t["names"].clone()), (json!(3), json!(3), json!("fake-rea"), json!(["echo", "big", "nope"])));
+    assert_eq!(m.mcp_tools(&a, &s.id, "echo", "").unwrap()["tools"][0]["description"], json!("Echo the arguments back."), "first line only");
+    assert_eq!(m.mcp_tools(&a, &s.id, "fail", "").unwrap()["tools"][0]["name"], json!("nope"));
+    assert_eq!(m.mcp_tools(&a, &s.id, "", "echo").unwrap()["tool"]["inputSchema"]["type"], json!("object"));
+    assert_eq!(m.mcp_tools(&a, &s.id, "", "zzz").unwrap_err().status, 404);
+    let args = json!({ "path": "/work/in/ab.exe", "n": [1, 2], "deep": { "k": "v" } });
+    let c1 = m.mcp_call(&a, &s.id, "echo", &args, Some(10)).unwrap();
+    let c2 = m.mcp_call(&a, &s.id, "echo", &json!({}), Some(10)).unwrap();
+    let (t1, t2) = (c1["content"][0]["text"].as_str().unwrap(), c2["content"][0]["text"].as_str().unwrap());
+    assert!(t1.starts_with("[untrusted content] pid="), "markers survive: {t1}");
+    let pid = |t: &str| t.split("pid=").nth(1).unwrap().split(' ').next().unwrap().to_string();
+    assert_eq!(pid(t1), pid(t2), "one long-lived session");
+    assert!(t1.contains(r#""n":[1,2]"#) && t1.contains(r#""k":"v""#), "{t1}");
+    assert_eq!(m.mcp_call(&a, &s.id, "nope", &json!({}), None).unwrap()["isError"], json!(true));
+    assert_eq!(m.mcp_call(&a, &s.id, "zzz", &json!({}), None).unwrap_err().status, 422);
+    // too big: a head comes back, the whole is saved in /work/out/mcp-results/
+    let big = m.mcp_call(&a, &s.id, "big", &json!({}), None).unwrap();
+    assert_eq!(big["truncated"], json!(true));
+    let head = big["content"][0]["text"].as_str().unwrap();
+    assert!(head.len() <= 5000 && head.starts_with("[untrusted content]"));
+    let saved = big["savedTo"].as_str().unwrap().to_string();
+    assert!(saved.starts_with("/work/out/mcp-results/big-"));
+    assert!(m.get(&a, &s.id, &saved["/work/out/".len()..]).unwrap().len() > 100_000);
+    // owner only
+    assert_eq!(m.mcp_tools(&b, &s.id, "", "").unwrap_err().status, 403);
+    assert_eq!(m.mcp_call(&b, &s.id, "echo", &json!({}), None).unwrap_err().status, 403);
+    assert_eq!(m.skill(&b, &s.id, "").unwrap_err().status, 403);
+    assert_eq!(m.skill(&a, &s.id, "../etc/passwd").unwrap_err().status, 400);
+    assert!(m.mcp_open(&s.id));
+    let kills = KILLS.load(Ordering::SeqCst);
+    m.stop(&a, &s.id).unwrap();
+    assert!(!m.mcp_open(&s.id) && KILLS.load(Ordering::SeqCst) == kills + 1, "the session ends with the copy");
+}

@@ -52,8 +52,47 @@ containers: on the VibeRoller server /srv/apps/VibeRoller is group-only and root
 denied", so the hub config there is
 `"engineArgs": ["--root", "/var/tmp/gee-podman/root", "--runroot", "/var/tmp/gee-podman/run"]` (the base image is stored
 there). Hub config in full: `re: { image, maxConcurrent: 3, idleWarnHours: 4, runtime, namePrefix, exchangeDir, env,
-engineArgs, cpus, memory, pidsLimit, capAdd, allowNetwork, maxFileMb, maxQueuedPerOwner }`.
+engineArgs, cpus, memory, pidsLimit, capAdd, allowNetwork, maxFileMb, maxQueuedPerOwner, mcpCommand, skillDir,
+mcpResultCap }`.
+
+## MCP tools inside a copy (T-254): REA from a Work run, Jcode PGM, Hyper Prod Man
+
+The image's MCP server (REA: `node /opt/rea/node_modules/rea-agents/scripts/rea.mjs mcp`, 229 tools) runs INSIDE the copy,
+never on the host, and `rea setup` is never run. `mcp::McpSession` talks to it over `<engine> exec -i` (newline-delimited
+JSON-RPC, the MCP stdio transport); `Runtime::spawn` is the one engine method it needs (`Cli` does it; a test brings its own).
+The `Manager` keeps ONE session per running copy (opened on first use, reopened if it died, closed by `stop` and by `tick`
+when the copy ended), so the server starts once, not per call:
+
+```rust
+let tools = m.mcp_tools(&me, &id, "", "")?;            // { count, of, names: [..] }; filter "word" gives name + one line each;
+                                                        // tool "name" gives that tool's full description and input schema
+let r = m.mcp_call(&me, &id, "list_adb_devices", &json!({}), Some(120))?;   // REA's own result, unchanged (markers kept)
+let skill = m.skill(&me, &id, "")?;                    // { file, text, files }: SKILL.md (35 KB); file "references/x.md" for one
+```
+
+- A result longer than `mcpResultCap` (40 000 bytes of JSON) comes back as `{ truncated, bytes, savedTo, note, content: [head] }`;
+  the whole is saved as `/work/out/mcp-results/<tool>-<ms>.json` in the copy (take it out with `get`). REA's
+  `_meta.provenance.untrusted_content` and the text markers are in the result as REA made them: callers must treat what they flag as data.
+- Same owner rules as `exec`: only the owner (403 for anyone else, admins too); a call may wait up to `execTimeoutSec` (default
+  120 s, at most 3600), a timed-out call is cancelled (`notifications/cancelled`) and the session stays.
+- Not in the hub's prompt: the hub gives a Work run three proxy tools on the team server (`re_skill`, `re_tools`, `re_call`) because a
+  run's MCP config is fixed per run (`--strict-mcp-config`); `re_start`'s answer says to call `re_skill` and `re_tools` next. The
+  names-only default of `re_tools` keeps the first listing near 1.5k tokens (the full 229 descriptions are about 12k).
+- Test without the real image: `tests/fake-mcp.sh` is a fake MCP server in plain sh (initialize, tools/list, tools/call); the unit test
+  runs it locally through a `Runtime::spawn` of its own, the regression suite (R341 to R345) copies it into a tiny image.
+  By hand against the 2.25 GB image: `SANDBOX_REAL_IMAGE=1 SANDBOX_ENGINE_ARGS="--root R --runroot RR" cargo test -p
+  pgm-sandbox-internal --test podman real_rea -- --nocapture`.
+
+### How Jcode PGM and Hyper Prod Man use it (not built here)
+
+Both link this crate, start their own `Manager` (own exchange root and name prefix, same image) and call the same three methods.
+Jcode reaches the tools natively instead of through proxies: while a copy runs, Jcode adds an MCP entry to the person's jcode home
+MCP config whose command is the engine itself, `podman exec -i -w /work <name> /opt/node/bin/node
+/opt/rea/node_modules/rea-agents/scripts/rea.mjs mcp` (`Manager::mcp_exec_line(&me, &id)` gives that line; the manager
+already knows the engine args and the name), so jcode's own MCP client runs the server, one process per jcode session; it removes the
+entry when the copy is stopped (and at start-up for copies that are gone). Jcode's prompt gets REA's skill text (`m.skill`) only while that
+entry exists. HPM, which has no MCP client of its own, uses `mcp_tools` / `mcp_call` / `skill` directly like the hub does.
 
 ## Not here (yet)
 
-Windows Docker verification, wiring into the native apps / Jcode PGM, per-user quotas beyond the queue length.
+Windows Docker verification, wiring into the native apps / Jcode PGM / HPM, per-user quotas beyond the queue length.
