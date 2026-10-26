@@ -400,6 +400,7 @@ $('callScreen').onclick = () => {
   if (call.nostream) return callMsg('You may not share your screen here.');
   if (appShare && appShare.screenShare === false) return callMsg('This app cannot share a screen on this computer' + (appShare.screenShareWhy ? ': ' + appShare.screenShareWhy : '.'));
   if (window.isSecureContext === false) return callMsg(shareErrorText(null, false, false));
+  if ((!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) && appShare && appShare.screenShare === true) return callMsg('This app can share a screen, but its web view has not switched capture on in this window yet: reload the window (Ctrl+R) or restart the app.');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return callMsg('This browser cannot share a screen (needs Chrome, Edge or Firefox on a computer).');
   $('shareOpts').hidden = !$('shareOpts').hidden; // the audio choice first; the browser's picker opens from the button in it (it needs a fresh click)
 };
@@ -459,7 +460,7 @@ function updateCallButtons() {
   $('callCam').classList.toggle('off', !camOn);
   label($('callScreen'), 'share', call.screen ? 'Stop sharing' : 'Share screen'); $('callScreen').classList.toggle('on', !!call.screen);
   askApp();
-  $('callScreen').hidden = (window.isSecureContext !== false && !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) || !!(appShare && appShare.screenShare === false);
+  $('callScreen').hidden = (window.isSecureContext !== false && !(appShare && appShare.screenShare === true) && !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) || !!(appShare && appShare.screenShare === false);
   label($('callTheater'), 'eye', theaterOn() ? 'Exit theater' : 'Theater'); $('callTheater').classList.toggle('on', theaterOn());
   const st = selfTile();
   if (st) { st.classList.toggle('nocam', !camOn); st.querySelector('video').srcObject = call.cam ? new MediaStream([call.cam]) : null; const l = st.querySelector('.lbl'); l.textContent = 'You'; if (!micOn) l.append(ic('mic-off', 'trail')); }
