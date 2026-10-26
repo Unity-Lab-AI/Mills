@@ -183,6 +183,8 @@ fn show_tools(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    // `<app> machine run --state <dir>`: the persistent mode (the service starts it), no window
+    if let Some(code) = machine::cli(&std::env::args().collect::<Vec<_>>()) { std::process::exit(code); }
     if std::env::args().any(|a| a == "--selftest") { println!("vr-desktop {} ({}) loads", update::VERSION, update::TARGET); return; }
     if std::env::args().any(|a| a == "--install") { match install::install() { Ok(m) => { println!("{m}"); return; } Err(e) => { eprintln!("{e}"); std::process::exit(1); } } }
     let smoke = std::env::args().any(|a| a == "--smoke");

@@ -3,8 +3,9 @@
 //! service template and the owner-only state folder check); this file is only the app's two modes around it:
 //! - while open: "Link this computer" runs the device-code link, and the runner serves the hub's tool calls on a thread of this
 //!   app until the app closes or the person pauses it;
-//! - persistent: "Keep it running when the app is closed" calls the bundled `vr-host machine install` (a systemd user unit on
-//!   Linux, a per-user Scheduled Task on Windows; no root, no administrator). The two are never on at once.
+//! - persistent: "Keep it running when the app is closed" installs the library's service template for THIS program (a systemd user
+//!   unit on Linux, a per-user Scheduled Task on Windows; no root, no administrator); the service runs `<app> machine run --state
+//!   <dir>` with no window ([`cli`]), so the Hyper Prod Man build, which ships no vr-host, has it too. The two modes are never on at once.
 //! Only the Tools window (this app's own page) may call these commands. The hub's page may not (capabilities/, main.rs): linking
 //! a computer and widening what the AI may reach is the person's act, on the machine, never the web page's.
 //! The state folder is `<app data>/machine` (so the VibeRoller and Hyper Prod Man builds, each with its own hub and account, keep
@@ -40,7 +41,7 @@ fn slug() -> String {
 }
 /// The service of this build: `vr-host machine run`, named after the app.
 pub fn unit(state: &Path) -> Unit {
-    Unit::new(&format!("{}-machine", slug()), &format!("{APP_NAME} linked machine"), &crate::aihost::host_exe(), &["machine", "run"], state)
+    Unit::new(&format!("{}-machine", slug()), &format!("{APP_NAME} linked machine"), &std::env::current_exe().map(|e| std::fs::canonicalize(&e).unwrap_or(e)).unwrap_or_default(), &["machine", "run"], state)
 }
 fn options(hub: &str, state: &Path) -> Options {
     let mut o = Options::new(hub, state, &format!("{}-desktop", slug()));
@@ -64,9 +65,7 @@ impl MachineApp {
             "scope": Scope::load(&state.join("scope.json")).summary(now()),
             "stopped": kill.is_stopped(), "stoppedInfo": kill.info(),
             "linking": { "active": l.active, "code": l.code, "error": l.error },
-            "stateError": check_state_dir(state).err(), "last": lk(&self.last).clone(),
-            "exeThere": crate::aihost::host_exe().exists(),
-        })
+            "stateError": check_state_dir(state).err(), "last": lk(&self.last).clone(),        })
     }
 
     /// Starts the device-code link on its own thread and returns the code to show (or why it could not start). The person approves it on
@@ -123,24 +122,40 @@ impl MachineApp {
         if let Some(r) = lk(&self.run).clone() { r.cancel(); r.machine().stop_jobs(); }
     }
 
-    /// Persistent mode: the bundled vr-host installs / removes the service for this state folder. Never with the while-open runner on.
+    /// Persistent mode: the library's service template installs / removes the unit for this state folder. The service runs THIS program
+    /// headless (`<this app> machine run --state <dir>`, see [`cli`]), so the Hyper Prod Man build, which ships no vr-host, has it too.
+    /// Never with the while-open runner on.
     pub fn service(&self, state: &Path, install: bool) -> Result<String, String> {
-        let exe = crate::aihost::host_exe();
-        if !exe.exists() { return Err(format!("The AI host program is not next to this app ({}): the service needs it.", exe.display())); }
         if install {
             if LinkRecord::load(state).is_none() { return Err("Link this computer first.".into()); }
             self.stop();
             for _ in 0..40 { if lk(&self.run).is_none() { break; } std::thread::sleep(std::time::Duration::from_millis(100)); }
         }
         let u = unit(state);
-        let mut c = std::process::Command::new(&exe);
-        c.args(["machine", if install { "install" } else { "uninstall" }, "--state"]).arg(state).args(["--name", &u.name, "--display", &u.display]).stdin(std::process::Stdio::null());
-        #[cfg(windows)]
-        { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
-        let o = c.output().map_err(|e| e.to_string())?;
-        let text = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)).trim().to_string();
-        if o.status.success() { Ok(text) } else { Err(text) }
+        if install { u.install(&scripts_dir(state), None, true).map(|l| l.join("\n")) } else { Ok(u.uninstall(None, true).join("\n")) }
     }
+}
+
+/// Where the generated `.sh` / `.cmd` twins go: beside the state folder, never inside it.
+pub fn scripts_dir(state: &Path) -> PathBuf { state.parent().unwrap_or(state).join("machine-service") }
+
+/// `<this app> machine run --state <dir>`: the persistent mode's entry, with no window (the service starts it). Returns the exit code
+/// when the arguments are a machine command (3 = unlinked on the web, 4 = will not start: not linked or the state folder is not private;
+/// the unit does not restart on those), None for a normal start of the app.
+pub fn cli(args: &[String]) -> Option<i32> {
+    if args.get(1).map(String::as_str) != Some("machine") { return None; }
+    let arg = |f: &str| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1).cloned());
+    let Some(state) = arg("--state").map(PathBuf::from) else { eprintln!("{APP_NAME} machine run --state <dir>"); return Some(2) };
+    if args.get(2).map(String::as_str) != Some("run") { eprintln!("{APP_NAME} machine run --state <dir>   (link, install and stop are in the app's Tools window)"); return Some(2); }
+    let mut o = options(&arg("--hub").unwrap_or_default(), &state);
+    o.mode = "persistent".into();
+    let r = match Runner::open(o) { Ok(r) => r, Err(e) => { eprintln!("{e}"); return Some(pgm_net_internal::machine::service::EXIT_REFUSED); } };
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
+    let r2 = r.clone();
+    Some(match rt.block_on(async move { tokio::select! { e = r2.run() => e, _ = tokio::signal::ctrl_c() => Ended::Cancelled } }) {
+        Ended::Revoked => { eprintln!("this machine was unlinked on the web: its token and key are wiped; link it again"); pgm_net_internal::machine::service::EXIT_REVOKED }
+        Ended::Cancelled => { r.machine().stop_jobs(); 0 }
+    })
 }
 
 #[cfg(test)]
