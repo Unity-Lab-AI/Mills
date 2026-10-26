@@ -6,6 +6,9 @@
 
 pub mod audit;
 pub mod floor;
+pub mod elevate;
+pub mod kill;
+pub mod limits;
 pub mod paths;
 pub mod scope;
 
