@@ -76,6 +76,7 @@ async fn get(m: &Machine, sc: &Scope, l: &super::exec::Link, ticket: &str, base:
     let mut offset = v["received"].as_u64().unwrap_or(0);
     let mut restart = false;
     if offset > size { offset = 0; restart = true; }
+    let resumed = offset;
     let mut tf = tokio::fs::File::from_std(f.try_clone().map_err(|e| Fail::Error(e.to_string()))?);
     tf.seek(std::io::SeekFrom::Start(offset)).await.map_err(|e| Fail::Error(e.to_string()))?;
     let (mut sent, mut buf) = (0u64, vec![0u8; CHUNK]);
@@ -98,7 +99,7 @@ async fn get(m: &Machine, sc: &Scope, l: &super::exec::Link, ticket: &str, base:
         offset += got as u64; sent += got as u64;
     }
     if offset < size {
-        return Ok((json!({ "complete": false, "received": offset, "size": size, "ticket": ticket, "id": key, "hint": "Not finished in this call. Call transfer_get again with the same path: it carries on from the byte the hub has." }), sent));
+        return Ok((json!({ "complete": false, "received": offset, "resumedFrom": resumed, "size": size, "ticket": ticket, "id": key, "hint": "Not finished in this call. Call transfer_get again with the same path: it carries on from the byte the hub has." }), sent));
     }
     // the whole file's checksum, and the same file as when it began
     let sha = sha256_file(f.try_clone().map_err(|e| Fail::Error(e.to_string()))?).await.map_err(Fail::Error)?;
@@ -106,7 +107,7 @@ async fn get(m: &Machine, sc: &Scope, l: &super::exec::Link, ticket: &str, base:
     if again.len() != size { return Err(Fail::Error("The file changed while it was being sent; call transfer_get again.".into())); }
     let (st, v) = post_json(l, &format!("/api/machine/transfer/{ticket}/done"), &json!({ "path": given, "key": key, "size": size, "sha256": sha })).await.map_err(Fail::Error)?;
     if st != 200 { return Err(hub_err(st, &v)); }
-    Ok((json!({ "complete": true, "ticket": ticket, "id": key, "size": size, "sha256": sha, "name": v["name"], "download": format!("/api/transfers/{key}"), "hubPath": v["hubPath"], "hint": "The file is in the hub's transfer area (kept an hour); the owner downloads it from `download`." }), sent))
+    Ok((json!({ "complete": true, "ticket": ticket, "id": key, "resumedFrom": resumed, "size": size, "sha256": sha, "name": v["name"], "download": format!("/api/transfers/{key}"), "hubPath": v["hubPath"], "hint": "The file is in the hub's transfer area (kept an hour); the owner downloads it from `download`." }), sent))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -123,6 +124,7 @@ async fn put(m: &Machine, sc: &Scope, l: &super::exec::Link, ticket: &str, base:
     let have = std::fs::metadata(part.real.to_path_buf()).map(|m| m.len()).unwrap_or(0);
     if have > size { let _ = std::fs::remove_file(part.real.to_path_buf()); }
     let mut offset = if have > size { 0 } else { have };
+    let resumed = offset;
     let mut f = open_real(sc, &part, Op::Write, OpenMode::Append, now)?;
     let (mut got_total, t0) = (0u64, Instant::now());
     while offset < size && got_total < max_send && t0.elapsed() < budget {
@@ -143,12 +145,12 @@ async fn put(m: &Machine, sc: &Scope, l: &super::exec::Link, ticket: &str, base:
     }
     drop(f);
     if offset < size {
-        return Ok((json!({ "complete": false, "received": offset, "size": size, "ticket": ticket, "hint": "Not finished in this call. Call transfer_put again with the same path and from: it carries on from the part already here." }), got_total));
+        return Ok((json!({ "complete": false, "received": offset, "resumedFrom": resumed, "size": size, "ticket": ticket, "hint": "Not finished in this call. Call transfer_put again with the same path and from: it carries on from the part already here." }), got_total));
     }
     let pf = open_real(sc, &part, Op::Read, OpenMode::Read, now)?;
     let sha = sha256_file(pf).await.map_err(Fail::Error)?;
     if sha != want_sha { let _ = std::fs::remove_file(part.real.to_path_buf()); return Err(Fail::Error("The file did not arrive intact (sha256 differs); the part was removed, call transfer_put again.".into())); }
     let t2 = authz(sc, Op::Write, base, given, now)?;
     std::fs::rename(part.real.to_path_buf(), t2.real.to_path_buf()).map_err(|e| Fail::Error(e.to_string()))?;
-    Ok((json!({ "complete": true, "ticket": ticket, "path": given, "size": size, "sha256": sha }), got_total))
+    Ok((json!({ "complete": true, "ticket": ticket, "path": given, "resumedFrom": resumed, "size": size, "sha256": sha }), got_total))
 }
