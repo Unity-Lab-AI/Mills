@@ -2,8 +2,10 @@
 //! one path canonicaliser, and the safety floor. Pure logic: no hub, no network. Linux and Windows only.
 //! - [`scope`]: the scope document, presets, the allow / deny evaluator, time-limited grants, the tool set
 //! - [`paths`]: path normalising (Linux and Windows rules, testable anywhere), real-path resolution, checked open
+//! - [`device`]: the per-device ed25519 key of a linked machine (sign and verify replies, owner-only key and token files)
 //! - [`floor`]: the paths no tool may ever touch, even under `unrestricted`; the default deny list; globs
 
+pub mod device;
 pub mod floor;
 pub mod paths;
 pub mod scope;
