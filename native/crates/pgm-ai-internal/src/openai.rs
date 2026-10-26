@@ -342,6 +342,93 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
         _ => complete_cli(hub, &p, &m, system, messages, on_token, cancel).await, // this hub's Claude, or a Claude Code login here
     }
 }
+/// An answer that may carry tool calls (T-317), in OpenAI's shape whatever the provider speaks.
+pub struct ToolAnswer { text: String, calls: Vec<Value>, finish: String, model: String, usage: Value }
+
+async fn read_all(mut src: Src, cancel: &Cancel) -> Result<Vec<u8>, ApiErr> { let mut v = vec![]; while let Some(c) = next_or_cancel(&mut src, cancel).await? { v.extend(c); } Ok(v) }
+
+/// One answer with tools (`tools`, `tool_choice`, assistant `tool_calls` and `tool` messages of OpenAI's chat format), as
+/// [`complete`] notes its use. OpenAI-kind providers get the fields as they are; Anthropic ones (an API key, a host's Claude
+/// login) get tool_use / tool_result blocks; any other kind refuses with 400 ("cannot carry tools") so a caller can fall back
+/// to text. Never streamed from the provider: the answer is whole when it is sent on.
+async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, b: &Value, cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<ToolAnswer, ApiErr> {
+    let w = hub.work(); let ai = hub.ai();
+    let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, NO_AI))?;
+    let kind = s(&p, "kind");
+    if (kind == "host" || kind == "claude-cli" || kind == "host-claude") && hub.root().join("ai-host.off").exists() { return Err(err(503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
+    let m = pick_model(&p, model);
+    let host = s(&p, "hostId"); let pid = s(&p, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default(); let nick = s(&p, "nickname");
+    let used_model = if m.is_empty() { p["models"][0].clone() } else { json!(m) };
+    let ans = match kind.as_str() {
+        "openai" | "host-openai" => {
+            let mut body = json!({ "model": used_model, "stream": false, "messages": crate::toolconv::clean_messages(b) });
+            if b["tools"].is_array() { body["tools"] = b["tools"].clone(); }
+            if !b["tool_choice"].is_null() { body["tool_choice"] = b["tool_choice"].clone(); }
+            if let Some(mt) = max_tokens { body["max_tokens"] = json!(mt); }
+            let (status, src) = if kind == "openai" {
+                let mut rb = self_http(&**hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string());
+                if !s(&p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(&p, "apiKey"))); }
+                let r = rb.send().await.map_err(|e| err(502, e.to_string()))?;
+                (r.status().as_u16(), Src::Http(r))
+            } else {
+                let r = ai.provider_fetch(&host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
+                (r.status, Src::Host(r.body))
+            };
+            let raw = read_all(src, &cancel).await?;
+            if !(200..300).contains(&status) { return Err(err(502, format!("{} answered {status}: {}", if kind == "openai" { "The endpoint".to_string() } else { format!("{nick}'s endpoint") }, String::from_utf8_lossy(&raw).chars().take(300).collect::<String>()))); }
+            let j: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+            let msg = &j["choices"][0]["message"];
+            let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
+            let finish = j["choices"][0]["finish_reason"].as_str().map(String::from).unwrap_or_else(|| if calls.is_empty() { "stop".into() } else { "tool_calls".into() });
+            (ToolAnswer { text: msg["content"].as_str().unwrap_or("").to_string(), calls, finish, model: j["model"].as_str().map(String::from).unwrap_or_else(|| s(&body, "model")), usage: j["usage"].clone() }, j["usage"].clone())
+        }
+        "anthropic" | "host-claude" if !(kind == "host-claude" && s(&p, "remoteKind") == "claude-cli-work") => {
+            let (system, msgs, tools, choice) = crate::toolconv::to_anthropic(b);
+            if msgs.is_empty() { return Err(err(400, "\"messages\" needs a user or assistant message.")); }
+            let mut body = json!({ "model": used_model, "max_tokens": max_tokens.unwrap_or(4096), "stream": false, "messages": msgs });
+            if !tools.is_empty() { body["tools"] = json!(tools); }
+            if let Some(c) = choice { body["tool_choice"] = c; }
+            let (status, src) = if kind == "anthropic" {
+                if !system.is_empty() { body["system"] = json!(system); }
+                let r = self_http(&**hub).post(ANTHROPIC_URL).header("content-type", "application/json").header("x-api-key", s(&p, "apiKey")).header("anthropic-version", "2023-06-01").body(body.to_string()).send().await.map_err(|e| err(502, e.to_string()))?;
+                (r.status().as_u16(), Src::Http(r))
+            } else {
+                let mut sys = vec![json!({ "type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude." })]; if !system.is_empty() { sys.push(json!({ "type": "text", "text": system })); }
+                body["system"] = json!(sys);
+                let r = ai.login_fetch(&host, &pid, "/v1/messages", "POST", vec![("content-type".into(), "application/json".into()), ("anthropic-version".into(), "2023-06-01".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
+                (r.status, Src::Host(r.body))
+            };
+            let raw = read_all(src, &cancel).await?;
+            if !(200..300).contains(&status) { return Err(err(if status == 429 && kind == "host-claude" { 429 } else { 502 }, format!("{} answered {status}: {}", if kind == "anthropic" { "Anthropic".to_string() } else { format!("{nick}'s Claude") }, String::from_utf8_lossy(&raw).chars().take(300).collect::<String>()))); }
+            let j: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+            let (text, calls, finish) = crate::toolconv::from_anthropic_answer(&j);
+            let usage = if j["usage"].is_object() { json!({ "prompt_tokens": j["usage"]["input_tokens"], "completion_tokens": j["usage"]["output_tokens"] }) } else { Value::Null };
+            (ToolAnswer { text, calls, finish, model: s(&j, "model"), usage }, j["usage"].clone())
+        }
+        _ => return Err(err(400, "That provider cannot carry tools: tool calls go through an OpenAI-compatible endpoint or an Anthropic one (an API key or a host's Claude login). Ask without tools for a text answer.")),
+    };
+    if let Some(u) = normalise(&ans.1) { ai.usage.note_answer(user, &kind, &ans.0.model, &u); }
+    Ok(ans.0)
+}
+/// The answer of a chat request with tools: whole, or (stream: true) as chat.completion.chunk events with the calls in `delta.tool_calls`.
+fn tools_reply(an: ToolAnswer, model: String, cid: &str, created: u64, stream: bool) -> Resp {
+    let model = if an.model.is_empty() { model } else { an.model.clone() };
+    let usage = if an.usage.is_object() { total(&an.usage) } else { json!({ "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }) };
+    if !stream {
+        let mut msg = json!({ "role": "assistant", "content": if an.text.is_empty() && !an.calls.is_empty() { Value::Null } else { json!(an.text) } });
+        if !an.calls.is_empty() { msg["tool_calls"] = json!(an.calls); }
+        return jout(200, json!({ "id": cid, "object": "chat.completion", "created": created, "model": model, "choices": [{ "index": 0, "message": msg, "finish_reason": an.finish }], "usage": usage }));
+    }
+    let (tx, rx) = mpsc::unbounded_channel::<Result<Bytes, String>>();
+    let chunk = |delta: Value, finish: Value| { let _ = tx.send(Ok(Bytes::from(format!("data: {}\n\n", json!({ "id": cid, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }] }))))); };
+    chunk(json!({ "role": "assistant", "content": "" }), Value::Null);
+    if !an.text.is_empty() { chunk(json!({ "content": an.text }), Value::Null); }
+    for (i, c) in an.calls.iter().enumerate() { chunk(json!({ "tool_calls": [{ "index": i, "id": c["id"], "type": "function", "function": c["function"] }] }), Value::Null); }
+    chunk(json!({}), json!(an.finish));
+    let _ = tx.send(Ok(Bytes::from(format!("data: {}\n\n", json!({ "id": cid, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [], "usage": usage })))));
+    let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n")));
+    sse_answer(rx)
+}
 fn self_http(hub: &dyn AiHub) -> &reqwest::Client { &hub.api().http }
 async fn next_or_cancel(src: &mut Src, cancel: &Cancel) -> Result<Option<Vec<u8>>, ApiErr> {
     if cancel.is() { return Err(err(502, "cancelled")); }
@@ -536,6 +623,15 @@ pub async fn v1_as(hub: &Arc<dyn AiHub>, r: &Req, user: String) -> Resp {
             count_use(&**hub, &user);
             let cid = format!("chatcmpl-{}", pgm_core_internal::crypto::random_hex(12)); let created = now_ms() / 1000;
             let pid = s(&prov, "id");
+            if crate::toolconv::wants_tools(&b) { // T-317: tools in, tool calls out (a request without them takes the path below, unchanged)
+                if let Some(m) = crate::toolconv::check_tools(&b) { return oa_error(400, &m, "invalid_request_error"); }
+                let res = complete_tools(hub, &user, &pid, &model, &b, run.cancel.clone(), max).await;
+                drop(run);
+                return match res {
+                    Ok(an) => tools_reply(an, model, &cid, created, b["stream"].as_bool().unwrap_or(false)),
+                    Err(e) => oa_error(if e.status == 0 { 502 } else { e.status }, &e.msg, if e.status == 503 { "service_unavailable" } else if e.status == 400 { "invalid_request_error" } else { "api_error" }),
+                };
+            }
             if b["stream"].as_bool().unwrap_or(false) {
                 let (tx, rx) = mpsc::unbounded_channel::<Result<Bytes, String>>();
                 let chunk = { let (cid, model) = (cid.clone(), model.clone()); move |tx: &mpsc::UnboundedSender<Result<Bytes, String>>, delta: Value, finish: Value| -> bool { tx.send(Ok(Bytes::from(format!("data: {}\n\n", json!({ "id": cid, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }] }))))).is_ok() } };

@@ -114,6 +114,7 @@ function unzipAll(buf) {
 }
 const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
 const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] };
+const fakeOaiTools = []; // R346: the bodies the fake OpenAI endpoint got that carried tools or tool messages
 const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
@@ -209,6 +210,13 @@ function startFakeOllama() {
       if (req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') { // /v1: Ollama's own OpenAI-compatible path (R182)
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
+        if (Array.isArray(b.tools) || (b.messages || []).some((m) => m.role === 'tool')) { // R346 (T-317): tools in, a tool call out; a tool result in, text out
+          fakeOaiTools.push(b);
+          const lm = (b.messages || [])[(b.messages || []).length - 1] || {};
+          const usage = { prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 };
+          if (lm.role === 'tool') return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: 'oai says: tool said ' + lm.content }, finish_reason: 'stop' }], usage });
+          return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_r346', type: 'function', function: { name: b.tools[0].function.name, arguments: '{"q":"r346","n":2}' } }] }, finish_reason: 'tool_calls' }], usage });
+        }
         if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
         const cached = /r185/.test(String(last.content)) ? { prompt_tokens: 2000, completion_tokens: 40, total_tokens: 2040, prompt_tokens_details: { cached_tokens: 1500 } } : null; // R185: a cache hit the hub must count
         return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: cached || { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
@@ -5197,6 +5205,60 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && oldSecret.status === 403 && removed.status === 200 && gone && ignored && stat170 && served,
         `static ${stat170}; served ${served} (${withPort.status} ${JSON.stringify(withPort.data).slice(0, 100)} badPort ${badPort.status} noSlash ${noSlash.status} ${noSlash.headers.get('location')} get ${viaGet.status} ${JSON.stringify(viaGetBody).slice(0, 300)} post ${JSON.stringify(viaPost).slice(0, 120)} internal ${viaInternal} front ${viaFront} unknown ${unknownProd} noPort ${noPortProd} down ${prodDown}); notAdmin ${notAdmin.status} made ${made.status} ${JSON.stringify(made.data).slice(0, 120)} badId ${badId.status} secret ${secret.length} mode ${mode.toString(8)}; status ${status.status} unsigned ${unsigned} once ${once.status} twice ${twice.status} moved ${moved.status} proxied ${proxied.status} old ${old.status} wrongKey ${wrongKey.status}; before ${beforeLink.status}/${aiBefore.status} wrongPw ${wrongPw.status} verified ${verified.status} ${verified.text.slice(0, 80)} blocked ${blocked.status}; profile ${profile.status} provs ${provs.status} ${provs.text.slice(0, 120)}; ai ${ai.status} "${aiText.slice(0, 80)}" ${ai.text.slice(0, 120)}; links ${JSON.stringify(links).slice(0, 80)}; oldSecret ${oldSecret.status} removed ${removed.status} gone ${gone} ignored ${ignored}`);
     } else check('R170', 'PGM Gateway: product data stays out of git; [static] the admin\'s products box, the board kit\'s options (VibeRoller keeps its Claude buttons) [the gateway is the Rust hub\'s: --rust-hub runs it]', spawnSync('git', ['check-ignore', '-q', 'bridge/gateway/products.json'], { cwd: MILLS }).status === 0 && stat170, `static ${stat170}`);
+  }
+  { // R346 (T-317): PGM Gateway carries tools: a product's chat completion with `tools` reaches the provider as it is, the provider's
+    // tool call comes back as tool_calls (finish_reason tool_calls), the follow-up with the assistant's call and a tool message
+    // gets the final text; streamed too; a request without tools is the old one; a provider that cannot carry tools says 400
+    if (RUST_HUB) {
+      const made = await call('/api/admin/gateway/products', A, { id: 'toolsprod', name: 'Tools product', ai: true });
+      const secFile = path.join(SB, 'gateway', 'toolsprod.secret');
+      const secret = fs.existsSync(secFile) ? fs.readFileSync(secFile, 'utf8').trim() : '';
+      const gw = async (method, pq, user, bodyObj) => {
+        const body = bodyObj === undefined ? '' : JSON.stringify(bodyObj), ts = Date.now(), nonce = crypto.randomBytes(16).toString('hex');
+        const sha = crypto.createHash('sha256').update(body).digest('hex');
+        const sig = crypto.createHmac('sha256', secret).update(`pgm-product-v1\n${method}\n${pq}\n${ts}\n${nonce}\n${user}\n${sha}`).digest('hex');
+        const r = await fetch(H + pq, { method, headers: { 'Content-Type': 'application/json', 'x-pgm-product': 'toolsprod', 'x-pgm-ts': String(ts), 'x-pgm-nonce': nonce, 'x-pgm-user': user, 'x-pgm-sig': sig }, body: body || undefined });
+        const text = await r.text(); let data = {}; try { data = JSON.parse(text); } catch {}
+        return { status: r.status, text, data };
+      };
+      const chatPath = '/internal/gateway/v1/chat/completions';
+      const verified = await gw('POST', '/internal/gateway/identity/verify', '', { username: 't-admin', password: 'pw-t-admin-0001', ip: '198.51.100.146' });
+      // an OpenAI-compatible provider of the admin's (the way R112 adds one: a host of theirs says hello for a moment)
+      const th = (await call('/api/hosts/new', A, {})).data.host || {}, thc = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+      await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thc.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+      const prov = (await call('/api/providers/add', A, { kind: 'openai', label: 'R346 endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt', shared: false })).data;
+      await call('/api/hosts/remove', A, { id: th.id });
+      await call('/api/apikey/rotate', A, {});
+      const setP = await call('/api/apikey/settings', A, { provider: prov.provider && prov.provider.id, model: 'fake-gpt' });
+      const tools = [{ type: 'function', function: { name: 'lookup', description: 'Look a thing up', parameters: { type: 'object', properties: { q: { type: 'string' }, n: { type: 'number' } } } } }];
+      const before = fakeOaiTools.length;
+      const plain = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'plain-r346' }] });
+      const plainText = (((plain.data.choices || [])[0] || {}).message || {}).content || '';
+      const first = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'find it' }], tools, tool_choice: 'auto' });
+      const c0 = (first.data.choices || [])[0] || {}, call0 = ((c0.message || {}).tool_calls || [])[0] || {};
+      const second = await gw('POST', chatPath, 't-admin', { tools, messages: [{ role: 'user', content: 'find it' }, { role: 'assistant', content: null, tool_calls: [call0] }, { role: 'tool', tool_call_id: call0.id, content: 'forty-two' }] });
+      const c1 = (second.data.choices || [])[0] || {};
+      const streamed = await gw('POST', chatPath, 't-admin', { stream: true, messages: [{ role: 'user', content: 'find it' }], tools });
+      const evs = streamed.text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => { try { return JSON.parse(l.slice(6)); } catch { return {}; } });
+      const sCall = evs.map((e) => ((e.choices || [])[0] || {}).delta || {}).flatMap((d) => d.tool_calls || [])[0] || {};
+      const sFinish = evs.map((e) => ((e.choices || [])[0] || {}).finish_reason).filter(Boolean).pop();
+      const bad = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'x' }], tools: [{ type: 'function' }] });
+      const gotTools = fakeOaiTools.slice(before);
+      await call('/api/apikey/revoke', A, {}); // back to the hub's own default (a Claude CLI answers text only)
+      const noTools = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'x' }], tools });
+      const textStill = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'gw-r346' }] });
+      await call('/api/providers/remove', A, { id: prov.provider && prov.provider.id });
+      await call('/api/admin/gateway/products/remove', A, { id: 'toolsprod' });
+      check('R346', 'T-317 PGM Gateway carries tools: a product\'s chat completion with tools and tool_choice reaches an OpenAI-compatible provider as it is (and a request without tools is the old text one); the provider\'s call comes back as message.tool_calls (id, name, arguments as JSON text) with finish_reason tool_calls and no content; the follow-up with the assistant\'s call and a tool message gets the final text (finish_reason stop) and the provider saw the tool message with the same id; streamed, the call arrives in delta.tool_calls and the stream ends with finish_reason tool_calls and [DONE]; a malformed tool is 400; a provider that cannot carry tools (a Claude CLI) answers 400 "cannot carry tools" while text still works',
+        made.status === 200 && verified.status === 200 && setP.status === 200
+        && plain.status === 200 && /oai says: plain-r346/.test(plainText)
+        && first.status === 200 && c0.finish_reason === 'tool_calls' && c0.message.content === null && call0.type === 'function' && call0.id === 'call_r346' && call0.function.name === 'lookup' && JSON.parse(call0.function.arguments).q === 'r346'
+        && second.status === 200 && c1.finish_reason === 'stop' && /oai says: tool said forty-two/.test((c1.message || {}).content || '')
+        && gotTools.length === 3 && gotTools[0].tools[0].function.name === 'lookup' && gotTools[0].tool_choice === 'auto' && gotTools[1].messages[2].role === 'tool' && gotTools[1].messages[2].tool_call_id === 'call_r346' && gotTools[1].messages[1].tool_calls[0].id === 'call_r346'
+        && streamed.status === 200 && sCall.function && sCall.function.name === 'lookup' && sCall.index === 0 && sFinish === 'tool_calls' && /data: \[DONE\]/.test(streamed.text)
+        && bad.status === 400 && noTools.status === 400 && /cannot carry tools/.test(noTools.text) && textStill.status === 200 && /gw-r346/.test(textStill.text),
+        `made ${made.status} verified ${verified.status} set ${setP.status}; plain ${plain.status} ${plainText.slice(0, 60)}; first ${first.status} ${first.text.slice(0, 300)}; second ${second.status} ${second.text.slice(0, 200)}; provider got ${gotTools.length}; stream ${streamed.status} ${streamed.text.slice(0, 300)}; bad ${bad.status}; noTools ${noTools.status} ${noTools.text.slice(0, 120)}; text ${textStill.status}`);
+    } else skip('R346', 'PGM Gateway carries tools (T-317)', 'the gateway is the Rust hub\'s: --rust-hub runs it');
   }
   // Persistence & restart (scratch restart.js: graceful flag only)
   const authBefore = sha(path.join(SB, 'profiles', 't-admin', 'auth.json'));
