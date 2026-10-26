@@ -5152,7 +5152,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       !!P && JSON.stringify(lines) === JSON.stringify(['Using A ×4', 'Done']) && P.sysLabel({ text: 'x', n: 1 }) === 'x' && wired, `lines ${JSON.stringify(lines)}; wired ${wired}`);
     let why = null;
     if (P) {
-      const hv = (o) => ({ v: 1, kind: 'result', error: false, text: 'ok', subtype: 'success', durationMs: 0, ...o });
+      const hv = (o) => ({ v: 1, kind: 'result', error: false, text: 'ok', subtype: 'success', durationMs: 1, ...o });
       const o = (x) => ({ model: 'Opus 5.5', turns: 1, out: 0, ...x });
       why = [P.resultNote(hv({}), o({ out: 1 })).text, P.resultNote(hv({}), o({ interrupted: true })).text, P.resultNote(hv({}), o({ stopped: true })).text, P.resultNote(hv({ subtype: 'error_during_execution' }), o({})).text,
         P.resultNote(hv({ text: '' }), o({ stderr: 'boom\nno conversation found' })).text, P.resultNote(hv({ text: '' }), o({})).text, P.resultNote(hv({}), o({ out: 1, turns: 3, model: '' })).text, P.resultNote(hv({ error: true, text: 'bad' }), o({})).text];
