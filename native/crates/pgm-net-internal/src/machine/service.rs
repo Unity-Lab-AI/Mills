@@ -258,6 +258,12 @@ echo \"{display} no longer starts by itself.\"
         Ok(lines)
     }
 
+    /// Is the unit / task there now? (Linux: the unit file; Windows: `schtasks /Query`.)
+    pub fn installed(&self) -> bool {
+        if cfg!(windows) { std::process::Command::new("schtasks").args(["/Query", "/TN", &self.display]).output().map(|o| o.status.success()).unwrap_or(false) }
+        else { user_unit_dir().join(self.unit_file_name()).exists() }
+    }
+
     /// Removes what [`Unit::install`] made (the state folder stays).
     pub fn uninstall(&self, unit_dir: Option<&Path>, run_system: bool) -> Vec<String> {
         let mut lines = vec![];

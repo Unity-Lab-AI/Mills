@@ -23,6 +23,7 @@ tauri-plugin-single-instance = "2.4.5"
 tokio = { version = "1.54.0", features = ["full"] }
 vr-core = { version = "0.1.0", path = "../vr-core" }
 pgm-ai-internal = { path = "../pgm-ai-internal" }
+pgm-net-internal = { path = "../pgm-net-internal" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # the same WebKitGTK binding tauri's webview uses (media-stream settings, version check: capture.rs)

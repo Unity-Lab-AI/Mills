@@ -40,7 +40,10 @@ pub fn default_state_dir() -> PathBuf {
 }
 
 /// The service template for this app: `vr-host machine run --state <dir>`.
-pub fn unit(exe: &Path, state: &Path) -> Unit { Unit::new("vibe-roller-machine", "VibeRoller linked machine", exe, &["machine", "run"], state) }
+/// `--name` / `--display` let another build of the same program (the Hyper Prod Man app) keep its own unit next to VibeRoller's.
+pub fn unit(exe: &Path, state: &Path, args: &[String]) -> Unit {
+    Unit::new(&arg_value(args, "--name").unwrap_or_else(|| "vibe-roller-machine".into()), &arg_value(args, "--display").unwrap_or_else(|| "VibeRoller linked machine".into()), exe, &["machine", "run"], state)
+}
 /// Where `install` leaves the generated scripts: beside the state folder (never inside it: it is the machine's private place).
 pub fn scripts_dir(state: &Path) -> PathBuf { state.parent().unwrap_or(state).join("machine-service") }
 
@@ -89,7 +92,7 @@ pub fn run(args: &[String]) -> i32 {
         }
         "install" | "uninstall" => {
             let exe = std::env::current_exe().map(|e| std::fs::canonicalize(&e).unwrap_or(e)).unwrap_or_else(|_| PathBuf::from("vr-host"));
-            let u = unit(&exe, &state);
+            let u = unit(&exe, &state, args);
             let out = arg_value(args, "--out").map(PathBuf::from).unwrap_or_else(|| scripts_dir(&state));
             let files_only = args.iter().any(|a| a == "--files-only");
             if sub == "install" {
