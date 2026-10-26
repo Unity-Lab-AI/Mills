@@ -7,7 +7,9 @@
 //! - [`sign`]: the hub signing key, the signed request envelope, the machine-side verifier (T-308)
 //! - [`exec`]: the machine's tools behind one door (kill switch, signature, scope, limits, tool, audit): files (`pc_job`'s five),
 //!   `machine_info`, shell, processes, RE containers (T-311); [`jobs`]: long jobs and the processes a tool started;
-//!   [`transfer`]: big files by ticket; [`runner`]: the link by device code and the poll loop that serves the hub's jobs
+//!   [`transfer`]: big files by ticket; [`runner`]: the link by device code and the poll loop that serves the hub's jobs;
+//!   [`service`] (T-313): the systemd user unit / Windows per-user task template (`.sh` and `.cmd` twins) and the owner-only
+//!   state folder check every start makes
 
 pub mod audit;
 pub mod changes;
@@ -21,6 +23,7 @@ pub mod limits;
 pub mod paths;
 pub mod runner;
 pub mod scope;
+pub mod service;
 pub mod sign;
 pub mod transfer;
 
