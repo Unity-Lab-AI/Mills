@@ -7,6 +7,58 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.27.0 — 2026-10-26
+
+MINOR: **REA inside Work runs, and linked machines steps 2, 3 and 6** (agent branches, reviewed and merged; team notes
+plans/rea.md and plans/linked-machines.md).
+- **REA from Work runs** (T-254). Once a run has an RE container, three team tools reach REA inside it:
+  - `re_skill{id, file?}`: REA's workflow guide, read from the container, about 9k tokens, only when asked;
+  - `re_tools{id, filter?, tool?}`: names only by default (5 KB instead of 47 KB), a search, or one tool's schema;
+  - `re_call{id, tool, args?}`: REA's result unchanged, with its untrusted-content marker. Results over 40 KB are saved
+    to /work/out.
+
+  How it works:
+  - One long-lived MCP session per container (`exec -i`), closed on stop.
+  - Owner only; planner sessions are refused.
+  - The Work prompt gets one short line; nothing REA-related loads before a container is up.
+  - The MCP-over-exec client lives in pgm-sandbox-internal, for Jcode PGM and HPM later.
+  - Checks R341 to R345, with a fake MCP server in a tiny test image. Checked by hand against the real image: 229 tools.
+
+  bridge/team-mcp.js 1.3.0, bridge/team.js 1.1.3.
+- **Owner-only enforcement** (T-308).
+  - **Per-run secret:** each Work run has its own secret for its MCP tools. The hub takes account, session and run from
+    the run itself and refuses a request that says otherwise. The old shared secret still works for older run configs,
+    logged as deprecated (`legacySharedSecret: false` turns it off).
+  - **Owner check:** a call that names a machine reaches it only for its owner. Another person's run, and an admin's,
+    get 403 with no fallback.
+  - **Signing:** the hub has one ed25519 signing key (`bridge/hub-signing.key`, owner-only) and signs every PC request it
+    forwards. vr-host pins the key from its hello (new cap `signed-pc`) and refuses a bad signature, another key, a
+    replay, an expired request, another owner or actor, or changed arguments. Older hosts and hubs keep working unsigned.
+  - Checks R323 and R324.
+- **Linking and revoking machines** (T-309).
+  - **Linking:** a computer links to an account with the device code (client `vr-machine`). The approval screen data
+    shows what is asking, its key fingerprint and the default scope (one folder). Each machine has its own ed25519 key and
+    signs its replies; its token works for that account only.
+  - **Routes:** `GET /api/machines` (owner only), rename / pause, unlink. Admins get only `GET /api/machines/count`.
+  - **Revoking:** unlinking ends the machine's poll at once, and the machine is told "revoked" and wipes its token. A new
+    password or "sign out everywhere" also unlinks the account's machines, unless `keepMachines: true`.
+  - **Re-linking** offers "replace the old record" and starts at the default scope.
+  - **HPM** keeps its own accounts, so a machine links to each hub separately.
+  - Checks R325 and R326.
+- **The machine's guards** (T-312; pgm-net-internal::machine):
+  - a hash-chained, rotating audit log that never holds file contents (the hub's copy is readable by the owner only);
+  - a kill switch (a `KILL` file or `machine stop`) that survives a restart and only the machine can clear;
+  - per-class rate limits;
+  - admin rights only after approval on the machine, and the app refuses to run as root or Administrator;
+  - scope changes: widening from the web waits for approval on the machine, narrowing applies at once and is audited,
+    grants expire, and no tool reaches the scope file.
+
+  Checks R331 to R333.
+- **Deploy:** `pack-data` and `restore-data` carry `hub-signing.key` on a hub move. restore-data had fallen behind
+  pack-data and would have refused work.json, ai-hosts.json and gateway; it now accepts everything pack-data writes.
+- **Not yet in use:** the linked-machine parts are library and hub groundwork. A machine does no jobs until T-311, and the
+  web panel comes with T-314.
+
 ## 5.26.0 — 2026-10-25
 
 MINOR: **reverse-engineering containers, the linked-machines library core, and Node 24 prepared** (agent branches,
