@@ -11,6 +11,8 @@ Low-latency networking and syncing.
 - `hostlink`: a program connected OUT to its hub (never opens a port): `HubLink` (`hello` with a nonce → HKDF
   session key checked by key id, `poll` with heartbeat / re-hello, `reply`, `stream`, sealed `events`), `HostKey`,
   `Envelope`, the job and hello types
+- `machine::device`: a linked machine's own ed25519 key: `DeviceKey` (generate, `sign_reply`), `verify_reply` (the hub's
+  check), `LinkStore` (owner-only `device-key` and `token` files, `wipe`, `handle_answer`: a 401 "revoked" wipes both)
 - `poll`: `wait_for(notify, timeout, look)`: a long poll that never misses a wake-up
 
 ## Use it in another project
