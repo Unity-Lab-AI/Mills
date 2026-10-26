@@ -411,7 +411,8 @@ mod tests {
     }
 
     fn scope(elevate: bool) -> Scope {
-        let j = format!(r#"{{"preset":"custom","paths":[{{"path":"/tmp","access":"rw"}}],"tools":{{"elevate":{elevate},"shell":{{"denyCommands":["mkfs"]}}}}}}"#);
+        let tmp = serde_json::to_string(std::env::temp_dir().to_str().unwrap()).unwrap();
+        let j = format!(r#"{{"preset":"custom","paths":[{{"path":{tmp},"access":"rw"}}],"tools":{{"elevate":{elevate},"shell":{{"denyCommands":["mkfs"]}}}}}}"#);
         Scope::try_parse(&j).unwrap()
     }
     fn req(c: &str) -> ElevateRequest {

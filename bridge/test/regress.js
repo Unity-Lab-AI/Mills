@@ -5150,7 +5150,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const L321 = 'linked machines core (T-307): scope model + evaluator in pgm-net-internal::machine::scope: Scope parses the 5.3 JSON, folder is the default, unknown keys are ignored, a newer v is refused whole, a bad or missing file allows nothing, every preset (folder, folders, read-only, full, full-ro, deny-list, no-shell, no-network, unrestricted, custom) has table-driven tests, deny beats allow, the more specific entry wins, full hides raw devices and keeps /sys and /proc/sys read-only, grants expire on a passed-in clock';
     const L322 = 'linked machines core (T-307): the one path canonicaliser machine::paths: .., symlink escape, dangling links, \\\\?\\, UNC, another drive, C:\\x vs c:/X, alternate data streams, reserved names, and the write-through-a-swapped-link case (O_NOFOLLOW + openat re-check on Linux) all deny; the Windows rules are pure logic tested on any host';
     const L340 = 'linked machines core (T-307): the safety floor machine::floor: under unrestricted (and every preset) the machine\'s token, device key, scope file and audit log are never readable, writable, deletable or listable, also through symlinks; fetch never sends them; the default deny list on full covers .env, *.pem, id_*, ~/.ssh and hub.json (glob matching)';
-    if (ct.error) { for (const [id, l] of [['R321', L321], ['R322', L322], ['R340', L340]]) skip(id, l, 'no Rust toolchain here (' + ct.error.code + ')'); }
+    const L331 = 'linked machines audit log (T-312): machine::audit is append-only and hash-chained: every allow and deny leaves one line, an edited, removed, reordered or tail-cut line breaks verify(), rotation keeps the chain across files, file contents are never in it (only a digest), the hub copy has no digest or byte count and only the owner may read it (an admin may not)';
+    const L332 = 'linked machines guards (T-312): a KILL file or machine stop stops jobs and the link, survives a restart and only a local action clears it (a remote message cannot); over-limit calls per tool class are refused with a retry-after; elevate without the machine\'s approval fails and never runs the command, an approved one runs once; the app refuses to serve as root / Administrator';
+    const L333 = 'linked machines scope changes (T-312): a widening proposal from the web stays pending and changes nothing until the machine approves, a narrowing applies at once and is audited with the old and new scope hash, a grant expires on time and its jobs are told to stop, and no tool can read or change the scope file or its neighbours (floor, under every preset)';
+    if (ct.error) { for (const [id, l] of [['R321', L321], ['R322', L322], ['R340', L340], ['R331', L331], ['R332', L332], ['R333', L333]]) skip(id, l, 'no Rust toolchain here (' + ct.error.code + ')'); }
     else {
       const out321 = String(ct.stdout || '') + String(ct.stderr || '');
       const okN = (re) => (out321.match(new RegExp('^test machine::' + re + '[^ ]* \\.\\.\\. ok$', 'gm')) || []).length;
@@ -5159,6 +5162,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       check('R321', L321, ct.status === 0 && src321 && okN('scope::') >= 12, detail321);
       check('R322', L322, ct.status === 0 && okN('paths::') >= 8, detail321);
       check('R340', L340, ct.status === 0 && okN('floor::') >= 4 && okN('tests::') >= 4, detail321);
+      // R331, R332, R333 (T-312, linked machines 6/8): the same cargo run covers the guards
+      const detail331 = `cargo test ${ct.status} audit ${okN('audit::')} kill ${okN('kill::')} limits ${okN('limits::')} elevate ${okN('elevate::')} changes ${okN('changes::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}`;
+      const src331 = ['audit.rs', 'kill.rs', 'limits.rs', 'elevate.rs', 'changes.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
+      check('R331', L331, ct.status === 0 && src331 && okN('audit::') >= 6, detail331);
+      check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= 4 && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331);
+      check('R333', L333, ct.status === 0 && src331 && okN('changes::') >= 7, detail331);
     }
   }
   const ws1 = (await call('/api/work/current', U)).data;
