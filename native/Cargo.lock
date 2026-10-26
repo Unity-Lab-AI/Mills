@@ -3469,6 +3469,7 @@ name = "pgm-net-internal"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ed25519-dalek",
  "hex",
  "http-body-util",
  "hyper",

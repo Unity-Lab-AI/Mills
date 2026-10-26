@@ -39,6 +39,8 @@ pub struct Host {
     pub update_deferred_since: Mutex<u64>,
     /// Wakes the status reporter now (a control changed something the hub should hear about at once).
     pub nudge: tokio::sync::Notify,
+    /// The hub's signing key as this host pinned it (T-308): once known, every PC job must carry a request the hub signed for this host's owner. None = an older hub that signs nothing: jobs are accepted as before.
+    pub hub_pin: crate::host::pin::HubPin,
 }
 /// The longest an automatic update waits for quiet minutes before it takes any moment with nothing in flight.
 pub const UPDATE_MAX_WAIT_MS: u64 = 30 * 60_000;
@@ -217,7 +219,7 @@ pub async fn run(folder: Folder, selftest: bool, update_flag: bool) -> i32 {
     let http = match pgm_net_internal::client::http_client(Duration::from_secs(20)) { Ok(c) => c, Err(e) => { eprintln!("[ai-host] {e}"); release_lock(&folder); return 1; } };
     let status = json!({ "pid": std::process::id(), "version": VERSION, "native": true, "target": TARGET, "hub": cfg.hub(), "id": cfg.id(), "startedAt": now_ms(), "connected": false, "connectedAt": 0, "lastOkAt": 0, "downSince": 0, "lastError": "", "active": 0, "runs": 0, "lastJobAt": 0, "paused": false, "lastUpdate": "", "lastUpdateAt": 0 });
     let h: H = Arc::new(Host { nickname: Mutex::new(cfg.nickname()), folder: folder.clone(), cfg, link: RwLock::new(link), http, status: Mutex::new(status.as_object().cloned().unwrap_or_default()), status_dirty: Mutex::new(true),
-        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0), nudge: tokio::sync::Notify::new() });
+        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0), nudge: tokio::sync::Notify::new(), hub_pin: crate::host::pin::HubPin::new() });
     h.write_status_now();
     let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<i32>(4);
     background(h.clone(), exit_tx.clone());
@@ -329,6 +331,7 @@ async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     log(format!("connected to {} as \"{nick}\"{}: {} provider(s) [{}], engines {}{}, key {kid}", h.cfg.hub(), if h.cfg.user().is_empty() { String::new() } else { format!(" ({})", h.cfg.user()) },
         body.providers.len(), body.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(", "), if engines.is_empty() { "none".into() } else { engines.join(", ") },
         h.cfg.pc_folder().map(|p| format!(", computer access to {}", p.display())).unwrap_or_default()));
+    for l in h.hub_pin.hello(&h.folder.dir, &a.hub_key, &(if a.user.is_empty() { h.cfg.user() } else { a.user.clone() })) { log(l); }
     let hv = a.update.as_ref().map(|u| u.version.clone()).unwrap_or_default();
     h.set_status(json!({ "connected": true, "connectedAt": now_ms(), "lastOkAt": now_ms(), "nickname": nick, "kid": kid, "owner": h.cfg.user(), "group": a.group, "hubVersion": hv, "lastError": "" }));
     update_confirmed(h);
@@ -461,9 +464,18 @@ async fn answer(h: &H, job: &Job, r: reqwest::Response, hdrs: Map<String, Value>
     Ok(())
 }
 
+
 /// Direct computer access: the five PC tools on pc.folder, never above it.
 async fn pc_job(h: H, job: Job) {
     let out = (|| -> std::result::Result<String, String> {
+        let body = job.body_bytes().map_err(|e| e.to_string())?;
+        // T-308: when this host pinned the hub's signing key, the request must be one the hub signed for this host's owner (host/pin.rs)
+        let sig = job.headers.get(pgm_net_internal::machine::sign::HEADER).and_then(Value::as_str).unwrap_or("");
+        match h.hub_pin.check(sig, job.path.trim_start_matches('/'), &body, (now_ms() / 1000) as i64).map_err(|e| e.to_string()) {
+            Ok(Some(a)) => log(format!("pc {} for {} (session {}, run {}): signed by the hub", job.path.trim_start_matches('/'), a.account, if a.session.is_empty() { "-" } else { &a.session }, if a.run.is_empty() { "-" } else { &a.run })),
+            Ok(None) => {}
+            Err(why) => { log(format!("refused pc {}: {why}", job.path.trim_start_matches('/'))); return Err(format!("This host refused the request: {why}.")); }
+        }
         let root = h.cfg.pc_folder().ok_or("This host offers no computer access (pc.folder is not set).")?;
         let name = job.path.trim_start_matches('/');
         let args: Value = if job.body.is_empty() { json!({}) } else { serde_json::from_slice(&job.body_bytes().map_err(|e| e.to_string())?).map_err(|e| e.to_string())? };

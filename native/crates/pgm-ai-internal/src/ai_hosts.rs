@@ -55,6 +55,9 @@ pub struct AiHosts {
     pub usage: Arc<crate::usage::Usage>,
     /// something people see changed (a hello, a host up / down, its usage, the registry): the JavaScript hub hears it
     pub dirty: Notify,
+    /// The hub's one signing key (T-308, machine::sign): made once in the data folder (hub-signing.key, owner-only), signs
+    /// every PC / machine request forwarded to a host. None only when the file could not be made (logged): requests then go unsigned.
+    sign: Option<pgm_net_internal::machine::HubKey>,
 }
 fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; let (x, y) = (pgm_core_internal::crypto::sha256(a.as_bytes()), pgm_core_internal::crypto::sha256(b.as_bytes())); bool::from(x.ct_eq(&y)) }
 fn clean_users(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')).take(50).collect()).unwrap_or_default() }
@@ -107,7 +110,8 @@ impl AiHosts {
             .map(|(n, s)| json!({ "id": n, "user": "", "nickname": n, "secret": s, "legacy": true, "createdAt": Value::Null, "share": {} })).collect()).unwrap_or_default();
         let (version, commit) = release_now(root);
         let h = Arc::new(AiHosts { root: root.to_path_buf(), cfg: cfg.clone(), db: Mutex::new(db), legacy, live: Mutex::default(), pending: Mutex::default(), was_up: Mutex::default(),
-            offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), usage, dirty: Notify::new() });
+            offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), usage, dirty: Notify::new(),
+            sign: match pgm_net_internal::machine::HubKey::load_or_create(&root.join("hub-signing.key")) { Ok(k) => Some(k), Err(e) => { eprintln!("[ai-host] no hub signing key ({e}): PC requests to hosts go unsigned until it is fixed"); None } } });
         h.restore_sessions();
         h
     }
@@ -405,10 +409,45 @@ impl AiHosts {
         self.usage.note_windows(&format!("h:{host}/{pid}"), &rec);
         self.changed();
     }
-    pub async fn pc_tool(self: &Arc<Self>, host: &str, name: &str, args: &Value) -> Result<Value, HostErr> {
-        let r = self.relay(host, "pc", &format!("/{name}"), "POST", vec![("content-type".into(), "application/json".into())], args.to_string().into_bytes(), "pc", false).await?;
+    /// The account the hub registered a host to (Settings → My AI hosts), "" for none. Never the name a host says it has.
+    fn registered_owner(r: &Value) -> String { r["user"].as_str().unwrap_or("").to_string() }
+    /// A machine the caller NAMED (its id or nickname), for the account that is calling (T-308, plans/linked-machines.md
+    /// section 4.3): only that machine's registered owner may use it. Another person's machine is refused with 403 and no
+    /// fallback to anything else, whoever asks, an admin or another person's run included. Ok = the host id.
+    pub fn machine_for(&self, named: &str, account: &str) -> Result<String, (u16, String)> {
+        let n = named.trim().to_lowercase();
+        let found = if n.is_empty() { None } else { self.all_records().into_iter().find(|r| r["id"].as_str().map(|i| i.to_lowercase() == n).unwrap_or(false) || r["nickname"].as_str().map(|i| i.to_lowercase() == n).unwrap_or(false)) };
+        let Some(r) = found else { return Err((404, format!("There is no machine called {named}."))) };
+        let owner = Self::registered_owner(&r);
+        if account.is_empty() || owner.is_empty() || owner != account { return Err((403, "That machine belongs to someone else.".into())); }
+        let id = r["id"].as_str().unwrap_or("").to_string();
+        let nick = r["nickname"].as_str().unwrap_or(&id).to_string();
+        let pc = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).and_then(|n| n.hello.as_ref().map(|h| h["pc"] == json!(true))).unwrap_or(false);
+        if !self.online(&id) { return Err((503, format!("Your machine {nick} is offline right now."))); }
+        if !pc { return Err((400, format!("Your machine {nick} does not offer computer access (no pc.folder set on it)."))); }
+        Ok(id)
+    }
+    /// A PC tool on a host, SIGNED by the hub for the machine's owner and the actor (machine::sign): the host verifies it when it
+    /// knows the hub's key (hello, cap `signed-pc`); an older host ignores the header and works as before. The hub's own check
+    /// is the first line: this is the second, so a bug in a caller can never sign a request for someone else's machine.
+    pub async fn pc_tool(self: &Arc<Self>, host: &str, name: &str, args: &Value, actor: &pgm_net_internal::machine::Actor) -> Result<Value, HostErr> {
+        let owner = self.record(host).map(|r| Self::registered_owner(&r)).unwrap_or_default();
+        if owner.is_empty() || owner != actor.account { return Err(herr(403, "That machine belongs to someone else.")); }
+        let body = args.to_string().into_bytes();
+        let mut headers: Vec<(String, String)> = vec![("content-type".into(), "application/json".into())];
+        if let Some(k) = &self.sign {
+            let env = pgm_net_internal::machine::Envelope::new(&owner, actor.clone(), name, &body, host, (now_ms() / 1000) as i64);
+            headers.push((pgm_net_internal::machine::sign::HEADER.into(), k.sign(&env).to_header()));
+        }
+        let r = self.relay(host, "pc", &format!("/{name}"), "POST", headers, body, "pc", true).await?;
         let b = r.bytes().await;
         serde_json::from_slice(&b).map_err(|e| herr(502, e.to_string()))
+    }
+    /// The frozen JavaScript hub's PC call (`/__front/ai/pc-tool`): it already chose the person's own host, so the actor is
+    /// that host's registered owner (compatibility; the JavaScript hub never names a run).
+    pub async fn pc_tool_front(self: &Arc<Self>, host: &str, name: &str, args: &Value) -> Result<Value, HostErr> {
+        let owner = self.record(host).map(|r| Self::registered_owner(&r)).unwrap_or_default();
+        self.pc_tool(host, name, args, &pgm_net_internal::machine::Actor { account: owner, session: String::new(), run: "js-hub".into() }).await
     }
     /// A Work run on a host (2.x hosts and hosts that allow Work): Claude Code runs there; events come back sealed.
     pub fn run_work(self: &Arc<Self>, host: &str, pid: &str, payload: Value) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
@@ -514,7 +553,7 @@ impl AiHosts {
                 self.save_sessions();
                 println!("[ai-host] {} ({}) connected: {} provider(s), engines {}, key {kid}{}", r["nickname"].as_str().unwrap_or(""), if hello["user"].as_str().unwrap_or("").is_empty() { "no owner" } else { hello["user"].as_str().unwrap_or("") }, hello["providers"].as_array().map(|a| a.len()).unwrap_or(0), if hello["engines"].as_array().map(|a| a.is_empty()).unwrap_or(true) { "none".to_string() } else { hello["engines"].as_array().unwrap().iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(", ") }, if caps.is_empty() { ", an older host".to_string() } else { format!(", can {}", caps.join(" ")) });
                 if !caps.iter().any(|c| c == "relay") { self.probe_relays(id.clone()); }
-                (200, Ok(json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "serverNonce": server_nonce, "kid": kid, "pollMs": POLL_MS, "offlineMs": self.offline_ms, "group": clean_users(self.cfg.get("hostGroup").unwrap_or(&Value::Null)), "update": { "version": self.release().0, "commit": self.release().1 } })))
+                (200, Ok(json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "serverNonce": server_nonce, "kid": kid, "pollMs": POLL_MS, "offlineMs": self.offline_ms, "hubKey": self.sign.as_ref().map(|k| k.public_hex()).unwrap_or_default(), "hubKid": self.sign.as_ref().map(|k| k.kid()).unwrap_or_default(), "group": clean_users(self.cfg.get("hostGroup").unwrap_or(&Value::Null)), "update": { "version": self.release().0, "commit": self.release().1 } })))
             }
             // how the host is doing (cap `control`): kept for the owner's page, nothing more
             "/node/status" if post => {

@@ -295,12 +295,12 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m' } } : {}), rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m' } } : {}), rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -329,6 +329,7 @@ async function setup() {
 // The throwaway hub runs Unity's engines THROUGH an AI node (bridge/ai-node.js, its own process), the way the hub on
 // the server will: every Unity check below then also tests the node path end to end (R137).
 const NODE_SECRET = 'test-node-secret-0123456789abcdef';
+const WORK_SECRET = 'work-secret-r323-0123456789abcdef0123'; // R323 (T-308): fixes the Rust hub's DEPRECATED shared MCP secret (config workSecret) so the test can send an old-style call
 const OLD_NODE_SECRET = 'old-node-secret-0123456789abcdef'; // R152: a 2.x host (no login relay), played by the test itself
 let aiNodeProc = null;
 function startAiNode() {
@@ -542,6 +543,7 @@ async function run() {
   const A = (await login('T-Admin', 'pw-t-admin-0001', devA)).data.token;
   const U = (await login('t-user', 'pw-t-user-0001', devB)).data.token;
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
+  if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -1135,7 +1137,7 @@ async function run() {
     for (const p of procs) { try { p.kill(); } catch {} }
     const hostRs = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'work.rs'), 'utf8');
     check('R188', L188,
-      !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin,control' && (pn.providers || []).length === 0
+      !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin,control,signed-pc' && (pn.providers || []).length === 0
       && !!jprov && jprov.kind === 'host-jcode' && jprov.owner === 't-admin' && !otherSees && !plainListed && pickPlain.status !== 200 && pick.status === 200 && pick.data.provider === 'h:jcode-node/jcode'
       && r1.events.some((e) => e.type === 'bridge_info' && /through Jcode PGM/.test(e.text)) && r1init.harness === 'jcode' && /^fakej-/.test(r1init.session)
       && /jcode-answer model=claude-sonnet-5-5 provider=viberoller/.test(r1t) && /cwd=\S*jcode-host\S*worktrees\S*t-admin/.test(r1t) && /resume=no/.test(r1t) && /overlay:yes/.test(r1t)
@@ -2099,7 +2101,7 @@ async function run() {
       && /function openOwn/.test(page159) && /'X-VR-Own-Seal': await sealOwn\(info\)/.test(page159) && /id="goFiles"/.test(page159) && /LIBRARY\.show\(\)/.test(page159)
       && /Copy to my uploaded_files/.test(lib159) && /\/api\/library\/delete/.test(lib159) && /ATTACH\.open\(it/.test(lib159)
       // the hub's own data never shows as a change in the live checkout (the auto-deploy refuses a checkout with changes)
-      && ['bridge/uploads-index.json', 'bridge/uploads/x', 'bridge/ai-host-sessions.json', 'bridge/ai-node.status.json', 'Chat/files/x'].every((f) => spawnSync('git', ['check-ignore', '-q', f], { cwd: MILLS }).status === 0),
+      && ['bridge/uploads-index.json', 'bridge/uploads/x', 'bridge/ai-host-sessions.json', 'bridge/hub-signing.key', 'bridge/ai-node.status.json', 'Chat/files/x'].every((f) => spawnSync('git', ['check-ignore', '-q', f], { cwd: MILLS }).status === 0),
       `U linux ${JSON.stringify(libU.linux)}; A linked ${libA.linux && libA.linux.linked}; on disk ${onLinkedDisk}; work entry ${JSON.stringify({ k: wEntry.kind, n: wEntry.name, la: !!wEntry.lastAccess, uses: (wEntry.uses || []).length, f: wEntry.folder })}; chat U ${sByU1}/${sByU2} A ${sByA} entry ${JSON.stringify(sEntry.where || {})} del ${sDel.status} after ${sAfter}; notMine ${notMine.status}; work del ${wDel.status} gone ${wGone} serve ${wServe}`);
     // R161: edit, execute, files put in uploaded_files outside VibeRoller, files sent to Work from the library
     {
@@ -5150,7 +5152,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const L321 = 'linked machines core (T-307): scope model + evaluator in pgm-net-internal::machine::scope: Scope parses the 5.3 JSON, folder is the default, unknown keys are ignored, a newer v is refused whole, a bad or missing file allows nothing, every preset (folder, folders, read-only, full, full-ro, deny-list, no-shell, no-network, unrestricted, custom) has table-driven tests, deny beats allow, the more specific entry wins, full hides raw devices and keeps /sys and /proc/sys read-only, grants expire on a passed-in clock';
     const L322 = 'linked machines core (T-307): the one path canonicaliser machine::paths: .., symlink escape, dangling links, \\\\?\\, UNC, another drive, C:\\x vs c:/X, alternate data streams, reserved names, and the write-through-a-swapped-link case (O_NOFOLLOW + openat re-check on Linux) all deny; the Windows rules are pure logic tested on any host';
     const L340 = 'linked machines core (T-307): the safety floor machine::floor: under unrestricted (and every preset) the machine\'s token, device key, scope file and audit log are never readable, writable, deletable or listable, also through symlinks; fetch never sends them; the default deny list on full covers .env, *.pem, id_*, ~/.ssh and hub.json (glob matching)';
-    if (ct.error) { for (const [id, l] of [['R321', L321], ['R322', L322], ['R340', L340]]) skip(id, l, 'no Rust toolchain here (' + ct.error.code + ')'); }
+    if (ct.error) { for (const [id, l] of [['R321', L321], ['R322', L322], ['R340', L340], ['R324', 'signed requests and the machine\'s own check (T-308): machine::sign + the host pin']]) skip(id, l, 'no Rust toolchain here (' + ct.error.code + ')'); }
     else {
       const out321 = String(ct.stdout || '') + String(ct.stderr || '');
       const okN = (re) => (out321.match(new RegExp('^test machine::' + re + '[^ ]* \\.\\.\\. ok$', 'gm')) || []).length;
@@ -5159,7 +5161,105 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       check('R321', L321, ct.status === 0 && src321 && okN('scope::') >= 12, detail321);
       check('R322', L322, ct.status === 0 && okN('paths::') >= 8, detail321);
       check('R340', L340, ct.status === 0 && okN('floor::') >= 4 && okN('tests::') >= 4, detail321);
+      // R324 (T-308, linked machines 2/8): signed requests and the machine's own check: machine::sign (hub key, envelope, verifier) and the
+      // host's pin of the hub key (host/pin.rs: an older hub that signs nothing still works). The hub's per-run secret unit tests ride along.
+      const ct323 = spawnSync('cargo', ['test', '-p', 'pgm-ai-internal', '--', 'host::pin::', 'work::tests::a_run_is_found', 'work::tests::the_deprecated', 'work::tests::a_hosts_job_token'], { cwd: path.join(MILLS, 'native'), env: env321, encoding: 'utf8', timeout: 1800000 });
+      const out2 = String(ct323.stdout || '') + String(ct323.stderr || '');
+      const ok2 = (name) => new RegExp('^test ' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\.\\.\\. ok$', 'm').test(out2);
+      const signTests = ['a_good_request_passes_and_names_the_actor', 'bad_signature_other_key_and_tampering_are_refused', 'a_lying_hub_stub_is_refused', 'a_request_for_another_owner_or_by_another_actor_is_refused', 'expired_future_and_too_long_requests_are_refused', 'a_repeated_nonce_is_refused_and_the_cache_is_bounded', 'the_tool_and_the_arguments_are_bound', 'the_hub_key_is_made_once_and_kept_owner_only'];
+      const pinTests = ['no_key_announced_means_unsigned_jobs_work_as_before', 'a_pinned_key_demands_a_signature_for_the_hosts_owner', 'a_different_key_later_is_not_taken_and_a_hello_again_keeps_the_replay_cache'];
+      const signOk = signTests.filter((t) => new RegExp('^test machine::sign::tests::' + t + ' \\.\\.\\. ok$', 'm').test(out321));
+      const pinOk = pinTests.filter((t) => ok2('host::pin::tests::' + t));
+      const src324 = fs.existsSync(path.join(mdir, 'sign.rs')) && /pub mod sign;/.test(fs.readFileSync(path.join(mdir, 'mod.rs'), 'utf8'));
+      check('R324', 'signed requests and the machine\'s own check (T-308): one ed25519 hub key made once in the hub\'s data folder (owner-only file), a signed envelope {owner, actor{account, session, run}, tool, args digest, nonce, issuedAt, expiresAt}, and the machine-side verifier refuses a bad signature, a request signed by another key (a lying hub stub), an expired or future request, a repeated nonce (bounded replay cache), an owner that is not its own link, actor.account != owner, another machine id, another tool or other arguments than the ones signed; the host pins the hub\'s key from its hello (an older hub that announces none keeps working unsigned, a different key later is not taken, an unsigned job is refused once pinned)',
+        ct.status === 0 && ct323.status === 0 && src324 && signOk.length === signTests.length && pinOk.length === pinTests.length && /signed-pc/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'hostlink.rs'), 'utf8')),
+        `cargo test ${ct.status} / ${ct323.status}: sign ${signOk.length}/${signTests.length}, pin ${pinOk.length}/${pinTests.length} ${/FAILED|panicked/.test(out2) ? 'FAILURES' : ''}`);
     }
+  }
+  // R323 (T-308, linked machines 2/8, the Rust hub's): the per-run secret and the owner check on the hub (plans/linked-machines.md 4.3)
+  if (!RUST_HUB) skip('R323', 'per-run MCP secret and the owner check for machines (the Rust hub\'s; --rust-hub runs it)', 'the Rust hub is not in front: run with --rust-hub');
+  else await r323Check();
+  async function r323Check() {
+    const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
+    const mkHost = async (token) => { const made = await call('/api/hosts/new', token, {}); const id = (made.data.host || {}).id || ''; const cj = (await call('/api/hosts/config', token, { id })).data.config || {}; return { id, token: cj.token, nick: (made.data.host || {}).nickname || '' }; };
+    const hostA = await mkHost(A), hostU = await mkHost(U);
+    const enc = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const mach = (r) => { const l = texts(r.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } };
+    const runIdOf = (r) => ((r.events || []).find((e) => e.type === 'bridge_run') || {}).id || '';
+    const listPc = (extra) => ({ route: 'pc-tool', body: { name: 'list', args: { path: '' } }, ...(extra || {}) });
+    // 1. before any machine is online: the owner's browser folder still answers (today's fallback), and a named machine that is the
+    //    owner's own but offline says so (it does not fall back); another person's machine is refused offline too
+    const fb = await chat(U, 'PCTOOL r323 browser fallback');
+    const early = mach(await chat(U, enc([listPc({ body: { name: 'list', args: { path: '' }, machine: hostU.id } }), listPc({ body: { name: 'list', args: {}, machine: hostA.id } }), listPc({ body: { name: 'list', args: {}, machine: 'no-such-machine-r323' } })])));
+    // 2. two machines online (played by the test: hello with pc + signed-pc, a held poll, an answer for every job)
+    const keyOf = {}; const got = { [hostA.id]: [], [hostU.id]: [] }; const ac = new AbortController();
+    for (const h of [hostA, hostU]) {
+      const hi = await (await fetch(H + '/node/hello', { method: 'POST', headers: hostHdr(h.id, h.token), body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex'), user: '', providers: [], engines: [], pc: true, version: '9.9.9', os: 'linux', caps: ['relay', 'signed-pc'] }) })).json().catch(() => ({}));
+      keyOf[h.id] = { key: hi.hubKey || '', kid: hi.hubKid || '' };
+      (async () => { while (!ac.signal.aborted) {
+        const pr = await fetch(H + '/node/poll', { headers: hostHdr(h.id, h.token), signal: ac.signal }).then((r) => r.json()).catch(() => ({}));
+        for (const j of pr.jobs || []) { got[h.id].push(j); await fetch(H + '/node/reply', { method: 'POST', headers: hostHdr(h.id, h.token), body: JSON.stringify({ id: j.id, status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ ok: true, result: 'host-listing ' + h.id })).toString('base64') }) }).catch(() => {});
+        }
+      } })();
+    }
+    for (let i = 0; i < 40; i++) { const hs = (await call('/api/check', U)).data.aiNodes || []; if ([hostA, hostU].every((h) => hs.some((x) => x.id === h.id && x.online))) break; await sleep(250); }
+    const legacyU = crypto.createHmac('sha256', WORK_SECRET).update('t-user').digest('hex');
+    // U's run: unnamed goes to U's own machine; naming A's machine (by id, by nickname, inside args) is 403; a header or session that disagrees with
+    // the run record is 403; a wrong secret is not ours; the old shared secret still works (deprecated) and the owner check still applies to it
+    const rU = await chat(U, enc([
+      listPc(),                                                                              // 0 own machine, unnamed
+      listPc({ body: { name: 'list', args: {}, machine: hostA.id } }),                       // 1 A's machine by id
+      listPc({ body: { name: 'list', args: {}, machine: hostA.nick } }),                     // 2 by nickname
+      listPc({ body: { name: 'list', args: { path: '', machine: hostA.id } } }),             // 3 named inside args
+      listPc({ account: 't-admin' }),                                                       // 4 the run's secret with someone else's account header
+      listPc({ body: { name: 'list', args: {}, session: 'someone-elses-session' } }),        // 5 a session that is not this run's
+      listPc({ secret: 'not-a-secret-r323' }),                                              // 6 a wrong secret
+      listPc({ account: null }),                                                            // 7 no account header at all: the record says who
+      listPc({ body: { name: 'list', args: {}, machine: hostU.nick } }),                     // 8 own machine by nickname
+      { route: 'board', body: { name: 'board_list', args: {} } },                            // 9 other tools on the run's secret
+      listPc({ secret: legacyU, account: 't-user' }),                                       // 10 the deprecated shared secret: still works
+      listPc({ secret: legacyU, account: 't-user', body: { name: 'list', args: {}, machine: hostA.id } }), // 11 ... and is owner-checked
+      listPc({ secret: legacyU, account: 't-admin' }),                                      // 12 the old secret is one account's: not as another
+    ]));
+    // A (the admin)'s run: names U's machine = 403 (an admin is another person); its own machine works, by id and unnamed
+    const rA = await chat(A, enc([
+      listPc({ body: { name: 'list', args: {}, machine: hostU.id } }),                       // 0 admin names U's machine
+      listPc({ body: { name: 'list', args: {}, machine: hostU.nick } }),                     // 1 by nickname
+      listPc(),                                                                              // 2 own machine, unnamed
+      listPc({ body: { name: 'list', args: {}, machine: hostA.id } }),                       // 3 own machine by id
+    ]));
+    ac.abort();
+    const u = mach(rU), a = mach(rA);
+    const isListing = (r, id) => r && r.status === 200 && r.body && r.body.ok === true && r.body.result === 'host-listing ' + id;
+    const notOurs = (r) => r && r.status !== 200 && !(r.body && r.body.ok === true);
+    const forbidden = (r) => r && r.status === 403 && r.body && r.body.ok === false;
+    // what the machines received: only requests for their own owner, each signed by the hub's key with the run as the actor
+    const spki = (hex) => crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(hex, 'hex')]), format: 'der', type: 'spki' });
+    const verify = (h, j) => { try {
+      const sr = JSON.parse(j.headers['x-vr-machine-sig'] || ''), env = JSON.parse(sr.payload);
+      const sigOk = crypto.verify(null, Buffer.concat([Buffer.from('vr-machine-request-v1\n'), Buffer.from(sr.payload)]), spki(keyOf[h.id].key), Buffer.from(sr.sig, 'hex'));
+      return { sigOk, env, digestOk: env.argsDigest === crypto.createHash('sha256').update(Buffer.from(j.body || '', 'base64')).digest('hex'), toolOk: env.tool === String(j.path).replace(/^\//, ''), life: env.expiresAt - env.issuedAt, kid: sr.kid };
+    } catch { return { sigOk: false, env: {} }; } };
+    const vA = got[hostA.id].map((j) => verify(hostA, j)), vU = got[hostU.id].map((j) => verify(hostU, j));
+    const nonces = new Set([...vA, ...vU].map((v) => v.env.nonce));
+    const idA = runIdOf(rA), idU = runIdOf(rU);
+    const signedOk = (v, owner, runId, h) => v.sigOk && v.digestOk && v.toolOk && v.env.v === 1 && v.env.owner === owner && v.env.actor && v.env.actor.account === owner && v.env.machine === h.id && v.life === 60 && v.kid === keyOf[h.id].kid && (runId ? v.env.actor.run === runId : true);
+    // the hub's key: made once, in the data folder, owner-only, the same one every hello announces
+    const keyFile = path.join(SB, 'hub-signing.key');
+    const keyMode = fs.existsSync(keyFile) ? fs.statSync(keyFile).mode & 0o777 : 0;
+    // clean up: the test machines go away (the later checks must not find a PC host for these accounts)
+    await call('/api/hosts/remove', A, { id: hostA.id }); await call('/api/hosts/remove', U, { id: hostU.id });
+    const detail323 = `browser fallback ${/fake-listing/.test(texts(fb.events))}; offline: ${early.map((r) => r.status).join('/')}; U run: ${u.map((r) => r.status).join('/')}; A run: ${a.map((r) => r.status).join('/')}; machine A got ${got[hostA.id].length} (signed ${vA.filter((v) => v.sigOk).length}), machine U got ${got[hostU.id].length} (signed ${vU.filter((v) => v.sigOk).length}); key mode ${keyMode.toString(8)}`;
+    check('R323', 'per-run MCP secret and the owner check for machines (T-308): a Work run gets its OWN secret in its MCP config, the hub takes the account and session from the run record (a disagreeing account header or session is 403, the account header is not needed, a wrong secret is not accepted); a run naming ANOTHER person\'s machine (by id, by nickname or inside the arguments) gets 403 with no fallback, and so does an admin\'s run; the owner\'s own machine answers (signed by the hub\'s one ed25519 key for the owner with the run as actor, digest of the arguments, 60 s life, a fresh nonce each), the owner\'s browser-folder fallback still works when no machine is named, a named machine that is the owner\'s but offline says so instead of falling back; the old shared secret (an older run config) still works, deprecated, and is owner-checked too; machines only ever received requests for their own owner; the hub key file is owner-only',
+      /fake-listing: a\.txt/.test(texts(fb.events)) && early.length === 3 && early[0].status === 503 && /offline/.test(JSON.stringify(early[0].body)) && forbidden(early[1]) && early[2].status === 404
+      && Object.values(keyOf).every((k) => /^[0-9a-f]{64}$/.test(k.key) && k.kid) && keyOf[hostA.id].key === keyOf[hostU.id].key
+      && u.length === 13 && isListing(u[0], hostU.id) && forbidden(u[1]) && forbidden(u[2]) && forbidden(u[3]) && forbidden(u[4]) && forbidden(u[5]) && notOurs(u[6]) && isListing(u[7], hostU.id) && isListing(u[8], hostU.id)
+      && u[9].status === 200 && u[9].body.ok === true && isListing(u[10], hostU.id) && forbidden(u[11]) && notOurs(u[12])
+      && a.length === 4 && forbidden(a[0]) && forbidden(a[1]) && isListing(a[2], hostA.id) && isListing(a[3], hostA.id)
+      && got[hostA.id].length === 2 && got[hostU.id].length === 4 // U: probes 0, 7, 8 and the legacy 10; A: 2 and 3
+      && vA.every((v) => signedOk(v, 't-admin', idA, hostA)) && vU.every((v, i) => signedOk(v, 't-user', i < 3 ? idU : '', hostU)) && nonces.size === vA.length + vU.length && !!idA && !!idU
+      && keyMode === 0o600,
+      detail323);
   }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });

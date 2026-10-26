@@ -262,15 +262,32 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let (id, tool) = rest.split_once("/internal/").unwrap_or(("", ""));
         if id.is_empty() || !matches!(tool, "pc-tool" | "board" | "team") { return answer(404, json!({ "error": "Not found" })); }
         return match hub.mods.ai.job_for(id, r.header("x-mills-internal").unwrap_or("")) {
-            Some((account, _)) => { let mut b = r.json(); if b["session"].as_str().unwrap_or("").is_empty() { let sid = hub.mods.work.session_of_job(id); if !sid.is_empty() { b["session"] = json!(sid); } } answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &b).await) }
+            // the job's token is this run's own (minted for it); the account and session come from the hub's records, a header or
+            // body that says otherwise is refused (T-308)
+            Some((account, _)) => {
+                let b = r.json();
+                match hub.mods.work.job_caller(id, &account, r.header("x-mills-account").unwrap_or(""), b["session"].as_str().unwrap_or("")) {
+                    work::Relay::Run(c) => { let (st, v) = work::tool_for(hub, if tool == "pc-tool" { "pc" } else { tool }, &c, &b).await; answer(st, v) }
+                    work::Relay::Refused(why) => answer(403, json!({ "ok": false, "error": why })),
+                    _ => answer(403, json!({ "ok": false, "error": "forbidden" })),
+                }
+            }
             None => answer(403, json!({ "ok": false, "error": "forbidden" })),
         };
     }
-    // the MCP tools of a Work run here (this hub's own secret; anything else is the JavaScript hub's)
+    // the MCP tools of a Work run here: the run's own secret (T-308), or, deprecated, the old shared one an older run config still
+    // sends; anything else is the JavaScript hub's (its own shared secret, which stays while it is the last fallback)
     if let Some(tool) = p.strip_prefix("/internal/").filter(|t| matches!(*t, "pc-tool" | "board" | "team")) {
-        let account = r.header("x-mills-account").filter(|a| !a.is_empty()).map(String::from).unwrap_or_else(|| hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string());
-        if r.method == hyper::Method::POST && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &hub.mods.work.secret_for(&account)) {
-            return answer(200, work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, &account, &r.json()).await);
+        if r.method == hyper::Method::POST {
+            let default = hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string();
+            let b = r.json();
+            let which = if tool == "pc-tool" { "pc" } else { tool };
+            match hub.mods.work.relay_auth(r.header("x-mills-internal").unwrap_or(""), r.header("x-mills-account").unwrap_or(""), &default, b["session"].as_str().unwrap_or("")) {
+                work::Relay::Run(c) => { let (st, v) = work::tool_for(hub, which, &c, &b).await; return answer(st, v); }
+                work::Relay::Legacy(account) => { let c = work::Caller { account, session: b["session"].as_str().unwrap_or("").to_string(), sid: String::new(), run: String::new(), legacy: true }; let (st, v) = work::tool_for(hub, which, &c, &b).await; return answer(st, v); }
+                work::Relay::Refused(why) => return answer(403, json!({ "ok": false, "error": why })),
+                work::Relay::NotOurs => {}
+            }
         }
         return Routed::Pass(vec![]);
     }
@@ -503,7 +520,7 @@ async fn ai_front(hub: &Arc<Hub>, r: &Req, what: &str) -> Routed {
         "cancel" => { ai.cancel_work(r.json()["id"].as_str().unwrap_or("")); answer(200, json!({ "ok": true })) }
         "pc-tool" => {
             let b = r.json();
-            match ai.pc_tool(b["host"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""), &if b["args"].is_object() { b["args"].clone() } else { json!({}) }).await {
+            match ai.pc_tool_front(b["host"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""), &if b["args"].is_object() { b["args"].clone() } else { json!({}) }).await {
                 Ok(v) => answer(200, json!({ "result": v })),
                 Err(e) => answer(200, json!({ "error": e.msg })),
             }

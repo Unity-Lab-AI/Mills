@@ -34,7 +34,28 @@ const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSe
 
 /// A run of one session (its key: the person for the primary session, "<user>#<id>" for the others). `last` = when it
 /// last sent something of its own (not the hub's pings): the liveness check ends a run silent for too long.
-struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String, project: String, branch: String, started: u64 }
+struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String, project: String, branch: String, started: u64,
+    /// The run's own secret (T-308): minted when the run starts, put in ITS MCP config, forgotten when the run ends (the record
+    /// leaves `runs`). The hub finds the run, so the account and session, from it; the headers of a call never say who it is.
+    secret: String, account: String, sid: String, sess_env: String }
+/// Who a tool call is, as the hub's own records say (never a header the caller typed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Caller {
+    pub account: String,
+    /// the session the relay names to the tools ("" for the person's first session)
+    pub session: String,
+    /// the session's id as the hub keeps it ("" when the record is not known: a deprecated shared-secret call)
+    pub sid: String,
+    pub run: String,
+    /// true: the call came with the deprecated shared secret and no run record stands behind it
+    pub legacy: bool,
+}
+impl Caller {
+    pub fn actor(&self) -> pgm_net_internal::machine::Actor { pgm_net_internal::machine::Actor { account: self.account.clone(), session: if self.session.is_empty() { self.sid.clone() } else { self.session.clone() }, run: self.run.clone() } }
+}
+/// What a relay call's credentials come to: a run of this hub, the deprecated shared secret, a refusal, or not this hub's.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Relay { Run(Caller), Legacy(String), Refused(&'static str), NotOurs }
 /// Everything a run has sent, so a page that reloads (or a second tab) can join it again: GET /api/work/attach.
 /// `base` = how many of the oldest events were dropped (a run keeps its last RUN_LOG_MAX).
 #[derive(Default, Clone)]
@@ -58,8 +79,12 @@ pub struct Work {
     root: PathBuf,
     mills: PathBuf,
     cfg: Config,
-    /// the MCP relays of runs here (x-mills-internal)
+    /// DEPRECATED (T-308): the old shared secret of the MCP relays, from which an account's key was derived. Runs now get their
+    /// own secret (see `Run::secret`); this stays only so an older run config keeps working for now (`Work::relay_auth`, logged).
+    /// Random per hub process unless the config's `workSecret` (24+ characters) fixes it, which the regression suite does to send an old-style call.
     pub secret: String,
+    /// accounts whose deprecated shared-secret use was logged already (once per account and process)
+    legacy_noted: Mutex<std::collections::HashSet<String>>,
     pub wt: Worktrees,
     states: Mutex<HashMap<String, Value>>,
     runs: Mutex<HashMap<String, Run>>,
@@ -88,7 +113,7 @@ fn iso() -> String { pgm_core_internal::time::iso_now() }
 
 impl Work {
     pub fn new(root: &Path, cfg: &Config) -> Work {
-        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: pgm_core_internal::crypto::random_hex(24), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), plans: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
+        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: cfg.get("workSecret").and_then(Value::as_str).filter(|s| s.len() >= 24).map(String::from).unwrap_or_else(|| pgm_core_internal::crypto::random_hex(24)), legacy_noted: Mutex::default(), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), plans: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new() }
     }
     // ---------- each person's Work state ----------
     fn state_file(a: &Account) -> PathBuf { a.dir.join("work.json") }
@@ -111,8 +136,45 @@ impl Work {
         self.states.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), v.clone());
         v
     }
-    /// One account's key for its runs' tools: a run can act only as its own person, whatever account it names.
+    /// DEPRECATED (T-308): one account's key derived from the old shared secret. New runs get their own secret; this only
+    /// recognises an older run config that still sends the derived one (see [`Work::relay_auth`]).
     pub fn secret_for(&self, account: &str) -> String { pgm_core_internal::crypto::hmac_hex(self.secret.as_bytes(), account.as_bytes()) }
+    /// What the credentials of a relay call at `/internal/<tool>` come to (T-308, plans/linked-machines.md section 4.3).
+    /// - A run's own secret: the account, session and run id come from THAT RUN'S RECORD. An account header or a session that
+    ///   disagrees with the record is refused (403) and logged; the call is never "the header's account".
+    /// - The deprecated shared secret (derived per account) keeps working while older run configs are around: the account is the
+    ///   header's, as it always was, there is no run record behind it, and the first use per account is logged as deprecated.
+    ///   `"legacySharedSecret": false` in the hub's config switches it off.
+    /// - Anything else is not this hub's (the frozen JavaScript hub answers it with ITS shared secret, which also stays for now).
+    /// `header_account` is the raw header, `default_account` what the old route assumed when none was sent.
+    pub fn relay_auth(&self, secret: &str, header_account: &str, default_account: &str, session: &str) -> Relay {
+        if secret.is_empty() { return Relay::NotOurs; }
+        let found = { let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); runs.values().find(|r| same_secret(secret, &r.secret)).map(|r| (r.account.clone(), r.sid.clone(), r.sess_env.clone(), r.id.clone())) };
+        if let Some((account, sid, sess_env, id)) = found {
+            if !header_account.is_empty() && header_account != account { eprintln!("[work] refused a tool call: the run of {account} came with the account header \"{}\" (the run record wins, the header may not name someone else)", header_account.chars().take(40).collect::<String>()); return Relay::Refused("The account named in the request is not the account of this run."); }
+            if !session.is_empty() && session != sid { eprintln!("[work] refused a tool call: the run of {account} named the session \"{}\" but it is the run of {sid}", session.chars().take(40).collect::<String>()); return Relay::Refused("The session named in the request is not the session of this run."); }
+            return Relay::Run(Caller { account, session: sess_env, sid, run: id, legacy: false });
+        }
+        let account = if header_account.is_empty() { default_account } else { header_account };
+        if self.cfg.get("legacySharedSecret").and_then(Value::as_bool) != Some(false) && !account.is_empty() && same_secret(secret, &self.secret_for(account)) {
+            if self.legacy_noted.lock().unwrap_or_else(|e| e.into_inner()).insert(account.to_string()) { eprintln!("[work] DEPRECATED: a tool call for {account} used the old shared MCP secret (an older run config); it still works for now, but runs get their own secret since T-308 and this will stop being accepted"); }
+            return Relay::Legacy(account.to_string());
+        }
+        Relay::NotOurs
+    }
+    /// A run on an AI host (its relay calls `/node/job/<id>/internal/<tool>` with the job's own token, which the hub minted for that
+    /// one run): the same rules as [`Work::relay_auth`] once the token matched the job (`account`).
+    pub fn job_caller(&self, job: &str, account: &str, header_account: &str, session: &str) -> Relay {
+        if !header_account.is_empty() && header_account != account { eprintln!("[work] refused a host tool call: the job of {account} came with the account header \"{}\"", header_account.chars().take(40).collect::<String>()); return Relay::Refused("The account named in the request is not the account of this run."); }
+        let rec = if job.is_empty() { None } else { self.runs.lock().unwrap_or_else(|e| e.into_inner()).values().find(|r| r.remote == job).map(|r| (r.sid.clone(), r.sess_env.clone(), r.id.clone())) };
+        match rec {
+            Some((sid, sess_env, id)) => {
+                if !session.is_empty() && session != sid { eprintln!("[work] refused a host tool call: the job of {account} named the session \"{}\" but it is the run of {sid}", session.chars().take(40).collect::<String>()); return Relay::Refused("The session named in the request is not the session of this run."); }
+                Relay::Run(Caller { account: account.to_string(), session: sess_env, sid, run: id, legacy: false })
+            }
+            None => Relay::Run(Caller { account: account.to_string(), session: session.to_string(), sid: String::new(), run: job.to_string(), legacy: false }),
+        }
+    }
     pub fn forget(&self, u: &str) { self.states.lock().unwrap_or_else(|e| e.into_inner()).remove(u); }
     pub fn drop_provider(&self, a: &Account, id: &str) { if self.state(a)["provider"] == json!(id) { self.update(a, |m| { m.remove("provider"); }); } }
     /// Is any session of theirs running (the primary one's run is keyed by the person, the others' by "<user>#<id>")?
@@ -347,9 +409,9 @@ impl Work {
         render_prompt(&segs)
     }
     /// The MCP servers of a run here: PC files, the board, the team chat (bridge/*-mcp.js), with this hub's secret.
-    fn mcp_json(&self, a: &Account, sx: &Sx) -> Value {
+    fn mcp_json(&self, a: &Account, sx: &Sx, run_secret: &str) -> Value {
         let node = std::env::var("VR_NODE").unwrap_or_else(|_| "node".into());
-        let mut env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": self.secret_for(&a.username), "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
+        let mut env = json!({ "MILLS_BRIDGE": format!("http://127.0.0.1:{}", self.cfg.port), "MILLS_INTERNAL": run_secret, "MILLS_USER": a.display, "MILLS_ACCOUNT": a.username });
         let planner = sessions::is_planner(a, &sx.sid);
         if !sx.primary || planner { env["MILLS_SESSION"] = json!(sx.sid); } // its PC tools reach the page of THIS session's run (and the relay knows a planner session)
         let srv = |js: &str| json!({ "command": node, "args": [std::path::absolute(self.root.join(js)).unwrap_or_default().display().to_string()], "env": env });
@@ -357,9 +419,9 @@ impl Work {
         if planner { return json!({ "mcpServers": { "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } }); }
         json!({ "mcpServers": { "pc": srv("pc-tools-mcp.js"), "board": srv("board-mcp.js"), "team": srv("team-mcp.js") } })
     }
-    fn mcp_config(&self, a: &Account, sx: &Sx) -> PathBuf {
+    fn mcp_config(&self, a: &Account, sx: &Sx, run_secret: &str) -> PathBuf {
         let f = if sx.primary { a.dir.join(".mcp-runtime-hub.json") } else { a.dir.join(format!(".mcp-runtime-hub-{}.json", sx.hex())) };
-        write_json(&f, &self.mcp_json(a, sx));
+        write_json(&f, &self.mcp_json(a, sx, run_secret));
         pgm_core_internal::fs::private(&f);
         f
     }
@@ -702,7 +764,8 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if none { } else if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
-    let mcp_config = w.mcp_config(a, &sx);
+    let run_secret = pgm_core_internal::crypto::random_hex(24); // this run's own secret for its MCP relays (T-308)
+    let mcp_config = w.mcp_config(a, &sx, &run_secret);
     // a planner session (T-275): read-only tools, no PC server, its own prompt segment; the relay enforces the same
     let planner = sessions::is_planner(a, &sx.sid);
     let planner_note: Option<String> = if planner { Some(planner_rules(hub.notes_tool("notes_read", &json!({ "path": "plans/planner-mode.md" }), &a.display)["result"]["text"].as_str().unwrap_or(""))) } else { None };
@@ -761,7 +824,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms() });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() } });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     w.busy_changed.notify_one();
@@ -818,7 +881,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // argument, a private jcode home with the hub's MCP servers and the system prompt as its overlay)
     let hkind = Work::harness_kind(&prov);
     let mut hx = crate::harness::harness_for(hkind, &prov, &s(&st, "model"));
-    let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a, &sx) } else { Value::Null };
+    let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a, &sx, &run_secret) } else { Value::Null };
     let sid = s(&st, "claudeSessionId");
     let claude_command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
     let mut claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
@@ -861,8 +924,22 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     ndjson(rx)
 }
 
-/// The MCP tools of a run (here: /internal/<tool> with this hub's secret; on a host: /node/job/<id>/internal/<tool>).
+/// The MCP tools of a run (here: /internal/<tool> with the run's own secret; on a host: /node/job/<id>/internal/<tool> with the job's token).
+/// `caller` is who the hub's own records say is calling (`Work::relay_auth` / `Work::job_caller`); the session it carries replaces any
+/// the body named. Answers (HTTP status, body): 403 when the call names a machine that is not the caller's own (T-308).
+pub async fn tool_for(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Value) -> (u16, Value) {
+    let mut b = b.clone();
+    if !caller.legacy { b["session"] = json!(caller.session); }
+    let mut v = tool_inner(hub, which, caller, &b).await;
+    let st = v.as_object_mut().and_then(|m| m.remove("_status")).and_then(|x| x.as_u64()).unwrap_or(200) as u16;
+    (st, v)
+}
+/// Compatibility entry (an account only, no run record): as the deprecated shared-secret call has always been.
 pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -> Value {
+    tool_for(hub, which, &Caller { account: account.to_string(), session: s(b, "session"), sid: String::new(), run: String::new(), legacy: true }, b).await.1
+}
+async fn tool_inner(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Value) -> Value {
+    let account = caller.account.as_str();
     let (name, args) = (s(b, "name"), if b["args"].is_object() { b["args"].clone() } else { json!({}) });
     // a planner session's run (its relay names the session): the hub refuses what a planner may not do, whatever the tool list said (T-275)
     if let Some(a) = hub.account(account) { if sessions::is_planner(&a, b["session"].as_str().unwrap_or("")) {
@@ -898,8 +975,25 @@ pub async fn tool(hub: &Arc<dyn AiHub>, which: &str, account: &str, b: &Value) -
         }
     }
     // pc-tool: the person's own AI host with direct computer access first (the native app), else the browser's open folder
-    if let Some(h) = hub.ai().pc_host_for(account) {
-        match hub.ai().pc_tool(&h, &name, &args).await { Ok(v) => return v, Err(e) => if !w.busy(account) { return json!({ "ok": false, "error": format!("{}'s computer did not answer: {}", a.display, e.msg) }) } }
+    // T-308 (plans/linked-machines.md 4.3): a call that NAMES a machine reaches it only for that machine's owner, whoever asks (an admin
+    // and another person's run get 403, no fallback to the browser folder or to any other machine); a call that names none goes to the
+    // caller's own pc host first, as before. Either way the request to the host is signed for the owner with this caller as the actor.
+    let ai = hub.ai();
+    let named = { let m = s(b, "machine"); if m.is_empty() { s(&args, "machine") } else { m } };
+    let mut args = args;
+    if let Some(o) = args.as_object_mut() { o.remove("machine"); }
+    let host = if named.is_empty() { ai.pc_host_for(account) } else {
+        match ai.machine_for(&named, account) {
+            Ok(h) => Some(h),
+            Err((st, m)) => { eprintln!("[work] refused: {account}'s run (session {}) named the machine \"{}\": {st} {m}", if caller.sid.is_empty() { "-" } else { &caller.sid }, named.chars().take(40).collect::<String>()); return json!({ "ok": false, "error": m, "_status": st }); }
+        }
+    };
+    if let Some(h) = host {
+        match ai.pc_tool(&h, &name, &args, &caller.actor()).await {
+            Ok(v) => return v,
+            Err(e) if e.status == 403 => return json!({ "ok": false, "error": e.msg, "_status": 403 }),
+            Err(e) => if !named.is_empty() || !w.busy(account) { return json!({ "ok": false, "error": format!("{}'s computer did not answer: {}", a.display, e.msg) }) }
+        }
     }
     let id = pgm_core_internal::crypto::random_hex(8);
     let (otx, orx) = oneshot::channel();
@@ -1367,6 +1461,65 @@ pub fn lint_segments(segs: &[Segment]) -> Vec<LintHit> { segs.iter().flat_map(|s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn put_run(w: &Work, key: &str, account: &str, sid: &str, sess_env: &str, secret: &str, id: &str, remote: &str) {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        w.runs.lock().unwrap().insert(key.into(), Run { id: id.into(), tx, pid: None, remote: remote.into(), pending: HashMap::new(), ev: RunLog::default(), last: 0, answered: false, prov: String::new(), project: String::new(), branch: String::new(), started: 0,
+            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into() });
+    }
+    /// T-308: the per-run secret names the run; the account and session come from the run record; a header that disagrees is refused;
+    /// the deprecated shared secret still works (and says so); nothing else is ours.
+    #[test]
+    fn a_run_is_found_by_its_own_secret_and_a_disagreeing_header_is_refused() {
+        let (w, _) = work_here();
+        put_run(&w, "alice", "alice", "s-main", "", "secret-of-alice-run", "r1", "");
+        put_run(&w, "bob#s7", "bob", "s7", "s7", "secret-of-bob-run", "r2", "job-9");
+        let c = |account: &str, session: &str, sid: &str, run: &str| Relay::Run(Caller { account: account.into(), session: session.into(), sid: sid.into(), run: run.into(), legacy: false });
+        // the secret alone is enough, and with the right header too
+        assert_eq!(w.relay_auth("secret-of-alice-run", "", "mills", ""), c("alice", "", "s-main", "r1"));
+        assert_eq!(w.relay_auth("secret-of-alice-run", "alice", "mills", ""), c("alice", "", "s-main", "r1"));
+        assert_eq!(w.relay_auth("secret-of-bob-run", "bob", "mills", "s7"), c("bob", "s7", "s7", "r2"));
+        assert_eq!(w.relay_auth("secret-of-bob-run", "", "mills", ""), c("bob", "s7", "s7", "r2"), "the record fills in the session the body left out");
+        // a header or session that disagrees with the record: refused, never "the header's account"
+        assert!(matches!(w.relay_auth("secret-of-alice-run", "bob", "mills", ""), Relay::Refused(_)));
+        assert!(matches!(w.relay_auth("secret-of-alice-run", "admin", "mills", ""), Relay::Refused(_)));
+        assert!(matches!(w.relay_auth("secret-of-bob-run", "bob", "mills", "s1"), Relay::Refused(_)));
+        assert!(matches!(w.relay_auth("secret-of-bob-run", "alice", "mills", "s7"), Relay::Refused(_)));
+        // one run's secret never works as another's
+        assert!(matches!(w.relay_auth("secret-of-bob-run", "alice", "mills", ""), Relay::Refused(_)));
+        // unknown or empty: not this hub's
+        assert_eq!(w.relay_auth("", "alice", "mills", ""), Relay::NotOurs);
+        assert_eq!(w.relay_auth("nope", "alice", "mills", ""), Relay::NotOurs);
+        // the secret expires with the run
+        w.runs.lock().unwrap().remove("alice");
+        assert_eq!(w.relay_auth("secret-of-alice-run", "alice", "mills", ""), Relay::NotOurs);
+    }
+    #[test]
+    fn the_deprecated_shared_secret_still_works_for_an_older_run_config() {
+        let (w, _) = work_here();
+        let old_alice = w.secret_for("alice");
+        assert_eq!(w.relay_auth(&old_alice, "alice", "mills", "s3"), Relay::Legacy("alice".into()));
+        assert_eq!(w.relay_auth(&old_alice, "", "alice", ""), Relay::Legacy("alice".into()), "no header: the default account, as before");
+        // it never lets one account act as another: the derived secret belongs to one account
+        assert_eq!(w.relay_auth(&old_alice, "bob", "mills", ""), Relay::NotOurs);
+        assert_eq!(w.relay_auth(&w.secret_for("bob"), "alice", "mills", ""), Relay::NotOurs);
+        // the per-run secret wins when both could apply
+        put_run(&w, "alice", "alice", "s-main", "", "run-secret", "r1", "");
+        assert!(matches!(w.relay_auth("run-secret", "alice", "mills", ""), Relay::Run(_)));
+        assert_eq!(w.relay_auth(&old_alice, "alice", "mills", ""), Relay::Legacy("alice".into()));
+    }
+    #[test]
+    fn a_hosts_job_token_gets_the_same_rules() {
+        let (w, _) = work_here();
+        put_run(&w, "bob#s7", "bob", "s7", "s7", "x", "r2", "job-9");
+        assert_eq!(w.job_caller("job-9", "bob", "", ""), Relay::Run(Caller { account: "bob".into(), session: "s7".into(), sid: "s7".into(), run: "r2".into(), legacy: false }));
+        assert!(matches!(w.job_caller("job-9", "bob", "alice", ""), Relay::Refused(_)));
+        assert!(matches!(w.job_caller("job-9", "bob", "bob", "s1"), Relay::Refused(_)));
+        assert!(matches!(w.job_caller("job-9", "bob", "bob", "s7"), Relay::Run(_)));
+        // a job whose run is not (yet) on record: the account the token belongs to, nothing else
+        assert_eq!(w.job_caller("job-1", "carol", "", ""), Relay::Run(Caller { account: "carol".into(), session: String::new(), sid: String::new(), run: "job-1".into(), legacy: false }));
+        assert!(matches!(w.job_caller("job-1", "carol", "bob", ""), Relay::Refused(_)));
+    }
 
     fn work_here() -> (Work, std::path::PathBuf) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bridge");
