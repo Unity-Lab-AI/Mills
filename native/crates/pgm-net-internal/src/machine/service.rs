@@ -243,10 +243,13 @@ echo \"{display} no longer starts by itself.\"
             let _ = std::process::Command::new("schtasks").args(["/Run", "/TN", &self.display]).output();
             lines.push(format!("{} is a per-user Scheduled Task for {} now: it starts at every sign-in (no administrator)", self.display, self.windows_account()));
         } else {
-            let ud = unit_dir.map(Path::to_path_buf).unwrap_or_else(user_unit_dir);
-            std::fs::create_dir_all(&ud).map_err(|e| e.to_string())?;
-            std::fs::write(ud.join(self.unit_file_name()), self.systemd_unit()).map_err(|e| e.to_string())?;
-            lines.push(format!("wrote {}", ud.join(self.unit_file_name()).display()));
+            // files only (`run_system` false, no folder named): nothing outside `scripts_dir` is touched
+            if run_system || unit_dir.is_some() {
+                let ud = unit_dir.map(Path::to_path_buf).unwrap_or_else(user_unit_dir);
+                std::fs::create_dir_all(&ud).map_err(|e| e.to_string())?;
+                std::fs::write(ud.join(self.unit_file_name()), self.systemd_unit()).map_err(|e| e.to_string())?;
+                lines.push(format!("wrote {}", ud.join(self.unit_file_name()).display()));
+            }
             if run_system {
                 for a in [vec!["--user", "daemon-reload"], vec!["--user", "enable", "--now", &format!("{}.service", self.name)]] {
                     let r = std::process::Command::new("systemctl").args(&a).output().map_err(|e| format!("systemctl did not start: {e}"))?;

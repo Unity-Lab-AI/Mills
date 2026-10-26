@@ -33,7 +33,7 @@ Low-latency networking and syncing.
 ## Running the linked-machines tests on Windows (R339)
 
 R321 to R333 and R340 are the unit tests under `machine::` (scope, paths, floor, device, sign, audit, kill, limits, elevate, changes,
-exec, service). They run on Linux in the suite (`cargo test -p pgm-net-internal machine::`: 90 tests). The Windows path rules
+exec, service). They run on Linux in the suite (`cargo test -p pgm-net-internal machine::`: 83 tests). The Windows path rules
 (drive letters, `\\?\`, UNC, alternate streams, reserved names, case) are pure logic and run on every host; the tests that need a real
 file system with links or Unix permissions are `#[cfg(unix)]`, and Windows has its own (`service::tests::a_broad_acl_on_the_state_folder_is_refused`
 uses `icacls`). On a Windows PC with the Rust toolchain (rustup, MSVC build tools) and this repository checked out:
