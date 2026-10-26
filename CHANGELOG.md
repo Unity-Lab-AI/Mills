@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.27.1 — 2026-10-26
+
+PATCH: **RE base image 1.0.1: REA's Frida tools work** (T-315).
+- **The bug:** the `frida` npm package's native binding was never installed, because `npm ci --ignore-scripts` skips
+  its install step. So `list_frida_devices` and REA's other Frida tools failed with "Could not locate the bindings
+  file". The frida command-line tool was not affected.
+- **The fix:** the image now unpacks the official prebuilt `frida-v17.23.2-napi-v8-linux-x64` binding into
+  `node_modules/frida/build/`, with its SHA-256 pinned (GitHub's asset digest, matched against a fresh download). No
+  install script runs.
+- **Smoke test:** a new check calls `list_frida_devices` through REA's MCP server; 28 of 28 pass.
+- **Image:** `localhost/pgm-re-base:1.0.1` (2.36 GB) is the new default in pgm-sandbox-internal. 1.0.0 is kept.
+
 ## 5.27.0 — 2026-10-26
 
 MINOR: **REA inside Work runs, and linked machines steps 2, 3 and 6** (agent branches, reviewed and merged; team notes
