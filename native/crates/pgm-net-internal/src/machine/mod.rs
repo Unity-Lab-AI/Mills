@@ -5,6 +5,7 @@
 //! - [`floor`]: the paths no tool may ever touch, even under `unrestricted`; the default deny list; globs
 
 pub mod audit;
+pub mod changes;
 pub mod floor;
 pub mod elevate;
 pub mod kill;
