@@ -216,7 +216,7 @@ fn answer(status: u16, v: Value) -> Routed { Routed::Answer(jresp(status, &v)) }
 fn maintenance(hub: &Hub) -> Option<String> { std::fs::read_to_string(hub.root.join(".maintenance")).ok().map(|t| { let t = t.trim().to_string(); if t.is_empty() { "the server".into() } else { t } }) }
 
 /// The routes a linked machine's own token may call (T-310).
-pub fn machine_token_may(path: &str) -> bool { matches!(path, "/api/machine/poll" | "/api/machine/reply" | "/api/machine/unlink") }
+pub fn machine_token_may(path: &str) -> bool { matches!(path, "/api/machine/poll" | "/api/machine/reply" | "/api/machine/unlink") || path.starts_with("/api/machine/transfer/") }
 pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     let p = r.path.as_str();
     // the regression runner's hook (VR_TEST_HOOKS=1 in the environment; nothing but the runner sets it): a panic inside
