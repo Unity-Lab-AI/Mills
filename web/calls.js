@@ -417,7 +417,8 @@ async function sendSignal(user, body) {
   const k = await pairKey(user);
   if (!k || !call.conv) return;
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const conv = call.conv, ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(JSON.stringify({ conv, from: me.username, to: user, sa: 1, ...body })));
+  const conv = call.conv; // (the same value inside the message and in the request: the call we are in right now)
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(JSON.stringify({ conv: call.conv, from: me.username, to: user, sa: 1, ...body })));
   const payload = JSON.stringify({ to: user, conv, iv: toB64(iv), ct: toB64(ct) });
   for (let n = 0; n < 4; n++) { // a lost offer / answer means no call: retry what may be transient (the other side not listed yet, a network blip), say so when it stays lost
     if (call.conv !== conv) return;
