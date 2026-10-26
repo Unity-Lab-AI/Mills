@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.27.2 — 2026-10-26
+
+PATCH: **Work no longer repeats "Done in 0s"** (T-319).
+- **The bug:** after a send (most often Send now) the transcript could show `Done in 0s · Opus 5.5` four times in a row.
+  Every `result` the page received added a line, and a run can deliver several (empty turns, a result sent again).
+- **Hub:** a run says each `result` once: the same uuid arriving again is dropped (Rust hub work.rs; the frozen JavaScript
+  hub's server.js the same), so the stream, a page that joins the run again and a share never see a repeat.
+- **Page:** one Done / Stopped line per run (a later result of the same run, or one seen before, updates the line, with
+  the turn count); a run that ended at once without output says why ("Ended at once: interrupted by Send now" / "you
+  stopped it" / the result subtype or error / the stderr tail / "nothing to resume or answer"); identical status lines
+  in a row collapse into one with a ×N count.
+- Checks R347 to R349; fake-claude gets MULTIRESULT and DUPRESULT.
+
 ## 5.27.1 — 2026-10-26
 
 PATCH: **RE base image 1.0.1: REA's Frida tools work** (T-315).

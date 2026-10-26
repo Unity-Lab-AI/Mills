@@ -5122,6 +5122,53 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         `mid busy ${mid.busy} run ${mid.run}; events ${all.map((e) => e.type).join(',')}; end busy ${d.busy}; again ${(again.events || []).length}/${again.busy}; none "${none.run}"; current keeps run ${cur}; static ${stat}`);
     } else check('R169', 'the page follows a Work run after a reload, offers updates instead of reloading in front of you, never stays black, sends the GitHub Pages copy to the hub [static; joining a run is the Rust hub\'s: --rust-hub runs it]', stat, `static ${stat}`);
   }
+  { // R347 to R349 (T-319): "Done in 0s" four times in a row after Send now
+    const results = (evs) => evs.filter((e) => e.type === 'result'), uuids = (evs) => results(evs).map((e) => e.uuid);
+    const sidOf = async (title) => (await call('/api/work/sessions/new', U, { title, background: true })).data.id;
+    // Send now: a run is stopped, then the next message goes (as the page does when the stream ends)
+    const slow = chat(U, 'SLOW sendnow-r347'); await sleep(1000);
+    await call('/api/stop', U, {}); const e1 = (await slow).events;
+    const e2 = (await chat(U, 'after sendnow r347')).events;
+    // a queue of three, one after the other
+    const q = []; for (let i = 1; i <= 3; i++) q.push((await chat(U, 'queued ' + i + ' r347')).events);
+    // the same result sent three times (one uuid), and three empty turns (three uuids)
+    const dup = (await chat(U, 'DUPRESULT r347')).events;
+    let replay = null;
+    if (RUST_HUB) { const rid = (dup.find((e) => e.type === 'bridge_run') || {}).id || ''; replay = ((await call('/api/work/attach?run=' + rid + '&after=0', U)).data || {}).events || []; }
+    const multi = (await chat(U, 'MULTIRESULT r347')).events;
+    // a page that joins the run again afterwards sees the same
+    // two sessions at once: each stream has its own result only
+    const multiSess = (await call('/api/work/sessions', U)).status === 200; // sessions are the Rust hub's
+    const sa = multiSess ? await sidOf('r347 a') : '', sb = multiSess ? await sidOf('r347 b') : '';
+    const [ra, rb] = multiSess ? await Promise.all([chat(U, 'SLOW two-A-r347', { session: sa }), chat(U, 'DUPRESULT two-B-r347', { session: sb })]) : [{ status: 0, events: [] }, { status: 0, events: [] }];
+    const own = (r, tag) => results(r.events).length === 1 && results(r.events).every((e) => new RegExp(tag).test(e.result || ''));
+    const sane = results(e1).length <= 1 && results(e2).length === 1 && q.every((e) => results(e).length === 1) && results(dup).length === 1 && new Set(uuids(multi)).size === results(multi).length;
+    check('R347', 'a run says each result once: after Send now (the stopped run has at most one, the next exactly one), three queued messages (one each), the same result delivered three times (one on the wire, and one when the run is joined again), three different empty turns (each kept, with its own uuid), and two sessions at once (each stream only its own, one result)',
+      sane && (!replay || results(replay).length === 1) && (!multiSess || (own(ra, 'two-A-r347') && own(rb, 'two-B-r347'))),
+      `send now ${results(e1).length}/${results(e2).length}; queue ${q.map((e) => results(e).length)}; dup ${results(dup).length}; multi ${results(multi).length}; replay ${replay ? results(replay).length : 'n/a'}; sessions ${results(ra.events).length}/${results(rb.events).length} (status ${ra.status}/${rb.status})`);
+    // the page's logic, run on its own source (a browser cannot run here)
+    const page347 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const m = page347.match(/\/\/ <t319>[^\n]*\n([\s\S]*?)\/\/ <\/t319>/);
+    let P = null; try { P = m ? require('vm').runInNewContext(m[1] + '; ({ sysCollapse, sysLabel, resultNote })') : null; } catch {}
+    let lines = null;
+    if (P) { // four identical status lines in a row: one with x4; a different one starts a new line
+      let st = null; const out = []; for (const t of ['Using A', 'Using A', 'Using A', 'Using A', 'Done']) { st = P.sysCollapse(st, t, false); if (st.merged) out[out.length - 1] = P.sysLabel(st); else out.push(P.sysLabel(st)); }
+      lines = out;
+    }
+    const wired = /runRes\.seen\.has\(rkey\)/.test(page347) && /runRes\.el\.textContent = note\.text/.test(page347) && /runRes = \{ id: '', seen: new Set\(\)/.test(page347) && /function sys\(text, bad\)[\s\S]{0,200}sysCollapse\(/.test(page347);
+    check('R348', 'the page shows one Done line per run: a result seen before (same uuid, a replay or a second stream) is skipped, the next result of the same run updates that line (with a turn count), a new run starts its own; identical status lines in a row collapse into one with a ×N count [static: the page\'s own functions run on their source]',
+      !!P && JSON.stringify(lines) === JSON.stringify(['Using A ×4', 'Done']) && P.sysLabel({ text: 'x', n: 1 }) === 'x' && wired, `lines ${JSON.stringify(lines)}; wired ${wired}`);
+    let why = null;
+    if (P) {
+      const hv = (o) => ({ v: 1, kind: 'result', error: false, text: 'ok', subtype: 'success', durationMs: 1, ...o });
+      const o = (x) => ({ model: 'Opus 5.5', turns: 1, out: 0, ...x });
+      why = [P.resultNote(hv({}), o({ out: 1 })).text, P.resultNote(hv({}), o({ interrupted: true })).text, P.resultNote(hv({}), o({ stopped: true })).text, P.resultNote(hv({ subtype: 'error_during_execution' }), o({})).text,
+        P.resultNote(hv({ text: '' }), o({ stderr: 'boom\nno conversation found' })).text, P.resultNote(hv({ text: '' }), o({})).text, P.resultNote(hv({}), o({ out: 1, turns: 3, model: '' })).text, P.resultNote(hv({ error: true, text: 'bad' }), o({})).text];
+    }
+    check('R349', 'a run that ended at once without output says why: interrupted by Send now, you stopped it, the result subtype, the stderr tail, nothing to resume; a normal reply says "Done in Ns · model" (and the turns when there are several); an error says what it was [static: the page\'s own function run on its source]',
+      !!why && why[0] === 'Done in 0s · Opus 5.5' && why[1] === 'Ended at once: interrupted by Send now' && why[2] === 'Ended at once: you stopped it' && why[3] === 'Ended at once: error_during_execution'
+      && why[4] === 'Ended at once: boom no conversation found' && why[5] === 'Ended at once: nothing to resume or answer' && why[6] === 'Done in 0s · 3 turns' && why[7] === 'Claude stopped with an error: bad', `${JSON.stringify(why)}`);
+  }
   { // R170 (5.1.0): PGM Gateway: an admin registers a product (its secret only in a private file), the product's signed
     // requests (pgm-net-internal's product link) check a VibeRoller login (the sign-in limits apply), link that person,
     // and use the AI hosts / providers as them; unsigned, replayed, re-pathed, proxied, unlinked and non-admin all refused

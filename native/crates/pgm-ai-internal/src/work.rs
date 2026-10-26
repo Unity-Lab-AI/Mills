@@ -62,7 +62,7 @@ pub enum Relay { Run(Caller), Legacy(String), Refused(&'static str), NotOurs }
 /// Everything a run has sent, so a page that reloads (or a second tab) can join it again: GET /api/work/attach.
 /// `base` = how many of the oldest events were dropped (a run keeps its last RUN_LOG_MAX).
 #[derive(Default, Clone)]
-struct RunLog { base: usize, events: Vec<Value>, woke: Arc<tokio::sync::Notify> }
+struct RunLog { base: usize, events: Vec<Value>, woke: Arc<tokio::sync::Notify>, results: std::collections::HashSet<String> }
 const RUN_LOG_MAX: usize = 20000;
 impl RunLog {
     fn push(&mut self, ev: Value) { self.events.push(ev); if self.events.len() > RUN_LOG_MAX { let k = self.events.len() - RUN_LOG_MAX; self.events.drain(0..k); self.base += k; } self.woke.notify_waiters(); }
@@ -469,6 +469,12 @@ impl Work {
         // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
         // fields as they came plus the `hub` object the page reads first (harness.rs, WORKPLAN 9b)
         let ev = crate::harness::wire(ev);
+        // T-319: a run says each result once: the same result (its uuid) arriving again is dropped, so neither the stream, nor a page that
+        // joins the run again, nor the share shows the same Done twice
+        if ev["type"] == json!("result") { if let Some(u) = ev["uuid"].as_str().filter(|u| !u.is_empty()) {
+            let dup = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx.key).map(|r| !r.ev.results.insert(u.to_string())).unwrap_or(false);
+            if dup { return; }
+        } }
         if let Some(sid) = ev["session_id"].as_str().filter(|s| !s.is_empty()) { let sid = sid.to_string(); sessions::supdate(self, a, sx, |m| { m.insert("claudeSessionId".into(), json!(sid)); }); }
         let usage = &hub.ai().usage;
         let t = ev["type"].as_str().unwrap_or("");
