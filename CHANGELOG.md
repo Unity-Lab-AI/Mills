@@ -7,6 +7,51 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.28.0 — 2026-10-26
+
+MINOR: **linked machines can be worked, only by their owner; and the PGM gateway carries tools** (agent branches,
+reviewed and merged; team note plans/linked-machines.md).
+- **Who may reach a machine** (T-310).
+  - **One rule:** a call that reaches a person's computer is allowed only when the run's account is the machine's owner
+    and that person started the run. This covers a linked machine, the host's PC engine and the browser folder. A new
+    add-only `Run.started_by` holds who started it; workflows and agent-to-agent runs must set it.
+  - **Refused:** admins, watchers, shared-session viewers, planner sessions and runs started on someone's behalf. Watchers
+    never see or answer machine or PC calls.
+  - **Machine tokens:** a machine's token reaches only `/api/machine/poll`, `/reply` and `/unlink`. It is no longer a
+    login.
+  - **Owner away:** the run goes on and ends with a report of what was done, why, and what can be changed.
+  - **Compatibility:** a newer scope document is refused whole. The hub's hello says `machine: {v: 1}`. Older apps keep
+    their PC engine, and the JavaScript hub keeps the browser PC tools.
+  - Checks R327 and R338.
+- **The machine's tools** (T-311). When the owner has a linked machine online, the AI's `mcp__pc__*` tools reach it, with
+  the same results as today's PC host.
+  - **New tools:**
+    - `machine_info`;
+    - `shell_run`: the working folder is confined to the scope (advisory), it is never run as root, with a timeout and an
+      output cap, and it is off under no-shell;
+    - `job_start` / `job_read` / `job_stop` for long commands (the job table lives on the machine and ends at revoke);
+    - `proc_list` / `proc_kill` (own children only);
+    - `re_*` for RE containers on the machine (off by default);
+    - `transfer_get` / `transfer_put` for big files by hub ticket (5 minutes, bound to account, machine and path). Data
+      moves in 4 MB chunks streamed to disk, with resume and sha256.
+  - **Every request** passes one door on the machine, in this order: the kill switch, the hub signature and owner check,
+    the scope, the rate limits, the tool, then one audit line.
+  - **Order of choice:** the owner's online machine first, then the AI host, then the browser folder.
+  - **First app on the new runner:** `vr-host machine link|run|stop|start|status`.
+  - Checks R328 to R330 (a 512 MB / 200 MB transfer with resume).
+- **The PGM gateway carries tools** (T-317).
+  - **Format:** `/v1/chat/completions`, and so the products' gateway, take `tools`, `tool_choice`, assistant `tool_calls`
+    and `tool` messages, and return `tool_calls`.
+  - **Providers:** OpenAI-compatible providers get them as they are. Anthropic keys and host Claude logins go through
+    `tool_use` / `tool_result`. Other kinds answer 400.
+  - Streamed requests are answered as chunks. A request without tools is unchanged.
+  - Check R346. The products' AI member runs a bounded tool loop in pgm-libs 5.24.0 (not tagged yet); HPM 0.6.0's Hyper
+    uses REA's tools through it.
+- bridge/pc-tools-mcp.js 1.0.3.
+- **Merge fix:** T-310 limited a machine token to poll, reply and unlink, which also blocked the machine's side of a T-311
+  transfer (`/api/machine/transfer/<ticket>/…`), so R330 moved 0 MB once both were in. The machine token now also reaches
+  the transfer routes; the ticket stays bound to account, machine, path and direction.
+
 ## 5.27.2 — 2026-10-26
 
 PATCH: **Work no longer repeats "Done in 0s"** (T-319).
