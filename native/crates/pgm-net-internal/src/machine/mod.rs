@@ -4,6 +4,7 @@
 //! - [`paths`]: path normalising (Linux and Windows rules, testable anywhere), real-path resolution, checked open
 //! - [`floor`]: the paths no tool may ever touch, even under `unrestricted`; the default deny list; globs
 
+pub mod audit;
 pub mod floor;
 pub mod paths;
 pub mod scope;
