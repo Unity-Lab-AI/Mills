@@ -4897,10 +4897,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       // R474 (T-207, spec 15): Hyper Workflows through the gateway for a product's people: the same paths as /api/hyperwork/,
       // as the person the product signed for (linked: t-user; not linked: t-admin → 404); the log streams; run-only honoured
       {
-        const gwList = await gw('GET', '/internal/gateway/hyperwork/list?q=r437', 't-user');
+        // a product's person designs through the gateway too (Hyper Prod Man's editor): save + publish a workflow of their own
+        const doc474 = { schema: 1, name: 'r474-flow', nodes: [{ id: 's', kind: 'start' }, { id: 'p', kind: 'prompt', config: { user: 'gateway {{inputs.prompt}}' } }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'p.in' }, { id: 'e2', from: 'p.text', to: 'e.result' }] };
+        const gwSave = await gw('POST', '/internal/gateway/hyperwork/save', 't-user', { doc: doc474 });
+        const gwId = (() => { try { return JSON.parse(gwSave.text).id || ''; } catch { return ''; } })();
+        const gwPub = gwId ? await gw('POST', '/internal/gateway/hyperwork/publish', 't-user', { id: gwId, message: 'r474' }) : { status: 0, text: '' };
+        const gwList = await gw('GET', '/internal/gateway/hyperwork/list?q=r474', 't-user');
         const gwItems = (() => { try { return JSON.parse(gwList.text).items || []; } catch { return []; } })();
         const notLinked = await gw('GET', '/internal/gateway/hyperwork/list', 't-admin');
-        const gwCmd = await gw('POST', '/internal/gateway/hyperwork/command', 't-user', { line: '/hyperwork r437-notes through the gateway', project: 'VibeRoller' });
+        const gwCmd = await gw('POST', '/internal/gateway/hyperwork/command', 't-user', { line: '/hyperwork r474-flow through the gateway', project: 'VibeRoller' });
         const gwRun = (() => { try { return JSON.parse(gwCmd.text).run || ''; } catch { return ''; } })();
         let gwLines = [];
         if (gwRun) { try { const pq = `/internal/gateway/hyperwork/log?id=${gwRun}&from=0&follow=1`; const r = await fetch(H + pq, { headers: sign('GET', pq, 't-user', ''), signal: AbortSignal.timeout(60000) }); gwLines = (await r.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch (e) { gwLines = [{ error: e.message }]; } }
@@ -4908,9 +4913,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         const ro = await (async () => { const pq = '/internal/gateway/hyperwork/save', body = JSON.stringify({ doc: { schema: 1, name: 'r474-ro', nodes: [{ id: 's', kind: 'start' }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'e.result' }] } }); const r = await fetch(H + pq, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vr-client': 'run-only', ...sign('POST', pq, 't-user', body) }, body }); return r.status; })();
         const gwUnknown = await gw('GET', '/internal/gateway/hyperwork/zzz', 't-user');
         const gwTypes = gwLines.map((e) => e.type);
-        check('R474', 'T-207 Hyper Workflows through the gateway (spec 15): a product\'s signed request as a linked person lists (GET hyperwork/list), runs a /hyperwork line (POST hyperwork/command → 202) against a project, follows the run (hyperwork/log streams NDJSON to run_end) and reads it (hyperwork/run); someone the product has not linked gets 404; a product that says x-vr-client: run-only cannot save (403); an unknown path is 404',
-          gwList.status === 200 && gwItems.some((i) => i.name === 'r437-notes') && notLinked.status === 404 && gwCmd.status === 202 && !!gwRun && gwTypes[0] === 'run_start' && gwTypes[gwTypes.length - 1] === 'run_end' && gwMeta.status === 200 && /"status":"ok"/.test(gwMeta.text) && ro === 403 && gwUnknown.status === 404,
-          `list ${gwList.status} ${gwItems.map((i) => i.name).join(',')}; not linked ${notLinked.status}; command ${gwCmd.status} ${gwCmd.text.slice(0, 80)}; log ${gwTypes.join(' ')}; run ${gwMeta.status} ${gwMeta.text.slice(0, 80)}; run-only save ${ro}; unknown ${gwUnknown.status}`);
+        check('R474', 'T-207 Hyper Workflows through the gateway (spec 15): a product\'s signed request as a linked person saves and publishes a workflow (POST hyperwork/save, hyperwork/publish), lists it (GET hyperwork/list), runs a /hyperwork line (POST hyperwork/command → 202) against a project, follows the run (hyperwork/log streams NDJSON to run_end) and reads it (hyperwork/run); someone the product has not linked gets 404; a product that says x-vr-client: run-only cannot save (403); an unknown path is 404',
+          gwSave.status === 200 && !!gwId && gwPub.status === 200 && gwList.status === 200 && gwItems.some((i) => i.name === 'r474-flow') && notLinked.status === 404 && gwCmd.status === 202 && !!gwRun && gwTypes[0] === 'run_start' && gwTypes[gwTypes.length - 1] === 'run_end' && gwMeta.status === 200 && /"status":"ok"/.test(gwMeta.text) && ro === 403 && gwUnknown.status === 404,
+          `save ${gwSave.status} publish ${gwPub.status}; list ${gwList.status} ${gwItems.map((i) => i.name).join(',')}; not linked ${notLinked.status}; command ${gwCmd.status} ${gwCmd.text.slice(0, 80)}; log ${gwTypes.join(' ')}; run ${gwMeta.status} ${gwMeta.text.slice(0, 80)}; run-only save ${ro}; unknown ${gwUnknown.status}`);
       }
       // a new secret: the old one stops at once; removing the product ends its links
       await call('/api/admin/gateway/products', A, { id: 'prodsuit', name: 'PGM Prod Suit', ai: true });
