@@ -147,6 +147,7 @@ impl Auth {
     pub fn session_user(&self, r: &Req) -> Option<String> {
         if let Some(u) = self.page_session_user(r) { return Some(u); }
         let tok = r.header("authorization").and_then(|a| a.strip_prefix("Bearer "))?;
+        if self.devices.is_machine_token(tok) { return None; } // T-310: a linked machine's token is never a login (the front refuses it first, 403)
         let u = self.devices.user_of(tok)?;
         self.account(&u).map(|_| u)
     }

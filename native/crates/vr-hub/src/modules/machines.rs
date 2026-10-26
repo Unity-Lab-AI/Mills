@@ -43,14 +43,21 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Option<Routed> {
             "poll" => {
                 // the held poll: online while it is held; closed at once when the machine is unlinked
                 let wait = b["wait"].as_u64().unwrap_or(0).min(MAX_WAIT_S);
-                a.devices.machine_report(tok, b["scope"].as_str(), b["mode"].as_str());
+                // a scope DOCUMENT in the poll (`scopeDoc`) is read here and refused whole when it is newer than this hub reads (T-310,
+                // section 9): the words come from the parsed document, nothing of a refused one is kept; the poll itself still answers
+                let (mut words, mut refused) = (b["scope"].as_str().map(String::from), None::<String>);
+                if !b["scopeDoc"].is_null() {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
+                    match pgm_net_internal::compat::scope_from_poll(&b["scopeDoc"], now) { Ok(w) => words = Some(w), Err(e) => { words = None; refused = Some(e); } }
+                }
+                a.devices.machine_report(tok, words.as_deref(), b["mode"].as_str());
                 let end = std::time::Instant::now() + std::time::Duration::from_secs(wait);
                 loop {
                     match a.devices.machine_seen(tok, true) {
                         MachineSeen::Revoked => return Some(revoked()),
                         MachineSeen::Unknown => return Some(answer(401, json!({ "error": "Not signed in." }))),
                         MachineSeen::Linked { user, id, paused } => {
-                            if std::time::Instant::now() >= end { return Some(answer(200, json!({ "ok": true, "machine": id, "owner": user, "paused": paused, "jobs": [] }))); }
+                            if std::time::Instant::now() >= end { return Some(answer(200, json!({ "ok": true, "machine": id, "owner": user, "paused": paused, "jobs": [], "scopeRefused": refused }))); }
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
