@@ -3729,8 +3729,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       d.push(`scope doc: v2 ${v2.status} "${(v2.data.scopeRefused || '').slice(0, 60)}"; kept "${(afterV2.scope || '').slice(0, 40)}"; v1 → "${(afterV1.scope || '').slice(0, 40)}"; hello machine ${JSON.stringify(hi.machine)}`);
       // the source: no presence / idle check on the machine path (the owner's run just goes on while they are away, Q7) and the sentence is in the prompt
       const workSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'work.rs'), 'utf8'), hostsSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'ai_hosts.rs'), 'utf8');
-      const toolBody = workSrc.slice(workSrc.indexOf('async fn tool_inner('), workSrc.indexOf('/// Everything a person may pick'));
-      const mfBody = hostsSrc.slice(hostsSrc.indexOf('pub fn machine_for('), hostsSrc.indexOf('pub async fn pc_tool('));
+      const toolBody = workSrc.slice(workSrc.indexOf('// pc-tool: the person'), workSrc.indexOf('/// Everything a person may pick')).replace(/\/\/.*$/gm, ''); // the pc path, code only
+      const mfBody = hostsSrc.slice(hostsSrc.indexOf('pub fn machine_for('), hostsSrc.indexOf('pub async fn pc_tool(')).replace(/\/\/.*$/gm, '');
       o.away = !/presence|idle|is_present|\.away|unattended/i.test(toolBody + mfBody) && /what you did, why you chose it over the other options, and what \{name\} can change/.test(workSrc) && !/unattended/i.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-hub', 'src', 'modules', 'machines.rs'), 'utf8').replace(/\/\/.*$/gm, ''));
       d.push(`away: no presence check on the machine path ${!/presence|idle|is_present|\.away|unattended/i.test(toolBody + mfBody)}`);
     } finally {
