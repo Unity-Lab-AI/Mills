@@ -136,7 +136,7 @@ impl Config {
     }
     /// Defaults overlaid with a `re: { image, maxConcurrent, idleWarnHours, runtime, … }` config object.
     pub fn from_json(root: impl Into<PathBuf>, v: &Value) -> Config {
-        let mut c = Config::new(root, v["image"].as_str().filter(|s| !s.is_empty()).unwrap_or("localhost/pgm-re-base:1.0.0"));
+        let mut c = Config::new(root, v["image"].as_str().filter(|s| !s.is_empty()).unwrap_or("localhost/pgm-re-base:1.0.1"));
         if let Some(n) = v["maxConcurrent"].as_u64().filter(|n| *n >= 1) { c.max_concurrent = n.min(64) as usize; }
         if let Some(n) = v["idleWarnHours"].as_f64().filter(|n| *n > 0.0) { c.idle_warn_hours = n; }
         if let Some(s) = v["namePrefix"].as_str().filter(|s| !s.is_empty() && s.len() < 40 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')) { c.name_prefix = s.to_string(); }

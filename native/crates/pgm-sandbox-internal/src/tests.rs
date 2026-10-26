@@ -240,7 +240,7 @@ fn config_reads_the_hub_json() {
     let c = Config::from_json("/x", &json!({ "image": "i:2", "maxConcurrent": 5, "idleWarnHours": 1.5, "capAdd": [], "cpus": 4, "memory": "8g", "namePrefix": "pgm-re-t-", "maxFileMb": 99 }));
     assert_eq!((c.image.as_str(), c.max_concurrent, c.idle_warn_hours, c.cap_add.len(), c.cpus.as_str(), c.memory.as_str(), c.name_prefix.as_str(), c.max_file_bytes), ("i:2", 5, 1.5, 0, "4", "8g", "pgm-re-t-", 30 << 20));
     let d = Config::from_json("/x", &json!({}));
-    assert_eq!((d.max_concurrent, d.image.as_str()), (3, "localhost/pgm-re-base:1.0.0"));
+    assert_eq!((d.max_concurrent, d.image.as_str()), (3, "localhost/pgm-re-base:1.0.1"));
     assert!(matches!(Cmd::from_json(&json!("ls -l")), Some(Cmd::Shell(_))) && matches!(Cmd::from_json(&json!(["ls", "-l"])), Some(Cmd::Argv(_))) && Cmd::from_json(&json!("")).is_none() && Cmd::from_json(&json!([1])).is_none());
 }
 

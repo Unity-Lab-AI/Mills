@@ -197,13 +197,13 @@ mod tests {
     use super::*;
     #[test]
     fn run_args_are_locked_down() {
-        let s = RunSpec { name: "pgm-re-ab12cd34".into(), image: "localhost/pgm-re-base:1.0.0".into(), network: false, cpus: "2".into(), memory: "4g".into(), pids_limit: 1024, cap_add: vec!["SYS_PTRACE".into()], in_dir: "/x/in".into(), out_dir: "/x/out".into() };
+        let s = RunSpec { name: "pgm-re-ab12cd34".into(), image: "localhost/pgm-re-base:1.0.1".into(), network: false, cpus: "2".into(), memory: "4g".into(), pids_limit: 1024, cap_add: vec!["SYS_PTRACE".into()], in_dir: "/x/in".into(), out_dir: "/x/out".into() };
         let a = s.args().join(" ");
         for must in ["--rm", "--network none", "--cap-drop ALL", "--cap-add SYS_PTRACE", "--security-opt no-new-privileges", "--pids-limit 1024", "--memory 4g", "--cpus 2", "dst=/work/in", "dst=/work/out", "--pull=never", "--name pgm-re-ab12cd34"] { assert!(a.contains(must), "{must} missing in {a}"); }
         assert!(!a.contains("--privileged") && !a.contains("-v "));
         assert_eq!(a.matches("--mount").count(), 2, "only the two exchange mounts");
         let mut on = s.clone(); on.network = true;
         assert!(!on.args().join(" ").contains("--network"), "network on = the engine's default network");
-        assert!(a.ends_with("localhost/pgm-re-base:1.0.0 infinity"));
+        assert!(a.ends_with("localhost/pgm-re-base:1.0.1 infinity"));
     }
 }

@@ -1,7 +1,14 @@
-# pgm-re-base 1.0.0: the reverse-engineering base image (T-253)
+# pgm-re-base 1.0.1: the reverse-engineering base image (T-253)
+
+**1.0.1 (T-315):** REA's Frida tools (`list_frida_devices` and the rest) now work. In 1.0.0 `npm ci --ignore-scripts`
+skipped the `frida` npm package's install step, so its native binding was missing ("Could not locate the bindings file
+.../frida/build/frida_binding.node"); the pip `frida` CLI was never affected. The Containerfile now downloads the official
+prebuilt binding (`frida-v17.23.2-napi-v8-linux-x64.tar.gz` from github.com/frida/frida, the file the package's own
+install script would fetch), checks its pinned SHA-256, and unpacks it into `node_modules/frida/build/`. The image grows
+by about 110 MB. The smoke test gained a check that calls `list_frida_devices` through REA's MCP server.
 
 One pre-set-up container image with REA, Ghidra, a JDK and the runtime RE tools, all working. The container manager
-(T-303) clones it for every RE job. Image: `localhost/pgm-re-base:1.0.0`, also `:latest`. Size: about 2.25 GB
+(T-303) clones it for every RE job. Image: `localhost/pgm-re-base:1.0.1`, also `:latest`. Size: about 2.25 GB
 (as reported by podman; a build also keeps its cached stage layers until pruned).
 
 ## What is inside
@@ -14,6 +21,7 @@ One pre-set-up container image with REA, Ghidra, a JDK and the runtime RE tools,
 | Ghidra | 12.1.4 (20260921) | /opt/ghidra | SHA-256 from the GitHub release notes |
 | Temurin JDK | 21.0.13+9 | /opt/jdk | SHA-256 from Adoptium |
 | Frida / frida-tools | 17.24.3 / 14.11.0 | venv /opt/frida-venv, commands in /usr/local/bin | pip `--require-hashes`, all wheels hashed |
+| frida npm package (REA's node binding) | 17.23.2 (napi-v8, linux-x64) | /opt/rea/node_modules/frida/build | SHA-256 of the official GitHub release asset (GitHub's asset digest; frida publishes no checksum file) |
 | Android platform-tools (adb) | 37.0.1 | /opt/android-platform-tools | Google's SHA-1 (repository2-3.xml) plus a SHA-256 of that file |
 | radare2 | 6.2.4 | /usr | SHA-256 from the release checksums.txt (not in Debian 13) |
 | LLDB 19, GDB 16, strace, ltrace, binutils, file, strings, jq, Python 3.13 + venv, unzip, 7z, xxd, procps | Debian snapshot | | snapshot date |
@@ -55,7 +63,8 @@ world-traversable path: `ENGINE_ARGS="--root /var/tmp/x/root --runroot /var/tmp/
 ## Smoke test
 
 `./smoke.sh [image]` starts a container with `--network none`, runs the checks inside and removes it:
-`rea --version`; REA MCP `initialize` + `tools/list` (counts the tools); a JavaScript/Electron static analysis of a
+`rea --version`; REA MCP `initialize` + `tools/list` (counts the tools); REA's `list_frida_devices` through MCP (the Frida
+node binding loads); a JavaScript/Electron static analysis of a
 tiny sample app; Ghidra `analyzeHeadless` import + analysis of a tiny compiled C binary, plus
 `rea doctor --provider ghidra`; frida, lldb, adb, gdb, radare2, java, strace, ltrace and the rest report their versions;
 user, folders and skill checks.
@@ -63,7 +72,7 @@ user, folders and skill checks.
 ## How the manager uses it
 
 One container per job, cloned from the image (`podman run -d --name <job> --network none -v <in>:/work/in:ro
--v <out>:/work/out localhost/pgm-re-base:1.0.0`), at most three at once, the rest queued. Work goes in through
+-v <out>:/work/out localhost/pgm-re-base:1.0.1`), at most three at once, the rest queued. Work goes in through
 `/work/in` and results come out of `/work/out`; tools run through `podman exec`. Add network (or `--cap-add`
 / `--device` for ADB, ptrace and Frida use) only when a job asks. When the person or the agent is done, the container
 is removed with `podman rm -f`: nothing persists.

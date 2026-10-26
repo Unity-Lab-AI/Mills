@@ -424,7 +424,7 @@ function reTestSetup() {
   const engines = [{ env: {}, pre: [] }, { env: { HOME: os.userInfo().homedir }, pre: [] }, { env: {}, pre: ['--root', '/var/tmp/gee-podman/root', '--runroot', '/var/tmp/gee-podman/run'] }];
   for (const eng of engines) {
     if (podman(['version'], eng).status !== 0) { why = 'podman is not available'; break; }
-    for (const from of ['docker.io/library/debian:trixie-slim', 'localhost/pgm-re-base:1.0.0']) {
+    for (const from of ['docker.io/library/debian:trixie-slim', 'localhost/pgm-re-base:1.0.1']) {
       fs.writeFileSync(path.join(dir, 'Containerfile'), `FROM ${from}\nUSER root\nRUN id -u re >/dev/null 2>&1 || useradd -m -u 1000 re\nCOPY fake-rea /opt/fake-rea\nRUN chmod -R a+rX /opt/fake-rea\nUSER re\n`);
       const b = podman(['build', '--pull=never', '-q', '-t', RE_T.image, '-f', path.join(dir, 'Containerfile'), dir], eng);
       if (b.status !== 0) { why = 'no local debian:trixie-slim image to build the test image from (' + String(b.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
