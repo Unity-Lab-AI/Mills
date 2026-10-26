@@ -368,6 +368,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Windows only (not run on Linux): a state folder that Users can read is refused, the owner-only ACL (what `private_dir` sets) passes.
+    #[cfg(windows)]
+    #[test]
+    fn a_broad_acl_on_the_state_folder_is_refused() {
+        let d = tmp("winstate");
+        pgm_core_internal::fs::private_dir(&d).unwrap();
+        assert!(check_state_dir(&d).is_ok(), "{:?}", check_state_dir(&d));
+        // BUILTIN\Users (by its well-known id), read and execute, inherited
+        let o = std::process::Command::new("icacls").arg(&d).args(["/grant", "*S-1-5-32-545:(OI)(CI)RX"]).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
+        let e = check_state_dir(&d).unwrap_err();
+        assert!(e.contains("will not start") && e.contains("icacls"), "{e}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_group_or_world_readable_state_folder_or_secret_is_refused() {
