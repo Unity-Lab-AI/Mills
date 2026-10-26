@@ -3495,6 +3495,121 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     // leave the board as it was: the planner checks after this one weigh owners by their open workload
     for (const t of [t315, p315]) if (t.id) { await call('/api/board/release', U, { id: t.id, asAgent: t === t315 }); await call('/api/board/delete', U, { id: t.id }); }
   } else skip('R315', 'asAgent board writes', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R325 and R326 (T-309): linking a machine by device code, its key, the owner's list, the admin's count, revoke, re-link
+    const mc = async (method, p, tok, body) => { // (call() does GET and POST only)
+      try { const r = await fetch(H + p, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: { error: e.message } }; }
+    };
+    const newKey = () => { const k = crypto.generateKeyPairSync('ed25519'); return { priv: k.privateKey, pub: k.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex') }; };
+    const signReply = (k, id, rid, body) => crypto.sign(null, Buffer.from(`vr-machine-reply/1\n${id}\n${rid}\n${crypto.createHash('sha256').update(body).digest('hex')}`), k.priv).toString('hex');
+    const mstart = (k, extra) => call('/api/device/start', null, { client: 'vr-machine', device: 'r325-box', publicKey: k.pub, machineId: 'mach-r325-aaaa', os: 'linux', app: 'vr-host', appVersion: '1.2.3', mode: 'persistent', folder: '/srv/r325/work', ...(extra || {}) });
+    const mlink = async (owner, k, extra, replace) => { // start, approve (with the person's session), poll once: the token (or why not)
+      const s = await mstart(k, extra), d = s.data || {};
+      const ok = await call('/api/device/approve', owner, { userCode: d.userCode, ...(replace ? { replace } : {}) });
+      const p = await call('/api/device/poll', null, { deviceCode: d.deviceCode });
+      return { s, ok, p, token: (p.data || {}).token, id: (p.data || {}).deviceId, userCode: d.userCode };
+    };
+    const created = (await call('/api/admin/create', A, { username: 't-r325', display: 'R325' })).data || {};
+    const X = created.password ? (await login('t-r325', created.password, 'device-r325-xxxxxxxxxx')).data.token : '';
+    const listOf = async (t) => ((await call('/api/machines', t)).data || {}).machines || [];
+    try {
+      // ---- R325: linking
+      const k1 = newKey();
+      const noKey = await call('/api/device/start', null, { client: 'vr-machine', device: 'r325-box' });
+      const s1 = await mstart(k1), d1 = s1.data || {};
+      const peekNoSession = await call('/api/device/peek', null, { userCode: d1.userCode });
+      const peekViaDev = await call('/api/device/peek', U, { userCode: 'BBBB-BBBB' });
+      const peek = await call('/api/device/peek', X, { userCode: d1.userCode });
+      const ap = await call('/api/device/approve', X, { userCode: d1.userCode });
+      const p1 = await call('/api/device/poll', null, { deviceCode: d1.deviceCode });
+      const tok = (p1.data || {}).token, id = (p1.data || {}).deviceId;
+      const whoAmI = tok ? (await call('/api/check', tok)).data : {};
+      const listX = await listOf(X), listU = await listOf(U), listA = await listOf(A);
+      const viaMachine = tok ? await call('/api/machines', tok) : {};
+      const devList = ((await call('/api/devices', X)).data || {}).devices || [];
+      const raw = fs.existsSync(path.join(SB, 'device-tokens.json')) ? fs.readFileSync(path.join(SB, 'device-tokens.json'), 'utf8') : '';
+      const body = JSON.stringify({ result: 'ok', n: 1 });
+      const rep = (rid, b, sig) => call('/api/machine/reply', tok, { requestId: rid, body: b, sig });
+      const good = await rep('rq1', body, signReply(k1, id, 'rq1', body));
+      const wrongKey = await rep('rq1', body, signReply(newKey(), id, 'rq1', body));
+      const tampered = await rep('rq1', body + ' ', signReply(k1, id, 'rq1', body));
+      const otherReq = await rep('rq2', body, signReply(k1, id, 'rq1', body));
+      const noSig = await rep('rq1', body, '');
+      const polled = await call('/api/machine/poll', tok, { wait: 0 });
+      const onlineX = (await listOf(X))[0] || {};
+      const cnt = await call('/api/machines/count', A), cntU = await call('/api/machines/count', U), cntX = await call('/api/machines/count', X), cntNone = await call('/api/machines/count', null);
+      const mine = (cnt.data.people || []).find((x) => x.user === 't-r325') || {};
+      const renU = await mc('PATCH', '/api/machines/' + id, U, { name: 'stolen' }), renX = await mc('PATCH', '/api/machines/' + id, X, { name: 'Desk r325' }), renBad = await mc('PATCH', '/api/machines/' + id, X, { name: '  ' });
+      const wide = await call('/api/machine/poll', tok, { wait: 0, scope: 'folders: /srv (read-write); shell (advisory)' });
+      const afterRename = (await listOf(X))[0] || {};
+      check('R325', 'T-309 link a machine by device code (client vr-machine): a start without a valid ed25519 key is refused (400); start names the default scope (one folder, read-write) and the approval screen (peek, own session only) shows os, app, key fingerprint and that scope; approving links it to the approving account only (its token is that account on the API, not the admin, not anyone else); its replies are signed by its device key and the hub refuses another key, another body, another request and no signature; the owner\'s list has only their machines (kind, mode, online, scope in words, never a token or key), the admin sees counts and online numbers only (no name, os, scope), a machine token cannot manage machines; rename works for the owner only; the hub keeps only a hash of the token',
+        noKey.status === 400 && s1.status === 200 && d1.kind === 'machine' && /^one folder: \/srv\/r325\/work \(read-write\)/.test((d1.defaultScope || {}).summary || '') && peekNoSession.status === 401 && peekViaDev.status === 404
+        && peek.status === 200 && peek.data.kind === 'machine' && peek.data.os === 'linux' && peek.data.app === 'vr-host' && /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/.test(peek.data.keyFingerprint || '') && /^one folder: /.test((peek.data.defaultScope || {}).summary || '') && Array.isArray(peek.data.replaceable) && !peek.data.replaceable.length
+        && ap.status === 200 && p1.status === 200 && !!tok && !!id && p1.data.kind === 'machine' && whoAmI.user === 't-r325'
+        && listX.length === 1 && listX[0].id === id && listX[0].kind === 'machine' && listX[0].mode === 'persistent' && listX[0].online === false && /^one folder: /.test(listX[0].scope) && !JSON.stringify(listX).includes(tok) && !JSON.stringify(listX).includes(k1.pub) && !listU.length && !listA.length
+        && viaMachine.status === 403 && devList.some((x) => x.id === id && x.kind === 'machine') && raw.includes(crypto.createHash('sha256').update(tok).digest('hex')) && !raw.includes(tok)
+        && good.status === 200 && good.data.owner === 't-r325' && good.data.machine === id && wrongKey.status === 403 && tampered.status === 403 && otherReq.status === 403 && noSig.status === 403
+        && polled.status === 200 && polled.data.owner === 't-r325' && onlineX.online === true
+        && cnt.status === 200 && cnt.data.machines >= 1 && mine.machines === 1 && mine.online === 1 && Object.keys(mine).sort().join() === 'machines,online,user' && !/Desk|linux|vr-host|scope|folder/.test(JSON.stringify(cnt.data)) && cntU.status === 403 && cntX.status === 403 && cntNone.status === 401
+        && renU.status === 404 && renX.status === 200 && renBad.status === 400 && afterRename.name === 'Desk r325' && wide.status === 200 && (await listOf(X))[0].scope.startsWith('folders: /srv') && (await listOf(X))[0].scopeIsDefault === false,
+        `start ${s1.status}/nokey ${noKey.status} scope "${(d1.defaultScope || {}).summary}" · peek ${peek.status} ${peek.data.keyFingerprint} · approve ${ap.status} poll ${p1.status} as ${whoAmI.user} · list X ${listX.length} U ${listU.length} A ${listA.length} via machine ${viaMachine.status} · reply good ${good.status}/wrong key ${wrongKey.status}/body ${tampered.status}/request ${otherReq.status}/none ${noSig.status} · online ${onlineX.online} · count ${cnt.status} ${JSON.stringify(mine)} U ${cntU.status} X ${cntX.status} · rename U ${renU.status} X ${renX.status} bad ${renBad.status}`);
+
+      // ---- R326: unlink, revoke on a password change, re-link
+      const inflight = (async () => { const t0 = Date.now(); const r = await call('/api/machine/poll', tok, { wait: 20 }); return { r, ms: Date.now() - t0 }; })();
+      await sleep(600);
+      const delU = await mc('DELETE', '/api/machines/' + id, U), delViaMachine = await mc('DELETE', '/api/machines/' + id, tok);
+      const stillThere = (await listOf(X)).length;
+      const delX = await mc('DELETE', '/api/machines/' + id, X);
+      const held = await inflight;
+      const afterPoll = await call('/api/machine/poll', tok, { wait: 0 }), afterReply = await rep('rq9', body, signReply(k1, id, 'rq9', body)), afterApi = await call('/api/check', tok);
+      const afterList = await listOf(X), afterTwice = await mc('DELETE', '/api/machines/' + id, X);
+      const unknown = await call('/api/machine/poll', 'f'.repeat(64), { wait: 0 });
+      const machineSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'machine', 'device.rs'), 'utf8');
+      // a password change revokes the machines (and the person's other devices); "keep my machines linked" keeps them
+      const k2 = newKey(), m2 = await mlink(X, k2, { machineId: 'mach-r325-bbbb' }), m3 = await mlink(X, k2, { machineId: 'mach-r325-cccc' });
+      const pollOf = async (t) => (await call('/api/machine/poll', t, { wait: 0 }));
+      const before = [(await pollOf(m2.token)).status, (await pollOf(m3.token)).status];
+      const pw1 = await call('/api/admin/password', A, { username: 't-r325' });
+      const afterPw = [await pollOf(m2.token), await pollOf(m3.token)];
+      const X2 = (await login('t-r325', pw1.data.password, 'device-r325-xxxxxxxxxx')).data.token;
+      const afterPwList = await listOf(X2);
+      const m4 = await mlink(X2, k2, { machineId: 'mach-r325-dddd' });
+      const pw2 = await call('/api/admin/password', A, { username: 't-r325', keepMachines: true });
+      const kept = await pollOf(m4.token), keptSession = await call('/api/check', X2);
+      const X3 = (await login('t-r325', pw2.data.password, 'device-r325-xxxxxxxxxx')).data.token;
+      const keptList = await listOf(X3);
+      // re-link after a wiped store: the same machine id is offered "replace old record", the old token ends, the scope is the default again
+      const k5 = newKey(), old = await mlink(X3, k5, { machineId: 'mach-r325-eeee', device: 'r325-old' });
+      await mc('PATCH', '/api/machines/' + old.id, X3, { name: 'My old desk', paused: true });
+      await call('/api/machine/poll', old.token, { wait: 0, scope: 'folders: / (read-write); shell' });
+      const k6 = newKey(), s6 = await mstart(k6, { machineId: 'mach-r325-eeee', device: 'r325-old', folder: '/srv/r325/new' }), d6 = s6.data || {};
+      const peek6 = await call('/api/device/peek', X3, { userCode: d6.userCode });
+      const stranger = await call('/api/device/approve', X3, { userCode: d6.userCode, replace: 'not-mine' });
+      const offerU = await call('/api/device/peek', U, { userCode: d6.userCode });
+      const ap6 = await call('/api/device/approve', X3, { userCode: d6.userCode, replace: old.id });
+      const p6 = await call('/api/device/poll', null, { deviceCode: d6.deviceCode });
+      const list6 = await listOf(X3);
+      const oldNow = await call('/api/machine/poll', old.token, { wait: 0 });
+      const newNow = await call('/api/machine/poll', (p6.data || {}).token, { wait: 0 });
+      // no replace: both records exist until one is unlinked
+      const k7 = newKey(), twin = await mlink(X3, k7, { machineId: 'mach-r325-eeee', device: 'r325-old' });
+      const list7 = await listOf(X3);
+      const so = await call('/api/admin/signout', A, { username: 't-r325' }), afterSignout = await pollOf(m4.token);
+      check('R326', 'T-309 revoke and re-link: Unlink from the web (the owner\'s page only; not another person, not a machine token) closes a held poll within moments and the token is invalid at once for poll, reply and the API, with the answer "revoked" (401) that makes the machine wipe its token and key (LinkStore::handle_answer, unit-tested; an ordinary 401 or a 500 wipes nothing); an unknown token is a plain 401; a password change revokes the account\'s machine tokens, unless the request says keepMachines (they stay, the sessions still go); "sign out everywhere" revokes them; re-link after a wiped store: the same machine id is offered "replace old record" (only the account\'s own records, else 400), replacing keeps the name and revokes the old token, the new link starts at the default scope (the new folder, unpaused), and without replacing both records exist',
+        delU.status === 404 && delViaMachine.status === 403 && stillThere === 1 && delX.status === 200 && held.r.status === 401 && held.r.data.revoked === true && held.ms < 5000
+        && afterPoll.status === 401 && afterPoll.data.error === 'revoked' && afterReply.status === 401 && afterReply.data.revoked === true && afterApi.status === 401 && !afterList.length && afterTwice.status === 404 && unknown.status === 401 && !unknown.data.revoked
+        && /fn handle_answer\(/.test(machineSrc) && /fn store_is_owner_only_and_wipes\(/.test(machineSrc)
+        && m2.p.status === 200 && m3.p.status === 200 && before.join() === '200,200' && pw1.status === 200 && afterPw.every((x) => x.status === 401 && x.data.revoked === true) && !afterPwList.length
+        && m4.p.status === 200 && pw2.status === 200 && kept.status === 200 && keptSession.status === 401 && keptList.length === 1 && keptList[0].id === m4.id && so.status === 200 && afterSignout.status === 401 && afterSignout.data.revoked === true
+        && s6.status === 200 && peek6.status === 200 && peek6.data.replaceable.length === 1 && peek6.data.replaceable[0].id === old.id && peek6.data.replaceable[0].sameMachineId === true && stranger.status === 400 && offerU.status === 404
+        && ap6.status === 200 && p6.status === 200 && (p6.data || {}).replaced === old.id && list6.length === 2 && !list6.some((x) => x.id === old.id) === true
+        && (() => { const n = list6.find((x) => x.id === (p6.data || {}).deviceId) || {}; return n.name === 'My old desk' && /^one folder: \/srv\/r325\/new \(read-write\)/.test(n.scope) && n.scopeIsDefault === true && n.paused === false && (n.replaced || []).length === 1; })()
+        && oldNow.status === 401 && oldNow.data.revoked === true && newNow.status === 200
+        && twin.p.status === 200 && list7.length === 3 && list7.filter((x) => x.machineId === 'mach-r325-eeee').length === 2,
+        `unlink U ${delU.status} machine ${delViaMachine.status} X ${delX.status} · held poll ${held.r.status} ${held.r.data.error} after ${held.ms} ms · after: poll ${afterPoll.status} reply ${afterReply.status} api ${afterApi.status} list ${afterList.length} · password: before ${before} after ${afterPw.map((x) => x.status)} list ${afterPwList.length} · keepMachines: machine ${kept.status} session ${keptSession.status} list ${keptList.length} · signout ${afterSignout.status} · offer ${JSON.stringify(peek6.data.replaceable)} · stranger ${stranger.status} · replaced ${(p6.data || {}).replaced} list ${list6.length} (${list6.map((x) => x.name + ' ' + x.scope.slice(0, 24)).join(' | ')}) · old ${oldNow.status} new ${newNow.status} · twin: list ${list7.length}`);
+    } finally {
+      if (created.password) await call('/api/admin/delete', A, { username: 't-r325' });
+    }
+  } else { skip('R325', 'linked machines: link by device code', 'the Rust hub\'s: --rust-hub runs it'); skip('R326', 'linked machines: revoke and re-link', 'the Rust hub\'s: --rust-hub runs it'); }
   // R316 to R320 (T-303): RE containers, the manager of throw-away copies of the base image. A tiny local image (reTestSetup),
   // the real Podman; every container this block starts is removed again, whatever happens
   if (RE_T.ok) {
