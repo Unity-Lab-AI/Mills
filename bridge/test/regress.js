@@ -5788,7 +5788,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && /is_hub_origin\(page, hub\)/.test(rd('native', 'crates', 'vr-desktop', 'src', 'capture.rs')) && /mode = "while open"/.test(deskMachine);
       const r328 = results.find((r) => r.id === 'R328');
       const parityOk = RUST_HUB ? !!r328 && r328.status === 'PASS' : true;
-      const cdesk = why334 ? { status: 77 } : spawnSync('sh', ['-c', `export RUSTUP_HOME="${env334.RUSTUP_HOME}" CARGO_HOME="${env334.CARGO_HOME}" CARGO_TARGET_DIR="${NATIVE_TARGET}" OWNER_HOME="${home334}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; [ "$HAVE_TAURI_LINUX" = 1 ] || exit 77; cargo test --release -q -p vr-desktop machine local 2>&1`], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+      const cdesk = why334 ? { status: 77 } : spawnSync('sh', ['-c', `export RUSTUP_HOME="${env334.RUSTUP_HOME}" CARGO_HOME="${env334.CARGO_HOME}" CARGO_TARGET_DIR="${NATIVE_TARGET}" OWNER_HOME="${home334}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; [ "$HAVE_TAURI_LINUX" = 1 ] || exit 77; cargo test --release -q -p vr-desktop -- machine local 2>&1`], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
       const deskTests = cdesk.status === 77 ? 'desktop unit tests not run (no WebKitGTK sysroot)' : `desktop unit tests ${cdesk.status}`;
       check('R335', L335, ct334.status === 0 && okT('host::runner::tests::the_pc_role_is_the_librarys_machine') && oldPc.length === 0 && copies.length === 0 && pcRole && hubKeeps && deskOk && parityOk && (cdesk.status === 77 || cdesk.status === 0),
         `pc_job in the source: ${oldPc.length ? oldPc.map((f) => path.relative(MILLS, f)).join(',') : 'none'}; canonicaliser copies outside pgm-net-internal: ${copies.join(',') || 'none'} (the frozen JavaScript host keeps its own); pc role ${pcRole}; hub still relays pc ${hubKeeps}; desktop ${deskOk}; ${deskTests}; R328 parity ${RUST_HUB ? (r328 ? r328.status : 'missing') : 'runs with --rust-hub'}`);
@@ -5965,6 +5965,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const mem0 = mem();
       const tStart = Date.now();
       const first = await one('transfer_get', { path: 'big.bin', maxBytes: 100 << 20, ticketSecs: 10 }, m2.id), f1 = res(first) || {};
+      const tFirstDone = Date.now(); // the ticket (10 s) was issued no later than this
       const partFile = path.join(SB, 'transfers', 't-user', (f1.id || 'x') + '.part');
       const partSize = fs.existsSync(partFile) ? fs.statSync(partFile).size : -1;
       const tk = f1.ticket || 'no-ticket', st = (tok, ticket, body) => mcall('POST', '/api/machine/transfer/' + ticket + '/status', tok, body);
@@ -5973,7 +5974,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const rGood = await st(tokOf(m2), tk, goodBody);
       const rChunkOther = await fetch(H + '/api/machine/transfer/' + tk + '/chunk?offset=' + (100 << 20) + '&key=' + f1.id + '&path=big.bin', { method: 'POST', headers: { Authorization: 'Bearer ' + tokOf(m3), 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(16) }).then((r) => r.status);
       const withinTicket = Date.now() - tStart < 9500;
-      await sleep(Math.max(0, 11000 - (Date.now() - tStart)));
+      await sleep(Math.max(0, 11000 - (Date.now() - tStart), 10500 - (Date.now() - tFirstDone)));
       const rLate = await st(tokOf(m2), tk, goodBody);
       // resume: the same call again carries on at the byte the hub holds, and ends with the sha256 of the whole file
       const second = await one('transfer_get', { path: 'big.bin' }, m2.id), f2 = res(second) || {};

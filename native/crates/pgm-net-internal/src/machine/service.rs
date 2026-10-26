@@ -318,12 +318,12 @@ mod tests {
     fn the_windows_task_is_per_user_least_privilege_and_restarts() {
         let mut u = unit();
         u.exe = PathBuf::from("C:\\Program Files\\VR\\vr-host.exe");
-        u.state_dir = PathBuf::from("C:\\Users\\ann\\AppData\\Local\\VibeRoller\\machine");
+        u.state_dir = PathBuf::from("D:\\Home\\ann\\AppData\\Local\\VibeRoller\\machine");
         let t = u.task_xml();
         assert!(t.contains("<LogonTrigger>") && t.contains("<RunLevel>LeastPrivilege</RunLevel>") && t.contains("<LogonType>InteractiveToken</LogonType>"));
         assert!(t.contains("<RestartOnFailure>") && t.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
         assert!(!t.contains("HighestAvailable") && !t.contains("LocalSystem") && !t.contains("S-1-5-18"), "no admin, no SYSTEM");
-        assert!(t.contains("<Command>C:\\Program Files\\VR\\vr-host.exe</Command>") && t.contains("machine run --state C:\\Users\\ann\\AppData\\Local\\VibeRoller\\machine"));
+        assert!(t.contains("<Command>C:\\Program Files\\VR\\vr-host.exe</Command>") && t.contains("machine run --state D:\\Home\\ann\\AppData\\Local\\VibeRoller\\machine"));
         assert!(t.contains("ann"));
         let c = u.install_cmd();
         assert!(c.contains("schtasks /Create") && c.contains("/XML") && c.contains("vibe-roller-machine.task.xml") && c.contains("\r\n"));
