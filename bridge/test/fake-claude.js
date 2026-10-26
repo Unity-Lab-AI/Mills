@@ -28,7 +28,7 @@ process.stdin.on('end', async () => {
   if (input.includes('SLOW')) await sleep(4000);
   if (input.includes('PCTOOL')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.pc.env;
-    const r = await fetch(env.MILLS_BRIDGE + '/internal/pc-tool', {
+    const r = await fetch((process.env.FAKE_CLAUDE_BRIDGE || env.MILLS_BRIDGE) + '/internal/pc-tool', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
       body: JSON.stringify({ name: 'list', args: { path: '' }, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }), // as pc-tools-mcp.js sends it
@@ -155,7 +155,7 @@ process.stdin.on('end', async () => {
       body: JSON.stringify({ name, args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     const rep = { servers: Object.keys(cfg).sort().join('+'), allowed: opt('--allowedTools'), denied: opt('--disallowedTools'), perm: opt('--permission-mode'), planPrompt: /PLANNER MODE/.test(opt('--append-system-prompt')) };
-    if (input.includes('PLANNERPC')) { const r = await call('pc-tool', 'write', { path: 'x.txt', content: 'x' }); rep.pc = r.ok ? 'done' : r.error; }
+    if (input.includes('PLANNERPC')) { const mach = (input.match(/PLANNERMACHINE=([a-z0-9-]+)/) || [])[1]; const r = await call('pc-tool', 'write', { path: 'x.txt', content: 'x', ...(mach ? { machine: mach } : {}) }); rep.pc = r.ok ? 'done' : r.error; }
     else {
       const bad = await call('team', 'notes_write', { path: 'planner-outside-r265.md', text: 'x' });
       const good = await call('team', 'notes_write', { path: 'plans/planner-inside-r265.md', text: '# plan r265' });

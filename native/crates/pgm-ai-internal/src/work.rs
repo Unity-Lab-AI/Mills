@@ -848,7 +848,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: a.username.clone() });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()) });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     w.busy_changed.notify_one();
@@ -1473,6 +1473,12 @@ pub fn machine_rule(account: &str, owner: &str, started_by: &str) -> Result<(), 
     if account.is_empty() || owner.is_empty() || account != owner { return Err("That machine belongs to someone else."); }
     if started_by != owner { return Err("This run was started on someone else's behalf: it never uses your machine or your PC folder (only a run you started yourself does)."); }
     Ok(())
+}
+/// The regression runner's way to start a run "on someone's behalf" before Hyper Workflows and T-294 exist: `_testStartedBy` in the chat
+/// body, honoured only when the environment has VR_TEST_HOOKS=1 (nothing but the runner's throwaway hub sets it, as for /__vr-test/).
+fn test_started_by(b: &Value) -> Option<String> {
+    if std::env::var("VR_TEST_HOOKS").ok().as_deref() != Some("1") { return None; }
+    b["_testStartedBy"].as_str().filter(|x| !x.is_empty()).map(String::from)
 }
 /// May a watcher of a shared Work session see this event of the run? Never a PC or machine call (`pc_tool`, `machine_*`): they carry
 /// paths and contents of the owner's computer, and a watcher can answer none (T-310; plans/linked-machines.md 4.5).
