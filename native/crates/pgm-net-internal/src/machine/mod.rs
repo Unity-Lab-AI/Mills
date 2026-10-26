@@ -5,6 +5,9 @@
 //! - [`device`]: the per-device ed25519 key of a linked machine (sign and verify replies, owner-only key and token files)
 //! - [`floor`]: the paths no tool may ever touch, even under `unrestricted`; the default deny list; globs
 //! - [`sign`]: the hub signing key, the signed request envelope, the machine-side verifier (T-308)
+//! - [`exec`]: the machine's tools behind one door (kill switch, signature, scope, limits, tool, audit): files (`pc_job`'s five),
+//!   `machine_info`, shell, processes, RE containers (T-311); [`jobs`]: long jobs and the processes a tool started;
+//!   [`transfer`]: big files by ticket; [`runner`]: the link by device code and the poll loop that serves the hub's jobs
 
 pub mod audit;
 pub mod changes;
