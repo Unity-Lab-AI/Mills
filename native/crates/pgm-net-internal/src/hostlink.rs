@@ -217,8 +217,8 @@ mod tests {
     }
     #[test]
     fn work_jcode_is_announced_only_on_request() {
-        assert_eq!(caps_for(false), ["relay", "update", "update-bin", "control"]);
-        assert_eq!(caps_for(true), ["relay", "update", "update-bin", "control", "work-jcode"]);
+        assert_eq!(caps_for(false), ["relay", "update", "update-bin", "control", "signed-pc"]);
+        assert_eq!(caps_for(true), ["relay", "update", "update-bin", "control", "signed-pc", "work-jcode"]);
         assert!(CAPS.contains(&CAP_CONTROL));
         assert!(CAP_WORK_JCODE.len() <= 20 && CAP_WORK_JCODE.bytes().all(|x| x.is_ascii_lowercase() || x == b'-')); // what the hub's hello accepts
     }

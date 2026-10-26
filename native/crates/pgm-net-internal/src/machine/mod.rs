@@ -5,7 +5,12 @@
 //! - [`floor`]: the paths no tool may ever touch, even under `unrestricted`; the default deny list; globs
 //! - [`sign`]: the hub signing key, the signed request envelope, the machine-side verifier (T-308)
 
+pub mod audit;
+pub mod changes;
 pub mod floor;
+pub mod elevate;
+pub mod kill;
+pub mod limits;
 pub mod paths;
 pub mod scope;
 pub mod sign;
