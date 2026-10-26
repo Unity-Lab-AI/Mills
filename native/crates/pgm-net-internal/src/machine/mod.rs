@@ -11,11 +11,15 @@ pub mod changes;
 pub mod device;
 pub mod floor;
 pub mod elevate;
+pub mod exec;
+pub mod jobs;
 pub mod kill;
 pub mod limits;
 pub mod paths;
+pub mod runner;
 pub mod scope;
 pub mod sign;
+pub mod transfer;
 
 pub use floor::Floor;
 pub use paths::{Flavor, NormPath, PathError};
