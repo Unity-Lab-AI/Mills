@@ -269,9 +269,9 @@ process.stdin.on('end', async () => {
   // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
   // "MULTIRESULT" (T-319): extra empty turns, each ending in its own result with its own uuid (a real run does this when background work
   // reports back); "DUPRESULT": the final result delivered three times, the same uuid (the hub must say it once)
-  if (input.includes(MULTIRESULT)) for (let i = 0; i < 3; i++) out({ type: result, subtype: success, is_error: false, duration_ms: 3, num_turns: 1, session_id: session, uuid: crypto.randomUUID(), result:  });
+  if (input.includes('MULTIRESULT')) for (let i = 0; i < 3; i++) out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 3, num_turns: 1, session_id: session, uuid: crypto.randomUUID(), result: '' });
   const finalUuid = crypto.randomUUID();
-  for (let i = 0; i < (input.includes(DUPRESULT) ? 3 : 1); i++)
+  for (let i = 0; i < (input.includes('DUPRESULT') ? 3 : 1); i++)
   out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, uuid: finalUuid, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
     ...(usage ? { modelUsage: { [model]: { inputTokens: 4000, outputTokens: 300, contextWindow: 200000 } } } : {}),
     ...(input.includes('DENIED') ? { permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_denied', tool_input: { command: 'rm -rf build' } }] } : {}) });
