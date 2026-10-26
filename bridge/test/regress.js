@@ -3601,7 +3601,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         /fn handle_answer\(/.test(machineSrc), /fn store_is_owner_only_and_wipes\(/.test(machineSrc),
         m2.p.status === 200, m3.p.status === 200, before.join() === '200,200', pw1.status === 200, afterPw.every((x) => x.status === 401 && x.data.revoked === true), !afterPwList.length,
         m4.p.status === 200, pw2.status === 200, kept.status === 200, keptSession.status === 401, keptList.length === 1, keptList[0] && keptList[0].id === m4.id, so.status === 200, afterSignout.status === 401, afterSignout.data.revoked === true,
-        s6.status === 200, peek6.status === 200, peek6.data.replaceable.length === 1, peek6.data.replaceable[0].id === old.id, peek6.data.replaceable[0].sameMachineId === true, stranger.status === 400, [404, 429].includes(offerU.status),
+        s6.status === 200, peek6.status === 200, peek6.data.replaceable.length === 1, peek6.data.replaceable[0].id === old.id, peek6.data.replaceable[0].sameMachineId === true, stranger.status === 400, (offerU.status === 200 && !(offerU.data.replaceable || []).length),
         ap6.status === 200, p6.status === 200, (p6.data || {}).replaced === old.id, list6.length === 2, !list6.some((x) => x.id === old.id),
         n6.name === 'My old desk', /^one folder: \/srv\/r325\/new \(read-write\)/.test(n6.scope || ''), n6.scopeIsDefault === true, n6.paused === false, (n6.replaced || []).length === 1,
         oldNow.status === 401, oldNow.data.revoked === true, newNow.status === 200,
