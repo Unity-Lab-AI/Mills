@@ -2076,7 +2076,29 @@ function scrollNew(el, force) {
 // ---------- chat ----------
 const log = $('log');
 const scroll = (force) => scrollNew(log, force === true);
-function sys(text, bad) { const d = document.createElement('div'); d.className = 'sys' + (bad ? ' bad' : ''); d.textContent = text; log.appendChild(d); scroll(); }
+// <t319> status lines (T-319): the same line twice in a row becomes one with a x N count; one Done / Stopped line per run
+function sysCollapse(prev, text, bad) { // prev = { text, bad, n } of the last status line (or null): the state of the line that follows it
+  if (prev && prev.text === text && !!prev.bad === !!bad) return { text, bad: !!bad, n: prev.n + 1, merged: true };
+  return { text, bad: !!bad, n: 1, merged: false };
+}
+const sysLabel = (st) => st.n > 1 ? st.text + ' ×' + st.n : st.text;
+// The one line a run's result(s) make. o = { model, turns (results so far in this run), out (answers / tool calls it showed), interrupted (Send now), stopped, stderr }
+function resultNote(hv, o) {
+  const secs = hv.durationMs ? Math.round(hv.durationMs / 1000) : 0, many = o.turns > 1 ? ' · ' + o.turns + ' turns' : '';
+  const stderr = String(o.stderr || '').trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(-200);
+  const why = o.interrupted ? 'interrupted by Send now' : o.stopped ? 'you stopped it' : hv.error ? (hv.text || hv.subtype || 'error') : hv.subtype && hv.subtype !== 'success' ? hv.subtype
+    : stderr ? stderr : hv.text && hv.text.trim() ? '' : 'nothing to resume or answer';
+  if (hv.error) return { bad: true, text: 'Claude stopped with an error: ' + (hv.text || hv.subtype) + many };
+  if (!o.out && why && secs < 1) return { bad: false, text: 'Ended at once: ' + why + many };
+  return { bad: false, text: 'Done' + (hv.durationMs ? ' in ' + secs + 's' : '') + (o.model ? ' · ' + o.model : '') + many };
+}
+// </t319>
+let lastSys = null, runRes = { seen: new Set(), n: 0, out: 0, el: null }, stopRequested = false;
+function sys(text, bad) {
+  const st = sysCollapse(lastSys && lastSys.el === log.lastElementChild ? lastSys : null, text, bad);
+  if (st.merged) { st.el = lastSys.el; st.el.textContent = sysLabel(st); lastSys = st; return st.el; }
+  const d = document.createElement('div'); d.className = 'sys' + (bad ? ' bad' : ''); d.textContent = text; log.appendChild(d); st.el = d; lastSys = st; scroll(); return d;
+}
 // tool lines get their gear from CSS (.tool::before); older saved sessions still carry a "⚙ " prefix in the text
 const toolText = (t) => String(t).replace(/^⚙️?\s*/, '');
 function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
@@ -2413,7 +2435,7 @@ function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = nu
 let runOutcome = null; // set by handleEvent: { state, text } for the message being worked on
 async function send(message) {
   const mine = bubble('me'); renderText(mine, message); record('me', message); scroll(true); // you sent it: to the bottom
-  const t0 = Date.now(); runOutcome = null; runEnded = false; curRun = null;
+  const t0 = Date.now(); runOutcome = null; runEnded = false; curRun = null; runRes = { id: '', seen: new Set(), n: 0, out: 0, el: null }; stopRequested = false;
   msgStatus(mine, 'working', 'Claude is working on this…');
   const tick = setInterval(() => { if (!runOutcome) msgStatus(mine, 'working', 'Claude is working on this… ' + elapsed(t0)); }, 5000);
   setBusy(true); runModel = ''; stderrText = ''; showThinking();
@@ -2700,7 +2722,7 @@ async function restorePlans() {
   for (const [id] of openPlans) if (!open.some((p) => p.id === id)) closePlan({ id, outcome: 'gone' });
 }
 function handleEvent(ev) {
-  if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; return; }
+  if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; if (runRes.id !== ev.id) runRes = { id: ev.id, seen: new Set(), n: 0, out: 0, el: null }; return; }
   if (ev.type === 'bridge_plan') { showPlan(ev); scroll(); return; }
   if (ev.type === 'bridge_plan_answered') { closePlan(ev); return; }
   if (ev.type === 'bridge_question') { showQuestion(ev); scroll(); return; }
@@ -2713,14 +2735,19 @@ function handleEvent(ev) {
   if (hk === 'assistant' || ev.type === 'bridge_error' || hk === 'result') hideThinking();
   if (hk === 'assistant') {
     for (const block of hv.blocks || []) {
-      if (block.type === 'text' && block.text.trim()) { renderText(bubble('claude'), block.text); record('claude', block.text); }
-      else if (block.type === 'tool_use') { const t = describeTool(block); line('tool', t); record('tool', t); }
+      if (block.type === 'text' && block.text.trim()) { runRes.out++; renderText(bubble('claude'), block.text); record('claude', block.text); }
+      else if (block.type === 'tool_use') { runRes.out++; const t = describeTool(block); line('tool', t); record('tool', t); }
     }
   } else if (hk === 'init') { if (hv.model) runModel = hv.model; }
   else if (hk === 'result') {
+    // T-319: one Done / Stopped line per run: a result seen before (replay, a second stream) is skipped, more results in the same run update the line
+    const rkey = ev.uuid || ((runRes.id || (curRun && curRun.id) || '') + '#' + (curRun ? curRun.n : runRes.seen.size));
+    if (runRes.seen.has(rkey)) { scroll(); return; }
+    runRes.seen.add(rkey); runRes.n++;
     runOutcome = hv.error ? { state: 'failed', text: 'Stopped with an error' } : { state: 'done', text: 'Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + ' s' : '') };
-    if (hv.error) sys('Claude stopped with an error: ' + (hv.text || hv.subtype), true);
-    else sys('Done' + (hv.durationMs ? ' in ' + Math.round(hv.durationMs / 1000) + 's' : '') + (runModel ? ' · ' + modelName(runModel) : ''));
+    const note = resultNote(hv, { model: runModel ? modelName(runModel) : '', turns: runRes.n, out: runRes.out, interrupted: !!sendNowMessage, stopped: stopRequested, stderr: stderrText });
+    if (runRes.el && runRes.el.isConnected) { runRes.el.textContent = note.text; runRes.el.className = 'sys' + (note.bad ? ' bad' : ''); }
+    else runRes.el = sys(note.text, note.bad);
     // it stopped short of a tool it was not allowed: the session waits on you (T-288), said and sounded once
     const denied = Array.isArray(ev.permission_denials) ? [...new Set(ev.permission_denials.map((d) => d && d.tool_name).filter(Boolean))] : [];
     if (denied.length) { sys(`Claude was not allowed to use ${denied.join(', ')}, so it stopped short. Answer to go on: say whether it may, or what to do instead.`, true); const P = prefs(); if (P.sound && P.sound.on) playTone('mention', P.sound.mention); }
@@ -2833,7 +2860,7 @@ $('input').addEventListener('keydown', (e) => {
 $('stop').onclick = () => {
   const text = $('input').value.trim();
   if (text) { sendNowMessage = text; $('input').value = ''; updateStopButton(); saveQueue(); sys('Stopping Claude — your message goes next.'); }
-  api('/api/stop', { method: 'POST' }).catch(() => {});
+  stopRequested = true; api('/api/stop', { method: 'POST' }).catch(() => {});
 };
 $('newChat').onclick = () => {
   if (busy) return sys('Stop Claude before starting a new chat.', true);

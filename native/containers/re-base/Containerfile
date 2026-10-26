@@ -1,0 +1,201 @@
+# pgm-re-base 1.0.1: the reverse-engineering base image (T-253).
+# Podman or Docker: the same file. Build with ./build.sh (Linux) or build.cmd (Windows).
+#
+# Rules: every download is pinned by version and checked against a SHA-256 below (the source of each sum is named
+# next to it); Debian packages come from a dated snapshot; the base image is pinned by digest; nothing is fetched
+# when a container starts. Linux x86_64 (amd64) only for now: Docker Desktop / Podman Desktop on Windows run it too.
+
+# debian:trixie-slim (Debian 13.7), amd64 index digest as of 2026-10-20. The snapshot date below is the one the
+# image itself documents in /etc/apt/sources.list.d/debian.sources.
+ARG BASE_IMAGE=docker.io/library/debian@sha256:4876fdea29cac1a33a3195f1eb1952feb1fca7dd6dd00be3e2f1879cf20d34d2
+ARG DEBIAN_SNAPSHOT=20261020T213255Z
+
+ARG IMAGE_VERSION=1.0.1
+ARG NODE_VERSION=24.22.1
+ARG REA_VERSION=6.8.0
+ARG GHIDRA_VERSION=12.1.4
+ARG GHIDRA_DATE=20260921
+ARG JDK_VERSION=21.0.13+9
+ARG PLATFORM_TOOLS_VERSION=37.0.1
+ARG FRIDA_TOOLS_VERSION=14.11.0
+ARG FRIDA_VERSION=17.24.3
+ARG RADARE2_VERSION=6.2.4
+# The frida npm package REA locks (rea/package-lock.json; checked at build time). Not FRIDA_VERSION (the pip wheels).
+ARG FRIDA_NODE_VERSION=17.23.2
+
+# SHA-256 sums and where they come from:
+# node: https://nodejs.org/dist/v24.22.1/SHASUMS256.txt
+ARG NODE_SHA256=6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6
+# ghidra: the release notes of https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.1.4_build (also the GitHub asset digest)
+ARG GHIDRA_SHA256=ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db
+# temurin: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz.sha256.txt (also the Adoptium API)
+ARG JDK_SHA256=d7f5d5cf865a2902b70ff549b97586a7d3f234e016f041ab447ea740c7d66d1c
+# radare2 (not in Debian 13): https://github.com/radareorg/radare2/releases/download/6.2.4/checksums.txt
+ARG RADARE2_SHA256=7019eedc0e0e87d1f53d6b8f5fc62b898567679c5efdce7fbfc557c9e7655e90
+# platform-tools: Google publishes SHA-1 only (https://dl.google.com/android/repository/repository2-3.xml:
+# 477254aa5f903c15cf51001717bdf347fb6b53e0); the SHA-256 below is of that very file, so we pin and check both.
+ARG PLATFORM_TOOLS_SHA1=477254aa5f903c15cf51001717bdf347fb6b53e0
+ARG PLATFORM_TOOLS_SHA256=d230f13842f60f782a8645f9c813f8f845bf36089ea7289f28c48f17979313f1
+# frida node binding (napi-v8, linux-x64): the very file the frida npm package's install script fetches (prebuild-install).
+# GitHub publishes a sha256 digest per release asset (API releases/tags/17.23.2, asset frida-v17.23.2-napi-v8-linux-x64.tar.gz);
+# frida publishes no checksum file, so the sum is pinned here, and matches one computed from a fresh download of the official asset.
+ARG FRIDA_NODE_SHA256=9fa8f668ce91eb03713e8564de4f8fbde232233ee91d729c16773fde11dbae95
+
+# ---------------------------------------------------------------- stage 1: download and verify
+FROM ${BASE_IMAGE} AS fetch
+ARG DEBIAN_SNAPSHOT
+ARG NODE_VERSION
+ARG GHIDRA_VERSION
+ARG GHIDRA_DATE
+ARG JDK_VERSION
+ARG PLATFORM_TOOLS_VERSION
+ARG NODE_SHA256
+ARG GHIDRA_SHA256
+ARG JDK_SHA256
+ARG PLATFORM_TOOLS_SHA1
+ARG PLATFORM_TOOLS_SHA256
+ARG RADARE2_VERSION
+ARG RADARE2_SHA256
+ARG FRIDA_NODE_VERSION
+ARG FRIDA_NODE_SHA256
+RUN set -eu; test "$(uname -m)" = x86_64 || { echo "pgm-re-base supports amd64 only"; exit 1; }
+RUN set -eu; rm -f /etc/apt/sources.list.d/debian.sources; \
+    printf 'Types: deb\nURIs: http://snapshot.debian.org/archive/debian/%s\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n\nTypes: deb\nURIs: http://snapshot.debian.org/archive/debian-security/%s\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' "$DEBIAN_SNAPSHOT" "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list.d/debian.sources; \
+    printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\n' > /etc/apt/apt.conf.d/99snapshot; \
+    apt-get update -qq; apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils unzip
+WORKDIR /dl
+RUN set -eu; curl -fsSL -o node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"; \
+    echo "${NODE_SHA256}  node.tar.xz" | sha256sum -c -; \
+    mkdir /opt/node; tar -xJf node.tar.xz -C /opt/node --strip-components=1; \
+    rm -rf /opt/node/include /opt/node/share /opt/node/CHANGELOG.md /opt/node/README.md
+RUN set -eu; curl -fsSL -o jdk.tar.gz "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-$(echo "${JDK_VERSION}" | sed 's/+/%2B/')/OpenJDK21U-jdk_x64_linux_hotspot_$(echo "${JDK_VERSION}" | tr + _).tar.gz"; \
+    echo "${JDK_SHA256}  jdk.tar.gz" | sha256sum -c -; \
+    mkdir /opt/jdk; tar -xzf jdk.tar.gz -C /opt/jdk --strip-components=1; \
+    rm -rf /opt/jdk/lib/src.zip /opt/jdk/demo /opt/jdk/sample
+RUN set -eu; curl -fsSL -o ghidra.zip "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_DATE}.zip"; \
+    echo "${GHIDRA_SHA256}  ghidra.zip" | sha256sum -c -; \
+    unzip -q ghidra.zip -d /opt; mv /opt/ghidra_${GHIDRA_VERSION}_PUBLIC /opt/ghidra
+RUN set -eu; curl -fsSL -o pt.zip "https://dl.google.com/android/repository/platform-tools_r${PLATFORM_TOOLS_VERSION}-linux.zip"; \
+    echo "${PLATFORM_TOOLS_SHA1}  pt.zip" | sha1sum -c -; \
+    echo "${PLATFORM_TOOLS_SHA256}  pt.zip" | sha256sum -c -; \
+    unzip -q pt.zip -d /opt; mv /opt/platform-tools /opt/android-platform-tools
+
+RUN set -eu; curl -fsSL -o /dl/radare2.deb "https://github.com/radareorg/radare2/releases/download/${RADARE2_VERSION}/radare2_${RADARE2_VERSION}_amd64.deb"; \
+    echo "${RADARE2_SHA256}  /dl/radare2.deb" | sha256sum -c -
+RUN set -eu; curl -fsSL -o /dl/frida-node.tar.gz "https://github.com/frida/frida/releases/download/${FRIDA_NODE_VERSION}/frida-v${FRIDA_NODE_VERSION}-napi-v8-linux-x64.tar.gz"; \
+    echo "${FRIDA_NODE_SHA256}  /dl/frida-node.tar.gz" | sha256sum -c -
+
+# ---------------------------------------------------------------- stage 2: REA from npm (lockfile with integrity hashes)
+FROM fetch AS rea
+ARG REA_VERSION
+ARG FRIDA_NODE_VERSION
+ENV PATH=/opt/node/bin:$PATH
+WORKDIR /opt/rea
+COPY rea/package.json rea/package-lock.json /opt/rea/
+# --ignore-scripts skips frida's install step (prebuild-install), so its verified prebuilt binding is unpacked by hand below.
+# npm ci checks every package against the sha512 "integrity" in the lockfile (rea-agents itself: see README).
+RUN set -eu; test "$(node -p "require('/opt/rea/package-lock.json').packages['node_modules/rea-agents'].version")" = "${REA_VERSION}"; \
+    npm ci --omit=dev --ignore-scripts --no-audit --no-fund; \
+    test "$(node -p "require('/opt/rea/node_modules/rea-agents/package.json').version")" = "${REA_VERSION}"; \
+    test "$(node -p "require('/opt/rea/node_modules/frida/package.json').version")" = "${FRIDA_NODE_VERSION}"; \
+    tar -xzf /dl/frida-node.tar.gz -C /opt/rea/node_modules/frida; \
+    test -s /opt/rea/node_modules/frida/build/frida_binding.node; \
+    mkdir -p /opt/rea/skill; \
+    cp -r /opt/rea/node_modules/rea-agents/skills/reverse-engineer-anything /opt/rea/skill/; \
+    npm cache clean --force
+
+# ---------------------------------------------------------------- stage 3: a tiny C sample for the Ghidra smoke test
+FROM ${BASE_IMAGE} AS fixture
+ARG DEBIAN_SNAPSHOT
+RUN set -eu; rm -f /etc/apt/sources.list.d/debian.sources; \
+    printf 'Types: deb\nURIs: http://snapshot.debian.org/archive/debian/%s\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list.d/debian.sources; \
+    printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\n' > /etc/apt/apt.conf.d/99snapshot; \
+    apt-get update -qq; apt-get install -y -qq --no-install-recommends gcc libc6-dev
+COPY fixtures/hello.c /src/hello.c
+RUN set -eu; gcc -O0 -g0 -o /hello /src/hello.c
+
+# ---------------------------------------------------------------- final image
+FROM ${BASE_IMAGE}
+ARG DEBIAN_SNAPSHOT
+ARG IMAGE_VERSION
+ARG NODE_VERSION
+ARG REA_VERSION
+ARG GHIDRA_VERSION
+ARG JDK_VERSION
+ARG PLATFORM_TOOLS_VERSION
+ARG FRIDA_TOOLS_VERSION
+ARG FRIDA_VERSION
+ARG FRIDA_NODE_VERSION
+ARG RADARE2_VERSION
+COPY --from=fetch /dl/radare2.deb /tmp/radare2.deb
+RUN set -eu; rm -f /etc/apt/sources.list.d/debian.sources; \
+    printf 'Types: deb\nURIs: http://snapshot.debian.org/archive/debian/%s\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n\nTypes: deb\nURIs: http://snapshot.debian.org/archive/debian-security/%s\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' "$DEBIAN_SNAPSHOT" "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list.d/debian.sources; \
+    printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\n' > /etc/apt/apt.conf.d/99snapshot; \
+    apt-get update -qq; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+      ca-certificates procps python3 python3-venv python3-pip gdb lldb strace ltrace binutils file jq /tmp/radare2.deb \
+      unzip p7zip-full xz-utils less xxd netcat-openbsd iproute2; \
+    apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/radare2.deb
+
+COPY --from=fetch /opt/node /opt/node
+COPY --from=fetch /opt/jdk /opt/jdk
+COPY --from=fetch /opt/ghidra /opt/ghidra
+COPY --from=fetch /opt/android-platform-tools /opt/android-platform-tools
+COPY --from=rea /opt/rea /opt/rea
+COPY --from=fixture /hello /opt/re-fixtures/hello
+COPY fixtures/js-app /opt/re-fixtures/js-app
+COPY frida-requirements.txt /opt/frida-requirements.txt
+COPY smoke.sh /opt/re-smoke.sh
+COPY entrypoint.sh /usr/local/bin/re-entrypoint
+
+# Frida: a venv, pinned, every wheel checked against the hashes in the requirements file.
+RUN set -eu; python3 -m venv /opt/frida-venv; \
+    /opt/frida-venv/bin/pip install --no-cache-dir --require-hashes --no-deps -r /opt/frida-requirements.txt; \
+    for f in /opt/frida-venv/bin/frida*; do ln -sf "$f" /usr/local/bin/; done; \
+    ln -sf /opt/android-platform-tools/adb /usr/local/bin/adb; \
+    ln -sf /opt/android-platform-tools/fastboot /usr/local/bin/fastboot; \
+    ln -sf /opt/node/bin/node /usr/local/bin/node; \
+    ln -sf /opt/node/bin/npm /usr/local/bin/npm; \
+    ln -sf /opt/rea/node_modules/rea-agents/scripts/rea.mjs /usr/local/bin/rea; \
+    chmod 0755 /usr/local/bin/re-entrypoint /opt/re-smoke.sh /opt/rea/node_modules/rea-agents/scripts/rea.mjs; \
+    chmod -R a+rX /opt/re-fixtures; \
+    useradd --uid 1000 --create-home --shell /bin/bash re; \
+    mkdir -p /work/in /work/out /work/tmp /home/re/.cache; \
+    chown -R 1000:1000 /work /home/re; \
+    printf '%s\n' "pgm-re-base ${IMAGE_VERSION}" > /etc/pgm-re-base-version
+
+# REA is found through these (no `rea setup`: it would edit agent configs). Registration for a run's MCP file:
+#   command /opt/node/bin/node, args /opt/rea/node_modules/rea-agents/scripts/rea.mjs mcp
+ENV PATH=/opt/node/bin:/opt/jdk/bin:/opt/android-platform-tools:$PATH \
+    JAVA_HOME=/opt/jdk \
+    GHIDRA_INSTALL_DIR=/opt/ghidra \
+    REA_MCP_INPUT_SCHEMA_PROFILE=compact \
+    REA_SKILL_DIR=/opt/rea/skill/reverse-engineer-anything \
+    XDG_CACHE_HOME=/home/re/.cache \
+    PGM_RE_BASE_VERSION=${IMAGE_VERSION} \
+    LANG=C.UTF-8 \
+    npm_config_update_notifier=false
+
+LABEL org.opencontainers.image.title="pgm-re-base" \
+      org.opencontainers.image.description="VibeRoller reverse-engineering base image: REA, Ghidra, JDK, Frida, LLDB, ADB and friends" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.vendor="VibeRoller" \
+      org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
+      tools.pgm.re-base.version="${IMAGE_VERSION}" \
+      tools.pgm.re-base.debian-snapshot="${DEBIAN_SNAPSHOT}" \
+      tools.pgm.re-base.node="${NODE_VERSION}" \
+      tools.pgm.re-base.rea-agents="${REA_VERSION}" \
+      tools.pgm.re-base.ghidra="${GHIDRA_VERSION}" \
+      tools.pgm.re-base.temurin-jdk="${JDK_VERSION}" \
+      tools.pgm.re-base.android-platform-tools="${PLATFORM_TOOLS_VERSION}" \
+      tools.pgm.re-base.radare2="${RADARE2_VERSION}" \
+      tools.pgm.re-base.frida="${FRIDA_VERSION}" \
+      tools.pgm.re-base.frida-node="${FRIDA_NODE_VERSION}" \
+      tools.pgm.re-base.frida-tools="${FRIDA_TOOLS_VERSION}" \
+      tools.pgm.re-base.rea-skill-dir="/opt/rea/skill/reverse-engineer-anything" \
+      tools.pgm.re-base.exchange-dirs="/work/in /work/out /work/tmp"
+
+USER 1000:1000
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/re-entrypoint"]
+CMD ["sleep", "infinity"]

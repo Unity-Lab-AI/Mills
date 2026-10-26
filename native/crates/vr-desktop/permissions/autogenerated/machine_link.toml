@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-machine-link"
+description = "Enables the machine_link command without any pre-configured scope."
+commands.allow = ["machine_link"]
+
+[[permission]]
+identifier = "deny-machine-link"
+description = "Denies the machine_link command without any pre-configured scope."
+commands.deny = ["machine_link"]

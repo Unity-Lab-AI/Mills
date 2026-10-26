@@ -7,7 +7,17 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
-## 5.26.0 — 2026-10-26
+## 5.30.0 — 2026-10-26
+
+MINOR: **Gee's Hyper Workflows branch and Sponge's 5.26.0 to 5.29.1 together on develop.** Both branches had a 5.26.0;
+Gee's (work/gee) is written out here, Sponge's further down. Merge notes:
+- **Work-run tool relay:** the Hyper Workflows tools (`hyperwork_list`, `hyperwork_run`) go through the per-run secret
+  of T-308 like every other run tool: the account and session come from the run's record, never from a header.
+- **Team MCP and the host's tool list:** the RE container tools (T-303) and the Hyper Workflows tools side by side.
+- **AI host:** the PC role on the library (T-313) and Unity's brain loading (T-293) in the same host.
+- versions: project 5.30.0, bridge/team-mcp.js 1.4.0, bridge/team.js 1.1.4, web/index.html 1.27.0.
+
+**From Gee's branch (5.26.0 on work/gee):**
 
 MINOR: **Hyper Workflows** (T-184: T-199 to T-207, T-210, T-186 = T-211 to T-213, T-205; the team note
 plans/hyper-workflows.md), **Unity's brain loads on the AI host** (T-293) and the **agent-to-agent spec checks** (T-295).
@@ -86,6 +96,214 @@ script share one relay helper (fake-claude.js).
 
 **Also:** `Ollama` in the AI host's hello (an ai-node.json `unity` block is optional and older hosts need nothing);
 NAMES.md lists the three workflow crates; the merge of develop's pgm-plan-internal, releases and notify tools alongside.
+
+## 5.29.1 — 2026-10-26
+
+PATCH: **screen sharing in calls, fixed as far as the code shows** (T-320). Found by reading and testing the code; the
+exact report still needs details from whoever saw it.
+- **The share tile:** it follows the hub's share flag. It no longer vanishes when a still screen stops sending (Firefox
+  mutes such a track), and it no longer waits for an unmute to appear.
+- **The share's sound:** kept per person, so a tile that appears after the audio has it. Before, the audio was dropped.
+- **After a hub restart:** a quiet re-join keeps the share flag; it used to send only camera and mic.
+- **Leaving and re-joining between two polls:** that person gets a fresh connection. A hub restart still keeps the old
+  ones.
+- **Lost signals:** a lost offer or answer is retried and reported instead of being swallowed. The offerer restarts ICE
+  after 5 seconds of "disconnected".
+- **Clearer errors:** share errors say what happened (refused, nothing to share or the Linux portal, a capture error,
+  plain http).
+- **The picker:** a second click no longer opens a second one, and a capture that arrives after leaving is stopped.
+- **The Share button:** it explains itself on plain http and in an app whose web view has not switched capture on.
+- web/calls.js 1.1.2. Checks R350 to R354, which run calls.js in Node with stubs.
+
+## 5.29.0 — 2026-10-26
+
+MINOR: **the apps run linked machines** (T-313; linked machines step 7 of 8; Linux and Windows only).
+- **Install.** One template writes a systemd **user** unit (no root, restarts on failure) and a per-user Windows logon
+  task, with `.sh` and `.cmd` twins.
+  - `vr-host machine install | uninstall` writes and removes them.
+  - The machine refuses to start if its state folder (token, key, scope, audit) can be read by others: group or other bits
+    on Linux, a Users / Everyone ACL on Windows.
+- **The AI host's PC role is the library's `Machine`.** The host-side `pc_job` is gone: scope, the one canonicaliser,
+  audit and the kill switch now apply. The hub still relays to older hosts that only have the PC engine, and there is no
+  copy of the canonicaliser outside pgm-net-internal.
+- **Desktop app** (VibeRoller and the HPM builds):
+  - "Link this computer" runs the device-code link and the machine runner while the app is open.
+  - It can install the persistent service.
+  - Its local file paths go through the library canonicaliser.
+  - Capture stays limited to the hub's own page.
+- **Jcode PGM:** `jcodepgm machine link | run | install | uninstall | scope | stop | start | status`, on the mirrored
+  library.
+- **Windows:** the code is written but unverified here (no mingw). The pgm-net-internal README lists the commands to run
+  the same tests on a Windows PC (R339).
+- **Checks:** R334, R335, R336, R339. R330's "late ticket" step is now timed from the first call, which made it flaky
+  under load.
+
+## 5.28.0 — 2026-10-26
+
+MINOR: **linked machines can be worked, only by their owner; and the PGM gateway carries tools** (agent branches,
+reviewed and merged; team note plans/linked-machines.md).
+- **Who may reach a machine** (T-310).
+  - **One rule:** a call that reaches a person's computer is allowed only when the run's account is the machine's owner
+    and that person started the run. This covers a linked machine, the host's PC engine and the browser folder. A new
+    add-only `Run.started_by` holds who started it; workflows and agent-to-agent runs must set it.
+  - **Refused:** admins, watchers, shared-session viewers, planner sessions and runs started on someone's behalf. Watchers
+    never see or answer machine or PC calls.
+  - **Machine tokens:** a machine's token reaches only `/api/machine/poll`, `/reply` and `/unlink`. It is no longer a
+    login.
+  - **Owner away:** the run goes on and ends with a report of what was done, why, and what can be changed.
+  - **Compatibility:** a newer scope document is refused whole. The hub's hello says `machine: {v: 1}`. Older apps keep
+    their PC engine, and the JavaScript hub keeps the browser PC tools.
+  - Checks R327 and R338.
+- **The machine's tools** (T-311). When the owner has a linked machine online, the AI's `mcp__pc__*` tools reach it, with
+  the same results as today's PC host.
+  - **New tools:**
+    - `machine_info`;
+    - `shell_run`: the working folder is confined to the scope (advisory), it is never run as root, with a timeout and an
+      output cap, and it is off under no-shell;
+    - `job_start` / `job_read` / `job_stop` for long commands (the job table lives on the machine and ends at revoke);
+    - `proc_list` / `proc_kill` (own children only);
+    - `re_*` for RE containers on the machine (off by default);
+    - `transfer_get` / `transfer_put` for big files by hub ticket (5 minutes, bound to account, machine and path). Data
+      moves in 4 MB chunks streamed to disk, with resume and sha256.
+  - **Every request** passes one door on the machine, in this order: the kill switch, the hub signature and owner check,
+    the scope, the rate limits, the tool, then one audit line.
+  - **Order of choice:** the owner's online machine first, then the AI host, then the browser folder.
+  - **First app on the new runner:** `vr-host machine link|run|stop|start|status`.
+  - Checks R328 to R330 (a 512 MB / 200 MB transfer with resume).
+- **The PGM gateway carries tools** (T-317).
+  - **Format:** `/v1/chat/completions`, and so the products' gateway, take `tools`, `tool_choice`, assistant `tool_calls`
+    and `tool` messages, and return `tool_calls`.
+  - **Providers:** OpenAI-compatible providers get them as they are. Anthropic keys and host Claude logins go through
+    `tool_use` / `tool_result`. Other kinds answer 400.
+  - Streamed requests are answered as chunks. A request without tools is unchanged.
+  - Check R346. The products' AI member runs a bounded tool loop in pgm-libs 5.24.0 (not tagged yet); HPM 0.6.0's Hyper
+    uses REA's tools through it.
+- bridge/pc-tools-mcp.js 1.0.3.
+- **Merge fix:** T-310 limited a machine token to poll, reply and unlink, which also blocked the machine's side of a T-311
+  transfer (`/api/machine/transfer/<ticket>/…`), so R330 moved 0 MB once both were in. The machine token now also reaches
+  the transfer routes; the ticket stays bound to account, machine, path and direction.
+
+## 5.27.2 — 2026-10-26
+
+PATCH: **Work no longer repeats "Done in 0s"** (T-319).
+- **The bug:** after a send (most often Send now) the transcript could show `Done in 0s · Opus 5.5` four times in a row.
+  Every `result` the page received added a line, and a run can deliver several (empty turns, a result sent again).
+- **Hub:** a run says each `result` once: the same uuid arriving again is dropped (Rust hub work.rs; the frozen JavaScript
+  hub's server.js the same), so the stream, a page that joins the run again and a share never see a repeat.
+- **Page:** one Done / Stopped line per run (a later result of the same run, or one seen before, updates the line, with
+  the turn count); a run that ended at once without output says why ("Ended at once: interrupted by Send now" / "you
+  stopped it" / the result subtype or error / the stderr tail / "nothing to resume or answer"); identical status lines
+  in a row collapse into one with a ×N count.
+- Checks R347 to R349; fake-claude gets MULTIRESULT and DUPRESULT.
+
+## 5.27.1 — 2026-10-26
+
+PATCH: **RE base image 1.0.1: REA's Frida tools work** (T-315).
+- **The bug:** the `frida` npm package's native binding was never installed, because `npm ci --ignore-scripts` skips
+  its install step. So `list_frida_devices` and REA's other Frida tools failed with "Could not locate the bindings
+  file". The frida command-line tool was not affected.
+- **The fix:** the image now unpacks the official prebuilt `frida-v17.23.2-napi-v8-linux-x64` binding into
+  `node_modules/frida/build/`, with its SHA-256 pinned (GitHub's asset digest, matched against a fresh download). No
+  install script runs.
+- **Smoke test:** a new check calls `list_frida_devices` through REA's MCP server; 28 of 28 pass.
+- **Image:** `localhost/pgm-re-base:1.0.1` (2.36 GB) is the new default in pgm-sandbox-internal. 1.0.0 is kept.
+
+## 5.27.0 — 2026-10-26
+
+MINOR: **REA inside Work runs, and linked machines steps 2, 3 and 6** (agent branches, reviewed and merged; team notes
+plans/rea.md and plans/linked-machines.md).
+- **REA from Work runs** (T-254). Once a run has an RE container, three team tools reach REA inside it:
+  - `re_skill{id, file?}`: REA's workflow guide, read from the container, about 9k tokens, only when asked;
+  - `re_tools{id, filter?, tool?}`: names only by default (5 KB instead of 47 KB), a search, or one tool's schema;
+  - `re_call{id, tool, args?}`: REA's result unchanged, with its untrusted-content marker. Results over 40 KB are saved
+    to /work/out.
+
+  How it works:
+  - One long-lived MCP session per container (`exec -i`), closed on stop.
+  - Owner only; planner sessions are refused.
+  - The Work prompt gets one short line; nothing REA-related loads before a container is up.
+  - The MCP-over-exec client lives in pgm-sandbox-internal, for Jcode PGM and HPM later.
+  - Checks R341 to R345, with a fake MCP server in a tiny test image. Checked by hand against the real image: 229 tools.
+
+  bridge/team-mcp.js 1.3.0, bridge/team.js 1.1.3.
+- **Owner-only enforcement** (T-308).
+  - **Per-run secret:** each Work run has its own secret for its MCP tools. The hub takes account, session and run from
+    the run itself and refuses a request that says otherwise. The old shared secret still works for older run configs,
+    logged as deprecated (`legacySharedSecret: false` turns it off).
+  - **Owner check:** a call that names a machine reaches it only for its owner. Another person's run, and an admin's,
+    get 403 with no fallback.
+  - **Signing:** the hub has one ed25519 signing key (`bridge/hub-signing.key`, owner-only) and signs every PC request it
+    forwards. vr-host pins the key from its hello (new cap `signed-pc`) and refuses a bad signature, another key, a
+    replay, an expired request, another owner or actor, or changed arguments. Older hosts and hubs keep working unsigned.
+  - Checks R323 and R324.
+- **Linking and revoking machines** (T-309).
+  - **Linking:** a computer links to an account with the device code (client `vr-machine`). The approval screen data
+    shows what is asking, its key fingerprint and the default scope (one folder). Each machine has its own ed25519 key and
+    signs its replies; its token works for that account only.
+  - **Routes:** `GET /api/machines` (owner only), rename / pause, unlink. Admins get only `GET /api/machines/count`.
+  - **Revoking:** unlinking ends the machine's poll at once, and the machine is told "revoked" and wipes its token. A new
+    password or "sign out everywhere" also unlinks the account's machines, unless `keepMachines: true`.
+  - **Re-linking** offers "replace the old record" and starts at the default scope.
+  - **HPM** keeps its own accounts, so a machine links to each hub separately.
+  - Checks R325 and R326.
+- **The machine's guards** (T-312; pgm-net-internal::machine):
+  - a hash-chained, rotating audit log that never holds file contents (the hub's copy is readable by the owner only);
+  - a kill switch (a `KILL` file or `machine stop`) that survives a restart and only the machine can clear;
+  - per-class rate limits;
+  - admin rights only after approval on the machine, and the app refuses to run as root or Administrator;
+  - scope changes: widening from the web waits for approval on the machine, narrowing applies at once and is audited,
+    grants expire, and no tool reaches the scope file.
+
+  Checks R331 to R333.
+- **Deploy:** `pack-data` and `restore-data` carry `hub-signing.key` on a hub move. restore-data had fallen behind
+  pack-data and would have refused work.json, ai-hosts.json and gateway; it now accepts everything pack-data writes.
+- **Not yet in use:** the linked-machine parts are library and hub groundwork. A machine does no jobs until T-311, and the
+  web panel comes with T-314.
+
+## 5.26.0 — 2026-10-25
+
+MINOR: **reverse-engineering containers, the linked-machines library core, and Node 24 prepared** (agent branches,
+reviewed and merged).
+- **The RE base image** (T-253; team note plans/rea.md). `native/containers/re-base` builds `localhost/pgm-re-base:1.0.0`
+  (2.25 GB, amd64).
+  - **What's inside, all pinned and checksum-verified:**
+    - REA (`rea-agents` 6.8.0 on Node 24.22.1; installed with `npm ci --ignore-scripts`, `rea setup` never run);
+    - Ghidra 12.1.4 and Temurin JDK 21.0.13;
+    - Frida 17.24.3, LLDB, GDB, ADB 37.0.1, radare2 6.2.4, strace and ltrace.
+  - **Layout:** `/work/in`, `/work/out` and `/work/tmp`, a non-root user, and REA's skill at `/opt/rea/skill`.
+  - **Smoke test:** 27 of 27 pass with no network (REA's MCP server lists 229 tools; a JS analysis and a Ghidra headless
+    analysis both run).
+  - **Scripts:** `build.sh` / `build.cmd`. The Windows build is not tested yet.
+- **RE containers** (T-303). New library `pgm-sandbox-internal` 0.1.0, Podman or Docker.
+  - **Copies:** each job gets a throw-away copy of the base image. At most 3 run at once (configurable), and the rest wait
+    in a FIFO queue.
+  - **Control:** only the owner controls a copy; an admin may stop any.
+  - **Data:** in and out through exchange folders.
+  - **Lifetime:** a copy is deleted entirely on stop. Idle copies are flagged, never killed, and running copies are
+    adopted back after a hub restart.
+  - **Isolation:** `--cap-drop ALL` plus `SYS_PTRACE` (for lldb, strace and frida), `no-new-privileges`, no network
+    unless asked, CPU / memory / pids limits, and no mounts beyond the exchange folders.
+  - **Routes and tools:** `/api/re/{start,list,status,exec,put,get,stop}` and the team tools `re_start`, `re_status`,
+    `re_list`, `re_exec`, `re_put`, `re_get`, `re_stop`. Rust hub only; the JavaScript hub answers "not available on this
+    hub" (bridge/team.js 1.1.2, bridge/team-mcp.js 1.2.0).
+  - **Config:** `re: { image, maxConcurrent, idleWarnHours, engineArgs, … }`. On this server rootless podman needs
+    `engineArgs: ["--root", "/var/tmp/gee-podman/root", "--runroot", "/var/tmp/gee-podman/run"]`.
+  - **Checks:** R316 to R320 run against real podman.
+- **Linked machines, step 1 of 8** (T-307; team note plans/linked-machines.md). New module `machine` in pgm-net-internal:
+  - **Scope model and evaluator:** ten presets, deny wins, the most specific entry wins, time-limited grants, and a tool
+    list per scope.
+  - **Path canonicaliser:** one for every tool, with Linux and Windows rules. Symlink and junction escapes are refused,
+    and opens are safe against a swapped link.
+  - **Safety floor:** the token, the device key, the scope file and the audit log are unreachable under every scope.
+  - **Checks:** R321, R322 and R340. Nothing uses it yet.
+- **Node 24 prepared** (T-304; deploy/node-upgrade.md).
+  - **Why:** the 2026-10-21 security release fixed four high-severity bugs that the server's Node 22.23.3 has.
+  - **Tested:** both suites pass on Node 24.22.1 LTS in throw-away hubs. The old Node 22 also still passes, so AI hosts
+    on 22 keep working.
+  - **Setup:** `deploy/setup-server.sh` installs Node line `VR_NODE_LINE` (24), checked against SHASUMS256.txt.
+  - **Not done yet:** the live server's Node is unchanged; the switch is a go-live step.
+- **Suite:** R31 (no hashes in tracked files) now skips the container pin files: Containerfile digests and download
+  checksums, and the pip and npm locks. They hold published checksums, like native/Cargo.lock.
 
 ## 5.25.3 — 2026-10-25
 

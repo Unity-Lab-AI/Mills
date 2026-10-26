@@ -147,6 +147,7 @@ impl Auth {
     pub fn session_user(&self, r: &Req) -> Option<String> {
         if let Some(u) = self.page_session_user(r) { return Some(u); }
         let tok = r.header("authorization").and_then(|a| a.strip_prefix("Bearer "))?;
+        if self.devices.is_machine_token(tok) { return None; } // T-310: a linked machine's token is never a login (the front refuses it first, 403)
         let u = self.devices.user_of(tok)?;
         self.account(&u).map(|_| u)
     }
@@ -166,7 +167,9 @@ impl Auth {
         self.sessions.lock().unwrap_or_else(|e| e.into_inner()).get(&token_key(tok)).and_then(|s| s.get("client").cloned()).filter(Value::is_object)
     }
     pub fn forget_session(&self, key: &str) { if self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(key).is_some() { self.save_sessions(); } }
-    pub fn drop_sessions(&self, user: &str) { self.devices.revoke_all(user);self.sessions.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| s["user"].as_str() != Some(user)); self.save_sessions(); }
+    pub fn drop_sessions(&self, user: &str) { self.drop_sessions_ex(user, false) }
+    /// `keep_machines`: the person ticked "keep my machines linked": their linked machines stay (everything else goes).
+    pub fn drop_sessions_ex(&self, user: &str, keep_machines: bool) { self.devices.revoke_all_ex(user, keep_machines);self.sessions.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| s["user"].as_str() != Some(user)); self.save_sessions(); }
     pub fn signed_in(&self, user: &str) -> usize { let now = now_ms(); self.sessions.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|s| s["user"].as_str() == Some(user) && s["exp"].as_u64().unwrap_or(0) > now).count() }
     pub fn lock_of(&self, user: &str) -> Option<Value> { self.locks.lock().unwrap_or_else(|e| e.into_inner()).get(user).cloned() }
     pub fn unlock(&self, user: &str) { self.locks.lock().unwrap_or_else(|e| e.into_inner()).remove(user); self.save_locks(); }

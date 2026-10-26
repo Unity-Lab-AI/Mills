@@ -114,6 +114,7 @@ function unzipAll(buf) {
 }
 const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
 const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] };
+const fakeOaiTools = []; // R346: the bodies the fake OpenAI endpoint got that carried tools or tool messages
 const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
 let fakeOllamaNoBrain = false; // R473: the brain is gone from /api/tags (a chat model and an embedder stay); "MODEL?" answers with the model asked for
@@ -210,6 +211,13 @@ function startFakeOllama() {
       if (req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') { // /v1: Ollama's own OpenAI-compatible path (R182)
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
+        if (Array.isArray(b.tools) || (b.messages || []).some((m) => m.role === 'tool')) { // R346 (T-317): tools in, a tool call out; a tool result in, text out
+          fakeOaiTools.push(b);
+          const lm = (b.messages || [])[(b.messages || []).length - 1] || {};
+          const usage = { prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 };
+          if (lm.role === 'tool') return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: 'oai says: tool said ' + lm.content }, finish_reason: 'stop' }], usage });
+          return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_r346', type: 'function', function: { name: b.tools[0].function.name, arguments: '{"q":"r346","n":2}' } }] }, finish_reason: 'tool_calls' }], usage });
+        }
         if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); for (const w of text.split(' ')) res.write('data: ' + JSON.stringify({ model: b.model, choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); return res.end('data: [DONE]\n\n'); }
         const cached = /r185/.test(String(last.content)) ? { prompt_tokens: 2000, completion_tokens: 40, total_tokens: 2040, prompt_tokens_details: { cached_tokens: 1500 } } : null; // R185: a cache hit the hub must count
         return j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: cached || { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
@@ -297,11 +305,12 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  reTestSetup();
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -330,6 +339,7 @@ async function setup() {
 // The throwaway hub runs Unity's engines THROUGH an AI node (bridge/ai-node.js, its own process), the way the hub on
 // the server will: every Unity check below then also tests the node path end to end (R137).
 const NODE_SECRET = 'test-node-secret-0123456789abcdef';
+const WORK_SECRET = 'work-secret-r323-0123456789abcdef0123'; // R323 (T-308): fixes the Rust hub's DEPRECATED shared MCP secret (config workSecret) so the test can send an old-style call
 const OLD_NODE_SECRET = 'old-node-secret-0123456789abcdef'; // R152: a 2.x host (no login relay), played by the test itself
 let aiNodeProc = null;
 function startAiNode() {
@@ -401,6 +411,48 @@ const RUST_HOST = (() => {
   if (why) { console.error('--rust-host: ' + why); process.exit(2); }
   return NATIVE_BIN.host;
 })();
+// T-303: RE containers (R316 to R320). The checks need the real Podman and a tiny local image: reTestSetup builds one from a
+// 2-line Containerfile (a non-root user, so the exchange folder's sub-uid files are exercised) from a Debian image that is
+// already in local storage (nothing is pulled), or says why not (the checks then skip). reTestCleanup removes every
+// container the hub made under the test prefix and the image.
+const RE_T = { ok: false, why: 'the Rust hub\'s: --rust-hub runs it', env: {}, image: 'localhost/pgm-re-test:p' + process.pid, prefix: 'pgm-re-test-' + process.pid + '-' }; // per suite run: two suites on one engine (shared storage) must not take each other's image or containers
+// eng = { env: extra environment, pre: global engine arguments } (the hub's re.env / re.engineArgs)
+function podman(args, eng) { const e = eng || {}; return spawnSync('podman', [...(e.pre || []), ...args], { encoding: 'utf8', env: { ...process.env, ...(e.env || {}) }, timeout: 240000, windowsHide: true }); }
+function reTestSetup() {
+  if (!RUST_HUB) return;
+  if (WIN) { RE_T.why = 'the engine here is Docker on Windows: not run by this check (T-303 leaves the Windows path)'; return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 're-test-image-')); // outside the scratch copy: its main must stay clean for R109
+  RE_T.dir = dir;
+  // T-254: a fake MCP stdio server and a small skill folder, where the hub's re.mcpCommand / re.skillDir point (see R341 to R345)
+  fs.mkdirSync(path.join(dir, 'fake-rea', 'skill', 'references'), { recursive: true });
+  fs.copyFileSync(path.join(MILLS, 'native', 'crates', 'pgm-sandbox-internal', 'tests', 'fake-mcp.sh'), path.join(dir, 'fake-rea', 'mcp.sh'));
+  fs.writeFileSync(path.join(dir, 'fake-rea', 'skill', 'SKILL.md'), '# Fake REA skill\n\nUse the tools; read references/environments.md for the environments (héllo).\n');
+  fs.writeFileSync(path.join(dir, 'fake-rea', 'skill', 'references', 'environments.md'), '# Environments\n\nA reference file.\n');
+  let why = 'podman is not available';
+  // the engine settings to try, in order: this account's own storage; its real HOME (the shared HOME's overlay folders have ACLs the
+  // engine cannot use); the shared rootless storage on the server (/var/tmp/gee-podman, where the base image lives)
+  const engines = [{ env: {}, pre: [] }, { env: { HOME: os.userInfo().homedir }, pre: [] }, { env: {}, pre: ['--root', '/var/tmp/gee-podman/root', '--runroot', '/var/tmp/gee-podman/run'] }];
+  for (const eng of engines) {
+    if (podman(['version'], eng).status !== 0) { why = 'podman is not available'; break; }
+    for (const from of ['docker.io/library/debian:trixie-slim', 'localhost/pgm-re-base:1.0.1']) {
+      fs.writeFileSync(path.join(dir, 'Containerfile'), `FROM ${from}\nUSER root\nRUN id -u re >/dev/null 2>&1 || useradd -m -u 1000 re\nCOPY fake-rea /opt/fake-rea\nRUN chmod -R a+rX /opt/fake-rea\nUSER re\n`);
+      const b = podman(['build', '--pull=never', '-q', '-t', RE_T.image, '-f', path.join(dir, 'Containerfile'), dir], eng);
+      if (b.status !== 0) { why = 'no local debian:trixie-slim image to build the test image from (' + String(b.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
+      const r = podman(['run', '--rm', '--pull=never', '--network', 'none', '--cap-drop', 'ALL', RE_T.image, 'id', '-u'], eng);
+      if (r.status !== 0 || r.stdout.trim() !== '1000') { why = 'podman cannot run containers here (' + String(r.stderr || '').trim().split('\n').pop().slice(0, 100) + ')'; continue; }
+      RE_T.ok = true; RE_T.env = eng; RE_T.why = '';
+      return;
+    }
+  }
+  RE_T.why = why;
+}
+function reTestCleanup() {
+  if (!RE_T.ok) return;
+  const left = (podman(['ps', '-a', '--filter', 'name=' + RE_T.prefix, '--format', '{{.Names}}'], RE_T.env).stdout || '').split('\n').filter(Boolean);
+  if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
+  podman(['rmi', '-f', RE_T.image], RE_T.env);
+  try { fs.rmSync(RE_T.dir, { recursive: true, force: true }); } catch {}
+}
 async function startHub() {
   const log = fs.openSync(path.join(SCRATCH, 'hub.log'), 'a');
   hub = spawn(process.execPath, [path.join(SB, 'run.js'), '--no-tunnel'], { cwd: SB, stdio: ['ignore', log, log], windowsHide: true });
@@ -438,7 +490,7 @@ async function call(p, token, body, extraHeaders = {}, retry = true) {
 const login = (username, password, deviceId) => call('/api/login', null, { username, password, deviceId });
 // Run a chat to completion; answers pc_tool events like a browser would.
 async function chat(token, message, opts = {}) {
-  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}) }) });
+  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}), ...(opts.startedBy ? { _testStartedBy: opts.startedBy } : {}) }) });
   if (r.status !== 200) return { status: r.status, events: [] };
   const events = []; let buf = '';
   const reader = r.body.getReader(), dec = new TextDecoder();
@@ -512,6 +564,8 @@ async function run() {
   const A = (await login('T-Admin', 'pw-t-admin-0001', devA)).data.token;
   const U = (await login('t-user', 'pw-t-user-0001', devB)).data.token;
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
+  if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
+  if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -1105,7 +1159,7 @@ async function run() {
     for (const p of procs) { try { p.kill(); } catch {} }
     const hostRs = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'work.rs'), 'utf8');
     check('R188', L188,
-      !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin,control' && (pn.providers || []).length === 0
+      !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin,control,signed-pc' && (pn.providers || []).length === 0
       && !!jprov && jprov.kind === 'host-jcode' && jprov.owner === 't-admin' && !otherSees && !plainListed && pickPlain.status !== 200 && pick.status === 200 && pick.data.provider === 'h:jcode-node/jcode'
       && r1.events.some((e) => e.type === 'bridge_info' && /through Jcode PGM/.test(e.text)) && r1init.harness === 'jcode' && /^fakej-/.test(r1init.session)
       && /jcode-answer model=claude-sonnet-5-5 provider=viberoller/.test(r1t) && /cwd=\S*jcode-host\S*worktrees\S*t-admin/.test(r1t) && /resume=no/.test(r1t) && /overlay:yes/.test(r1t)
@@ -2069,7 +2123,7 @@ async function run() {
       && /function openOwn/.test(page159) && /'X-VR-Own-Seal': await sealOwn\(info\)/.test(page159) && /id="goFiles"/.test(page159) && /LIBRARY\.show\(\)/.test(page159)
       && /Copy to my uploaded_files/.test(lib159) && /\/api\/library\/delete/.test(lib159) && /ATTACH\.open\(it/.test(lib159)
       // the hub's own data never shows as a change in the live checkout (the auto-deploy refuses a checkout with changes)
-      && ['bridge/uploads-index.json', 'bridge/uploads/x', 'bridge/ai-host-sessions.json', 'bridge/ai-node.status.json', 'Chat/files/x'].every((f) => spawnSync('git', ['check-ignore', '-q', f], { cwd: MILLS }).status === 0),
+      && ['bridge/uploads-index.json', 'bridge/uploads/x', 'bridge/ai-host-sessions.json', 'bridge/hub-signing.key', 'bridge/ai-node.status.json', 'Chat/files/x'].every((f) => spawnSync('git', ['check-ignore', '-q', f], { cwd: MILLS }).status === 0),
       `U linux ${JSON.stringify(libU.linux)}; A linked ${libA.linux && libA.linux.linked}; on disk ${onLinkedDisk}; work entry ${JSON.stringify({ k: wEntry.kind, n: wEntry.name, la: !!wEntry.lastAccess, uses: (wEntry.uses || []).length, f: wEntry.folder })}; chat U ${sByU1}/${sByU2} A ${sByA} entry ${JSON.stringify(sEntry.where || {})} del ${sDel.status} after ${sAfter}; notMine ${notMine.status}; work del ${wDel.status} gone ${wGone} serve ${wServe}`);
     // R161: edit, execute, files put in uploaded_files outside VibeRoller, files sent to Work from the library
     {
@@ -3572,6 +3626,409 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     // leave the board as it was: the planner checks after this one weigh owners by their open workload
     for (const t of [t315, p315]) if (t.id) { await call('/api/board/release', U, { id: t.id, asAgent: t === t315 }); await call('/api/board/delete', U, { id: t.id }); }
   } else skip('R315', 'asAgent board writes', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R325 and R326 (T-309): linking a machine by device code, its key, the owner's list, the admin's count, revoke, re-link
+    const mc = async (method, p, tok, body) => { // (call() does GET and POST only)
+      try { const r = await fetch(H + p, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: { error: e.message } }; }
+    };
+    const newKey = () => { const k = crypto.generateKeyPairSync('ed25519'); return { priv: k.privateKey, pub: k.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex') }; };
+    const signReply = (k, id, rid, body) => crypto.sign(null, Buffer.from(`vr-machine-reply/1\n${id}\n${rid}\n${crypto.createHash('sha256').update(body).digest('hex')}`), k.priv).toString('hex');
+    const mstart = (k, extra) => call('/api/device/start', null, { client: 'vr-machine', device: 'r325-box', publicKey: k.pub, machineId: 'mach-r325-aaaa', os: 'linux', app: 'vr-host', appVersion: '1.2.3', mode: 'persistent', folder: '/srv/r325/work', ...(extra || {}) });
+    const mlink = async (owner, k, extra, replace) => { // start, approve (with the person's session), poll once: the token (or why not)
+      const s = await mstart(k, extra), d = s.data || {};
+      const ok = await call('/api/device/approve', owner, { userCode: d.userCode, ...(replace ? { replace } : {}) });
+      const p = await call('/api/device/poll', null, { deviceCode: d.deviceCode });
+      return { s, ok, p, token: (p.data || {}).token, id: (p.data || {}).deviceId, userCode: d.userCode };
+    };
+    const created = (await call('/api/admin/create', A, { username: 't-r325', display: 'R325' })).data || {};
+    const X = created.password ? (await login('t-r325', created.password, 'device-r325-xxxxxxxxxx')).data.token : '';
+    const listOf = async (t) => ((await call('/api/machines', t)).data || {}).machines || [];
+    try {
+      // ---- R325: linking
+      const k1 = newKey();
+      const noKey = await call('/api/device/start', null, { client: 'vr-machine', device: 'r325-box' });
+      const s1 = await mstart(k1), d1 = s1.data || {};
+      const peekNoSession = await call('/api/device/peek', null, { userCode: d1.userCode });
+      const peekViaDev = await call('/api/device/peek', U, { userCode: 'BBBB-BBBB' });
+      const peek = await call('/api/device/peek', X, { userCode: d1.userCode });
+      const ap = await call('/api/device/approve', X, { userCode: d1.userCode });
+      const p1 = await call('/api/device/poll', null, { deviceCode: d1.deviceCode });
+      const tok = (p1.data || {}).token, id = (p1.data || {}).deviceId;
+      const whoAmI = tok ? (await call('/api/check', tok)).data : {};
+      const listX = await listOf(X), listU = await listOf(U), listA = await listOf(A);
+      const viaMachine = tok ? await call('/api/machines', tok) : {};
+      const devList = ((await call('/api/devices', X)).data || {}).devices || [];
+      const raw = fs.existsSync(path.join(SB, 'device-tokens.json')) ? fs.readFileSync(path.join(SB, 'device-tokens.json'), 'utf8') : '';
+      const body = JSON.stringify({ result: 'ok', n: 1 });
+      const rep = (rid, b, sig) => call('/api/machine/reply', tok, { requestId: rid, body: b, sig });
+      const good = await rep('rq1', body, signReply(k1, id, 'rq1', body));
+      const wrongKey = await rep('rq1', body, signReply(newKey(), id, 'rq1', body));
+      const tampered = await rep('rq1', body + ' ', signReply(k1, id, 'rq1', body));
+      const otherReq = await rep('rq2', body, signReply(k1, id, 'rq1', body));
+      const noSig = await rep('rq1', body, '');
+      const polled = await call('/api/machine/poll', tok, { wait: 0 });
+      const onlineX = (await listOf(X))[0] || {};
+      const cnt = await call('/api/machines/count', A), cntU = await call('/api/machines/count', U), cntX = await call('/api/machines/count', X), cntNone = await call('/api/machines/count', null);
+      const mine = (cnt.data.people || []).find((x) => x.user === 't-r325') || {};
+      const renU = await mc('PATCH', '/api/machines/' + id, U, { name: 'stolen' }), renX = await mc('PATCH', '/api/machines/' + id, X, { name: 'Desk r325' }), renBad = await mc('PATCH', '/api/machines/' + id, X, { name: '  ' });
+      const wide = await call('/api/machine/poll', tok, { wait: 0, scope: 'folders: /srv (read-write); shell (advisory)' });
+      const afterRename = (await listOf(X))[0] || {};
+      check('R325', 'T-309 link a machine by device code (client vr-machine): a start without a valid ed25519 key is refused (400); start names the default scope (one folder, read-write) and the approval screen (peek, own session only) shows os, app, key fingerprint and that scope; approving links it to the approving account only (its token is that account on /api/machine only: T-310 refuses it everywhere else, see R327); its replies are signed by its device key and the hub refuses another key, another body, another request and no signature; the owner\'s list has only their machines (kind, mode, online, scope in words, never a token or key), the admin sees counts and online numbers only (no name, os, scope), a machine token cannot manage machines; rename works for the owner only; the hub keeps only a hash of the token',
+        noKey.status === 400 && s1.status === 200 && d1.kind === 'machine' && /^one folder: \/srv\/r325\/work \(read-write\)/.test((d1.defaultScope || {}).summary || '') && peekNoSession.status === 401 && [404, 429].includes(peekViaDev.status)
+        && peek.status === 200 && peek.data.kind === 'machine' && peek.data.os === 'linux' && peek.data.app === 'vr-host' && /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/.test(peek.data.keyFingerprint || '') && /^one folder: /.test((peek.data.defaultScope || {}).summary || '') && Array.isArray(peek.data.replaceable) && !peek.data.replaceable.length
+        && ap.status === 200 && p1.status === 200 && !!tok && !!id && p1.data.kind === 'machine' && !whoAmI.username
+        && listX.length === 1 && listX[0].id === id && listX[0].kind === 'machine' && listX[0].mode === 'persistent' && listX[0].online === false && /^one folder: /.test(listX[0].scope) && !JSON.stringify(listX).includes(tok) && !JSON.stringify(listX).includes(k1.pub) && !listU.length && !listA.length
+        && viaMachine.status === 403 && devList.some((x) => x.id === id && x.kind === 'machine') && raw.includes(crypto.createHash('sha256').update(tok).digest('hex')) && !raw.includes(tok)
+        && good.status === 200 && good.data.owner === 't-r325' && good.data.machine === id && wrongKey.status === 403 && tampered.status === 403 && otherReq.status === 403 && noSig.status === 403
+        && polled.status === 200 && polled.data.owner === 't-r325' && onlineX.online === true
+        && cnt.status === 200 && cnt.data.machines >= 1 && mine.machines === 1 && mine.online === 1 && Object.keys(mine).sort().join() === 'machines,online,user' && !/Desk|linux|vr-host|scope|folder/.test(JSON.stringify(cnt.data)) && cntU.status === 403 && cntX.status === 403 && cntNone.status === 401
+        && renU.status === 404 && renX.status === 200 && renBad.status === 400 && afterRename.name === 'Desk r325' && wide.status === 200 && (await listOf(X))[0].scope.startsWith('folders: /srv') && (await listOf(X))[0].scopeIsDefault === false,
+        `start ${s1.status}/nokey ${noKey.status} scope "${(d1.defaultScope || {}).summary}" · peek ${peek.status} ${peek.data.keyFingerprint} · approve ${ap.status} poll ${p1.status} as ${whoAmI.username} · list X ${listX.length} U ${listU.length} A ${listA.length} via machine ${viaMachine.status} · reply good ${good.status}/wrong key ${wrongKey.status}/body ${tampered.status}/request ${otherReq.status}/none ${noSig.status} · online ${onlineX.online} · count ${cnt.status} ${JSON.stringify(mine)} U ${cntU.status} X ${cntX.status} · rename U ${renU.status} X ${renX.status} bad ${renBad.status}`);
+
+      // ---- R326: unlink, revoke on a password change, re-link
+      const inflight = (async () => { const t0 = Date.now(); const r = await call('/api/machine/poll', tok, { wait: 20 }); return { r, ms: Date.now() - t0 }; })();
+      await sleep(600);
+      const delU = await mc('DELETE', '/api/machines/' + id, U), delViaMachine = await mc('DELETE', '/api/machines/' + id, tok);
+      const stillThere = (await listOf(X)).length;
+      const delX = await mc('DELETE', '/api/machines/' + id, X);
+      const held = await inflight;
+      const afterPoll = await call('/api/machine/poll', tok, { wait: 0 }), afterReply = await rep('rq9', body, signReply(k1, id, 'rq9', body)), afterApi = await call('/api/check', tok);
+      const afterList = await listOf(X), afterTwice = await mc('DELETE', '/api/machines/' + id, X);
+      const unknown = await call('/api/machine/poll', 'f'.repeat(64), { wait: 0 });
+      const machineSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'machine', 'device.rs'), 'utf8');
+      // a password change revokes the machines (and the person's other devices); "keep my machines linked" keeps them
+      const k2 = newKey(), m2 = await mlink(X, k2, { machineId: 'mach-r325-bbbb' }), m3 = await mlink(X, k2, { machineId: 'mach-r325-cccc' });
+      const pollOf = async (t) => (await call('/api/machine/poll', t, { wait: 0 }));
+      const before = [(await pollOf(m2.token)).status, (await pollOf(m3.token)).status];
+      const pw1 = await call('/api/admin/password', A, { username: 't-r325' });
+      const afterPw = [await pollOf(m2.token), await pollOf(m3.token)];
+      const X2 = (await login('t-r325', pw1.data.password, 'device-r325-xxxxxxxxxx')).data.token;
+      const afterPwList = await listOf(X2);
+      const m4 = await mlink(X2, k2, { machineId: 'mach-r325-dddd' });
+      const pw2 = await call('/api/admin/password', A, { username: 't-r325', keepMachines: true });
+      const kept = await pollOf(m4.token), keptSession = await call('/api/check', X2);
+      const X3 = (await login('t-r325', pw2.data.password, 'device-r325-xxxxxxxxxx')).data.token;
+      const keptList = await listOf(X3);
+      // re-link after a wiped store: the same machine id is offered "replace old record", the old token ends, the scope is the default again
+      const k5 = newKey(), old = await mlink(X3, k5, { machineId: 'mach-r325-eeee', device: 'r325-old' });
+      await mc('PATCH', '/api/machines/' + old.id, X3, { name: 'My old desk', paused: true });
+      await call('/api/machine/poll', old.token, { wait: 0, scope: 'folders: / (read-write); shell' });
+      const k6 = newKey(), s6 = await mstart(k6, { machineId: 'mach-r325-eeee', device: 'r325-old', folder: '/srv/r325/new' }), d6 = s6.data || {};
+      const peek6 = await call('/api/device/peek', X3, { userCode: d6.userCode });
+      const stranger = await call('/api/device/approve', X3, { userCode: d6.userCode, replace: 'not-mine' });
+      const offerU = await call('/api/device/peek', U, { userCode: d6.userCode });
+      const ap6 = await call('/api/device/approve', X3, { userCode: d6.userCode, replace: old.id });
+      const p6 = await call('/api/device/poll', null, { deviceCode: d6.deviceCode });
+      const list6 = await listOf(X3);
+      const oldNow = await call('/api/machine/poll', old.token, { wait: 0 });
+      const newNow = await call('/api/machine/poll', (p6.data || {}).token, { wait: 0 });
+      // no replace: both records exist until one is unlinked
+      const k7 = newKey(), twin = await mlink(X3, k7, { machineId: 'mach-r325-eeee', device: 'r325-old' });
+      const list7 = await listOf(X3);
+      const so = await call('/api/admin/signout', A, { username: 't-r325' }), afterSignout = await pollOf(m4.token);
+      const n6 = list6.find((x) => x.id === (p6.data || {}).deviceId) || {};
+      const bits326 = [
+        delU.status === 404, delViaMachine.status === 403, stillThere === 1, delX.status === 200, held.r.status === 401, held.r.data.revoked === true, held.ms < 5000,
+        afterPoll.status === 401, afterPoll.data.error === 'revoked', afterReply.status === 401, afterReply.data.revoked === true, afterApi.status === 401, !afterList.length, afterTwice.status === 404, unknown.status === 401, !unknown.data.revoked,
+        /fn handle_answer\(/.test(machineSrc), /fn store_is_owner_only_and_wipes\(/.test(machineSrc),
+        m2.p.status === 200, m3.p.status === 200, before.join() === '200,200', pw1.status === 200, afterPw.every((x) => x.status === 401 && x.data.revoked === true), !afterPwList.length,
+        m4.p.status === 200, pw2.status === 200, kept.status === 200, keptSession.status === 401, keptList.length === 1, keptList[0] && keptList[0].id === m4.id, so.status === 200, afterSignout.status === 401, afterSignout.data.revoked === true,
+        s6.status === 200, peek6.status === 200, peek6.data.replaceable.length === 1, peek6.data.replaceable[0].id === old.id, peek6.data.replaceable[0].sameMachineId === true, stranger.status === 400, (offerU.status === 200 && !(offerU.data.replaceable || []).length),
+        ap6.status === 200, p6.status === 200, (p6.data || {}).replaced === old.id, list6.length === 2, !list6.some((x) => x.id === old.id),
+        n6.name === 'My old desk', /^one folder: \/srv\/r325\/new \(read-write\)/.test(n6.scope || ''), n6.scopeIsDefault === true, n6.paused === false, (n6.replaced || []).length === 1,
+        oldNow.status === 401, oldNow.data.revoked === true, newNow.status === 200,
+        twin.p.status === 200, list7.length === 3, list7.filter((x) => x.machineId === 'mach-r325-eeee').length === 2,
+      ];
+      check('R326', 'T-309 revoke and re-link: Unlink from the web (the owner\'s page only; not another person, not a machine token) closes a held poll within moments and the token is invalid at once for poll, reply and the API, with the answer "revoked" (401) that makes the machine wipe its token and key (LinkStore::handle_answer, unit-tested; an ordinary 401 or a 500 wipes nothing); an unknown token is a plain 401; a password change revokes the account\'s machine tokens, unless the request says keepMachines (they stay, the sessions still go); "sign out everywhere" revokes them; re-link after a wiped store: the same machine id is offered "replace old record" (only the account\'s own records, else 400), replacing keeps the name and revokes the old token, the new link starts at the default scope (the new folder, unpaused), and without replacing both records exist',
+        bits326.every(Boolean),
+        `${bits326.map((b, i) => (b ? '' : 'FAILED #' + i + ' ')).join('')}unlink U ${delU.status} machine ${delViaMachine.status} X ${delX.status} · held poll ${held.r.status} ${held.r.data.error} after ${held.ms} ms · after: poll ${afterPoll.status} reply ${afterReply.status} api ${afterApi.status} list ${afterList.length} · password: before ${before} after ${afterPw.map((x) => x.status)} list ${afterPwList.length} · keepMachines: machine ${kept.status} session ${keptSession.status} list ${keptList.length} · signout ${afterSignout.status} · offer ${JSON.stringify(peek6.data.replaceable)} · stranger ${stranger.status} · replaced ${(p6.data || {}).replaced} list ${list6.length} (${list6.map((x) => x.name + ' ' + x.scope.slice(0, 24)).join(' | ')}) · old ${oldNow.status} new ${newNow.status} · twin: list ${list7.length}`);
+    } finally {
+      if (created.password) await call('/api/admin/delete', A, { username: 't-r325' });
+    }
+  } else { skip('R325', 'linked machines: link by device code', 'the Rust hub\'s: --rust-hub runs it'); skip('R326', 'linked machines: revoke and re-link', 'the Rust hub\'s: --rust-hub runs it'); }
+  // R327 and R338 (T-310, linked machines 4/8): who may reach a linked machine, and compatibility. The hub half runs here (the Rust hub's);
+  // the unit tests, the check calls and the JavaScript hub's half are in the cargo block further down (r327hub / r338hub carry the results).
+  let r327hub = null, r338hub = null;
+  if (RUST_HUB) {
+    const mc = async (method, p, tok, body) => { try { const r = await fetch(H + p, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: {} }; } };
+    const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
+    const mkHost = async (token) => { const made = await call('/api/hosts/new', token, {}); const id = (made.data.host || {}).id || ''; const cj = (await call('/api/hosts/config', token, { id })).data.config || {}; return { id, token: cj.token, nick: (made.data.host || {}).nickname || '' }; };
+    const enc = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const mach = (r) => { const l = texts(r.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } };
+    const listPc = (extra) => ({ route: 'pc-tool', body: { name: 'list', args: { path: '' }, ...(extra || {}) } });
+    const o = {}; const d = [];
+    const created = (await call('/api/admin/create', A, { username: 't-r327', display: 'R327' })).data || {};
+    const X = created.password ? (await login('t-r327', created.password, 'device-r327-xxxxxxxxxx')).data.token : '';
+    const watchStop = { v: false }; let watcher = Promise.resolve(); let hostStub = null;
+    try {
+      // ---- 1. a machine token reaches only /api/machine/poll|reply|unlink (403 everywhere else); an ordinary device token is unchanged
+      const kp = crypto.generateKeyPairSync('ed25519'); const pub = kp.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex');
+      const ms = (await call('/api/device/start', null, { client: 'vr-machine', device: 'r327-box', publicKey: pub, machineId: 'mach-r327-aaaa', os: 'linux', app: 'vr-host', appVersion: '1.2.3', mode: 'persistent', folder: '/srv/r327/work' })).data || {};
+      await call('/api/device/approve', X, { userCode: ms.userCode });
+      const mp = (await call('/api/device/poll', null, { deviceCode: ms.deviceCode })).data || {}; const tokM = mp.token, idM = mp.deviceId;
+      const ds = (await call('/api/device/start', null, { client: 'jcode', device: 'r327-laptop' })).data || {};
+      await call('/api/device/approve', X, { userCode: ds.userCode });
+      const tokD = ((await call('/api/device/poll', null, { deviceCode: ds.deviceCode })).data || {}).token;
+      const gets = ['/api/check', '/api/machines', '/api/devices', '/api/work/current', '/api/board', '/api/notes/list', '/v1/models', '/api/machine/other', '/api/usage'];
+      const posts = [['/api/chat', { message: 'hi' }], ['/api/work/share', { conv: 'room' }], ['/api/devices/revoke', { id: idM }], ['/api/hosts/new', {}], ['/api/device/approve', { userCode: 'AAAA-BBBB' }], ['/api/logout', {}], ['/api/pc-result', { id: 'x', ok: true }], ['/api/admin/create', { username: 't-r327-x' }]];
+      const viaM = []; for (const p of gets) viaM.push((await mc('GET', p, tokM)).status); for (const [p, b] of posts) viaM.push((await mc('POST', p, tokM, b)).status);
+      const mPoll = await mc('POST', '/api/machine/poll', tokM, { wait: 0 });
+      const dChk = await mc('GET', '/api/check', tokD), dList = await mc('GET', '/api/devices', tokD), dBoard = await mc('GET', '/api/board', tokD);
+      const stillLinked = ((await mc('GET', '/api/machines', X)).data.machines || []).some((m) => m.id === idM);
+      o.scope = viaM.every((s) => s === 403) && mPoll.status === 200 && mPoll.data.owner === 't-r327' && dChk.status === 200 && dChk.data.username === 't-r327' && dList.status === 200 && dBoard.status === 200 && stillLinked;
+      d.push(`scope: machine token ${viaM.join('/')} poll ${mPoll.status}; device token check ${dChk.status} devices ${dList.status} board ${dBoard.status}`);
+
+      // ---- 2. a watcher sees no machine / pc event and cannot answer one. (No host of U's is online yet: the call goes to the page.)
+      await call('/api/work/share', U, { conv: 'room' });
+      const wlog = []; let wcur = 0, wsince = '';
+      watcher = (async () => { while (!watchStop.v) {
+        const w = await call('/api/work/watch?user=t-user&after=' + wcur + '&since=' + encodeURIComponent(wsince), A); const dd = w.data || {};
+        for (const e of dd.events || []) wlog.push(e); if (typeof dd.after === 'number') wcur = dd.after; if (dd.since) wsince = dd.since; if (dd.stopped || w.status !== 200) break;
+      } })();
+      let ownerSaw = '', ownerRun = '', wrongAnswer = null, waitedOnOwner = false, finished = false;
+      await (async () => {
+        const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ message: 'PCTOOL r327 watcher', fresh: true }) });
+        const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue; let ev = {}; try { ev = JSON.parse(line); } catch { /* */ }
+            if (ev.type === 'bridge_run') ownerRun = ev.id;
+            if (ev.type === 'pc_tool') (async () => { wrongAnswer = await call('/api/pc-result', A, { id: ev.id, ok: true, result: 'watcher-answer' }); await sleep(600); waitedOnOwner = !finished; await call('/api/pc-result', U, { id: ev.id, ok: true, result: 'owner-answer' }); })();
+            if (ev.type === 'assistant') ownerSaw += JSON.stringify(ev.message);
+          }
+        }
+        finished = true;
+      })();
+      await sleep(300);
+      const attachA = await call('/api/work/attach?run=' + encodeURIComponent(ownerRun) + '&after=0', A);
+      await call('/api/work/share', U, { conv: '' }); watchStop.v = true; await Promise.race([watcher, sleep(5000)]);
+      const wjson = JSON.stringify(wlog);
+      o.watch = /owner-answer/.test(ownerSaw) && !/watcher-answer/.test(ownerSaw) && waitedOnOwner && wrongAnswer && wrongAnswer.status === 200 && wlog.length > 0 && wlog.every((e) => ['user', 'claude', 'tool', 'sys'].includes(e.t) && !('type' in e)) && !/pc_tool|machine_/.test(wjson) && !!ownerRun && attachA.status === 200 && !(attachA.data.events || []).length;
+      d.push(`watch: ${wlog.length} log lines (${[...new Set(wlog.map((e) => e.t))].join('+')}) pc_tool in log ${/pc_tool|machine_/.test(wjson)}; the watcher's answer was ${waitedOnOwner ? 'ignored (the run kept waiting for the owner)' : 'NOT ignored'}; run saw ${/owner-answer/.test(ownerSaw) ? 'the owner\'s answer' : ownerSaw.slice(0, 120)}; attach by the watcher ${(attachA.data.events || []).length} events`);
+
+      // ---- 3. the owner's own (older) AI host: pc engine, no `machine` cap, not even `signed-pc`. A planner session's run never reaches it; a run
+      //         started on U's behalf by someone else never reaches it (nor the browser folder); U's own run does.
+      const hostU = await mkHost(U); const got = [];
+      const ac = new AbortController(); hostStub = ac;
+      const hi = await (await fetch(H + '/node/hello', { method: 'POST', headers: hostHdr(hostU.id, hostU.token), body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex'), user: '', providers: [], engines: [], pc: true, version: '1.0.0', os: 'linux', caps: ['relay'] }) })).json().catch(() => ({}));
+      (async () => { while (!ac.signal.aborted) {
+        const pr = await fetch(H + '/node/poll', { headers: hostHdr(hostU.id, hostU.token), signal: ac.signal }).then((r) => r.json()).catch(() => ({}));
+        for (const j of pr.jobs || []) { got.push(j); await fetch(H + '/node/reply', { method: 'POST', headers: hostHdr(hostU.id, hostU.token), body: JSON.stringify({ id: j.id, status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ ok: true, result: 'host-listing ' + hostU.id })).toString('base64') }) }).catch(() => {}); }
+      } })();
+      for (let i = 0; i < 40; i++) { const hs = (await call('/api/check', U)).data.aiNodes || []; if (hs.some((x) => x.id === hostU.id && x.online)) break; await sleep(250); }
+      const planSid = (await call('/api/work/sessions/new', U, { title: 'r327 planner', background: true, mode: 'planner' })).data.id;
+      const n0 = got.length;
+      const pr1 = await chat(U, 'PLANNERPC PLANNERMACHINE=' + hostU.id + ' please', { session: planSid }), pr2 = await chat(U, 'PLANNERPC please', { session: planSid });
+      const planMsg = (r) => { try { return JSON.parse((texts(r.events).match(/PLANNER:(\{.*\})/) || [])[1]).pc || ''; } catch { return ''; } };
+      const n1 = got.length;
+      const behalf = mach(await chat(U, enc([listPc(), listPc({ machine: hostU.id }), listPc({ machine: hostU.nick }), { route: 'board', body: { name: 'board_list', args: {} } }]), { startedBy: 't-admin', fresh: true }));
+      const n2 = got.length;
+      const own = mach(await chat(U, enc([listPc(), listPc({ machine: hostU.id })]), { fresh: true }));
+      const n3 = got.length;
+      const isListing = (r) => r && r.status === 200 && r.body && r.body.ok === true && r.body.result === 'host-listing ' + hostU.id;
+      o.planner = /Planner mode: PC tools are not available/.test(planMsg(pr1)) && /Planner mode: PC tools are not available/.test(planMsg(pr2)) && n1 === n0;
+      o.behalf = behalf.length === 4 && [0, 1, 2].every((i) => behalf[i].status === 403 && behalf[i].body.ok === false && /on someone else's behalf/.test(JSON.stringify(behalf[i].body))) && behalf[3].status === 200 && n2 === n1;
+      o.own = own.length === 2 && isListing(own[0]) && isListing(own[1]) && n3 === n2 + 2;
+      d.push(`planner: "${planMsg(pr1).slice(0, 50)}" / "${planMsg(pr2).slice(0, 50)}" jobs to the host ${n1 - n0}; on behalf: ${behalf.map((r) => r.status).join('/')} jobs ${n2 - n1}; own run: ${own.map((r) => r.status).join('/')} jobs ${n3 - n2}`);
+      // the same on behalf with no host: the page's folder is not reached either (no pc_tool event leaves, the answer is at once)
+      ac.abort(); await call('/api/hosts/remove', U, { id: hostU.id });
+      const behalfB = mach(await chat(U, enc([listPc()]), { startedBy: 't-admin', fresh: true }));
+      const ownB = await chat(U, 'PCTOOL r327 own page', { fresh: true });
+      o.behalfBrowser = behalfB.length === 1 && behalfB[0].status === 403 && /fake-listing/.test(texts(ownB.events));
+      d.push(`browser: on behalf ${behalfB.map((r) => r.status).join('/')}, own run ${/fake-listing/.test(texts(ownB.events))}`);
+
+      // ---- compatibility (R338): the hub's hello answer announces `machine` (an older host never mentions it and still gets its pc jobs, above),
+      //      a scope document with a higher v at the poll boundary is refused whole, a readable one gives the words
+      o.hello = !!hi.hubKey && hi.machine && hi.machine.v === 1;
+      const listM = async () => ((await mc('GET', '/api/machines', X)).data.machines || []).find((m) => m.id === idM) || {};
+      const before = await listM();
+      const v2 = await mc('POST', '/api/machine/poll', tokM, { wait: 0, scopeDoc: { v: 2, preset: 'folder', paths: [{ path: '/srv/r327/newer', access: 'rw' }], futureThing: true } });
+      const v2text = await mc('POST', '/api/machine/poll', tokM, { wait: 0, scopeDoc: JSON.stringify({ v: 9 }), scope: 'folders: /srv/typed-by-the-machine (read-write)' });
+      const junk = await mc('POST', '/api/machine/poll', tokM, { wait: 0, scopeDoc: 'not json' });
+      const afterV2 = await listM();
+      const v1 = await mc('POST', '/api/machine/poll', tokM, { wait: 0, scopeDoc: { v: 1, preset: 'folder', paths: [{ path: '/srv/r327/other', access: 'rw' }], futureKey: [1] }, scope: 'folders: /srv/typed-by-the-machine (read-write)' });
+      const afterV1 = await listM();
+      o.scopeDoc = v2.status === 200 && /needs a newer hub/.test(v2.data.scopeRefused || '') && /needs a newer hub/.test(v2text.data.scopeRefused || '') && !!junk.data.scopeRefused && afterV2.scope === before.scope && afterV2.scopeIsDefault === true
+        && v1.status === 200 && v1.data.scopeRefused === null && /^one folder: \/srv\/r327\/other/.test(afterV1.scope || '') && !/typed-by-the-machine/.test(afterV1.scope || '') && afterV1.scopeIsDefault === false;
+      d.push(`scope doc: v2 ${v2.status} "${(v2.data.scopeRefused || '').slice(0, 60)}"; kept "${(afterV2.scope || '').slice(0, 40)}"; v1 → "${(afterV1.scope || '').slice(0, 40)}"; hello machine ${JSON.stringify(hi.machine)}`);
+      // the source: no presence / idle check on the machine path (the owner's run just goes on while they are away, Q7) and the sentence is in the prompt
+      const workSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'work.rs'), 'utf8'), hostsSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'ai_hosts.rs'), 'utf8');
+      const toolBody = workSrc.slice(workSrc.indexOf('// pc-tool: the person'), workSrc.indexOf('/// Everything a person may pick')).replace(/\/\/.*$/gm, ''); // the pc path, code only
+      const mfBody = hostsSrc.slice(hostsSrc.indexOf('pub fn machine_for('), hostsSrc.indexOf('pub async fn pc_tool(')).replace(/\/\/.*$/gm, '');
+      o.away = !/presence|idle|is_present|\.away|unattended/i.test(toolBody + mfBody) && /what you did, why you chose it over the other options, and what \{name\} can change/.test(workSrc) && !/unattended/i.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-hub', 'src', 'modules', 'machines.rs'), 'utf8').replace(/\/\/.*$/gm, ''));
+      d.push(`away: no presence check on the machine path ${!/presence|idle|is_present|\.away|unattended/i.test(toolBody + mfBody)}`);
+    } finally {
+      watchStop.v = true; if (hostStub) hostStub.abort();
+      await call('/api/work/share', U, { conv: '' });
+      if (created.password) await call('/api/admin/delete', A, { username: 't-r327' });
+    }
+    r327hub = { ok: ['scope', 'watch', 'planner', 'behalf', 'own', 'behalfBrowser', 'away'].every((k) => o[k] === true), o, detail: d.join(' · ') };
+    r338hub = { ok: ['own', 'hello', 'scopeDoc'].every((k) => o[k] === true), o, detail: d.join(' · ') };
+  }
+  // R316 to R320 (T-303): RE containers, the manager of throw-away copies of the base image. A tiny local image (reTestSetup),
+  // the real Podman; every container this block starts is removed again, whatever happens
+  if (RE_T.ok) {
+    const prefix = RE_T.prefix, tok = { u: U, d: D, a: A };
+    const ctrs = () => (podman(['ps', '-a', '--filter', 'name=' + prefix, '--format', '{{.Names}}'], RE_T.env).stdout || '').split('\n').filter(Boolean).sort();
+    const re = (p, t, body) => call('/api/re/' + p, t, body);
+    const reList = async (t) => ((await re('list', t)).data || {});
+    const reSt = async (t, id) => ((await re('status?id=' + id, t)).data || {}).sandbox || {};
+    const exch = (id) => path.join(SCRATCH, 'Re', id);
+    const started = []; // every copy this block made, for the last clean-up
+    try {
+      // R316: at most three run, the rest wait in order, a freed slot starts the next in line
+      const mk = async (t, purpose) => { const r = await re('start', t, { purpose }); const s = (r.data || {}).sandbox || {}; if (s.id) started.push(s.id); return { status: r.status, s, error: (r.data || {}).error }; };
+      const s1 = await mk(U, 'r316 one'), s2 = await mk(U, 'r316 two'), s3 = await mk(D, 'r316 three');
+      const q1 = await mk(A, 'r316 four'), q2 = await mk(U, 'r316 five');
+      const l316 = await reList(U);
+      const names316 = ctrs();
+      const stop1 = await re('stop', U, { id: s1.s.id });
+      let q1after = {}; for (let i = 0; i < 40; i++) { q1after = await reSt(A, q1.s.id); if (q1after.state === 'running') break; await sleep(250); }
+      const q2after = await reSt(U, q2.s.id);
+      const q2stop = await re('stop', U, { id: q2.s.id }); // leaving the queue: it never starts
+      const names316b = ctrs();
+      check('R316', 'T-303 RE containers: at most 3 copies run at once (a fourth and fifth wait: state queued, place 1 and 2, no container made for them); stopping a running one starts the next in line (FIFO), the one behind moves up, and a queued copy can leave the queue; anyone on the team may start one (no approval)',
+        [s1, s2, s3].every((x) => x.status === 200 && x.s.state === 'running') && q1.s.state === 'queued' && q1.s.queuePosition === 1 && q2.s.state === 'queued' && q2.s.queuePosition === 2
+        && l316.running === 3 && l316.queued === 2 && l316.max === 3 && (l316.sandboxes || []).length === 5 && names316.length === 3 && names316.every((n) => n.startsWith(prefix))
+        && stop1.status === 200 && stop1.data.sandbox.state === 'gone' && q1after.state === 'running' && q2after.state === 'queued' && q2after.queuePosition === 1
+        && q2stop.status === 200 && names316b.length === 3 && !names316b.includes(prefix + s1.s.id),
+        `started ${[s1, s2, s3].map((x) => x.s.state)} queued ${q1.s.queuePosition}/${q2.s.queuePosition} (${q1.error || ''}${q2.error || ''}) list ${l316.running}+${l316.queued}/${l316.max} containers ${names316.length} · after stop q1 ${q1after.state} q2 ${q2after.state}/${q2after.queuePosition} containers ${names316b.length}`);
+
+      // R317: data in, a command in the copy, data out (text, binary and the raw download); no network, no host mount, a non-root user, one capability
+      const id2 = s2.s.id;
+      const bin = Buffer.from([0, 1, 2, 250, 255, 77, 90, 144, 0, 3]);
+      const p1 = await re('put', U, { id: id2, path: 'sample/hello.txt', text: 'hello re' });
+      const p2 = await re('put', U, { id: id2, path: 'bin.dat', base64: bin.toString('base64') });
+      const x1 = await re('exec', U, { id: id2, cmd: 'cat /work/in/sample/hello.txt | tr a-z A-Z > /work/out/up.txt; cp /work/in/bin.dat /work/out/bin.dat; id -u; ls /sys/class/net; ls /work; grep CapEff /proc/self/status; echo err >&2' });
+      const x2 = await re('exec', U, { id: id2, cmd: ['sh', '-c', 'echo $0 $1', 'a', 'b'] });
+      const x3 = await re('exec', U, { id: id2, cmd: 'sleep 30', timeoutSec: 1 });
+      const g1 = await re('get', U, { id: id2, path: 'up.txt' });
+      const g2 = await re('get', U, { id: id2, path: 'out/bin.dat' });
+      const raw = await fetch(H + '/api/re/get?id=' + id2 + '&path=bin.dat', { headers: { Authorization: 'Bearer ' + U } });
+      const rawBuf = Buffer.from(await raw.arrayBuffer());
+      const esc = [await re('put', U, { id: id2, path: '../escape.txt', text: 'x' }), await re('put', U, { id: id2, path: '/etc/cron.d/x', text: 'x' }), await re('get', U, { id: id2, path: '../../etc/passwd' }), await re('get', U, { id: id2, path: '/etc/passwd' }), await re('put', U, { id: id2, path: 'in/../../x', text: 'x' })];
+      const st2 = (await re('status?id=' + id2, U)).data || {};
+      const out1 = (x1.data.stdout || '').split('\n');
+      check('R317', 'T-303 RE containers: put / exec / get round trip: a text and a binary file go in (/work/in), a command in the copy makes results in /work/out (it runs as a non-root user, no network but lo, nothing of the host mounted, only the ptrace capability), they come out unchanged (JSON and raw download), stderr is kept apart, a runaway command is stopped at its timeout, and a path that leaves the exchange folder (.., absolute) is refused with 400',
+        p1.status === 200 && p1.data.path === '/work/in/sample/hello.txt' && p2.status === 200 && p2.data.size === bin.length
+        && x1.status === 200 && x1.data.code === 0 && out1[0] === '1000' && out1[1] === 'lo' && out1[2] === 'in' && out1[3] === 'out' && /CapEff:\t0000000000080000/.test(x1.data.stdout) && x1.data.stderr.trim() === 'err'
+        && x2.data.code === 0 && x2.data.stdout.trim() === 'a b' && x3.data.timedOut === true
+        && g1.status === 200 && g1.data.text === 'HELLO RE' && g2.status === 200 && g2.data.base64 === bin.toString('base64') && raw.status === 200 && rawBuf.equals(bin)
+        && esc.every((e) => e.status === 400) && !fs.existsSync(path.join(SCRATCH, 'Re', 'escape.txt')) && (st2.files || []).some((f) => f.area === 'out' && f.path === 'up.txt'),
+        `put ${p1.status}/${p2.status} exec ${x1.status} ${JSON.stringify(x1.data).slice(0, 220)} · argv ${JSON.stringify(x2.data.stdout)} · timeout ${x3.data.timedOut} · get ${g1.data.text}/${g2.status} raw ${raw.status} ${rawBuf.length} · escapes ${esc.map((e) => e.status)}`);
+
+      // R318: stop removes the container and its exchange folder entirely
+      const dir2 = exch(id2), hadDir = fs.existsSync(path.join(dir2, 'in', 'bin.dat')) && fs.existsSync(path.join(dir2, 'out', 'up.txt'));
+      const stop2 = await re('stop', U, { id: id2 });
+      const after2 = [await re('exec', U, { id: id2, cmd: 'true' }), await re('get', U, { id: id2, path: 'up.txt' })];
+      const gone = (await reList(U)).sandboxes || [];
+      check('R318', 'T-303 RE containers: stopping a copy deletes it entirely: its container is gone from the engine, its exchange folder (what went in and what came out, even files the copy\'s own user made) is deleted, it is off the list, and using it afterwards is refused (409/404); nothing survives',
+        hadDir && stop2.status === 200 && stop2.data.deleted === true && !ctrs().includes(prefix + id2) && !fs.existsSync(dir2) && !gone.some((s) => s.id === id2) && after2.every((r) => r.status === 404 || r.status === 409),
+        `had ${hadDir} stop ${stop2.status} container ${ctrs().includes(prefix + id2)} folder ${fs.existsSync(dir2)} after ${after2.map((r) => r.status)}`);
+
+      // R319: someone else's copy: listed, readable (status), but never stopped / used by another person (403)
+      const mine = await mk(U, 'r319 mine');
+      await re('put', U, { id: mine.s.id, path: 'keep.txt', text: 'keep me' });
+      const other = [await re('stop', D, { id: mine.s.id }), await re('exec', D, { id: mine.s.id, cmd: 'id' }), await re('put', D, { id: mine.s.id, path: 'x', text: 'x' }), await re('get', D, { id: mine.s.id, path: 'keep.txt' })];
+      const dList = await reList(D), dSee = (dList.sandboxes || []).find((s) => s.id === mine.s.id), dStatus = await re('status?id=' + mine.s.id, D);
+      const stillMine = await re('exec', U, { id: mine.s.id, cmd: 'echo still here' });
+      // the team tools: an agent is its person (same owner rules); an unknown tool is refused
+      check('R319', 'T-303 RE containers: another person cannot stop, exec, put to or get from someone\'s copy (403 each, nothing changed) while the list and status show it to everyone (read-only); the owner still can; the list says who owns which',
+        mine.status === 200 && other.every((r) => r.status === 403) && !!dSee && dSee.owner === 't-user' && dSee.purpose === 'r319 mine' && dStatus.status === 200 && dStatus.data.sandbox.state === 'running' && stillMine.status === 200 && stillMine.data.stdout.trim() === 'still here',
+        `other ${other.map((r) => r.status)} listed ${!!dSee} status ${dStatus.status} owner exec ${stillMine.status}`);
+
+      // R320: a hub restart adopts the running copy back (owner, purpose, files kept), never kills it; an admin may stop any copy
+      const pid0 = (await call('/api/status')).data.pid, before = ctrs();
+      fs.writeFileSync(path.join(SB, '.restart'), 'test');
+      let pid1 = pid0; for (let i = 0; i < 120 && (pid1 === pid0 || !pid1); i++) { await sleep(250); pid1 = (await call('/api/status')).data.pid; }
+      let l320 = {}, mine2 = null; for (let i = 0; i < 40 && !mine2; i++) { l320 = await reList(U); mine2 = (l320.sandboxes || []).find((s) => s.id === mine.s.id); if (!mine2) await sleep(500); }
+      const got = await re('get', U, { id: mine.s.id, path: 'in/keep.txt' }), dOther = await re('exec', D, { id: mine.s.id, cmd: 'id' });
+      const stillRuns = await re('exec', U, { id: mine.s.id, cmd: 'echo after restart' });
+      const during = ctrs();
+      const adminStop = await re('stop', A, { id: mine.s.id });
+      check('R320', 'T-303 RE containers: after a hub restart the running copy is adopted back (same id, owner, purpose; its files and its container untouched; listed as adopted), the owner rules still hold (403 for others), and an admin may stop any copy',
+        !!pid1 && pid1 !== pid0 && !!mine2 && mine2.adopted === true && mine2.state === 'running' && mine2.owner === 't-user' && mine2.purpose === 'r319 mine' && before.includes(prefix + mine.s.id)
+        && got.status === 200 && got.data.text === 'keep me' && dOther.status === 403 && stillRuns.status === 200 && stillRuns.data.stdout.trim() === 'after restart' && adminStop.status === 200 && !ctrs().includes(prefix + mine.s.id) && !fs.existsSync(exch(mine.s.id)),
+        `pid ${pid0} -> ${pid1} adopted ${mine2 && mine2.adopted} ${mine2 && mine2.state} get ${got.status} other ${dOther.status} exec ${stillRuns.status} admin stop ${adminStop.status}`);
+    } finally {
+      // whatever happened: every copy is stopped (their owners', through the hub), then any container left is removed with the engine
+      for (const id of started) for (const t of [A]) await re('stop', t, { id });
+      const left = ctrs(); if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
+    }
+  } else for (const id of ['R316', 'R317', 'R318', 'R319', 'R320']) skip(id, 'RE containers (T-303: cap of 3 + queue, put / exec / get, stop deletes everything, owner rules, restart adoption)', RE_T.why);
+  // R341 to R345 (T-254): REA's MCP tools inside a container, through three proxy tools (re_skill, re_tools, re_call). The test image
+  // carries a fake MCP stdio server (native/crates/pgm-sandbox-internal/tests/fake-mcp.sh, plain sh) and a two-file skill folder,
+  // and the hub's re.mcpCommand / re.skillDir point at them: the real 2.25 GB image is not needed
+  if (RE_T.ok) {
+    const prefix = RE_T.prefix;
+    const ctrs = () => (podman(['ps', '-a', '--filter', 'name=' + prefix, '--format', '{{.Names}}'], RE_T.env).stdout || '').split('\n').filter(Boolean).sort();
+    const re = (p, t, body) => call('/api/re/' + p, t, body);
+    const tools = async (token, calls) => { const r = await chat(token, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
+    const ok = (x) => (x && x.ok && x.result) || {};
+    const fakeProcs = (id) => { const x = spawnSync('podman', [...(RE_T.env.pre || []), 'exec', prefix + id, 'sh', '-c', 'grep -la "[m]cp.sh" /proc/[0-9]*/cmdline 2>/dev/null | wc -l'], { encoding: 'utf8', env: { ...process.env, ...(RE_T.env.env || {}) } }); return parseInt((x.stdout || '').trim(), 10); };
+    const hostClients = (id) => (spawnSync('ps', ['-eo', 'args'], { encoding: 'utf8' }).stdout || '').split('\n').filter((l) => l.includes('exec -i -w /work ' + prefix + id)).length;
+    const started = [];
+    let id = '';
+    try {
+      const st = await re('start', U, { purpose: 'r341 rea tools' });
+      id = ((st.data || {}).sandbox || {}).id || ''; if (id) started.push(id);
+      const hint = (st.data || {}).hint || '';
+      const before = id ? fakeProcs(id) : -1; // nothing of REA runs until the first use
+      const [t0, t1, t2, t3, t4] = await tools(U, [['re_tools', { id }], ['re_tools', { id, filter: 'FAIL' }], ['re_tools', { id, tool: 'echo' }], ['re_tools', { id, tool: 'nonesuch' }], ['re_tools', { id: 'zzzzzzzz' }]]);
+      const after = fakeProcs(id);
+      check('R341', 'T-254 re_tools lists REA\'s tools from inside the container: re_start\'s answer says to call re_skill and re_tools next, nothing of REA runs in the copy before the first use, the first re_tools starts its MCP server in the copy (one process) and answers the fake\'s three tool names (names only, with the server\'s name), filter gives the matching ones with the first line of their description, tool gives one tool\'s full schema, an unknown tool or copy is an error',
+        st.status === 200 && /re_skill/.test(hint) && /re_tools/.test(hint) && /re_call/.test(hint) && before === 0 && after === 1
+        && ok(t0).count === 3 && ok(t0).of === 3 && ok(t0).server && ok(t0).server.name === 'fake-rea' && ok(t0).names.join() === 'echo,big,nope' && !ok(t0).tools
+        && ok(t1).count === 1 && ok(t1).tools[0].name === 'nope' && ok(t1).tools[0].description === 'Always fails.' && ok(t2).tool && ok(t2).tool.inputSchema.type === 'object' && t3 && t3.ok === false && /nonesuch/.test(t3.error) && t4 && t4.ok === false,
+        `hint ${/re_skill/.test(hint)}/${/re_tools/.test(hint)} before ${before} after ${after} · list ${JSON.stringify(ok(t0)).slice(0, 200)} · filter ${ok(t1).count} · tool ${!!ok(t2).tool} · bad ${t3 && t3.error} / ${t4 && t4.error}`);
+
+      const args = { path: '/work/in/a "quoted".exe', n: [1, 2, 3], deep: { k: 'v', u: 'héllo' } };
+      const [c1, c2, c3, c4] = await tools(U, [['re_call', { id, tool: 'echo', args }], ['re_call', { id, tool: 'echo' }], ['re_call', { id, tool: 'nope', args: {} }], ['re_call', { id, tool: 'nonesuch', args: {} }]]);
+      const bigR = await re('call', U, { id, tool: 'big', args: {} });
+      const head = (((bigR.data || {}).content || [])[0] || {}).text || '';
+      const full = (bigR.data || {}).savedTo ? await re('get', U, { id, path: bigR.data.savedTo.replace('/work/', '') }) : {};
+      const txt1 = (((ok(c1).content || [])[0]) || {}).text || '', txt2 = (((ok(c2).content || [])[0]) || {}).text || '';
+      const pidOf = (t) => (t.match(/pid=(\d+)/) || [])[1];
+      let echoed = null; try { echoed = JSON.parse(txt1.slice(txt1.indexOf('args=') + 5)); } catch {}
+      check('R342', 'T-254 re_call round-trips: the arguments (quotes, nesting, non-ASCII) reach REA\'s tool exactly and its result comes back unchanged (its untrusted-content marker kept), two calls are served by the same long-lived MCP process (same pid, one process in the copy), an isError result passes through as REA gave it, an unknown tool is an error, and a result over the cap (100000 characters) comes back as a head with truncated, its size and a path in /work/out/mcp-results/ where the whole is saved and can be taken out with re_get',
+        c1 && c1.ok === true && /^\[untrusted content\] pid=/.test(txt1) && JSON.stringify(echoed) === JSON.stringify(args) && pidOf(txt1) && pidOf(txt1) === pidOf(txt2) && fakeProcs(id) === 1
+        && c3.ok === true && ok(c3).isError === true && /it failed/.test(JSON.stringify(ok(c3).content)) && c4.ok === false && /Unknown tool/.test(c4.error)
+        && bigR.status === 200 && bigR.data.truncated === true && bigR.data.bytes > 100000 && head.startsWith('[untrusted content]') && head.length <= 40000 && /^\/work\/out\/mcp-results\/big-\d+\.json$/.test(bigR.data.savedTo || '') && full.status === 200 && ((full.data || {}).size || 0) === bigR.data.bytes,
+        `echo ${JSON.stringify(echoed)} pids ${pidOf(txt1)}/${pidOf(txt2)} procs ${fakeProcs(id)} · nope ${ok(c3).isError} · unknown ${c4 && c4.error} · big ${bigR.status} ${bigR.data && bigR.data.truncated} ${bigR.data && bigR.data.bytes} head ${head.length} saved ${bigR.data && bigR.data.savedTo} ${(full.data || {}).size}`);
+
+      const skillFx = fs.readFileSync(path.join(RE_T.dir, 'fake-rea', 'skill', 'SKILL.md'), 'utf8'), refFx = fs.readFileSync(path.join(RE_T.dir, 'fake-rea', 'skill', 'references', 'environments.md'), 'utf8');
+      const [s0, s1, s2, s3] = await tools(U, [['re_skill', { id }], ['re_skill', { id, file: 'references/environments.md' }], ['re_skill', { id, file: '../../etc/passwd' }], ['re_skill', { id, file: 'references/none.md' }]]);
+      check('R343', 'T-254 re_skill returns REA\'s skill text from inside the container: SKILL.md by default, with the list of the other files (references/…), or one of them by path; a path that leaves the skill folder or does not exist is an error (nothing of the host is read)',
+        s0 && s0.ok === true && ok(s0).file === 'SKILL.md' && ok(s0).text === skillFx && (ok(s0).files || []).join() === 'SKILL.md,references/environments.md'
+        && ok(s1).file === 'references/environments.md' && ok(s1).text === refFx && s2 && s2.ok === false && !/root:/.test(JSON.stringify(s2)) && s3 && s3.ok === false,
+        `default ${ok(s0).file} ${(ok(s0).text || '').length}b files ${(ok(s0).files || []).join()} · ref ${ok(s1).text === refFx} · escape ${s2 && s2.ok} · missing ${s3 && s3.ok}`);
+
+      // owner only: another person (even an admin) is refused, by the routes (403) and by the tools; the owner still can
+      const other = [await re('tools?id=' + id, D), await re('skill?id=' + id, D), await re('call', D, { id, tool: 'echo', args: {} }), await re('tools?id=' + id, A), await re('call', A, { id, tool: 'echo', args: {} })];
+      const [o1, o2, o3] = await tools(D, [['re_tools', { id }], ['re_call', { id, tool: 'echo', args: {} }], ['re_skill', { id }]]);
+      const mine = await re('call', U, { id, tool: 'echo', args: { again: 1 } });
+      check('R344', 'T-254 REA\'s tools are the owner\'s only: another person gets 403 from the routes (tools, skill, call) and an error from the three tools, an admin too, nothing of the copy is revealed to them; the owner still can',
+        other.every((r) => r.status === 403) && [o1, o2, o3].every((x) => x && x.ok === false && /owner/.test(x.error) && !/fake-rea|echo/.test(x.error)) && mine.status === 200 && /again/.test(JSON.stringify(mine.data)),
+        `routes ${other.map((r) => r.status)} tools ${[o1, o2, o3].map((x) => x && x.ok)} owner ${mine.status}`);
+
+      // stop: the MCP session ends with the copy, nothing is left running (container, host-side client), nothing answers afterwards
+      const clientsBefore = hostClients(id), procsBefore = fakeProcs(id);
+      const stop = await tools(U, [['re_stop', { id }]]);
+      const left = [await re('call', U, { id, tool: 'echo', args: {} }), await re('tools?id=' + id, U), await re('skill?id=' + id, U)];
+      await sleep(300);
+      const planner = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'work.rs'), 'utf8').match(/\("team", "re_start"[^=]*=>/);
+      const names = ['re_skill', 're_tools', 're_call'], jsNames = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+      const rsNames = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+      const jsRe = new RegExp(fs.readFileSync(path.join(BRIDGE, 'team.js'), 'utf8').match(/\/\^(re_\([^$]*\))\$\/\.test\(name\)/)[1]);
+      check('R345', 'T-254 stopping the copy ends its MCP session and leaves nothing running: before the stop one MCP server in the copy and one exec client on the host, after it the container is gone and no client process is left, REA\'s tools and skill answer 404 / 409 afterwards; [static] both team MCP servers list re_skill, re_tools and re_call, the JavaScript hub answers them "not available", and a planner session may not use them',
+        clientsBefore === 1 && procsBefore === 1 && stop[0] && stop[0].ok === true && !ctrs().includes(prefix + id) && hostClients(id) === 0 && left.every((r) => r.status === 404 || r.status === 409)
+        && names.every((n) => jsNames.includes(n) && rsNames.includes(n) && jsRe.test(n)) && !!planner && names.every((n) => planner[0].includes('"' + n + '"')),
+        `before ${clientsBefore}/${procsBefore} stop ${stop[0] && stop[0].ok} container ${ctrs().includes(prefix + id)} clients ${hostClients(id)} after ${left.map((r) => r.status)} · names js ${names.map((n) => jsNames.includes(n))} rs ${names.map((n) => rsNames.includes(n))} planner ${!!planner}`);
+    } finally {
+      for (const x of started) await re('stop', A, { id: x });
+      const left = ctrs(); if (left.length) podman(['rm', '-f', '-t', '0', ...left], RE_T.env);
+    }
+  } else for (const id of ['R341', 'R342', 'R343', 'R344', 'R345']) skip(id, 'REA tools inside a container (T-254: re_tools, re_call, re_skill, owner only, closes on stop)', RE_T.why);
   if (RUST_HUB && !WIN) { // R200: a session's worktree follows the worktree law (it builds on the person's work/<user>) and its work comes home
     const wt200 = path.join(SB, 'worktree.js'), own200 = path.join(SCRATCH, 'worktrees', 't-user');
     const run200 = (...args) => spawnSync(process.execPath, [wt200, ...args], { cwd: SB, encoding: 'utf8', timeout: 60000 });
@@ -4827,6 +5284,158 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         `mid busy ${mid.busy} run ${mid.run}; events ${all.map((e) => e.type).join(',')}; end busy ${d.busy}; again ${(again.events || []).length}/${again.busy}; none "${none.run}"; current keeps run ${cur}; static ${stat}`);
     } else check('R169', 'the page follows a Work run after a reload, offers updates instead of reloading in front of you, never stays black, sends the GitHub Pages copy to the hub [static; joining a run is the Rust hub\'s: --rust-hub runs it]', stat, `static ${stat}`);
   }
+  { // R347 to R349 (T-319): "Done in 0s" four times in a row after Send now
+    const results = (evs) => evs.filter((e) => e.type === 'result'), uuids = (evs) => results(evs).map((e) => e.uuid);
+    const sidOf = async (title) => (await call('/api/work/sessions/new', U, { title, background: true })).data.id;
+    // Send now: a run is stopped, then the next message goes (as the page does when the stream ends)
+    const slow = chat(U, 'SLOW sendnow-r347'); await sleep(1000);
+    await call('/api/stop', U, {}); const e1 = (await slow).events;
+    const e2 = (await chat(U, 'after sendnow r347')).events;
+    // a queue of three, one after the other
+    const q = []; for (let i = 1; i <= 3; i++) q.push((await chat(U, 'queued ' + i + ' r347')).events);
+    // the same result sent three times (one uuid), and three empty turns (three uuids)
+    const dup = (await chat(U, 'DUPRESULT r347')).events;
+    let replay = null;
+    if (RUST_HUB) { const rid = (dup.find((e) => e.type === 'bridge_run') || {}).id || ''; replay = ((await call('/api/work/attach?run=' + rid + '&after=0', U)).data || {}).events || []; }
+    const multi = (await chat(U, 'MULTIRESULT r347')).events;
+    // a page that joins the run again afterwards sees the same
+    // two sessions at once: each stream has its own result only
+    const multiSess = (await call('/api/work/sessions', U)).status === 200; // sessions are the Rust hub's
+    const sa = multiSess ? await sidOf('r347 a') : '', sb = multiSess ? await sidOf('r347 b') : '';
+    const [ra, rb] = multiSess ? await Promise.all([chat(U, 'SLOW two-A-r347', { session: sa }), chat(U, 'DUPRESULT two-B-r347', { session: sb })]) : [{ status: 0, events: [] }, { status: 0, events: [] }];
+    const own = (r, tag) => results(r.events).length === 1 && results(r.events).every((e) => new RegExp(tag).test(e.result || ''));
+    const sane = results(e1).length <= 1 && results(e2).length === 1 && q.every((e) => results(e).length === 1) && results(dup).length === 1 && new Set(uuids(multi)).size === results(multi).length;
+    check('R347', 'a run says each result once: after Send now (the stopped run has at most one, the next exactly one), three queued messages (one each), the same result delivered three times (one on the wire, and one when the run is joined again), three different empty turns (each kept, with its own uuid), and two sessions at once (each stream only its own, one result)',
+      sane && (!replay || results(replay).length === 1) && (!multiSess || (own(ra, 'two-A-r347') && own(rb, 'two-B-r347'))),
+      `send now ${results(e1).length}/${results(e2).length}; queue ${q.map((e) => results(e).length)}; dup ${results(dup).length}; multi ${results(multi).length}; replay ${replay ? results(replay).length : 'n/a'}; sessions ${results(ra.events).length}/${results(rb.events).length} (status ${ra.status}/${rb.status})`);
+    // the page's logic, run on its own source (a browser cannot run here)
+    const page347 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const m = page347.match(/\/\/ <t319>[^\n]*\n([\s\S]*?)\/\/ <\/t319>/);
+    let P = null; try { P = m ? require('vm').runInNewContext(m[1] + '; ({ sysCollapse, sysLabel, resultNote })') : null; } catch {}
+    let lines = null;
+    if (P) { // four identical status lines in a row: one with x4; a different one starts a new line
+      let st = null; const out = []; for (const t of ['Using A', 'Using A', 'Using A', 'Using A', 'Done']) { st = P.sysCollapse(st, t, false); if (st.merged) out[out.length - 1] = P.sysLabel(st); else out.push(P.sysLabel(st)); }
+      lines = out;
+    }
+    const wired = /runRes\.seen\.has\(rkey\)/.test(page347) && /runRes\.el\.textContent = note\.text/.test(page347) && /runRes = \{ id: '', seen: new Set\(\)/.test(page347) && /function sys\(text, bad\)[\s\S]{0,200}sysCollapse\(/.test(page347);
+    check('R348', 'the page shows one Done line per run: a result seen before (same uuid, a replay or a second stream) is skipped, the next result of the same run updates that line (with a turn count), a new run starts its own; identical status lines in a row collapse into one with a ×N count [static: the page\'s own functions run on their source]',
+      !!P && JSON.stringify(lines) === JSON.stringify(['Using A ×4', 'Done']) && P.sysLabel({ text: 'x', n: 1 }) === 'x' && wired, `lines ${JSON.stringify(lines)}; wired ${wired}`);
+    let why = null;
+    if (P) {
+      const hv = (o) => ({ v: 1, kind: 'result', error: false, text: 'ok', subtype: 'success', durationMs: 1, ...o });
+      const o = (x) => ({ model: 'Opus 5.5', turns: 1, out: 0, ...x });
+      why = [P.resultNote(hv({}), o({ out: 1 })).text, P.resultNote(hv({}), o({ interrupted: true })).text, P.resultNote(hv({}), o({ stopped: true })).text, P.resultNote(hv({ subtype: 'error_during_execution' }), o({})).text,
+        P.resultNote(hv({ text: '' }), o({ stderr: 'boom\nno conversation found' })).text, P.resultNote(hv({ text: '' }), o({})).text, P.resultNote(hv({}), o({ out: 1, turns: 3, model: '' })).text, P.resultNote(hv({ error: true, text: 'bad' }), o({})).text];
+    }
+    check('R349', 'a run that ended at once without output says why: interrupted by Send now, you stopped it, the result subtype, the stderr tail, nothing to resume; a normal reply says "Done in Ns · model" (and the turns when there are several); an error says what it was [static: the page\'s own function run on its source]',
+      !!why && why[0] === 'Done in 0s · Opus 5.5' && why[1] === 'Ended at once: interrupted by Send now' && why[2] === 'Ended at once: you stopped it' && why[3] === 'Ended at once: error_during_execution'
+      && why[4] === 'Ended at once: boom no conversation found' && why[5] === 'Ended at once: nothing to resume or answer' && why[6] === 'Done in 0s · 3 turns' && why[7] === 'Claude stopped with an error: bad', `${JSON.stringify(why)}`);
+  }
+  { // R350 to R354 (T-320): screen sharing in calls. The hub half runs on the real hub; the page half runs web/calls.js on its own source with
+    // stubs (a browser cannot run here), so the share logic is exercised for real: double click, leaving while the picker is open, the browser's
+    // "Stop sharing" bar, the tile rule, the quiet re-join, a quick leave + join, and the sa gating between an old page and a new one.
+    const roomOf = async (tok) => (((await call('/api/call/poll?after=0&ver=-1', tok)).data.calls || {}).room || []);
+    const whoU = async () => (await roomOf(A)).find((p) => p.user === 't-user') || {};
+    await call('/api/call/leave', A, {}); await call('/api/call/leave', U, {});
+    await call('/api/call/join', U, { conv: 'room', cam: false, mic: true, screen: true });
+    const u1 = await whoU();
+    await call('/api/call/join', A, { conv: 'room', cam: false, mic: true });
+    await call('/api/call/join', U, { conv: 'room', cam: false, mic: true, screen: true }); // the page's quiet re-join after a hub restart: the share flag comes with it
+    const u2 = await whoU();
+    await call('/api/call/leave', U, {}); await sleep(30);
+    await call('/api/call/join', U, { conv: 'room', cam: false, mic: true });
+    const u3 = await whoU();
+    const bigSig = (n) => ({ iv: toB64(rand(12)), ct: toB64(rand(n)) });
+    const sigOk = await call('/api/call/signal', A, { to: 't-user', conv: 'room', ...bigSig(150000) }), sigBig = await call('/api/call/signal', A, { to: 't-user', conv: 'room', ...bigSig(150003) });
+    await call('/api/call/leave', A, {}); await call('/api/call/leave', U, {});
+    check('R350', 'T-320 calls, hub side: a join can carry the share flag (the page re-joins with it after a hub restart), a re-join keeps the person\'s `since` and a leave + join makes a new one (the page rebuilds the connection from that), and a signal of 200000 characters goes through while 200004 is refused',
+      u1.screen === true && u2.screen === true && !!u1.since && u1.since === u2.since && u3.since && u3.since !== u1.since && u3.screen === false && sigOk.status === 200 && sigBig.status === 400,
+      `screen ${u1.screen}/${u2.screen}/${u3.screen}; since same ${u1.since === u2.since} new ${u3.since !== u1.since}; signal ${sigOk.status}/${sigBig.status}`);
+
+    const callsSrc = fs.readFileSync(path.join(MILLS, 'web', 'calls.js'), 'utf8'), vm = require('vm');
+    const hm = callsSrc.match(/\/\/ <t320>[^\n]*\n([\s\S]*?)\/\/ <\/t320>/);
+    let H = null; try { H = hm ? vm.runInNewContext(hm[1] + '; ({ shareErrorText, shareTileWanted, peerNeedsRebuild, retryableSignal })') : null; } catch {}
+    const er = (name, message) => ({ name, message: message || name });
+    check('R351', 'T-320 the page says why a share failed (refused / cancelled, nothing to share and the Linux portal, capture error, rejected options, plain http), a share tile shows while the hub says the person shares and the track has not ended (also while it is muted), a person who left and joined again gets a new connection unless the hub restarted, and a lost set-up signal is retried only when it may be transient [the helpers run on their own source]',
+      !!H && /cancelled or blocked/.test(H.shareErrorText(er('NotAllowedError'), false)) && /not allowed to capture/.test(H.shareErrorText(er('NotAllowedError'), true)) && /portal/.test(H.shareErrorText(er('NotFoundError'), false))
+      && /could not be captured \(boom\)/.test(H.shareErrorText(er('NotReadableError', 'boom'), false)) && /did not accept/.test(H.shareErrorText(er('TypeError', 'bad'), false)) && /secure address/.test(H.shareErrorText(null, false, false)) && /^Screen share: odd$/.test(H.shareErrorText(er('X', 'odd'), false))
+      && H.shareTileWanted(true, { readyState: 'live', muted: true }) && !H.shareTileWanted(false, { readyState: 'live' }) && !H.shareTileWanted(true, null) && !H.shareTileWanted(true, { readyState: 'ended' })
+      && H.peerNeedsRebuild('a', 'b', false) && !H.peerNeedsRebuild('a', 'b', true) && !H.peerNeedsRebuild('a', 'a', false) && !H.peerNeedsRebuild(null, 'b', false)
+      && H.retryableSignal(new Error('Both people must be in this call.')) && H.retryableSignal(new TypeError('Failed to fetch')) && !H.retryableSignal(new Error('Bad signal.')), `helpers ${!!H}`);
+
+    const wired = [/e\.track\.onunmute = \(\) => syncShareTile\(user\); e\.track\.onended = \(\) => syncShareTile\(user\)/, /peer\.shareStream\.addTrack\(e\.track\)/, /syncShareTile\(p\.user\); \}/, /screen: !!call\.screen \}\) \}\); \} catch/, /if \(call\.screen \|\| call\.sharing\) return/,
+      /s\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\)/, /for \(let n = 0; n < 4; n\+\+\)/, /try \{ await onSignal\(s\); \}/, /function askApp\(\)/, /\n  askApp\(\);\n  \$\('callScreen'\)\.hidden/, /connectionState === 'disconnected' && peer\.offerer/, /peerNeedsRebuild\(old\.since, p\.since, ourMoved\)/].map((re) => re.test(callsSrc));
+    check('R352', 'T-320 [static] calls.js wiring: the remote share tile follows the hub flag (no hide on mute), the share audio is kept on the peer, the re-join carries the share flag, no second capture while the picker is open and a capture that arrives after leaving is stopped, set-up signals are retried and a bad one does not cost the rest, the app answer redraws the buttons, an offerer restarts ICE on "disconnected", a quick leave + join rebuilds the connection; the old hide-on-mute is gone',
+      wired.every(Boolean) && !/e\.track\.onmute = hide/.test(callsSrc), `wired ${wired.map((x) => (x ? 1 : 0)).join('')}`);
+
+    // the page's own code, run with stubs
+    const { webcrypto } = require('crypto');
+    const mk = () => { const kept = {}; return new Proxy(function () {}, { get: (t, k) => (k === 'then' ? undefined : k in kept ? kept[k] : (kept[k] = mk())), set: (t, k, v) => { kept[k] = v; return true; }, apply: () => mk() }); }; // any element, any call
+    const posts = [], els = {}, pend = [];
+    class MS { constructor(t = []) { this.t = [...t]; } getTracks() { return this.t; } getAudioTracks() { return this.t.filter((x) => x.kind === 'audio'); } getVideoTracks() { return this.t.filter((x) => x.kind === 'video'); } addTrack(x) { this.t.push(x); } removeTrack(x) { this.t = this.t.filter((y) => y !== x); } }
+    class PC { constructor() { this.ts = []; this.closed = false; } addTransceiver() { return {}; } getTransceivers() { return this.ts; } close() { this.closed = true; } }
+    const ctx = { console, setTimeout, clearTimeout, setInterval: () => 0, Promise, JSON, Date, Math, Uint8Array, Map, Set, Array, Object, String, Number, Error, Symbol, MediaStream: MS, RTCPeerConnection: PC, RTCRtpReceiver: {}, crypto: webcrypto, CSS: { escape: (x) => x }, enc, dec, toB64, fromB64,
+      $: (id) => els[id] || (els[id] = mk()), json: async (p, o) => { posts.push([p, o && o.body ? JSON.parse(o.body) : null]); return { calls: {}, iceServers: [] }; },
+      store: { get: () => null, set() {} }, prefs: () => ({ audio: {}, call: { quality: 'medium', volume: 100 }, sound: {}, tts: {} }), me: { username: 'alice' }, nickOf: (u) => u, colorOf: () => '#000', ic: () => mk(), label() {}, layout: { show: {} },
+      sysRoom() {}, playTone() {}, speak() {}, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), convLabel: (c) => c, currentConv: 'room', chatPriv: {}, token: '', base: '', memberOf: () => null, changedKeys: new Set(), trustedPub: () => true, sharedWith: async () => null,
+      document: { createElement: () => mk(), addEventListener() {}, querySelector: () => null }, addEventListener() {}, navigator: { mediaDevices: { getDisplayMedia: () => new Promise((res) => pend.push(res)) } }, isSecureContext: true };
+    ctx.window = ctx;
+    let S = null, e353 = '';
+    try { S = vm.runInNewContext(callsSrc + '\n;({ call, startShare, onCallState, onSignal, syncShareTile })', ctx); } catch (e) { e353 = 'load: ' + e.message; }
+    const track = (kind) => ({ kind, readyState: 'live', enabled: true, stopped: false, stop() { this.stopped = true; this.readyState = 'ended'; } });
+    const res = {};
+    if (S) try {
+      S.call.conv = 'room';
+      // a double click while the picker is open starts one capture only; the picture goes out and the hub is told
+      const p1 = S.startShare('none'), p2 = S.startShare('none'); res.oneCapture = pend.length === 1;
+      const s1 = new MS([track('video')]); pend[0](s1); await p1; await p2;
+      res.sharing = S.call.screen === s1.t[0] && posts.some(([p, b]) => p === '/api/call/state' && b.screen === true) && S.call.screenStream.getTracks().includes(s1.t[0]);
+      // the browser's "Stop sharing" bar ends the track: the state follows
+      const vt = S.call.screen; posts.length = 0; vt.onended(); await ctx.sleep(30);
+      res.stoppedByBar = S.call.screen === null && vt.stopped && posts.some(([p, b]) => p === '/api/call/state' && b.screen === false) && !S.call.screenStream.getTracks().includes(vt);
+      // leaving while the picker is open: the capture that arrives later is stopped (its light goes off), nothing is shared
+      pend.length = 0; S.call.conv = 'room'; const p3 = S.startShare('none'); S.call.conv = null; const s2 = new MS([track('video')]); pend[0](s2); await p3;
+      res.leftFirst = s2.t[0].stopped === true && S.call.screen === null && S.call.sharing === false;
+      // a refusal in the app and a missing source say different things
+      S.call.conv = 'room'; ctx.navigator.mediaDevices.getDisplayMedia = () => Promise.reject(er('NotFoundError')); await S.startShare('none'); res.msg = /nothing to share/.test(String(els.callMsg.textContent)); res.free = S.call.sharing === false;
+      // the share tile rule on a peer's track
+      const log = []; ctx.showScreenTile = (u) => log.push('show:' + u); ctx.removeScreenTile = (u) => log.push('rm:' + u);
+      const pr = { shareTrack: { readyState: 'live', muted: true }, shareStream: {} }; S.call.peers.set('bob', pr);
+      S.call.state = { room: [{ user: 'bob', screen: true }] }; S.syncShareTile('bob');
+      S.call.state = { room: [{ user: 'bob', screen: false }] }; S.syncShareTile('bob');
+      S.call.state = { room: [{ user: 'bob', screen: true }] }; pr.shareTrack = { readyState: 'ended' }; S.syncShareTile('bob');
+      res.tile = JSON.stringify(log) === JSON.stringify(['show:bob', 'rm:bob', 'rm:bob']); S.call.peers.delete('bob');
+      // the quiet re-join after a restart carries what we share
+      S.call.screen = track('video'); S.call.state = {}; posts.length = 0;
+      await S.onCallState({ room: [{ user: 'bob', since: 'b1' }] });
+      res.rejoin = posts.some(([p, b]) => p === '/api/call/join' && b.screen === true);
+      // bob left and joined again between two polls (our own since unchanged): a new connection; the hub restarted (ours moved too): kept
+      await S.onCallState({ room: [{ user: 'alice', since: 'a1' }, { user: 'bob', since: 'b1' }] });
+      const first = S.call.peers.get('bob');
+      await S.onCallState({ room: [{ user: 'alice', since: 'a1' }, { user: 'bob', since: 'b2' }] });
+      const second = S.call.peers.get('bob');
+      await S.onCallState({ room: [{ user: 'alice', since: 'a2' }, { user: 'bob', since: 'b3' }] });
+      res.rebuild = first.pc.closed === true && second !== first && S.call.peers.get('bob') === second && second.pc.closed === false;
+    } catch (e) { e353 = String(e && e.stack || e); }
+    check('R353', 'T-320 the share flow, calls.js run with stubs: a double click opens one picker, the picture goes out and the hub is told; the browser\'s Stop sharing bar ends it and the hub is told; a capture that arrives after leaving is stopped; a refusal says what it was; a peer\'s share tile shows while the hub says they share (muted or not) and goes with the flag or the end of the track; the quiet re-join carries the share flag; a quick leave + join rebuilds the connection but a hub restart does not',
+      !!S && Object.values(res).length === 9 && Object.values(res).every(Boolean), e353 || JSON.stringify(res));
+
+    // sa gating: an up-to-date page's answer turns the share-audio line on (one more offer); an older page's answer leaves it inactive
+    const saRes = {};
+    if (S) try {
+      const key = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']); ctx.pairKey = async () => key;
+      const mkT = (kind, dir) => ({ direction: dir, receiver: { track: { kind } }, sender: { setStreams() {}, replaceTrack: async () => {} } });
+      const fpc = { signalingState: 'stable', remoteDescription: null, setRemoteDescription: async function (d) { this.remoteDescription = d; }, addIceCandidate: async () => {}, getTransceivers() { return this.ts; }, ts: [mkT('audio', 'sendrecv'), mkT('video', 'sendrecv'), mkT('video', 'sendrecv'), mkT('audio', 'inactive')] };
+      const fpeer = { pc: fpc, user: 'bob', offerer: true, pendingIce: [] }; S.call.peers.set('bob', fpeer); S.call.conv = 'room';
+      const sig = async (body) => { const iv = webcrypto.getRandomValues(new Uint8Array(12)); const ct = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify({ conv: 'room', from: 'bob', to: 'alice', ...body }))); return { conv: 'room', from: 'bob', iv: toB64(iv), ct: toB64(ct) }; };
+      await S.onSignal(await sig({ d: { type: 'answer', sdp: 'x' } }));
+      saRes.oldPage = fpc.ts[3].direction === 'inactive' && !fpeer.saOn;
+      await S.onSignal(await sig({ sa: 1, d: { type: 'answer', sdp: 'x' } }));
+      saRes.newPage = fpc.ts[3].direction === 'sendrecv' && fpeer.saOn === true && fpc.ts[2].direction === 'sendrecv';
+    } catch (e) { saRes.err = String(e && e.stack || e); }
+    check('R354', 'T-320 old page and new page together: the share-audio line stays inactive after an answer from a page that does not say sa, and is turned on (one more offer) after an answer that does; the page\'s own signal code ran on a real AES-GCM message',
+      saRes.oldPage === true && saRes.newPage === true, JSON.stringify(saRes));
+  }
   { // R170 (5.1.0): PGM Gateway: an admin registers a product (its secret only in a private file), the product's signed
     // requests (pgm-net-internal's product link) check a VibeRoller login (the sign-in limits apply), link that person,
     // and use the AI hosts / providers as them; unsigned, replayed, re-pathed, proxied, unlinked and non-admin all refused
@@ -4933,6 +5542,60 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && oldSecret.status === 403 && removed.status === 200 && gone && ignored && stat170 && served,
         `static ${stat170}; served ${served} (${withPort.status} ${JSON.stringify(withPort.data).slice(0, 100)} badPort ${badPort.status} noSlash ${noSlash.status} ${noSlash.headers.get('location')} get ${viaGet.status} ${JSON.stringify(viaGetBody).slice(0, 300)} post ${JSON.stringify(viaPost).slice(0, 120)} internal ${viaInternal} front ${viaFront} unknown ${unknownProd} noPort ${noPortProd} down ${prodDown}); notAdmin ${notAdmin.status} made ${made.status} ${JSON.stringify(made.data).slice(0, 120)} badId ${badId.status} secret ${secret.length} mode ${mode.toString(8)}; status ${status.status} unsigned ${unsigned} once ${once.status} twice ${twice.status} moved ${moved.status} proxied ${proxied.status} old ${old.status} wrongKey ${wrongKey.status}; before ${beforeLink.status}/${aiBefore.status} wrongPw ${wrongPw.status} verified ${verified.status} ${verified.text.slice(0, 80)} blocked ${blocked.status}; profile ${profile.status} provs ${provs.status} ${provs.text.slice(0, 120)}; ai ${ai.status} "${aiText.slice(0, 80)}" ${ai.text.slice(0, 120)}; links ${JSON.stringify(links).slice(0, 80)}; oldSecret ${oldSecret.status} removed ${removed.status} gone ${gone} ignored ${ignored}`);
     } else check('R170', 'PGM Gateway: product data stays out of git; [static] the admin\'s products box, the board kit\'s options (VibeRoller keeps its Claude buttons) [the gateway is the Rust hub\'s: --rust-hub runs it]', spawnSync('git', ['check-ignore', '-q', 'bridge/gateway/products.json'], { cwd: MILLS }).status === 0 && stat170, `static ${stat170}`);
+  }
+  { // R346 (T-317): PGM Gateway carries tools: a product's chat completion with `tools` reaches the provider as it is, the provider's
+    // tool call comes back as tool_calls (finish_reason tool_calls), the follow-up with the assistant's call and a tool message
+    // gets the final text; streamed too; a request without tools is the old one; a provider that cannot carry tools says 400
+    if (RUST_HUB) {
+      const made = await call('/api/admin/gateway/products', A, { id: 'toolsprod', name: 'Tools product', ai: true });
+      const secFile = path.join(SB, 'gateway', 'toolsprod.secret');
+      const secret = fs.existsSync(secFile) ? fs.readFileSync(secFile, 'utf8').trim() : '';
+      const gw = async (method, pq, user, bodyObj) => {
+        const body = bodyObj === undefined ? '' : JSON.stringify(bodyObj), ts = Date.now(), nonce = crypto.randomBytes(16).toString('hex');
+        const sha = crypto.createHash('sha256').update(body).digest('hex');
+        const sig = crypto.createHmac('sha256', secret).update(`pgm-product-v1\n${method}\n${pq}\n${ts}\n${nonce}\n${user}\n${sha}`).digest('hex');
+        const r = await fetch(H + pq, { method, headers: { 'Content-Type': 'application/json', 'x-pgm-product': 'toolsprod', 'x-pgm-ts': String(ts), 'x-pgm-nonce': nonce, 'x-pgm-user': user, 'x-pgm-sig': sig }, body: body || undefined });
+        const text = await r.text(); let data = {}; try { data = JSON.parse(text); } catch {}
+        return { status: r.status, text, data };
+      };
+      const chatPath = '/internal/gateway/v1/chat/completions';
+      const verified = await gw('POST', '/internal/gateway/identity/verify', '', { username: 't-admin', password: 'pw-t-admin-0001', ip: '198.51.100.146' });
+      // an OpenAI-compatible provider of the admin's (the way R112 adds one: a host of theirs says hello for a moment)
+      const th = (await call('/api/hosts/new', A, {})).data.host || {}, thc = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+      await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thc.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+      const prov = (await call('/api/providers/add', A, { kind: 'openai', label: 'R346 endpoint', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k', models: 'fake-gpt', shared: false })).data;
+      await call('/api/hosts/remove', A, { id: th.id });
+      await call('/api/apikey/rotate', A, {});
+      const setP = await call('/api/apikey/settings', A, { provider: prov.provider && prov.provider.id, model: 'fake-gpt' });
+      const tools = [{ type: 'function', function: { name: 'lookup', description: 'Look a thing up', parameters: { type: 'object', properties: { q: { type: 'string' }, n: { type: 'number' } } } } }];
+      const before = fakeOaiTools.length;
+      const plain = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'plain-r346' }] });
+      const plainText = (((plain.data.choices || [])[0] || {}).message || {}).content || '';
+      const first = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'find it' }], tools, tool_choice: 'auto' });
+      const c0 = (first.data.choices || [])[0] || {}, call0 = ((c0.message || {}).tool_calls || [])[0] || {};
+      const second = await gw('POST', chatPath, 't-admin', { tools, messages: [{ role: 'user', content: 'find it' }, { role: 'assistant', content: null, tool_calls: [call0] }, { role: 'tool', tool_call_id: call0.id, content: 'forty-two' }] });
+      const c1 = (second.data.choices || [])[0] || {};
+      const streamed = await gw('POST', chatPath, 't-admin', { stream: true, messages: [{ role: 'user', content: 'find it' }], tools });
+      const evs = streamed.text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => { try { return JSON.parse(l.slice(6)); } catch { return {}; } });
+      const sCall = evs.map((e) => ((e.choices || [])[0] || {}).delta || {}).flatMap((d) => d.tool_calls || [])[0] || {};
+      const sFinish = evs.map((e) => ((e.choices || [])[0] || {}).finish_reason).filter(Boolean).pop();
+      const bad = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'x' }], tools: [{ type: 'function' }] });
+      const gotTools = fakeOaiTools.slice(before);
+      await call('/api/apikey/revoke', A, {}); // back to the hub's own default (a Claude CLI answers text only)
+      const noTools = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'x' }], tools });
+      const textStill = await gw('POST', chatPath, 't-admin', { messages: [{ role: 'user', content: 'gw-r346' }] });
+      await call('/api/providers/remove', A, { id: prov.provider && prov.provider.id });
+      await call('/api/admin/gateway/products/remove', A, { id: 'toolsprod' });
+      check('R346', 'T-317 PGM Gateway carries tools: a product\'s chat completion with tools and tool_choice reaches an OpenAI-compatible provider as it is (and a request without tools is the old text one); the provider\'s call comes back as message.tool_calls (id, name, arguments as JSON text) with finish_reason tool_calls and no content; the follow-up with the assistant\'s call and a tool message gets the final text (finish_reason stop) and the provider saw the tool message with the same id; streamed, the call arrives in delta.tool_calls and the stream ends with finish_reason tool_calls and [DONE]; a malformed tool is 400; a provider that cannot carry tools (a Claude CLI) answers 400 "cannot carry tools" while text still works',
+        made.status === 200 && verified.status === 200 && setP.status === 200
+        && plain.status === 200 && /oai says: plain-r346/.test(plainText)
+        && first.status === 200 && c0.finish_reason === 'tool_calls' && c0.message.content === null && call0.type === 'function' && call0.id === 'call_r346' && call0.function.name === 'lookup' && JSON.parse(call0.function.arguments).q === 'r346'
+        && second.status === 200 && c1.finish_reason === 'stop' && /oai says: tool said forty-two/.test((c1.message || {}).content || '')
+        && gotTools.length === 3 && gotTools[0].tools[0].function.name === 'lookup' && gotTools[0].tool_choice === 'auto' && gotTools[1].messages[2].role === 'tool' && gotTools[1].messages[2].tool_call_id === 'call_r346' && gotTools[1].messages[1].tool_calls[0].id === 'call_r346'
+        && streamed.status === 200 && sCall.function && sCall.function.name === 'lookup' && sCall.index === 0 && sFinish === 'tool_calls' && /data: \[DONE\]/.test(streamed.text)
+        && bad.status === 400 && noTools.status === 400 && /cannot carry tools/.test(noTools.text) && textStill.status === 200 && /gw-r346/.test(textStill.text),
+        `made ${made.status} verified ${verified.status} set ${setP.status}; plain ${plain.status} ${plainText.slice(0, 60)}; first ${first.status} ${first.text.slice(0, 300)}; second ${second.status} ${second.text.slice(0, 200)}; provider got ${gotTools.length}; stream ${streamed.status} ${streamed.text.slice(0, 300)}; bad ${bad.status}; noTools ${noTools.status} ${noTools.text.slice(0, 120)}; text ${textStill.status}`);
+    } else skip('R346', 'PGM Gateway carries tools (T-317)', 'the gateway is the Rust hub\'s: --rust-hub runs it');
   }
   // Persistence & restart (scratch restart.js: graceful flag only)
   const authBefore = sha(path.join(SB, 'profiles', 't-admin', 'auth.json'));
@@ -5191,6 +5854,468 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && /capture::enable_in_webview\(&main_win\)/.test(mainSrc) && /set_enable_media_stream\(true\)/.test(capSrc) && /capture::capability\(\)/.test(mainSrc)
         && /screenShare/.test(capSrc) && /is_hub_origin\(page, hub\)/.test(capSrc) && ut.status === 0 && /3 passed; 0 failed|test result: ok\. 3 passed/.test(ut.stdout || ''),
         `cargo test ${ut.status} "${String(ut.stdout || ut.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
+    }
+  }
+  // R321, R322, R340 (T-307, linked machines 1/8): the library core pgm-net-internal::machine (scope model + evaluator,
+  // path canonicaliser, safety floor), pure logic: its unit tests run once (Linux real temp dirs and symlinks; the Windows
+  // rules are pure-logic tests that run on any host)
+  {
+    const mdir = path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'machine');
+    const home321 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const env321 = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home321, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home321, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET };
+    env321.PATH = path.join(env321.CARGO_HOME, 'bin') + path.delimiter + (env321.PATH || '');
+    const ct = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', 'machine::'], { cwd: path.join(MILLS, 'native'), env: env321, encoding: 'utf8', timeout: 1800000 });
+    const L321 = 'linked machines core (T-307): scope model + evaluator in pgm-net-internal::machine::scope: Scope parses the 5.3 JSON, folder is the default, unknown keys are ignored, a newer v is refused whole, a bad or missing file allows nothing, every preset (folder, folders, read-only, full, full-ro, deny-list, no-shell, no-network, unrestricted, custom) has table-driven tests, deny beats allow, the more specific entry wins, full hides raw devices and keeps /sys and /proc/sys read-only, grants expire on a passed-in clock';
+    const L322 = 'linked machines core (T-307): the one path canonicaliser machine::paths: .., symlink escape, dangling links, \\\\?\\, UNC, another drive, C:\\x vs c:/X, alternate data streams, reserved names, and the write-through-a-swapped-link case (O_NOFOLLOW + openat re-check on Linux) all deny; the Windows rules are pure logic tested on any host';
+    const L340 = 'linked machines core (T-307): the safety floor machine::floor: under unrestricted (and every preset) the machine\'s token, device key, scope file and audit log are never readable, writable, deletable or listable, also through symlinks; fetch never sends them; the default deny list on full covers .env, *.pem, id_*, ~/.ssh and hub.json (glob matching)';
+    const L331 = 'linked machines audit log (T-312): machine::audit is append-only and hash-chained: every allow and deny leaves one line, an edited, removed, reordered or tail-cut line breaks verify(), rotation keeps the chain across files, file contents are never in it (only a digest), the hub copy has no digest or byte count and only the owner may read it (an admin may not)';
+    const L332 = 'linked machines guards (T-312): a KILL file or machine stop stops jobs and the link, survives a restart and only a local action clears it (a remote message cannot); over-limit calls per tool class are refused with a retry-after; elevate without the machine\'s approval fails and never runs the command, an approved one runs once; the app refuses to serve as root / Administrator';
+    const L333 = 'linked machines scope changes (T-312): a widening proposal from the web stays pending and changes nothing until the machine approves, a narrowing applies at once and is audited with the old and new scope hash, a grant expires on time and its jobs are told to stop, and no tool can read or change the scope file or its neighbours (floor, under every preset)';
+    const L327 = 'linked machines who may reach a machine (T-310): a linked machine\'s device token reaches only /api/machine/poll|reply|unlink and is refused (403) on every other route while an ordinary device token is unchanged; a watcher of a shared Work session gets no pc_tool / machine_* event (the share log holds only text lines), cannot answer a call (its /api/pc-result finds nothing, the run waits for the owner) and sees nothing through attach; a planner session\'s machine / pc call is refused and no job reaches the host; the one rule (machine_rule) is run account = machine owner AND the run started by that person: a run started on the owner\'s behalf by someone else (Hyper Workflows, T-294: Work::set_started_by) gets 403 for machine, host pc and the browser folder, the owner\'s own run works; nothing refuses a run because the owner is away (no grant, no presence check) and the prompt says "report what I did, why, what you can change"';
+    const L338 = 'linked machines compatibility (T-310): an older AI host (no machine cap, not even signed-pc) still serves its pc engine and is shown "one folder (older app)"; the hub\'s hello answer announces machine v1 and a newer app against an older hub (no announcement, the frozen JavaScript hub) stays an AI host; a scope document with a higher v (or unreadable) arriving in a machine\'s poll is refused whole at the hub (nothing kept, the typed words ignored) while a readable one gives the words; the frozen JavaScript hub keeps the browser PC-folder tools and has no machine routes';
+    if (ct.error) { for (const [id, l] of [['R327', L327], ['R338', L338], ['R321', L321], ['R322', L322], ['R340', L340], ['R331', L331], ['R332', L332], ['R333', L333], ['R324', 'signed requests and the machine\'s own check (T-308): machine::sign + the host pin']]) skip(id, l, 'no Rust toolchain here (' + ct.error.code + ')'); }
+    else {
+      const out321 = String(ct.stdout || '') + String(ct.stderr || '');
+      const okN = (re) => (out321.match(new RegExp('^test machine::' + re + '[^ ]* \\.\\.\\. ok$', 'gm')) || []).length;
+      const detail321 = `cargo test ${ct.status} scope ${okN('scope::')} paths ${okN('paths::')} floor ${okN('floor::')} integration ${okN('tests::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}`;
+      const src321 = ['mod.rs', 'scope.rs', 'paths.rs', 'floor.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
+      check('R321', L321, ct.status === 0 && src321 && okN('scope::') >= 12, detail321);
+      check('R322', L322, ct.status === 0 && okN('paths::') >= 8, detail321);
+      check('R340', L340, ct.status === 0 && okN('floor::') >= 4 && okN('tests::') >= 4, detail321);
+      // R324 (T-308, linked machines 2/8): signed requests and the machine's own check: machine::sign (hub key, envelope, verifier) and the
+      // host's pin of the hub key (host/pin.rs: an older hub that signs nothing still works). The hub's per-run secret unit tests ride along.
+      const ct323 = spawnSync('cargo', ['test', '-p', 'pgm-ai-internal', '--', 'host::pin::', 'work::tests::a_run_is_found', 'work::tests::the_deprecated', 'work::tests::a_hosts_job_token'], { cwd: path.join(MILLS, 'native'), env: env321, encoding: 'utf8', timeout: 1800000 });
+      const out2 = String(ct323.stdout || '') + String(ct323.stderr || '');
+      const ok2 = (name) => new RegExp('^test ' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\.\\.\\. ok$', 'm').test(out2);
+      const signTests = ['a_good_request_passes_and_names_the_actor', 'bad_signature_other_key_and_tampering_are_refused', 'a_lying_hub_stub_is_refused', 'a_request_for_another_owner_or_by_another_actor_is_refused', 'expired_future_and_too_long_requests_are_refused', 'a_repeated_nonce_is_refused_and_the_cache_is_bounded', 'the_tool_and_the_arguments_are_bound', 'the_hub_key_is_made_once_and_kept_owner_only'];
+      const pinTests = ['no_key_announced_means_unsigned_jobs_work_as_before', 'a_pinned_key_demands_a_signature_for_the_hosts_owner', 'a_different_key_later_is_not_taken_and_a_hello_again_keeps_the_replay_cache'];
+      const signOk = signTests.filter((t) => new RegExp('^test machine::sign::tests::' + t + ' \\.\\.\\. ok$', 'm').test(out321));
+      const pinOk = pinTests.filter((t) => ok2('host::pin::tests::' + t));
+      const src324 = fs.existsSync(path.join(mdir, 'sign.rs')) && /pub mod sign;/.test(fs.readFileSync(path.join(mdir, 'mod.rs'), 'utf8'));
+      check('R324', 'signed requests and the machine\'s own check (T-308): one ed25519 hub key made once in the hub\'s data folder (owner-only file), a signed envelope {owner, actor{account, session, run}, tool, args digest, nonce, issuedAt, expiresAt}, and the machine-side verifier refuses a bad signature, a request signed by another key (a lying hub stub), an expired or future request, a repeated nonce (bounded replay cache), an owner that is not its own link, actor.account != owner, another machine id, another tool or other arguments than the ones signed; the host pins the hub\'s key from its hello (an older hub that announces none keeps working unsigned, a different key later is not taken, an unsigned job is refused once pinned)',
+        ct.status === 0 && ct323.status === 0 && src324 && signOk.length === signTests.length && pinOk.length === pinTests.length && /signed-pc/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'hostlink.rs'), 'utf8')),
+        `cargo test ${ct.status} / ${ct323.status}: sign ${signOk.length}/${signTests.length}, pin ${pinOk.length}/${pinTests.length} ${/FAILED|panicked/.test(out2) ? 'FAILURES' : ''}`);
+      // R331, R332, R333 (T-312, linked machines 6/8): the same cargo run covers the guards
+      const detail331 = `cargo test ${ct.status} audit ${okN('audit::')} kill ${okN('kill::')} limits ${okN('limits::')} elevate ${okN('elevate::')} changes ${okN('changes::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}`;
+      const src331 = ['audit.rs', 'kill.rs', 'limits.rs', 'elevate.rs', 'changes.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
+      check('R331', L331, ct.status === 0 && src331 && okN('audit::') >= 6, detail331);
+      check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= 4 && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331);
+      check('R333', L333, ct.status === 0 && src331 && okN('changes::') >= 7, detail331);
+      // R327 and R338 (T-310): the unit tests of the rule, the watcher filter and the compatibility module, plus the hub's half from above
+      const ct310 = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', '-p', 'pgm-ai-internal', '-p', 'pgm-identity-internal', '--', 'compat::', 'work::tests::', 'devices::'], { cwd: path.join(MILLS, 'native'), env: env321, encoding: 'utf8', timeout: 1800000 });
+      const out310 = String(ct310.stdout || '') + String(ct310.stderr || '');
+      const t310 = (name) => new RegExp('^test ' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\.\\.\\. ok$', 'm').test(out310);
+      const units327 = ['work::tests::a_machine_call_needs_the_owner_to_be_the_account_and_the_starter', 'work::tests::watchers_see_no_machine_event_and_answer_none_and_a_planner_has_no_machine', 'work::tests::a_planner_may_only_write_notes_under_plans_and_never_use_pc_tools'];
+      const units338 = ['compat::tests::an_older_hub_offers_no_machine_and_a_newer_app_stays_an_ai_host', 'compat::tests::an_older_app_keeps_its_pc_engine_and_gets_no_machine_job', 'compat::tests::a_scope_with_a_higher_v_is_refused_whole_at_the_polls_boundary'];
+      const u327 = units327.filter(t310), u338 = units338.filter(t310);
+      if (!RUST_HUB) skip('R327', L327, 'the Rust hub\'s: --rust-hub runs it');
+      else check('R327', L327, ct310.status === 0 && u327.length === units327.length && !!r327hub && r327hub.ok, `cargo test ${ct310.status}: units ${u327.length}/${units327.length} ${/FAILED|panicked/.test(out310) ? 'FAILURES' : ''} · ${r327hub ? (r327hub.ok ? '' : 'FAILED ' + Object.entries(r327hub.o).filter(([, v]) => v !== true).map(([k]) => k).join(',') + ' · ') + r327hub.detail : 'no hub run'}`);
+      // the frozen JavaScript hub's half (bridge/test/js-fallback.js): the browser PC tools answer, the machine routes are absent, hello announces no machine
+      const js338 = await require('./js-fallback.js').probe({ portFrom: PORT + 380 });
+      check('R338', L338, ct310.status === 0 && u338.length === units338.length && js338.ok && js338.steps.pcBrowser === true && js338.steps.noMachines === true && js338.steps.hostStaysAiHost === true && (!RUST_HUB || (!!r338hub && r338hub.ok)),
+        `cargo test ${ct310.status}: units ${u338.length}/${units338.length} · JavaScript hub alone: ${js338.why.slice(0, 160)} · ${RUST_HUB ? (r338hub ? (r338hub.ok ? 'hub ok' : 'hub FAILED ' + Object.entries(r338hub.o).filter(([, v]) => v !== true).map(([k]) => k).join(',')) : 'no hub run') : 'plain mode: the Rust hub\'s half is skipped'}`);
+    }
+  }
+  // R323 (T-308, linked machines 2/8, the Rust hub's): the per-run secret and the owner check on the hub (plans/linked-machines.md 4.3)
+  if (!RUST_HUB) skip('R323', 'per-run MCP secret and the owner check for machines (the Rust hub\'s; --rust-hub runs it)', 'the Rust hub is not in front: run with --rust-hub');
+  else await r323Check();
+  async function r323Check() {
+    const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
+    const mkHost = async (token) => { const made = await call('/api/hosts/new', token, {}); const id = (made.data.host || {}).id || ''; const cj = (await call('/api/hosts/config', token, { id })).data.config || {}; return { id, token: cj.token, nick: (made.data.host || {}).nickname || '' }; };
+    const hostA = await mkHost(A), hostU = await mkHost(U);
+    const enc = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const mach = (r) => { const l = texts(r.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } };
+    const runIdOf = (r) => ((r.events || []).find((e) => e.type === 'bridge_run') || {}).id || '';
+    const listPc = (extra) => ({ route: 'pc-tool', body: { name: 'list', args: { path: '' } }, ...(extra || {}) });
+    // 1. before any machine is online: the owner's browser folder still answers (today's fallback), and a named machine that is the
+    //    owner's own but offline says so (it does not fall back); another person's machine is refused offline too
+    const fb = await chat(U, 'PCTOOL r323 browser fallback');
+    const early = mach(await chat(U, enc([listPc({ body: { name: 'list', args: { path: '' }, machine: hostU.id } }), listPc({ body: { name: 'list', args: {}, machine: hostA.id } }), listPc({ body: { name: 'list', args: {}, machine: 'no-such-machine-r323' } })])));
+    // 2. two machines online (played by the test: hello with pc + signed-pc, a held poll, an answer for every job)
+    const keyOf = {}; const got = { [hostA.id]: [], [hostU.id]: [] }; const ac = new AbortController();
+    for (const h of [hostA, hostU]) {
+      const hi = await (await fetch(H + '/node/hello', { method: 'POST', headers: hostHdr(h.id, h.token), body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex'), user: '', providers: [], engines: [], pc: true, version: '9.9.9', os: 'linux', caps: ['relay', 'signed-pc'] }) })).json().catch(() => ({}));
+      keyOf[h.id] = { key: hi.hubKey || '', kid: hi.hubKid || '' };
+      (async () => { while (!ac.signal.aborted) {
+        const pr = await fetch(H + '/node/poll', { headers: hostHdr(h.id, h.token), signal: ac.signal }).then((r) => r.json()).catch(() => ({}));
+        for (const j of pr.jobs || []) { got[h.id].push(j); await fetch(H + '/node/reply', { method: 'POST', headers: hostHdr(h.id, h.token), body: JSON.stringify({ id: j.id, status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ ok: true, result: 'host-listing ' + h.id })).toString('base64') }) }).catch(() => {});
+        }
+      } })();
+    }
+    for (let i = 0; i < 40; i++) { const hs = (await call('/api/check', U)).data.aiNodes || []; if ([hostA, hostU].every((h) => hs.some((x) => x.id === h.id && x.online))) break; await sleep(250); }
+    const legacyU = crypto.createHmac('sha256', WORK_SECRET).update('t-user').digest('hex');
+    // U's run: unnamed goes to U's own machine; naming A's machine (by id, by nickname, inside args) is 403; a header or session that disagrees with
+    // the run record is 403; a wrong secret is not ours; the old shared secret still works (deprecated) and the owner check still applies to it
+    const rU = await chat(U, enc([
+      listPc(),                                                                              // 0 own machine, unnamed
+      listPc({ body: { name: 'list', args: {}, machine: hostA.id } }),                       // 1 A's machine by id
+      listPc({ body: { name: 'list', args: {}, machine: hostA.nick } }),                     // 2 by nickname
+      listPc({ body: { name: 'list', args: { path: '', machine: hostA.id } } }),             // 3 named inside args
+      listPc({ account: 't-admin' }),                                                       // 4 the run's secret with someone else's account header
+      listPc({ body: { name: 'list', args: {}, session: 'someone-elses-session' } }),        // 5 a session that is not this run's
+      listPc({ secret: 'not-a-secret-r323' }),                                              // 6 a wrong secret
+      listPc({ account: null }),                                                            // 7 no account header at all: the record says who
+      listPc({ body: { name: 'list', args: {}, machine: hostU.nick } }),                     // 8 own machine by nickname
+      { route: 'board', body: { name: 'board_list', args: {} } },                            // 9 other tools on the run's secret
+      listPc({ secret: legacyU, account: 't-user' }),                                       // 10 the deprecated shared secret: still works
+      listPc({ secret: legacyU, account: 't-user', body: { name: 'list', args: {}, machine: hostA.id } }), // 11 ... and is owner-checked
+      listPc({ secret: legacyU, account: 't-admin' }),                                      // 12 the old secret is one account's: not as another
+    ]));
+    // A (the admin)'s run: names U's machine = 403 (an admin is another person); its own machine works, by id and unnamed
+    const rA = await chat(A, enc([
+      listPc({ body: { name: 'list', args: {}, machine: hostU.id } }),                       // 0 admin names U's machine
+      listPc({ body: { name: 'list', args: {}, machine: hostU.nick } }),                     // 1 by nickname
+      listPc(),                                                                              // 2 own machine, unnamed
+      listPc({ body: { name: 'list', args: {}, machine: hostA.id } }),                       // 3 own machine by id
+    ]));
+    ac.abort();
+    const u = mach(rU), a = mach(rA);
+    const isListing = (r, id) => r && r.status === 200 && r.body && r.body.ok === true && r.body.result === 'host-listing ' + id;
+    const notOurs = (r) => r && r.status !== 200 && !(r.body && r.body.ok === true);
+    const forbidden = (r) => r && r.status === 403 && r.body && r.body.ok === false;
+    // what the machines received: only requests for their own owner, each signed by the hub's key with the run as the actor
+    const spki = (hex) => crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(hex, 'hex')]), format: 'der', type: 'spki' });
+    const verify = (h, j) => { try {
+      const sr = JSON.parse(j.headers['x-vr-machine-sig'] || ''), env = JSON.parse(sr.payload);
+      const sigOk = crypto.verify(null, Buffer.concat([Buffer.from('vr-machine-request-v1\n'), Buffer.from(sr.payload)]), spki(keyOf[h.id].key), Buffer.from(sr.sig, 'hex'));
+      return { sigOk, env, digestOk: env.argsDigest === crypto.createHash('sha256').update(Buffer.from(j.body || '', 'base64')).digest('hex'), toolOk: env.tool === String(j.path).replace(/^\//, ''), life: env.expiresAt - env.issuedAt, kid: sr.kid };
+    } catch { return { sigOk: false, env: {} }; } };
+    const vA = got[hostA.id].map((j) => verify(hostA, j)), vU = got[hostU.id].map((j) => verify(hostU, j));
+    const nonces = new Set([...vA, ...vU].map((v) => v.env.nonce));
+    const idA = runIdOf(rA), idU = runIdOf(rU);
+    const signedOk = (v, owner, runId, h) => v.sigOk && v.digestOk && v.toolOk && v.env.v === 1 && v.env.owner === owner && v.env.actor && v.env.actor.account === owner && v.env.machine === h.id && v.life === 60 && v.kid === keyOf[h.id].kid && (runId ? v.env.actor.run === runId : true);
+    // the hub's key: made once, in the data folder, owner-only, the same one every hello announces
+    const keyFile = path.join(SB, 'hub-signing.key');
+    const keyMode = fs.existsSync(keyFile) ? fs.statSync(keyFile).mode & 0o777 : 0;
+    // clean up: the test machines go away (the later checks must not find a PC host for these accounts)
+    await call('/api/hosts/remove', A, { id: hostA.id }); await call('/api/hosts/remove', U, { id: hostU.id });
+    const detail323 = `browser fallback ${/fake-listing/.test(texts(fb.events))}; offline: ${early.map((r) => r.status).join('/')}; U run: ${u.map((r) => r.status).join('/')}; A run: ${a.map((r) => r.status).join('/')}; machine A got ${got[hostA.id].length} (signed ${vA.filter((v) => v.sigOk).length}), machine U got ${got[hostU.id].length} (signed ${vU.filter((v) => v.sigOk).length}); key mode ${keyMode.toString(8)}`;
+    check('R323', 'per-run MCP secret and the owner check for machines (T-308): a Work run gets its OWN secret in its MCP config, the hub takes the account and session from the run record (a disagreeing account header or session is 403, the account header is not needed, a wrong secret is not accepted); a run naming ANOTHER person\'s machine (by id, by nickname or inside the arguments) gets 403 with no fallback, and so does an admin\'s run; the owner\'s own machine answers (signed by the hub\'s one ed25519 key for the owner with the run as actor, digest of the arguments, 60 s life, a fresh nonce each), the owner\'s browser-folder fallback still works when no machine is named, a named machine that is the owner\'s but offline says so instead of falling back; the old shared secret (an older run config) still works, deprecated, and is owner-checked too; machines only ever received requests for their own owner; the hub key file is owner-only',
+      /fake-listing: a\.txt/.test(texts(fb.events)) && early.length === 3 && early[0].status === 503 && /offline/.test(JSON.stringify(early[0].body)) && forbidden(early[1]) && early[2].status === 404
+      && Object.values(keyOf).every((k) => /^[0-9a-f]{64}$/.test(k.key) && k.kid) && keyOf[hostA.id].key === keyOf[hostU.id].key
+      && u.length === 13 && isListing(u[0], hostU.id) && forbidden(u[1]) && forbidden(u[2]) && forbidden(u[3]) && forbidden(u[4]) && forbidden(u[5]) && notOurs(u[6]) && isListing(u[7], hostU.id) && isListing(u[8], hostU.id)
+      && u[9].status === 200 && u[9].body.ok === true && isListing(u[10], hostU.id) && forbidden(u[11]) && notOurs(u[12])
+      && a.length === 4 && forbidden(a[0]) && forbidden(a[1]) && isListing(a[2], hostA.id) && isListing(a[3], hostA.id)
+      && got[hostA.id].length === 2 && got[hostU.id].length === 4 // U: probes 0, 7, 8 and the legacy 10; A: 2 and 3
+      && vA.every((v) => signedOk(v, 't-admin', idA, hostA)) && vU.every((v, i) => signedOk(v, 't-user', i < 3 ? idU : '', hostU)) && nonces.size === vA.length + vU.length && !!idA && !!idU
+      && keyMode === 0o600,
+      detail323);
+  }
+  // R328, R329, R330 (T-311, linked machines 5/8): the machine's tools, over the wire, with a REAL machine runner (`vr-host machine`, the
+  // library's runner) linked by device code to this scratch hub, called through a Work run's pc-tool relay like the AI does.
+  if (!RUST_HUB) { for (const [id, l] of [['R328', 'machine tools: files (the pc_* mapping) and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it'); }
+  else if (WIN) { for (const [id, l] of [['R328', 'machine tools: files and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the shell and process checks use sh and /proc; run on Linux'); }
+  else await machineToolsCheck();
+  // R334, R335, R336, R339 (T-313, linked machines 7/8): the apps use the library: the service install and the state folder check
+  // (one template, a systemd user unit and a per-user Windows task, .sh and .cmd twins), pc_job retired for the library's door, vr-desktop
+  // links this computer, jcodepgm machine, and the cross-test. Windows can't be built or run here: its half is marked pending.
+  {
+    const rd = (...p) => fs.readFileSync(path.join(MILLS, ...p), 'utf8');
+    const cratesDir = path.join(MILLS, 'native', 'crates');
+    const rsFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === 'target' ? [] : rsFiles(path.join(dir, e.name))) : e.name.endsWith('.rs') ? [path.join(dir, e.name)] : []));
+    const home334 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const env334 = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home334, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home334, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET };
+    env334.PATH = path.join(env334.CARGO_HOME, 'bin') + path.delimiter + (env334.PATH || '');
+    const L334 = 'linked machines service install (T-313): ONE template (pgm-net-internal::machine::service) makes a systemd USER unit (Restart=on-failure, WantedBy=default.target, no User=, never root, no restart after exit 3 / 4) and a per-user Windows Scheduled Task (logon trigger, LeastPrivilege, restart on failure, no administrator, no SYSTEM) with .sh and .cmd twins; `vr-host machine install | uninstall` write and remove them; the machine refuses to start (exit 4) when the state folder, or the token / key / scope in it, is group- or world-readable (Linux) or has a broad ACL (Windows, the icacls helper)';
+    const L335 = 'linked machines, the apps use the library (T-313): the host-side pc_job is gone, the AI host\'s PC role is the library\'s Machine (scope + the one canonicaliser, audit, kill switch; an older hub that signs nothing is still served as the owner), the hub still relays the pc engine to older hosts, no copy of the canonicaliser exists outside pgm-net-internal (the desktop app\'s local file paths use it too), vr-desktop links this computer and serves it while open or as the persistent service, only the Tools window may call those commands (the hub\'s page, scoped to the hub origin, cannot), and the machine parity R328 stays green';
+    const L336 = 'linked machines, Jcode PGM (T-313): `jcodepgm machine link | run | install | uninstall | scope | stop | start | status` on the mirrored library, run against a fake hub (link by device code, signed calls served, unsigned / other-key / outside-folder refused, revoked wipe, state folder check, local scope edits audited, kill switch), the credential files owner-only, the library mirrored byte for byte from this repo';
+    const L339 = 'linked machines cross-test (T-313): the library tests R321 to R333 and R340 run on Linux (machine:: unit tests), the Windows path rules are pure logic that run on any host, and the Windows run is documented for Gee in the pgm-net-internal README; the Windows run itself is PENDING';
+    const why334 = buildNative();
+    const ct334 = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', '-p', 'pgm-ai-internal', '--', 'machine::', 'the_pc_role_is_the_librarys_machine'], { cwd: path.join(MILLS, 'native'), env: env334, encoding: 'utf8', timeout: 1800000 });
+    if (ct334.error) { for (const [id, l] of [['R334', L334], ['R335', L335], ['R339', L339]]) skip(id, l, 'no Rust toolchain here (' + ct334.error.code + ')'); }
+    else {
+      const out334 = String(ct334.stdout || '') + String(ct334.stderr || '');
+      const okT = (name) => new RegExp('^test ' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\.\\.\\. ok$', 'm').test(out334);
+      const nOk = (out334.match(/^test machine::[^ ]+ \.\.\. ok$/gm) || []).length;
+      const svcTests = ['the_systemd_unit_is_a_user_unit_that_restarts_on_failure_and_never_runs_as_root', 'the_windows_task_is_per_user_least_privilege_and_restarts', 'sh_and_cmd_twins_exist_and_the_sh_refuses_root', 'install_writes_the_unit_and_uninstall_removes_it', 'a_group_or_world_readable_state_folder_or_secret_is_refused'];
+      const svcOk = svcTests.filter((t) => okT('machine::service::tests::' + t));
+      const runnerSrc = rd('native', 'crates', 'pgm-net-internal', 'src', 'machine', 'runner.rs'), hostSrc = rd('native', 'crates', 'vr-host', 'src', 'machine.rs');
+      const srcOk334 = (runnerSrc.match(/check_state_dir\(&o\.state_dir\)/g) || []).length >= 2 && /fn install_sh|install_cmd/.test(rd('native', 'crates', 'pgm-net-internal', 'src', 'machine', 'service.rs')) && /"install" \| "uninstall"/.test(hostSrc) && /EXIT_REFUSED/.test(hostSrc);
+      // the real program: generated files, then the refusal
+      let live = { ok: false, why: why334 || 'not run' };
+      const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+      if (!why334 && !WIN && !isRoot) {
+        const d = fs.mkdtempSync(path.join(SCRATCH || require('os').tmpdir(), 'r334-')), state = path.join(d, 'state'), out = path.join(d, 'out');
+        const vr = (...a) => spawnSync(NATIVE_BIN.host, ['machine', ...a], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: d, XDG_CONFIG_HOME: path.join(d, 'cfg') } });
+        const inst = vr('install', '--files-only', '--state', state, '--out', out);
+        const names = ['install.sh', 'uninstall.sh', 'install.cmd', 'uninstall.cmd', 'vibe-roller-machine.service', 'vibe-roller-machine.task.xml'];
+        const have = names.filter((n) => fs.existsSync(path.join(out, n)));
+        const rdo = (n) => (fs.existsSync(path.join(out, n)) ? fs.readFileSync(path.join(out, n), 'utf8') : '');
+        const unit = rdo('vibe-roller-machine.service'), xml = rdo('vibe-roller-machine.task.xml'), cmd = rdo('install.cmd'), sh = rdo('install.sh');
+        const shn = spawnSync('sh', ['-n', path.join(out, 'install.sh')], { encoding: 'utf8' });
+        const unitOk = /^Restart=on-failure$/m.test(unit) && /^WantedBy=default\.target$/m.test(unit) && !/^User=/m.test(unit) && !/multi-user\.target/.test(unit) && /^RestartPreventExitStatus=3 4$/m.test(unit) && /machine run --state /.test(unit) && /^UMask=0077$/m.test(unit);
+        const taskOk = /<LogonTrigger>/.test(xml) && /<RunLevel>LeastPrivilege<\/RunLevel>/.test(xml) && /<RestartOnFailure>/.test(xml) && !/HighestAvailable|LocalSystem|S-1-5-18/.test(xml);
+        const twinsOk = /schtasks \/Create/.test(cmd) && !/sc create|LocalSystem/.test(cmd) && /\r\n/.test(cmd) && sh.startsWith('#!/bin/sh') && /id -u/.test(sh) && shn.status === 0;
+        // the refusal: linked state (record + token), folder open to the group / the world, then a group- or world-readable token in a private folder
+        fs.mkdirSync(state, { recursive: true });
+        fs.writeFileSync(path.join(state, 'link.json'), JSON.stringify({ owner: 'ann', machine: 'mach-x', hub: 'http://127.0.0.1:9' })); fs.writeFileSync(path.join(state, 'token'), 'tok');
+        fs.chmodSync(path.join(state, 'link.json'), 0o600); fs.chmodSync(path.join(state, 'token'), 0o600);
+        const refuse = [];
+        for (const [dirMode, tokMode] of [[0o755, 0o600], [0o750, 0o600], [0o700, 0o640], [0o700, 0o604]]) {
+          fs.chmodSync(state, dirMode); fs.chmodSync(path.join(state, 'token'), tokMode);
+          const r = vr('run', '--state', state);
+          refuse.push(r.status === 4 && /will not start/.test(r.stderr || '') && /chmod (700|600)/.test(r.stderr || ''));
+        }
+        live = { ok: inst.status === 0 && have.length === names.length && unitOk && taskOk && twinsOk && refuse.every(Boolean), why: `install ${inst.status} files ${have.length}/${names.length} unit ${unitOk} task ${taskOk} twins ${twinsOk} refusal ${refuse.map((b) => (b ? 'exit4' : 'NO')).join('/')}` };
+      } else if (WIN) live = { ok: true, why: 'the live shell checks run on Linux; the Windows run is in the README' };
+      else if (isRoot) live = { ok: true, why: 'running as root: `machine install` refuses root by design, the live check is skipped (the unit tests cover the text)' };
+      check('R334', L334, ct334.status === 0 && svcOk.length === svcTests.length && srcOk334 && live.ok, `cargo test ${ct334.status}: service tests ${svcOk.length}/${svcTests.length}; ${live.why}; Windows: the ACL test and the task are written but not run here (no Windows)`);
+
+      // ---- R335
+      const allRs = rsFiles(cratesDir), outside = allRs.filter((f) => !f.includes(path.join('crates', 'pgm-net-internal') + path.sep));
+      const oldPc = allRs.filter((f) => /\bfn pc_job\b/.test(fs.readFileSync(f, 'utf8')));
+      const copies = outside.filter((f) => { const t = fs.readFileSync(f, 'utf8'); return /contains\(&"\.\."\)/.test(t) || (/go above the (shared|projects) folder/.test(t) && !/canonicalize_in/.test(t)); }).map((f) => path.relative(MILLS, f));
+      const runnerAi = rd('native', 'crates', 'pgm-ai-internal', 'src', 'host', 'runner.rs'), aiHosts = rd('native', 'crates', 'pgm-ai-internal', 'src', 'ai_hosts.rs');
+      const pcRole = /async fn machine_job\(/.test(runnerAi) && /machine::exec::Machine/.test(runnerAi) && /\.handle\(&tool, &body, &sig\)/.test(runnerAi) && /\.run_as\(/.test(runnerAi) && !/read_dir\(&full\)|remove_dir_all\(&full\)/.test(runnerAi) && /h\.track\(machine_job\(h2, job\)\)/.test(runnerAi);
+      const hubKeeps = /self\.relay\(host, "pc", &format!\("\/\{name\}"\)/.test(aiHosts) && fs.existsSync(path.join(cratesDir, 'pgm-net-internal', 'src', 'compat.rs')) && /an_older_app_keeps_its_pc_engine/.test(rd('native', 'crates', 'pgm-net-internal', 'src', 'compat.rs'));
+      const deskMain = rd('native', 'crates', 'vr-desktop', 'src', 'main.rs'), deskMachine = rd('native', 'crates', 'vr-desktop', 'src', 'machine.rs'), deskLocal = rd('native', 'crates', 'vr-desktop', 'src', 'local.rs');
+      const hubCapSrc = (/CapabilityBuilder::new\("hub"\)[\s\S]*?\)\)\?;/.exec(deskMain) || [''])[0];
+      const toolsCap = JSON.parse(rd('native', 'crates', 'vr-desktop', 'capabilities', 'tools.json')), buildRs = rd('native', 'crates', 'vr-desktop', 'build.rs');
+      const machCmds = ['machine_status', 'machine_link', 'machine_act', 'machine_service'];
+      const deskOk = machCmds.every((c) => new RegExp('fn ' + c + '\\(').test(deskMain) && buildRs.includes('"' + c + '"') && toolsCap.permissions.includes('allow-' + c.replace(/_/g, '-')) && deskMain.includes(c)) && hubCapSrc.length > 50 && !/machine/.test(hubCapSrc) && /\.remote\(format!\("\{hub\}\/\*"\)\)/.test(hubCapSrc)
+        && /Runner::open/.test(deskMachine) && /runner::link/.test(deskMachine) && /Unit::new/.test(deskMachine) && /option_env!\("VR_APP_NAME"\)/.test(deskMachine) && /fn cli\(/.test(deskMachine) && /machine::cli\(/.test(deskMain) && /canonicalize_in/.test(deskLocal)
+        && /is_hub_origin\(page, hub\)/.test(rd('native', 'crates', 'vr-desktop', 'src', 'capture.rs')) && /mode = "while open"/.test(deskMachine);
+      const r328 = results.find((r) => r.id === 'R328');
+      const parityOk = RUST_HUB ? !!r328 && r328.status === 'PASS' : true;
+      const cdesk = why334 ? { status: 77 } : spawnSync('sh', ['-c', `export RUSTUP_HOME="${env334.RUSTUP_HOME}" CARGO_HOME="${env334.CARGO_HOME}" CARGO_TARGET_DIR="${NATIVE_TARGET}" OWNER_HOME="${home334}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; [ "$HAVE_TAURI_LINUX" = 1 ] || exit 77; cargo test --release -q -p vr-desktop -- machine local 2>&1`], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+      const deskTests = cdesk.status === 77 ? 'desktop unit tests not run (no WebKitGTK sysroot)' : `desktop unit tests ${cdesk.status}`;
+      check('R335', L335, ct334.status === 0 && okT('host::runner::tests::the_pc_role_is_the_librarys_machine') && oldPc.length === 0 && copies.length === 0 && pcRole && hubKeeps && deskOk && parityOk && (cdesk.status === 77 || cdesk.status === 0),
+        `pc_job in the source: ${oldPc.length ? oldPc.map((f) => path.relative(MILLS, f)).join(',') : 'none'}; canonicaliser copies outside pgm-net-internal: ${copies.join(',') || 'none'} (the frozen JavaScript host keeps its own); pc role ${pcRole}; hub still relays pc ${hubKeeps}; desktop ${deskOk}; ${deskTests}; R328 parity ${RUST_HUB ? (r328 ? r328.status : 'missing') : 'runs with --rust-hub'}`);
+
+      // ---- R339
+      const readme = rd('native', 'crates', 'pgm-net-internal', 'README.md');
+      const winDoc = /Running the linked-machines tests on Windows \(R339\)/.test(readme) && /cargo test -p pgm-net-internal machine::/.test(readme) && /vr-host\.exe machine install --files-only/.test(readme) && /schtasks \/Query/.test(readme);
+      const winTests = (fs.readFileSync(path.join(cratesDir, 'pgm-net-internal', 'src', 'machine', 'paths.rs'), 'utf8').match(/fn w\(|Flavor::Windows/g) || []).length;
+      check('R339', L339, ct334.status === 0 && nOk >= 80 && !/FAILED|panicked/.test(out334) && winDoc && winTests >= 5,
+        `Linux: cargo test ${ct334.status}, ${nOk} machine:: tests ok; Windows path rules are pure logic (${winTests} Windows-flavour uses in paths.rs) and run here; Windows run: PENDING (Gee: the README commands; the cfg(windows) ACL test and the Scheduled Task were never run)`);
+    }
+
+    // ---- R336 (Jcode PGM): its tests live in the Jcode PGM repo; here, the files, the mirror and the test list
+    const jc = [process.env.JCODE_PGM_DIR, path.join(MILLS, '..', 'jc-' + path.basename(MILLS).replace(/^vr-/, '')), path.join(MILLS, '..', 'Jcode-PGM'), '/srv/apps/sharedwork/Jcode-PGM'].filter(Boolean).find((d) => fs.existsSync(path.join(d, 'crates', 'jcode-machine', 'src', 'tests.rs')));
+    if (!jc) skip('R336', L336, 'no Jcode PGM checkout with crates/jcode-machine beside this repo (JCODE_PGM_DIR=<dir> points at one); its tests: cargo test -p jcode-machine');
+    else {
+      const jr = (...p) => fs.readFileSync(path.join(jc, ...p), 'utf8');
+      const mirrorDir = path.join(jc, 'pgm', 'libs', 'pgm-net-internal', 'src'), srcDir = path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src');
+      const same = (rel) => { try { return fs.readFileSync(path.join(mirrorDir, rel)).equals(fs.readFileSync(path.join(srcDir, rel))); } catch { return false; } };
+      const rels = ['client.rs', ...fs.readdirSync(path.join(srcDir, 'machine')).map((f) => path.join('machine', f))];
+      const stale = rels.filter((r) => !same(r));
+      const tj = jr('crates', 'jcode-machine', 'src', 'tests.rs'), lj = jr('crates', 'jcode-machine', 'src', 'lib.rs'), cj = jr('src', 'cli', 'machine.rs'), aj = jr('src', 'cli', 'args.rs');
+      const names = ['link_then_run_serves_signed_calls_and_refuses_the_rest', 'unlinked_on_the_web_wipes_the_token_and_exits_3', 'a_state_folder_others_can_read_is_refused_before_any_call', 'scope_shows_and_edits_locally_and_the_audit_names_this_terminal', 'stop_ends_all_access_until_start_here', 'the_default_hub_is_the_one_hub_login_signed_in_to', 'the_service_is_jcodepgm_machine_run_as_a_user_unit_and_a_per_user_task'];
+      const hasTests = names.filter((n) => tj.includes('fn ' + n));
+      const cli = /enum MachineCommand/.test(aj) && ['Link', 'Run', 'Install', 'Uninstall', 'Scope', 'Stop', 'Start', 'Status'].every((v) => new RegExp('\\b' + v + '\\b').test(aj.slice(aj.indexOf('enum MachineCommand')))) && /MachineCommand::Scope/.test(cj) && /Command::Machine/.test(jr('src', 'cli', 'dispatch.rs'));
+      const wiring = /fn fake_hub\(/.test(tj) && /mode\(&state\), 0o700/.test(tj) && /0o600/.test(tj) && /pgm_net_internal::machine::runner::\{self, Ended, LinkRecord, Options, Runner\}/.test(lj) && /LocalApproval::from_machine\(APPROVER\)/.test(lj) && /jcode_hub_login::load/.test(lj) && /pgm-net-internal = \{ path = "\.\.\/\.\.\/pgm\/libs\/pgm-net-internal" \}/.test(jr('crates', 'jcode-machine', 'Cargo.toml'));
+      let ran = '';
+      let jt = { status: 0 };
+      if (process.env.VR_RUN_JCODE_TESTS === '1') { jt = spawnSync('cargo', ['test', '-p', 'jcode-machine'], { cwd: jc, env: { ...env334, CARGO_TARGET_DIR: path.join(jc, 'target') }, encoding: 'utf8', timeout: 1800000 }); ran = ` cargo test -p jcode-machine ${jt.status}`; }
+      check('R336', L336, stale.length === 0 && hasTests.length === names.length && cli && wiring && jt.status === 0,
+        `Jcode PGM at ${jc}: mirror stale files ${stale.join(',') || 'none'}; fake-hub tests ${hasTests.length}/${names.length}; CLI ${cli}; wiring ${wiring};${ran || ' the tests run with: cargo test -p jcode-machine (VR_RUN_JCODE_TESTS=1 runs them here)'}`);
+    }
+  }
+  async function machineToolsCheck() {
+    const mdir = fs.mkdtempSync(path.join(SCRATCH, 'r328-'));
+    const procs = [], cleanups = [];
+    const encSpec = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const machOf = (r) => { const l = texts(r.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } };
+    const pc = (name, args, machine) => ({ route: 'pc-tool', body: { name, args: args || {}, ...(machine ? { machine } : {}) } });
+    const via = async (specs) => machOf(await chat(U, encSpec(specs)));       // one Work run, the calls in order
+    const one = async (name, args, machine) => (await via([pc(name, args, machine)]))[0] || { status: 0, body: {} };
+    const okB = (r) => !!(r && r.body && r.body.ok === true), res = (r) => (r && r.body ? r.body.result : undefined), errOf = (r) => String((r && r.body && r.body.error) || '');
+    const tree = (dir, rel = '') => { const o = {}; for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) { const p = rel ? rel + '/' + e.name : e.name; if (e.isDirectory()) { o[p + '/'] = 1; Object.assign(o, tree(dir, p)); } else o[p] = fs.readFileSync(path.join(dir, p), 'utf8'); } return o; };
+    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const mcall = (method, p, tok, body) => fetch(H + p, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) })).catch((e) => ({ status: 0, data: { error: e.message } }));
+    const linkMachine = (tag, approver, name) => new Promise((resolve) => {
+      const state = path.join(mdir, tag + '-state'), home = path.join(mdir, tag + '-home'); fs.mkdirSync(home, { recursive: true });
+      const p = spawn(NATIVE_BIN.host, ['machine', 'link', '--hub', H, '--folder', home, '--state', state, '--name', name], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VR_MACHINE_ALLOW_ROOT: '1' } });
+      let out = '', approved = false;
+      p.stdout.on('data', (d) => { out += d; const m = /Code: ([A-Z]{4}-[A-Z]{4})/.exec(out); if (m && !approved) { approved = true; call('/api/device/approve', approver, { userCode: m[1] }); } });
+      p.stderr.on('data', (d) => { out += d; });
+      p.on('close', (code) => { let id = ''; try { id = JSON.parse(fs.readFileSync(path.join(state, 'link.json'), 'utf8')).machine; } catch {} resolve({ code, out, state, home: fs.realpathSync(home), tag, id, name }); });
+    });
+    const runMachine = (m) => { const log = fs.openSync(path.join(mdir, m.tag + '.log'), 'a'); const p = spawn(NATIVE_BIN.host, ['machine', 'run', '--state', m.state], { stdio: ['ignore', log, log], env: { ...process.env, VR_MACHINE_ALLOW_ROOT: '1' } }); procs.push(p); m.proc = p; m.exited = new Promise((r) => p.once('exit', (c) => r(c))); return p; };
+    const setScope = (m, doc) => { fs.writeFileSync(path.join(m.state, 'scope.json'), JSON.stringify({ v: 1, ...doc })); };
+    const folderScope = (m, extra) => ({ preset: 'folder', paths: [{ path: m.home, access: 'rw' }], ...(extra || {}) });
+    const waitOnline = async (tok, ids) => { for (let i = 0; i < 80; i++) { const ms = (await call('/api/machines', tok)).data.machines || []; if (ids.every((id) => ms.some((x) => x.id === id && x.online))) return true; await sleep(250); } return false; };
+    const tokOf = (m) => fs.readFileSync(path.join(m.state, 'token'), 'utf8').trim();
+    const created = (await call('/api/admin/create', A, { username: 't-r330', display: 'R330' })).data || {};
+    const X = created.password ? (await login('t-r330', created.password, 'device-r330-xxxxxxxxxx')).data.token : '';
+    const detail = {};
+    try {
+      // 0. with no machine and no host linked, the browser folder answers as it always did
+      const fbBefore = await chat(U, 'PCTOOL r328 before any machine');
+      const fallbackBefore = /fake-listing/.test(texts(fbBefore.events));
+      const [m1, m2, m2b, m3] = await Promise.all([linkMachine('m1', U, 'r328-box'), linkMachine('m2', U, 'r330-box'), linkMachine('m2b', U, 'r330-other'), linkMachine('m3', X, 'r330-x')]);
+      detail.linked = [m1, m2, m2b, m3].map((m) => m.code + ':' + (m.id ? 'id' : 'noid')).join(',');
+      runMachine(m1);
+      const online = await waitOnline(U, [m1.id]);
+      // a real pc_job host (the AI host's own five tools) on its own folder, for the parity
+      const madeHost = await call('/api/hosts/new', U, {}), hostId = (madeHost.data.host || {}).id || '', hcfg = (await call('/api/hosts/config', U, { id: hostId })).data.config || {};
+      const hdir = path.join(mdir, 'host'), hhome = path.join(mdir, 'host-home'); fs.mkdirSync(hdir, { recursive: true }); fs.mkdirSync(hhome, { recursive: true });
+      fs.writeFileSync(path.join(hdir, 'ai-node.json'), JSON.stringify({ hub: H, id: hostId, token: hcfg.token, user: 't-user', autoUpdate: false, engines: {}, providers: [], pc: { folder: hhome } }), { mode: 0o600 });
+      const hlog = fs.openSync(path.join(mdir, 'host.log'), 'a');
+      const hostProc = spawn(NATIVE_BIN.host, ['host', '--config', path.join(hdir, 'ai-node.json')], { cwd: hdir, stdio: ['ignore', hlog, hlog] }); procs.push(hostProc);
+      for (let i = 0; i < 60; i++) { const hs = (await call('/api/check', U)).data.aiNodes || []; if (hs.some((x) => x.id === hostId && x.online)) break; await sleep(250); }
+
+      // ===== R328: files through the machine = files through pc_job; ro refuses writes; machine_info =====
+      const ops = [['list', {}], ['mkdir', { path: 'sub/deep' }], ['write', { path: 'sub/a.txt', content: 'héllo wörld' }], ['write', { path: 'top.txt', content: 'x' }], ['list', {}], ['list', { path: 'sub' }], ['read', { path: 'sub/a.txt' }], ['read', { path: 'nope.txt' }],
+        ['delete', { path: 'sub/deep' }], ['delete', { path: 'nothing' }], ['write', { path: '', content: 'z' }], ['delete', { path: '' }], ['write', { path: '../escape.txt', content: 'no' }], ['read', { path: '/etc/hostname' }], ['list', { path: './sub/' }], ['write', { path: 'sub/./b.txt', content: '' }], ['list', { path: 'sub' }]];
+      const hostRes = await via(ops.map(([n, a]) => pc(n, a, hostId))), machRes = await via(ops.map(([n, a]) => pc(n, a, m1.id)));
+      const sameOp = ops.map((o, i) => { const h = hostRes[i], m = machRes[i]; if (!h || !m || h.status !== m.status) return false; if (okB(h) !== okB(m)) return false; if (okB(h)) return res(h) === res(m); return o[1].path === '' ? errOf(h) === errOf(m) : true; });
+      const treesEqual = JSON.stringify(tree(hhome)) === JSON.stringify(tree(m1.home));
+      detail.parity = sameOp.map((b, i) => b ? '' : ops[i][0] + '#' + i).filter(Boolean).join(',') || 'all same';
+      const noEscape = !fs.existsSync(path.join(mdir, 'escape.txt'));
+      const info = await one('machine_info', {}, m1.id), inf = res(info) || {};
+      // read-only: reads work, every change is refused and nothing changes; the write tools are not even offered
+      setScope(m1, { preset: 'folders', paths: [{ path: m1.home, access: 'ro' }] });
+      const ro = await via([pc('read', { path: 'top.txt' }, m1.id), pc('write', { path: 'n.txt', content: 'x' }, m1.id), pc('delete', { path: 'top.txt' }, m1.id), pc('mkdir', { path: 'dro' }, m1.id), pc('machine_info', {}, m1.id), pc('transfer_put', { path: 'p.bin', from: '0'.repeat(32) }, m1.id)]);
+      const roInfo = res(ro[4]) || {};
+      const roKept = fs.existsSync(path.join(m1.home, 'top.txt')) && !fs.existsSync(path.join(m1.home, 'n.txt')) && !fs.existsSync(path.join(m1.home, 'dro'));
+      setScope(m1, folderScope(m1));
+      const auditFile = path.join(m1.state, 'machine-audit.jsonl'), auditText = fs.existsSync(auditFile) ? fs.readFileSync(auditFile, 'utf8') : '';
+      const auditLines = auditText.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } });
+      const stMode = fs.statSync(m1.state).mode & 0o777, tokMode = fs.statSync(path.join(m1.state, 'token')).mode & 0o777;
+      const card = ((await call('/api/machines', U)).data.machines || []).find((x) => x.id === m1.id) || {};
+      // done with the pc_job host: it must not answer the later fallback checks
+      await call('/api/hosts/remove', U, { id: hostId }); hostProc.kill();
+      check('R328', 'T-311 machine tools, files: a machine linked by device code and run by the library\'s runner answers mcp__pc__list / read / write / delete / mkdir through a Work run exactly as today\'s pc_job does for the same folder (same results for success, a refusal where pc_job refuses, the same files afterwards; paths are relative to the selected folder; nothing written outside it), a read-only scope reads but refuses write / delete / mkdir and does not offer the write tools, machine_info says os, arch, the scope in words, the tools it offers and the shell\'s limits, every call leaves an audit line (denials too, never file contents) and the state folder is owner-only; mcp__pc__* still works with no machine linked (the browser folder)',
+        fallbackBefore && [m1, m2, m2b, m3].every((m) => m.code === 0 && m.id) && online && !!hostId && hostRes.length === ops.length && machRes.length === ops.length && sameOp.every(Boolean) && treesEqual && noEscape
+        && okB(info) && inf.os === 'linux' && typeof inf.arch === 'string' && /^one folder: /.test(inf.scope || '') && inf.access === 'read-write' && ['machine_info', 'list', 'read', 'write', 'delete', 'mkdir', 'shell_run', 'job_start', 'job_read', 'job_stop', 'proc_kill', 'transfer_get', 'transfer_put'].every((t) => (inf.tools || []).includes(t)) && /^advisory/.test((inf.shell || {}).confinement || '') && (inf.shell || {}).elevation === 'never'
+        && okB(ro[0]) && res(ro[0]) === 'x' && [1, 2, 3].every((i) => !okB(ro[i])) && roKept && roInfo.access === 'read-only' && !(roInfo.tools || []).includes('write') && (roInfo.tools || []).includes('read') && !okB(ro[5])
+        && auditLines.length >= 20 && auditLines.some((l) => l.decision === 'deny') && auditLines.some((l) => l.decision === 'allow') && auditLines.every((l) => l.hash && l.actor) && !auditText.includes('héllo') && stMode === 0o700 && tokMode === 0o600 && /^(one folder|folders): /.test(card.scope || ''),
+        `${detail.linked} · parity ${detail.parity} · trees ${treesEqual} · ro ${ro.map((r) => okB(r) ? 'ok' : 'no').join('/')} · audit ${auditLines.length} lines (deny ${auditLines.some((l) => l.decision === 'deny')}, noactor ${auditLines.filter((l) => !l.actor || !l.hash).length}) · fb ${fallbackBefore} online ${online} state ${stMode.toString(8)} token ${tokMode.toString(8)} card "${card.scope}" tools ${(inf.tools || []).join()} access ${inf.access} elev ${(inf.shell || {}).elevation} conf ${(inf.shell || {}).confinement} ro ${roInfo.access} ${(roInfo.tools || []).join()}`);
+
+      // ===== R329: shell, jobs, processes =====
+      const home1 = m1.home;
+      setScope(m1, folderScope(m1, { tools: { shell: { enabled: true, timeoutSec: 6, maxOutputKB: 1 } }, limits: { concurrentJobs: 2 } }));
+      const sh = await via([pc('shell_run', { cmd: 'pwd; echo err >&2; exit 3' }, m1.id), pc('mkdir', { path: 'sub' }, m1.id), pc('shell_run', { cmd: 'pwd; touch made.txt', cwd: 'sub' }, m1.id),
+        pc('shell_run', { cmd: 'pwd', cwd: '..' }, m1.id), pc('shell_run', { cmd: 'pwd', cwd: '/' }, m1.id), pc('shell_run', { cmd: 'pwd', cwd: '/etc' }, m1.id), pc('shell_run', { cmd: 'pwd', cwd: 'sub/../..' }, m1.id), pc('shell_run', { cmd: 'pwd', cwd: home1 }, m1.id),
+        pc('shell_run', { cmd: "head -c 100000 /dev/zero | tr '\\0' x", timeoutSec: 99 }, m1.id), pc('shell_run', { cmd: '   ' }, m1.id)]);
+      const tShort = Date.now(); const slow1 = await one('shell_run', { cmd: 'sleep 30', timeoutSec: 1 }, m1.id); const msShort = Date.now() - tShort;
+      const tCap = Date.now(); const slow2 = await one('shell_run', { cmd: 'sleep 30' }, m1.id); const msCap = Date.now() - tCap;
+      // jobs: run A starts a long one; "reload" = other runs read it by id; a pause from the web and back (the link drops and returns); then stop
+      const jobA = await one('job_start', { cmd: 'echo $$ > jobpid.txt; echo first; sleep 2; echo second; sleep 120', timeoutSec: 300 }, m1.id), jid = (res(jobA) || {}).jobId || '';
+      await sleep(900);
+      const rd1 = await one('job_read', { jobId: jid }, m1.id), r1 = res(rd1) || {};
+      const pausedNow = await mcall('PATCH', '/api/machines/' + m1.id, U, { paused: true });
+      const whilePaused = await one('job_read', { jobId: jid }, m1.id);
+      await mcall('PATCH', '/api/machines/' + m1.id, U, { paused: false });
+      await waitOnline(U, [m1.id]); await sleep(1800);
+      const rd2 = await one('job_read', { jobId: jid, since: r1.next || 0 }, m1.id), r2 = res(rd2) || {};
+      const listed = res(await one('job_read', {}, m1.id)) || {};
+      const jobB = await one('job_start', { cmd: 'sleep 100' }, m1.id), jidB = (res(jobB) || {}).jobId || '';
+      const jobC = await one('job_start', { cmd: 'sleep 100' }, m1.id); // over concurrentJobs: 2
+      const jpid = Number((fs.existsSync(path.join(home1, 'jobpid.txt')) ? fs.readFileSync(path.join(home1, 'jobpid.txt'), 'utf8') : '0').trim());
+      const stopA = await one('job_stop', { jobId: jid }, m1.id); await sleep(300);
+      const jaDead = !alive(jpid);
+      // processes: an unrelated one is untouchable, a job's own can be killed
+      const other = spawn('sleep', ['300'], { stdio: 'ignore' }); cleanups.push(() => { try { other.kill(); } catch {} });
+      const pl = res(await one('proc_list', {}, m1.id)) || {};
+      const killOther = await one('proc_kill', { pid: other.pid }, m1.id), otherAlive = alive(other.pid);
+      const bPid = ((res(await one('job_read', { jobId: jidB }, m1.id)) || {}).pid) || 0;
+      const killOwn = await one('proc_kill', { pid: bPid }, m1.id); await sleep(500);
+      const bDead = bPid > 1 && !alive(bPid);
+      const killInit = await one('proc_kill', { pid: 1 }, m1.id);
+      // no-shell: the shell tools disappear, files stay
+      setScope(m1, folderScope(m1, { preset: 'no-shell', tools: { shell: { enabled: false } } }));
+      const ns = await via([pc('machine_info', {}, m1.id), pc('shell_run', { cmd: 'echo hi' }, m1.id), pc('job_start', { cmd: 'echo hi' }, m1.id), pc('list', {}, m1.id)]);
+      const nsTools = (res(ns[0]) || {}).tools || [];
+      setScope(m1, folderScope(m1));
+      // revoke: a running job dies with the link, the runner wipes its token and key and exits
+      const jobR = await one('job_start', { cmd: 'echo $$ > revpid.txt; sleep 300' }, m1.id); await sleep(500);
+      const rpid = Number((fs.existsSync(path.join(home1, 'revpid.txt')) ? fs.readFileSync(path.join(home1, 'revpid.txt'), 'utf8') : '0').trim());
+      const rAlive = alive(rpid);
+      const unlink = await mcall('DELETE', '/api/machines/' + m1.id, U);
+      const exitCode = await Promise.race([m1.exited, sleep(12000).then(() => 'timeout')]);
+      await sleep(300);
+      const rDead = rpid > 1 && !alive(rpid), tokenGone = !fs.existsSync(path.join(m1.state, 'token')) && !fs.existsSync(path.join(m1.state, 'device-key'));
+      const afterRevoke = await one('shell_run', { cmd: 'echo hi' }, m1.id);
+      const fbAfter = await chat(U, 'PCTOOL r329 after the machine is gone');
+      const fallbackAfter = /fake-listing/.test(texts(fbAfter.events));
+      const shellSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'machine', 'exec.rs'), 'utf8');
+      check('R329', 'T-311 machine tools, shell / jobs / processes: shell_run runs in the selected folder or a folder inside the scope (cwd .., /, /etc and sub/../.. are refused, an absolute path inside the folder works), has a timeout (the call\'s own, never above the scope\'s) and an output cap (truncated is said), says its confinement is advisory and is never run as root; no-shell removes shell_run / job_* (and says so) while files work; job_start / job_read / job_stop keep a job on the machine across runs, a pause from the web and back, and a reload (read by job id, the list finds it), refuse past concurrentJobs, and a stopped job\'s process is gone; proc_kill with kill own-children kills a job\'s process and refuses an unrelated one and pid 1; an unlink from the web ends running jobs, the runner wipes its token and key and exits, and then the browser folder answers mcp__pc__* again',
+        okB(sh[0]) && res(sh[0]).stdout.trim() === home1 && res(sh[0]).stderr.trim() === 'err' && res(sh[0]).exit === 3 && /advisory/.test(res(sh[0]).note) && okB(sh[2]) && res(sh[2]).stdout.trim() === path.join(home1, 'sub') && fs.existsSync(path.join(home1, 'sub', 'made.txt'))
+        && [3, 4, 5, 6].every((i) => !okB(sh[i])) && okB(sh[7]) && res(sh[7]).stdout.trim() === home1 && okB(sh[8]) && res(sh[8]).truncated === true && res(sh[8]).stdout.length <= 1024 && !okB(sh[9])
+        && okB(slow1) && res(slow1).timedOut === true && msShort < 9000 && okB(slow2) && res(slow2).timedOut === true && msCap < 12000 && msCap >= 4000
+        && !!jid && okB(rd1) && r1.running === true && /first/.test(r1.output || '') && !/second/.test(r1.output || '') && pausedNow.status === 200 && !okB(whilePaused) && /paused/.test(errOf(whilePaused))
+        && okB(rd2) && r2.running === true && /second/.test(r2.output || '') && !/first/.test(r2.output || '') && (listed.jobs || []).some((j) => j.jobId === jid) && !!jidB && !okB(jobC) && /running already/.test(errOf(jobC))
+        && jpid > 1 && okB(stopA) && res(stopA).state === 'stopped' && jaDead
+        && !okB(killOther) && /not started by a tool/.test(errOf(killOther)) && otherAlive && (pl.processes || []).some((p) => p.pid === other.pid && p.ownChild === false) && bPid > 1 && okB(killOwn) && res(killOwn).ownChild === true && bDead && !okB(killInit)
+        && nsTools.includes('list') && ['shell_run', 'job_start', 'job_read', 'job_stop'].every((t) => !nsTools.includes(t)) && !okB(ns[1]) && /does not offer shell_run/.test(errOf(ns[1])) && !okB(ns[2]) && okB(ns[3])
+        && okB(jobR) && rpid > 1 && rAlive && unlink.status === 200 && exitCode === 3 && rDead && tokenGone && !okB(afterRevoke) && fallbackAfter && /fn is_elevated\(/.test(shellSrc),
+        `shell ${sh.map((r) => okB(r) ? 'ok' : 'no').join('/')} · timeout ${msShort} ms / cap ${msCap} ms · job ${jid ? 'started' : 'NOT started'} reads ${r1.running}/${r2.running} paused ${errOf(whilePaused).slice(0, 40)} · killOther ${errOf(killOther).slice(0, 60)} · revoke: unlink ${unlink.status} exit ${exitCode} dead ${rDead} wiped ${tokenGone} fallback ${fallbackAfter}`);
+
+      // ===== R330: big-file transfer by ticket =====
+      runMachine(m2); await waitOnline(U, [m2.id]);
+      const SIZE = 512 << 20, big = path.join(m2.home, 'big.bin');
+      { const fd = fs.openSync(big, 'w'); fs.ftruncateSync(fd, SIZE); const stamp = (at, s) => fs.writeSync(fd, Buffer.from(s.repeat(64)), 0, 64 * s.length, at); stamp(0, 'head-of-the-file;'); stamp(SIZE / 2, 'middle-of-the-file;'); stamp(SIZE - 2048, 'end-of-the-file;'); fs.closeSync(fd); }
+      const shaOf = (file) => new Promise((resolve, reject) => { const h = crypto.createHash('sha256'); fs.createReadStream(file, { highWaterMark: 1 << 20 }).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject); });
+      const wantSha = await shaOf(big);
+      const hubPid = (() => { try { for (const d of fs.readdirSync('/proc')) { if (!/^\d+$/.test(d)) continue; try { if (fs.readFileSync('/proc/' + d + '/cmdline', 'utf8').split('\0')[0] === process.env.VR_HUB_BIN) return +d; } catch {} } } catch {} return 0; })();
+      const mem = () => { try { const s = fs.readFileSync('/proc/' + hubPid + '/status', 'utf8'); return { rss: +(/VmRSS:\s+(\d+)/.exec(s) || [])[1] * 1024, hwm: +(/VmHWM:\s+(\d+)/.exec(s) || [])[1] * 1024 }; } catch { return null; } };
+      const mem0 = mem();
+      const tStart = Date.now();
+      const first = await one('transfer_get', { path: 'big.bin', maxBytes: 100 << 20, ticketSecs: 10 }, m2.id), f1 = res(first) || {};
+      const tFirstDone = Date.now(); // the ticket (10 s) was issued no later than this
+      const partFile = path.join(SB, 'transfers', 't-user', (f1.id || 'x') + '.part');
+      const partSize = fs.existsSync(partFile) ? fs.statSync(partFile).size : -1;
+      const tk = f1.ticket || 'no-ticket', st = (tok, ticket, body) => mcall('POST', '/api/machine/transfer/' + ticket + '/status', tok, body);
+      const goodBody = { path: 'big.bin', key: f1.id };
+      const rOther = await st(tokOf(m3), tk, goodBody), rSibling = await st(tokOf(m2b), tk, goodBody), rPath = await st(tokOf(m2), tk, { path: 'other.bin', key: f1.id }), rPage = await st(U, tk, goodBody), rNone = await st(null, tk, goodBody), rBogus = await st(tokOf(m2), 'f'.repeat(48), goodBody);
+      const rGood = await st(tokOf(m2), tk, goodBody);
+      const rChunkOther = await fetch(H + '/api/machine/transfer/' + tk + '/chunk?offset=' + (100 << 20) + '&key=' + f1.id + '&path=big.bin', { method: 'POST', headers: { Authorization: 'Bearer ' + tokOf(m3), 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(16) }).then((r) => r.status);
+      const withinTicket = Date.now() - tStart < 9500;
+      await sleep(Math.max(0, 11000 - (Date.now() - tStart), 10500 - (Date.now() - tFirstDone)));
+      const rLate = await st(tokOf(m2), tk, goodBody);
+      // resume: the same call again carries on at the byte the hub holds, and ends with the sha256 of the whole file
+      const second = await one('transfer_get', { path: 'big.bin' }, m2.id), f2 = res(second) || {};
+      const hubFile = path.join(SB, 'transfers', 't-user', f2.id || 'x');
+      const hubSha = fs.existsSync(hubFile) ? await shaOf(hubFile) : '';
+      // the owner downloads it from the hub, streamed; Range works; another account has none of it
+      const dl = await fetch(H + '/api/transfers/' + f2.id, { headers: { Authorization: 'Bearer ' + U } });
+      const dh = crypto.createHash('sha256'); let dn = 0; for await (const c of dl.body) { dh.update(c); dn += c.length; }
+      const rng = await fetch(H + '/api/transfers/' + f2.id, { headers: { Authorization: 'Bearer ' + U, Range: 'bytes=0-63' } });
+      const rngBuf = Buffer.from(await rng.arrayBuffer()), rngBad = await fetch(H + '/api/transfers/' + f2.id, { headers: { Authorization: 'Bearer ' + U, Range: 'bytes=' + (SIZE + 5) + '-' } });
+      const dlOther = await mcall('GET', '/api/transfers/' + f2.id, X), listU = ((await call('/api/transfers', U)).data.transfers || []).map((t) => t.id), listX = ((await call('/api/transfers', X)).data.transfers || []).map((t) => t.id);
+      // the other way: the owner uploads to the hub, the machine pulls it down in pieces with a resume, verified, then put in place
+      const UP = 200 << 20, upFile = path.join(mdir, 'up.bin');
+      { const fd = fs.openSync(upFile, 'w'); fs.ftruncateSync(fd, UP); fs.writeSync(fd, Buffer.from('upload-start;'.repeat(40)), 0, 520, 0); fs.writeSync(fd, Buffer.from('upload-end;'.repeat(40)), 0, 440, UP - 440); fs.closeSync(fd); }
+      const upSha = await shaOf(upFile);
+      const upload = async (tok, file, size, id) => { const fh = fs.openSync(file, 'r'); const buf = Buffer.alloc(4 << 20); let off = 0; while (off < size) { const n = fs.readSync(fh, buf, 0, buf.length, off); const r = await fetch(H + '/api/transfers/' + id + '/chunk?offset=' + off, { method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/octet-stream' }, body: buf.subarray(0, n) }); if (r.status !== 200) break; off += n; } fs.closeSync(fh); return off; };
+      const slot = (await call('/api/transfers', U, { name: 'up.bin' })).data || {};
+      const uploaded = await upload(U, upFile, UP, slot.id);
+      const upDone = await mcall('POST', '/api/transfers/' + slot.id + '/done', U, {});
+      const upBad = await fetch(H + '/api/transfers/' + slot.id + '/chunk?offset=0', { method: 'POST', headers: { Authorization: 'Bearer ' + U, 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(8) }).then((r) => r.status);
+      const put1 = await one('transfer_put', { path: 'inbox/up.bin', from: slot.id, maxBytes: 50 << 20 }, m2.id), p1 = res(put1) || {};
+      const partOnMachine = path.join(m2.home, 'inbox', 'up.bin.vr-part'), partMachineSize = fs.existsSync(partOnMachine) ? fs.statSync(partOnMachine).size : -1;
+      const put2 = await one('transfer_put', { path: 'inbox/up.bin', from: slot.id }, m2.id), p2 = res(put2) || {};
+      const landed = path.join(m2.home, 'inbox', 'up.bin'), landedSha = fs.existsSync(landed) ? await shaOf(landed) : '';
+      const putOut = await one('transfer_put', { path: '../evil.bin', from: slot.id }, m2.id), evilThere = fs.existsSync(path.join(m2.home, '..', 'evil.bin')) || fs.existsSync(path.join(m2.home, '..', 'evil.bin.vr-part'));
+      const xFile = path.join(mdir, 'x.bin'); fs.writeFileSync(xFile, 'only for t-r330');
+      const slotX = (await call('/api/transfers', X, { name: 'x.bin' })).data || {}; await upload(X, xFile, 15, slotX.id); await mcall('POST', '/api/transfers/' + slotX.id + '/done', X, {});
+      const putOfOthers = await one('transfer_put', { path: 'steal.bin', from: slotX.id }, m2.id);
+      // the scope's maxFileMB bounds the transfer too
+      setScope(m2, folderScope(m2, { limits: { maxFileMB: 100 } }));
+      const tooBig = await one('transfer_get', { path: 'big.bin' }, m2.id);
+      setScope(m2, folderScope(m2));
+      const mem1 = mem();
+      const srcT = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'machine_transfer.rs'), 'utf8');
+      check('R330', `T-311 big-file transfer by ticket: the hub issues a ticket bound to account, machine, path and direction (5 minutes at most; a call may ask for less); a sparse ${SIZE >> 20} MB file is pulled from the machine in chunks (the hub writes them straight to disk, its memory stays bounded), a call that stops early resumes at the byte the hub holds, the end is checked by sha256 and the owner downloads it streamed (Range works, another account sees nothing); a ${UP >> 20} MB upload from the owner goes down to the machine the other way with a resume and a sha256 check before it is put in place; the ticket is refused for another account's machine, another machine of the same account, another path, a page token, no token and after it expired; the scope's maxFileMB, path rules and another account's file are refused too`,
+        !!f1.ticket && f1.complete === false && f1.received === (100 << 20) && partSize === (100 << 20) && f1.resumedFrom === 0 && withinTicket
+        && rOther.status === 403 && rSibling.status === 403 && rPath.status === 403 && rPage.status === 401 && rNone.status === 401 && rBogus.status === 403 && rGood.status === 200 && rGood.data.received === (100 << 20) && rChunkOther === 403 && rLate.status === 410
+        && f2.complete === true && f2.resumedFrom === (100 << 20) && f2.size === SIZE && f2.sha256 === wantSha && hubSha === wantSha && fs.statSync(hubFile).size === SIZE && !fs.existsSync(partFile)
+        && dl.status === 200 && dn === SIZE && dh.digest('hex') === wantSha && rng.status === 206 && rngBuf.toString().startsWith('head-of-the-file;') && rngBuf.length === 64 && rngBad.status === 416 && dlOther.status === 404 && listU.includes(f2.id) && !listX.includes(f2.id)
+        && uploaded === UP && upDone.status === 200 && upDone.data.sha256 === upSha && upDone.data.size === UP && upBad === 409
+        && okB(put1) && p1.complete === false && p1.received === (50 << 20) && partMachineSize === (50 << 20) && okB(put2) && p2.complete === true && p2.resumedFrom === (50 << 20) && p2.sha256 === upSha && landedSha === upSha && !fs.existsSync(partOnMachine)
+        && !okB(putOut) && !evilThere && !okB(putOfOthers) && !fs.existsSync(path.join(m2.home, 'steal.bin')) && !okB(tooBig) && /maxFileMB|more than the allowed/.test(errOf(tooBig))
+        && !!hubPid && !!mem0 && !!mem1 && mem1.hwm - mem0.hwm < 160 * (1 << 20) && mem1.rss - mem0.rss < 160 * (1 << 20)
+        && /pub const TICKET_SECS: i64 = 300/.test(srcT) && /fn a_ticket_is_bound_to_machine_account_path_and_five_minutes/.test(srcT),
+        `${SIZE >> 20} MB: first call received ${(f1.received || 0) >> 20} MB, resumed from ${(f2.resumedFrom || 0) >> 20} MB, sha ${f2.sha256 === wantSha} · refusals other-account ${rOther.status} sibling ${rSibling.status} path ${rPath.status} page ${rPage.status} none ${rNone.status} late ${rLate.status} (within ticket ${withinTicket}) · download ${dl.status} ${dn >> 20} MB range ${rng.status} · put ${UP >> 20} MB: ${(p1.received || 0) >> 20}+${((p2.size || 0) - (p2.resumedFrom || 0)) >> 20} MB sha ${landedSha === upSha} · hub memory ${mem0 && mem1 ? `hwm ${(mem0.hwm >> 20)} → ${(mem1.hwm >> 20)} MB, rss ${(mem0.rss >> 20)} → ${(mem1.rss >> 20)} MB` : 'n/a'}`);
+    } finally {
+      for (const f of cleanups) f();
+      for (const p of procs) { try { p.kill('SIGKILL'); } catch {} }
+      for (const tok of [U, X]) { if (!tok) continue; for (const t of ((await call('/api/transfers', tok)).data.transfers || [])) await mcall('DELETE', '/api/transfers/' + t.id, tok); }
+      for (const mm of ((await call('/api/machines', U)).data.machines || [])) if (/^r3(28|30)-/.test(mm.name || '')) await mcall('DELETE', '/api/machines/' + mm.id, U);
+      if (created.password) await call('/api/admin/delete', A, { username: 't-r330' });
+      try { fs.rmSync(mdir, { recursive: true, force: true }); } catch {}
     }
   }
   // R401 to R406 (T-199): the Hyper Workflows library (native/crates/pgm-workflow-internal): one `cargo test` run, its
@@ -5585,7 +6710,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   const generic = ['[0-9a-f]{32}', '"hash"\\s*:\\s*"[0-9a-f]', 'C:\\\\\\\\Users\\\\\\\\', 'trycloudflare\\.com/', 'password\\s*[:=]\\s*"[^"]{6,}'];
   const pattern = [...generic, ...terms.map((t) => '\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b')].join('|');
   // web/vendor holds third-party libraries (checked by R102 against their published hashes), not our text
-  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor', ':!native/Cargo.lock'], { cwd: MILLS, encoding: 'utf8' }); // Cargo.lock: the crates' published checksums
+  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor', ':!native/Cargo.lock', ':!native/containers/*/Containerfile', ':!native/containers/*/*requirements.txt', ':!native/containers/*/*/package-lock.json'], { cwd: MILLS, encoding: 'utf8' }); // Cargo.lock and the container pins (Containerfile digests / download checksums, pip and npm locks): published checksums, not ours
   check('R31', `no names / passwords / ids / hashes / local paths in tracked files (${terms.length} local terms)`, gg.status === 1, (gg.stdout || '').split('\n').slice(0, 3).join(' | '));
   const junk = [];
   (function walk(d) {
@@ -5625,6 +6750,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     await run();
   } catch (e) { if (e.stopAfter) console.log(e.message); else { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); } }
   stopHub();
+  reTestCleanup();
   if (ollamaSrv) ollamaSrv.close();
   await sleep(800);
   const failed = results.filter((r) => r.status === 'FAIL'), skipped = results.filter((r) => r.status === 'SKIP'), pending = results.filter((r) => r.status === 'SPEC');

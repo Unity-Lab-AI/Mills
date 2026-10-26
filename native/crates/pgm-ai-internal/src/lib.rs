@@ -16,6 +16,9 @@
 //!   Claude), confirmations, voice / speech / pictures, her section's routes, the chat's AI member and its queue
 //! - [`hub`]: what all of this needs from the program around it ([`hub::AiHub`])
 //! - [`host`]: the AI host program's side (the job loop, relays, Work on the host, its MCP tools, its folder + settings)
+//! - [`machine_jobs`], [`machine_transfer`]: the hub's side of linked machines' tools (T-311): the signed job queue a machine's
+//!   poll drains, replies matched to calls, the routing of a run's PC / machine tool call to its owner's online machine, and
+//!   big-file tickets with the per-account transfer area (chunks straight to disk)
 //! - [`local_proxy`]: a local API proxy (127.0.0.1 → a hub's /v1 with a person's key; no web page can use it)
 //! - [`fj`]: `fj` (the Forgejo CLI) signed in as the person in their Work runs (their own keys file + wrapper)
 //! - [`harness`]: the `Harness` trait (Claude Code, Jcode PGM): a run's command, resume arguments and the mapping of
@@ -31,12 +34,15 @@ pub mod host;
 pub mod hub;
 pub mod jcode;
 pub mod local_proxy;
+pub mod machine_jobs;
+pub mod machine_transfer;
 pub mod openai;
 pub mod plan;
 pub mod planner;
 pub mod projects;
 pub mod questions;
 pub mod sessions;
+pub mod toolconv;
 pub mod unity;
 pub mod unity_brain;
 pub mod unity_routes;

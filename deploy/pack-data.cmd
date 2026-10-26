@@ -13,7 +13,7 @@ for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"'
 set "OUT=%USERPROFILE%\Desktop\viberoller-data-%STAMP%.tar.gz"
 setlocal enabledelayedexpansion
 set LIST=
-for %%p in (bridge\auth.json bridge\state.json bridge\hub-state.json bridge\usage.json bridge\assistant.json bridge\providers.json bridge\forgejo.json bridge\forgejo-users.json bridge\server-owners.json bridge\gateway bridge\profiles bridge\profiles-deleted Chat Archive Board Notes Avatars Images Api) do if exist "%%p" set LIST=!LIST! "%%p"
+for %%p in (bridge\auth.json bridge\state.json bridge\work.json bridge\work-current.json bridge\api-keys.json bridge\hub-state.json bridge\front-sessions.json bridge\device-locks.json bridge\release-key.json bridge\usage.json bridge\assistant.json bridge\providers.json bridge\forgejo.json bridge\forgejo-users.json bridge\server-owners.json bridge\ai-hosts.json bridge\hub-signing.key bridge\gateway bridge\profiles bridge\profiles-deleted Chat Archive Board Notes Avatars Images Api) do if exist "%%p" set LIST=!LIST! "%%p"
 if "!LIST!"=="" (echo Nothing to pack here: no data folders found next to bridge\. & pause & exit /b 1)
 tar -czf "%OUT%" --exclude="*.tmp" --exclude="*.log" !LIST!
 if errorlevel 1 (echo Packing failed. & pause & exit /b 1)

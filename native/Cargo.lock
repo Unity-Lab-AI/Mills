@@ -3358,6 +3358,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "tokio",
 ]
@@ -3469,15 +3470,18 @@ name = "pgm-net-internal"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ed25519-dalek",
  "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "pgm-core-internal",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -3506,6 +3510,15 @@ dependencies = [
  "tokio",
  "windows-service",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pgm-sandbox-internal"
+version = "0.1.0"
+dependencies = [
+ "pgm-core-internal",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6137,6 +6150,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "pgm-ai-internal",
+ "pgm-net-internal",
  "portable-pty",
  "reqwest",
  "serde",
@@ -6160,7 +6174,9 @@ dependencies = [
  "libc",
  "pgm-ai-internal",
  "pgm-core-internal",
+ "pgm-net-internal",
  "pgm-platform-internal",
+ "pgm-sandbox-internal",
  "ratatui",
  "reqwest",
  "serde",
@@ -6196,6 +6212,7 @@ dependencies = [
  "pgm-identity-internal",
  "pgm-net-internal",
  "pgm-platform-internal",
+ "pgm-sandbox-internal",
  "pgm-workflow-engine-internal",
  "regex",
  "reqwest",

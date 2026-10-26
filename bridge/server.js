@@ -261,7 +261,8 @@ function runClaude(acct, message, fresh, res, context, preWm = null) {
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
   acct.stream = res;
   const keepAlive = setInterval(() => emit(acct, { type: 'ping' }), 15000);
-  const onEvent = (ev) => { if (ev && ev.session_id) acct.state.claudeSessionId = ev.session_id; if (source) noteUsage(acct, ev, source); else if (!/rate_limit/.test(String(ev.type || ''))) noteUsage(acct, ev, 'hub'); shares.mirrorEvent(acct, ev); emit(acct, ev); };
+  const seenResults = new Set(); // T-319: one result per uuid in a run: a repeat of the same one is dropped
+  const onEvent = (ev) => { if (ev && ev.type === "result" && ev.uuid) { if (seenResults.has(ev.uuid)) return; seenResults.add(ev.uuid); } if (ev && ev.session_id) acct.state.claudeSessionId = ev.session_id; if (source) noteUsage(acct, ev, source); else if (!/rate_limit/.test(String(ev.type || ''))) noteUsage(acct, ev, 'hub'); shares.mirrorEvent(acct, ev); emit(acct, ev); };
   const finish = (code) => {
     clearInterval(keepAlive);
     for (const [id, p] of acct.pending) { clearTimeout(p.timer); send(p.res, 200, { ok: false, error: 'Run ended' }); acct.pending.delete(id); }

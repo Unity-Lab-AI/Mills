@@ -28,12 +28,29 @@ process.stdin.on('end', async () => {
   if (input.includes('SLOW')) await sleep(4000);
   if (input.includes('PCTOOL')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.pc.env;
-    const r = await fetch(env.MILLS_BRIDGE + '/internal/pc-tool', {
+    const r = await fetch((process.env.FAKE_CLAUDE_BRIDGE || env.MILLS_BRIDGE) + '/internal/pc-tool', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
       body: JSON.stringify({ name: 'list', args: { path: '' }, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }), // as pc-tools-mcp.js sends it
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
+  }
+  // "MACHTOOL=<hex>" (T-308): relay probes with the run's own credentials, each as the spec says, printing every HTTP status + body.
+  // The hex is a JSON array of { route: 'pc-tool' | 'board' | 'team', body, secret?: 'run' | <literal>, account?: <header> | null (none),
+  // session?: 'run' }; "run" is the secret / session of THIS run's MCP config (env.MILLS_INTERNAL / MILLS_SESSION).
+  if (/MACHTOOL=[0-9a-f]+/.test(input)) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.pc.env;
+    const probes = JSON.parse(Buffer.from(input.match(/MACHTOOL=([0-9a-f]+)/)[1], 'hex').toString('utf8'));
+    const res = [];
+    for (const p of probes) {
+      const h = { 'Content-Type': 'application/json', 'X-Mills-Internal': p.secret === undefined || p.secret === 'run' ? env.MILLS_INTERNAL : p.secret };
+      const acct = p.account === undefined ? env.MILLS_ACCOUNT : p.account; if (acct !== null) h['X-Mills-Account'] = acct;
+      const body = { ...(p.body || {}), ...(p.session === 'run' && env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) };
+      const r = await fetch(env.MILLS_BRIDGE + '/internal/' + (p.route || 'pc-tool'), { method: 'POST', headers: h, body: JSON.stringify(body) })
+        .then(async (x) => ({ status: x.status, body: await x.json().catch(() => ({})) })).catch((e) => ({ status: 0, body: { error: e.message } }));
+      res.push(r);
+    }
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'MACH:' + JSON.stringify(res) }] } });
   }
   // "ASKTOOL" (T-245): ask the person two questions through the team MCP relay's ask_user and print the answers.
   // "ASKTOOL TIMEOUT": a 2-second timeout (the defaults must come back). "ASKTOOL POLL": polls every second like the MCP relay does.
@@ -138,7 +155,7 @@ process.stdin.on('end', async () => {
       body: JSON.stringify({ name, args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     const rep = { servers: Object.keys(cfg).sort().join('+'), allowed: opt('--allowedTools'), denied: opt('--disallowedTools'), perm: opt('--permission-mode'), planPrompt: /PLANNER MODE/.test(opt('--append-system-prompt')) };
-    if (input.includes('PLANNERPC')) { const r = await call('pc-tool', 'write', { path: 'x.txt', content: 'x' }); rep.pc = r.ok ? 'done' : r.error; }
+    if (input.includes('PLANNERPC')) { const mach = (input.match(/PLANNERMACHINE=([a-z0-9-]+)/) || [])[1]; const r = await call('pc-tool', 'write', { path: 'x.txt', content: 'x', ...(mach ? { machine: mach } : {}) }); rep.pc = r.ok ? 'done' : r.error; }
     else {
       const bad = await call('team', 'notes_write', { path: 'planner-outside-r265.md', text: 'x' });
       const good = await call('team', 'notes_write', { path: 'plans/planner-inside-r265.md', text: '# plan r265' });
@@ -263,7 +280,12 @@ process.stdin.on('end', async () => {
   out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | fjw=${/made by VibeRoller/.test(fjW) ? 'wrapper:' + fjKeys : ''} | relay=${relay} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')} | adddir=${opt('--add-dir') || ''} | sysvolatile=${/\d+ min ago|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(opt('--append-system-prompt') || '')} | syslaw=${/Worktree law/.test(opt('--append-system-prompt') || '')} | sysnone=${/NO PROJECT/.test(opt('--append-system-prompt') || '')}` }],
     ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
   // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
-  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
+  // "MULTIRESULT" (T-319): extra empty turns, each ending in its own result with its own uuid (a real run does this when background work
+  // reports back); "DUPRESULT": the final result delivered three times, the same uuid (the hub must say it once)
+  if (input.includes('MULTIRESULT')) for (let i = 0; i < 3; i++) out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 3, num_turns: 1, session_id: session, uuid: crypto.randomUUID(), result: '' });
+  const finalUuid = crypto.randomUUID();
+  for (let i = 0; i < (input.includes('DUPRESULT') ? 3 : 1); i++)
+  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, uuid: finalUuid, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
     ...(usage ? { modelUsage: { [model]: { inputTokens: 4000, outputTokens: 300, contextWindow: 200000 } } } : {}),
     ...(input.includes('DENIED') ? { permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_denied', tool_input: { command: 'rm -rf build' } }] } : {}) });
 });

@@ -11,11 +11,13 @@
 //!                                   found and kept: its settings and logs stay)
 //!   vr-host --selftest              load everything and exit 0 (an update is tried this way first)
 //!   vr-host mcp pc|board|team       the team tools for a Work run's Claude Code (MCP over stdio)
+//!   vr-host machine link|run|stop|start|status   this computer as a linked machine of its owner (T-311; src/machine.rs)
 //! It works in the same folder, with the same ai-node.json and the same files, as the JavaScript host
 //! (bridge/ai-node.js + bridge/vr-host.js), so it can take that one's place, and either control app reads either host.
 mod control;
 mod files;
 mod install;
+mod machine;
 mod mcp;
 mod proc;
 mod runner;
@@ -60,6 +62,7 @@ fn main() {
             rt().block_on(runner::run(folder, false, args.iter().any(|a| a == "--update")))
         }
         Some("mcp") => rt().block_on(mcp::serve(words.get(1).copied().unwrap_or(""))),
+        Some("machine") => machine::run(&args),
         #[cfg(windows)]
         Some("service-run") => winservice::dispatch(folder),
         Some(_) => command(&folder, &words, now),

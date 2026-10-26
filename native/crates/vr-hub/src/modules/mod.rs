@@ -12,6 +12,7 @@ use crate::front::{json as jresp, Body, Hub, Req};
 pub mod admin;
 pub mod ai_hosts;
 pub mod profile;
+pub mod re;
 pub mod site;
 mod traits;
 pub mod auth;
@@ -23,6 +24,7 @@ pub mod downloads_text;
 pub mod files;
 pub mod forgejo;
 pub mod gateway;
+pub mod machines;
 pub mod guilds;
 pub mod hyperwork;
 pub mod perms;
@@ -72,6 +74,7 @@ pub struct Modules {
     pub downloads: downloads::Downloads,
     pub releases: releases::Releases,
     pub gateway: gateway::Gateway,
+    pub re: Arc<re::Re>,
     pub hyperwork: hyperwork::Hyperwork,
     mills: std::path::PathBuf,
 }
@@ -81,12 +84,14 @@ impl Modules {
         let mills = root.join("..");
         let usage = Arc::new(usage::Usage::new(root, cfg, true));
         let auth = auth::Auth::new(root, cfg);
+        let ai = ai_hosts::AiHosts::new(root, cfg, usage);
+        machines::init(&auth, &ai);
         let accounts = auth.accounts();
         let api = openai::Api::new(root, &accounts);
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), hyperwork: Default::default(), mills })
+            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -190,6 +195,7 @@ pub fn start_background(hub: &Arc<Hub>) {
     hyperwork::start(hub);
     chat::start(hub);
     unity_brain::start(hub);
+    re::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     let h = hub.clone();
     forever("notes watch", move || { let h = h.clone(); async move {
@@ -209,14 +215,26 @@ fn from_front(hub: &Hub, r: &Req) -> bool {
 }
 fn answer(status: u16, v: Value) -> Routed { Routed::Answer(jresp(status, &v)) }
 /// A Work run's MCP tool call: the Hyper Workflows team tools are this hub's own (hyperwork.rs), the rest Work's.
-async fn team_or_work(hub: &Arc<Hub>, tool: &str, account: &str, b: &Value) -> Value {
-    if tool == "team" && b["name"].as_str().is_some_and(|n| n.starts_with("hyperwork_")) { return hyperwork::tool(hub, account, b).await; }
-    work::tool(hub, if tool == "pc-tool" { "pc" } else { tool }, account, b).await
+/// A Work run's relayed tool call, as the caller the hub's records name (T-308): the Hyper Workflows tools (T-207) are the
+/// hyperwork module's, everything else the run tools'.
+async fn team_or_work(hub: &Arc<Hub>, tool: &str, c: &work::Caller, b: &Value) -> (u16, Value) {
+    if tool == "team" && b["name"].as_str().is_some_and(|n| n.starts_with("hyperwork_")) {
+        let mut b = b.clone();
+        if !c.legacy { b["session"] = json!(c.session); }
+        return (200, hyperwork::tool(hub, &c.account, &b).await);
+    }
+    work::tool_for(hub, if tool == "pc-tool" { "pc" } else { tool }, c, b).await
 }
 
 /// The JavaScript hub's own "moving house" switch (bridge/.maintenance): its text is the new address.
 fn maintenance(hub: &Hub) -> Option<String> { std::fs::read_to_string(hub.root.join(".maintenance")).ok().map(|t| { let t = t.trim().to_string(); if t.is_empty() { "the server".into() } else { t } }) }
 
+/// The routes a linked machine's own token may call (T-310).
+pub fn machine_token_may(path: &str) -> bool {
+    // poll, reply, unlink (T-310), and the machine's side of a big-file transfer by ticket (T-311): the ticket itself is
+    // bound to account, machine, path and direction
+    matches!(path, "/api/machine/poll" | "/api/machine/reply" | "/api/machine/unlink") || path.starts_with("/api/machine/transfer/")
+}
 pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     let p = r.path.as_str();
     // the regression runner's hook (VR_TEST_HOOKS=1 in the environment; nothing but the runner sets it): a panic inside
@@ -225,6 +243,11 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         if std::env::var("VR_TEST_HOOKS").ok().as_deref() != Some("1") { return answer(404, json!({ "error": "Not found" })); }
         if r.param("lock").as_deref() == Some("gateway") { let _held = hub.mods.gateway.hold_for_test(); panic!("test panic inside the gateway's products lock"); }
         panic!("test panic");
+    }
+    // T-310 (plans/linked-machines.md 4.1): a linked machine's device token reaches ONLY /api/machine/* (poll, reply, unlink); on
+    // every other route it is refused (403), before any module looks at it. Ordinary device tokens (T-236, Jcode) are unchanged.
+    if let Some(t) = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")) {
+        if hub.mods.auth.devices.is_machine_token(t) && !machine_token_may(p) { return answer(403, json!({ "error": "A linked machine's token reaches only /api/machine/ (poll, reply, unlink)." })); }
     }
     // the front itself: who answers here (for the tools and the regression suite; nothing private)
     if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules(), "alone": hub.alone() }))); }
@@ -267,15 +290,31 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let (id, tool) = rest.split_once("/internal/").unwrap_or(("", ""));
         if id.is_empty() || !matches!(tool, "pc-tool" | "board" | "team") { return answer(404, json!({ "error": "Not found" })); }
         return match hub.mods.ai.job_for(id, r.header("x-mills-internal").unwrap_or("")) {
-            Some((account, _)) => { let mut b = r.json(); if b["session"].as_str().unwrap_or("").is_empty() { let sid = hub.mods.work.session_of_job(id); if !sid.is_empty() { b["session"] = json!(sid); } } answer(200, team_or_work(hub, tool, &account, &b).await) }
+            // the job's token is this run's own (minted for it); the account and session come from the hub's records, a header or
+            // body that says otherwise is refused (T-308)
+            Some((account, _)) => {
+                let b = r.json();
+                match hub.mods.work.job_caller(id, &account, r.header("x-mills-account").unwrap_or(""), b["session"].as_str().unwrap_or("")) {
+                    work::Relay::Run(c) => { let (st, v) = team_or_work(hub, tool, &c, &b).await; answer(st, v) }
+                    work::Relay::Refused(why) => answer(403, json!({ "ok": false, "error": why })),
+                    _ => answer(403, json!({ "ok": false, "error": "forbidden" })),
+                }
+            }
             None => answer(403, json!({ "ok": false, "error": "forbidden" })),
         };
     }
-    // the MCP tools of a Work run here (this hub's own secret; anything else is the JavaScript hub's)
+    // the MCP tools of a Work run here: the run's own secret (T-308), or, deprecated, the old shared one an older run config still
+    // sends; anything else is the JavaScript hub's (its own shared secret, which stays while it is the last fallback)
     if let Some(tool) = p.strip_prefix("/internal/").filter(|t| matches!(*t, "pc-tool" | "board" | "team")) {
-        let account = r.header("x-mills-account").filter(|a| !a.is_empty()).map(String::from).unwrap_or_else(|| hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string());
-        if r.method == hyper::Method::POST && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &hub.mods.work.secret_for(&account)) {
-            return answer(200, team_or_work(hub, tool, &account, &r.json()).await);
+        if r.method == hyper::Method::POST {
+            let default = hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string();
+            let b = r.json();
+            match hub.mods.work.relay_auth(r.header("x-mills-internal").unwrap_or(""), r.header("x-mills-account").unwrap_or(""), &default, b["session"].as_str().unwrap_or("")) {
+                work::Relay::Run(c) => { let (st, v) = team_or_work(hub, tool, &c, &b).await; return answer(st, v); }
+                work::Relay::Legacy(account) => { let c = work::Caller { account, session: b["session"].as_str().unwrap_or("").to_string(), sid: String::new(), run: String::new(), legacy: true }; let (st, v) = team_or_work(hub, tool, &c, &b).await; return answer(st, v); }
+                work::Relay::Refused(why) => return answer(403, json!({ "ok": false, "error": why })),
+                work::Relay::NotOurs => {}
+            }
         }
         return Routed::Pass(vec![]);
     }
@@ -318,7 +357,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         if p == "/api/device/poll" { let (s, v) = a.devices.poll(b["deviceCode"].as_str().unwrap_or("")); return answer(s, v); }
         let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
         let client = b["client"].as_str().map(String::from).unwrap_or_else(|| b["client"]["app"].as_str().unwrap_or("").to_string());
-        return match a.devices.start(&client, b["device"].as_str().unwrap_or(""), b["expiresIn"].as_u64(), &ip) {
+        // (a `vr-machine` client also says its public key, machine id, os, app, mode and default folder: T-309)
+        return match a.devices.start_ex(&client, b["device"].as_str().unwrap_or(""), b["expiresIn"].as_u64(), &ip, &b) {
             Ok(mut v) => { v["verificationUrl"] = json!(format!("{}/?device={}", hub.mods.public_url(&hub.cfg).trim_end_matches('/'), v["userCode"].as_str().unwrap_or(""))); answer(200, v) }
             Err((s, e)) => answer(s, json!({ "error": e })),
         };
@@ -342,12 +382,14 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         return match (p, r.method.clone()) {
             ("/api/devices", hyper::Method::GET) => answer(200, json!({ "devices": a.devices.list(&u, bearer) })),
             ("/api/devices/revoke", hyper::Method::POST) => {
-                if a.devices.revoke(&u, b["id"].as_str().unwrap_or("")) { println!("[vr-hub] {u} revoked a signed-in device."); answer(200, json!({ "ok": true })) } else { answer(404, json!({ "error": "No such device." })) }
+                let id = b["id"].as_str().unwrap_or("");
+                if a.page_session_user(r).is_none() && a.devices.machines_of(&u).iter().any(|m| m["id"].as_str() == Some(id)) { return answer(403, json!({ "error": "A machine is unlinked from the page, signed in with your own session." })); }
+                if a.devices.revoke(&u, id) { println!("[vr-hub] {u} revoked a signed-in device."); answer(200, json!({ "ok": true })) } else { answer(404, json!({ "error": "No such device." })) }
             }
             ("/api/device/approve" | "/api/device/deny", hyper::Method::POST) => {
                 if a.page_session_user(r).is_none() { return answer(403, json!({ "error": "Approve it on the page, signed in with your own session." })); }
                 let ok = p == "/api/device/approve";
-                match a.devices.decide(&u, b["userCode"].as_str().unwrap_or(""), ok) {
+                match a.devices.decide_ex(&u, b["userCode"].as_str().unwrap_or(""), ok, b["replace"].as_str()) {
                     Ok(v) => { println!("[vr-hub] {u} {} a device sign-in.", if ok { "approved" } else { "refused" }); answer(200, v) }
                     Err((s, e)) => answer(s, json!({ "error": e })),
                 }
@@ -355,6 +397,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             _ => answer(405, json!({ "error": "Method not allowed." })),
         };
     }
+    // linked machines (T-309): the owner's list / rename / unlink, the admin's count, the machine's own poll and signed replies
+    if p.starts_with("/api/machine") || p == "/api/device/peek" || p == "/api/transfers" || p.starts_with("/api/transfers/") { if let Some(x) = machines::route(hub, r).await { return x; } }
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
     let me = || { let mut h = vec![("x-vr-notes-ver".to_string(), hub.mods.notes.version().to_string())]; if let Some(u) = &user { h.push(("x-vr-user".to_string(), u.clone())); } h };
     // ----- the board and the notes: this hub's own now -----
@@ -382,6 +426,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if p == "/api/version" && r.method == hyper::Method::GET { let b = hub.mods.build.get(hub).0; return answer(200, json!({ "version": b.split('+').next().unwrap_or(""), "build": b })); }
             if let Some(x) = profile::route(hub, r, &acc) { return x; } // profiles, prefs, pictures
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
+            if let Some(x) = re::route(hub, r, &acc).await { return x; } // the RE containers (T-303): everyone on the team
             if let Some(x) = gateway::admin(hub, r, &acc) { return x; } // the admin's gateway products
             if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
             if let Some(x) = releases::route(hub, r).await { return x; } // the products' releases (T-250)
@@ -429,6 +474,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/allow-device" | "/api/admin/signout") {
         let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
         if !a.account(u).map(|x| x.admin).unwrap_or(false) { return Routed::Answer(jresp(403, &json!({ "error": "Admins only." }))); }
+        let keep_machines = r.json()["keepMachines"].as_bool() == Some(true);
         let target = r.json()["username"].as_str().and_then(|t| a.account(t));
         let Some(t) = target else { return Routed::Answer(jresp(400, &json!({ "error": "No such account." }))) };
         return Routed::Answer(match p {
@@ -437,8 +483,10 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 let f = t.dir.join("auth.json");
                 let tmp = f.with_extension("json.tmp");
                 if std::fs::write(&tmp, serde_json::to_string_pretty(&auth::hash_password(&pw)).unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, &f)).is_err() { return Routed::Answer(jresp(500, &json!({ "error": "Could not save the password." }))); }
-                if t.username != *u { a.drop_sessions(&t.username); }
-                println!("[vr-hub] {u} set a new password for \"{}\".", t.username);
+                // a new password revokes the account's linked machines too, unless "keep my machines linked" is ticked (T-309, Sponge's answer 4)
+                let keep = keep_machines;
+                if t.username != *u { a.drop_sessions_ex(&t.username, keep); } else if !keep { a.devices.revoke_all_ex(&t.username, false); }
+                println!("[vr-hub] {u} set a new password for \"{}\"{}.", t.username, if keep { " (machines kept linked)" } else { "" });
                 jresp(200, &json!({ "username": t.username, "password": pw }))
             }
             "/api/admin/unlock" => { a.unlock(&t.username); jresp(200, &json!({ "ok": true })) }
@@ -446,7 +494,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 Ok(n) => { println!("[vr-hub] {u} let \"{}\" add one more device (it has {n}).", t.username); jresp(200, &json!({ "ok": true, "username": t.username, "devices": n })) }
                 Err(e) => jresp(400, &json!({ "error": e })),
             },
-            _ => { if t.username != *u { a.drop_sessions(&t.username); } jresp(200, &json!({ "ok": true })) }
+            _ => { if t.username != *u { a.drop_sessions_ex(&t.username, keep_machines); } jresp(200, &json!({ "ok": true })) }
         });
     }
     Routed::Pass(me())
@@ -513,7 +561,7 @@ async fn ai_front(hub: &Arc<Hub>, r: &Req, what: &str) -> Routed {
         "cancel" => { ai.cancel_work(r.json()["id"].as_str().unwrap_or("")); answer(200, json!({ "ok": true })) }
         "pc-tool" => {
             let b = r.json();
-            match ai.pc_tool(b["host"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""), &if b["args"].is_object() { b["args"].clone() } else { json!({}) }).await {
+            match ai.pc_tool_front(b["host"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""), &if b["args"].is_object() { b["args"].clone() } else { json!({}) }).await {
                 Ok(v) => answer(200, json!({ "result": v })),
                 Err(e) => answer(200, json!({ "error": e.msg })),
             }
