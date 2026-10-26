@@ -1,5 +1,8 @@
+//! **pgm-workflow-command-internal** = PGM_WorkflowCommand_Internal (PsyGraphMediaWorkflowCommandInternal).
+//!
 //! `/hyperwork <name> [options] <prompt>` (spec 10.2, T-207): one parser for every product (the page's Work box, Hyper
-//! Prod Man, jcode), so the three read a line the same way.
+//! Prod Man, jcode), so the three read a line the same way. Serde only: no engine, no runtime, so a TUI or a page build
+//! takes it alone. Mirrored by copy into Jcode PGM's `pgm/libs/` (the same file); the engine re-exports it as `command`.
 //!
 //! ```text
 //! /hyperwork release-notes --project VibeRoller --on hub --version 3 the prompt text …
@@ -7,6 +10,7 @@
 //! Options may stand anywhere after the name (`--project X`, `--on local|hub|gateway|hpm`, `--version N|tag`, and
 //! `--project=X` style); everything else is the prompt. A name that matches no workflow runs nothing: the answer names
 //! the nearest ones instead (never runs "the closest" by guess).
+#![forbid(unsafe_code)]
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

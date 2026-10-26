@@ -39,12 +39,23 @@ fn run_only(hub: &Hub, r: &Req) -> bool {
 }
 
 pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account, rest: &str) -> Routed {
+    handle(hub, r, Caller { user: a.username.clone(), run_only: run_only(hub, r) }, rest).await
+}
+
+/// The same routes for a product through the gateway (`/internal/gateway/hyperwork/<rest>`, T-207 / spec 15): the person
+/// is the one the product signed for (already checked as linked); a product that says `x-vr-client: run-only` gets a
+/// run-only caller, else the person's full rights (Hyper Prod Man designs too; jcode is run-only by its session).
+pub async fn via_gateway(hub: &Arc<Hub>, r: &Req, a: &Account, rest: &str) -> Routed {
+    let run_only = matches!(r.header("x-vr-client").map(str::to_lowercase).as_deref(), Some("jcode" | "run-only"));
+    handle(hub, r, Caller { user: a.username.clone(), run_only }, rest).await
+}
+
+async fn handle(hub: &Arc<Hub>, r: &Req, caller: Caller, rest: &str) -> Routed {
     let Some(svc) = hub.mods.hyperwork.get().cloned() else { return answer(503, json!({ "error": "Hyper Workflows are starting." })) };
     let query: HashMap<String, String> = crate::front::url_params(&r.query).into_iter().collect();
     let body = if r.method == hyper::Method::POST {
         if r.body.is_empty() { json!({}) } else { match serde_json::from_slice::<Value>(&r.body) { Ok(v) => v, Err(_) => return answer(400, json!({ "error": "That request is not valid JSON." })) } }
     } else { json!({}) };
-    let caller = Caller { user: a.username.clone(), run_only: run_only(hub, r) };
     match svc.handle(&caller, r.method.as_str(), rest, &query, &body).await {
         Answer::Json(status, v) => answer(status, v),
         Answer::Lines(mut rx) => {

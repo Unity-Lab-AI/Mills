@@ -15,7 +15,8 @@
 #![forbid(unsafe_code)]
 
 pub mod cancel;
-pub mod command;
+/// The `/hyperwork` command line: its own crate since T-207 (pgm-workflow-command-internal), re-exported here.
+pub use pgm_workflow_command_internal as command;
 pub mod custom;
 mod engine;
 pub mod fake;

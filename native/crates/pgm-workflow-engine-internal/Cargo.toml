@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 pgm-workflow-internal = { path = "../pgm-workflow-internal" }
+pgm-workflow-command-internal = { path = "../pgm-workflow-command-internal" }
 pgm-core-internal = { path = "../pgm-core-internal" }
 pgm-orchestrator-internal = { path = "../pgm-orchestrator-internal" }
 futures-util = "0.3.34"

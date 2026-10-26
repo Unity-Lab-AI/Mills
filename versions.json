@@ -1,5 +1,5 @@
 {
-  "project": "5.25.3",
+  "project": "5.26.0",
   "modules": {
     "bridge/ai-node.js": "3.4.0",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -52,6 +52,7 @@
     "web/editor/workflows-ui.js": "1.0.0",
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.1.0",
+    "web/hyperwork.js": "1.0.0",
     "web/index.html": "1.26.0",
     "web/library.js": "1.1.0",
     "web/localai.js": "1.0.0",

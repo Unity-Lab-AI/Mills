@@ -492,7 +492,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['localai.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -4894,6 +4894,24 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const served = withPort.status === 200 && (withPort.data.product || {}).path === '/p/fakeprod/' && badPort.status === 400 && noSlash.status === 302 && noSlash.headers.get('location') === '/p/fakeprod/'
         && viaGet.status === 200 && viaGet.headers.get('x-prod') === 'yes' && viaGetBody.path === '/a/b?x=1' && viaGetBody.h.prefix === '/p/fakeprod' && viaGetBody.h.vr === '' && viaGetBody.h.pgm === '' && viaGetBody.h.auth === 'Bearer abc' && viaGetBody.h.xff === '127.0.0.1' && /^\d+\.\d+\.\d+/.test(viaGetBody.h.gw)
         && viaPost.method === 'POST' && viaPost.body === '{"u":1}' && viaPost.path === '/api/login' && viaInternal === 404 && viaFront === 404 && unknownProd === 404 && noPortProd === 404 && prodDown === 503;
+      // R474 (T-207, spec 15): Hyper Workflows through the gateway for a product's people: the same paths as /api/hyperwork/,
+      // as the person the product signed for (linked: t-user; not linked: t-admin → 404); the log streams; run-only honoured
+      {
+        const gwList = await gw('GET', '/internal/gateway/hyperwork/list?q=r437', 't-user');
+        const gwItems = (() => { try { return JSON.parse(gwList.text).items || []; } catch { return []; } })();
+        const notLinked = await gw('GET', '/internal/gateway/hyperwork/list', 't-admin');
+        const gwCmd = await gw('POST', '/internal/gateway/hyperwork/command', 't-user', { line: '/hyperwork r437-notes through the gateway', project: 'VibeRoller' });
+        const gwRun = (() => { try { return JSON.parse(gwCmd.text).run || ''; } catch { return ''; } })();
+        let gwLines = [];
+        if (gwRun) { try { const pq = `/internal/gateway/hyperwork/log?id=${gwRun}&from=0&follow=1`; const r = await fetch(H + pq, { headers: sign('GET', pq, 't-user', ''), signal: AbortSignal.timeout(60000) }); gwLines = (await r.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch (e) { gwLines = [{ error: e.message }]; } }
+        const gwMeta = gwRun ? await gw('GET', '/internal/gateway/hyperwork/run?id=' + gwRun, 't-user') : { status: 0, text: '' };
+        const ro = await (async () => { const pq = '/internal/gateway/hyperwork/save', body = JSON.stringify({ doc: { schema: 1, name: 'r474-ro', nodes: [{ id: 's', kind: 'start' }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'e.result' }] } }); const r = await fetch(H + pq, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vr-client': 'run-only', ...sign('POST', pq, 't-user', body) }, body }); return r.status; })();
+        const gwUnknown = await gw('GET', '/internal/gateway/hyperwork/zzz', 't-user');
+        const gwTypes = gwLines.map((e) => e.type);
+        check('R474', 'T-207 Hyper Workflows through the gateway (spec 15): a product\'s signed request as a linked person lists (GET hyperwork/list), runs a /hyperwork line (POST hyperwork/command → 202) against a project, follows the run (hyperwork/log streams NDJSON to run_end) and reads it (hyperwork/run); someone the product has not linked gets 404; a product that says x-vr-client: run-only cannot save (403); an unknown path is 404',
+          gwList.status === 200 && gwItems.some((i) => i.name === 'r437-notes') && notLinked.status === 404 && gwCmd.status === 202 && !!gwRun && gwTypes[0] === 'run_start' && gwTypes[gwTypes.length - 1] === 'run_end' && gwMeta.status === 200 && /"status":"ok"/.test(gwMeta.text) && ro === 403 && gwUnknown.status === 404,
+          `list ${gwList.status} ${gwItems.map((i) => i.name).join(',')}; not linked ${notLinked.status}; command ${gwCmd.status} ${gwCmd.text.slice(0, 80)}; log ${gwTypes.join(' ')}; run ${gwMeta.status} ${gwMeta.text.slice(0, 80)}; run-only save ${ro}; unknown ${gwUnknown.status}`);
+      }
       // a new secret: the old one stops at once; removing the product ends its links
       await call('/api/admin/gateway/products', A, { id: 'prodsuit', name: 'PGM Prod Suit', ai: true });
       const oldSecret = await gw('GET', '/internal/gateway/status', '');
@@ -5256,7 +5274,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R431: 2, R432: 1, R433: 2, R434: 2, R435: 1, R436: 1, R454: 1, R455: 1, R456: 1, R457: 1, R458: 1, R466: 1, R467: 1, R468: 1, R469: 1, R470: 1, R471: 1 };
     if (!fs.existsSync(path.join(native407, 'crates', 'pgm-workflow-engine-internal'))) for (const id of Object.keys(L407)) skip(id, L407[id], 'no crate native/crates/pgm-workflow-engine-internal');
     else {
-      const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home407}/.rustup" CARGO_HOME="${home407}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-engine-internal 2>&1`], { cwd: native407, encoding: 'utf8', timeout: 1800000 });
+      const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home407}/.rustup" CARGO_HOME="${home407}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-engine-internal -p pgm-workflow-command-internal 2>&1`], { cwd: native407, encoding: 'utf8', timeout: 1800000 });
       const out407 = String(ut.stdout || '') + String(ut.stderr || '');
       if (ut.status === 77) for (const id of Object.keys(L407)) skip(id, L407[id], 'no Rust toolchain here (cargo not found)');
       else {
@@ -5289,9 +5307,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R472: 'hyperwork triggers on the hub: a webhook trigger made in /api/hyperwork/trigger is started by POST /hooks/hyperwork/<id> signed as Forgejo does (no session), refused unsigned; an internal event (this machine, its secret) starts an event trigger; a triggered run that fails sends its owner a private chat alert from "Hyper Workflows"; the list shows the runs',
     };
     const hw = (p, tok, body, hdr) => call('/api/hyperwork/' + p, tok, body, hdr);
-    const html461 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    const page461 = /\{ cmd: '\/hyperwork', desc: /.test(html461) && /\{ cmd: '\/hw', desc: /.test(html461) && /function hwTypeahead\(\)/.test(html461) && /\/api\/hyperwork\/list\?q=/.test(html461)
-      && /\/api\/hyperwork\/command', \{ method: 'POST', body: JSON\.stringify\(\{ line, project: \(me && me\.project\) \|\| '' \}\) \}/.test(html461) && /\/api\/hyperwork\/log\?id=/.test(html461) && /\/api\/hyperwork\/answer/.test(html461) && /cannot run: /.test(html461);
+    // the page's part is the kit module web/hyperwork.js (one copy with Hyper Prod Man and pgm-libs) with the page's hooks
+    const html461 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), mod461 = fs.readFileSync(path.join(MILLS, 'web', 'hyperwork.js'), 'utf8');
+    const page461 = /\{ cmd: '\/hyperwork', desc: /.test(html461) && /\{ cmd: '\/hw', desc: /.test(html461) && /HyperworkUI\.create\(\{/.test(html461) && /project: \(\) => \(me && me\.project\) \|\| ''/.test(html461) && /id="hwMenu" hidden/.test(html461) && /<script src="hyperwork\.js"><\/script>/.test(html461)
+      && /function typeahead\(\)/.test(mod461) && /\/api\/hyperwork\/list\?q=/.test(mod461) && /\/api\/hyperwork\/command', \{ method: 'POST', body: JSON\.stringify\(\{ line, project: /.test(mod461) && /\/api\/hyperwork\/log\?id=/.test(mod461) && /\/api\/hyperwork\/answer/.test(mod461) && /cannot run: /.test(mod461)
+      && (() => { try { const M = require(path.join(MILLS, 'web', 'hyperwork.js')); return M.nameQuery('/hyperwork te') === 'te' && M.nameQuery('/hw ') === '' && M.nameQuery('hello') === null && M.isCommand('/hw notes go') && !M.isCommand('/model x') && M.renderEvent({ type: 'run_end', status: 'ok', result: 'done it' }).kind === 'done' && M.renderEvent({ type: 'wait', node: 'a', what: 'approval' }).kind === 'wait' && M.renderEvent({ type: 'node_end', status: 'ok', kind: 'prompt', node: 'p' }).kind === 'step'; } catch { return false; } })();
     if (!RUST_HUB) {
       const js1 = await hw('list', U), js2 = await hw('run', U, { name: 'x', prompt: 'y' });
       check('R445', L437.R445, js1.status === 404 && js2.status === 404, `JavaScript hub: list ${js1.status}, run ${js2.status}`);
