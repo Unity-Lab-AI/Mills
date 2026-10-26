@@ -7,6 +7,12 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.30.1 — 2026-10-26
+
+PATCH: test only. The Work-prompt test in pgm-ai-internal checks the laws segment only where the hub's LAWS.md exists,
+so the same file passes in the pgm-libs checkout. pgm-libs 5.26.0 is re-mirrored from 5.30.0 and has the three
+workflow crates. Nothing changes at runtime.
+
 ## 5.30.0 — 2026-10-26
 
 MINOR: **Gee's Hyper Workflows branch and Sponge's 5.26.0 to 5.29.1 together on develop.** Both branches had a 5.26.0;
