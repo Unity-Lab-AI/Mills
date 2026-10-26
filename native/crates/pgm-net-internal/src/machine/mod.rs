@@ -3,14 +3,17 @@
 //! - [`scope`]: the scope document, presets, the allow / deny evaluator, time-limited grants, the tool set
 //! - [`paths`]: path normalising (Linux and Windows rules, testable anywhere), real-path resolution, checked open
 //! - [`floor`]: the paths no tool may ever touch, even under `unrestricted`; the default deny list; globs
+//! - [`sign`]: the hub signing key, the signed request envelope, the machine-side verifier (T-308)
 
 pub mod floor;
 pub mod paths;
 pub mod scope;
+pub mod sign;
 
 pub use floor::Floor;
 pub use paths::{Flavor, NormPath, PathError};
 pub use scope::{Access, Decision, Op, Preset, Scope, ScopeError};
+pub use sign::{Actor, Envelope, HubKey, SignedRequest, Verifier, VerifyError};
 
 #[cfg(test)]
 mod tests {

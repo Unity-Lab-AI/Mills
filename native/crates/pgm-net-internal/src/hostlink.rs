@@ -45,7 +45,11 @@ impl HostKey {
 }
 
 /// What a host can do, told to the hub in hello (older hosts send none). "update-bin": it updates its own binary.
-pub const CAPS: &[&str] = &["relay", "update", "update-bin", "control"];
+pub const CAPS: &[&str] = &["relay", "update", "update-bin", "control", CAP_SIGNED_PC];
+/// "signed-pc": the host verifies the hub's signed PC / machine requests (machine::sign) once it knows the hub's key,
+/// given in the hello answer (`hubKey`). Optional both ways: an older host never announces it and is never refused
+/// for it; an older hub gives no key and the host then accepts unsigned jobs as before (T-308).
+pub const CAP_SIGNED_PC: &str = crate::machine::sign::CAP_SIGNED;
 /// "control": the host answers `control` jobs from the hub (pause, resume, restart, update, logs) for its owner and
 /// reports its status (`POST /node/status`). The hub sends a control job only to a host that announced it (5.12.0).
 pub const CAP_CONTROL: &str = "control";
@@ -97,6 +101,9 @@ pub struct HelloAnswer {
     #[serde(rename = "pollMs", default)] pub poll_ms: Option<u64>,
     #[serde(default)] pub group: Vec<String>,
     #[serde(default)] pub update: Option<Release>,
+    /// The hub's signing key (ed25519 public key, hex) and its id: what a host pins to verify signed PC requests (T-308).
+    #[serde(rename = "hubKey", default)] pub hub_key: String,
+    #[serde(rename = "hubKid", default)] pub hub_kid: String,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Beat { #[serde(default)] pub t: Option<u64>, #[serde(default)] pub version: String, #[serde(default)] pub commit: String }

@@ -35,6 +35,23 @@ process.stdin.on('end', async () => {
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
   }
+  // "MACHTOOL=<hex>" (T-308): relay probes with the run's own credentials, each as the spec says, printing every HTTP status + body.
+  // The hex is a JSON array of { route: 'pc-tool' | 'board' | 'team', body, secret?: 'run' | <literal>, account?: <header> | null (none),
+  // session?: 'run' }; "run" is the secret / session of THIS run's MCP config (env.MILLS_INTERNAL / MILLS_SESSION).
+  if (/MACHTOOL=[0-9a-f]+/.test(input)) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.pc.env;
+    const probes = JSON.parse(Buffer.from(input.match(/MACHTOOL=([0-9a-f]+)/)[1], 'hex').toString('utf8'));
+    const res = [];
+    for (const p of probes) {
+      const h = { 'Content-Type': 'application/json', 'X-Mills-Internal': p.secret === undefined || p.secret === 'run' ? env.MILLS_INTERNAL : p.secret };
+      const acct = p.account === undefined ? env.MILLS_ACCOUNT : p.account; if (acct !== null) h['X-Mills-Account'] = acct;
+      const body = { ...(p.body || {}), ...(p.session === 'run' && env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) };
+      const r = await fetch(env.MILLS_BRIDGE + '/internal/' + (p.route || 'pc-tool'), { method: 'POST', headers: h, body: JSON.stringify(body) })
+        .then(async (x) => ({ status: x.status, body: await x.json().catch(() => ({})) })).catch((e) => ({ status: 0, body: { error: e.message } }));
+      res.push(r);
+    }
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'MACH:' + JSON.stringify(res) }] } });
+  }
   // "ASKTOOL" (T-245): ask the person two questions through the team MCP relay's ask_user and print the answers.
   // "ASKTOOL TIMEOUT": a 2-second timeout (the defaults must come back). "ASKTOOL POLL": polls every second like the MCP relay does.
   if (input.includes('ASKTOOL')) {
