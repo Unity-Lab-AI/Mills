@@ -5221,7 +5221,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   const generic = ['[0-9a-f]{32}', '"hash"\\s*:\\s*"[0-9a-f]', 'C:\\\\\\\\Users\\\\\\\\', 'trycloudflare\\.com/', 'password\\s*[:=]\\s*"[^"]{6,}'];
   const pattern = [...generic, ...terms.map((t) => '\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b')].join('|');
   // web/vendor holds third-party libraries (checked by R102 against their published hashes), not our text
-  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor', ':!native/Cargo.lock'], { cwd: MILLS, encoding: 'utf8' }); // Cargo.lock: the crates' published checksums
+  const gg = spawnSync('git', ['grep', '-n', '-I', '-i', '-E', pattern, '--', '.', ':!bridge/test/regress.js', ':!web/vendor', ':!native/Cargo.lock', ':!native/containers/*/Containerfile', ':!native/containers/*/*requirements.txt', ':!native/containers/*/*/package-lock.json'], { cwd: MILLS, encoding: 'utf8' }); // Cargo.lock and the container pins (Containerfile digests / download checksums, pip and npm locks): published checksums, not ours
   check('R31', `no names / passwords / ids / hashes / local paths in tracked files (${terms.length} local terms)`, gg.status === 1, (gg.stdout || '').split('\n').slice(0, 3).join(' | '));
   const junk = [];
   (function walk(d) {

@@ -7,6 +7,51 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.26.0 — 2026-10-25
+
+MINOR: **reverse-engineering containers, the linked-machines library core, and Node 24 prepared** (agent branches,
+reviewed and merged).
+- **The RE base image** (T-253; team note plans/rea.md). `native/containers/re-base` builds `localhost/pgm-re-base:1.0.0`
+  (2.25 GB, amd64).
+  - **What's inside, all pinned and checksum-verified:**
+    - REA (`rea-agents` 6.8.0 on Node 24.22.1; installed with `npm ci --ignore-scripts`, `rea setup` never run);
+    - Ghidra 12.1.4 and Temurin JDK 21.0.13;
+    - Frida 17.24.3, LLDB, GDB, ADB 37.0.1, radare2 6.2.4, strace and ltrace.
+  - **Layout:** `/work/in`, `/work/out` and `/work/tmp`, a non-root user, and REA's skill at `/opt/rea/skill`.
+  - **Smoke test:** 27 of 27 pass with no network (REA's MCP server lists 229 tools; a JS analysis and a Ghidra headless
+    analysis both run).
+  - **Scripts:** `build.sh` / `build.cmd`. The Windows build is not tested yet.
+- **RE containers** (T-303). New library `pgm-sandbox-internal` 0.1.0, Podman or Docker.
+  - **Copies:** each job gets a throw-away copy of the base image. At most 3 run at once (configurable), and the rest wait
+    in a FIFO queue.
+  - **Control:** only the owner controls a copy; an admin may stop any.
+  - **Data:** in and out through exchange folders.
+  - **Lifetime:** a copy is deleted entirely on stop. Idle copies are flagged, never killed, and running copies are
+    adopted back after a hub restart.
+  - **Isolation:** `--cap-drop ALL` plus `SYS_PTRACE` (for lldb, strace and frida), `no-new-privileges`, no network
+    unless asked, CPU / memory / pids limits, and no mounts beyond the exchange folders.
+  - **Routes and tools:** `/api/re/{start,list,status,exec,put,get,stop}` and the team tools `re_start`, `re_status`,
+    `re_list`, `re_exec`, `re_put`, `re_get`, `re_stop`. Rust hub only; the JavaScript hub answers "not available on this
+    hub" (bridge/team.js 1.1.2, bridge/team-mcp.js 1.2.0).
+  - **Config:** `re: { image, maxConcurrent, idleWarnHours, engineArgs, … }`. On this server rootless podman needs
+    `engineArgs: ["--root", "/var/tmp/gee-podman/root", "--runroot", "/var/tmp/gee-podman/run"]`.
+  - **Checks:** R316 to R320 run against real podman.
+- **Linked machines, step 1 of 8** (T-307; team note plans/linked-machines.md). New module `machine` in pgm-net-internal:
+  - **Scope model and evaluator:** ten presets, deny wins, the most specific entry wins, time-limited grants, and a tool
+    list per scope.
+  - **Path canonicaliser:** one for every tool, with Linux and Windows rules. Symlink and junction escapes are refused,
+    and opens are safe against a swapped link.
+  - **Safety floor:** the token, the device key, the scope file and the audit log are unreachable under every scope.
+  - **Checks:** R321, R322 and R340. Nothing uses it yet.
+- **Node 24 prepared** (T-304; deploy/node-upgrade.md).
+  - **Why:** the 2026-10-21 security release fixed four high-severity bugs that the server's Node 22.23.3 has.
+  - **Tested:** both suites pass on Node 24.22.1 LTS in throw-away hubs. The old Node 22 also still passes, so AI hosts
+    on 22 keep working.
+  - **Setup:** `deploy/setup-server.sh` installs Node line `VR_NODE_LINE` (24), checked against SHASUMS256.txt.
+  - **Not done yet:** the live server's Node is unchanged; the switch is a go-live step.
+- **Suite:** R31 (no hashes in tracked files) now skips the container pin files: Containerfile digests and download
+  checksums, and the pip and npm locks. They hold published checksums, like native/Cargo.lock.
+
 ## 5.25.3 — 2026-10-25
 
 PATCH: **the local Ollama probe works in a browser, and is one shared module** (T-209).
