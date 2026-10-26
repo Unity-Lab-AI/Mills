@@ -382,7 +382,7 @@ impl Work {
         parts.extend([
             format!("{name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools"),
             format!("(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's VibeRoller folder, not {name}'s PC."),
-            format!("Shell commands cannot run on {name}'s PC; if something needs running there, tell {name} exactly what to run."),
+            format!("Shell commands cannot run in a browser folder; if {name} has linked their computer (the same mcp__pc__* tools then reach it, and machine_info says what it allows) use shell_run (short) or job_start / job_read / job_stop (long), which run in the folder they opened, and transfer_get / transfer_put for big files; otherwise tell {name} exactly what to run."),
             format!("The VibeRoller team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as \"{name} · Claude\"."),
             "When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.".into(),
             "You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.".into(),

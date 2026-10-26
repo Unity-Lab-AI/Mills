@@ -42,15 +42,15 @@ impl Options {
 
 /// What the approval left on the machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LinkRecord { pub owner: String, pub machine: String }
+pub struct LinkRecord { pub owner: String, pub machine: String, pub hub: String }
 impl LinkRecord {
     pub fn load(dir: &Path) -> Option<LinkRecord> {
         let v: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(LINK_FILE)).ok()?).ok()?;
-        Some(LinkRecord { owner: v["owner"].as_str()?.to_string(), machine: v["machine"].as_str()?.to_string() })
+        Some(LinkRecord { owner: v["owner"].as_str()?.to_string(), machine: v["machine"].as_str()?.to_string(), hub: v["hub"].as_str().unwrap_or("").to_string() })
     }
     fn save(&self, dir: &Path) -> std::io::Result<()> {
         let f = dir.join(LINK_FILE);
-        std::fs::write(&f, json!({ "owner": self.owner, "machine": self.machine }).to_string())?;
+        std::fs::write(&f, json!({ "owner": self.owner, "machine": self.machine, "hub": self.hub }).to_string())?;
         pgm_core_internal::fs::private(&f);
         Ok(())
     }
@@ -81,7 +81,7 @@ pub async fn link(o: &Options, folder: &str, device: &str, show: &dyn Fn(&str)) 
         match st {
             200 => {
                 let token = v["token"].as_str().ok_or("the hub approved without a token")?;
-                let rec = LinkRecord { owner: v["username"].as_str().unwrap_or("").to_string(), machine: v["machineId"].as_str().or(v["deviceId"].as_str()).unwrap_or("").to_string() };
+                let rec = LinkRecord { owner: v["username"].as_str().unwrap_or("").to_string(), machine: v["machineId"].as_str().or(v["deviceId"].as_str()).unwrap_or("").to_string(), hub: o.hub.clone() };
                 if rec.owner.is_empty() || rec.machine.is_empty() { return Err("the hub's answer named no account".into()); }
                 store.save_token(token).map_err(|e| e.to_string())?;
                 rec.save(&o.state_dir).map_err(|e| e.to_string())?;
@@ -126,9 +126,11 @@ pub struct Runner {
 
 impl Runner {
     /// Opens a linked machine's state (`link.json`, the token, the device key). Err when this machine is not linked.
-    pub fn open(o: Options) -> Result<Arc<Runner>, String> {
+    pub fn open(mut o: Options) -> Result<Arc<Runner>, String> {
         let store = LinkStore::new(&o.state_dir).map_err(|e| e.to_string())?;
         let rec = LinkRecord::load(&o.state_dir).ok_or("this machine is not linked yet (no link record)")?;
+        if o.hub.is_empty() { o.hub = rec.hub.clone(); }
+        if o.hub.is_empty() { return Err("no hub address (give one, or link again)".into()); }
         if !store.linked() { return Err("this machine has no token: link it first".into()); }
         let key = store.load_or_create_key().map_err(|e| e.to_string())?;
         let machine = Arc::new(Machine::open(&o.state_dir, &rec.machine, &o.app).map_err(|e| e.to_string())?);
