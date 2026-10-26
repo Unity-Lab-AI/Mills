@@ -557,6 +557,7 @@ async function run() {
   const U = (await login('t-user', 'pw-t-user-0001', devB)).data.token;
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
+  if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -5710,6 +5711,217 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && vA.every((v) => signedOk(v, 't-admin', idA, hostA)) && vU.every((v, i) => signedOk(v, 't-user', i < 3 ? idU : '', hostU)) && nonces.size === vA.length + vU.length && !!idA && !!idU
       && keyMode === 0o600,
       detail323);
+  }
+  // R328, R329, R330 (T-311, linked machines 5/8): the machine's tools, over the wire, with a REAL machine runner (`vr-host machine`, the
+  // library's runner) linked by device code to this scratch hub, called through a Work run's pc-tool relay like the AI does.
+  if (!RUST_HUB) { for (const [id, l] of [['R328', 'machine tools: files (the pc_* mapping) and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it'); }
+  else if (WIN) { for (const [id, l] of [['R328', 'machine tools: files and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the shell and process checks use sh and /proc; run on Linux'); }
+  else await machineToolsCheck();
+  async function machineToolsCheck() {
+    const mdir = fs.mkdtempSync(path.join(SCRATCH, 'r328-'));
+    const procs = [], cleanups = [];
+    const encSpec = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const machOf = (r) => { const l = texts(r.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } };
+    const pc = (name, args, machine) => ({ route: 'pc-tool', body: { name, args: args || {}, ...(machine ? { machine } : {}) } });
+    const via = async (specs) => machOf(await chat(U, encSpec(specs)));       // one Work run, the calls in order
+    const one = async (name, args, machine) => (await via([pc(name, args, machine)]))[0] || { status: 0, body: {} };
+    const okB = (r) => !!(r && r.body && r.body.ok === true), res = (r) => (r && r.body ? r.body.result : undefined), errOf = (r) => String((r && r.body && r.body.error) || '');
+    const tree = (dir, rel = '') => { const o = {}; for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) { const p = rel ? rel + '/' + e.name : e.name; if (e.isDirectory()) { o[p + '/'] = 1; Object.assign(o, tree(dir, p)); } else o[p] = fs.readFileSync(path.join(dir, p), 'utf8'); } return o; };
+    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const mcall = (method, p, tok, body) => fetch(H + p, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) })).catch((e) => ({ status: 0, data: { error: e.message } }));
+    const linkMachine = (tag, approver, name) => new Promise((resolve) => {
+      const state = path.join(mdir, tag + '-state'), home = path.join(mdir, tag + '-home'); fs.mkdirSync(home, { recursive: true });
+      const p = spawn(NATIVE_BIN.host, ['machine', 'link', '--hub', H, '--folder', home, '--state', state, '--name', name], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VR_MACHINE_ALLOW_ROOT: '1' } });
+      let out = '', approved = false;
+      p.stdout.on('data', (d) => { out += d; const m = /Code: ([A-Z]{4}-[A-Z]{4})/.exec(out); if (m && !approved) { approved = true; call('/api/device/approve', approver, { userCode: m[1] }); } });
+      p.stderr.on('data', (d) => { out += d; });
+      p.on('close', (code) => { let id = ''; try { id = JSON.parse(fs.readFileSync(path.join(state, 'link.json'), 'utf8')).machine; } catch {} resolve({ code, out, state, home: fs.realpathSync(home), tag, id, name }); });
+    });
+    const runMachine = (m) => { const log = fs.openSync(path.join(mdir, m.tag + '.log'), 'a'); const p = spawn(NATIVE_BIN.host, ['machine', 'run', '--state', m.state], { stdio: ['ignore', log, log], env: { ...process.env, VR_MACHINE_ALLOW_ROOT: '1' } }); procs.push(p); m.proc = p; m.exited = new Promise((r) => p.once('exit', (c) => r(c))); return p; };
+    const setScope = (m, doc) => { fs.writeFileSync(path.join(m.state, 'scope.json'), JSON.stringify({ v: 1, ...doc })); };
+    const folderScope = (m, extra) => ({ preset: 'folder', paths: [{ path: m.home, access: 'rw' }], ...(extra || {}) });
+    const waitOnline = async (tok, ids) => { for (let i = 0; i < 80; i++) { const ms = (await call('/api/machines', tok)).data.machines || []; if (ids.every((id) => ms.some((x) => x.id === id && x.online))) return true; await sleep(250); } return false; };
+    const tokOf = (m) => fs.readFileSync(path.join(m.state, 'token'), 'utf8').trim();
+    const created = (await call('/api/admin/create', A, { username: 't-r330', display: 'R330' })).data || {};
+    const X = created.password ? (await login('t-r330', created.password, 'device-r330-xxxxxxxxxx')).data.token : '';
+    const detail = {};
+    try {
+      // 0. with no machine and no host linked, the browser folder answers as it always did
+      const fbBefore = await chat(U, 'PCTOOL r328 before any machine');
+      const fallbackBefore = /fake-listing/.test(texts(fbBefore.events));
+      const [m1, m2, m2b, m3] = await Promise.all([linkMachine('m1', U, 'r328-box'), linkMachine('m2', U, 'r330-box'), linkMachine('m2b', U, 'r330-other'), linkMachine('m3', X, 'r330-x')]);
+      detail.linked = [m1, m2, m2b, m3].map((m) => m.code + ':' + (m.id ? 'id' : 'noid')).join(',');
+      runMachine(m1);
+      const online = await waitOnline(U, [m1.id]);
+      // a real pc_job host (the AI host's own five tools) on its own folder, for the parity
+      const madeHost = await call('/api/hosts/new', U, {}), hostId = (madeHost.data.host || {}).id || '', hcfg = (await call('/api/hosts/config', U, { id: hostId })).data.config || {};
+      const hdir = path.join(mdir, 'host'), hhome = path.join(mdir, 'host-home'); fs.mkdirSync(hdir, { recursive: true }); fs.mkdirSync(hhome, { recursive: true });
+      fs.writeFileSync(path.join(hdir, 'ai-node.json'), JSON.stringify({ hub: H, id: hostId, token: hcfg.token, user: 't-user', autoUpdate: false, engines: {}, providers: [], pc: { folder: hhome } }), { mode: 0o600 });
+      const hlog = fs.openSync(path.join(mdir, 'host.log'), 'a');
+      const hostProc = spawn(NATIVE_BIN.host, ['host', '--config', path.join(hdir, 'ai-node.json')], { cwd: hdir, stdio: ['ignore', hlog, hlog] }); procs.push(hostProc);
+      for (let i = 0; i < 60; i++) { const hs = (await call('/api/check', U)).data.aiNodes || []; if (hs.some((x) => x.id === hostId && x.online)) break; await sleep(250); }
+
+      // ===== R328: files through the machine = files through pc_job; ro refuses writes; machine_info =====
+      const ops = [['list', {}], ['mkdir', { path: 'sub/deep' }], ['write', { path: 'sub/a.txt', content: 'héllo wörld' }], ['write', { path: 'top.txt', content: 'x' }], ['list', {}], ['list', { path: 'sub' }], ['read', { path: 'sub/a.txt' }], ['read', { path: 'nope.txt' }],
+        ['delete', { path: 'sub/deep' }], ['delete', { path: 'nothing' }], ['write', { path: '', content: 'z' }], ['delete', { path: '' }], ['write', { path: '../escape.txt', content: 'no' }], ['read', { path: '/etc/hostname' }], ['list', { path: './sub/' }], ['write', { path: 'sub/./b.txt', content: '' }], ['list', { path: 'sub' }]];
+      const hostRes = await via(ops.map(([n, a]) => pc(n, a, hostId))), machRes = await via(ops.map(([n, a]) => pc(n, a, m1.id)));
+      const sameOp = ops.map((o, i) => { const h = hostRes[i], m = machRes[i]; if (!h || !m || h.status !== m.status) return false; if (okB(h) !== okB(m)) return false; if (okB(h)) return res(h) === res(m); return o[1].path === '' ? errOf(h) === errOf(m) : true; });
+      const treesEqual = JSON.stringify(tree(hhome)) === JSON.stringify(tree(m1.home));
+      detail.parity = sameOp.map((b, i) => b ? '' : ops[i][0] + '#' + i).filter(Boolean).join(',') || 'all same';
+      const noEscape = !fs.existsSync(path.join(mdir, 'escape.txt'));
+      const info = await one('machine_info', {}, m1.id), inf = res(info) || {};
+      // read-only: reads work, every change is refused and nothing changes; the write tools are not even offered
+      setScope(m1, { preset: 'folders', paths: [{ path: m1.home, access: 'ro' }] });
+      const ro = await via([pc('read', { path: 'top.txt' }, m1.id), pc('write', { path: 'n.txt', content: 'x' }, m1.id), pc('delete', { path: 'top.txt' }, m1.id), pc('mkdir', { path: 'dro' }, m1.id), pc('machine_info', {}, m1.id), pc('transfer_put', { path: 'p.bin', from: '0'.repeat(32) }, m1.id)]);
+      const roInfo = res(ro[4]) || {};
+      const roKept = fs.existsSync(path.join(m1.home, 'top.txt')) && !fs.existsSync(path.join(m1.home, 'n.txt')) && !fs.existsSync(path.join(m1.home, 'dro'));
+      setScope(m1, folderScope(m1));
+      const auditFile = path.join(m1.state, 'machine-audit.jsonl'), auditText = fs.existsSync(auditFile) ? fs.readFileSync(auditFile, 'utf8') : '';
+      const auditLines = auditText.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } });
+      const stMode = fs.statSync(m1.state).mode & 0o777, tokMode = fs.statSync(path.join(m1.state, 'token')).mode & 0o777;
+      const card = ((await call('/api/machines', U)).data.machines || []).find((x) => x.id === m1.id) || {};
+      // done with the pc_job host: it must not answer the later fallback checks
+      await call('/api/hosts/remove', U, { id: hostId }); hostProc.kill();
+      check('R328', 'T-311 machine tools, files: a machine linked by device code and run by the library\'s runner answers mcp__pc__list / read / write / delete / mkdir through a Work run exactly as today\'s pc_job does for the same folder (same results for success, a refusal where pc_job refuses, the same files afterwards; paths are relative to the selected folder; nothing written outside it), a read-only scope reads but refuses write / delete / mkdir and does not offer the write tools, machine_info says os, arch, the scope in words, the tools it offers and the shell\'s limits, every call leaves an audit line (denials too, never file contents) and the state folder is owner-only; mcp__pc__* still works with no machine linked (the browser folder)',
+        fallbackBefore && [m1, m2, m2b, m3].every((m) => m.code === 0 && m.id) && online && !!hostId && hostRes.length === ops.length && machRes.length === ops.length && sameOp.every(Boolean) && treesEqual && noEscape
+        && okB(info) && inf.os === 'linux' && typeof inf.arch === 'string' && /^one folder: /.test(inf.scope || '') && inf.access === 'read-write' && ['machine_info', 'list', 'read', 'write', 'delete', 'mkdir', 'shell_run', 'job_start', 'job_read', 'job_stop', 'proc_kill', 'transfer_get', 'transfer_put'].every((t) => (inf.tools || []).includes(t)) && /^advisory/.test((inf.shell || {}).confinement || '') && (inf.shell || {}).elevation === 'never'
+        && okB(ro[0]) && res(ro[0]) === 'x' && [1, 2, 3].every((i) => !okB(ro[i])) && roKept && roInfo.access === 'read-only' && !(roInfo.tools || []).includes('write') && (roInfo.tools || []).includes('read') && !okB(ro[5])
+        && auditLines.length >= 20 && auditLines.some((l) => l.decision === 'deny') && auditLines.some((l) => l.decision === 'allow') && auditLines.every((l) => l.hash && l.actor) && !auditText.includes('héllo') && stMode === 0o700 && tokMode === 0o600 && /^(one folder|folders): /.test(card.scope || ''),
+        `${detail.linked} · parity ${detail.parity} · trees ${treesEqual} · ro ${ro.map((r) => okB(r) ? 'ok' : 'no').join('/')} · audit ${auditLines.length} lines (deny ${auditLines.some((l) => l.decision === 'deny')}, noactor ${auditLines.filter((l) => !l.actor || !l.hash).length}) · fb ${fallbackBefore} online ${online} state ${stMode.toString(8)} token ${tokMode.toString(8)} card "${card.scope}" tools ${(inf.tools || []).join()} access ${inf.access} elev ${(inf.shell || {}).elevation} conf ${(inf.shell || {}).confinement} ro ${roInfo.access} ${(roInfo.tools || []).join()}`);
+
+      // ===== R329: shell, jobs, processes =====
+      const home1 = m1.home;
+      setScope(m1, folderScope(m1, { tools: { shell: { enabled: true, timeoutSec: 6, maxOutputKB: 1 } }, limits: { concurrentJobs: 2 } }));
+      const sh = await via([pc('shell_run', { cmd: 'pwd; echo err >&2; exit 3' }, m1.id), pc('mkdir', { path: 'sub' }, m1.id), pc('shell_run', { cmd: 'pwd; touch made.txt', cwd: 'sub' }, m1.id),
+        pc('shell_run', { cmd: 'pwd', cwd: '..' }, m1.id), pc('shell_run', { cmd: 'pwd', cwd: '/' }, m1.id), pc('shell_run', { cmd: 'pwd', cwd: '/etc' }, m1.id), pc('shell_run', { cmd: 'pwd', cwd: 'sub/../..' }, m1.id), pc('shell_run', { cmd: 'pwd', cwd: home1 }, m1.id),
+        pc('shell_run', { cmd: "head -c 100000 /dev/zero | tr '\\0' x", timeoutSec: 99 }, m1.id), pc('shell_run', { cmd: '   ' }, m1.id)]);
+      const tShort = Date.now(); const slow1 = await one('shell_run', { cmd: 'sleep 30', timeoutSec: 1 }, m1.id); const msShort = Date.now() - tShort;
+      const tCap = Date.now(); const slow2 = await one('shell_run', { cmd: 'sleep 30' }, m1.id); const msCap = Date.now() - tCap;
+      // jobs: run A starts a long one; "reload" = other runs read it by id; a pause from the web and back (the link drops and returns); then stop
+      const jobA = await one('job_start', { cmd: 'echo $$ > jobpid.txt; echo first; sleep 2; echo second; sleep 120', timeoutSec: 300 }, m1.id), jid = (res(jobA) || {}).jobId || '';
+      await sleep(900);
+      const rd1 = await one('job_read', { jobId: jid }, m1.id), r1 = res(rd1) || {};
+      const pausedNow = await mcall('PATCH', '/api/machines/' + m1.id, U, { paused: true });
+      const whilePaused = await one('job_read', { jobId: jid }, m1.id);
+      await mcall('PATCH', '/api/machines/' + m1.id, U, { paused: false });
+      await waitOnline(U, [m1.id]); await sleep(1800);
+      const rd2 = await one('job_read', { jobId: jid, since: r1.next || 0 }, m1.id), r2 = res(rd2) || {};
+      const listed = res(await one('job_read', {}, m1.id)) || {};
+      const jobB = await one('job_start', { cmd: 'sleep 100' }, m1.id), jidB = (res(jobB) || {}).jobId || '';
+      const jobC = await one('job_start', { cmd: 'sleep 100' }, m1.id); // over concurrentJobs: 2
+      const jpid = Number((fs.existsSync(path.join(home1, 'jobpid.txt')) ? fs.readFileSync(path.join(home1, 'jobpid.txt'), 'utf8') : '0').trim());
+      const stopA = await one('job_stop', { jobId: jid }, m1.id); await sleep(300);
+      const jaDead = !alive(jpid);
+      // processes: an unrelated one is untouchable, a job's own can be killed
+      const other = spawn('sleep', ['300'], { stdio: 'ignore' }); cleanups.push(() => { try { other.kill(); } catch {} });
+      const pl = res(await one('proc_list', {}, m1.id)) || {};
+      const killOther = await one('proc_kill', { pid: other.pid }, m1.id), otherAlive = alive(other.pid);
+      const bPid = ((res(await one('job_read', { jobId: jidB }, m1.id)) || {}).pid) || 0;
+      const killOwn = await one('proc_kill', { pid: bPid }, m1.id); await sleep(500);
+      const bDead = bPid > 1 && !alive(bPid);
+      const killInit = await one('proc_kill', { pid: 1 }, m1.id);
+      // no-shell: the shell tools disappear, files stay
+      setScope(m1, folderScope(m1, { preset: 'no-shell', tools: { shell: { enabled: false } } }));
+      const ns = await via([pc('machine_info', {}, m1.id), pc('shell_run', { cmd: 'echo hi' }, m1.id), pc('job_start', { cmd: 'echo hi' }, m1.id), pc('list', {}, m1.id)]);
+      const nsTools = (res(ns[0]) || {}).tools || [];
+      setScope(m1, folderScope(m1));
+      // revoke: a running job dies with the link, the runner wipes its token and key and exits
+      const jobR = await one('job_start', { cmd: 'echo $$ > revpid.txt; sleep 300' }, m1.id); await sleep(500);
+      const rpid = Number((fs.existsSync(path.join(home1, 'revpid.txt')) ? fs.readFileSync(path.join(home1, 'revpid.txt'), 'utf8') : '0').trim());
+      const rAlive = alive(rpid);
+      const unlink = await mcall('DELETE', '/api/machines/' + m1.id, U);
+      const exitCode = await Promise.race([m1.exited, sleep(12000).then(() => 'timeout')]);
+      await sleep(300);
+      const rDead = rpid > 1 && !alive(rpid), tokenGone = !fs.existsSync(path.join(m1.state, 'token')) && !fs.existsSync(path.join(m1.state, 'device-key'));
+      const afterRevoke = await one('shell_run', { cmd: 'echo hi' }, m1.id);
+      const fbAfter = await chat(U, 'PCTOOL r329 after the machine is gone');
+      const fallbackAfter = /fake-listing/.test(texts(fbAfter.events));
+      const shellSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'machine', 'exec.rs'), 'utf8');
+      check('R329', 'T-311 machine tools, shell / jobs / processes: shell_run runs in the selected folder or a folder inside the scope (cwd .., /, /etc and sub/../.. are refused, an absolute path inside the folder works), has a timeout (the call\'s own, never above the scope\'s) and an output cap (truncated is said), says its confinement is advisory and is never run as root; no-shell removes shell_run / job_* (and says so) while files work; job_start / job_read / job_stop keep a job on the machine across runs, a pause from the web and back, and a reload (read by job id, the list finds it), refuse past concurrentJobs, and a stopped job\'s process is gone; proc_kill with kill own-children kills a job\'s process and refuses an unrelated one and pid 1; an unlink from the web ends running jobs, the runner wipes its token and key and exits, and then the browser folder answers mcp__pc__* again',
+        okB(sh[0]) && res(sh[0]).stdout.trim() === home1 && res(sh[0]).stderr.trim() === 'err' && res(sh[0]).exit === 3 && /advisory/.test(res(sh[0]).note) && okB(sh[2]) && res(sh[2]).stdout.trim() === path.join(home1, 'sub') && fs.existsSync(path.join(home1, 'sub', 'made.txt'))
+        && [3, 4, 5, 6].every((i) => !okB(sh[i])) && okB(sh[7]) && res(sh[7]).stdout.trim() === home1 && okB(sh[8]) && res(sh[8]).truncated === true && res(sh[8]).stdout.length <= 1024 && !okB(sh[9])
+        && okB(slow1) && res(slow1).timedOut === true && msShort < 9000 && okB(slow2) && res(slow2).timedOut === true && msCap < 12000 && msCap >= 4000
+        && !!jid && okB(rd1) && r1.running === true && /first/.test(r1.output || '') && !/second/.test(r1.output || '') && pausedNow.status === 200 && !okB(whilePaused) && /paused/.test(errOf(whilePaused))
+        && okB(rd2) && r2.running === true && /second/.test(r2.output || '') && !/first/.test(r2.output || '') && (listed.jobs || []).some((j) => j.jobId === jid) && !!jidB && !okB(jobC) && /running already/.test(errOf(jobC))
+        && jpid > 1 && okB(stopA) && res(stopA).state === 'stopped' && jaDead
+        && !okB(killOther) && /not started by a tool/.test(errOf(killOther)) && otherAlive && (pl.processes || []).some((p) => p.pid === other.pid && p.ownChild === false) && bPid > 1 && okB(killOwn) && res(killOwn).ownChild === true && bDead && !okB(killInit)
+        && nsTools.includes('list') && ['shell_run', 'job_start', 'job_read', 'job_stop'].every((t) => !nsTools.includes(t)) && !okB(ns[1]) && /does not offer shell_run/.test(errOf(ns[1])) && !okB(ns[2]) && okB(ns[3])
+        && okB(jobR) && rpid > 1 && rAlive && unlink.status === 200 && exitCode === 3 && rDead && tokenGone && !okB(afterRevoke) && fallbackAfter && /fn is_elevated\(/.test(shellSrc),
+        `shell ${sh.map((r) => okB(r) ? 'ok' : 'no').join('/')} · timeout ${msShort} ms / cap ${msCap} ms · job ${jid ? 'started' : 'NOT started'} reads ${r1.running}/${r2.running} paused ${errOf(whilePaused).slice(0, 40)} · killOther ${errOf(killOther).slice(0, 60)} · revoke: unlink ${unlink.status} exit ${exitCode} dead ${rDead} wiped ${tokenGone} fallback ${fallbackAfter}`);
+
+      // ===== R330: big-file transfer by ticket =====
+      runMachine(m2); await waitOnline(U, [m2.id]);
+      const SIZE = 512 << 20, big = path.join(m2.home, 'big.bin');
+      { const fd = fs.openSync(big, 'w'); fs.ftruncateSync(fd, SIZE); const stamp = (at, s) => fs.writeSync(fd, Buffer.from(s.repeat(64)), 0, 64 * s.length, at); stamp(0, 'head-of-the-file;'); stamp(SIZE / 2, 'middle-of-the-file;'); stamp(SIZE - 2048, 'end-of-the-file;'); fs.closeSync(fd); }
+      const shaOf = (file) => new Promise((resolve, reject) => { const h = crypto.createHash('sha256'); fs.createReadStream(file, { highWaterMark: 1 << 20 }).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject); });
+      const wantSha = await shaOf(big);
+      const hubPid = (() => { try { for (const d of fs.readdirSync('/proc')) { if (!/^\d+$/.test(d)) continue; try { if (fs.readFileSync('/proc/' + d + '/cmdline', 'utf8').split('\0')[0] === process.env.VR_HUB_BIN) return +d; } catch {} } } catch {} return 0; })();
+      const mem = () => { try { const s = fs.readFileSync('/proc/' + hubPid + '/status', 'utf8'); return { rss: +(/VmRSS:\s+(\d+)/.exec(s) || [])[1] * 1024, hwm: +(/VmHWM:\s+(\d+)/.exec(s) || [])[1] * 1024 }; } catch { return null; } };
+      const mem0 = mem();
+      const tStart = Date.now();
+      const first = await one('transfer_get', { path: 'big.bin', maxBytes: 100 << 20, ticketSecs: 10 }, m2.id), f1 = res(first) || {};
+      const partFile = path.join(SB, 'transfers', 't-user', (f1.id || 'x') + '.part');
+      const partSize = fs.existsSync(partFile) ? fs.statSync(partFile).size : -1;
+      const tk = f1.ticket || 'no-ticket', st = (tok, ticket, body) => mcall('POST', '/api/machine/transfer/' + ticket + '/status', tok, body);
+      const goodBody = { path: 'big.bin', key: f1.id };
+      const rOther = await st(tokOf(m3), tk, goodBody), rSibling = await st(tokOf(m2b), tk, goodBody), rPath = await st(tokOf(m2), tk, { path: 'other.bin', key: f1.id }), rPage = await st(U, tk, goodBody), rNone = await st(null, tk, goodBody), rBogus = await st(tokOf(m2), 'f'.repeat(48), goodBody);
+      const rGood = await st(tokOf(m2), tk, goodBody);
+      const rChunkOther = await fetch(H + '/api/machine/transfer/' + tk + '/chunk?offset=' + (100 << 20) + '&key=' + f1.id + '&path=big.bin', { method: 'POST', headers: { Authorization: 'Bearer ' + tokOf(m3), 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(16) }).then((r) => r.status);
+      const withinTicket = Date.now() - tStart < 9500;
+      await sleep(Math.max(0, 11000 - (Date.now() - tStart)));
+      const rLate = await st(tokOf(m2), tk, goodBody);
+      // resume: the same call again carries on at the byte the hub holds, and ends with the sha256 of the whole file
+      const second = await one('transfer_get', { path: 'big.bin' }, m2.id), f2 = res(second) || {};
+      const hubFile = path.join(SB, 'transfers', 't-user', f2.id || 'x');
+      const hubSha = fs.existsSync(hubFile) ? await shaOf(hubFile) : '';
+      // the owner downloads it from the hub, streamed; Range works; another account has none of it
+      const dl = await fetch(H + '/api/transfers/' + f2.id, { headers: { Authorization: 'Bearer ' + U } });
+      const dh = crypto.createHash('sha256'); let dn = 0; for await (const c of dl.body) { dh.update(c); dn += c.length; }
+      const rng = await fetch(H + '/api/transfers/' + f2.id, { headers: { Authorization: 'Bearer ' + U, Range: 'bytes=0-63' } });
+      const rngBuf = Buffer.from(await rng.arrayBuffer()), rngBad = await fetch(H + '/api/transfers/' + f2.id, { headers: { Authorization: 'Bearer ' + U, Range: 'bytes=' + (SIZE + 5) + '-' } });
+      const dlOther = await mcall('GET', '/api/transfers/' + f2.id, X), listU = ((await call('/api/transfers', U)).data.transfers || []).map((t) => t.id), listX = ((await call('/api/transfers', X)).data.transfers || []).map((t) => t.id);
+      // the other way: the owner uploads to the hub, the machine pulls it down in pieces with a resume, verified, then put in place
+      const UP = 200 << 20, upFile = path.join(mdir, 'up.bin');
+      { const fd = fs.openSync(upFile, 'w'); fs.ftruncateSync(fd, UP); fs.writeSync(fd, Buffer.from('upload-start;'.repeat(40)), 0, 520, 0); fs.writeSync(fd, Buffer.from('upload-end;'.repeat(40)), 0, 440, UP - 440); fs.closeSync(fd); }
+      const upSha = await shaOf(upFile);
+      const upload = async (tok, file, size, id) => { const fh = fs.openSync(file, 'r'); const buf = Buffer.alloc(4 << 20); let off = 0; while (off < size) { const n = fs.readSync(fh, buf, 0, buf.length, off); const r = await fetch(H + '/api/transfers/' + id + '/chunk?offset=' + off, { method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/octet-stream' }, body: buf.subarray(0, n) }); if (r.status !== 200) break; off += n; } fs.closeSync(fh); return off; };
+      const slot = (await call('/api/transfers', U, { name: 'up.bin' })).data || {};
+      const uploaded = await upload(U, upFile, UP, slot.id);
+      const upDone = await mcall('POST', '/api/transfers/' + slot.id + '/done', U, {});
+      const upBad = await fetch(H + '/api/transfers/' + slot.id + '/chunk?offset=0', { method: 'POST', headers: { Authorization: 'Bearer ' + U, 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(8) }).then((r) => r.status);
+      const put1 = await one('transfer_put', { path: 'inbox/up.bin', from: slot.id, maxBytes: 50 << 20 }, m2.id), p1 = res(put1) || {};
+      const partOnMachine = path.join(m2.home, 'inbox', 'up.bin.vr-part'), partMachineSize = fs.existsSync(partOnMachine) ? fs.statSync(partOnMachine).size : -1;
+      const put2 = await one('transfer_put', { path: 'inbox/up.bin', from: slot.id }, m2.id), p2 = res(put2) || {};
+      const landed = path.join(m2.home, 'inbox', 'up.bin'), landedSha = fs.existsSync(landed) ? await shaOf(landed) : '';
+      const putOut = await one('transfer_put', { path: '../evil.bin', from: slot.id }, m2.id), evilThere = fs.existsSync(path.join(m2.home, '..', 'evil.bin')) || fs.existsSync(path.join(m2.home, '..', 'evil.bin.vr-part'));
+      const xFile = path.join(mdir, 'x.bin'); fs.writeFileSync(xFile, 'only for t-r330');
+      const slotX = (await call('/api/transfers', X, { name: 'x.bin' })).data || {}; await upload(X, xFile, 15, slotX.id); await mcall('POST', '/api/transfers/' + slotX.id + '/done', X, {});
+      const putOfOthers = await one('transfer_put', { path: 'steal.bin', from: slotX.id }, m2.id);
+      // the scope's maxFileMB bounds the transfer too
+      setScope(m2, folderScope(m2, { limits: { maxFileMB: 100 } }));
+      const tooBig = await one('transfer_get', { path: 'big.bin' }, m2.id);
+      setScope(m2, folderScope(m2));
+      const mem1 = mem();
+      const srcT = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'machine_transfer.rs'), 'utf8');
+      check('R330', `T-311 big-file transfer by ticket: the hub issues a ticket bound to account, machine, path and direction (5 minutes at most; a call may ask for less); a sparse ${SIZE >> 20} MB file is pulled from the machine in chunks (the hub writes them straight to disk, its memory stays bounded), a call that stops early resumes at the byte the hub holds, the end is checked by sha256 and the owner downloads it streamed (Range works, another account sees nothing); a ${UP >> 20} MB upload from the owner goes down to the machine the other way with a resume and a sha256 check before it is put in place; the ticket is refused for another account's machine, another machine of the same account, another path, a page token, no token and after it expired; the scope's maxFileMB, path rules and another account's file are refused too`,
+        !!f1.ticket && f1.complete === false && f1.received === (100 << 20) && partSize === (100 << 20) && f1.resumedFrom === 0 && withinTicket
+        && rOther.status === 403 && rSibling.status === 403 && rPath.status === 403 && rPage.status === 401 && rNone.status === 401 && rBogus.status === 403 && rGood.status === 200 && rGood.data.received === (100 << 20) && rChunkOther === 403 && rLate.status === 410
+        && f2.complete === true && f2.resumedFrom === (100 << 20) && f2.size === SIZE && f2.sha256 === wantSha && hubSha === wantSha && fs.statSync(hubFile).size === SIZE && !fs.existsSync(partFile)
+        && dl.status === 200 && dn === SIZE && dh.digest('hex') === wantSha && rng.status === 206 && rngBuf.toString().startsWith('head-of-the-file;') && rngBuf.length === 64 && rngBad.status === 416 && dlOther.status === 404 && listU.includes(f2.id) && !listX.includes(f2.id)
+        && uploaded === UP && upDone.status === 200 && upDone.data.sha256 === upSha && upDone.data.size === UP && upBad === 409
+        && okB(put1) && p1.complete === false && p1.received === (50 << 20) && partMachineSize === (50 << 20) && okB(put2) && p2.complete === true && p2.resumedFrom === (50 << 20) && p2.sha256 === upSha && landedSha === upSha && !fs.existsSync(partOnMachine)
+        && !okB(putOut) && !evilThere && !okB(putOfOthers) && !fs.existsSync(path.join(m2.home, 'steal.bin')) && !okB(tooBig) && /maxFileMB|more than the allowed/.test(errOf(tooBig))
+        && !!hubPid && !!mem0 && !!mem1 && mem1.hwm - mem0.hwm < 160 * (1 << 20) && mem1.rss - mem0.rss < 160 * (1 << 20)
+        && /pub const TICKET_SECS: i64 = 300/.test(srcT) && /fn a_ticket_is_bound_to_machine_account_path_and_five_minutes/.test(srcT),
+        `${SIZE >> 20} MB: first call received ${(f1.received || 0) >> 20} MB, resumed from ${(f2.resumedFrom || 0) >> 20} MB, sha ${f2.sha256 === wantSha} · refusals other-account ${rOther.status} sibling ${rSibling.status} path ${rPath.status} page ${rPage.status} none ${rNone.status} late ${rLate.status} (within ticket ${withinTicket}) · download ${dl.status} ${dn >> 20} MB range ${rng.status} · put ${UP >> 20} MB: ${(p1.received || 0) >> 20}+${((p2.size || 0) - (p2.resumedFrom || 0)) >> 20} MB sha ${landedSha === upSha} · hub memory ${mem0 && mem1 ? `hwm ${(mem0.hwm >> 20)} → ${(mem1.hwm >> 20)} MB, rss ${(mem0.rss >> 20)} → ${(mem1.rss >> 20)} MB` : 'n/a'}`);
+    } finally {
+      for (const f of cleanups) f();
+      for (const p of procs) { try { p.kill('SIGKILL'); } catch {} }
+      for (const tok of [U, X]) { if (!tok) continue; for (const t of ((await call('/api/transfers', tok)).data.transfers || [])) await mcall('DELETE', '/api/transfers/' + t.id, tok); }
+      for (const mm of ((await call('/api/machines', U)).data.machines || [])) if (/^r3(28|30)-/.test(mm.name || '')) await mcall('DELETE', '/api/machines/' + mm.id, U);
+      if (created.password) await call('/api/admin/delete', A, { username: 't-r330' });
+      try { fs.rmSync(mdir, { recursive: true, force: true }); } catch {}
+    }
   }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });

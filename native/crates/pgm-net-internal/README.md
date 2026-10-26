@@ -13,6 +13,14 @@ Low-latency networking and syncing.
   `Envelope`, the job and hello types
 - `machine::device`: a linked machine's own ed25519 key: `DeviceKey` (generate, `sign_reply`), `verify_reply` (the hub's
   check), `LinkStore` (owner-only `device-key` and `token` files, `wipe`, `handle_answer`: a 401 "revoked" wipes both)
+- `machine::exec` / `jobs` / `transfer` / `runner` (T-311): what a linked machine does. `Machine::handle` is the one door
+  every hub request passes (kill switch, the hub's signature and the owner, the scope, rate limits, the tool, an audit
+  line); the tools are `list` / `read` / `write` / `delete` / `mkdir` (the AI host's `pc_job` results, through the scope's
+  canonicaliser), `machine_info`, `shell_run` and `job_start` / `job_read` / `job_stop` (cwd confined, advisory, never root,
+  jobs kept on the machine), `proc_list` / `proc_kill` (own children only by default), `re_*` (a `Containers` the app plugs in;
+  without one they say there is no container engine) and `transfer_get` / `transfer_put` (big files by hub ticket, chunked,
+  resumable, sha256-checked). `runner::link` (device code) and `Runner::run` (poll with backoff, signed replies, wipe on
+  "revoked") are what vr-host, vr-desktop and jcodepgm reuse; `vr-host machine link|run|stop|start|status` is the first user.
 - `poll`: `wait_for(notify, timeout, look)`: a long poll that never misses a wake-up
 
 ## Use it in another project

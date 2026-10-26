@@ -3358,6 +3358,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "tokio",
 ]
@@ -3480,6 +3481,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -6132,7 +6134,9 @@ dependencies = [
  "libc",
  "pgm-ai-internal",
  "pgm-core-internal",
+ "pgm-net-internal",
  "pgm-platform-internal",
+ "pgm-sandbox-internal",
  "ratatui",
  "reqwest",
  "serde",

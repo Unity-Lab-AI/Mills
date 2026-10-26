@@ -82,13 +82,14 @@ impl Modules {
         let mills = root.join("..");
         let usage = Arc::new(usage::Usage::new(root, cfg, true));
         let auth = auth::Auth::new(root, cfg);
-        machines::init(&auth);
+        let ai = ai_hosts::AiHosts::new(root, cfg, usage);
+        machines::init(&auth, &ai);
         let accounts = auth.accounts();
         let api = openai::Api::new(root, &accounts);
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai: ai_hosts::AiHosts::new(root, cfg, usage), native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), mills })
+            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -377,7 +378,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         };
     }
     // linked machines (T-309): the owner's list / rename / unlink, the admin's count, the machine's own poll and signed replies
-    if p.starts_with("/api/machine") || p == "/api/device/peek" { if let Some(x) = machines::route(hub, r).await { return x; } }
+    if p.starts_with("/api/machine") || p == "/api/device/peek" || p == "/api/transfers" || p.starts_with("/api/transfers/") { if let Some(x) = machines::route(hub, r).await { return x; } }
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
     let me = || { let mut h = vec![("x-vr-notes-ver".to_string(), hub.mods.notes.version().to_string())]; if let Some(u) = &user { h.push(("x-vr-user".to_string(), u.clone())); } h };
     // ----- the board and the notes: this hub's own now -----

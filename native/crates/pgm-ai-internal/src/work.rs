@@ -404,7 +404,7 @@ impl Work {
         parts.extend([
             format!("{name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools"),
             format!("(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's VibeRoller folder, not {name}'s PC."),
-            format!("Shell commands cannot run on {name}'s PC; if something needs running there, tell {name} exactly what to run."),
+            format!("Shell commands cannot run in a browser folder; if {name} has linked their computer (the same mcp__pc__* tools then reach it, and machine_info says what it allows) use shell_run (short) or job_start / job_read / job_stop (long), which run in the folder they opened, and transfer_get / transfer_put for big files; otherwise tell {name} exactly what to run."),
             format!("The PC tools (and a linked machine of {name}'s) act only for {name}, in a run {name} started. If {name} is away, do not stop and do not wait: carry on with the best recommended defaults for the task, and finish with a short report of what you did, why you chose it over the other options, and what {name} can change (name the options)."),
             format!("The VibeRoller team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as \"{name} · Claude\"."),
             "When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.".into(),
@@ -1019,6 +1019,11 @@ async fn tool_inner(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Valu
     let named = { let m = s(b, "machine"); if m.is_empty() { s(&args, "machine") } else { m } };
     let mut args = args;
     if let Some(o) = args.as_object_mut() { o.remove("machine"); }
+    // T-311: the owner's own linked machine, when one is online (or the caller named it); the caller's account is the actor and the owner
+    match ai.machines.route(&hub.machines_of(account), account, &named, &name, &args, &caller.actor()).await {
+        crate::machine_jobs::Routed::Done(v) => return v,
+        crate::machine_jobs::Routed::Pass => {}
+    }
     let host = if named.is_empty() { ai.pc_host_for(account) } else {
         match ai.machine_for(&named, account) {
             Ok(h) => Some(h),

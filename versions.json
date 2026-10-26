@@ -23,7 +23,7 @@
     "bridge/native-releases.js": "1.0.1",
     "bridge/notes.js": "1.0.0",
     "bridge/openai.js": "1.2.0",
-    "bridge/pc-tools-mcp.js": "1.0.2",
+    "bridge/pc-tools-mcp.js": "1.0.3",
     "bridge/presence.js": "1.0.0",
     "bridge/providers.js": "1.4.0",
     "bridge/restart.js": "1.0.0",
