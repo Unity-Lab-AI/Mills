@@ -12,16 +12,18 @@
 //! - after a restart [`Manager::reconcile`] adopts the running `pgm-re-*` copies it knows (a `meta.json` in their
 //!   exchange folder) and lists the rest as orphans; it never kills anything.
 mod exchange;
+pub mod mcp;
 mod runtime;
 
 pub use exchange::Area;
-pub use runtime::{Cli, ExecEnd, Flavour, Found, RunSpec, Runtime, Stream};
+pub use mcp::{McpError, McpSession};
+pub use runtime::{Cli, ExecEnd, Flavour, Found, Proc, RunSpec, Runtime, Stream};
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 /// A refusal or failure, with the HTTP status a hub answers it with.
@@ -119,11 +121,18 @@ pub struct Config {
     pub exec_timeout_default: u64,
     pub exec_timeout_max: u64,
     pub max_output_bytes: usize,
+    /// the MCP server inside the image (run with `exec -i`): REA is `node /opt/rea/node_modules/rea-agents/scripts/rea.mjs mcp`
+    pub mcp_command: Vec<String>,
+    /// the skill folder inside the image (SKILL.md and references/)
+    pub skill_dir: String,
+    /// a tool result longer than this (bytes of JSON) is saved to /work/out/mcp-results/ and a head is returned
+    pub mcp_result_cap: usize,
 }
 impl Config {
     pub fn new(root: impl Into<PathBuf>, image: &str) -> Config {
         Config { image: image.to_string(), max_concurrent: 3, idle_warn_hours: 4.0, name_prefix: "pgm-re-".into(), root: root.into(), cpus: "2".into(), memory: "4g".into(), pids_limit: 1024,
-            cap_add: vec!["SYS_PTRACE".into()], allow_network: true, max_file_bytes: 24 << 20, max_queued_per_owner: 10, exec_timeout_default: 120, exec_timeout_max: 3600, max_output_bytes: 1 << 20 }
+            cap_add: vec!["SYS_PTRACE".into()], allow_network: true, max_file_bytes: 24 << 20, max_queued_per_owner: 10, exec_timeout_default: 120, exec_timeout_max: 3600, max_output_bytes: 1 << 20,
+            mcp_command: ["/opt/node/bin/node", "/opt/rea/node_modules/rea-agents/scripts/rea.mjs", "mcp"].iter().map(|s| s.to_string()).collect(), skill_dir: "/opt/rea/skill/reverse-engineer-anything".into(), mcp_result_cap: 40_000 }
     }
     /// Defaults overlaid with a `re: { image, maxConcurrent, idleWarnHours, runtime, … }` config object.
     pub fn from_json(root: impl Into<PathBuf>, v: &Value) -> Config {
@@ -139,6 +148,9 @@ impl Config {
         if let Some(n) = v["maxFileMb"].as_u64().filter(|n| *n >= 1) { c.max_file_bytes = n.min(30) << 20; }
         if let Some(n) = v["maxQueuedPerOwner"].as_u64().filter(|n| *n >= 1) { c.max_queued_per_owner = n as usize; }
         if let Some(n) = v["execTimeoutSec"].as_u64().filter(|n| *n >= 1) { c.exec_timeout_default = n; }
+        if let Some(a) = v["mcpCommand"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>()).filter(|a| !a.is_empty()) { c.mcp_command = a; }
+        if let Some(d) = v["skillDir"].as_str().filter(|d| d.starts_with('/') && !d.contains("..")) { c.skill_dir = d.trim_end_matches('/').to_string(); }
+        if let Some(n) = v["mcpResultCap"].as_u64().filter(|n| *n >= 1000) { c.mcp_result_cap = n as usize; }
         c
     }
 }
@@ -146,12 +158,16 @@ impl Config {
 struct Item { sb: Sandbox, saved: u64 }
 #[derive(Default)]
 struct Inner { items: Vec<Item>, gone: VecDeque<Sandbox>, orphans: Vec<Orphan> }
+/// One MCP session per running copy (opened on first use, closed when the copy is stopped or gone).
+#[derive(Default)]
+struct McpPool { sessions: Mutex<HashMap<String, Arc<McpSession>>>, opening: Mutex<()> }
 
 pub struct Manager {
     rt: Box<dyn Runtime>,
     cfg: Config,
     inner: Mutex<Inner>,
     clock: Box<dyn Fn() -> u64 + Send + Sync>,
+    mcp: McpPool,
 }
 
 const KEEP_GONE: usize = 50;
@@ -161,9 +177,9 @@ const WRAP: &str = r#"if command -v timeout >/dev/null 2>&1; then exec timeout -
 fn is_id(s: &str) -> bool { s.len() == 8 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) }
 
 impl Manager {
-    pub fn new(rt: Box<dyn Runtime>, cfg: Config) -> Manager { Manager { rt, cfg, inner: Mutex::default(), clock: Box::new(pgm_core_internal::now_ms) } }
+    pub fn new(rt: Box<dyn Runtime>, cfg: Config) -> Manager { Manager { rt, cfg, inner: Mutex::default(), clock: Box::new(pgm_core_internal::now_ms), mcp: McpPool::default() } }
     /// A manager with its own clock (tests).
-    pub fn with_clock(rt: Box<dyn Runtime>, cfg: Config, clock: impl Fn() -> u64 + Send + Sync + 'static) -> Manager { Manager { rt, cfg, inner: Mutex::default(), clock: Box::new(clock) } }
+    pub fn with_clock(rt: Box<dyn Runtime>, cfg: Config, clock: impl Fn() -> u64 + Send + Sync + 'static) -> Manager { Manager { rt, cfg, inner: Mutex::default(), clock: Box::new(clock), mcp: McpPool::default() } }
     pub fn config(&self) -> &Config { &self.cfg }
     pub fn runtime_name(&self) -> &str { self.rt.name() }
     fn now(&self) -> u64 { (self.clock)() }
@@ -254,7 +270,7 @@ impl Manager {
             let dead: Vec<String> = { let g = self.lock(); g.items.iter().filter(|i| i.sb.state == State::Running && !found.iter().any(|f| f.running && f.name == i.sb.name)).map(|i| i.sb.id.clone()).collect() };
             for id in dead {
                 let removed = { let mut g = self.lock(); g.items.iter().position(|i| i.sb.id == id && i.sb.state == State::Running).map(|p| { let mut s = g.items.remove(p).sb; s.state = State::Gone; s.error = Some("Its container ended by itself (out of memory, or the program inside quit); its exchange folder was deleted.".into()); remember(&mut g, s.clone()); s }) };
-                if removed.is_some() { self.rt.purge_dir(&self.dir(&id)); }
+                if removed.is_some() { self.mcp_close(&id); self.rt.purge_dir(&self.dir(&id)); }
             }
         }
         self.pump();
@@ -332,6 +348,92 @@ impl Manager {
         r
     }
 
+    // ---- the MCP server inside the copy (REA's tools)
+
+    /// The copy's MCP session, opened on first use (one long-lived `exec -i` per copy) and reopened if it died.
+    fn mcp_session(&self, id: &str, s: &Sandbox) -> Result<Arc<McpSession>> {
+        let get = || self.mcp.sessions.lock().unwrap_or_else(|e| e.into_inner()).get(id).filter(|m| m.alive()).cloned();
+        if let Some(m) = get() { return Ok(m); }
+        let _one_at_a_time = self.mcp.opening.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(m) = get() { return Ok(m); }
+        let m = Arc::new(McpSession::open(&*self.rt, &s.name, &self.cfg.mcp_command, Duration::from_secs(60)).map_err(|e| Error::new(502, format!("Could not start the MCP server inside the copy: {e}")))?);
+        // the copy may have been stopped while it started: do not keep a session for it
+        if self.lock().items.iter().find(|i| i.sb.id == id).map(|i| i.sb.state) != Some(State::Running) { m.close(); return Err(Error::new(409, "That copy is stopping.")); }
+        self.mcp.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), m.clone());
+        Ok(m)
+    }
+    /// End the copy's MCP session (stop, or the copy is gone). Nothing is left running in the copy.
+    fn mcp_close(&self, id: &str) { let m = self.mcp.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(id); if let Some(m) = m { m.close(); } }
+    /// Whether the copy has an open MCP session right now (for status and tests).
+    pub fn mcp_open(&self, id: &str) -> bool { self.mcp.sessions.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|m| m.alive()).unwrap_or(false) }
+
+    /// The command line (engine, its global arguments, `exec -i`, the copy, the MCP server) a program with its own MCP client runs to
+    /// reach the server in the copy (Jcode PGM adds it to the person's MCP config while the copy runs). Owner only; the engine's
+    /// environment (`Cli::with_env`) is not part of the line.
+    pub fn mcp_exec_line(&self, who: &Actor, id: &str) -> Result<Vec<String>> {
+        let s = self.running_owned(who, id)?;
+        self.rt.exec_line(&s.name, &self.cfg.mcp_command).ok_or_else(|| Error::new(501, "This engine has no command line."))
+    }
+
+    fn mcp_timeout(&self, secs: Option<u64>) -> Duration { Duration::from_secs(secs.unwrap_or(self.cfg.exec_timeout_default).clamp(1, self.cfg.exec_timeout_max)) }
+    fn mcp_err(e: McpError) -> Error { match e { McpError::Timeout => Error::new(504, e.to_string()), McpError::Closed(_) => Error::new(502, e.to_string()), McpError::Rpc(..) => Error::new(422, e.to_string()) } }
+
+    /// The tools of the MCP server in the copy: `{ count, of, tools: [{ name, description }] }`, or one tool in full
+    /// (`tool`), or those matching `filter`. The server is started on the first call and kept for the copy's life.
+    pub fn mcp_tools(&self, who: &Actor, id: &str, filter: &str, tool: &str) -> Result<Value> {
+        let s = self.running_owned(who, id)?;
+        self.touch(id);
+        let m = self.mcp_session(id, &s)?;
+        let all = m.tools(self.mcp_timeout(Some(60))).map_err(Self::mcp_err)?;
+        let mut v = mcp::summarize(&all, filter, tool);
+        if let Some(e) = v["error"].as_str() { return Err(Error::new(404, e)); }
+        v["server"] = m.info["serverInfo"].clone();
+        Ok(v)
+    }
+
+    /// Call one tool of the MCP server in the copy. The server's result comes back unchanged (its `content` blocks, its
+    /// untrusted-content markers, `isError`) unless it is longer than `mcp_result_cap`: then the whole is saved to
+    /// `/work/out/mcp-results/<tool>-<ms>.json` and what comes back is `{ truncated, bytes, savedTo, content: [head] }`.
+    pub fn mcp_call(&self, who: &Actor, id: &str, tool: &str, args: &Value, timeout_sec: Option<u64>) -> Result<Value> {
+        if tool.is_empty() || tool.len() > 200 { return Err(Error::new(400, "Give the tool's name (re_tools lists them).")); }
+        let s = self.running_owned(who, id)?;
+        self.touch(id);
+        let m = self.mcp_session(id, &s)?;
+        let r = m.call(tool, args, self.mcp_timeout(timeout_sec)).map_err(Self::mcp_err);
+        self.touch(id);
+        let r = r?;
+        let Some((head, bytes)) = mcp::too_big(&r, self.cfg.mcp_result_cap) else { return Ok(r) };
+        let safe: String = tool.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        let name = format!("mcp-results/{safe}-{}.json", self.now());
+        let saved = self.put(who, id, &format!("out/{name}"), r.to_string().as_bytes());
+        Ok(json!({ "truncated": true, "bytes": bytes, "isError": r["isError"],
+            "savedTo": saved.as_ref().ok().map(|(p, _)| p.clone()),
+            "note": match &saved { Ok((p, _)) => format!("The result is {bytes} bytes; the first {} are here. All of it is saved as {p} in the copy (read it with re_exec, or take it out with re_get).", head.len()), Err(e) => format!("The result is {bytes} bytes and could not be saved ({}); only the first {} are here.", e.msg, head.len()) },
+            "content": [{ "type": "text", "text": head }] }))
+    }
+
+    /// The skill text inside the image (REA's long workflow skill): SKILL.md by default, or a file under `references/`
+    /// (`file`); the answer lists the other files. Read from the copy, never from the host.
+    pub fn skill(&self, who: &Actor, id: &str, file: &str) -> Result<Value> {
+        let s = self.running_owned(who, id)?;
+        let file = if file.is_empty() { "SKILL.md" } else { file.trim_start_matches("./") };
+        if file.len() > 120 || file.contains("..") || file.starts_with('/') || !file.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b)) { return Err(Error::new(400, "file is SKILL.md or a path like references/environments.md (see the list in the answer).")); }
+        self.touch(id);
+        let run = |argv: Vec<String>| -> Result<(Option<i32>, Vec<u8>)> {
+            let mut out = Vec::<u8>::new();
+            let end = self.rt.exec(&s.name, &argv, Duration::from_secs(20), &mut |st, b| { if st == Stream::Stdout && out.len() < 4 << 20 { out.extend_from_slice(b); } }).map_err(|e| Error::new(502, e))?;
+            Ok((end.code, out))
+        };
+        let dir = &self.cfg.skill_dir;
+        let (code, text) = run(vec!["cat".into(), format!("{dir}/{file}")])?;
+        if code != Some(0) { return Err(Error::new(404, format!("No skill file {file} in the image ({dir}).{}", if file == "SKILL.md" { " This image has no skill." } else { " Call re_skill without file for the list." }))); }
+        let (_, list) = run(vec!["find".into(), dir.clone(), "-type".into(), "f".into()])?;
+        let mut files: Vec<String> = String::from_utf8_lossy(&list).lines().filter_map(|l| l.strip_prefix(&format!("{dir}/")).map(String::from)).collect();
+        files.sort();
+        let text = String::from_utf8_lossy(&text).to_string();
+        Ok(json!({ "file": file, "text": text, "files": files, "note": "Read the other files only when the task needs them (re_skill with file)." }))
+    }
+
     /// Put a file into the copy's /work/in (a path starting `out/` goes to /work/out). Refuses path escapes.
     pub fn put(&self, who: &Actor, id: &str, path: &str, bytes: &[u8]) -> Result<(String, u64)> {
         self.running_owned(who, id)?;
@@ -389,6 +491,7 @@ impl Manager {
             _ => {}
         }
         { let mut g = self.lock(); if let Some(i) = g.items.iter_mut().find(|i| i.sb.id == id) { i.sb.state = State::Stopping; } }
+        self.mcp_close(id); // the MCP server inside ends first: nothing is left running
         // let the host delete what the copy's own user wrote (best effort), then remove the container and the folder
         let mut sink = |_: Stream, _: &[u8]| {};
         let _ = self.rt.exec(&s.name, &["sh".into(), "-c".into(), "chmod -R a+rwX /work/in /work/out 2>/dev/null; true".into()], Duration::from_secs(20), &mut sink);
