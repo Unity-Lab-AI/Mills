@@ -7,6 +7,29 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.29.0 — 2026-10-26
+
+MINOR: **the apps run linked machines** (T-313; linked machines step 7 of 8; Linux and Windows only).
+- **Install.** One template writes a systemd **user** unit (no root, restarts on failure) and a per-user Windows logon
+  task, with `.sh` and `.cmd` twins.
+  - `vr-host machine install | uninstall` writes and removes them.
+  - The machine refuses to start if its state folder (token, key, scope, audit) can be read by others: group or other bits
+    on Linux, a Users / Everyone ACL on Windows.
+- **The AI host's PC role is the library's `Machine`.** The host-side `pc_job` is gone: scope, the one canonicaliser,
+  audit and the kill switch now apply. The hub still relays to older hosts that only have the PC engine, and there is no
+  copy of the canonicaliser outside pgm-net-internal.
+- **Desktop app** (VibeRoller and the HPM builds):
+  - "Link this computer" runs the device-code link and the machine runner while the app is open.
+  - It can install the persistent service.
+  - Its local file paths go through the library canonicaliser.
+  - Capture stays limited to the hub's own page.
+- **Jcode PGM:** `jcodepgm machine link | run | install | uninstall | scope | stop | start | status`, on the mirrored
+  library.
+- **Windows:** the code is written but unverified here (no mingw). The pgm-net-internal README lists the commands to run
+  the same tests on a Windows PC (R339).
+- **Checks:** R334, R335, R336, R339. R330's "late ticket" step is now timed from the first call, which made it flaky
+  under load.
+
 ## 5.28.0 — 2026-10-26
 
 MINOR: **linked machines can be worked, only by their owner; and the PGM gateway carries tools** (agent branches,
