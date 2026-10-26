@@ -5170,6 +5170,111 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       !!why && why[0] === 'Done in 0s · Opus 5.5' && why[1] === 'Ended at once: interrupted by Send now' && why[2] === 'Ended at once: you stopped it' && why[3] === 'Ended at once: error_during_execution'
       && why[4] === 'Ended at once: boom no conversation found' && why[5] === 'Ended at once: nothing to resume or answer' && why[6] === 'Done in 0s · 3 turns' && why[7] === 'Claude stopped with an error: bad', `${JSON.stringify(why)}`);
   }
+  { // R350 to R354 (T-320): screen sharing in calls. The hub half runs on the real hub; the page half runs web/calls.js on its own source with
+    // stubs (a browser cannot run here), so the share logic is exercised for real: double click, leaving while the picker is open, the browser's
+    // "Stop sharing" bar, the tile rule, the quiet re-join, a quick leave + join, and the sa gating between an old page and a new one.
+    const roomOf = async (tok) => (((await call('/api/call/poll?after=0&ver=-1', tok)).data.calls || {}).room || []);
+    const whoU = async () => (await roomOf(A)).find((p) => p.user === 't-user') || {};
+    await call('/api/call/leave', A, {}); await call('/api/call/leave', U, {});
+    await call('/api/call/join', U, { conv: 'room', cam: false, mic: true, screen: true });
+    const u1 = await whoU();
+    await call('/api/call/join', A, { conv: 'room', cam: false, mic: true });
+    await call('/api/call/join', U, { conv: 'room', cam: false, mic: true, screen: true }); // the page's quiet re-join after a hub restart: the share flag comes with it
+    const u2 = await whoU();
+    await call('/api/call/leave', U, {}); await sleep(30);
+    await call('/api/call/join', U, { conv: 'room', cam: false, mic: true });
+    const u3 = await whoU();
+    const bigSig = (n) => ({ iv: toB64(rand(12)), ct: toB64(rand(n)) });
+    const sigOk = await call('/api/call/signal', A, { to: 't-user', conv: 'room', ...bigSig(150000) }), sigBig = await call('/api/call/signal', A, { to: 't-user', conv: 'room', ...bigSig(150003) });
+    await call('/api/call/leave', A, {}); await call('/api/call/leave', U, {});
+    check('R350', 'T-320 calls, hub side: a join can carry the share flag (the page re-joins with it after a hub restart), a re-join keeps the person\'s `since` and a leave + join makes a new one (the page rebuilds the connection from that), and a signal of 200000 characters goes through while 200004 is refused',
+      u1.screen === true && u2.screen === true && !!u1.since && u1.since === u2.since && u3.since && u3.since !== u1.since && u3.screen === false && sigOk.status === 200 && sigBig.status === 400,
+      `screen ${u1.screen}/${u2.screen}/${u3.screen}; since same ${u1.since === u2.since} new ${u3.since !== u1.since}; signal ${sigOk.status}/${sigBig.status}`);
+
+    const callsSrc = fs.readFileSync(path.join(MILLS, 'web', 'calls.js'), 'utf8'), vm = require('vm');
+    const hm = callsSrc.match(/\/\/ <t320>[^\n]*\n([\s\S]*?)\/\/ <\/t320>/);
+    let H = null; try { H = hm ? vm.runInNewContext(hm[1] + '; ({ shareErrorText, shareTileWanted, peerNeedsRebuild, retryableSignal })') : null; } catch {}
+    const er = (name, message) => ({ name, message: message || name });
+    check('R351', 'T-320 the page says why a share failed (refused / cancelled, nothing to share and the Linux portal, capture error, rejected options, plain http), a share tile shows while the hub says the person shares and the track has not ended (also while it is muted), a person who left and joined again gets a new connection unless the hub restarted, and a lost set-up signal is retried only when it may be transient [the helpers run on their own source]',
+      !!H && /cancelled or blocked/.test(H.shareErrorText(er('NotAllowedError'), false)) && /not allowed to capture/.test(H.shareErrorText(er('NotAllowedError'), true)) && /portal/.test(H.shareErrorText(er('NotFoundError'), false))
+      && /could not be captured \(boom\)/.test(H.shareErrorText(er('NotReadableError', 'boom'), false)) && /did not accept/.test(H.shareErrorText(er('TypeError', 'bad'), false)) && /secure address/.test(H.shareErrorText(null, false, false)) && /^Screen share: odd$/.test(H.shareErrorText(er('X', 'odd'), false))
+      && H.shareTileWanted(true, { readyState: 'live', muted: true }) && !H.shareTileWanted(false, { readyState: 'live' }) && !H.shareTileWanted(true, null) && !H.shareTileWanted(true, { readyState: 'ended' })
+      && H.peerNeedsRebuild('a', 'b', false) && !H.peerNeedsRebuild('a', 'b', true) && !H.peerNeedsRebuild('a', 'a', false) && !H.peerNeedsRebuild(null, 'b', false)
+      && H.retryableSignal(new Error('Both people must be in this call.')) && H.retryableSignal(new TypeError('Failed to fetch')) && !H.retryableSignal(new Error('Bad signal.')), `helpers ${!!H}`);
+
+    const wired = [/e\.track\.onunmute = \(\) => syncShareTile\(user\); e\.track\.onended = \(\) => syncShareTile\(user\)/, /peer\.shareStream\.addTrack\(e\.track\)/, /syncShareTile\(p\.user\); \}/, /screen: !!call\.screen \}\) \}\); \} catch/, /if \(call\.screen \|\| call\.sharing\) return/,
+      /s\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\)/, /for \(let n = 0; n < 4; n\+\+\)/, /try \{ await onSignal\(s\); \}/, /function askApp\(\)/, /\n  askApp\(\);\n  \$\('callScreen'\)\.hidden/, /connectionState === 'disconnected' && peer\.offerer/, /peerNeedsRebuild\(old\.since, p\.since, ourMoved\)/].map((re) => re.test(callsSrc));
+    check('R352', 'T-320 [static] calls.js wiring: the remote share tile follows the hub flag (no hide on mute), the share audio is kept on the peer, the re-join carries the share flag, no second capture while the picker is open and a capture that arrives after leaving is stopped, set-up signals are retried and a bad one does not cost the rest, the app answer redraws the buttons, an offerer restarts ICE on "disconnected", a quick leave + join rebuilds the connection; the old hide-on-mute is gone',
+      wired.every(Boolean) && !/e\.track\.onmute = hide/.test(callsSrc), `wired ${wired.map((x) => (x ? 1 : 0)).join('')}`);
+
+    // the page's own code, run with stubs
+    const { webcrypto } = require('crypto');
+    const mk = () => { const kept = {}; return new Proxy(function () {}, { get: (t, k) => (k === 'then' ? undefined : k in kept ? kept[k] : (kept[k] = mk())), set: (t, k, v) => { kept[k] = v; return true; }, apply: () => mk() }); }; // any element, any call
+    const posts = [], els = {}, pend = [];
+    class MS { constructor(t = []) { this.t = [...t]; } getTracks() { return this.t; } getAudioTracks() { return this.t.filter((x) => x.kind === 'audio'); } getVideoTracks() { return this.t.filter((x) => x.kind === 'video'); } addTrack(x) { this.t.push(x); } removeTrack(x) { this.t = this.t.filter((y) => y !== x); } }
+    class PC { constructor() { this.ts = []; this.closed = false; } addTransceiver() { return {}; } getTransceivers() { return this.ts; } close() { this.closed = true; } }
+    const ctx = { console, setTimeout, clearTimeout, setInterval: () => 0, Promise, JSON, Date, Math, Uint8Array, Map, Set, Array, Object, String, Number, Error, Symbol, MediaStream: MS, RTCPeerConnection: PC, RTCRtpReceiver: {}, crypto: webcrypto, CSS: { escape: (x) => x }, enc, dec, toB64, fromB64,
+      $: (id) => els[id] || (els[id] = mk()), json: async (p, o) => { posts.push([p, o && o.body ? JSON.parse(o.body) : null]); return { calls: {}, iceServers: [] }; },
+      store: { get: () => null, set() {} }, prefs: () => ({ audio: {}, call: { quality: 'medium', volume: 100 }, sound: {}, tts: {} }), me: { username: 'alice' }, nickOf: (u) => u, colorOf: () => '#000', ic: () => mk(), label() {}, layout: { show: {} },
+      sysRoom() {}, playTone() {}, speak() {}, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), convLabel: (c) => c, currentConv: 'room', chatPriv: {}, token: '', base: '', memberOf: () => null, changedKeys: new Set(), trustedPub: () => true, sharedWith: async () => null,
+      document: { createElement: () => mk(), addEventListener() {}, querySelector: () => null }, addEventListener() {}, navigator: { mediaDevices: { getDisplayMedia: () => new Promise((res) => pend.push(res)) } }, isSecureContext: true };
+    ctx.window = ctx;
+    let S = null, e353 = '';
+    try { S = vm.runInNewContext(callsSrc + '\n;({ call, startShare, onCallState, onSignal, syncShareTile })', ctx); } catch (e) { e353 = 'load: ' + e.message; }
+    const track = (kind) => ({ kind, readyState: 'live', enabled: true, stopped: false, stop() { this.stopped = true; this.readyState = 'ended'; } });
+    const res = {};
+    if (S) try {
+      S.call.conv = 'room';
+      // a double click while the picker is open starts one capture only; the picture goes out and the hub is told
+      const p1 = S.startShare('none'), p2 = S.startShare('none'); res.oneCapture = pend.length === 1;
+      const s1 = new MS([track('video')]); pend[0](s1); await p1; await p2;
+      res.sharing = S.call.screen === s1.t[0] && posts.some(([p, b]) => p === '/api/call/state' && b.screen === true) && S.call.screenStream.getTracks().includes(s1.t[0]);
+      // the browser's "Stop sharing" bar ends the track: the state follows
+      const vt = S.call.screen; posts.length = 0; vt.onended(); await ctx.sleep(30);
+      res.stoppedByBar = S.call.screen === null && vt.stopped && posts.some(([p, b]) => p === '/api/call/state' && b.screen === false) && !S.call.screenStream.getTracks().includes(vt);
+      // leaving while the picker is open: the capture that arrives later is stopped (its light goes off), nothing is shared
+      pend.length = 0; S.call.conv = 'room'; const p3 = S.startShare('none'); S.call.conv = null; const s2 = new MS([track('video')]); pend[0](s2); await p3;
+      res.leftFirst = s2.t[0].stopped === true && S.call.screen === null && S.call.sharing === false;
+      // a refusal in the app and a missing source say different things
+      S.call.conv = 'room'; ctx.navigator.mediaDevices.getDisplayMedia = () => Promise.reject(er('NotFoundError')); await S.startShare('none'); res.msg = /nothing to share/.test(String(els.callMsg.textContent)); res.free = S.call.sharing === false;
+      // the share tile rule on a peer's track
+      const log = []; ctx.showScreenTile = (u) => log.push('show:' + u); ctx.removeScreenTile = (u) => log.push('rm:' + u);
+      const pr = { shareTrack: { readyState: 'live', muted: true }, shareStream: {} }; S.call.peers.set('bob', pr);
+      S.call.state = { room: [{ user: 'bob', screen: true }] }; S.syncShareTile('bob');
+      S.call.state = { room: [{ user: 'bob', screen: false }] }; S.syncShareTile('bob');
+      S.call.state = { room: [{ user: 'bob', screen: true }] }; pr.shareTrack = { readyState: 'ended' }; S.syncShareTile('bob');
+      res.tile = JSON.stringify(log) === JSON.stringify(['show:bob', 'rm:bob', 'rm:bob']); S.call.peers.delete('bob');
+      // the quiet re-join after a restart carries what we share
+      S.call.screen = track('video'); S.call.state = {}; posts.length = 0;
+      await S.onCallState({ room: [{ user: 'bob', since: 'b1' }] });
+      res.rejoin = posts.some(([p, b]) => p === '/api/call/join' && b.screen === true);
+      // bob left and joined again between two polls (our own since unchanged): a new connection; the hub restarted (ours moved too): kept
+      await S.onCallState({ room: [{ user: 'alice', since: 'a1' }, { user: 'bob', since: 'b1' }] });
+      const first = S.call.peers.get('bob');
+      await S.onCallState({ room: [{ user: 'alice', since: 'a1' }, { user: 'bob', since: 'b2' }] });
+      const second = S.call.peers.get('bob');
+      await S.onCallState({ room: [{ user: 'alice', since: 'a2' }, { user: 'bob', since: 'b3' }] });
+      res.rebuild = first.pc.closed === true && second !== first && S.call.peers.get('bob') === second && second.pc.closed === false;
+    } catch (e) { e353 = String(e && e.stack || e); }
+    check('R353', 'T-320 the share flow, calls.js run with stubs: a double click opens one picker, the picture goes out and the hub is told; the browser\'s Stop sharing bar ends it and the hub is told; a capture that arrives after leaving is stopped; a refusal says what it was; a peer\'s share tile shows while the hub says they share (muted or not) and goes with the flag or the end of the track; the quiet re-join carries the share flag; a quick leave + join rebuilds the connection but a hub restart does not',
+      !!S && Object.values(res).length === 9 && Object.values(res).every(Boolean), e353 || JSON.stringify(res));
+
+    // sa gating: an up-to-date page's answer turns the share-audio line on (one more offer); an older page's answer leaves it inactive
+    const saRes = {};
+    if (S) try {
+      const key = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']); ctx.pairKey = async () => key;
+      const mkT = (kind, dir) => ({ direction: dir, receiver: { track: { kind } }, sender: { setStreams() {}, replaceTrack: async () => {} } });
+      const fpc = { signalingState: 'stable', remoteDescription: null, setRemoteDescription: async function (d) { this.remoteDescription = d; }, addIceCandidate: async () => {}, getTransceivers() { return this.ts; }, ts: [mkT('audio', 'sendrecv'), mkT('video', 'sendrecv'), mkT('video', 'sendrecv'), mkT('audio', 'inactive')] };
+      const fpeer = { pc: fpc, user: 'bob', offerer: true, pendingIce: [] }; S.call.peers.set('bob', fpeer); S.call.conv = 'room';
+      const sig = async (body) => { const iv = webcrypto.getRandomValues(new Uint8Array(12)); const ct = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify({ conv: 'room', from: 'bob', to: 'alice', ...body }))); return { conv: 'room', from: 'bob', iv: toB64(iv), ct: toB64(ct) }; };
+      await S.onSignal(await sig({ d: { type: 'answer', sdp: 'x' } }));
+      saRes.oldPage = fpc.ts[3].direction === 'inactive' && !fpeer.saOn;
+      await S.onSignal(await sig({ sa: 1, d: { type: 'answer', sdp: 'x' } }));
+      saRes.newPage = fpc.ts[3].direction === 'sendrecv' && fpeer.saOn === true && fpc.ts[2].direction === 'sendrecv';
+    } catch (e) { saRes.err = String(e && e.stack || e); }
+    check('R354', 'T-320 old page and new page together: the share-audio line stays inactive after an answer from a page that does not say sa, and is turned on (one more offer) after an answer that does; the page\'s own signal code ran on a real AES-GCM message',
+      saRes.oldPage === true && saRes.newPage === true, JSON.stringify(saRes));
+  }
   { // R170 (5.1.0): PGM Gateway: an admin registers a product (its secret only in a private file), the product's signed
     // requests (pgm-net-internal's product link) check a VibeRoller login (the sign-in limits apply), link that person,
     // and use the AI hosts / providers as them; unsigned, replayed, re-pathed, proxied, unlinked and non-admin all refused
