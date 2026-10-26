@@ -7,6 +7,12 @@
 //!   vr-host machine stop                                           the kill switch: no jobs, no link, survives a restart
 //!   vr-host machine start                                          start access again (only here, never from the web)
 //!   vr-host machine status                                         who it is linked to, the scope in words, stopped or not
+//!   vr-host machine install [--out <dir>] [--files-only]           keep `machine run` going: a systemd USER unit (Linux) or a per-user
+//!                                                                  Scheduled Task at sign-in (Windows); no root, no administrator; writes the
+//!                                                                  .sh / .cmd twins to --out (default: next to the state folder)
+//!   vr-host machine uninstall [--out <dir>]                        remove it (the state folder and the link stay)
+//! `run` ends with 3 when the hub unlinked the machine and 4 when it will not start (not linked, or the state folder is readable by
+//! others): the unit does not restart on those. See `pgm_net_internal::machine::service`.
 //! The state folder (token, device key, scope.json, audit log, KILL): `--state <dir>`, else VR_MACHINE_STATE, else
 //! `~/.local/state/vibe-roller/machine` (Linux) / `%LOCALAPPDATA%\VibeRoller\machine` (Windows). The scope is `scope.json` in it.
 //! RE containers: when `re.json` is in the state folder (`{ "image": ..., "runtime": "podman" }`, all optional) and Podman or Docker is
@@ -14,6 +20,7 @@
 use pgm_net_internal::machine::exec::Containers;
 use pgm_net_internal::machine::kill::{Kill, LocalApproval};
 use pgm_net_internal::machine::runner::{self, Ended, LinkRecord, Options, Runner};
+use pgm_net_internal::machine::service::{Unit, EXIT_REFUSED, EXIT_REVOKED};
 use pgm_sandbox_internal::{Actor, Cli, Cmd, Config as SbConfig, Manager, StartOpts, State};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -31,6 +38,11 @@ pub fn default_state_dir() -> PathBuf {
         base.join("vibe-roller").join("machine")
     }
 }
+
+/// The service template for this app: `vr-host machine run --state <dir>`.
+pub fn unit(exe: &Path, state: &Path) -> Unit { Unit::new("vibe-roller-machine", "VibeRoller linked machine", exe, &["machine", "run"], state) }
+/// Where `install` leaves the generated scripts: beside the state folder (never inside it: it is the machine's private place).
+pub fn scripts_dir(state: &Path) -> PathBuf { state.parent().unwrap_or(state).join("machine-service") }
 
 fn now() -> i64 { (pgm_core_internal::now_ms() / 1000) as i64 }
 
@@ -54,12 +66,12 @@ pub fn run(args: &[String]) -> i32 {
             }
         }
         "run" => {
-            let r = match Runner::open(o) { Ok(r) => r, Err(e) => { eprintln!("{e}"); return 1; } };
+            let r = match Runner::open(o) { Ok(r) => r, Err(e) => { eprintln!("{e}"); return EXIT_REFUSED; } };
             if let Some(re) = ReContainers::from_state(&state) { r.machine().set_containers(Some(Arc::new(re))); }
             println!("serving {}'s tool calls for machine {} (scope: {})", r.record().owner, r.record().machine, r.machine().summary());
             let r2 = r.clone();
             match rt.block_on(async move { tokio::select! { e = r2.run() => e, _ = tokio::signal::ctrl_c() => Ended::Cancelled } }) {
-                Ended::Revoked => { eprintln!("this machine was unlinked on the web: its token and key are wiped; link it again to use it"); 3 }
+                Ended::Revoked => { eprintln!("this machine was unlinked on the web: its token and key are wiped; link it again to use it"); EXIT_REVOKED }
                 Ended::Cancelled => { r.machine().stop_jobs(); 0 }
             }
         }
@@ -75,7 +87,19 @@ pub fn run(args: &[String]) -> i32 {
             println!("scope: {}", pgm_net_internal::machine::Scope::load(&state.join("scope.json")).summary(now()));
             0
         }
-        _ => { eprintln!("vr-host machine link | run | stop | start | status   (--state <dir>, --hub <url>)"); 2 }
+        "install" | "uninstall" => {
+            let exe = std::env::current_exe().map(|e| std::fs::canonicalize(&e).unwrap_or(e)).unwrap_or_else(|_| PathBuf::from("vr-host"));
+            let u = unit(&exe, &state);
+            let out = arg_value(args, "--out").map(PathBuf::from).unwrap_or_else(|| scripts_dir(&state));
+            let files_only = args.iter().any(|a| a == "--files-only");
+            if sub == "install" {
+                match u.install(&out, None, !files_only) {
+                    Ok(l) => { for x in l { println!("{x}"); } if LinkRecord::load(&state).is_none() { println!("This computer is not linked yet: `vr-host machine link --hub <url> --folder <dir>` first (the service does not start until it is)."); } 0 }
+                    Err(e) => { eprintln!("not installed: {e}"); 1 }
+                }
+            } else { for x in u.uninstall(None, !files_only) { println!("{x}"); } 0 }
+        }
+        _ => { eprintln!("vr-host machine link | run | stop | start | status | install | uninstall   (--state <dir>, --hub <url>)"); 2 }
     }
 }
 
