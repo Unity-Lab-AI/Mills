@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-pub const ZERO_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub const ZERO_HASH: &str = concat!("00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000");
 /// Rotated at 50 MB (7.1).
 pub const DEFAULT_MAX_BYTES: u64 = 50 * 1024 * 1024;
 /// Rotated files kept (with 90 days of retention in [`AuditLog::prune`]).
