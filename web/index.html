@@ -1590,7 +1590,7 @@ function assistAdd(cls, text) {
 function assistSys(text, bad) { const d = assistAdd('sys' + (bad ? ' bad' : ''), text); return d; }
 function assistStatus(st) {
   $('assistStatus').textContent = st.brain === 'local'
-    ? (st.local.model ? 'Unity on the host (local model)' : st.local.up ? 'Local model is still loading on the host…' : 'Local model is starting on the host…')
+    ? (st.local.model ? 'Unity on the host (local model)' : st.local.up ? (st.local.standin ? `Unity on a stand-in model (${st.local.standin}) until ${st.local.name || 'unity-brain'} is loaded on the host` : 'Local model is still loading on the host…') : 'Local model is starting on the host…')
     : 'Unity on Claude';
 }
 async function openAssist() {

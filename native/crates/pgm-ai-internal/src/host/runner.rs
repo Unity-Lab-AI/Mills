@@ -12,6 +12,7 @@ use tokio::sync::RwLock;
 use crate::host::folder::{log, Folder};
 use crate::host::{control, relay, work};
 use crate::host::settings::{HostSettings, Provider};
+use std::path::{Path, PathBuf};
 use pgm_core_internal::{now_ms, Error, Result};
 use pgm_net_internal::hostlink::{Hello, HubLink, Job, OfferedProvider, Poll};
 
@@ -39,6 +40,86 @@ pub struct Host {
     pub update_deferred_since: Mutex<u64>,
     /// Wakes the status reporter now (a control changed something the hub should hear about at once).
     pub nudge: tokio::sync::Notify,
+    /// Unity's brain on this machine (T-293): when Ollama was last started from here, whether `ollama create` runs now,
+    /// and what was already said in the log (said once).
+    pub brain: Mutex<Brain>,
+}
+#[derive(Default)]
+pub struct Brain { pub ollama_started_at: u64, pub loading: bool, pub noted_missing: bool, pub noted_no_modelfile: bool }
+/// Between two tries to start an installed Ollama from here.
+const START_OLLAMA_EVERY_MS: u64 = 10 * 60_000;
+
+/// Where Unity's Modelfile would be when `unity.modelfile` is not set, in the order it is looked for: next to the hub
+/// checkout this host works from (`<hubRepo>/../Backrooms/models/<brain>/Modelfile`, where the hub itself looked when it
+/// ran on this PC), inside the host folder (`<folder>/models/<brain>/Modelfile`), and next to the host folder's parents
+/// (`<folder>/../Backrooms/…` up to three levels up).
+pub fn brain_modelfile_candidates(folder: &Path, hub_repo: Option<&Path>, brain: &str) -> Vec<PathBuf> {
+    let tail = |base: PathBuf| base.join("Backrooms").join("models").join(brain).join("Modelfile");
+    let mut v = vec![];
+    if let Some(r) = hub_repo { v.push(tail(r.join(".."))); }
+    v.push(folder.join("models").join(brain).join("Modelfile"));
+    let mut up = folder.to_path_buf();
+    for _ in 0..3 { up = up.join(".."); v.push(tail(up.clone())); }
+    v
+}
+/// The Modelfile to load the brain from: the configured one (whether or not it exists: a wrong setting is said, not
+/// silently replaced), else the first candidate that exists.
+pub fn brain_modelfile(cfg: &HostSettings, folder: &Path) -> Option<PathBuf> {
+    if let Some(p) = cfg.unity_modelfile() { return Some(p); }
+    brain_modelfile_candidates(folder, cfg.hub_repo().as_deref(), &cfg.unity_model()).into_iter().find(|p| p.is_file())
+}
+/// Is the brain among these model names? ("unity-brain" = "unity-brain:latest".)
+pub fn has_brain(models: &[String], brain: &str) -> bool { crate::unity::has_brain(models, brain) }
+
+/// Starts an installed Ollama that is not answering (the hub did this when it ran on this PC; now the host does, T-293):
+/// `ollama serve` in the background, then up to 20 s for it to answer. Nothing when the program is not here, when
+/// `autoDetect.startOllama` is off, or when it was tried in the last 10 minutes. True when Ollama answers afterwards.
+async fn start_ollama_here(h: &H, url: &str) -> bool {
+    if !h.cfg.start_ollama() { return false; }
+    let cmd = h.cfg.ollama_command();
+    let Some(exe) = pgm_platform_internal::proc::which(&cmd) else { return false };
+    { let mut b = h.brain.lock().unwrap_or_else(|e| e.into_inner()); if now_ms().saturating_sub(b.ollama_started_at) < START_OLLAMA_EVERY_MS { return false; } b.ollama_started_at = now_ms(); }
+    let dir = h.folder.dir.clone();
+    match pgm_platform_internal::proc::spawn_detached(&exe.display().to_string(), &["serve".to_string()], &dir, &h.folder.f("ollama.log")) {
+        Ok(()) => log(format!("Ollama is installed here but was not running: started `{cmd} serve` (its output goes to ollama.log)")),
+        Err(e) => { log(format!("could not start `{cmd} serve`: {e}")); return false; }
+    }
+    for _ in 0..20 { tokio::time::sleep(Duration::from_secs(1)).await; if probe_ollama(&h.http, url).await.is_some() { return true; } }
+    log("Ollama was started but does not answer yet; looked at again every minute");
+    false
+}
+/// Loads Unity's brain into this machine's Ollama when it is missing (T-293): `ollama create <brain> -f <Modelfile>` in
+/// the background, once at a time; when it is done the host looks again and tells the hub what it now offers. Said once
+/// when there is no Modelfile to load it from (the hub then answers on a stand-in model).
+fn ensure_brain(h: &H, models: &[String]) {
+    let brain = h.cfg.unity_model();
+    if has_brain(models, &brain) { return; }
+    let Some(mf) = brain_modelfile(&h.cfg, &h.folder.dir) else {
+        let mut b = h.brain.lock().unwrap_or_else(|e| e.into_inner());
+        if !b.noted_no_modelfile { b.noted_no_modelfile = true; log(format!("Ollama here has no {brain} and no Modelfile for it was found (looked at {}): Unity answers on a stand-in model until it is loaded; set unity.modelfile in ai-node.json to load it from here", brain_modelfile_candidates(&h.folder.dir, h.cfg.hub_repo().as_deref(), &brain).iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))); }
+        return;
+    };
+    if !mf.is_file() {
+        let mut b = h.brain.lock().unwrap_or_else(|e| e.into_inner());
+        if !b.noted_missing { b.noted_missing = true; log(format!("unity.modelfile points at {}, which is not a file: Unity's brain {brain} is not loaded from here", mf.display())); }
+        return;
+    }
+    { let mut b = h.brain.lock().unwrap_or_else(|e| e.into_inner()); if b.loading { return; } b.loading = true; }
+    let h2 = h.clone();
+    tokio::spawn(async move {
+        log(format!("loading Unity's brain {brain} into Ollama from {} (one time, a few minutes)...", mf.display()));
+        let cmd = h2.cfg.ollama_command();
+        let out = pgm_platform_internal::proc::command(&cmd).args(["create", &brain, "-f", &mf.display().to_string()]).current_dir(mf.parent().unwrap_or(&h2.folder.dir)).stdin(std::process::Stdio::null()).output().await;
+        match out {
+            Ok(o) if o.status.success() => log(format!("{brain} is loaded into Ollama; Unity runs on it from here")),
+            Ok(o) => log(format!("`{cmd} create {brain}` failed: {}", format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)).trim().lines().last().unwrap_or("").chars().take(300).collect::<String>())),
+            Err(e) => log(format!("could not run `{cmd} create {brain}`: {e}")),
+        }
+        h2.brain.lock().unwrap_or_else(|e| e.into_inner()).loading = false;
+        let before = offered(&h2);
+        detect_local(&h2).await;
+        if offered(&h2) != before && h2.link.read().await.key.is_some() && !h2.busy() { log("what this host offers changed: saying hello again"); h2.link.write().await.key = None; }
+    });
 }
 /// The longest an automatic update waits for quiet minutes before it takes any moment with nothing in flight.
 pub const UPDATE_MAX_WAIT_MS: u64 = 30 * 60_000;
@@ -95,7 +176,10 @@ pub async fn detect_local(h: &H) {
     let mut d = Detected::default();
     let mut seen = json!({});
     if !off {
-        if let Some(models) = probe_ollama(&h.http, &url).await {
+        let mut found = probe_ollama(&h.http, &url).await;
+        if found.is_none() && start_ollama_here(h, &url).await { found = probe_ollama(&h.http, &url).await; }
+        if let Some(models) = found {
+            ensure_brain(h, &models);
             seen = json!({ "ollama": url, "models": models });
             let configured_engine = h.cfg.engines().iter().any(|(k, _)| k == "ollama");
             let configured_endpoint = h.cfg.all_providers().iter().any(|p| p.kind == "openai" && (p.base_url.contains(":11434") || p.id == "ollama"));
@@ -217,7 +301,7 @@ pub async fn run(folder: Folder, selftest: bool, update_flag: bool) -> i32 {
     let http = match pgm_net_internal::client::http_client(Duration::from_secs(20)) { Ok(c) => c, Err(e) => { eprintln!("[ai-host] {e}"); release_lock(&folder); return 1; } };
     let status = json!({ "pid": std::process::id(), "version": VERSION, "native": true, "target": TARGET, "hub": cfg.hub(), "id": cfg.id(), "startedAt": now_ms(), "connected": false, "connectedAt": 0, "lastOkAt": 0, "downSince": 0, "lastError": "", "active": 0, "runs": 0, "lastJobAt": 0, "paused": false, "lastUpdate": "", "lastUpdateAt": 0 });
     let h: H = Arc::new(Host { nickname: Mutex::new(cfg.nickname()), folder: folder.clone(), cfg, link: RwLock::new(link), http, status: Mutex::new(status.as_object().cloned().unwrap_or_default()), status_dirty: Mutex::new(true),
-        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0), nudge: tokio::sync::Notify::new() });
+        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0), nudge: tokio::sync::Notify::new(), brain: Mutex::default() });
     h.write_status_now();
     let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<i32>(4);
     background(h.clone(), exit_tx.clone());
@@ -547,6 +631,30 @@ mod tests {
         assert!(!super::path_ok("/a/../b"));
         assert!(!super::path_ok("//evil"));
         assert!(!super::path_ok("/a b"));
+    }
+    #[test]
+    fn the_brains_modelfile_is_looked_for_next_to_the_hub_and_the_host_folder() {
+        use std::path::{Path, PathBuf};
+        let c = super::brain_modelfile_candidates(Path::new("/h/ai-host"), Some(Path::new("/h/VibeRoller")), "unity-brain");
+        assert_eq!(c[0], PathBuf::from("/h/VibeRoller/../Backrooms/models/unity-brain/Modelfile"), "the hub's own default first");
+        assert_eq!(c[1], PathBuf::from("/h/ai-host/models/unity-brain/Modelfile"));
+        assert_eq!(c[2], PathBuf::from("/h/ai-host/../Backrooms/models/unity-brain/Modelfile"));
+        assert_eq!(c.len(), 5);
+        let none = super::brain_modelfile_candidates(Path::new("/h/ai-host"), None, "unity-brain");
+        assert_eq!(none.len(), 4);
+        // a configured Modelfile is taken as given (a wrong path is said, not swapped for another)
+        let dir = std::env::temp_dir().join(format!("vr-brain-{}", std::process::id())); let _ = std::fs::remove_dir_all(&dir); std::fs::create_dir_all(dir.join("models").join("unity-brain")).unwrap();
+        let mut s = super::HostSettings::new(dir.join("ai-node.json")); s.raw.insert("unity".into(), serde_json::json!({ "modelfile": "/nowhere/Modelfile" }));
+        assert_eq!(super::brain_modelfile(&s, &dir), Some(PathBuf::from("/nowhere/Modelfile")));
+        s.raw.remove("unity");
+        assert_eq!(super::brain_modelfile(&s, &dir), None, "no Modelfile anywhere yet");
+        std::fs::write(dir.join("models").join("unity-brain").join("Modelfile"), "FROM llama3\n").unwrap();
+        assert_eq!(super::brain_modelfile(&s, &dir), Some(dir.join("models").join("unity-brain").join("Modelfile")));
+        assert_eq!(s.unity_model(), "unity-brain"); assert!(s.start_ollama()); assert_eq!(s.ollama_command(), "ollama");
+        s.raw.insert("autoDetect".into(), serde_json::json!({ "startOllama": false })); assert!(!s.start_ollama());
+        assert!(super::has_brain(&["llama3:8b".into(), "unity-brain:latest".into()], "unity-brain"));
+        assert!(!super::has_brain(&["llama3:8b".into()], "unity-brain"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn ollama_tags_give_the_model_names() {

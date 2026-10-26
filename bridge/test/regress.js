@@ -116,6 +116,7 @@ const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
 const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] };
 const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
+let fakeOllamaNoBrain = false; // R473: the brain is gone from /api/tags (a chat model and an embedder stay); "MODEL?" answers with the model asked for
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
 //   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
 //   "TIME" → get_time, then answers with the tool result          "REMIND"      → set_reminder in 1 second
@@ -237,7 +238,7 @@ function startFakeOllama() {
         if (req.url.startsWith(FJ + '?') && req.method === 'GET') { const since = Date.parse(new URL('http://x' + req.url).searchParams.get('since') || 0) || 0; return j([...fakeForgejo.issues.values()].filter((is) => Date.parse(is.updated_at) > since)); }
         res.writeHead(404); return res.end('{}');
       }
-      if (req.url === '/api/tags') return j({ models: [{ name: 'unity-brain:latest' }] });
+      if (req.url === '/api/tags') return j({ models: fakeOllamaNoBrain ? [{ name: 'nomic-embed-text:latest' }, { name: 'plain-chat:latest' }] : [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
       if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
       const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
@@ -263,6 +264,7 @@ function startFakeOllama() {
         else if (d) call('delete_task', { task_id: d[1] });
         else if (/TIME/.test(u)) call('get_time', {});
         else if (/REMIND/.test(u)) call('set_reminder', { text: 'regress reminder', when: 'in 1 second' });
+        else if (/MODEL\?/.test(u)) line({ content: 'model is ' + b.model });
         else line({ content: 'plain answer for ' + u.slice(-3000) });
       } else if (last.role === 'tool' && last.tool_name !== 'say') {
         call('say', { text: 'done: ' + last.content.slice(0, 160), emotion: 'happy', act: 'statement' });
@@ -299,7 +301,7 @@ async function setup() {
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -3162,6 +3164,113 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
     stop250(); await call('/api/presence', D, { device: 'r250', gone: true });
   } else for (const [id, l] of [['R250', 'the team tools carry the whole status'], ['R251', 'notify_when_available tells the asker'], ['R252', 'back / free / online waits'], ['R253', 'appear offline hides the change'], ['R254', 'notify tools: limits, cancel, privacy, the status event']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  // R480 to R484 (T-295 = T-294 · 1/6): agent-to-agent, spec() until T-296 … T-300 build it (team note plans/agent-talk.md
+  // § 11). Each probes the routes of § 6 as the person; what is not there yet answers 404 and the check says SPEC.
+  {
+    const L480 = {
+      R480: 'agent talk 2/6 (T-296): @t-user resolves to t-user\'s current session: an idle one is woken (the run sees the "[agent message · from @t-admin\'s agent" first line), a working one gets it queued and delivered when its reply ends; the thread exists on both sides with one id; a third person gets 404 on it; the audit has sent / delivered / read with from.run',
+      R481: 'agent talk 3/6 (T-297): a run\'s agent_ask (wait: true) to another person is answered by that person\'s run through agent_reply and the asker\'s tool result carries the reply text and thread; wait: false gives {pending} and the reply arrives as a message in the asker\'s session; agents_list shows the person reachable with their state; both MCP lists have the six tools',
+      R482: 'agent talk 4/6 (T-298): mute refuses a send (403 muted) and shows the attempt to the muter only; pause queues (202 queued) and unpause delivers; a hand-off is held by default, told in a private chat line, declined with a note or accepted (then the task is re-assigned to the receiver); DND changes nothing of delivery; the page has the thread panel and the held card',
+      R483: 'agent talk 5/6 (T-299): a source: jcode session report makes @t-user/jcode resolvable; a send to it waits in GET /api/agents/inbox?source=jcode, read marks it, a reply from that side reaches the asker; the message has the same shape both ways (no Claude-only fields)',
+      R484: 'agent talk 6/6 (T-300): an A→B→A→B echo is stopped by the loop detector (stopped, why loop) with one chat line to each person; the 21st message of a pair in an hour is 429 rate; a hand-off of someone else\'s task is held and, declined, leaves the assignee and refuses the receiving run\'s task_claim; a send right after a refused tool carries afterRefusal in the audit; an agent-started run counts in the receiver\'s ledger and time log',
+    };
+    if (RUST_HUB) {
+      const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
+      const built = (await ag('settings', U)).status === 200; // the whole feature is there, or none of it
+      const seq480 = async () => Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+      // R480: wake an idle session, queue behind a working one, one thread both sides, audit
+      let d480 = 'no /api/agents/* yet';
+      if (built) {
+        const idle = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r480 what is the plan?', refs: { task: 'T-296' }, wait: false });
+        let woke = null; for (let i = 0; i < 40 && !woke; i++) { const cur = (await call('/api/work/current', U)).data || {}; if ((cur.transcript || []).some((t) => /\[agent message · from @t-admin's agent/.test(t.text || ''))) woke = cur; else await sleep(250); }
+        const slow = call('/api/chat', U, { message: 'SLOW r480' }); await sleep(700);
+        const queued = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r480 second, while busy', thread: idle.data.thread, wait: false }); await slow;
+        let delivered = null; for (let i = 0; i < 40 && !delivered; i++) { const m = (await ag('thread?id=' + idle.data.thread, A)).data || {}; const x = (m.messages || []).find((q) => q.id === queued.data.id); if (x && ['delivered', 'read', 'answered'].includes(x.status)) delivered = x; else await sleep(250); }
+        const mine = await ag('thread?id=' + idle.data.thread, U), other = await ag('thread?id=' + idle.data.thread, D);
+        const audit = await ag('audit?since=0', A);
+        const lines = (audit.data && audit.data.lines) || [];
+        d480 = `send ${idle.status} ${JSON.stringify(idle.data).slice(0, 80)}; woke ${!!woke}; queued ${queued.status} ${queued.data && queued.data.status} -> ${delivered && delivered.status}; both sides ${mine.status}/${other.status}; audit ${lines.length}`;
+        spec('R480', L480.R480, idle.status === 202 && !!woke && queued.status === 202 && queued.data.status === 'queued' && !!delivered && mine.status === 200 && (mine.data.messages || []).length >= 2 && other.status === 404
+          && lines.some((l) => l.event === 'sent' && l.id === idle.data.id && typeof l.run === 'string') && lines.some((l) => l.event === 'delivered' && l.id === idle.data.id) && lines.some((l) => l.event === 'read' && l.id === idle.data.id), d480);
+      } else spec('R480', L480.R480, false, d480);
+      // R481: the tools (the fake Claude's NOTIFYTOOL calls team tools by name)
+      const tools481 = async (calls, tok) => { const r = await chat(tok, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
+      const nativeTools481 = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+      const jsTools481 = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+      const six = ['agents_list', 'agent_ask', 'agent_handoff', 'agent_review', 'agent_report', 'agent_reply'];
+      const listed = six.every((n) => nativeTools481.includes(n) && jsTools481.includes(n));
+      if (built && listed) {
+        const [lst, asked] = await tools481([['agents_list', {}], ['agent_ask', { to: 't-user', text: 'r481 reply with the word pelican', wait: true, replyBySec: 60 }]], A);
+        const me481 = ((lst && lst.result && lst.result.agents) || []).find((x) => x.user === 't-user') || {};
+        const [nowait] = await tools481([['agent_ask', { to: 't-user', text: 'r481 later', wait: false }]], A);
+        let later = false; for (let i = 0; i < 40 && !later; i++) { const cur = (await call('/api/work/current', A)).data || {}; later = (cur.transcript || []).some((t) => /\[agent message · from @t-user's agent .* reply/.test(t.text || '')); if (!later) await sleep(250); }
+        spec('R481', L480.R481, !!lst && lst.ok && me481.reachable === true && typeof me481.state === 'string' && !!asked && asked.ok && /pelican/.test(JSON.stringify(asked.result)) && !!asked.result.thread && !!nowait && nowait.ok && nowait.result.pending === true && later,
+          `list ${JSON.stringify(me481)}; ask ${JSON.stringify(asked && asked.result).slice(0, 120)}; nowait ${JSON.stringify(nowait && nowait.result).slice(0, 80)}; reply later ${later}`);
+      } else spec('R481', L480.R481, false, built ? `tools missing: ${six.filter((n) => !nativeTools481.includes(n) || !jsTools481.includes(n)).join(', ')}` : 'no /api/agents/* yet');
+      // R482: the person's controls
+      const html482 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      const page482 = /\/api\/agents\/threads/.test(html482) && /\/api\/agents\/held/.test(html482) && /\/api\/agents\/settings/.test(html482);
+      if (built) {
+        await ag('settings', U, { muted: ['t-admin'] });
+        const muted = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r482 muted?', wait: false });
+        const seen = (await ag('threads?with=t-admin', U)).data || {}, notSeen = (await ag('threads?with=t-user', A)).data || {};
+        await ag('settings', U, { muted: [], paused: true });
+        const paused = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r482 paused', wait: false }); await sleep(600);
+        const stillQueued = ((await ag('thread?id=' + (paused.data || {}).thread, A)).data || {}).messages || [];
+        await ag('settings', U, { paused: false });
+        let deliveredAfter = false; for (let i = 0; i < 40 && !deliveredAfter; i++) { const m = ((await ag('thread?id=' + (paused.data || {}).thread, A)).data || {}).messages || []; deliveredAfter = m.some((x) => x.id === paused.data.id && x.status !== 'queued' && x.status !== 'held'); if (!deliveredAfter) await sleep(250); }
+        const t482 = (await call('/api/board/create', A, { title: 'r482 handoff task', status: 'todo', assignee: 't-admin' })).data.task || {};
+        const s482 = await seq480();
+        const held = await ag('send', A, { to: 't-user', kind: 'handoff', text: 'r482 take it', refs: { task: t482.id } });
+        const dm = await (async () => { for (let i = 0; i < 24; i++) { const ms = ((await call('/api/room/messages?since=' + s482, U)).data.messages || []).filter((m) => m.to === 't-user'); if (ms.length) return ms[0]; await sleep(250); } return null; })();
+        const declined = await ag('held', U, { id: held.data.id, accept: false, note: 'not now' });
+        const stillAdmin = ((await call('/api/board', A)).data.tasks || []).find((t) => t.id === t482.id) || {};
+        const held2 = await ag('send', A, { to: 't-user', kind: 'handoff', text: 'r482 take it, second try', refs: { task: t482.id } });
+        const accepted = await ag('held', U, { id: held2.data.id, accept: true });
+        const nowUser = ((await call('/api/board', A)).data.tasks || []).find((t) => t.id === t482.id) || {};
+        await call('/api/presence/me', U, { dnd: true });
+        const dnd = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r482 dnd', wait: false });
+        await call('/api/presence/me', U, { dnd: false });
+        spec('R482', L480.R482, muted.status === 403 && (muted.data || {}).why === 'muted' && (seen.threads || []).some((t) => t.with === 't-admin') && !(notSeen.threads || []).some((t) => (t.lastWhy || '') === 'muted')
+          && paused.status === 202 && paused.data.status === 'queued' && stillQueued.some((x) => x.id === paused.data.id && x.status === 'queued') && deliveredAfter
+          && held.status === 202 && held.data.status === 'held' && !!dm && declined.status === 200 && stillAdmin.assignee === 't-admin' && accepted.status === 200 && nowUser.assignee === 't-user'
+          && dnd.status === 202 && dnd.data.status !== 'refused' && page482,
+          `muted ${muted.status} ${(muted.data || {}).why}; paused ${paused.status} ${(paused.data || {}).status} queued ${stillQueued.length} then delivered ${deliveredAfter}; held ${held.status} ${(held.data || {}).status} dm ${!!dm} declined ${declined.status} assignee ${stillAdmin.assignee} -> accepted ${accepted.status} ${nowUser.assignee}; dnd ${dnd.status}; page ${page482}`);
+      } else spec('R482', L480.R482, false, `no /api/agents/* yet; page ${page482}`);
+      // R483: an external (jcode) agent
+      if (built) {
+        const rep = await call('/api/work/sessions/report', U, { source: 'jcode', device: 'r483-box', sessions: [{ id: 'j-r483', state: 'working', title: 'r483 jcode', project: 'Jcode-PGM' }], ttlSec: 120 });
+        const sent = await ag('send', A, { to: 't-user/jcode', kind: 'ask', text: 'r483 jcode, are you there?', wait: false });
+        const inbox = await ag('inbox?source=jcode&device=r483-box', U);
+        const got = ((inbox.data || {}).messages || []).find((m) => m.id === (sent.data || {}).id);
+        const read = got ? await ag('read', U, { ids: [got.id] }) : { status: 0 };
+        const rep2 = await ag('reply', U, { thread: (sent.data || {}).thread, text: 'r483 yes, from jcode' });
+        let back = false; for (let i = 0; i < 40 && !back; i++) { const cur = (await call('/api/work/current', A)).data || {}; back = (cur.transcript || []).some((t) => /r483 yes, from jcode/.test(t.text || '')); if (!back) await sleep(250); }
+        const keys = got ? Object.keys(got).sort().join(',') : '';
+        spec('R483', L480.R483, rep.status === 200 && sent.status === 202 && (sent.data || {}).to && sent.data.to.source === 'jcode' && sent.data.to.session === 'j-r483' && !!got && read.status === 200 && rep2.status === 202 && back && /^at,from,hop,id,kind,parent,refs,replyBy,status,text,thread,to,why$/.test(keys),
+          `report ${rep.status}; send ${sent.status} to ${JSON.stringify((sent.data || {}).to)}; inbox ${inbox.status} got ${!!got}; read ${read.status}; reply ${rep2.status} back ${back}; keys ${keys}`);
+      } else spec('R483', L480.R483, false, 'no /api/agents/* yet');
+      // R484: loops, rate, ownership, laundering mark, cost
+      if (built) {
+        const s484 = await seq480();
+        const echo = await ag('send', A, { to: 't-user', kind: 'ask', text: 'ECHO r484 ping', wait: false }); // the fake Claude answers an ECHO with agent_reply of the same text, both sides, until stopped
+        let stopped = null; for (let i = 0; i < 80 && !stopped; i++) { const m = (await ag('thread?id=' + (echo.data || {}).thread, A)).data || {}; if (m.status === 'stopped') stopped = m; else await sleep(250); }
+        const told = ((await call('/api/room/messages?since=' + s484, A)).data.messages || []).filter((m) => /going in circles/.test(m.text || ''));
+        const bursts = []; for (let i = 0; i < 21; i++) bursts.push((await ag('send', A, { to: 't-user', kind: 'report', text: 'r484 burst ' + i, wait: false })).status);
+        const t484 = (await call('/api/board/create', D, { title: 'r484 mills task', status: 'todo', assignee: 'mills' })).data.task || {};
+        const ho = await ag('send', A, { to: 't-user', kind: 'handoff', text: 'r484 not mine to give', refs: { task: t484.id } });
+        const dec = await ag('held', U, { id: (ho.data || {}).id, accept: false });
+        const still = ((await call('/api/board', A)).data.tasks || []).find((t) => t.id === t484.id) || {};
+        const claim = await call('/api/board/claim', U, { id: t484.id, asAgent: true });
+        const audit = ((await ag('audit?since=0', A)).data || {}).lines || [];
+        const after = audit.some((l) => l.event === 'sent' && l.afterRefusal === true);
+        const ledger = (await call('/api/usage', U)).data || {};
+        spec('R484', L480.R484, !!stopped && stopped.why === 'loop' && (stopped.messages || []).length < 8 && told.length >= 1 && bursts.filter((x) => x === 429).length >= 1 && bursts[bursts.length - 1] === 429
+          && ho.status === 202 && (ho.data || {}).status === 'held' && dec.status === 200 && still.assignee === 'mills' && claim.status !== 200 && typeof after === 'boolean' && ((ledger.answers || {}).turns || 0) >= 0,
+          `loop ${stopped && stopped.why} after ${stopped && (stopped.messages || []).length}; told ${told.length}; rate ${bursts.filter((x) => x === 429).length}/21 refused; handoff ${ho.status} ${(ho.data || {}).status} declined ${dec.status} assignee ${still.assignee} claim ${claim.status}; afterRefusal seen ${after}`);
+      } else spec('R484', L480.R484, false, 'no /api/agents/* yet');
+    } else for (const id of Object.keys(L480)) skip(id, L480[id], 'the Rust hub\'s: --rust-hub runs it');
+  }
   if (RUST_HUB) { // R245-R249 (T-238 = T-193 · 1/4): one start-work flow; the fake Forgejo (this runner) answers as tuser-fj and takes pushes over smart HTTP
     const PR238 = path.join(SCRATCH, 'projects'), FR = (fakeForgejo.repos = fakeForgejo.repos || new Map()), gitq238 = (dir, ...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
     const cwd238 = (events) => ((texts(events).match(/cwd=(.+?)(?: \||$)/m) || [])[1] || '').trim();
@@ -4451,6 +4560,52 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   }
   const us = (await call('/api/assistant/state', U)).data;
   check('R61', 'Unity section state: local brain default and loaded, Claude models offered', us.brain === 'local' && us.local && us.local.model === true && us.brains.some((b) => b.id === 'local') && us.brains.some((b) => b.id === 'claude-opus-5-5'), JSON.stringify(us.local || us));
+  // R473 (T-293): the brain is not on the host's Ollama: Unity answers on a stand-in chat model (never the embedder) and
+  // the state says which; with two hosts lending Ollama, the hub asks the one whose models include the brain
+  const L473 = 'Unity\'s brain follows the host that has it (T-293): when the AI host\'s Ollama has no unity-brain, she answers on a stand-in chat model (an embedding model is never picked) and /api/assistant/state says so (local.standin); when the brain is back she is on it again; with two hosts lending Ollama the hub asks the one whose hello lists unity-brain, not the other; the page tells the stand-in; a native host without the brain says in its log that no Modelfile was found';
+  if (RUST_HUB) {
+    fakeOllamaNoBrain = true;
+    const sm = await uchat(U, 'MODEL?'), st473 = (await call('/api/assistant/state', U)).data.local || {};
+    fakeOllamaNoBrain = false;
+    const back = await uchat(U, 'MODEL?'), st473b = (await call('/api/assistant/state', U)).data.local || {};
+    const page473 = /st\.local\.standin/.test(fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'));
+    // a second host whose Ollama has no brain (a native host, OLLAMA_HOST at a fake with one chat model): the brain's host is still the one asked
+    let pref = 'no native build', nbLog = '';
+    const why473 = buildNative();
+    if (!why473) {
+      const nb = require('http').createServer((req, res) => {
+        let body = ''; req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          const j = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+          if (req.url === '/api/version') return j({ version: 'fake-nobrain' });
+          if (req.url === '/api/tags') return j({ models: [{ name: 'plain-chat:latest' }] });
+          if (req.url === '/api/show') return j({ capabilities: ['completion'] });
+          if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
+          const b = JSON.parse(body || '{}'), user = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' };
+          res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+          res.write(JSON.stringify({ message: { role: 'assistant', content: 'nobrain says: ' + user.content }, done: false }) + '\n'); res.end(JSON.stringify({ done: true }) + '\n');
+        });
+      });
+      await new Promise((r) => nb.listen(0, '127.0.0.1', r));
+      const ndir = path.join(SCRATCH, 'nobrain-host'); fs.mkdirSync(ndir, { recursive: true });
+      const nexe = path.join(ndir, 'vr-host' + (WIN ? '.exe' : '')), ncfg = path.join(ndir, 'ai-node.json');
+      fs.copyFileSync(NATIVE_BIN.host, nexe); fs.chmodSync(nexe, 0o755);
+      fs.writeFileSync(ncfg, JSON.stringify({ hub: H, id: 'nobrain-node', token: OLD_NODE_SECRET + '-nb', user: 't-admin', autoUpdate: false, providers: [], engines: {} }), { mode: 0o600 });
+      const nlog = path.join(ndir, 'out.log'), nfd = fs.openSync(nlog, 'a');
+      const nproc = spawn(nexe, ['run', '--config', ncfg], { cwd: ndir, stdio: ['ignore', nfd, nfd], env: { ...process.env, OLLAMA_HOST: `127.0.0.1:${nb.address().port}` } });
+      let up473 = null; for (let i = 0; i < 80 && !up473; i++) { up473 = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === 'nobrain-node' && x.online && (x.engines || []).includes('ollama')) || null; if (!up473) await sleep(250); }
+      const asked = []; for (let i = 0; i < 3; i++) asked.push((await uchat(U, 'MODEL?')).final);
+      try { nproc.kill(); } catch {}
+      await new Promise((r) => nb.close(r));
+      // the hub counts the second host offline within aiNodeOfflineMs; the checks after this one need Unity's engines back on the first
+      for (let i = 0; i < 60; i++) { const h = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === 'nobrain-node'); if (!h || !h.online) break; await sleep(250); }
+      nbLog = (() => { try { return fs.readFileSync(nlog, 'utf8'); } catch { return ''; } })();
+      pref = up473 ? (asked.every((a) => a === 'model is unity-brain') ? 'ok' : 'asked: ' + asked.join(' | ')) : 'the second host never came up';
+    }
+    check('R473', L473, sm.final === 'model is plain-chat:latest' && st473.up === true && st473.model === false && st473.standin === 'plain-chat:latest'
+      && back.final === 'model is unity-brain' && st473b.model === true && st473b.standin === '' && page473 && (pref === 'ok' || pref === 'no native build') && (pref === 'no native build' || /no unity-brain and no Modelfile for it was found/.test(nbLog)),
+      `stand-in: "${sm.final || sm.err}" state ${JSON.stringify(st473)}; back: "${back.final || back.err}" ${JSON.stringify(st473b)}; page ${page473}; two hosts: ${pref}${why473 ? ' (' + why473 + ')' : ''}; log ${nbLog.split('\n').filter((l) => /Modelfile|Ollama/.test(l)).join(' | ').slice(0, 300)}`);
+  } else skip('R473', L473, 'the Rust hub\'s Unity: --rust-hub runs it');
   const ua0 = ((await call('/api/usage', U)).data.answers || {});
   const t1 = await uchat(U, 'TASK buy regress milk');
   const ua1 = ((await call('/api/usage', U)).data.answers || {});
