@@ -47,6 +47,14 @@ count=$(jq -s '[.[] | select(.id == 2) | .result.tools | length] | max // 0' "$T
 srv=$(jq -rs '[.[] | select(.id == 1) | .result.serverInfo.name + " " + .result.serverInfo.version] | first // ""' "$T/mcp.out" 2>/dev/null)
 if [ "${count:-0}" -ge 100 ]; then ok "rea mcp: initialize ($srv) + tools/list = $count tools"; else bad "rea mcp: tools/list gave '$count' tools; $(head -c 300 "$T/mcp.err")"; fi
 
+# 2b. REA's Frida tool through the MCP server: the node binding must load (T-315). An empty device list is fine.
+call='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_frida_devices","arguments":{}}}'
+(printf '%s\n%s\n%s\n' "$init" "$done_" "$call"; sleep 15) | rea mcp > "$T/frida.out" 2> "$T/frida.err"
+fres=$(jq -cs '[.[] | select(.id == 3)] | first // {}' "$T/frida.out" 2>/dev/null)
+if [ -n "$fres" ] && [ "$fres" != "{}" ] && ! printf '%s' "$fres" | grep -qi 'bindings file\|frida_binding\|"isError":true\|"error"'; then
+  ok "rea mcp list_frida_devices: Frida node binding loads ($(printf '%s' "$fres" | head -c 160))"
+else bad "rea mcp list_frida_devices: $(printf '%s' "$fres" | head -c 300) $(head -c 200 "$T/frida.err")"; fi
+
 # 3. Static analysis of a tiny JavaScript / Electron-style app
 rea analyze-javascript-application /opt/re-fixtures/js-app --format json > "$T/js.out" 2> "$T/js.err"
 if grep -q 'main.js' "$T/js.out" && grep -q 'api.example.invalid' "$T/js.out"; then
