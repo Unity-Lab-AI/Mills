@@ -221,7 +221,8 @@
   .tpNone { font-size: .78rem; color: var(--muted); }
   .tpItem { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .4rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
   .tpActs { display: flex; gap: .3rem; } .tpActs button { font-size: .75rem; padding: .15rem .45rem; }
-  #board, #cal, #notes { overflow: hidden; }
+  #board, #cal, #notes, #workflows { overflow: hidden; }
+  #wfBody { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   /* ── My day planner (web/board.js) ── */
   #myDay .box { width: min(680px, 94vw); }
   .mdSect { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: .4rem; display: flex; justify-content: space-between; }
@@ -336,11 +337,11 @@
   button.dictate.armed { background: var(--good); color: #111; border-color: var(--good); }
   .msg.me.queued { opacity: .6; border: 1px dashed var(--muted); }
   /* slash-command menu above the Claude box: "/" lists the common commands, filtered as you type */
-  #slashMenu { border-top: 1px solid var(--line); background: var(--panel); max-height: 40%; overflow: auto; padding: .3rem; display: flex; flex-direction: column; gap: .1rem; font-size: .85rem; }
-  #slashMenu .sl { display: flex; align-items: baseline; gap: .6rem; padding: .35rem .6rem; border-radius: 6px; cursor: pointer; background: transparent; color: var(--text); border: 0; text-align: left; font-weight: 400; }
-  #slashMenu .sl:hover, #slashMenu .sl.on { background: var(--line); }
-  #slashMenu .sl code { font-family: ui-monospace, Consolas, monospace; font-weight: 700; min-width: 7.5rem; }
-  #slashMenu .sl small { color: var(--muted); } #slashMenu .sl .tag { margin-left: auto; font-size: .66rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 .4rem; }
+  #slashMenu, #hwMenu { border-top: 1px solid var(--line); background: var(--panel); max-height: 40%; overflow: auto; padding: .3rem; display: flex; flex-direction: column; gap: .1rem; font-size: .85rem; }
+  #slashMenu .sl, #hwMenu button { display: flex; align-items: baseline; gap: .6rem; padding: .35rem .6rem; border-radius: 6px; cursor: pointer; background: transparent; color: var(--text); border: 0; text-align: left; font-weight: 400; }
+  #slashMenu .sl:hover, #slashMenu .sl.on, #hwMenu button:hover, #hwMenu button.on { background: var(--line); }
+  #slashMenu .sl code, #hwMenu button code { font-family: ui-monospace, Consolas, monospace; font-weight: 700; min-width: 7.5rem; }
+  #slashMenu .sl small, #hwMenu button small { color: var(--muted); } #slashMenu .sl .tag, #hwMenu button .tag { margin-left: auto; font-size: .66rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 .4rem; }
   .msg .unqueue { float: right; margin-left: .5rem; background: transparent; color: var(--muted); padding: 0 .3rem; font-size: .8rem; border: 0; }
 
   #archive, .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 40; }
@@ -797,6 +798,7 @@
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.7"/><path d="M20.5 15.5l-4.8-4.5-9.2 8"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
   <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5.5 12h13"/></symbol>
+  <symbol id="i-flow" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="5" rx="1.5"/><rect x="14" y="15" width="7" height="5" rx="1.5"/><path d="M10 6.5h4a3 3 0 0 1 3 3V15"/></symbol>
   <symbol id="i-board" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M9.2 4v16M14.8 4v16M5.6 7.5h1.6M11.2 7.5h1.6M11.2 10.5h1.6M16.8 7.5h1.6"/></symbol>
   <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/><circle cx="8.3" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="15.7" cy="13.5" r=".9" fill="currentColor" stroke="none"/><circle cx="8.3" cy="17" r=".9" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-tasks" viewBox="0 0 24 24"><path d="M4 6.5l1.6 1.6L8.5 5M4 12.5l1.6 1.6 2.9-3.1M4 18.5l1.6 1.6 2.9-3.1M11.5 6.5h8.5M11.5 12.5h8.5M11.5 18.5h6"/></symbol>
@@ -851,6 +853,7 @@
     <button id="goChat" class="tile"><svg class="ic lead"><use href="#i-chat"/></svg>Chat<small>Servers, channels, groups and calls, end-to-end encrypted</small><span class="badge" id="chatBadge" hidden></span></button>
     <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
     <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
+    <button id="goWorkflows" class="tile"><svg class="ic lead"><use href="#i-flow"/></svg>Workflows<small>Design and test Hyper Workflows: boxes and wires, with an AI beside you</small></button>
     <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
     <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
     <button id="goTools" class="tile" hidden><svg class="ic lead"><use href="#i-plug"/></svg>Tools<small>This computer: your projects, a terminal, builds, git, the AI host</small></button>
@@ -1120,6 +1123,17 @@
   <div id="libList"></div>
 </div>
 
+<!-- Workflows: the list and the visual editor for Hyper Workflows (web/editor/*.js, the editor foundation T-205) -->
+<div id="workflows" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Workflows</b>
+    <span class="folder">Hyper Workflows: a graph you design once and run many times</span>
+    <span id="wfMsg" class="status"></span>
+  </header>
+  <div id="wfBody"></div>
+</div>
+
 <div id="assist" class="screen" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
@@ -1246,6 +1260,7 @@
       </div>
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
       <div id="slashMenu" hidden></div>
+      <div id="hwMenu" hidden></div><!-- the Hyper Workflows matching "/hyperwork <name>" (web/hyperwork.js, T-207) -->
       <div id="workTray" class="attTray" hidden></div>
       <form id="composer">
         <button type="button" class="ghost attPlus" id="workAttach" title="Attach files, pictures, videos for Claude (or drop / paste them here)" aria-label="Attach files"><svg class="ic"><use href="#i-plus"/></svg></button>
@@ -1308,6 +1323,7 @@
 
 <script src="md.js"></script>
 <script src="localai.js"></script>
+<script src="hyperwork.js"></script>
 <script src="attach.js"></script>
 <script src="board.js"></script>
 <script>
@@ -1357,7 +1373,7 @@ let USER_NAME = 'you';       // display name of whoever is signed in
 if (PRODUCT) { // a product's page: its name, only its screens on the menu, no Downloads / Connections (those are the hub's)
   document.title = PRODUCT.name; $('title').textContent = PRODUCT.name;
   $('loginHint').textContent = 'Sign in with your VibeRoller username and password. The first time, your ' + PRODUCT.name + ' account is made from it; after that it is its own.';
-  for (const [s, id] of Object.entries({ shell: 'goWork', room: 'goChat', board: 'goBoard', cal: 'goCal', notes: 'goNotes', library: 'goFiles', assist: 'goAssist' })) if (!PRODUCT.screens.includes(s)) $(id).hidden = true;
+  for (const [s, id] of Object.entries({ shell: 'goWork', room: 'goChat', board: 'goBoard', cal: 'goCal', notes: 'goNotes', library: 'goFiles', assist: 'goAssist', workflows: 'goWorkflows' })) if (!PRODUCT.screens.includes(s)) $(id).hidden = true;
   $('goDownloads').hidden = true;
   for (const t of ['connections', 'downloads']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
 } else if ('__MILLS_SERVED__' === 'hub') $('menuProducts').hidden = false; // the hub's own page (the hub fills this in; SERVED_BY_HUB is defined further down): the products it serves
@@ -1590,7 +1606,7 @@ function assistAdd(cls, text) {
 function assistSys(text, bad) { const d = assistAdd('sys' + (bad ? ' bad' : ''), text); return d; }
 function assistStatus(st) {
   $('assistStatus').textContent = st.brain === 'local'
-    ? (st.local.model ? 'Unity on the host (local model)' : st.local.up ? 'Local model is still loading on the host…' : 'Local model is starting on the host…')
+    ? (st.local.model ? 'Unity on the host (local model)' : st.local.up ? (st.local.standin ? `Unity on a stand-in model (${st.local.standin}) until ${st.local.name || 'unity-brain'} is loaded on the host` : 'Local model is still loading on the host…') : 'Local model is starting on the host…')
     : 'Unity on Claude';
 }
 async function openAssist() {
@@ -1853,16 +1869,18 @@ async function enter() {
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
   restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
+  if (/^#\/?(workflows|hyperwork)\b/.test(location.hash) && $('workflows')) { const m = /^#\/?(?:workflows|hyperwork)\/([^/?]+)/.exec(location.hash); openWorkflows(m ? decodeURIComponent(m[1]) : ''); } // #workflows, #hyperwork, #workflows/<name>
 }
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
   if (PRODUCT && !['menu', 'admin', ...PRODUCT.screens].includes(name)) name = 'menu'; // a product has only its own screens
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
   if (name === 'notes') NOTES.show(); // web/notes.js
   if (name === 'library') LIBRARY.show(); // web/library.js
+  if (name === 'workflows') WORKFLOWS.show(); // web/editor/workflows-ui.js
   presenceTick(); // tell the others where you are now
   if (name === 'shell' && !workStarted) { workStarted = true; restoreFolder(); restoreWork(); } // the previous conversation + queue come back
   if (name === 'shell') refreshUsage();
@@ -1877,6 +1895,7 @@ $('goBoard').onclick = () => showScreen('board');
 $('goCal').onclick = () => showScreen('cal');
 $('goNotes').onclick = () => showScreen('notes');
 $('goFiles').onclick = () => showScreen('library');
+$('goWorkflows').onclick = () => showScreen('workflows');
 // the desktop app's Tools window (its own page, which may use this computer; the hub's page never can)
 if (NATIVE) { $('goTools').hidden = false; $('goTools').onclick = () => NATIVE.call('open_tools').catch((e) => sys(String(e), true)); document.body.classList.add('native'); }
 $('goAdmin').onclick = () => showScreen('admin');
@@ -1886,7 +1905,7 @@ function signOut() {
   if (NATIVE && token) NATIVE.call('set_session', { token: '' }).catch(() => {});
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
   BOARD.stop(); NOTES.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
@@ -2747,6 +2766,9 @@ const SLASH = [
   { cmd: '/new', desc: 'Start a fresh conversation', local: () => $('newChat').click() },
   { cmd: '/stop', desc: 'Stop the current reply', local: () => $('stop').click() },
   { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', local: (a) => slashModel(a) },
+  { cmd: '/hyperwork', desc: 'Send a prompt through a Hyper Workflow (it runs on the hub; type a name to see the list)', args: '<name> <prompt>', local: (a) => hyperwork(a) },
+  { cmd: '/hw', desc: 'Short for /hyperwork', args: '<name> <prompt>', local: (a) => hyperwork(a) },
+  { cmd: '/workflows', desc: 'Open the Workflows screen: the list, then the visual editor (/workflows <name> opens that one)', args: '[name]', local: (a) => openWorkflows(a) },
   { cmd: '/share', desc: 'Share / stop sharing this Work session with everyone', local: () => $('shareBtn').click() },
   { cmd: '/save', desc: 'Save this session to Past sessions now', local: () => saveToArchive(false) },
   { cmd: '/sessions', desc: 'Open Past sessions', local: () => showArchive() },
@@ -2802,9 +2824,30 @@ function runLocalSlash(message) {
   if (!s || !s.local) return false;
   s.local(m[2]); return true;
 }
-$('input').addEventListener('input', () => { slashIdx = 0; renderSlash(); });
-$('input').addEventListener('blur', () => setTimeout(() => { $('slashMenu').hidden = true; }, 150));
+// ── /hyperwork <name> <prompt> (T-207; the team note plans/hyper-workflows.md § 10.2): a prompt sent through a Hyper
+// Workflow on the hub, followed here step by step (an approval as Approve / Reject, the answer at the end). The code is
+// the shared kit module web/hyperwork.js (one copy for this page, Hyper Prod Man and pgm-libs): the page passes its hooks
+// in. Typing "/hyperwork te" lists the workflows that match (grey = cannot run here, with the reason) in #hwMenu; the hub
+// parses the line (one parser for the page, HPM and jcode). A hub without Hyper Workflows (the JavaScript hub, an older
+// one) answers 404: the module says so.
+const HW = typeof HyperworkUI !== 'undefined' ? HyperworkUI.create({
+  input: $('input'), menu: $('hwMenu'),
+  api: (p, init) => api(p, init), streamUrl: (p) => base + p, headers: () => (token ? { Authorization: 'Bearer ' + token } : {}),
+  project: () => (me && me.project) || '',
+  me: (text) => { bubble('me').textContent = text; scroll(); },
+  say: (text, bad) => { const d = sys(text, bad); scroll(); return d; },
+  answer: (text) => { renderText(bubble('claude'), text); scroll(); },
+}) : null;
+function openWorkflows(name) { showScreen('workflows'); name = String(name || '').trim(); if (name) WORKFLOWS.openByName(name); }
+async function hyperwork(arg) {
+  if (!String(arg || '').trim()) return openWorkflows(); // /hyperwork on its own: the Workflows screen (a name and a prompt send a prompt through it)
+  if (!HW) return sys('Hyper Workflows need web/hyperwork.js, which this page did not load.', true);
+  await HW.run('/hyperwork ' + String(arg || '').trim());
+}
+$('input').addEventListener('input', () => { slashIdx = 0; if (HW && HW.typeahead()) { $('slashMenu').hidden = true; return; } if (HW) HW.hide(); renderSlash(); });
+$('input').addEventListener('blur', () => setTimeout(() => { $('slashMenu').hidden = true; if (HW) HW.hide(); }, 150));
 $('input').addEventListener('keydown', (e) => {
+  if (HW && HW.key(e)) return; // the Hyper Workflow menu is open: arrows move, Tab / Enter pick, Escape closes
   const open = !$('slashMenu').hidden, list = open ? slashMatches() : [];
   if (open && list.length) {
     if (e.key === 'ArrowDown') { e.preventDefault(); slashIdx = (slashIdx + 1) % list.length; return renderSlash(); }
@@ -4158,12 +4201,12 @@ const DEVICE = (() => { try { let d = sessionStorage.getItem(NS + 'vr.device'); 
 const dndOn = () => { const s = me && statusMap[me.username]; return !!(s && s.dnd && (!s.dndUntil || Date.now() < s.dndUntil)); };
 window.vrDnd = dndOn;
 let lastInput = Date.now(), sentIdle = null, sentScreen = '', inputSince = false, sentActive = 0;
-const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin', notes: 'Notes', assist: 'Unity' };
+const SCREEN_NAMES = { menu: 'the menu', shell: 'Work', room: 'Chat', board: 'the Board', cal: 'the Calendar', admin: 'Admin', notes: 'Notes', assist: 'Unity', workflows: 'Workflows' };
 function postPresence(body) { if (me && token && base) json('/api/presence', { method: 'POST', body: JSON.stringify({ ...body, device: DEVICE }) }).catch(() => {}); }
 function presenceTick() {
   if (!me) return;
   const idle = document.visibilityState === 'hidden' || Date.now() - lastInput > IDLE_MS;
-  const screen = ['menu', 'shell', 'room', 'board', 'cal', 'admin', 'notes', 'assist'].find((id) => !$(id).hidden) || '';
+  const screen = ['menu', 'shell', 'room', 'board', 'cal', 'admin', 'notes', 'assist', 'workflows'].find((id) => !$(id).hidden) || '';
   const active = inputSince && Date.now() - sentActive >= 60000; // time accounting (plans/presence.md § 6): input since the last report, at most once a minute
   if (idle !== sentIdle || screen !== sentScreen || active) { sentIdle = idle; sentScreen = screen; const body = { screen, idle }; if (active) { body.active = true; inputSince = false; sentActive = Date.now(); } postPresence(body); }
 }
@@ -5082,7 +5125,7 @@ $('adminClearChat').replaceWith(confirmButton('Clear chat history', () => adminC
 // (api() signs out then); any other failure keeps it and shows the sign-in page with what went wrong.
 // Never a black page: when no screen at all is showing and something failed (or opening takes over 20 s), the sign-in
 // form comes back and says what went wrong (the session is kept; it is also in the browser console).
-const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library'];
+const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows'];
 function nothingShown() { return SCREENS.every((id) => !$(id) || $(id).hidden); }
 function bootTrouble(msg) {
   if (!nothingShown()) return;
@@ -5112,6 +5155,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 <script src="profile.js"></script>
 <script src="notes.js"></script>
 <script src="library.js"></script>
+<!-- the visual editor foundation (T-205): the core logic, the SVG view, the Hyper Workflows plugin, a stub page-elements plugin, and the Workflows screen -->
+<script src="editor/core.js"></script>
+<script src="editor/view.js"></script>
+<script src="editor/kinds-workflow.js"></script>
+<script src="editor/kinds-boxes.js"></script>
+<script src="editor/workflows-ui.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -161,6 +161,12 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, rest: &str) -> Routed {
             let d: Arc<dyn AiHub> = hub.clone();
             Routed::Answer(pgm_ai_internal::openai::v1_as(&d, &inner, a.username).await)
         }
+        // Hyper Workflows for a product's people (T-207; spec 15: the same paths as /api/hyperwork/, the person the
+        // product signed for, their rights on the hub): Hyper Prod Man's /hyperwork and its editor come through here
+        h if h == "hyperwork" || h.starts_with("hyperwork/") => {
+            let Some(a) = account(&user) else { return answer(404, json!({ "error": "Not linked to this product." })) };
+            super::hyperwork::via_gateway(hub, r, &a, h.strip_prefix("hyperwork/").unwrap_or("")).await
+        }
         _ => answer(404, json!({ "error": "Not found" })),
     }
 }

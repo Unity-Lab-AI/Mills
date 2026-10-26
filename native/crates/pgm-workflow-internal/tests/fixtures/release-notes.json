@@ -1,0 +1,323 @@
+{
+  "schema": 1,
+  "id": "wf-9fd3a1c27b04",
+  "name": "release-notes",
+  "title": "Release notes from a diff",
+  "description": "Summarise a diff, check it, write the notes, ask a person.",
+  "scope": "team-core",
+  "owner": "gee",
+  "version": 4,
+  "labels": [
+    "release",
+    "docs"
+  ],
+  "runOn": "any",
+  "needsProject": true,
+  "inputs": [
+    {
+      "name": "prompt",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "audience",
+      "type": "text",
+      "default": "team"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "notes",
+      "type": "text"
+    }
+  ],
+  "defaults": {
+    "model": {
+      "via": "host",
+      "provider": "claude",
+      "model": "sonnet"
+    },
+    "laws": [
+      "law-tone",
+      "grp-safety"
+    ],
+    "limits": {
+      "maxSeconds": 900,
+      "maxNodes": 200,
+      "maxCost": 2.0,
+      "maxParallel": 4
+    },
+    "retry": {
+      "max": 1,
+      "backoffSec": 5,
+      "on": [
+        "timeout"
+      ]
+    },
+    "onError": "fail"
+  },
+  "sections": [
+    {
+      "id": "s1",
+      "label": "Write",
+      "color": "#4a7",
+      "nodes": [
+        "n3",
+        "n4"
+      ],
+      "model": {
+        "via": "openrouter",
+        "model": "anthropic/claude-sonnet"
+      },
+      "laws": [
+        "law-cite"
+      ],
+      "pos": [
+        400,
+        40,
+        420,
+        260
+      ],
+      "x-collapsed": false
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "start",
+      "kindVersion": 1,
+      "pos": [
+        0,
+        120
+      ]
+    },
+    {
+      "id": "n1",
+      "kind": "script",
+      "kindVersion": 1,
+      "label": "git diff",
+      "config": {
+        "lang": "transform",
+        "code": "{{ not a template }}",
+        "outputs": [
+          "diff"
+        ]
+      },
+      "pos": [
+        180,
+        80
+      ]
+    },
+    {
+      "id": "n2",
+      "kind": "summarise",
+      "kindVersion": 1,
+      "config": {
+        "target": {
+          "bullets": 8
+        },
+        "keep": [
+          "file paths"
+        ]
+      },
+      "pos": [
+        360,
+        80
+      ]
+    },
+    {
+      "id": "n8",
+      "kind": "loop",
+      "kindVersion": 1,
+      "label": "Until fit",
+      "config": {
+        "mode": "until",
+        "condition": "state.round >= 3",
+        "maxIterations": 3
+      },
+      "pos": [
+        400,
+        200
+      ]
+    },
+    {
+      "id": "n3",
+      "kind": "prompt",
+      "kindVersion": 1,
+      "label": "Draft notes",
+      "config": {
+        "system": "{{prompt:release-style}}",
+        "user": "Audience: {{inputs.audience}}\n{{node.n2.out.summary}}",
+        "responseFormat": "text"
+      },
+      "laws": [
+        "law-no-secrets"
+      ],
+      "settings": {
+        "timeoutSec": 120,
+        "retry": {
+          "max": 2
+        }
+      },
+      "pos": [
+        440,
+        80
+      ],
+      "x-editor-note": {
+        "seen": true
+      }
+    },
+    {
+      "id": "n4",
+      "kind": "jev",
+      "kindVersion": 1,
+      "config": {
+        "question": "Is the draft fit to send?",
+        "mode": "yes-no",
+        "model": {
+          "via": "ollama",
+          "model": "decision-small"
+        },
+        "minConfidence": 0.7,
+        "onLowConfidence": "ask-person"
+      },
+      "pos": [
+        640,
+        80
+      ]
+    },
+    {
+      "id": "n5",
+      "kind": "approve",
+      "kindVersion": 1,
+      "config": {
+        "who": "sender",
+        "timeoutSec": 600,
+        "onTimeout": "reject",
+        "questions": [
+          {
+            "text": "Send these notes?",
+            "kind": "single",
+            "options": [
+              "yes",
+              "no"
+            ],
+            "default": "no"
+          }
+        ]
+      },
+      "pos": [
+        820,
+        80
+      ]
+    },
+    {
+      "id": "n6",
+      "kind": "end",
+      "kindVersion": 1,
+      "config": {
+        "name": "done"
+      },
+      "pos": [
+        1000,
+        60
+      ]
+    },
+    {
+      "id": "n7",
+      "kind": "end",
+      "kindVersion": 1,
+      "config": {
+        "name": "rejected"
+      },
+      "pos": [
+        1000,
+        180
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "n0.prompt",
+      "to": "n1.in",
+      "x-color": "#fff"
+    },
+    {
+      "id": "e2",
+      "from": "n1.diff",
+      "to": "n2.text"
+    },
+    {
+      "id": "e3",
+      "from": "n2.summary",
+      "to": "n8.in"
+    },
+    {
+      "id": "e3b",
+      "from": "n8.again",
+      "to": "n3.in"
+    },
+    {
+      "id": "e4",
+      "from": "n3.text",
+      "to": "n4.context"
+    },
+    {
+      "id": "e5",
+      "from": "n4.yes",
+      "to": "n6.result"
+    },
+    {
+      "id": "e6",
+      "from": "n4.no",
+      "to": "n8.back"
+    },
+    {
+      "id": "e7",
+      "from": "n3.error",
+      "to": "n5.in"
+    },
+    {
+      "id": "e8",
+      "from": "n5.approved",
+      "to": "n6.result"
+    },
+    {
+      "id": "e9",
+      "from": "n5.rejected",
+      "to": "n7.result"
+    }
+  ],
+  "subgraphs": {},
+  "perms": {
+    "run": [
+      "team"
+    ],
+    "view": [
+      "team"
+    ],
+    "edit": [
+      "gee",
+      "sponge",
+      "mills"
+    ],
+    "publish": [
+      "gee",
+      "sponge",
+      "mills"
+    ],
+    "admin": [
+      "sponge"
+    ]
+  },
+  "createdAt": 1790000000000,
+  "updatedAt": 1790000300000,
+  "publishedAt": 1790000300000,
+  "publishedBy": "gee",
+  "message": "Add the jev check",
+  "x-editor": {
+    "zoom": 1.5,
+    "grid": true
+  }
+}

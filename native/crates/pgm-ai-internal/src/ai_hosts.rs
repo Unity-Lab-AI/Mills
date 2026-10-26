@@ -52,6 +52,8 @@ pub struct AiHosts {
     was_up: Mutex<HashMap<String, (bool, u64)>>,
     offline_ms: u64,
     release_at: Mutex<(u64, String, String)>,
+    /// engine → the host Unity found her brain on (`prefer_engine_host`, T-293)
+    preferred: Mutex<HashMap<String, String>>,
     pub usage: Arc<crate::usage::Usage>,
     /// something people see changed (a hello, a host up / down, its usage, the registry): the JavaScript hub hears it
     pub dirty: Notify,
@@ -103,6 +105,11 @@ pub fn check_scope(scope: &Scope, owner: &str, label: &str, use_: &str, model: &
     Ok(())
 }
 fn job_id() -> String { use base64::Engine; base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pgm_core_internal::crypto::random_bytes(9)) }
+/// Does a host's hello list this model among any of its providers' models? ("unity-brain" = "unity-brain:latest".)
+pub fn hello_has_model(hello: &Value, model: &str) -> bool {
+    let want = model.trim_end_matches(":latest");
+    hello["providers"].as_array().map(|ps| ps.iter().any(|p| p["models"].as_array().map(|ms| ms.iter().filter_map(Value::as_str).any(|m| m.trim_end_matches(":latest") == want)).unwrap_or(false))).unwrap_or(false)
+}
 
 impl AiHosts {
     pub fn new(root: &std::path::Path, cfg: &pgm_core_internal::config::Config, usage: Arc<crate::usage::Usage>) -> Arc<AiHosts> {
@@ -113,7 +120,7 @@ impl AiHosts {
         let (version, commit) = release_now(root);
         let sign: Option<Arc<pgm_net_internal::machine::HubKey>> = match pgm_net_internal::machine::HubKey::load_or_create(&root.join("hub-signing.key")) { Ok(k) => Some(Arc::new(k)), Err(e) => { eprintln!("[ai-host] no hub signing key ({e}): PC requests to hosts go unsigned until it is fixed"); None } };
         let h = Arc::new(AiHosts { root: root.to_path_buf(), cfg: cfg.clone(), db: Mutex::new(db), legacy, live: Mutex::default(), pending: Mutex::default(), was_up: Mutex::default(),
-            offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), usage, dirty: Notify::new(),
+            offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), preferred: Mutex::default(), usage, dirty: Notify::new(),
             machines: Arc::new(crate::machine_jobs::MachineJobs::new(root, sign.clone(), cfg.get("machineTransferMaxMB").and_then(Value::as_u64).unwrap_or(4096))), sign });
         h.restore_sessions();
         h
@@ -307,15 +314,30 @@ impl AiHosts {
                 "caps": n.and_then(|n| n.hello.as_ref().map(|h| h["caps"].clone())).unwrap_or(json!([])), "kid": n.map(|n| n.kid.clone()).unwrap_or_default(), "version": n.and_then(|n| n.hello.as_ref().map(|h| h["version"].clone())).unwrap_or(json!("")), "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null) })
         }).collect()
     }
-    fn pick_engine_host(&self, engine: &str) -> Option<String> {
+    /// The hosts that may lend this engine right now, best first: the one pinned by config (`assistant.node`) alone when
+    /// it is set; else every online host lending it that is the hub's own (config) or a hub admin's (Unity's engines
+    /// see everyone's prompts, voice and pictures: never just anyone's), those whose hello lists Unity's brain among
+    /// their models first (T-293), then by id, so the order is the same on every call.
+    pub fn engine_hosts(&self, engine: &str) -> Vec<String> {
         if let Some(want) = self.cfg.get("assistant").and_then(|a| a["node"].as_str()).filter(|s| !s.is_empty()) {
             let ok = self.online(want) && self.live.lock().unwrap_or_else(|e| e.into_inner()).get(want).map(|n| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).unwrap_or(false);
-            return if ok { Some(want.to_string()) } else { None };
+            return if ok { vec![want.to_string()] } else { vec![] };
         }
-        let ids: Vec<String> = self.live.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, n)| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).map(|(id, _)| id.clone()).collect();
-        // Unity's engines see everyone's prompts, voice and pictures: only a host from the hub's config or one of a hub
-        // admin's lends them, never just anyone's
-        ids.into_iter().find(|id| self.online(id) && self.record(id).map(|r| r["legacy"] == json!(true) || self.owner_is_admin(&r)).unwrap_or(false))
+        let brain = self.cfg.get("assistant").and_then(|a| a["model"].as_str()).filter(|s| !s.is_empty()).unwrap_or("unity-brain").to_string();
+        let mut ids: Vec<(String, bool)> = self.live.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, n)| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).map(|(id, n)| (id.clone(), n.hello.as_ref().map(|h| hello_has_model(h, &brain)).unwrap_or(false))).collect();
+        ids.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ids.into_iter().map(|(id, _)| id).filter(|id| self.online(id) && self.record(id).map(|r| r["legacy"] == json!(true) || self.owner_is_admin(&r)).unwrap_or(false)).collect()
+    }
+    /// Unity found out which host's Ollama has her brain (unity.rs asks each one's /api/tags, T-293): that host is asked
+    /// first for this engine while it lends it; None forgets the choice.
+    pub fn prefer_engine_host(&self, engine: &str, host: Option<String>) {
+        let mut p = self.preferred.lock().unwrap_or_else(|e| e.into_inner());
+        match host { Some(h) => { p.insert(engine.to_string(), h); } None => { p.remove(engine); } }
+    }
+    fn pick_engine_host(&self, engine: &str) -> Option<String> {
+        let hosts = self.engine_hosts(engine);
+        if let Some(p) = self.preferred.lock().unwrap_or_else(|e| e.into_inner()).get(engine) { if hosts.iter().any(|h| h == p) { return Some(p.clone()); } }
+        hosts.into_iter().next()
     }
 
     fn owner_is_admin(&self, r: &Value) -> bool {
@@ -382,6 +404,12 @@ impl AiHosts {
         if !ENGINES.contains(&engine) { return Err(herr(400, format!("Unknown engine {engine}"))); }
         let id = self.pick_engine_host(engine).ok_or_else(|| herr(503, OFFLINE_TEXT))?;
         self.relay(&id, engine, path, method, headers, body, "engine", false).await
+    }
+    /// The same call to one named host (one of `engine_hosts`): how Unity asks each Ollama what it has (T-293).
+    pub async fn engine_fetch_on(self: &Arc<Self>, host: &str, engine: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
+        if !ENGINES.contains(&engine) { return Err(herr(400, format!("Unknown engine {engine}"))); }
+        if !self.engine_hosts(engine).iter().any(|h| h == host) { return Err(herr(503, format!("{host} does not lend the {engine} engine right now."))); }
+        self.relay(host, engine, path, method, headers, body, "engine", false).await
     }
     pub async fn provider_fetch(self: &Arc<Self>, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
         if !self.online(host) { return Err(herr(503, format!("That AI host ({}) is offline right now.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(host.into())))); }
@@ -859,6 +887,12 @@ fn pick_headers(v: &Value) -> Vec<(String, String)> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hello_lists_the_brain_among_its_models() {
+        let h = serde_json::json!({ "engines": ["ollama"], "providers": [{ "id": "claude", "models": ["claude-opus-5-5"] }, { "id": "ollama", "kind": "openai", "models": ["llama3.1:8b", "unity-brain:latest"] }] });
+        assert!(super::hello_has_model(&h, "unity-brain")); assert!(super::hello_has_model(&h, "unity-brain:latest")); assert!(!super::hello_has_model(&h, "qwen3"));
+        assert!(!super::hello_has_model(&serde_json::json!({ "engines": ["ollama"] }), "unity-brain"), "an older host's hello: no models known");
+    }
     use super::*;
     #[test]
     fn a_scope_limits_models_and_uses_and_defaults_to_everything() {

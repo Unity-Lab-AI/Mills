@@ -120,6 +120,16 @@ impl HostSettings {
         if let Some(m) = l.get("providers").and_then(Value::as_object) { for (id, v) in m { self.set(&format!("provider.{id}.maxSessions"), &if v.is_null() { String::new() } else { num(v) })?; } }
         Ok(())
     }
+    /// Unity's local brain on this machine (T-293), all optional under "unity": the model she runs on (default
+    /// "unity-brain"), the Modelfile it is loaded from when Ollama here does not have it (default: looked for next to the
+    /// hub checkout and the host folder, `brain_modelfile_candidates`), the `ollama` program ("ollama" on the PATH), and
+    /// whether the host starts an installed Ollama that is not running (`autoDetect.startOllama`, default on).
+    pub fn unity_model(&self) -> String { self.obj("unity").and_then(|o| o.get("model")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).unwrap_or("unity-brain").to_string() }
+    pub fn unity_modelfile(&self) -> Option<PathBuf> { self.obj("unity").and_then(|o| o.get("modelfile")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(|s| std::path::absolute(s).unwrap_or_else(|_| PathBuf::from(s))) }
+    pub fn ollama_command(&self) -> String { self.obj("unity").and_then(|o| o.get("ollamaCommand")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).unwrap_or("ollama").to_string() }
+    pub fn start_ollama(&self) -> bool { self.obj("autoDetect").and_then(|o| o.get("startOllama")).and_then(Value::as_bool) != Some(false) }
+    /// The hub checkout this host works from ("work.hubRepo"), when set.
+    pub fn hub_repo(&self) -> Option<PathBuf> { self.obj("work").and_then(|o| o.get("hubRepo")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(|s| std::path::absolute(s).unwrap_or_else(|_| PathBuf::from(s))) }
     pub fn pc_folder(&self) -> Option<PathBuf> { self.obj("pc").and_then(|o| o.get("folder")).and_then(Value::as_str).filter(|s| !s.is_empty()).map(|s| std::path::absolute(s).unwrap_or_else(|_| PathBuf::from(s))) }
     pub fn work(&self) -> Map<String, Value> { self.obj("work").cloned().unwrap_or_default() }
     /// The engines lent to the hub by name → their local address (the ones switched off live under "enginesOff").

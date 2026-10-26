@@ -26,6 +26,7 @@ pub mod forgejo;
 pub mod gateway;
 pub mod machines;
 pub mod guilds;
+pub mod hyperwork;
 pub mod perms;
 pub mod native_releases;
 pub mod notes;
@@ -74,6 +75,7 @@ pub struct Modules {
     pub releases: releases::Releases,
     pub gateway: gateway::Gateway,
     pub re: Arc<re::Re>,
+    pub hyperwork: hyperwork::Hyperwork,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -89,7 +91,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), mills })
+            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -190,6 +192,7 @@ pub fn start_background(hub: &Arc<Hub>) {
     let h = hub.clone();
     forever("AI hosts state push", move || { let h = h.clone(); async move { loop { h.mods.ai.dirty.notified().await; tokio::time::sleep(std::time::Duration::from_millis(50)).await; push_ai_state(&h).await; } } });
     work::start(hub);
+    hyperwork::start(hub);
     chat::start(hub);
     unity_brain::start(hub);
     re::start(hub);
@@ -211,6 +214,17 @@ fn from_front(hub: &Hub, r: &Req) -> bool {
     r.peer.ip().is_loopback() && r.header("x-vr-front-secret").map(|s| bool::from(s.as_bytes().ct_eq(hub.mods.front_secret.as_bytes()))).unwrap_or(false)
 }
 fn answer(status: u16, v: Value) -> Routed { Routed::Answer(jresp(status, &v)) }
+/// A Work run's MCP tool call: the Hyper Workflows team tools are this hub's own (hyperwork.rs), the rest Work's.
+/// A Work run's relayed tool call, as the caller the hub's records name (T-308): the Hyper Workflows tools (T-207) are the
+/// hyperwork module's, everything else the run tools'.
+async fn team_or_work(hub: &Arc<Hub>, tool: &str, c: &work::Caller, b: &Value) -> (u16, Value) {
+    if tool == "team" && b["name"].as_str().is_some_and(|n| n.starts_with("hyperwork_")) {
+        let mut b = b.clone();
+        if !c.legacy { b["session"] = json!(c.session); }
+        return (200, hyperwork::tool(hub, &c.account, &b).await);
+    }
+    work::tool_for(hub, if tool == "pc-tool" { "pc" } else { tool }, c, b).await
+}
 
 /// The JavaScript hub's own "moving house" switch (bridge/.maintenance): its text is the new address.
 fn maintenance(hub: &Hub) -> Option<String> { std::fs::read_to_string(hub.root.join(".maintenance")).ok().map(|t| { let t = t.trim().to_string(); if t.is_empty() { "the server".into() } else { t } }) }
@@ -281,7 +295,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             Some((account, _)) => {
                 let b = r.json();
                 match hub.mods.work.job_caller(id, &account, r.header("x-mills-account").unwrap_or(""), b["session"].as_str().unwrap_or("")) {
-                    work::Relay::Run(c) => { let (st, v) = work::tool_for(hub, if tool == "pc-tool" { "pc" } else { tool }, &c, &b).await; answer(st, v) }
+                    work::Relay::Run(c) => { let (st, v) = team_or_work(hub, tool, &c, &b).await; answer(st, v) }
                     work::Relay::Refused(why) => answer(403, json!({ "ok": false, "error": why })),
                     _ => answer(403, json!({ "ok": false, "error": "forbidden" })),
                 }
@@ -295,10 +309,9 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         if r.method == hyper::Method::POST {
             let default = hub.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string();
             let b = r.json();
-            let which = if tool == "pc-tool" { "pc" } else { tool };
             match hub.mods.work.relay_auth(r.header("x-mills-internal").unwrap_or(""), r.header("x-mills-account").unwrap_or(""), &default, b["session"].as_str().unwrap_or("")) {
-                work::Relay::Run(c) => { let (st, v) = work::tool_for(hub, which, &c, &b).await; return answer(st, v); }
-                work::Relay::Legacy(account) => { let c = work::Caller { account, session: b["session"].as_str().unwrap_or("").to_string(), sid: String::new(), run: String::new(), legacy: true }; let (st, v) = work::tool_for(hub, which, &c, &b).await; return answer(st, v); }
+                work::Relay::Run(c) => { let (st, v) = team_or_work(hub, tool, &c, &b).await; return answer(st, v); }
+                work::Relay::Legacy(account) => { let c = work::Caller { account, session: b["session"].as_str().unwrap_or("").to_string(), sid: String::new(), run: String::new(), legacy: true }; let (st, v) = team_or_work(hub, tool, &c, &b).await; return answer(st, v); }
                 work::Relay::Refused(why) => return answer(403, json!({ "ok": false, "error": why })),
                 work::Relay::NotOurs => {}
             }
@@ -309,6 +322,9 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if let Some(rest) = p.strip_prefix("/internal/gateway/") { return gateway::route(hub, r, rest).await; }
     if let Some(rest) = p.strip_prefix("/p/") { return gateway::serve(hub, r, rest).await; }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
+    // Hyper Workflows (T-212): webhooks (signed, no session) and this machine's own events
+    if let Some(id) = p.strip_prefix("/hooks/hyperwork/") { return if r.method == hyper::Method::POST { hyperwork::webhook(hub, r, id) } else { answer(405, json!({ "error": "POST only" })) }; }
+    if p == "/internal/hyperwork/event" && r.method == hyper::Method::POST { return hyperwork::event(hub, r); }
     // Unity's Claude brain calling her tools (this hub's secret; anything else is the JavaScript hub's)
     if p == "/internal/assistant-tool" && work::same_secret(r.header("x-mills-internal").unwrap_or(""), &vr_core::crypto::hmac_hex(hub.mods.unity.secret.as_bytes(), r.header("x-mills-account").unwrap_or("").as_bytes())) { return unity_routes::internal(hub, r).await; }
     // the OpenAI- / Anthropic-compatible API: its own bearer keys, for harnesses, not the browser app
@@ -396,9 +412,12 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         return files_http(hub, r, &u).await;
     }
+    // ----- Hyper Workflows (T-204): this hub's own, the JavaScript hub has none -----
+    if p.starts_with("/api/hyperwork/") && user.is_none() { return answer(401, json!({ "error": "Not signed in." })); }
     // ----- Work: runs, model / provider, project, usage, shared sessions, the conversation + queue, past sessions -----
     if let Some(u) = &user {
         if let Some(acc) = a.account(u) {
+            if let Some(rest) = p.strip_prefix("/api/hyperwork/") { return hyperwork::route(hub, r, &acc, rest).await; }
             if let Some(x) = work::route(hub, r, &acc).await { return x; }
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
             if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence
@@ -691,4 +710,4 @@ fn s_of(v: &Value, k: &str) -> String { v[k].as_str().unwrap_or("").to_string() 
 pub fn wants_after(r: &Req) -> bool { matches!(r.path.as_str(), "/api/logout" | "/api/admin/delete" | "/api/admin/accounts" | "/api/admin/stop" | "/api/check") || (r.path == "/api/projects" && r.method == hyper::Method::POST) }
 
 /// The modules this front answers itself.
-pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api", "chat", "unity"] }
+pub fn native_modules() -> Vec<&'static str> { vec!["auth", "board", "notes", "files", "aihosts", "work", "api", "chat", "unity", "hyperwork"] }

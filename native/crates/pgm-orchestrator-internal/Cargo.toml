@@ -1,0 +1,15 @@
+[package]
+name = "pgm-orchestrator-internal"
+description = "PGM_Orchestrator_Internal (PsyGraphMediaOrchestratorInternal): the policy of /pgm-orchestrator, pure and testable: worker profiles (free-only, one provider, paid-only, mixed), task kinds, worker selection with fallbacks, health (strikes, benches, refusals), context budgets, the orchestrator directive and roster briefing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }

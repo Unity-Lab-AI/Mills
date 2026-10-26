@@ -37,6 +37,7 @@ pgm-dist-internal = { path = "../pgm-dist-internal" }
 pgm-hcom-internal = { path = "../pgm-hcom-internal" }
 pgm-ai-internal = { path = "../pgm-ai-internal" }
 pgm-sandbox-internal = { path = "../pgm-sandbox-internal" }
+pgm-workflow-engine-internal = { path = "../pgm-workflow-engine-internal" }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.191"

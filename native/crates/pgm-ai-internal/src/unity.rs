@@ -24,8 +24,19 @@ pub const MAX_ROUNDS: usize = 6; pub const MAX_RESULT: usize = 3000; pub const H
 /// One run's view of the person: their clock and place, where pictures go, the open stream to their page.
 pub struct Ci { pub place: Place, pub tz: String, pub scope: String, pub user: String, pub out: Option<mpsc::UnboundedSender<Value>>, pub images: Vec<String>, pub media: Vec<String> }
 impl Ci { pub fn send(&self, v: Value) { if let Some(o) = &self.out { let _ = o.send(v); } } }
+/// Ollama as last seen: answering, the brain (`model`) loaded, and when not, the stand-in model Unity answers on
+/// meanwhile ("" = none: the brain's error is shown). T-293.
 #[derive(Default, Clone)]
-pub struct Ollama { pub up: bool, pub model: bool, pub checked: u64 }
+pub struct Ollama { pub up: bool, pub model: bool, pub checked: u64, pub standin: String }
+/// Is the brain among Ollama's models? ("unity-brain" matches "unity-brain" and "unity-brain:latest".)
+pub fn has_brain(models: &[String], brain: &str) -> bool { let b = brain.trim_end_matches(":latest"); models.iter().any(|m| m == brain || m.trim_end_matches(":latest") == b) }
+/// The model Unity answers on while the brain is not loaded: the configured fallback when there is one, else the first
+/// model Ollama lists that can chat (embedding / reranking models are not it), else "" (nothing to answer with).
+pub fn pick_standin(models: &[String], brain: &str, fallback: &str) -> String {
+    if !fallback.is_empty() { return fallback.to_string(); }
+    let not_chat = |m: &str| { let l = m.to_lowercase(); ["embed", "rerank", "bge-", "minilm", "e5-", "clip", "whisper"].iter().any(|w| l.contains(w)) };
+    models.iter().find(|m| !has_brain(std::slice::from_ref(m), brain) && !not_chat(m)).cloned().unwrap_or_default()
+}
 /// A body as it comes, from an engine here or one an AI host lends.
 pub enum Src { Http(reqwest::Response), Host(mpsc::Receiver<Result<Bytes, String>>) }
 impl Src {
@@ -40,6 +51,8 @@ pub struct Unity {
     root: PathBuf, mills: PathBuf,
     pub web: Web,
     pub ollama_state: Mutex<Ollama>, ollama_lock: tokio::sync::Mutex<()>, services: tokio::sync::Mutex<()>,
+    /// (the hosts asked, when, the one with the brain): `pick_brain_host`
+    brain_probe: Mutex<(String, u64, Option<String>)>,
     stores: Mutex<HashMap<String, Value>>,
     states: Mutex<HashMap<String, Value>>,
     pub clients: Mutex<HashMap<String, Value>>,
@@ -70,7 +83,7 @@ impl Unity {
             image_url: clean_url(&a["imageUrl"], "http://127.0.0.1:5124"), voice_url: clean_url(&a["voiceUrl"], "http://127.0.0.1:5123"), ears_url: clean_url(&a["speechUrl"], "http://127.0.0.1:5125"), via_node: a["via"] == json!("node"),
             image_ckpt: p("imageCheckpoint", mills.join("..").join("Unity 3D Equational Model").join("Unity 18+").join("models").join("realistic-vision-v51.safetensors")), images_dir: mills.join("Images"),
             selfie_look: a["selfieLook"].as_str().unwrap_or("25 year old emo goth woman, black hair with hot pink streaks").into(), web: Web::new(&a), root: root.to_path_buf(), mills,
-            ollama_state: Mutex::default(), ollama_lock: tokio::sync::Mutex::new(()), services: tokio::sync::Mutex::new(()), stores: Mutex::default(), states: Mutex::default(), clients: Mutex::default(), pending: Mutex::default(), last: Mutex::default(), notices: Mutex::default(),
+            ollama_state: Mutex::default(), ollama_lock: tokio::sync::Mutex::new(()), services: tokio::sync::Mutex::new(()), brain_probe: Mutex::default(), stores: Mutex::default(), states: Mutex::default(), clients: Mutex::default(), pending: Mutex::default(), last: Mutex::default(), notices: Mutex::default(),
             runs: Mutex::default(), waiting: Mutex::default(), claude_out: Mutex::default(), caps: Mutex::new(None), secret: pgm_core_internal::crypto::random_hex(24), http: reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().expect("http"), a }
     }
     pub fn busy(&self) -> bool { !self.runs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() }
@@ -95,25 +108,52 @@ impl Unity {
         Ok((st, serde_json::from_slice(&src.all().await).unwrap_or(Value::Null)))
     }
     async fn ollama_up(&self, hub: &Arc<dyn AiHub>) -> bool { matches!(self.engine(hub, &format!("{}/api/version", self.ollama), "GET", vec![], 2000).await, Ok((200..=299, _))) }
-    async fn has_model(&self, hub: &Arc<dyn AiHub>, name: &str) -> bool { match self.engine_json(hub, &format!("{}/api/tags", self.ollama), "GET", Value::Null, 4000).await { Ok((_, v)) => v["models"].as_array().map(|m| m.iter().any(|x| x["name"] == json!(name) || x["name"] == json!(format!("{name}:latest")))).unwrap_or(false), Err(_) => false } }
-    /// Ollama and the local model: started here on demand (not via an AI host: its host runs them).
+    /// The models Ollama lists (/api/tags), by name; empty when it does not answer.
+    async fn models(&self, hub: &Arc<dyn AiHub>) -> Vec<String> { match self.engine_json(hub, &format!("{}/api/tags", self.ollama), "GET", Value::Null, 4000).await { Ok((_, v)) => v["models"].as_array().map(|m| m.iter().filter_map(|x| x["name"].as_str().or(x["model"].as_str()).map(String::from)).collect()).unwrap_or_default(), Err(_) => vec![] } }
+    /// Ollama and the local model: started here on demand (not via an AI host: its host runs them and loads the brain
+    /// from its own Modelfile, T-293). When the brain is not there, a stand-in is picked from what Ollama has.
     pub async fn ensure_ollama(&self, hub: &Arc<dyn AiHub>) -> Ollama {
         let _g = self.ollama_lock.lock().await;
         let cmd = self.a["ollamaCommand"].as_str().unwrap_or("ollama").to_string();
+        if self.via_node { self.pick_brain_host(hub).await; }
         if !self.ollama_up(hub).await && !self.via_node {
             let _ = detached(&cmd, &["serve"], None);
             for _ in 0..30 { if self.ollama_up(hub).await { break; } tokio::time::sleep(Duration::from_secs(1)).await; }
         }
         let up = self.ollama_up(hub).await;
-        let mut model = up && self.has_model(hub, &self.local_model).await;
+        let mut models = if up { self.models(hub).await } else { vec![] };
+        let mut model = up && has_brain(&models, &self.local_model);
         if !self.via_node && up && !model && self.modelfile.exists() {
             println!("[vr-hub] Unity: loading {} into Ollama (one time, a few minutes)...", self.local_model);
             let dir = self.modelfile.parent().map(Path::to_path_buf);
             let _ = tokio::process::Command::new(&cmd).args(["create", &self.local_model, "-f", &self.modelfile.display().to_string()]).current_dir(dir.unwrap_or_default()).status().await;
-            model = self.has_model(hub, &self.local_model).await;
+            models = self.models(hub).await; model = has_brain(&models, &self.local_model);
         }
-        let st = Ollama { up, model, checked: pgm_core_internal::now_ms() };
+        let standin = if up && !model { pick_standin(&models, &self.local_model, &self.fallback) } else { String::new() };
+        { let was = self.ollama_state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+          if up && !model && was.standin != standin { if standin.is_empty() { println!("[vr-hub] Unity: the local brain {} is not loaded on the AI host and it has no other model to stand in", self.local_model); } else { println!("[vr-hub] Unity: the local brain {} is not loaded on the AI host yet; answering on {standin} meanwhile", self.local_model); } } }
+        let st = Ollama { up, model, checked: pgm_core_internal::now_ms(), standin };
         *self.ollama_state.lock().unwrap_or_else(|e| e.into_inner()) = st.clone(); st
+    }
+    /// With several AI hosts lending Ollama, the one whose Ollama has the brain is the one asked (T-293): each host's
+    /// /api/tags is read once a minute (or when the set of hosts changes; a host that does not answer is skipped) and
+    /// the first with the brain is pinned in the hosts registry. With one host, or none with the brain, nothing is pinned.
+    async fn pick_brain_host(&self, hub: &Arc<dyn AiHub>) {
+        let hosts = hub.ai().engine_hosts("ollama");
+        let key = hosts.join(",");
+        { let p = self.brain_probe.lock().unwrap_or_else(|e| e.into_inner()); if p.0 == key && pgm_core_internal::now_ms().saturating_sub(p.1) < 60_000 { return; } }
+        let mut found: Option<String> = None;
+        if hosts.len() > 1 {
+            for h in &hosts {
+                let tags = match tokio::time::timeout(Duration::from_millis(4000), hub.ai().engine_fetch_on(h, "ollama", "/api/tags", "GET", vec![], vec![])).await { Ok(Ok(r)) => serde_json::from_slice::<Value>(&r.bytes().await).unwrap_or(Value::Null), _ => continue };
+                let models: Vec<String> = tags["models"].as_array().map(|m| m.iter().filter_map(|x| x["name"].as_str().or(x["model"].as_str()).map(String::from)).collect()).unwrap_or_default();
+                if has_brain(&models, &self.local_model) { found = Some(h.clone()); break; }
+            }
+        }
+        { let was = self.brain_probe.lock().unwrap_or_else(|e| e.into_inner()).2.clone();
+          if was != found { match &found { Some(h) => println!("[vr-hub] Unity: the local brain {} is on AI host {h}; her engine calls go there", self.local_model), None if hosts.len() > 1 => println!("[vr-hub] Unity: none of the {} AI hosts lending Ollama has the local brain {}", hosts.len(), self.local_model), None => {} } } }
+        hub.ai().prefer_engine_host("ollama", found.clone());
+        *self.brain_probe.lock().unwrap_or_else(|e| e.into_inner()) = (key, pgm_core_internal::now_ms(), found);
     }
     /// The Python services (image engine, her voice, speech recognition): started detached when they do not answer.
     async fn ensure_service(&self, hub: &Arc<dyn AiHub>, url: &str, args: Vec<String>, cwd: PathBuf) -> bool {
@@ -288,6 +328,19 @@ impl Unity {
             _ => Ok(self.with_store(a, |st| crate::unity_brain::store_tool(st, name, args, &tz))),
         };
         res.unwrap_or_else(|e| json!({ "ok": false, "error": e }))
+    }
+}
+#[cfg(test)]
+mod brain_tests {
+    use super::{has_brain, pick_standin};
+    fn v(l: &[&str]) -> Vec<String> { l.iter().map(|s| s.to_string()).collect() }
+    #[test]
+    fn the_brain_is_found_with_or_without_latest_and_a_stand_in_is_a_chat_model() {
+        assert!(has_brain(&v(&["unity-brain:latest"]), "unity-brain")); assert!(has_brain(&v(&["unity-brain"]), "unity-brain:latest")); assert!(!has_brain(&v(&["unity-brain-v2:latest"]), "unity-brain"));
+        assert_eq!(pick_standin(&v(&["nomic-embed-text:latest", "llama3.1:8b", "qwen3:4b"]), "unity-brain", ""), "llama3.1:8b", "the first chat model, not the embedder");
+        assert_eq!(pick_standin(&v(&["nomic-embed-text:latest", "bge-m3:latest"]), "unity-brain", ""), "", "nothing can chat");
+        assert_eq!(pick_standin(&v(&[]), "unity-brain", ""), "");
+        assert_eq!(pick_standin(&v(&["llama3.1:8b"]), "unity-brain", "my-fallback"), "my-fallback", "the configured fallback wins");
     }
 }
 fn radix36(mut n: u64) -> String { let d = b"0123456789abcdefghijklmnopqrstuvwxyz"; let mut v = vec![]; loop { v.push(d[(n % 36) as usize]); n /= 36; if n == 0 { break; } } v.reverse(); String::from_utf8(v).unwrap() }

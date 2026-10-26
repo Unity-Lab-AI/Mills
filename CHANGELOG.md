@@ -7,6 +7,96 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.30.0 — 2026-10-26
+
+MINOR: **Gee's Hyper Workflows branch and Sponge's 5.26.0 to 5.29.1 together on develop.** Both branches had a 5.26.0;
+Gee's (work/gee) is written out here, Sponge's further down. Merge notes:
+- **Work-run tool relay:** the Hyper Workflows tools (`hyperwork_list`, `hyperwork_run`) go through the per-run secret
+  of T-308 like every other run tool: the account and session come from the run's record, never from a header.
+- **Team MCP and the host's tool list:** the RE container tools (T-303) and the Hyper Workflows tools side by side.
+- **AI host:** the PC role on the library (T-313) and Unity's brain loading (T-293) in the same host.
+- versions: project 5.30.0, bridge/team-mcp.js 1.4.0, bridge/team.js 1.1.4, web/index.html 1.27.0.
+
+**From Gee's branch (5.26.0 on work/gee):**
+
+MINOR: **Hyper Workflows** (T-184: T-199 to T-207, T-210, T-186 = T-211 to T-213, T-205; the team note
+plans/hyper-workflows.md), **Unity's brain loads on the AI host** (T-293) and the **agent-to-agent spec checks** (T-295).
+Everything new is the Rust hub's; the frozen JavaScript hub answers 404 on `/api/hyperwork/` (R445) and keeps reading
+every shared file as before (the workflow data is new files under `Hyperwork/`).
+
+**Hyper Workflows: an independent, node-based workflow system.** A workflow is a re-usable flow chart; a prompt sent
+through it is carried by the engine through the whole automated back-and-forth (AI calls, JEV decisions, programmatic
+steps) until it ends. The AI is one kind of node inside it.
+- **Libraries** (native/crates, the library law; they go to pgm-libs with this release): `pgm-workflow-internal` (the
+  graph model and JSON document with unknown fields kept and migration on read, port types, validation, diff, versions,
+  laws / prompts shapes, node-kind manifests, `{{template}}` and condition expressions, the store; T-199),
+  `pgm-workflow-engine-internal` (the engine: tokens on wires, parallel lines and joins, switch, bounded loops,
+  sub-graphs, for-each, sub-workflows, retries / timeouts / failure paths, approvals that hold no worker, run limits,
+  cancel, an append-only run log that is also the resume memory, replay; `WorkflowHost` + `NodeKind` traits and a fake
+  host; T-200), the **built-in kinds** prompt / chat / summarise / jev / tool (+ custom HTTP with secrets in headers
+  only) / script (the transform language, no files, network or clock) / agent / orchestrate / sub-workflow, with model
+  choice node → section → workflow → host and a fallback (T-201), **laws and saved prompts** applied scope → workflow →
+  sections → node, groups, `-law-x`, lockable laws, checks with onFail, `{{prompt:name}}` pinned or latest, export /
+  import bundles (T-202), **custom node kinds** made on the fly (graph / http / script; from a selection; published once
+  per version after their tests pass; author-only → reviewed → blocked trust; pinned majors; hashes checked; T-203),
+  the **decision-model slot** (a scope's JEV through OpenRouter, a local Ollama model as its fallback, a node's own
+  model first; T-210), the **AI side chat's server side** (`POST ask`: the person's own AI answers with text and a
+  patch of editor commands, writes nothing; T-206), **triggers** (timers every N minutes / hours / days and the board's
+  own repeats, missed once or skipped, a scheduler lease so one hub fires, Forgejo / GitHub webhooks signed with the
+  trigger's secret, internal events from this machine, standing workflows with run history, pause / resume and a chat
+  alert to the owner when a run fails; T-186), and `pgm-workflow-command-internal`, the one `/hyperwork <name>
+  [--project P] [--on runner] [--version V] <prompt>` parser for the page, Hyper Prod Man and jcode, with the
+  nearest-names helper (T-207; mirrored by copy into Jcode PGM).
+- **The hub** (`vr-hub` hyperwork module, `/api/hyperwork/`; T-204): scopes me- / team- / grp- / company (config
+  `hyperworkTeams`), rights run / view / edit / publish / admin, run-only clients (a jcode session), list with the
+  type-ahead order and `since=<rev>`, get / save (etag, 409) / validate / publish / versions / diff / restore / promote /
+  delete / perms / policy / export / import, run (the published version pinned; 422 with the preflight problems), the
+  run log streamed as NDJSON with `follow=1`, cancel, answer, replay; runs resume from their logs after a hub restart
+  (`run_resume`); the log is scrubbed of secrets (config `hyperworkSecrets`; HTTP only to `hyperworkNetwork`); AI
+  through the person's own providers; `POST command` runs a `/hyperwork` line (404 with the nearest names when nothing
+  matches); webhooks at `POST /hooks/hyperwork/<id>`, internal events at `POST /internal/hyperwork/event` (config
+  `hyperworkEventSecret`, this machine only); **the same routes for a product's people through the gateway**
+  (`/internal/gateway/hyperwork/<rest>`, spec 15: Hyper Prod Man's /hyperwork and editor; R474). The team tools
+  `hyperwork_list` / `hyperwork_run` let a Work run's AI send a prompt through a workflow as its person (team-mcp.js
+  1.2.0, mcp-tools.json). A session keeps the client it signed in with (pgm-identity-internal `session_client`).
+- **The page** (web/index.html 1.26.0, web/sw.js 1.0.6): `/hyperwork` and `/hw` in the Work box with a type-ahead from
+  the hub's list (grey = cannot run here, with the reason), the run followed line by line, Approve / Reject on an
+  approval, the answer at the end; `--project`, else the page's project. **The visual editor foundation** (T-205,
+  Sponge's agent branch merged here): `web/editor/core.js` (pure logic: add, move, resize, snap, box select, align,
+  group / ungroup, undo / redo, copy / paste across documents, sub-graph views, a json-schema property panel, AI patches
+  as one undo step), `view.js`, the plugins `kinds-workflow.js` (the hub's kinds, the document, the `/api/hyperwork`
+  client, the run overlay, the side chat with patch preview, triggers) and `kinds-boxes.js` (a T-191 stub), and the
+  **Workflows screen** (`workflows-ui.js`: the menu tile, `/workflows`, the list, the editor, save / test run / publish /
+  duplicate / delete). Mills' look, the native port (R453) and a few editor gaps (moving a section, opening loop
+  sub-graphs, resizing) are left for later.
+- **Checks:** R401 to R406 (model), R407 to R423 (engine and kinds), R425 to R436 (laws, custom kinds), R437 to R446 and
+  R460 to R462, R465, R472, R474 (the hub over HTTP), R447 to R452 (the editor), R454 to R458 (the side chat), R466 to
+  R471 (triggers); 0 failed in both suite modes.
+
+**Unity's brain loads on the AI host** (T-293; Sponge: "my brain glitched: the local brain (unity-brain) is not loaded
+on the AI host yet").
+- **What happened:** with the hub on the server, Unity borrows Ollama from whichever admin's host lends one. Gee's host
+  offered no Ollama (not running there), so the hub asked Sponge's host, whose Ollama has no unity-brain; the engine
+  guard rightly stops the hub from loading a model on a host, and only a hub on the same PC ever loaded the brain itself.
+- **The host** (vr-host): starts an installed Ollama that is not running (`autoDetect.startOllama`, default on; its
+  output in `ollama.log`) and loads the brain from a Modelfile it finds (`unity.modelfile`, else next to `work.hubRepo`,
+  in the host folder's `models/unity-brain/Modelfile`, or next to the host folder's parents), then says hello again
+  with the new model; one log line when there is no Modelfile. Settings `unity.model`, `unity.modelfile`,
+  `unity.ollamaCommand`, `autoDetect.startOllama` (ai-node.example.json).
+- **The hub:** with several hosts lending Ollama, Unity asks each one's `/api/tags` (once a minute, or when the set
+  changes) and pins the host that has the brain (`AiHosts::prefer_engine_host`); a host whose hello lists the brain
+  comes first anyway. When no host has it, she answers on a stand-in chat model of that Ollama (never an embedding
+  model; `assistant.fallbackModel` first when set), `/api/assistant/state` says so (`local.standin`) and the Unity screen
+  shows it. The glitch text remains only when the Ollama has no chat model at all, and then says how to fix it.
+- README (host setup), R473, unit tests for the brain lookup, the stand-in pick, the hello models and the Modelfile search.
+
+**Agent to agent** (T-295 = T-294 · 1/6): the spec is the team note plans/agent-talk.md; its checks R480 to R484 are in
+the suite as `spec()` lines (SPEC until T-296 to T-300 build them). The fake Claude's team-tool script and the `HYPERWORK`
+script share one relay helper (fake-claude.js).
+
+**Also:** `Ollama` in the AI host's hello (an ai-node.json `unity` block is optional and older hosts need nothing);
+NAMES.md lists the three workflow crates; the merge of develop's pgm-plan-internal, releases and notify tools alongside.
+
 ## 5.29.1 — 2026-10-26
 
 PATCH: **screen sharing in calls, fixed as far as the code shows** (T-320). Found by reading and testing the code; the
