@@ -3482,6 +3482,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgm-orchestrator-internal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pgm-plan-internal"
 version = "0.1.0"
 dependencies = [
@@ -3498,6 +3506,37 @@ dependencies = [
  "tokio",
  "windows-service",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pgm-workflow-command-internal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "pgm-workflow-engine-internal"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "pgm-collab-internal",
+ "pgm-core-internal",
+ "pgm-orchestrator-internal",
+ "pgm-workflow-command-internal",
+ "pgm-workflow-internal",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "pgm-workflow-internal"
+version = "0.1.0"
+dependencies = [
+ "pgm-core-internal",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6157,6 +6196,7 @@ dependencies = [
  "pgm-identity-internal",
  "pgm-net-internal",
  "pgm-platform-internal",
+ "pgm-workflow-engine-internal",
  "regex",
  "reqwest",
  "scrypt",

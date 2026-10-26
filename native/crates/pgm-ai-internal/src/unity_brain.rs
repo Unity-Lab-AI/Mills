@@ -147,9 +147,10 @@ pub fn ollama_usage(ev: &Value) -> Option<pgm_context_internal::ledger::Usage> {
 pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut Ci, cancel: &crate::openai::Cancel, opts: Opts) -> Result<String, String> {
     let u = hub.unity();
     let st = u.ensure_ollama(hub).await;
-    let model = if st.model { u.local_model.clone() } else { u.fallback.clone() };
+    // the brain, else the configured fallback, else what the host's Ollama has (T-293: she answers rather than glitches)
+    let model = if st.model { u.local_model.clone() } else if !u.fallback.is_empty() { u.fallback.clone() } else { st.standin.clone() };
     if !st.up || model.is_empty() {
-        return Err(if st.up { format!("The local brain ({}) is not loaded on the AI host yet.", u.local_model) } else { let r = if u.via_node { hub.ai().reason() } else { String::new() }; if r.is_empty() { "Unity's brain (Ollama) is not running on the AI host.".into() } else { r } });
+        return Err(if st.up { format!("The local brain ({}) is not loaded on the AI host yet, and its Ollama has no other model to stand in. The host loads the brain from its Modelfile when it finds one (ai-node.json: unity.modelfile), or pull any chat model there.", u.local_model) } else { let r = if u.via_node { hub.ai().reason() } else { String::new() }; if r.is_empty() { "Unity's brain (Ollama) is not running on the AI host.".into() } else { r } });
     }
     let native = u.native_tools(hub, &model).await;
     let say_mode = model.starts_with("unity-brain");

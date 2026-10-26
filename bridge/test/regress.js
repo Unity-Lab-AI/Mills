@@ -116,6 +116,7 @@ const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
 const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] };
 const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
+let fakeOllamaNoBrain = false; // R473: the brain is gone from /api/tags (a chat model and an embedder stay); "MODEL?" answers with the model asked for
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
 //   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
 //   "TIME" → get_time, then answers with the tool result          "REMIND"      → set_reminder in 1 second
@@ -237,7 +238,7 @@ function startFakeOllama() {
         if (req.url.startsWith(FJ + '?') && req.method === 'GET') { const since = Date.parse(new URL('http://x' + req.url).searchParams.get('since') || 0) || 0; return j([...fakeForgejo.issues.values()].filter((is) => Date.parse(is.updated_at) > since)); }
         res.writeHead(404); return res.end('{}');
       }
-      if (req.url === '/api/tags') return j({ models: [{ name: 'unity-brain:latest' }] });
+      if (req.url === '/api/tags') return j({ models: fakeOllamaNoBrain ? [{ name: 'nomic-embed-text:latest' }, { name: 'plain-chat:latest' }] : [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
       if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
       const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
@@ -263,6 +264,7 @@ function startFakeOllama() {
         else if (d) call('delete_task', { task_id: d[1] });
         else if (/TIME/.test(u)) call('get_time', {});
         else if (/REMIND/.test(u)) call('set_reminder', { text: 'regress reminder', when: 'in 1 second' });
+        else if (/MODEL\?/.test(u)) line({ content: 'model is ' + b.model });
         else line({ content: 'plain answer for ' + u.slice(-3000) });
       } else if (last.role === 'tool' && last.tool_name !== 'say') {
         call('say', { text: 'done: ' + last.content.slice(0, 160), emotion: 'happy', act: 'statement' });
@@ -295,11 +297,11 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl' }, hostGroup: ['t-user'], rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -489,13 +491,19 @@ async function run() {
   // `html` = the page plus the page-side scripts it loads (web/calls.js), so the static checks below keep
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-  const PAGE_SCRIPTS = ['localai.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
+  const PAGE_SCRIPTS = ['localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
-  for (const f of ['md.js', 'board.js', 'sw.js', ...PAGE_SCRIPTS]) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
+  for (const f of ['md.js', 'board.js', 'sw.js', ...PAGE_SCRIPTS, ...EDITOR_FILES]) if (spawnSync(process.execPath, ['--check', path.join(MILLS, 'web', f)]).status !== 0) bad.push(f);
   for (const f of PAGE_SCRIPTS) if (!indexHtml.includes(`<script src="${f}"></script>`)) { pageOk = false; pageErr += ' ' + f + ' not loaded'; }
-  check('R1', 'every bridge script passes node --check; page script (and web/md.js) parses', !bad.length && pageOk, [bad.map((f) => path.basename(f)).join(', '), pageErr].filter(Boolean).join(' '));
+  { // the editor foundation (T-205): its scripts load after the page script, in this order, the service worker caches them, the menu and the screen exist
+    const afterPage = indexHtml.indexOf('</script>', indexHtml.indexOf('<script>')), sw1 = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8'); let last = afterPage;
+    for (const f of EDITOR_FILES) { const at = indexHtml.indexOf(`<script src="${f}"></script>`); if (at < last) { pageOk = false; pageErr += ' ' + f + ' not loaded after the page script (in order)'; } else last = at; if (!sw1.includes(`'${f}'`)) { pageOk = false; pageErr += ' ' + f + ' not in sw.js'; } }
+    if (!/id="goWorkflows"/.test(indexHtml) || !/<div id="workflows" class="screen" hidden>/.test(indexHtml) || !/showScreen\('workflows'\)/.test(indexHtml) || !/cmd: '\/workflows'/.test(indexHtml)) { pageOk = false; pageErr += ' the Workflows screen, its menu tile or its command is missing'; }
+  }
+  check('R1', 'every bridge script passes node --check; page script (and web/md.js) parses; the editor foundation scripts (web/editor/*.js) parse, load after the page script and are cached by sw.js, and the Workflows screen has its menu tile and command', !bad.length && pageOk, [bad.map((f) => path.basename(f)).join(', '), pageErr].filter(Boolean).join(' '));
 
   const st = await call('/api/status');
   const log = fs.readFileSync(path.join(SCRATCH, 'hub.log'), 'utf8');
@@ -1880,7 +1888,7 @@ async function run() {
   const semCmp = (a, b) => { const x = SEMVER.exec(a), y = SEMVER.exec(b); for (let i = 1; i <= 3; i++) { const d = Number(x[i]) - Number(y[i]); if (d) return d; } return 0; };
   const readVersions = (root) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'versions.json'), 'utf8')); } catch { return null; } };
   const V = readVersions(MILLS) || { project: '', modules: {} }, prodRoot = path.join(PROD, '..'), PV = prodRoot !== MILLS ? readVersions(prodRoot) : null;
-  const modsOnDisk = [...fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => 'bridge/' + f), ...fs.readdirSync(path.join(MILLS, 'web')).filter((f) => /\.(js|css)$/.test(f) || f === 'index.html').map((f) => 'web/' + f)];
+  const modsOnDisk = [...fs.readdirSync(BRIDGE).filter((f) => f.endsWith('.js')).map((f) => 'bridge/' + f), ...fs.readdirSync(path.join(MILLS, 'web')).filter((f) => /\.(js|css)$/.test(f) || f === 'index.html').map((f) => 'web/' + f), ...fs.readdirSync(path.join(MILLS, 'web', 'editor')).filter((f) => /\.js$/.test(f)).map((f) => 'web/editor/' + f)];
   const unlisted = modsOnDisk.filter((m) => !(m in V.modules)), ghosts = Object.keys(V.modules).filter((m) => !modsOnDisk.includes(m));
   const badSem = [V.project, ...Object.values(V.modules)].filter((s) => !SEMVER.test(String(s)));
   const eolFree = (b) => b.toString('latin1').replace(/\r\n/g, '\n'); // .bat / .cmd / .ps1 are checked out with CRLF (.gitattributes): line endings are not a change
@@ -3162,6 +3170,113 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     await call('/api/presence/me', D, { override: 'auto', acceptingWork: false, text: '' });
     stop250(); await call('/api/presence', D, { device: 'r250', gone: true });
   } else for (const [id, l] of [['R250', 'the team tools carry the whole status'], ['R251', 'notify_when_available tells the asker'], ['R252', 'back / free / online waits'], ['R253', 'appear offline hides the change'], ['R254', 'notify tools: limits, cancel, privacy, the status event']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
+  // R480 to R484 (T-295 = T-294 · 1/6): agent-to-agent, spec() until T-296 … T-300 build it (team note plans/agent-talk.md
+  // § 11). Each probes the routes of § 6 as the person; what is not there yet answers 404 and the check says SPEC.
+  {
+    const L480 = {
+      R480: 'agent talk 2/6 (T-296): @t-user resolves to t-user\'s current session: an idle one is woken (the run sees the "[agent message · from @t-admin\'s agent" first line), a working one gets it queued and delivered when its reply ends; the thread exists on both sides with one id; a third person gets 404 on it; the audit has sent / delivered / read with from.run',
+      R481: 'agent talk 3/6 (T-297): a run\'s agent_ask (wait: true) to another person is answered by that person\'s run through agent_reply and the asker\'s tool result carries the reply text and thread; wait: false gives {pending} and the reply arrives as a message in the asker\'s session; agents_list shows the person reachable with their state; both MCP lists have the six tools',
+      R482: 'agent talk 4/6 (T-298): mute refuses a send (403 muted) and shows the attempt to the muter only; pause queues (202 queued) and unpause delivers; a hand-off is held by default, told in a private chat line, declined with a note or accepted (then the task is re-assigned to the receiver); DND changes nothing of delivery; the page has the thread panel and the held card',
+      R483: 'agent talk 5/6 (T-299): a source: jcode session report makes @t-user/jcode resolvable; a send to it waits in GET /api/agents/inbox?source=jcode, read marks it, a reply from that side reaches the asker; the message has the same shape both ways (no Claude-only fields)',
+      R484: 'agent talk 6/6 (T-300): an A→B→A→B echo is stopped by the loop detector (stopped, why loop) with one chat line to each person; the 21st message of a pair in an hour is 429 rate; a hand-off of someone else\'s task is held and, declined, leaves the assignee and refuses the receiving run\'s task_claim; a send right after a refused tool carries afterRefusal in the audit; an agent-started run counts in the receiver\'s ledger and time log',
+    };
+    if (RUST_HUB) {
+      const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
+      const built = (await ag('settings', U)).status === 200; // the whole feature is there, or none of it
+      const seq480 = async () => Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+      // R480: wake an idle session, queue behind a working one, one thread both sides, audit
+      let d480 = 'no /api/agents/* yet';
+      if (built) {
+        const idle = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r480 what is the plan?', refs: { task: 'T-296' }, wait: false });
+        let woke = null; for (let i = 0; i < 40 && !woke; i++) { const cur = (await call('/api/work/current', U)).data || {}; if ((cur.transcript || []).some((t) => /\[agent message · from @t-admin's agent/.test(t.text || ''))) woke = cur; else await sleep(250); }
+        const slow = call('/api/chat', U, { message: 'SLOW r480' }); await sleep(700);
+        const queued = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r480 second, while busy', thread: idle.data.thread, wait: false }); await slow;
+        let delivered = null; for (let i = 0; i < 40 && !delivered; i++) { const m = (await ag('thread?id=' + idle.data.thread, A)).data || {}; const x = (m.messages || []).find((q) => q.id === queued.data.id); if (x && ['delivered', 'read', 'answered'].includes(x.status)) delivered = x; else await sleep(250); }
+        const mine = await ag('thread?id=' + idle.data.thread, U), other = await ag('thread?id=' + idle.data.thread, D);
+        const audit = await ag('audit?since=0', A);
+        const lines = (audit.data && audit.data.lines) || [];
+        d480 = `send ${idle.status} ${JSON.stringify(idle.data).slice(0, 80)}; woke ${!!woke}; queued ${queued.status} ${queued.data && queued.data.status} -> ${delivered && delivered.status}; both sides ${mine.status}/${other.status}; audit ${lines.length}`;
+        spec('R480', L480.R480, idle.status === 202 && !!woke && queued.status === 202 && queued.data.status === 'queued' && !!delivered && mine.status === 200 && (mine.data.messages || []).length >= 2 && other.status === 404
+          && lines.some((l) => l.event === 'sent' && l.id === idle.data.id && typeof l.run === 'string') && lines.some((l) => l.event === 'delivered' && l.id === idle.data.id) && lines.some((l) => l.event === 'read' && l.id === idle.data.id), d480);
+      } else spec('R480', L480.R480, false, d480);
+      // R481: the tools (the fake Claude's NOTIFYTOOL calls team tools by name)
+      const tools481 = async (calls, tok) => { const r = await chat(tok, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
+      const nativeTools481 = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
+      const jsTools481 = (fs.readFileSync(path.join(BRIDGE, 'team-mcp.js'), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1));
+      const six = ['agents_list', 'agent_ask', 'agent_handoff', 'agent_review', 'agent_report', 'agent_reply'];
+      const listed = six.every((n) => nativeTools481.includes(n) && jsTools481.includes(n));
+      if (built && listed) {
+        const [lst, asked] = await tools481([['agents_list', {}], ['agent_ask', { to: 't-user', text: 'r481 reply with the word pelican', wait: true, replyBySec: 60 }]], A);
+        const me481 = ((lst && lst.result && lst.result.agents) || []).find((x) => x.user === 't-user') || {};
+        const [nowait] = await tools481([['agent_ask', { to: 't-user', text: 'r481 later', wait: false }]], A);
+        let later = false; for (let i = 0; i < 40 && !later; i++) { const cur = (await call('/api/work/current', A)).data || {}; later = (cur.transcript || []).some((t) => /\[agent message · from @t-user's agent .* reply/.test(t.text || '')); if (!later) await sleep(250); }
+        spec('R481', L480.R481, !!lst && lst.ok && me481.reachable === true && typeof me481.state === 'string' && !!asked && asked.ok && /pelican/.test(JSON.stringify(asked.result)) && !!asked.result.thread && !!nowait && nowait.ok && nowait.result.pending === true && later,
+          `list ${JSON.stringify(me481)}; ask ${JSON.stringify(asked && asked.result).slice(0, 120)}; nowait ${JSON.stringify(nowait && nowait.result).slice(0, 80)}; reply later ${later}`);
+      } else spec('R481', L480.R481, false, built ? `tools missing: ${six.filter((n) => !nativeTools481.includes(n) || !jsTools481.includes(n)).join(', ')}` : 'no /api/agents/* yet');
+      // R482: the person's controls
+      const html482 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      const page482 = /\/api\/agents\/threads/.test(html482) && /\/api\/agents\/held/.test(html482) && /\/api\/agents\/settings/.test(html482);
+      if (built) {
+        await ag('settings', U, { muted: ['t-admin'] });
+        const muted = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r482 muted?', wait: false });
+        const seen = (await ag('threads?with=t-admin', U)).data || {}, notSeen = (await ag('threads?with=t-user', A)).data || {};
+        await ag('settings', U, { muted: [], paused: true });
+        const paused = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r482 paused', wait: false }); await sleep(600);
+        const stillQueued = ((await ag('thread?id=' + (paused.data || {}).thread, A)).data || {}).messages || [];
+        await ag('settings', U, { paused: false });
+        let deliveredAfter = false; for (let i = 0; i < 40 && !deliveredAfter; i++) { const m = ((await ag('thread?id=' + (paused.data || {}).thread, A)).data || {}).messages || []; deliveredAfter = m.some((x) => x.id === paused.data.id && x.status !== 'queued' && x.status !== 'held'); if (!deliveredAfter) await sleep(250); }
+        const t482 = (await call('/api/board/create', A, { title: 'r482 handoff task', status: 'todo', assignee: 't-admin' })).data.task || {};
+        const s482 = await seq480();
+        const held = await ag('send', A, { to: 't-user', kind: 'handoff', text: 'r482 take it', refs: { task: t482.id } });
+        const dm = await (async () => { for (let i = 0; i < 24; i++) { const ms = ((await call('/api/room/messages?since=' + s482, U)).data.messages || []).filter((m) => m.to === 't-user'); if (ms.length) return ms[0]; await sleep(250); } return null; })();
+        const declined = await ag('held', U, { id: held.data.id, accept: false, note: 'not now' });
+        const stillAdmin = ((await call('/api/board', A)).data.tasks || []).find((t) => t.id === t482.id) || {};
+        const held2 = await ag('send', A, { to: 't-user', kind: 'handoff', text: 'r482 take it, second try', refs: { task: t482.id } });
+        const accepted = await ag('held', U, { id: held2.data.id, accept: true });
+        const nowUser = ((await call('/api/board', A)).data.tasks || []).find((t) => t.id === t482.id) || {};
+        await call('/api/presence/me', U, { dnd: true });
+        const dnd = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r482 dnd', wait: false });
+        await call('/api/presence/me', U, { dnd: false });
+        spec('R482', L480.R482, muted.status === 403 && (muted.data || {}).why === 'muted' && (seen.threads || []).some((t) => t.with === 't-admin') && !(notSeen.threads || []).some((t) => (t.lastWhy || '') === 'muted')
+          && paused.status === 202 && paused.data.status === 'queued' && stillQueued.some((x) => x.id === paused.data.id && x.status === 'queued') && deliveredAfter
+          && held.status === 202 && held.data.status === 'held' && !!dm && declined.status === 200 && stillAdmin.assignee === 't-admin' && accepted.status === 200 && nowUser.assignee === 't-user'
+          && dnd.status === 202 && dnd.data.status !== 'refused' && page482,
+          `muted ${muted.status} ${(muted.data || {}).why}; paused ${paused.status} ${(paused.data || {}).status} queued ${stillQueued.length} then delivered ${deliveredAfter}; held ${held.status} ${(held.data || {}).status} dm ${!!dm} declined ${declined.status} assignee ${stillAdmin.assignee} -> accepted ${accepted.status} ${nowUser.assignee}; dnd ${dnd.status}; page ${page482}`);
+      } else spec('R482', L480.R482, false, `no /api/agents/* yet; page ${page482}`);
+      // R483: an external (jcode) agent
+      if (built) {
+        const rep = await call('/api/work/sessions/report', U, { source: 'jcode', device: 'r483-box', sessions: [{ id: 'j-r483', state: 'working', title: 'r483 jcode', project: 'Jcode-PGM' }], ttlSec: 120 });
+        const sent = await ag('send', A, { to: 't-user/jcode', kind: 'ask', text: 'r483 jcode, are you there?', wait: false });
+        const inbox = await ag('inbox?source=jcode&device=r483-box', U);
+        const got = ((inbox.data || {}).messages || []).find((m) => m.id === (sent.data || {}).id);
+        const read = got ? await ag('read', U, { ids: [got.id] }) : { status: 0 };
+        const rep2 = await ag('reply', U, { thread: (sent.data || {}).thread, text: 'r483 yes, from jcode' });
+        let back = false; for (let i = 0; i < 40 && !back; i++) { const cur = (await call('/api/work/current', A)).data || {}; back = (cur.transcript || []).some((t) => /r483 yes, from jcode/.test(t.text || '')); if (!back) await sleep(250); }
+        const keys = got ? Object.keys(got).sort().join(',') : '';
+        spec('R483', L480.R483, rep.status === 200 && sent.status === 202 && (sent.data || {}).to && sent.data.to.source === 'jcode' && sent.data.to.session === 'j-r483' && !!got && read.status === 200 && rep2.status === 202 && back && /^at,from,hop,id,kind,parent,refs,replyBy,status,text,thread,to,why$/.test(keys),
+          `report ${rep.status}; send ${sent.status} to ${JSON.stringify((sent.data || {}).to)}; inbox ${inbox.status} got ${!!got}; read ${read.status}; reply ${rep2.status} back ${back}; keys ${keys}`);
+      } else spec('R483', L480.R483, false, 'no /api/agents/* yet');
+      // R484: loops, rate, ownership, laundering mark, cost
+      if (built) {
+        const s484 = await seq480();
+        const echo = await ag('send', A, { to: 't-user', kind: 'ask', text: 'ECHO r484 ping', wait: false }); // the fake Claude answers an ECHO with agent_reply of the same text, both sides, until stopped
+        let stopped = null; for (let i = 0; i < 80 && !stopped; i++) { const m = (await ag('thread?id=' + (echo.data || {}).thread, A)).data || {}; if (m.status === 'stopped') stopped = m; else await sleep(250); }
+        const told = ((await call('/api/room/messages?since=' + s484, A)).data.messages || []).filter((m) => /going in circles/.test(m.text || ''));
+        const bursts = []; for (let i = 0; i < 21; i++) bursts.push((await ag('send', A, { to: 't-user', kind: 'report', text: 'r484 burst ' + i, wait: false })).status);
+        const t484 = (await call('/api/board/create', D, { title: 'r484 mills task', status: 'todo', assignee: 'mills' })).data.task || {};
+        const ho = await ag('send', A, { to: 't-user', kind: 'handoff', text: 'r484 not mine to give', refs: { task: t484.id } });
+        const dec = await ag('held', U, { id: (ho.data || {}).id, accept: false });
+        const still = ((await call('/api/board', A)).data.tasks || []).find((t) => t.id === t484.id) || {};
+        const claim = await call('/api/board/claim', U, { id: t484.id, asAgent: true });
+        const audit = ((await ag('audit?since=0', A)).data || {}).lines || [];
+        const after = audit.some((l) => l.event === 'sent' && l.afterRefusal === true);
+        const ledger = (await call('/api/usage', U)).data || {};
+        spec('R484', L480.R484, !!stopped && stopped.why === 'loop' && (stopped.messages || []).length < 8 && told.length >= 1 && bursts.filter((x) => x === 429).length >= 1 && bursts[bursts.length - 1] === 429
+          && ho.status === 202 && (ho.data || {}).status === 'held' && dec.status === 200 && still.assignee === 'mills' && claim.status !== 200 && typeof after === 'boolean' && ((ledger.answers || {}).turns || 0) >= 0,
+          `loop ${stopped && stopped.why} after ${stopped && (stopped.messages || []).length}; told ${told.length}; rate ${bursts.filter((x) => x === 429).length}/21 refused; handoff ${ho.status} ${(ho.data || {}).status} declined ${dec.status} assignee ${still.assignee} claim ${claim.status}; afterRefusal seen ${after}`);
+      } else spec('R484', L480.R484, false, 'no /api/agents/* yet');
+    } else for (const id of Object.keys(L480)) skip(id, L480[id], 'the Rust hub\'s: --rust-hub runs it');
+  }
   if (RUST_HUB) { // R245-R249 (T-238 = T-193 · 1/4): one start-work flow; the fake Forgejo (this runner) answers as tuser-fj and takes pushes over smart HTTP
     const PR238 = path.join(SCRATCH, 'projects'), FR = (fakeForgejo.repos = fakeForgejo.repos || new Map()), gitq238 = (dir, ...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
     const cwd238 = (events) => ((texts(events).match(/cwd=(.+?)(?: \||$)/m) || [])[1] || '').trim();
@@ -4451,6 +4566,52 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   }
   const us = (await call('/api/assistant/state', U)).data;
   check('R61', 'Unity section state: local brain default and loaded, Claude models offered', us.brain === 'local' && us.local && us.local.model === true && us.brains.some((b) => b.id === 'local') && us.brains.some((b) => b.id === 'claude-opus-5-5'), JSON.stringify(us.local || us));
+  // R473 (T-293): the brain is not on the host's Ollama: Unity answers on a stand-in chat model (never the embedder) and
+  // the state says which; with two hosts lending Ollama, the hub asks the one whose models include the brain
+  const L473 = 'Unity\'s brain follows the host that has it (T-293): when the AI host\'s Ollama has no unity-brain, she answers on a stand-in chat model (an embedding model is never picked) and /api/assistant/state says so (local.standin); when the brain is back she is on it again; with two hosts lending Ollama the hub asks the one whose hello lists unity-brain, not the other; the page tells the stand-in; a native host without the brain says in its log that no Modelfile was found';
+  if (RUST_HUB) {
+    fakeOllamaNoBrain = true;
+    const sm = await uchat(U, 'MODEL?'), st473 = (await call('/api/assistant/state', U)).data.local || {};
+    fakeOllamaNoBrain = false;
+    const back = await uchat(U, 'MODEL?'), st473b = (await call('/api/assistant/state', U)).data.local || {};
+    const page473 = /st\.local\.standin/.test(fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'));
+    // a second host whose Ollama has no brain (a native host, OLLAMA_HOST at a fake with one chat model): the brain's host is still the one asked
+    let pref = 'no native build', nbLog = '';
+    const why473 = buildNative();
+    if (!why473) {
+      const nb = require('http').createServer((req, res) => {
+        let body = ''; req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          const j = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+          if (req.url === '/api/version') return j({ version: 'fake-nobrain' });
+          if (req.url === '/api/tags') return j({ models: [{ name: 'plain-chat:latest' }] });
+          if (req.url === '/api/show') return j({ capabilities: ['completion'] });
+          if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
+          const b = JSON.parse(body || '{}'), user = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' };
+          res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+          res.write(JSON.stringify({ message: { role: 'assistant', content: 'nobrain says: ' + user.content }, done: false }) + '\n'); res.end(JSON.stringify({ done: true }) + '\n');
+        });
+      });
+      await new Promise((r) => nb.listen(0, '127.0.0.1', r));
+      const ndir = path.join(SCRATCH, 'nobrain-host'); fs.mkdirSync(ndir, { recursive: true });
+      const nexe = path.join(ndir, 'vr-host' + (WIN ? '.exe' : '')), ncfg = path.join(ndir, 'ai-node.json');
+      fs.copyFileSync(NATIVE_BIN.host, nexe); fs.chmodSync(nexe, 0o755);
+      fs.writeFileSync(ncfg, JSON.stringify({ hub: H, id: 'nobrain-node', token: OLD_NODE_SECRET + '-nb', user: 't-admin', autoUpdate: false, providers: [], engines: {} }), { mode: 0o600 });
+      const nlog = path.join(ndir, 'out.log'), nfd = fs.openSync(nlog, 'a');
+      const nproc = spawn(nexe, ['run', '--config', ncfg], { cwd: ndir, stdio: ['ignore', nfd, nfd], env: { ...process.env, OLLAMA_HOST: `127.0.0.1:${nb.address().port}` } });
+      let up473 = null; for (let i = 0; i < 80 && !up473; i++) { up473 = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === 'nobrain-node' && x.online && (x.engines || []).includes('ollama')) || null; if (!up473) await sleep(250); }
+      const asked = []; for (let i = 0; i < 3; i++) asked.push((await uchat(U, 'MODEL?')).final);
+      try { nproc.kill(); } catch {}
+      await new Promise((r) => nb.close(r));
+      // the hub counts the second host offline within aiNodeOfflineMs; the checks after this one need Unity's engines back on the first
+      for (let i = 0; i < 60; i++) { const h = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === 'nobrain-node'); if (!h || !h.online) break; await sleep(250); }
+      nbLog = (() => { try { return fs.readFileSync(nlog, 'utf8'); } catch { return ''; } })();
+      pref = up473 ? (asked.every((a) => a === 'model is unity-brain') ? 'ok' : 'asked: ' + asked.join(' | ')) : 'the second host never came up';
+    }
+    check('R473', L473, sm.final === 'model is plain-chat:latest' && st473.up === true && st473.model === false && st473.standin === 'plain-chat:latest'
+      && back.final === 'model is unity-brain' && st473b.model === true && st473b.standin === '' && page473 && (pref === 'ok' || pref === 'no native build') && (pref === 'no native build' || /no unity-brain and no Modelfile for it was found/.test(nbLog)),
+      `stand-in: "${sm.final || sm.err}" state ${JSON.stringify(st473)}; back: "${back.final || back.err}" ${JSON.stringify(st473b)}; page ${page473}; two hosts: ${pref}${why473 ? ' (' + why473 + ')' : ''}; log ${nbLog.split('\n').filter((l) => /Modelfile|Ollama/.test(l)).join(' | ').slice(0, 300)}`);
+  } else skip('R473', L473, 'the Rust hub\'s Unity: --rust-hub runs it');
   const ua0 = ((await call('/api/usage', U)).data.answers || {});
   const t1 = await uchat(U, 'TASK buy regress milk');
   const ua1 = ((await call('/api/usage', U)).data.answers || {});
@@ -4733,6 +4894,29 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const served = withPort.status === 200 && (withPort.data.product || {}).path === '/p/fakeprod/' && badPort.status === 400 && noSlash.status === 302 && noSlash.headers.get('location') === '/p/fakeprod/'
         && viaGet.status === 200 && viaGet.headers.get('x-prod') === 'yes' && viaGetBody.path === '/a/b?x=1' && viaGetBody.h.prefix === '/p/fakeprod' && viaGetBody.h.vr === '' && viaGetBody.h.pgm === '' && viaGetBody.h.auth === 'Bearer abc' && viaGetBody.h.xff === '127.0.0.1' && /^\d+\.\d+\.\d+/.test(viaGetBody.h.gw)
         && viaPost.method === 'POST' && viaPost.body === '{"u":1}' && viaPost.path === '/api/login' && viaInternal === 404 && viaFront === 404 && unknownProd === 404 && noPortProd === 404 && prodDown === 503;
+      // R474 (T-207, spec 15): Hyper Workflows through the gateway for a product's people: the same paths as /api/hyperwork/,
+      // as the person the product signed for (linked: t-user; not linked: t-admin → 404); the log streams; run-only honoured
+      {
+        // a product's person designs through the gateway too (Hyper Prod Man's editor): save + publish a workflow of their own
+        const doc474 = { schema: 1, name: 'r474-flow', nodes: [{ id: 's', kind: 'start' }, { id: 'p', kind: 'prompt', config: { user: 'gateway {{inputs.prompt}}' } }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'p.in' }, { id: 'e2', from: 'p.text', to: 'e.result' }] };
+        const gwSave = await gw('POST', '/internal/gateway/hyperwork/save', 't-user', { doc: doc474 });
+        const gwId = (() => { try { return JSON.parse(gwSave.text).id || ''; } catch { return ''; } })();
+        const gwPub = gwId ? await gw('POST', '/internal/gateway/hyperwork/publish', 't-user', { id: gwId, message: 'r474' }) : { status: 0, text: '' };
+        const gwList = await gw('GET', '/internal/gateway/hyperwork/list?q=r474', 't-user');
+        const gwItems = (() => { try { return JSON.parse(gwList.text).items || []; } catch { return []; } })();
+        const notLinked = await gw('GET', '/internal/gateway/hyperwork/list', 't-admin');
+        const gwCmd = await gw('POST', '/internal/gateway/hyperwork/command', 't-user', { line: '/hyperwork r474-flow through the gateway', project: 'VibeRoller' });
+        const gwRun = (() => { try { return JSON.parse(gwCmd.text).run || ''; } catch { return ''; } })();
+        let gwLines = [];
+        if (gwRun) { try { const pq = `/internal/gateway/hyperwork/log?id=${gwRun}&from=0&follow=1`; const r = await fetch(H + pq, { headers: sign('GET', pq, 't-user', ''), signal: AbortSignal.timeout(60000) }); gwLines = (await r.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch (e) { gwLines = [{ error: e.message }]; } }
+        const gwMeta = gwRun ? await gw('GET', '/internal/gateway/hyperwork/run?id=' + gwRun, 't-user') : { status: 0, text: '' };
+        const ro = await (async () => { const pq = '/internal/gateway/hyperwork/save', body = JSON.stringify({ doc: { schema: 1, name: 'r474-ro', nodes: [{ id: 's', kind: 'start' }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'e.result' }] } }); const r = await fetch(H + pq, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vr-client': 'run-only', ...sign('POST', pq, 't-user', body) }, body }); return r.status; })();
+        const gwUnknown = await gw('GET', '/internal/gateway/hyperwork/zzz', 't-user');
+        const gwTypes = gwLines.map((e) => e.type);
+        check('R474', 'T-207 Hyper Workflows through the gateway (spec 15): a product\'s signed request as a linked person saves and publishes a workflow (POST hyperwork/save, hyperwork/publish), lists it (GET hyperwork/list), runs a /hyperwork line (POST hyperwork/command → 202) against a project, follows the run (hyperwork/log streams NDJSON to run_end) and reads it (hyperwork/run); someone the product has not linked gets 404; a product that says x-vr-client: run-only cannot save (403); an unknown path is 404',
+          gwSave.status === 200 && !!gwId && gwPub.status === 200 && gwList.status === 200 && gwItems.some((i) => i.name === 'r474-flow') && notLinked.status === 404 && gwCmd.status === 202 && !!gwRun && gwTypes[0] === 'run_start' && gwTypes[gwTypes.length - 1] === 'run_end' && gwMeta.status === 200 && /"status":"ok"/.test(gwMeta.text) && ro === 403 && gwUnknown.status === 404,
+          `save ${gwSave.status} publish ${gwPub.status}; list ${gwList.status} ${gwItems.map((i) => i.name).join(',')}; not linked ${notLinked.status}; command ${gwCmd.status} ${gwCmd.text.slice(0, 80)}; log ${gwTypes.join(' ')}; run ${gwMeta.status} ${gwMeta.text.slice(0, 80)}; run-only save ${ro}; unknown ${gwUnknown.status}`);
+      }
       // a new secret: the old one stops at once; removing the product ends its links
       await call('/api/admin/gateway/products', A, { id: 'prodsuit', name: 'PGM Prod Suit', ai: true });
       const oldSecret = await gw('GET', '/internal/gateway/status', '');
@@ -5008,6 +5192,338 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && /screenShare/.test(capSrc) && /is_hub_origin\(page, hub\)/.test(capSrc) && ut.status === 0 && /3 passed; 0 failed|test result: ok\. 3 passed/.test(ut.stdout || ''),
         `cargo test ${ut.status} "${String(ut.stdout || ut.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
     }
+  }
+  // R401 to R406 (T-199): the Hyper Workflows library (native/crates/pgm-workflow-internal): one `cargo test` run, its
+  // tests named r401_ ... r406_ map back to the checks (a check passes when every test of its id ran and passed)
+  {
+    const home401 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const native401 = path.join(MILLS, 'native');
+    const L401 = {
+      R401: 'workflow library: a document (section 13 shape, loop fixed) round-trips with its unknown fields, an older schema is migrated on read, a newer one is refused with a message',
+      R402: 'workflow library: each validation rule of 3.3 has a case (two starts, a bad edge type, an unfed required input, an input with two edges, an unreachable node as a warning, an unknown kind, a missing law id)',
+      R403: 'workflow library: a cycle without a loop node is an error, the same cycle through a loop with a limit is valid, a loop with no limit is an error',
+      R404: 'workflow library: a sub-graph with matching input / output ports is valid, mismatched ports or a sub-graph containing itself are errors, depth 9 is refused',
+      R405: 'workflow library: diff(v1, v2) names an added node, a removed node, a changed config key and a rewired edge',
+      R406: 'workflow library: a bad json file in the store is moved aside as *.bad-<time> and the listing goes on',
+    };
+    const MIN401 = { R401: 4, R402: 10, R403: 3, R404: 4, R405: 1, R406: 2 };
+    if (!fs.existsSync(path.join(native401, 'crates', 'pgm-workflow-internal'))) for (const id of Object.keys(L401)) skip(id, L401[id], 'no crate native/crates/pgm-workflow-internal');
+    else {
+      const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home401}/.rustup" CARGO_HOME="${home401}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-internal 2>&1`], { cwd: native401, encoding: 'utf8', timeout: 1800000 });
+      const out401 = String(ut.stdout || '') + String(ut.stderr || '');
+      if (ut.status === 77) for (const id of Object.keys(L401)) skip(id, L401[id], 'no Rust toolchain here (cargo not found)');
+      else {
+        const seen = {};
+        for (const m of out401.matchAll(/^test (r40\d)_\S+ \.\.\. (ok|FAILED)/gm)) { const id = m[1].toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
+        const tail = out401.replace(/\s+/g, ' ').slice(-160);
+        for (const id of Object.keys(L401)) check(id, L401[id], ut.status === 0 && (seen[id] || []).length >= MIN401[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
+      }
+    }
+  }
+  // R407 to R423 (T-200, T-201): the Hyper Workflows engine and its built-in kinds (native/crates/
+  // pgm-workflow-engine-internal), all with its fake host and no network: one `cargo test` run, its tests named
+  // r407_ ... r423_ map back to the checks as R401-R406 do
+  {
+    const home407 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const native407 = path.join(MILLS, 'native');
+    const L407 = {
+      R407: 'workflow engine: a prompt through start -> prompt -> end gives the fake AI\'s answer as the result; the log has run_start, node_start / node_end per node, run_end, with gapless seq',
+      R408: 'workflow engine: parallel lines run at the same time and join all gives a list in line order; join first cancels the others; maxParallel 2 never lets three run',
+      R409: 'workflow engine: a switch fires one port only, the nodes on the other ports are logged skipped, a join ignores skipped lines',
+      R410: 'workflow engine: a loop until stops when met; one that never is stops at maxIterations and leaves by its limit port, or ends gave-up when that is not wired; each round is its own log entry',
+      R411: 'workflow engine: a node that fails twice then works runs three attempts with backoff entries; after max it leaves by its error port; no wire: onError fail ends failed, skip goes on with a warning',
+      R412: 'workflow engine: an approve node ends its worker (the run waits), a snapshot is written, an answer wakes it; a timeout follows onTimeout and never approves unless the designer chose it',
+      R413: 'workflow engine: a run killed mid-way resumes from its log without running finished nodes again; a non-idempotent node that was mid-flight pauses for a person',
+      R414: 'workflow engine: maxNodes, maxSeconds and maxCost each end a run limit with their name',
+      R415: 'workflow engine: cancel stops running nodes through their cancel handle and ends cancelled; no node starts after it',
+      R416: 'workflow engine: a panic in one node ends that node with engine.panic, and the engine and other runs go on',
+      R417: 'workflow engine: a run\'s log replayed with a host that refuses all calls gives the same result',
+      // T-201: the built-in kinds (tests/kinds.rs), same crate, same cargo run
+      R418: 'workflow kinds: prompt / chat / summarise: templates fill from wires and saved prompts, a missing value is an error, a bad json answer is asked again; chat stops at maxTurns and at stopWhen; summarise keeps the keep items and cuts long texts',
+      R419: 'workflow kinds: tool calls only what the scope allows (engine.tool-denied); a custom http call maps status and a json path; a secret is never in the log and a prompt cannot read one',
+      R420: 'workflow kinds: script (the transform language) computes, has no file / network / clock function, and stops at its step limit; other languages are refused',
+      R421: 'workflow kinds: model choice is the node\'s, then its section\'s (inner first), then the workflow default; fallback is tried when a model is unreachable',
+      R422: 'workflow kinds: sub-workflow runs a pinned child with both logs linked and refuses past the depth limit; agent waits for the final answer; orchestrate plans, fans out, reviews within maxRounds and picks workers with a pgm-orchestrator profile',
+      R423: 'workflow kinds: jev picks one choice port; low confidence follows onLowConfidence (default, error, second opinion, ask a person); off-shape is retried then an error; votes take the majority; through openrouter, ollama and host; the decision-model slot (T-210): a scope\'s decision model, JEV through OpenRouter then a local model, a node\'s own model first',
+      // T-202: laws and saved prompts (tests/laws.rs, the store side in tests/service.rs)
+      R425: 'workflow laws: a law and a prompt are saved, grouped (in two groups at once), left standalone, listed and deleted; deleting a group keeps its members; every save is a new version file; only the scope\'s admins (and lawEditors) change a team\'s',
+      R426: 'workflow laws: scope defaults, workflow, sections (outer to inner) and node give the laws in that order with no duplicates; the right laws reach the right node and nowhere else; node_start names their ids and versions',
+      R427: 'workflow laws: a lower level adds a law and takes one away (-law-x), but cannot remove a lockable: false law of a higher level',
+      R428: 'workflow laws: a law check (regex, expr, jev) that fails follows its onFail: retry (once, told which law), error, or warn',
+      R429: 'workflow prompts: {{prompt:name}} resolves a saved prompt; a pinned one (name@1) does not change when the prompt is edited, a latest one does; an unknown name is a validation error',
+      R430: 'workflow laws: an export bundle carries the laws, groups and prompts the workflow uses (and nothing else); an import into another scope checks them and brings them along',
+      // T-207: the /hyperwork command line (the one parser for the page, HPM and jcode)
+      R460: 'hyperwork command: /hyperwork name prompt with --project / --on / --version (and --x=y, /hw), a still-typed name, bad options refused; a name that matches nothing runs nothing and gets the nearest names',
+      // T-203: custom node kinds (tests/custom.rs, the store side in tests/service.rs)
+      R431: 'custom kinds: "new node from selection" makes a graph kind whose ports are the selection\'s way in and out, saved in the person\'s own scope, and the rewired workflow runs as before',
+      R432: 'custom kinds: undeclared access is denied at run time (an http kind with network: [] gets engine.denied, nothing is sent); a script kind stops at its step limit; a crash is the node\'s error; a sandboxed program is refused on this runner',
+      R433: 'custom kinds: publishing runs the kind\'s tests and refuses a failing one; a version is published once; a built-in cannot be replaced',
+      R434: 'custom kinds: a workflow pinned to major 1 never picks up 2.x; a stored kind whose hash no longer matches is refused (422 engine.kind-hash)',
+      R435: 'custom kinds: author-only runs for its author alone; a review by someone not the author (an admin or lawEditor) makes it reviewed; a sandboxed program needs two; blocked can be neither added nor run',
+      R436: 'custom kinds: a team kind is fetched by another runner (jcode) with its hash, installed only when the hash matches, and runs there',
+      // T-206: the AI side chat (tests/service.rs)
+      R454: 'side chat: ask answers about a workflow and may return a patch (the editor\'s commands); asking writes nothing',
+      R455: 'side chat: a patch is for the person\'s draft only: asking never saves, publishes or runs',
+      R456: 'side chat: a patch is only the editor\'s drawing commands; anything else (publish, run) is refused as a problem, and nothing happens',
+      R457: 'side chat: the AI is told the node kinds the person may use; a patch that breaks validation comes with its problems, not applied',
+      R458: 'side chat: with no AI reachable it says so (noAi) and the editor still works',
+      // T-186: triggers (tests/triggers.rs, a clock of the test's own)
+      R466: 'triggers: timers every N minutes / hours / days and the board\'s repeats (nightly at 02:00, monthly month-end aware); a run when due, once; a triggered run says so (sender trigger)',
+      R467: 'triggers: no double run after a restart (the next time is saved first) or across two hubs on one store (a lease; the other takes over when it lapses)',
+      R468: 'triggers: a time missed while the hub was down runs once (marked missed) or is skipped, then back on schedule',
+      R469: 'triggers: a Forgejo / GitHub webhook, signed with the trigger\'s secret, starts a run with its payload; a wrong or missing signature is 401; an event it did not ask for starts nothing; the secret is never listed',
+      R470: 'triggers: a named event from this server starts every unpaused event trigger of that name with its payload',
+      R471: 'triggers: standing workflows list their last runs and next time, pause / resume, only the owner changes them, and a failed run sends the owner a chat alert',
+    };
+    const MIN407 = { R407: 2, R408: 7, R409: 2, R410: 4, R411: 4, R412: 3, R413: 2, R414: 1, R415: 1, R416: 1, R417: 1, R418: 5, R419: 2, R420: 1, R421: 1, R422: 4, R423: 5, R425: 1, R426: 2, R427: 1, R428: 1, R429: 2, R430: 1, R460: 3,
+      R431: 2, R432: 1, R433: 2, R434: 2, R435: 1, R436: 1, R454: 1, R455: 1, R456: 1, R457: 1, R458: 1, R466: 1, R467: 1, R468: 1, R469: 1, R470: 1, R471: 1 };
+    if (!fs.existsSync(path.join(native407, 'crates', 'pgm-workflow-engine-internal'))) for (const id of Object.keys(L407)) skip(id, L407[id], 'no crate native/crates/pgm-workflow-engine-internal');
+    else {
+      const ut = spawnSync('sh', ['-c', `export RUSTUP_HOME="${home407}/.rustup" CARGO_HOME="${home407}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}"; export PATH="$CARGO_HOME/bin:$PATH"; command -v cargo >/dev/null || exit 77; cargo test --release --color never -p pgm-workflow-engine-internal -p pgm-workflow-command-internal 2>&1`], { cwd: native407, encoding: 'utf8', timeout: 1800000 });
+      const out407 = String(ut.stdout || '') + String(ut.stderr || '');
+      if (ut.status === 77) for (const id of Object.keys(L407)) skip(id, L407[id], 'no Rust toolchain here (cargo not found)');
+      else {
+        const seen = {};
+        // a test may stand for several checks: r454_r455_... counts for both
+        for (const m of out407.matchAll(/^test (?:[\w:]+::)?((?:r4\d\d_)+)\S* \.\.\. (ok|FAILED)/gm)) for (const x of m[1].match(/r4\d\d/g)) { const id = x.toUpperCase(); (seen[id] = seen[id] || []).push(m[2]); }
+        const tail = out407.replace(/\s+/g, ' ').slice(-160);
+        for (const id of Object.keys(L407)) check(id, L407[id], ut.status === 0 && (seen[id] || []).length >= MIN407[id] && seen[id].every((s) => s === 'ok'), `${(seen[id] || []).length} test(s) ${(seen[id] || []).filter((s) => s === 'ok').length} ok; cargo test ${ut.status}${ut.status === 0 ? '' : ' "' + tail + '"'}`);
+      }
+    }
+  }
+  // R437 to R446 (T-204): Hyper Workflows' store and run API, /api/hyperwork/ (the Rust hub's alone: the frozen
+  // JavaScript hub has none of it, R445). The library's own tests (tests/service.rs) run with the cargo block above;
+  // these go over HTTP, as the person: config hyperworkTeams makes team-core of t-admin + t-user, mills is outside it
+  {
+    const L437 = {
+      R437: 'hyperwork routes: save, get, publish (a message needed, errors refused), versions, diff, restore round trip; a stale etag gets 409',
+      R438: 'hyperwork routes: a viewer cannot save (403), an editor cannot publish (403), a run-only client (jcode) cannot save, publish, delete or change rights (403 each) and can list, get the published version and run',
+      R439: 'hyperwork routes: a team workflow is seen by a team member and not by someone outside the team (404 on get, list and run); a personal scope is private; the same name in two scopes lists twice, tagged; promote copies with history',
+      R440: 'hyperwork routes: run pins the published version and runs it through the hub\'s own AI path; log?follow=1 streams its events to run_end; a page that reloads attaches again from a seq; runs lists it',
+      R441: 'hyperwork routes: a run with preflight problems (needsProject without a project) answers 422 with the problems and starts nothing',
+      R442: 'hyperwork routes: an approval workflow shows waiting, someone else cannot answer it, /api/hyperwork/answer wakes it [the Work question protocol\'s bridge_question + POST /api/work/answer is T-204\'s later part, with 5.17.0\'s ask_user]',
+      R443: 'hyperwork routes: a hub restart in the middle of a run: the run resumes from its log after the restart and says so (run_resume)',
+      R444: 'hyperwork routes: a secret (config hyperworkSecrets) used in a workflow\'s HTTP call never appears in the run log or any route\'s answer',
+      R445: 'hyperwork routes: the frozen JavaScript hub answers 404 on /api/hyperwork/ (no mirror); the Rust hub lists the module',
+      R446: 'hyperwork routes: list?since=<rev> gives only what changed [the gateway serving the same routes and mirroring the home hub is T-204\'s later part]',
+      R461: 'hyperwork in the page: /hyperwork (and /hw) in the Work box\'s commands, a type-ahead from /api/hyperwork/list (grey = cannot run, with its reason), the line sent to POST /api/hyperwork/command with the session\'s project, the run followed from its log (steps, the answer, Approve / Reject); the command route runs a workflow by its line [HPM\'s and jcode\'s /hyperwork are T-207\'s later parts]',
+      R462: 'hyperwork command: a workflow that needs a project refuses to start without one; the line\'s --project (else the page\'s project) is the run\'s project',
+      R465: 'hyperwork team tools: a Work run\'s AI lists workflows (hyperwork_list) and sends a prompt through one (hyperwork_run) as the person whose run it is; someone else\'s personal workflow is refused [the session policy switch is T-207\'s later part]',
+      R472: 'hyperwork triggers on the hub: a webhook trigger made in /api/hyperwork/trigger is started by POST /hooks/hyperwork/<id> signed as Forgejo does (no session), refused unsigned; an internal event (this machine, its secret) starts an event trigger; a triggered run that fails sends its owner a private chat alert from "Hyper Workflows"; the list shows the runs',
+    };
+    const hw = (p, tok, body, hdr) => call('/api/hyperwork/' + p, tok, body, hdr);
+    // the page's part is the kit module web/hyperwork.js (one copy with Hyper Prod Man and pgm-libs) with the page's hooks
+    const html461 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), mod461 = fs.readFileSync(path.join(MILLS, 'web', 'hyperwork.js'), 'utf8');
+    const page461 = /\{ cmd: '\/hyperwork', desc: /.test(html461) && /\{ cmd: '\/hw', desc: /.test(html461) && /HyperworkUI\.create\(\{/.test(html461) && /project: \(\) => \(me && me\.project\) \|\| ''/.test(html461) && /id="hwMenu" hidden/.test(html461) && /<script src="hyperwork\.js"><\/script>/.test(html461)
+      && /function typeahead\(\)/.test(mod461) && /\/api\/hyperwork\/list\?q=/.test(mod461) && /\/api\/hyperwork\/command', \{ method: 'POST', body: JSON\.stringify\(\{ line, project: /.test(mod461) && /\/api\/hyperwork\/log\?id=/.test(mod461) && /\/api\/hyperwork\/answer/.test(mod461) && /cannot run: /.test(mod461)
+      && (() => { try { const M = require(path.join(MILLS, 'web', 'hyperwork.js')); return M.nameQuery('/hyperwork te') === 'te' && M.nameQuery('/hw ') === '' && M.nameQuery('hello') === null && M.isCommand('/hw notes go') && !M.isCommand('/model x') && M.renderEvent({ type: 'run_end', status: 'ok', result: 'done it' }).kind === 'done' && M.renderEvent({ type: 'wait', node: 'a', what: 'approval' }).kind === 'wait' && M.renderEvent({ type: 'node_end', status: 'ok', kind: 'prompt', node: 'p' }).kind === 'step'; } catch { return false; } })();
+    if (!RUST_HUB) {
+      const js1 = await hw('list', U), js2 = await hw('run', U, { name: 'x', prompt: 'y' });
+      check('R445', L437.R445, js1.status === 404 && js2.status === 404, `JavaScript hub: list ${js1.status}, run ${js2.status}`);
+      for (const id of Object.keys(L437).filter((x) => x !== 'R445')) skip(id, L437[id], 'the Rust hub\'s: --rust-hub runs it');
+    } else {
+      const doc = (name, extra = {}) => ({ schema: 1, name, nodes: [{ id: 's', kind: 'start' }, { id: 'p', kind: 'prompt', config: { user: 'hyperwork {{inputs.prompt}}' } }, { id: 'e', kind: 'end' }],
+        edges: [{ id: 'e1', from: 's.prompt', to: 'p.in' }, { id: 'e2', from: 'p.text', to: 'e.result' }], ...extra });
+      const until = async (run, tok = A) => { let m = {}; for (let i = 0; i < 240; i++) { m = (await hw('run?id=' + run, tok)).data || {}; if (m.status && m.status !== 'running') break; await sleep(250); } return m; };
+      const follow = async (run, tok, from = 0) => { try { const r = await fetch(`${H}/api/hyperwork/log?id=${run}&from=${from}&follow=1`, { headers: { Authorization: 'Bearer ' + tok }, signal: AbortSignal.timeout(60000) }); return (await r.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch (e) { return [{ error: e.message }]; } };
+      const JC = { 'X-VR-Client': 'jcode' };
+      // R437
+      const sv = await hw('save', A, { doc: doc('r437-notes'), scope: 'team-core' }), id = sv.data.id;
+      const g1 = await hw('get?id=' + id, A), p0 = await hw('publish', A, { id }), p1 = await hw('publish', A, { id, message: 'first' });
+      const sv2 = await hw('save', A, { id, doc: doc('r437-notes', { description: 'second' }), etag: sv.data.etag });
+      const stale = await hw('save', A, { id, doc: doc('r437-notes'), etag: sv.data.etag });
+      const p2 = await hw('publish', A, { id, message: 'second' }), vers = await hw('versions?id=' + id, A), df = await hw(`diff?id=${id}&a=1&b=2`, A), rst = await hw('restore', A, { id, version: 1 });
+      const broken = await hw('save', A, { doc: { schema: 1, name: 'r437-broken', nodes: [{ id: 's', kind: 'start' }, { id: 's2', kind: 'start' }], edges: [] } }), pb = await hw('publish', A, { id: broken.data.id, message: 'x' });
+      check('R437', L437.R437, sv.status === 200 && g1.status === 200 && p0.status === 400 && p1.data.version === 1 && sv2.status === 200 && stale.status === 409 && p2.data.version === 2 && (vers.data.versions || []).length === 2 && df.status === 200 && rst.status === 200 && pb.status === 422,
+        `save ${sv.status} get ${g1.status} publish ${p0.status}/${p1.data.version}/${p2.data.version} stale ${stale.status} versions ${(vers.data.versions || []).length} diff ${df.status} restore ${rst.status} broken ${pb.status}`);
+      // R438
+      const viewerSave = await hw('save', U, { id, doc: doc('r437-notes') });
+      await hw('perms', A, { id, perms: { edit: ['t-user'] } });
+      const editorSave = await hw('save', U, { id, doc: doc('r437-notes') }), editorPub = await hw('publish', U, { id, message: 'x' });
+      const jc = [await hw('save', A, { id, doc: doc('r437-notes') }, JC), await hw('publish', A, { id, message: 'x' }, JC), await hw('delete', A, { id }, JC), await hw('perms', A, { id, perms: {} }, JC)].map((r) => r.status);
+      const jcList = await hw('list', A, undefined, JC), jcGet = await hw('get?id=' + id, A, undefined, JC), jcRun = await hw('run', A, { id, prompt: 'from jcode' }, JC);
+      check('R438', L437.R438, viewerSave.status === 403 && editorSave.status === 200 && editorPub.status === 403 && jc.every((s) => s === 403) && jcList.status === 200 && (jcList.data.items || []).some((i) => i.id === id && i.rights.edit === false) && jcGet.status === 200 && jcGet.data.version === 2 && jcRun.status === 202,
+        `viewer save ${viewerSave.status}, editor save ${editorSave.status} publish ${editorPub.status}; run-only writes ${jc.join('/')}, list ${jcList.status} get ${jcGet.status} v${jcGet.data.version} run ${jcRun.status}`);
+      // R439
+      const outGet = await hw('get?id=' + id, D), outList = await hw('list', D), outRun = await hw('run', D, { id, prompt: 'x' });
+      const mine = await hw('save', A, { doc: doc('r437-notes') }); await hw('publish', A, { id: mine.data.id, message: 'mine' });
+      const peek = await hw('get?id=' + mine.data.id, U), both = await hw('list?q=r437-no', A);
+      const promo = await hw('promote', A, { id: mine.data.id, scope: 'company' }), promoVers = promo.data.id ? await hw('versions?id=' + promo.data.id, D) : { data: {} };
+      const shown = (both.data.items || []).map((i) => i.shown);
+      check('R439', L437.R439, outGet.status === 404 && !(outList.data.items || []).some((i) => i.id === id) && outRun.status === 404 && peek.status === 404 && shown.includes('r437-notes') && shown.includes('core/r437-notes') && promo.status === 200 && (promoVers.data.versions || []).length === 1,
+        `outside: get ${outGet.status} run ${outRun.status} listed ${(outList.data.items || []).some((i) => i.id === id)}; personal peek ${peek.status}; shown ${shown.join(', ')}; promote ${promo.status}, company sees ${(promoVers.data.versions || []).length} version(s)`);
+      // R440 (and T-201's run through the hub: the prompt node answers through the hub's own AI path)
+      const r440 = await hw('run', A, { id, prompt: 'r440' });
+      await hw('save', A, { id, doc: doc('r437-notes', { description: 'third' }) }); await hw('publish', A, { id, message: 'third' });
+      const lines = await follow(r440.data.run, A), m440 = await until(r440.data.run), again = await follow(r440.data.run, A, 3), runs = await hw('runs?mine=1', A);
+      const ty = lines.map((e) => e.type);
+      check('R440', L437.R440, r440.status === 202 && ty[0] === 'run_start' && ty[ty.length - 1] === 'run_end' && lines[0].workflow && lines[0].workflow.version === 2 && m440.status === 'ok' && !!m440.result && again.length > 0 && again[0].seq === 3 && (runs.data.runs || []).some((x) => x.id === r440.data.run),
+        `run ${r440.status}; streamed ${ty.join(' ')}; pinned v${lines[0] && lines[0].workflow && lines[0].workflow.version}; status ${m440.status} result ${JSON.stringify(m440.result || m440.error).slice(0, 120)}; reattach from ${again[0] && again[0].seq}`);
+      // R441
+      const np = await hw('save', A, { doc: doc('r441-needs', { needsProject: true }) }); await hw('publish', A, { id: np.data.id, message: 'x' });
+      const r441 = await hw('run', A, { id: np.data.id, prompt: 'x' }), runs441 = await hw('runs?workflow=' + np.data.id, A);
+      check('R441', L437.R441, r441.status === 422 && (r441.data.problems || []).some((p) => p.code === 'engine.no-project') && (runs441.data.runs || []).length === 0, `run ${r441.status} ${JSON.stringify(r441.data.problems || []).slice(0, 120)}; runs ${(runs441.data.runs || []).length}`);
+      // R442
+      const ap = await hw('save', A, { doc: { schema: 1, name: 'r442-ship', nodes: [{ id: 's', kind: 'start' }, { id: 'a', kind: 'approve', config: { timeoutSec: 600 } }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'a.in' }, { id: 'e2', from: 'a.approved', to: 'e.result' }] } });
+      await hw('publish', A, { id: ap.data.id, message: 'x' });
+      const r442 = await hw('run', A, { id: ap.data.id, prompt: 'ship v5' }), w442 = await until(r442.data.run);
+      const notMine = await hw('answer', U, { run: r442.data.run, node: 'a', answers: { approved: true } }), ok442 = await hw('answer', A, { run: r442.data.run, node: 'a', answers: { approved: true } });
+      const d442 = await until(r442.data.run);
+      check('R442', L437.R442, w442.status === 'waiting' && (w442.waiting || [])[0] && w442.waiting[0].key === 'a' && [403, 404].includes(notMine.status) && ok442.status === 200 && d442.status === 'ok' && d442.result === 'ship v5',
+        `first ${w442.status} on ${JSON.stringify(w442.waiting || []).slice(0, 80)}; t-user answers ${notMine.status}; owner ${ok442.status}; then ${d442.status} ${JSON.stringify(d442.result)}`);
+      // R443: a run that waits 4 s is cut by a graceful restart (a workflow run does not hold the hub busy) and resumes
+      const wt = await hw('save', A, { doc: { schema: 1, name: 'r443-wait', nodes: [{ id: 's', kind: 'start' }, { id: 'w', kind: 'wait', config: { seconds: 4 } }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'w.in' }, { id: 'e2', from: 'w.out', to: 'e.result' }] } });
+      await hw('publish', A, { id: wt.data.id, message: 'x' });
+      const pid443 = (await call('/api/status')).data.pid;
+      const r443 = await hw('run', A, { id: wt.data.id, prompt: 'after the restart' });
+      await sleep(800);
+      fs.writeFileSync(path.join(SB, '.restart'), 'test');
+      let pid2 = pid443; for (let i = 0; i < 80 && (pid2 === pid443 || !pid2); i++) { await sleep(250); pid2 = (await call('/api/status')).data.pid; }
+      for (let i = 0; i < 40 && (await call('/api/status')).status !== 200; i++) await sleep(250);
+      const m443 = await until(r443.data.run), l443 = await follow(r443.data.run, A);
+      check('R443', L437.R443, pid2 && pid2 !== pid443 && m443.status === 'ok' && m443.result === 'after the restart' && l443.some((e) => e.type === 'run_resume'),
+        `pid ${pid443} -> ${pid2}; ${m443.status} ${JSON.stringify(m443.result || m443.error).slice(0, 100)}; resumed ${l443.some((e) => e.type === 'run_resume')}`);
+      // R444
+      const sec = await hw('save', A, { doc: { schema: 1, name: 'r444-call', nodes: [{ id: 's', kind: 'start' }, { id: 't', kind: 'tool', config: { http: { url: `http://127.0.0.1:${OLLAMA_PORT}/r444`, headers: { authorization: 'token {{secret:R444_TOKEN}}' }, expect: { status: [200, 404] } } } }, { id: 'e', kind: 'end' }],
+        edges: [{ id: 'e1', from: 's.inputs', to: 't.args' }, { id: 'e2', from: 't.result', to: 'e.result' }] } });
+      await hw('publish', A, { id: sec.data.id, message: 'x' });
+      const r444 = await hw('run', A, { id: sec.data.id, prompt: 'x' }), m444 = await until(r444.data.run), l444 = await follow(r444.data.run, A), all444 = JSON.stringify([m444, l444, (await hw('runs', A)).data]);
+      const file444 = (() => { try { return fs.readFileSync(path.join(SCRATCH, 'Hyperwork', 'runs', r444.data.run, 'log.ndjson'), 'utf8'); } catch { return ''; } })();
+      check('R444', L437.R444, r444.status === 202 && l444.length > 2 && !all444.includes('r444-sekrit-token-77') && !!file444 && !file444.includes('r444-sekrit-token-77'),
+        `run ${r444.status} ${m444.status}; ${l444.length} events; secret in answers ${all444.includes('r444-sekrit-token-77')}, in the file ${file444.includes('r444-sekrit-token-77')} (${file444.length} bytes)`);
+      // R445
+      const front = await call('/__vr-front');
+      check('R445', L437.R445, (front.data.modules || []).includes('hyperwork') && (await hw('list', A)).status === 200 && (await hw('list')).status === 401, `modules ${(front.data.modules || []).join(' ')}`);
+      // R446
+      const rev = (await hw('list', A)).data.rev;
+      const ch = await hw('save', A, { doc: doc('r446-new') });
+      const since = await hw('list?since=' + rev, A);
+      check('R446', L437.R446, ch.status === 200 && (since.data.items || []).length === 1 && since.data.items[0].id === ch.data.id, `since ${rev}: ${(since.data.items || []).map((i) => i.name).join(', ')}`);
+      // R461 / R462: the command line (as the page sends it)
+      const ai = await hw('save', A, { doc: doc('r461-notes') }); await hw('publish', A, { id: ai.data.id, message: 'x' });
+      const c1 = await hw('command', A, { line: '/hyperwork r461-notes write it', project: 'VibeRoller' }), c1m = c1.data.run ? await until(c1.data.run) : {};
+      const c2 = await hw('command', A, { line: '/hyperwork r461-nots write it' }), c3 = await hw('command', A, { line: '/hyperwork r461-notes --on moon x' });
+      check('R461', L437.R461, page461 && c1.status === 202 && c1m.status === 'ok' && c2.status === 404 && (c2.data.nearest || []).includes('r461-notes') && c3.status === 400,
+        `page ${page461}; command ${c1.status} ${c1m.status}; unknown ${c2.status} nearest ${JSON.stringify(c2.data.nearest)}; bad --on ${c3.status}`);
+      const c4 = await hw('command', A, { line: '/hyperwork r441-needs x' }), c5 = await hw('command', A, { line: '/hyperwork r441-needs --project Jcode-PGM x', project: 'VibeRoller' }), c6 = await hw('command', A, { line: '/hyperwork r441-needs x', project: 'VibeRoller' });
+      const p5 = c5.data.run ? (await follow(c5.data.run, A))[0] || {} : {}, p6 = c6.data.run ? (await follow(c6.data.run, A))[0] || {} : {};
+      check('R462', L437.R462, c4.status === 422 && c5.status === 202 && p5.project === 'Jcode-PGM' && c6.status === 202 && p6.project === 'VibeRoller', `none ${c4.status}; --project ${c5.status} ${p5.project}; the page's ${c6.status} ${p6.project}`);
+      // R465: a Work run's AI (the fake Claude's HYPERWORK) uses the team tools
+      const t465 = await chat(A, 'HYPERWORK r461-notes', { fresh: true }), o465 = JSON.parse((texts(t465.events).match(/HW:(\{.*\})/) || [])[1] || '{}');
+      const u465 = await chat(U, 'HYPERWORK r461-notes', { fresh: true }), q465 = JSON.parse((texts(u465.events).match(/HW:(\{.*\})/) || [])[1] || '{}');
+      const mine465 = o465.run && o465.run.run ? (await hw('run?id=' + o465.run.run, A)).data : {};
+      check('R465', L437.R465, Array.isArray(o465.listed) && o465.listed.includes('r461-notes') && o465.ok === true && o465.run.status === 'ok' && mine465.owner === 't-admin' && q465.ok === false,
+        `listed ${JSON.stringify(o465.listed)}; run ${JSON.stringify(o465.run).slice(0, 160)}; owner ${mine465.owner}; t-user ${q465.ok} ${JSON.stringify(q465.run).slice(0, 80)}`);
+      // R472: triggers through the hub
+      const crypto472 = require('crypto');
+      const wh = await hw('trigger', A, { workflow: ai.data.id, kind: 'webhook', webhook: { events: ['pull_request'] }, prompt: 'review {{event.pull_request.title}}', title: 'r472 hook' });
+      const body472 = JSON.stringify({ action: 'opened', pull_request: { title: 'R472 PR' } });
+      const post472 = (headers) => fetch(H + '/hooks/hyperwork/' + wh.data.id, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: body472 }).then(async (x) => ({ status: x.status, data: await x.json().catch(() => ({})) })).catch((e) => ({ status: 0, data: { error: e.message } }));
+      const signed = await post472({ 'X-Forgejo-Event': 'pull_request', 'X-Forgejo-Signature': crypto472.createHmac('sha256', wh.data.secret || 'x').update(body472).digest('hex') });
+      const unsigned = await post472({ 'X-Forgejo-Event': 'pull_request' });
+      const m472 = signed.data.run ? await until(signed.data.run) : {};
+      const ev = await hw('trigger', A, { workflow: ai.data.id, kind: 'event', event: { name: 'r472-deployed' }, prompt: 'deployed {{event.v}}' });
+      const sendEvent = (secret) => fetch(H + '/internal/hyperwork/event', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Event-Secret': secret }, body: JSON.stringify({ name: 'r472-deployed', payload: { v: '9.9.9' } }) }).then(async (x) => ({ status: x.status, data: await x.json().catch(() => ({})) }));
+      const evOk = await sendEvent('r472-event-secret-0123456789'), evBad = await sendEvent('wrong-secret-0000000000');
+      const mEv = (evOk.data.runs || [])[0] ? await until(evOk.data.runs[0]) : {};
+      // a workflow that fails (an HTTP call to a host the hub does not allow), started by an event: its owner hears of it
+      const failing = await hw('save', A, { doc: { schema: 1, name: 'r472-fails', nodes: [{ id: 's', kind: 'start' }, { id: 't', kind: 'tool', config: { http: { url: 'https://not-allowed.example/x' } } }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.inputs', to: 't.args' }, { id: 'e2', from: 't.result', to: 'e.result' }] } });
+      await hw('publish', A, { id: failing.data.id, message: 'x' });
+      await hw('trigger', A, { workflow: failing.data.id, kind: 'event', event: { name: 'r472-breaks' }, title: 'r472 breaks' });
+      const seq472 = Math.max(0, ...((await call('/api/room/messages?since=0', A)).data.messages || []).map((m) => m.seq));
+      const evFail = await fetch(H + '/internal/hyperwork/event', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Event-Secret': 'r472-event-secret-0123456789' }, body: JSON.stringify({ name: 'r472-breaks', payload: {} }) }).then((x) => x.json()).catch(() => ({}));
+      const mFail = (evFail.runs || [])[0] ? await until(evFail.runs[0]) : {};
+      let alert472 = null;
+      for (let i = 0; i < 40 && !alert472; i++) { alert472 = ((await call('/api/room/messages?since=' + seq472, A)).data.messages || []).find((m) => m.as === 'Hyper Workflows' && m.to === 't-admin') || null; if (!alert472) await sleep(250); }
+      const list472 = (await hw('triggers?workflow=' + ai.data.id, A)).data.triggers || [], hook472 = list472.find((t) => t.id === wh.data.id) || {};
+      check('R472', L437.R472, wh.status === 200 && !!wh.data.secret && signed.status === 202 && m472.status === 'ok' && unsigned.status === 401 && ev.status === 200 && evOk.status === 200 && mEv.status === 'ok' && evBad.status === 403
+        && mFail.status === 'failed' && !!alert472 && (hook472.runs || []).length === 1 && hook472.webhook && hook472.webhook.secret === undefined,
+        `hook ${wh.status}; signed ${signed.status} ${m472.status} ${JSON.stringify(m472.result).slice(0, 60)}; unsigned ${unsigned.status}; event ${evOk.status} ${mEv.status}, wrong secret ${evBad.status}; failing ${mFail.status}, alert ${!!alert472}; listed runs ${(hook472.runs || []).length}`);
+    }
+  }
+  // R447 to R453 (T-205): the editor foundation (web/editor/core.js, view.js, the workflow plugin, a stub page-elements
+  // plugin, the Workflows screen). The logic checks run in Node in both suite modes (bridge/test/editor-check.js, with a
+  // fake DOM for the view and a stub hub for the screen); R451 also goes through the real Rust hub under --rust-hub.
+  {
+    const L447 = {
+      R447: 'editor core (web/editor/core.js: pure logic, no DOM): add, move, resize, snap to the grid and to another item, box select, align, group / ungroup; undo x n then redo x n returns the same document; a continuous drag is one undo step',
+      R448: 'editor core: copy / paste across two documents keeps ids unique; a connected selection keeps the wires inside it and drops the wires to the outside; a group travels with its members',
+      R449: 'editor core: the property panel is built from a json schema (also drawn by the view); an invalid value shows the schema\'s message and does not write',
+      R450: 'editor core: entering a sub-graph and leaving it again changes the view, not the document or its history; the breadcrumb shows the path (and the view draws it)',
+      R451: 'editor plugins: a tool registers item kinds (the workflow one, and a stub "page elements" one for T-191); core.js names neither and works alone; the workflow plugin\'s ports, types and document round trip follow the library; the Workflows screen opens the list, then the editor (save, test run with the node overlay, the side chat); with --rust-hub the plugin\'s calls match the hub: its kinds equal the hub\'s, save then open round-trips a document through /api/hyperwork/, validate, a test run reports node states, the side chat, triggers, duplicate, delete, publish',
+      R452: 'editor core: an AI patch (a list of commands) applies as one undo step; a bad patch is refused whole and a rejected proposal leaves no trace in the history',
+    };
+    const ec = await require('./editor-check.js').run();
+    let hub451 = { ok: true, detail: '' };
+    if (!RUST_HUB) hub451.detail = ' (the hub half of R451 runs with --rust-hub)';
+    else {
+      const WF = require(path.join(MILLS, 'web', 'editor', 'kinds-workflow.js')), CORE = require(path.join(MILLS, 'web', 'editor', 'core.js'));
+      const request = async (method, p, body) => {
+        const r = await fetch(H + p, { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + A }, body: body === undefined || method === 'GET' ? undefined : JSON.stringify(body) });
+        const text = await r.text(); let data = null; if (!/\/log\?/.test(p)) { try { data = JSON.parse(text); } catch { data = null; } }
+        return { status: r.status, data, text };
+      };
+      const cl = WF.client(request), why = [], need = (name, ok, more) => { if (!ok) why.push(name + (more ? ' [' + more + ']' : '')); };
+      try {
+        // the hub's kinds and the plugin's static copy agree (names, ports, types, required, many)
+        const hubKinds = await cl.kinds(), port = (p) => [p.name, p.type, !!p.required, !!p.many].join(':');
+        const sig = (m) => m.kind + '|' + (m.ports.in || []).map(port).join(',') + '|' + (m.ports.out || []).map(port).join(',');
+        const hubBuilt = hubKinds.filter((k) => k.trust === 'built-in'), sa = new Set(WF.STATIC_MANIFESTS.map(sig)), sb = new Set(hubBuilt.map(sig));
+        need('the static kinds equal the hub\'s built-ins', [...sa].every((x) => sb.has(x)) && [...sb].every((x) => sa.has(x)), 'static-only ' + [...sa].filter((x) => !sb.has(x)).join(' ; ') + ' hub-only ' + [...sb].filter((x) => !sa.has(x)).join(' ; '));
+        // build a document in the editor, save it, open it again
+        const reg = CORE.createRegistry(); WF.install(reg, hubKinds);
+        const ed = CORE.createEditor({ registry: reg, doc: WF.fromWorkflow(WF.blank('r451-edit', { extra: { labels: ['r451cat'] } })), idPrefix: 'n', linkPrefix: 'e' });
+        need('edit: disconnect the blank\'s wire', ed.exec({ type: 'disconnect', id: 'e1' }).ok);
+        const added = ed.exec({ type: 'add', kind: 'prompt', id: 'n3', x: 220, y: 100, props: { user: 'hyperwork {{inputs.prompt}}', label: 'Answer' } });
+        need('edit: add a prompt node', added.ok, added.error);
+        const c1 = ed.exec({ type: 'connect', from: 'n1.prompt', to: 'n3.in' }), c2 = ed.exec({ type: 'connect', from: 'n3.text', to: 'n2.result' });
+        need('edit: wire start to prompt to end', c1.ok && c2.ok, (c1.error || '') + (c2.error || ''));
+        const sv = await cl.save(null, ed.toJSON(), { scope: 'team-core' });
+        need('save: a new workflow in team-core, an etag, no errors', !!sv.id && !!sv.etag && !sv.problems.some((p) => p.level === 'error'), JSON.stringify(sv.problems).slice(0, 200));
+        const opened = await cl.open(sv.id), mine = WF.toWorkflow(ed.toJSON()).json, back = WF.toWorkflow(opened.doc).json;
+        const norm = (j) => CORE.canon({ nodes: j.nodes, edges: j.edges, name: j.name, labels: j.labels });
+        need('open: the saved document comes back with the same nodes, wires, positions, config and name', norm(mine) === norm(back) && opened.draft === true && opened.etag === sv.etag && opened.rights.edit === true, norm(mine).slice(0, 160) + ' <> ' + norm(back).slice(0, 160));
+        need('open: the editor loads it again (same items and wires)', Object.keys(opened.doc.items).sort().join() === Object.keys(ed.doc.items).sort().join() && Object.keys(opened.doc.links).sort().join() === Object.keys(ed.doc.links).sort().join());
+        const again = await cl.save(sv.id, opened.doc, { etag: opened.etag }); need('save again with the etag', again.id === sv.id && again.etag !== opened.etag);
+        let stale = 0; try { await cl.save(sv.id, opened.doc, { etag: opened.etag }); } catch (e) { stale = e.status; } need('a stale etag is refused (409), the editor says so', stale === 409, 'status ' + stale);
+        // validate: a good document, and one the hub refuses
+        const good = await cl.validate(ed.toJSON()); need('validate: no errors for the good document', !good.some((p) => p.level === 'error'), JSON.stringify(good).slice(0, 160));
+        const broken = CORE.createEditor({ registry: reg, doc: WF.fromWorkflow(WF.blank('r451-bad')), idPrefix: 'n', linkPrefix: 'e' }); broken.exec({ type: 'delete', ids: ['n2'] });
+        const badp = await cl.validate(broken.toJSON()); need('validate: a document with no end has the hub\'s error (end.missing)', badp.some((p) => p.code === 'end.missing' && p.level === 'error'), JSON.stringify(badp).slice(0, 160));
+        // a test run of the draft, with the node states from the log
+        const until = async (run) => { let m = {}; for (let i = 0; i < 240; i++) { m = await cl.runMeta(run); if (m.status && m.status !== 'running') break; await sleep(250); } return m; };
+        const run = await cl.run(sv.id, { prompt: 'r451 run', draft: true }); need('a test run starts (a run id, the hub as runner)', /^hr-/.test(run.run) && run.runner === 'hub', JSON.stringify(run));
+        const watched = []; const w = cl.watch(run.run, (ev) => watched.push(ev), { pollMs: 150 }); await Promise.race([w.done, sleep(60000)]); w.stop();
+        const meta = await until(run.run), logged = await cl.log(run.run, 0), ov = WF.overlay(); ov.apply.all(logged);
+        need('the live watch and the log give the same events, ending with run_end', watched.length === logged.length && watched.length > 3 && watched[watched.length - 1].type === 'run_end' && JSON.stringify(watched.map((e) => e.seq)) === JSON.stringify(logged.map((e) => e.seq)), watched.length + ' vs ' + logged.length);
+        need('the overlay reports each node\'s state (start, prompt, end: ok) and the run (ok, outcome, result)', ov.nodes.n1 && ov.nodes.n1.state === 'ok' && ov.nodes.n3 && ov.nodes.n3.state === 'ok' && ov.nodes.n2 && ov.nodes.n2.state === 'ok' && ov.run.status === 'ok' && !!ov.run.outcome && ov.run.result !== null && meta.status === 'ok', JSON.stringify(ov.marks()).slice(0, 240) + ' run ' + ov.run.status);
+        need('the marks carry text for the view and the run is over', ov.marks().n3 && /ok/.test(ov.marks().n3.text) && ov.ended());
+        // a run that fails: the overlay shows the node in error (a template with no value)
+        const bad = CORE.createEditor({ registry: reg, doc: WF.fromWorkflow(WF.blank('r451-fail')), idPrefix: 'n', linkPrefix: 'e' }); bad.exec({ type: 'disconnect', id: 'e1' });
+        bad.exec({ type: 'add', kind: 'prompt', id: 'n3', x: 220, y: 100, props: { user: '{{inputs.nothing_here}}' } }); bad.exec({ type: 'connect', from: 'n1.prompt', to: 'n3.in' }); bad.exec({ type: 'connect', from: 'n3.text', to: 'n2.result' });
+        const sv2 = await cl.save(null, bad.toJSON(), { scope: 'team-core' }), run2 = await cl.run(sv2.id, { prompt: 'x', draft: true }); await until(run2.run);
+        const ov2 = WF.overlay(); ov2.apply.all(await cl.log(run2.run, 0)); need('a failing node shows as error with its message, the run as failed', ov2.nodes.n3 && ov2.nodes.n3.state === 'error' && !!ov2.nodes.n3.error && ov2.run.status === 'failed', JSON.stringify(ov2.nodes.n3) + ' ' + ov2.run.status);
+        // the side chat: asks with the document as it is now; answers have text and a patch array (no AI reachable is an answer too)
+        const ask = await cl.ask(ed.toJSON(), 'what does this workflow do?'); need('the side chat answers with text and a patch list (writes nothing)', typeof ask.text === 'string' && Array.isArray(ask.patch), JSON.stringify(ask).slice(0, 160));
+        const chat = WF.chat(cl, ed); const before = JSON.stringify(ed.history()); await chat.send('explain it'); need('the chat records the question and an answer, and the editor history is untouched', chat.messages.length === 2 && JSON.stringify(ed.history()) === before);
+        // triggers
+        const tr = await cl.triggerSave(WF.triggerBody(sv.id, { kind: 'event', name: 'r451-evt', prompt: 'go', title: 'r451 trigger' })); need('a trigger is added', !!tr.id, JSON.stringify(tr));
+        let list = await cl.triggers(sv.id); need('the trigger list shows it, with a readable summary', list.some((t) => t.id === tr.id && /r451-evt/.test(WF.triggerSummary(t))), JSON.stringify(list).slice(0, 160));
+        await cl.triggerPause(tr.id); list = await cl.triggers(sv.id); need('pause shows in the list', list.find((t) => t.id === tr.id).paused === true);
+        await cl.triggerResume(tr.id); await cl.triggerDelete(tr.id); list = await cl.triggers(sv.id); need('remove takes it away', !list.some((t) => t.id === tr.id));
+        // publish, then the list: search, categories, duplicate, delete
+        const pub = await cl.publish(sv.id, 'r451 first').catch((e) => ({ error: e.message })); need('publish through the plugin gives version 1', pub.version === 1, JSON.stringify(pub));
+        const items = await cl.list(), mineRow = items.find((i) => i.id === sv.id);
+        need('the list has the workflow with its version and categories; filter and categories work on it', !!mineRow && mineRow.version === 1 && WF.categories(items).some((c) => c.id === 'r451cat') && WF.filterList(items, { q: 'r451-ed' }).some((i) => i.id === sv.id) && WF.filterList(items, { category: 'r451cat' }).every((i) => (i.labels || []).includes('r451cat')) && WF.filterList(items, { q: 'no-such-thing-zz' }).length === 0, JSON.stringify(mineRow).slice(0, 160));
+        const cname = WF.copyName('r451-edit', items.map((i) => i.name)), dup = await cl.duplicate(sv.id, cname), dupOpen = await cl.open(dup.id);
+        need('duplicate saves a copy under a new name in the same scope', !!dup.id && dup.id !== sv.id && dupOpen.meta.name === cname && dupOpen.meta.scope === 'team-core' && (dupOpen.json.nodes || []).length === 3, JSON.stringify(dupOpen.meta).slice(0, 160));
+        await cl.remove(dup.id); const gone = await cl.list(); need('delete removes it from the list', !gone.some((i) => i.id === dup.id) && gone.some((i) => i.id === sv.id));
+      } catch (e) { why.push('threw: ' + e.message + ' ' + String(e.stack).split('\n')[1]); }
+      hub451 = { ok: !why.length, detail: why.length ? '; hub: ' + why.join('; ') : '; hub: kinds, save / open round trip, validate, test run + overlay, chat, triggers, publish, list, duplicate, delete all match' };
+    }
+    for (const id of ['R447', 'R448', 'R449', 'R450', 'R452']) check(id, L447[id], ec[id].ok, ec[id].detail);
+    check('R451', L447.R451, ec.R451.ok && hub451.ok, ec.R451.detail + hub451.detail);
+    skip('R453', 'editor core: the same fixture (a document and a list of user commands) gives the same result on the web build and the native build', 'there is no native build of editor-core yet (the Rust port, pgm-editor, comes after the web page; open question 11); the web build\'s checks R447 to R452 are the results a native build is held to');
   }
   const ws1 = (await call('/api/work/current', U)).data;
   await call('/api/work/queue', U, { queue: [], sendNow: null }); await call('/api/work/current', U, { transcript: [] });
