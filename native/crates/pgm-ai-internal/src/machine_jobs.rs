@@ -261,7 +261,7 @@ mod tests {
         assert!(j.xfer.check(&t, "m1", "gee", "big.bin", now).is_err() && j.xfer.check(&t, "m1", "sponge", "other.bin", now).is_err());
         assert!(v["result"].get("ticketSecs").is_none(), "the hub keeps that argument");
         // a put needs a file the owner uploaded
-        match j.route(&cards, "sponge", "", "transfer_put", &json!({ "path": "x.bin", "from": "0123456789abcdef0123456789abcdef" }), &a).await { Routed::Done(v) => assert_eq!(v["ok"], json!(false)), _ => panic!() }
+        match j.route(&cards, "sponge", "", "transfer_put", &json!({ "path": "x.bin", "from": "01234567".repeat(4) }), &a).await { Routed::Done(v) => assert_eq!(v["ok"], json!(false)), _ => panic!() }
         let _ = std::fs::remove_dir_all(d);
     }
 }

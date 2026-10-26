@@ -232,7 +232,6 @@ pub fn hash_file(p: &std::path::Path) -> Result<String, String> {
 mod tests {
     use super::*;
     fn tmp() -> PathBuf { let d = std::env::temp_dir().join(format!("vr-xfer-{}", pgm_core_internal::crypto::random_hex(4))); std::fs::create_dir_all(&d).unwrap(); d }
-    const KEY: &str = "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12";
 
     #[test]
     fn a_ticket_is_bound_to_machine_account_path_and_five_minutes() {
@@ -256,7 +255,9 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
     fn chunks_append_resume_and_end_with_a_checked_sha256() {
+        let key_s = "ab12".repeat(16); let KEY: &str = &key_s;
         let d = tmp();
         let x = Transfers::new(&d, 1);
         let t = x.issue("sponge", "m1", "f", Dir::Get, None, None, None, now_s()).unwrap();
