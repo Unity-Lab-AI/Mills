@@ -41,6 +41,8 @@
     M('jev', 'AI', 'JEV decision', ['context:json!', 'question:text'], ['choice:text', 'reason:text', 'confidence:number', 'error:error'], { question: S, mode: E('pick', 'yes-no', 'score', 'rank'), model: O, choices: A, minConfidence: { type: 'number', minimum: 0, maximum: 1 }, onLowConfidence: E('ask-person', 'second-opinion', 'default', 'error'), votes: { type: 'integer', minimum: 1 } }),
     M('tool', 'Tools', 'Tool call', ['args:json'], ['result:json', 'error:error'], { tool: S }),
     M('script', 'Tools', 'Script', ['in:json'], ['error:error'], { lang: S, code: S, outputs: A }),
+    M('rea', 'Tools', 'Reverse engineering (REA)', ['args:json', 'copy:text'], ['result:json', 'text:text', 'output:json', 'files:json', 'copy:text', 'error:error'],
+      { tool: S, args: O, exec: { type: ['string', 'array'] }, files: A, get: { type: 'array', items: S }, purpose: S, copy: S, keep: { type: 'boolean' }, stop: { type: 'boolean' }, timeoutSec: { type: 'integer', minimum: 1 }, queueSec: { type: 'integer', minimum: 0 }, failOnExit: { type: 'boolean' } }),
     M('agent', 'Agents', 'Agent', ['task:text!'], ['result:json', 'text:text', 'error:error'], { timeoutSec: { type: 'number', minimum: 1 } }),
     M('orchestrate', 'Agents', 'Orchestrate', ['goal:text!'], ['result:json', 'error:error']),
     M('sub-workflow', 'Agents', 'Sub-workflow', ['in:json'], ['result:json', 'outcome:text', 'error:error'], { name: S, range: S, inputs: O }, ['name']),

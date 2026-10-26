@@ -1642,12 +1642,13 @@ mod tests {
                 let segs = w.system_segments(&a, &wd);
                 assert_eq!(segs.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["1-intro", "2-where", "3-tools", "4-laws"]);
                 assert!(segs.iter().all(|s| matches!(s.class, Class::Static | Class::Session)));
-                assert!(!segs[3].text.is_empty(),"the hub's laws are in the prompt");
+                // the laws are the hub checkout's LAWS.md / CLAUDE.md (a library checkout such as pgm-libs has none)
+                if w.mills.join("LAWS.md").is_file() { assert!(!segs[3].text.is_empty(), "the hub's laws are in the prompt"); }
                 let hits = lint_segments(&segs);
                 assert!(hits.is_empty(), "the Work system prompt has volatile text: {:?}", hits.iter().map(|h| format!("{} / {}: {}", h.segment, h.pattern, h.snippet)).collect::<Vec<_>>());
                 let p = render_prompt(&segs);
                 assert_eq!(p, w.system_prompt(&a, &wd, None), "built twice: the same bytes");
-                assert!(p.starts_with("You are talking with Sponge") && p.contains("OWN git worktree") && p.contains("\n\n"));
+                assert!(p.starts_with("You are talking with Sponge") && p.contains("OWN git worktree") && (p.contains("\n\n") || segs[3].text.is_empty()));
             }
         }
         let _ = std::fs::remove_dir_all(&tmp);

@@ -146,7 +146,7 @@ impl Engine {
     /// An engine with every built-in kind (T-201): `prompt`, `chat`, `summarise`, `jev`, `tool`, `script`, `agent`,
     /// `orchestrate`, besides the engine's own flow-control kinds and `sub-workflow`.
     pub fn with_builtins() -> Engine {
-        use crate::kinds::{ai, orchestrate, script, tools};
+        use crate::kinds::{ai, orchestrate, rea, script, tools};
         let mut e = Engine::new();
         e.implement("prompt", Arc::new(ai::Prompt));
         e.implement("chat", Arc::new(ai::Chat));
@@ -156,6 +156,7 @@ impl Engine {
         e.implement("agent", Arc::new(tools::Agent));
         e.implement("script", Arc::new(script::Script));
         e.implement("orchestrate", Arc::new(orchestrate::Orchestrate));
+        e.implement("rea", Arc::new(rea::Rea));
         e
     }
 
