@@ -13,10 +13,11 @@ use tauri::{AppHandle, Emitter};
 /// A path inside the projects folder (never above it).
 pub fn inside(root: &str, rel: &str) -> Result<PathBuf, String> {
     if root.is_empty() { return Err("Choose your projects folder first (Settings in this window).".into()); }
-    let root = PathBuf::from(root);
-    let segs: Vec<&str> = rel.split(['/', '\\']).filter(|s| !s.is_empty() && *s != ".").collect();
-    if segs.contains(&"..") { return Err("Paths cannot go above the projects folder.".into()); }
-    Ok(segs.iter().fold(root, |p, s| p.join(s)))
+    // T-313: the one canonicaliser of the linked-machines library (pgm-net-internal::machine::paths), not a copy of it: `..`, `\\?\`,
+    // alternate streams, reserved names and the like are refused there. A link INSIDE the projects folder that leads elsewhere is
+    // allowed (the person made it in their own folder; the lexical path decides), as it always was.
+    let r = pgm_net_internal::machine::paths::canonicalize_in(&[PathBuf::from(root)], rel, true, true).map_err(|e| format!("Paths cannot go above the projects folder ({e})."))?;
+    Ok(r.real.to_path_buf())
 }
 pub fn fs_list(root: &str, rel: &str) -> Result<Value, String> {
     let d = inside(root, rel)?;

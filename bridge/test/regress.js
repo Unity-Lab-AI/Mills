@@ -5717,6 +5717,111 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (!RUST_HUB) { for (const [id, l] of [['R328', 'machine tools: files (the pc_* mapping) and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it'); }
   else if (WIN) { for (const [id, l] of [['R328', 'machine tools: files and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the shell and process checks use sh and /proc; run on Linux'); }
   else await machineToolsCheck();
+  // R334, R335, R336, R339 (T-313, linked machines 7/8): the apps use the library: the service install and the state folder check
+  // (one template, a systemd user unit and a per-user Windows task, .sh and .cmd twins), pc_job retired for the library's door, vr-desktop
+  // links this computer, jcodepgm machine, and the cross-test. Windows can't be built or run here: its half is marked pending.
+  {
+    const rd = (...p) => fs.readFileSync(path.join(MILLS, ...p), 'utf8');
+    const cratesDir = path.join(MILLS, 'native', 'crates');
+    const rsFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === 'target' ? [] : rsFiles(path.join(dir, e.name))) : e.name.endsWith('.rs') ? [path.join(dir, e.name)] : []));
+    const home334 = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
+    const env334 = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home334, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home334, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET };
+    env334.PATH = path.join(env334.CARGO_HOME, 'bin') + path.delimiter + (env334.PATH || '');
+    const L334 = 'linked machines service install (T-313): ONE template (pgm-net-internal::machine::service) makes a systemd USER unit (Restart=on-failure, WantedBy=default.target, no User=, never root, no restart after exit 3 / 4) and a per-user Windows Scheduled Task (logon trigger, LeastPrivilege, restart on failure, no administrator, no SYSTEM) with .sh and .cmd twins; `vr-host machine install | uninstall` write and remove them; the machine refuses to start (exit 4) when the state folder, or the token / key / scope in it, is group- or world-readable (Linux) or has a broad ACL (Windows, the icacls helper)';
+    const L335 = 'linked machines, the apps use the library (T-313): the host-side pc_job is gone, the AI host\'s PC role is the library\'s Machine (scope + the one canonicaliser, audit, kill switch; an older hub that signs nothing is still served as the owner), the hub still relays the pc engine to older hosts, no copy of the canonicaliser exists outside pgm-net-internal (the desktop app\'s local file paths use it too), vr-desktop links this computer and serves it while open or as the persistent service, only the Tools window may call those commands (the hub\'s page, scoped to the hub origin, cannot), and the machine parity R328 stays green';
+    const L336 = 'linked machines, Jcode PGM (T-313): `jcodepgm machine link | run | install | uninstall | scope | stop | start | status` on the mirrored library, run against a fake hub (link by device code, signed calls served, unsigned / other-key / outside-folder refused, revoked wipe, state folder check, local scope edits audited, kill switch), the credential files owner-only, the library mirrored byte for byte from this repo';
+    const L339 = 'linked machines cross-test (T-313): the library tests R321 to R333 and R340 run on Linux (machine:: unit tests), the Windows path rules are pure logic that run on any host, and the Windows run is documented for Gee in the pgm-net-internal README; the Windows run itself is PENDING';
+    const why334 = buildNative();
+    const ct334 = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', '-p', 'pgm-ai-internal', '--', 'machine::', 'the_pc_role_is_the_librarys_machine'], { cwd: path.join(MILLS, 'native'), env: env334, encoding: 'utf8', timeout: 1800000 });
+    if (ct334.error) { for (const [id, l] of [['R334', L334], ['R335', L335], ['R339', L339]]) skip(id, l, 'no Rust toolchain here (' + ct334.error.code + ')'); }
+    else {
+      const out334 = String(ct334.stdout || '') + String(ct334.stderr || '');
+      const okT = (name) => new RegExp('^test ' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\.\\.\\. ok$', 'm').test(out334);
+      const nOk = (out334.match(/^test machine::[^ ]+ \.\.\. ok$/gm) || []).length;
+      const svcTests = ['the_systemd_unit_is_a_user_unit_that_restarts_on_failure_and_never_runs_as_root', 'the_windows_task_is_per_user_least_privilege_and_restarts', 'sh_and_cmd_twins_exist_and_the_sh_refuses_root', 'install_writes_the_unit_and_uninstall_removes_it', 'a_group_or_world_readable_state_folder_or_secret_is_refused'];
+      const svcOk = svcTests.filter((t) => okT('machine::service::tests::' + t));
+      const runnerSrc = rd('native', 'crates', 'pgm-net-internal', 'src', 'machine', 'runner.rs'), hostSrc = rd('native', 'crates', 'vr-host', 'src', 'machine.rs');
+      const srcOk334 = (runnerSrc.match(/check_state_dir\(&o\.state_dir\)/g) || []).length >= 2 && /fn install_sh|install_cmd/.test(rd('native', 'crates', 'pgm-net-internal', 'src', 'machine', 'service.rs')) && /"install" \| "uninstall"/.test(hostSrc) && /EXIT_REFUSED/.test(hostSrc);
+      // the real program: generated files, then the refusal
+      let live = { ok: false, why: why334 || 'not run' };
+      const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+      if (!why334 && !WIN && !isRoot) {
+        const d = fs.mkdtempSync(path.join(SCRATCH || require('os').tmpdir(), 'r334-')), state = path.join(d, 'state'), out = path.join(d, 'out');
+        const vr = (...a) => spawnSync(NATIVE_BIN.host, ['machine', ...a], { encoding: 'utf8', timeout: 60000, env: { ...process.env, HOME: d, XDG_CONFIG_HOME: path.join(d, 'cfg') } });
+        const inst = vr('install', '--files-only', '--state', state, '--out', out);
+        const names = ['install.sh', 'uninstall.sh', 'install.cmd', 'uninstall.cmd', 'vibe-roller-machine.service', 'vibe-roller-machine.task.xml'];
+        const have = names.filter((n) => fs.existsSync(path.join(out, n)));
+        const rdo = (n) => (fs.existsSync(path.join(out, n)) ? fs.readFileSync(path.join(out, n), 'utf8') : '');
+        const unit = rdo('vibe-roller-machine.service'), xml = rdo('vibe-roller-machine.task.xml'), cmd = rdo('install.cmd'), sh = rdo('install.sh');
+        const shn = spawnSync('sh', ['-n', path.join(out, 'install.sh')], { encoding: 'utf8' });
+        const unitOk = /^Restart=on-failure$/m.test(unit) && /^WantedBy=default\.target$/m.test(unit) && !/^User=/m.test(unit) && !/multi-user\.target/.test(unit) && /^RestartPreventExitStatus=3 4$/m.test(unit) && /machine run --state /.test(unit) && /^UMask=0077$/m.test(unit);
+        const taskOk = /<LogonTrigger>/.test(xml) && /<RunLevel>LeastPrivilege<\/RunLevel>/.test(xml) && /<RestartOnFailure>/.test(xml) && !/HighestAvailable|LocalSystem|S-1-5-18/.test(xml);
+        const twinsOk = /schtasks \/Create/.test(cmd) && !/sc create|LocalSystem/.test(cmd) && /\r\n/.test(cmd) && sh.startsWith('#!/bin/sh') && /id -u/.test(sh) && shn.status === 0;
+        // the refusal: linked state (record + token), folder open to the group / the world, then a group- or world-readable token in a private folder
+        fs.mkdirSync(state, { recursive: true });
+        fs.writeFileSync(path.join(state, 'link.json'), JSON.stringify({ owner: 'ann', machine: 'mach-x', hub: 'http://127.0.0.1:9' })); fs.writeFileSync(path.join(state, 'token'), 'tok');
+        fs.chmodSync(path.join(state, 'link.json'), 0o600); fs.chmodSync(path.join(state, 'token'), 0o600);
+        const refuse = [];
+        for (const [dirMode, tokMode] of [[0o755, 0o600], [0o750, 0o600], [0o700, 0o640], [0o700, 0o604]]) {
+          fs.chmodSync(state, dirMode); fs.chmodSync(path.join(state, 'token'), tokMode);
+          const r = vr('run', '--state', state);
+          refuse.push(r.status === 4 && /will not start/.test(r.stderr || '') && /chmod (700|600)/.test(r.stderr || ''));
+        }
+        live = { ok: inst.status === 0 && have.length === names.length && unitOk && taskOk && twinsOk && refuse.every(Boolean), why: `install ${inst.status} files ${have.length}/${names.length} unit ${unitOk} task ${taskOk} twins ${twinsOk} refusal ${refuse.map((b) => (b ? 'exit4' : 'NO')).join('/')}` };
+      } else if (WIN) live = { ok: true, why: 'the live shell checks run on Linux; the Windows run is in the README' };
+      else if (isRoot) live = { ok: true, why: 'running as root: `machine install` refuses root by design, the live check is skipped (the unit tests cover the text)' };
+      check('R334', L334, ct334.status === 0 && svcOk.length === svcTests.length && srcOk334 && live.ok, `cargo test ${ct334.status}: service tests ${svcOk.length}/${svcTests.length}; ${live.why}; Windows: the ACL test and the task are written but not run here (no Windows)`);
+
+      // ---- R335
+      const allRs = rsFiles(cratesDir), outside = allRs.filter((f) => !f.includes(path.join('crates', 'pgm-net-internal') + path.sep));
+      const oldPc = allRs.filter((f) => /\bfn pc_job\b/.test(fs.readFileSync(f, 'utf8')));
+      const copies = outside.filter((f) => { const t = fs.readFileSync(f, 'utf8'); return /contains\(&"\.\."\)/.test(t) || (/go above the (shared|projects) folder/.test(t) && !/canonicalize_in/.test(t)); }).map((f) => path.relative(MILLS, f));
+      const runnerAi = rd('native', 'crates', 'pgm-ai-internal', 'src', 'host', 'runner.rs'), aiHosts = rd('native', 'crates', 'pgm-ai-internal', 'src', 'ai_hosts.rs');
+      const pcRole = /async fn machine_job\(/.test(runnerAi) && /machine::exec::Machine/.test(runnerAi) && /\.handle\(&tool, &body, &sig\)/.test(runnerAi) && /\.run_as\(/.test(runnerAi) && !/read_dir\(&full\)|remove_dir_all\(&full\)/.test(runnerAi) && /h\.track\(machine_job\(h2, job\)\)/.test(runnerAi);
+      const hubKeeps = /self\.relay\(host, "pc", &format!\("\/\{name\}"\)/.test(aiHosts) && fs.existsSync(path.join(cratesDir, 'pgm-net-internal', 'src', 'compat.rs')) && /an_older_app_keeps_its_pc_engine/.test(rd('native', 'crates', 'pgm-net-internal', 'src', 'compat.rs'));
+      const deskMain = rd('native', 'crates', 'vr-desktop', 'src', 'main.rs'), deskMachine = rd('native', 'crates', 'vr-desktop', 'src', 'machine.rs'), deskLocal = rd('native', 'crates', 'vr-desktop', 'src', 'local.rs');
+      const hubCapSrc = (/CapabilityBuilder::new\("hub"\)[\s\S]*?\)\)\?;/.exec(deskMain) || [''])[0];
+      const toolsCap = JSON.parse(rd('native', 'crates', 'vr-desktop', 'capabilities', 'tools.json')), buildRs = rd('native', 'crates', 'vr-desktop', 'build.rs');
+      const machCmds = ['machine_status', 'machine_link', 'machine_act', 'machine_service'];
+      const deskOk = machCmds.every((c) => new RegExp('fn ' + c + '\\(').test(deskMain) && buildRs.includes('"' + c + '"') && toolsCap.permissions.includes('allow-' + c.replace(/_/g, '-')) && deskMain.includes(c)) && hubCapSrc.length > 50 && !/machine/.test(hubCapSrc) && /\.remote\(format!\("\{hub\}\/\*"\)\)/.test(hubCapSrc)
+        && /Runner::open/.test(deskMachine) && /runner::link/.test(deskMachine) && /Unit::new/.test(deskMachine) && /option_env!\("VR_APP_NAME"\)/.test(deskMachine) && /fn cli\(/.test(deskMachine) && /machine::cli\(/.test(deskMain) && /canonicalize_in/.test(deskLocal)
+        && /is_hub_origin\(page, hub\)/.test(rd('native', 'crates', 'vr-desktop', 'src', 'capture.rs')) && /mode = "while open"/.test(deskMachine);
+      const r328 = results.find((r) => r.id === 'R328');
+      const parityOk = RUST_HUB ? !!r328 && r328.status === 'PASS' : true;
+      const cdesk = why334 ? { status: 77 } : spawnSync('sh', ['-c', `export RUSTUP_HOME="${env334.RUSTUP_HOME}" CARGO_HOME="${env334.CARGO_HOME}" CARGO_TARGET_DIR="${NATIVE_TARGET}" OWNER_HOME="${home334}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; [ "$HAVE_TAURI_LINUX" = 1 ] || exit 77; cargo test --release -q -p vr-desktop -- machine local 2>&1`], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+      const deskTests = cdesk.status === 77 ? 'desktop unit tests not run (no WebKitGTK sysroot)' : `desktop unit tests ${cdesk.status}`;
+      check('R335', L335, ct334.status === 0 && okT('host::runner::tests::the_pc_role_is_the_librarys_machine') && oldPc.length === 0 && copies.length === 0 && pcRole && hubKeeps && deskOk && parityOk && (cdesk.status === 77 || cdesk.status === 0),
+        `pc_job in the source: ${oldPc.length ? oldPc.map((f) => path.relative(MILLS, f)).join(',') : 'none'}; canonicaliser copies outside pgm-net-internal: ${copies.join(',') || 'none'} (the frozen JavaScript host keeps its own); pc role ${pcRole}; hub still relays pc ${hubKeeps}; desktop ${deskOk}; ${deskTests}; R328 parity ${RUST_HUB ? (r328 ? r328.status : 'missing') : 'runs with --rust-hub'}`);
+
+      // ---- R339
+      const readme = rd('native', 'crates', 'pgm-net-internal', 'README.md');
+      const winDoc = /Running the linked-machines tests on Windows \(R339\)/.test(readme) && /cargo test -p pgm-net-internal machine::/.test(readme) && /vr-host\.exe machine install --files-only/.test(readme) && /schtasks \/Query/.test(readme);
+      const winTests = (fs.readFileSync(path.join(cratesDir, 'pgm-net-internal', 'src', 'machine', 'paths.rs'), 'utf8').match(/fn w\(|Flavor::Windows/g) || []).length;
+      check('R339', L339, ct334.status === 0 && nOk >= 80 && !/FAILED|panicked/.test(out334) && winDoc && winTests >= 5,
+        `Linux: cargo test ${ct334.status}, ${nOk} machine:: tests ok; Windows path rules are pure logic (${winTests} Windows-flavour uses in paths.rs) and run here; Windows run: PENDING (Gee: the README commands; the cfg(windows) ACL test and the Scheduled Task were never run)`);
+    }
+
+    // ---- R336 (Jcode PGM): its tests live in the Jcode PGM repo; here, the files, the mirror and the test list
+    const jc = [process.env.JCODE_PGM_DIR, path.join(MILLS, '..', 'jc-' + path.basename(MILLS).replace(/^vr-/, '')), path.join(MILLS, '..', 'Jcode-PGM'), '/srv/apps/sharedwork/Jcode-PGM'].filter(Boolean).find((d) => fs.existsSync(path.join(d, 'crates', 'jcode-machine', 'src', 'tests.rs')));
+    if (!jc) skip('R336', L336, 'no Jcode PGM checkout with crates/jcode-machine beside this repo (JCODE_PGM_DIR=<dir> points at one); its tests: cargo test -p jcode-machine');
+    else {
+      const jr = (...p) => fs.readFileSync(path.join(jc, ...p), 'utf8');
+      const mirrorDir = path.join(jc, 'pgm', 'libs', 'pgm-net-internal', 'src'), srcDir = path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src');
+      const same = (rel) => { try { return fs.readFileSync(path.join(mirrorDir, rel)).equals(fs.readFileSync(path.join(srcDir, rel))); } catch { return false; } };
+      const rels = ['client.rs', ...fs.readdirSync(path.join(srcDir, 'machine')).map((f) => path.join('machine', f))];
+      const stale = rels.filter((r) => !same(r));
+      const tj = jr('crates', 'jcode-machine', 'src', 'tests.rs'), lj = jr('crates', 'jcode-machine', 'src', 'lib.rs'), cj = jr('src', 'cli', 'machine.rs'), aj = jr('src', 'cli', 'args.rs');
+      const names = ['link_then_run_serves_signed_calls_and_refuses_the_rest', 'unlinked_on_the_web_wipes_the_token_and_exits_3', 'a_state_folder_others_can_read_is_refused_before_any_call', 'scope_shows_and_edits_locally_and_the_audit_names_this_terminal', 'stop_ends_all_access_until_start_here', 'the_default_hub_is_the_one_hub_login_signed_in_to', 'the_service_is_jcodepgm_machine_run_as_a_user_unit_and_a_per_user_task'];
+      const hasTests = names.filter((n) => tj.includes('fn ' + n));
+      const cli = /enum MachineCommand/.test(aj) && ['Link', 'Run', 'Install', 'Uninstall', 'Scope', 'Stop', 'Start', 'Status'].every((v) => new RegExp('\\b' + v + '\\b').test(aj.slice(aj.indexOf('enum MachineCommand')))) && /MachineCommand::Scope/.test(cj) && /Command::Machine/.test(jr('src', 'cli', 'dispatch.rs'));
+      const wiring = /fn fake_hub\(/.test(tj) && /mode\(&state\), 0o700/.test(tj) && /0o600/.test(tj) && /pgm_net_internal::machine::runner::\{self, Ended, LinkRecord, Options, Runner\}/.test(lj) && /LocalApproval::from_machine\(APPROVER\)/.test(lj) && /jcode_hub_login::load/.test(lj) && /pgm-net-internal = \{ path = "\.\.\/\.\.\/pgm\/libs\/pgm-net-internal" \}/.test(jr('crates', 'jcode-machine', 'Cargo.toml'));
+      let ran = '';
+      let jt = { status: 0 };
+      if (process.env.VR_RUN_JCODE_TESTS === '1') { jt = spawnSync('cargo', ['test', '-p', 'jcode-machine'], { cwd: jc, env: { ...env334, CARGO_TARGET_DIR: path.join(jc, 'target') }, encoding: 'utf8', timeout: 1800000 }); ran = ` cargo test -p jcode-machine ${jt.status}`; }
+      check('R336', L336, stale.length === 0 && hasTests.length === names.length && cli && wiring && jt.status === 0,
+        `Jcode PGM at ${jc}: mirror stale files ${stale.join(',') || 'none'}; fake-hub tests ${hasTests.length}/${names.length}; CLI ${cli}; wiring ${wiring};${ran || ' the tests run with: cargo test -p jcode-machine (VR_RUN_JCODE_TESTS=1 runs them here)'}`);
+    }
+  }
   async function machineToolsCheck() {
     const mdir = fs.mkdtempSync(path.join(SCRATCH, 'r328-'));
     const procs = [], cleanups = [];
@@ -5860,6 +5965,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const mem0 = mem();
       const tStart = Date.now();
       const first = await one('transfer_get', { path: 'big.bin', maxBytes: 100 << 20, ticketSecs: 10 }, m2.id), f1 = res(first) || {};
+      const tFirstDone = Date.now(); // the ticket (10 s) was issued no later than this
       const partFile = path.join(SB, 'transfers', 't-user', (f1.id || 'x') + '.part');
       const partSize = fs.existsSync(partFile) ? fs.statSync(partFile).size : -1;
       const tk = f1.ticket || 'no-ticket', st = (tok, ticket, body) => mcall('POST', '/api/machine/transfer/' + ticket + '/status', tok, body);
@@ -5868,7 +5974,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const rGood = await st(tokOf(m2), tk, goodBody);
       const rChunkOther = await fetch(H + '/api/machine/transfer/' + tk + '/chunk?offset=' + (100 << 20) + '&key=' + f1.id + '&path=big.bin', { method: 'POST', headers: { Authorization: 'Bearer ' + tokOf(m3), 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(16) }).then((r) => r.status);
       const withinTicket = Date.now() - tStart < 9500;
-      await sleep(Math.max(0, 11000 - (Date.now() - tStart)));
+      await sleep(Math.max(0, 11000 - (Date.now() - tStart), 10500 - (Date.now() - tFirstDone)));
       const rLate = await st(tokOf(m2), tk, goodBody);
       // resume: the same call again carries on at the byte the hub holds, and ends with the sha256 of the whole file
       const second = await one('transfer_get', { path: 'big.bin' }, m2.id), f2 = res(second) || {};

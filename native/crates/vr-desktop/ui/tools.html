@@ -14,6 +14,7 @@
   <button data-tab="build">Build &amp; run</button>
   <button data-tab="git">Git</button>
   <button data-tab="host">AI host</button>
+  <button data-tab="machine">Linked machine</button>
   <button data-tab="proxy">API proxy</button>
   <button data-tab="settings">Settings</button>
   <div class="foot" id="ver"></div>
@@ -54,6 +55,16 @@
     <div class="row"><button data-host="start">Start</button><button data-host="pause">Pause</button><button data-host="resume">Resume</button><button data-host="restart">Restart</button><button data-host="stop" class="danger">Stop</button><button data-host="update">Update now</button></div>
     <div class="row"><span>Start at boot:</span><button data-host="boot-service">As a service</button><button data-host="boot-sign-in" class="win">At sign-in</button><button data-host="boot-user" class="lin">User service</button><button data-host="boot-off">Off</button></div>
     <pre id="hostOut" class="term small"></pre>
+  </section>
+  <section id="machine" class="tab">
+    <header><span>This computer as a linked machine</span></header>
+    <p class="hint">Lets <b>your own</b> AI work on this computer from the hub, inside the one folder you choose (you can widen it later, only here). Only you can use it: nobody else's run, a watcher or an admin can't. The AI can't change its own scope, and <b>Stop</b> ends all access until you start it again here.</p>
+    <div id="mState" class="card"></div>
+    <div class="row"><input id="mFolder" placeholder="the folder the AI may use"><button id="mPick">Choose…</button><input id="mName" placeholder="name of this computer"><button id="mLink">Link this computer</button></div>
+    <div class="row"><button id="mStart">Serve while this app is open</button><button id="mStop" class="danger">Pause / stop</button></div>
+    <div class="row"><span>Keep it running when the app is closed:</span><button id="mInstall">Install the service</button><button id="mUninstall">Remove it</button></div>
+    <p class="hint">The service is a per-user one (no administrator, no root): a systemd user unit on Linux, a Scheduled Task at sign-in on Windows. The service runs this app with no window. Install this app first if you run it from a download folder.</p>
+    <pre id="mOut" class="term small"></pre>
   </section>
   <section id="proxy" class="tab">
     <header><span>Local API proxy</span></header>

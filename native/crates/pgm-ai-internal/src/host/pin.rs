@@ -18,6 +18,9 @@ fn short(k: &str) -> String { k.chars().take(16).collect() }
 
 impl HubPin {
     pub fn new() -> HubPin { HubPin::default() }
+    /// The verifier of the pinned key (T-313: handed to the PC role's `Machine`, so its door checks the hub's signature itself).
+    /// Shared, so the replay cache is one.
+    pub fn verifier(&self) -> Option<Arc<Verifier>> { self.slot.lock().unwrap_or_else(|e| e.into_inner()).clone() }
     /// Is a key pinned for the hub that is connected now?
     pub fn active(&self) -> bool { self.slot.lock().unwrap_or_else(|e| e.into_inner()).is_some() }
     /// What the hello answer said: `announced` = the hub's public key (hex, "" from an older hub), `owner` = the account this

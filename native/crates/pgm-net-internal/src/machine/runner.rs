@@ -61,6 +61,7 @@ fn client() -> Result<reqwest::Client, String> { crate::client::http_client(Dura
 /// Links this machine by device code. `show` gets the user code to display ("approve BBBB-CCCC on the web, signed in as yourself").
 /// `folder` is the default scope's one folder (written to `scope.json` when there is none yet). Returns the link record.
 pub async fn link(o: &Options, folder: &str, device: &str, show: &dyn Fn(&str)) -> Result<LinkRecord, String> {
+    super::service::check_state_dir(&o.state_dir)?;
     let store = LinkStore::new(&o.state_dir).map_err(|e| e.to_string())?;
     let key = store.load_or_create_key().map_err(|e| e.to_string())?;
     let mid = {
@@ -127,6 +128,7 @@ pub struct Runner {
 impl Runner {
     /// Opens a linked machine's state (`link.json`, the token, the device key). Err when this machine is not linked.
     pub fn open(mut o: Options) -> Result<Arc<Runner>, String> {
+        super::service::check_state_dir(&o.state_dir)?;
         let store = LinkStore::new(&o.state_dir).map_err(|e| e.to_string())?;
         let rec = LinkRecord::load(&o.state_dir).ok_or("this machine is not linked yet (no link record)")?;
         if o.hub.is_empty() { o.hub = rec.hub.clone(); }
