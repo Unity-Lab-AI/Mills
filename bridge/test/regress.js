@@ -5130,16 +5130,17 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const multi = (await chat(U, 'MULTIRESULT r347')).events;
     // a page that joins the run again afterwards sees the same
     // two sessions at once: each stream has its own result only
-    const sa = await sidOf('r347 a'), sb = await sidOf('r347 b');
-    const [ra, rb] = await Promise.all([chat(U, 'SLOW two-A-r347', { session: sa }), chat(U, 'DUPRESULT two-B-r347', { session: sb })]);
+    const multiSess = (await call('/api/work/sessions', U)).status === 200; // sessions are the Rust hub's
+    const sa = multiSess ? await sidOf('r347 a') : '', sb = multiSess ? await sidOf('r347 b') : '';
+    const [ra, rb] = multiSess ? await Promise.all([chat(U, 'SLOW two-A-r347', { session: sa }), chat(U, 'DUPRESULT two-B-r347', { session: sb })]) : [{ status: 0, events: [] }, { status: 0, events: [] }];
     const own = (r, tag) => results(r.events).length === 1 && results(r.events).every((e) => new RegExp(tag).test(e.result || ''));
     const sane = results(e1).length <= 1 && results(e2).length === 1 && q.every((e) => results(e).length === 1) && results(dup).length === 1 && new Set(uuids(multi)).size === results(multi).length;
     check('R347', 'a run says each result once: after Send now (the stopped run has at most one, the next exactly one), three queued messages (one each), the same result delivered three times (one on the wire, and one when the run is joined again), three different empty turns (each kept, with its own uuid), and two sessions at once (each stream only its own, one result)',
-      sane && (!replay || results(replay).length === 1) && own(ra, 'two-A-r347') && own(rb, 'two-B-r347'),
-      `send now ${results(e1).length}/${results(e2).length}; queue ${q.map((e) => results(e).length)}; dup ${results(dup).length}; multi ${results(multi).length}; replay ${replay ? results(replay).length : 'n/a'}; sessions ${results(ra.events).length}/${results(rb.events).length}`);
+      sane && (!replay || results(replay).length === 1) && (!multiSess || (own(ra, 'two-A-r347') && own(rb, 'two-B-r347'))),
+      `send now ${results(e1).length}/${results(e2).length}; queue ${q.map((e) => results(e).length)}; dup ${results(dup).length}; multi ${results(multi).length}; replay ${replay ? results(replay).length : 'n/a'}; sessions ${results(ra.events).length}/${results(rb.events).length} (status ${ra.status}/${rb.status})`);
     // the page's logic, run on its own source (a browser cannot run here)
     const page347 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    const m = page347.match(/\/\/ <t319>([\s\S]*?)\/\/ <\/t319>/);
+    const m = page347.match(/\/\/ <t319>[^\n]*\n([\s\S]*?)\/\/ <\/t319>/);
     let P = null; try { P = m ? require('vm').runInNewContext(m[1] + '; ({ sysCollapse, sysLabel, resultNote })') : null; } catch {}
     let lines = null;
     if (P) { // four identical status lines in a row: one with x4; a different one starts a new line
