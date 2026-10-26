@@ -7,6 +7,729 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.30.0 — 2026-10-26
+
+MINOR: **Gee's Hyper Workflows branch and Sponge's 5.26.0 to 5.29.1 together on develop.** Both branches had a 5.26.0;
+Gee's (work/gee) is written out here, Sponge's further down. Merge notes:
+- **Work-run tool relay:** the Hyper Workflows tools (`hyperwork_list`, `hyperwork_run`) go through the per-run secret
+  of T-308 like every other run tool: the account and session come from the run's record, never from a header.
+- **Team MCP and the host's tool list:** the RE container tools (T-303) and the Hyper Workflows tools side by side.
+- **AI host:** the PC role on the library (T-313) and Unity's brain loading (T-293) in the same host.
+- versions: project 5.30.0, bridge/team-mcp.js 1.4.0, bridge/team.js 1.1.4, web/index.html 1.27.0.
+
+**From Gee's branch (5.26.0 on work/gee):**
+
+MINOR: **Hyper Workflows** (T-184: T-199 to T-207, T-210, T-186 = T-211 to T-213, T-205; the team note
+plans/hyper-workflows.md), **Unity's brain loads on the AI host** (T-293) and the **agent-to-agent spec checks** (T-295).
+Everything new is the Rust hub's; the frozen JavaScript hub answers 404 on `/api/hyperwork/` (R445) and keeps reading
+every shared file as before (the workflow data is new files under `Hyperwork/`).
+
+**Hyper Workflows: an independent, node-based workflow system.** A workflow is a re-usable flow chart; a prompt sent
+through it is carried by the engine through the whole automated back-and-forth (AI calls, JEV decisions, programmatic
+steps) until it ends. The AI is one kind of node inside it.
+- **Libraries** (native/crates, the library law; they go to pgm-libs with this release): `pgm-workflow-internal` (the
+  graph model and JSON document with unknown fields kept and migration on read, port types, validation, diff, versions,
+  laws / prompts shapes, node-kind manifests, `{{template}}` and condition expressions, the store; T-199),
+  `pgm-workflow-engine-internal` (the engine: tokens on wires, parallel lines and joins, switch, bounded loops,
+  sub-graphs, for-each, sub-workflows, retries / timeouts / failure paths, approvals that hold no worker, run limits,
+  cancel, an append-only run log that is also the resume memory, replay; `WorkflowHost` + `NodeKind` traits and a fake
+  host; T-200), the **built-in kinds** prompt / chat / summarise / jev / tool (+ custom HTTP with secrets in headers
+  only) / script (the transform language, no files, network or clock) / agent / orchestrate / sub-workflow, with model
+  choice node → section → workflow → host and a fallback (T-201), **laws and saved prompts** applied scope → workflow →
+  sections → node, groups, `-law-x`, lockable laws, checks with onFail, `{{prompt:name}}` pinned or latest, export /
+  import bundles (T-202), **custom node kinds** made on the fly (graph / http / script; from a selection; published once
+  per version after their tests pass; author-only → reviewed → blocked trust; pinned majors; hashes checked; T-203),
+  the **decision-model slot** (a scope's JEV through OpenRouter, a local Ollama model as its fallback, a node's own
+  model first; T-210), the **AI side chat's server side** (`POST ask`: the person's own AI answers with text and a
+  patch of editor commands, writes nothing; T-206), **triggers** (timers every N minutes / hours / days and the board's
+  own repeats, missed once or skipped, a scheduler lease so one hub fires, Forgejo / GitHub webhooks signed with the
+  trigger's secret, internal events from this machine, standing workflows with run history, pause / resume and a chat
+  alert to the owner when a run fails; T-186), and `pgm-workflow-command-internal`, the one `/hyperwork <name>
+  [--project P] [--on runner] [--version V] <prompt>` parser for the page, Hyper Prod Man and jcode, with the
+  nearest-names helper (T-207; mirrored by copy into Jcode PGM).
+- **The hub** (`vr-hub` hyperwork module, `/api/hyperwork/`; T-204): scopes me- / team- / grp- / company (config
+  `hyperworkTeams`), rights run / view / edit / publish / admin, run-only clients (a jcode session), list with the
+  type-ahead order and `since=<rev>`, get / save (etag, 409) / validate / publish / versions / diff / restore / promote /
+  delete / perms / policy / export / import, run (the published version pinned; 422 with the preflight problems), the
+  run log streamed as NDJSON with `follow=1`, cancel, answer, replay; runs resume from their logs after a hub restart
+  (`run_resume`); the log is scrubbed of secrets (config `hyperworkSecrets`; HTTP only to `hyperworkNetwork`); AI
+  through the person's own providers; `POST command` runs a `/hyperwork` line (404 with the nearest names when nothing
+  matches); webhooks at `POST /hooks/hyperwork/<id>`, internal events at `POST /internal/hyperwork/event` (config
+  `hyperworkEventSecret`, this machine only); **the same routes for a product's people through the gateway**
+  (`/internal/gateway/hyperwork/<rest>`, spec 15: Hyper Prod Man's /hyperwork and editor; R474). The team tools
+  `hyperwork_list` / `hyperwork_run` let a Work run's AI send a prompt through a workflow as its person (team-mcp.js
+  1.2.0, mcp-tools.json). A session keeps the client it signed in with (pgm-identity-internal `session_client`).
+- **The page** (web/index.html 1.26.0, web/sw.js 1.0.6): `/hyperwork` and `/hw` in the Work box with a type-ahead from
+  the hub's list (grey = cannot run here, with the reason), the run followed line by line, Approve / Reject on an
+  approval, the answer at the end; `--project`, else the page's project. **The visual editor foundation** (T-205,
+  Sponge's agent branch merged here): `web/editor/core.js` (pure logic: add, move, resize, snap, box select, align,
+  group / ungroup, undo / redo, copy / paste across documents, sub-graph views, a json-schema property panel, AI patches
+  as one undo step), `view.js`, the plugins `kinds-workflow.js` (the hub's kinds, the document, the `/api/hyperwork`
+  client, the run overlay, the side chat with patch preview, triggers) and `kinds-boxes.js` (a T-191 stub), and the
+  **Workflows screen** (`workflows-ui.js`: the menu tile, `/workflows`, the list, the editor, save / test run / publish /
+  duplicate / delete). Mills' look, the native port (R453) and a few editor gaps (moving a section, opening loop
+  sub-graphs, resizing) are left for later.
+- **Checks:** R401 to R406 (model), R407 to R423 (engine and kinds), R425 to R436 (laws, custom kinds), R437 to R446 and
+  R460 to R462, R465, R472, R474 (the hub over HTTP), R447 to R452 (the editor), R454 to R458 (the side chat), R466 to
+  R471 (triggers); 0 failed in both suite modes.
+
+**Unity's brain loads on the AI host** (T-293; Sponge: "my brain glitched: the local brain (unity-brain) is not loaded
+on the AI host yet").
+- **What happened:** with the hub on the server, Unity borrows Ollama from whichever admin's host lends one. Gee's host
+  offered no Ollama (not running there), so the hub asked Sponge's host, whose Ollama has no unity-brain; the engine
+  guard rightly stops the hub from loading a model on a host, and only a hub on the same PC ever loaded the brain itself.
+- **The host** (vr-host): starts an installed Ollama that is not running (`autoDetect.startOllama`, default on; its
+  output in `ollama.log`) and loads the brain from a Modelfile it finds (`unity.modelfile`, else next to `work.hubRepo`,
+  in the host folder's `models/unity-brain/Modelfile`, or next to the host folder's parents), then says hello again
+  with the new model; one log line when there is no Modelfile. Settings `unity.model`, `unity.modelfile`,
+  `unity.ollamaCommand`, `autoDetect.startOllama` (ai-node.example.json).
+- **The hub:** with several hosts lending Ollama, Unity asks each one's `/api/tags` (once a minute, or when the set
+  changes) and pins the host that has the brain (`AiHosts::prefer_engine_host`); a host whose hello lists the brain
+  comes first anyway. When no host has it, she answers on a stand-in chat model of that Ollama (never an embedding
+  model; `assistant.fallbackModel` first when set), `/api/assistant/state` says so (`local.standin`) and the Unity screen
+  shows it. The glitch text remains only when the Ollama has no chat model at all, and then says how to fix it.
+- README (host setup), R473, unit tests for the brain lookup, the stand-in pick, the hello models and the Modelfile search.
+
+**Agent to agent** (T-295 = T-294 · 1/6): the spec is the team note plans/agent-talk.md; its checks R480 to R484 are in
+the suite as `spec()` lines (SPEC until T-296 to T-300 build them). The fake Claude's team-tool script and the `HYPERWORK`
+script share one relay helper (fake-claude.js).
+
+**Also:** `Ollama` in the AI host's hello (an ai-node.json `unity` block is optional and older hosts need nothing);
+NAMES.md lists the three workflow crates; the merge of develop's pgm-plan-internal, releases and notify tools alongside.
+
+## 5.29.1 — 2026-10-26
+
+PATCH: **screen sharing in calls, fixed as far as the code shows** (T-320). Found by reading and testing the code; the
+exact report still needs details from whoever saw it.
+- **The share tile:** it follows the hub's share flag. It no longer vanishes when a still screen stops sending (Firefox
+  mutes such a track), and it no longer waits for an unmute to appear.
+- **The share's sound:** kept per person, so a tile that appears after the audio has it. Before, the audio was dropped.
+- **After a hub restart:** a quiet re-join keeps the share flag; it used to send only camera and mic.
+- **Leaving and re-joining between two polls:** that person gets a fresh connection. A hub restart still keeps the old
+  ones.
+- **Lost signals:** a lost offer or answer is retried and reported instead of being swallowed. The offerer restarts ICE
+  after 5 seconds of "disconnected".
+- **Clearer errors:** share errors say what happened (refused, nothing to share or the Linux portal, a capture error,
+  plain http).
+- **The picker:** a second click no longer opens a second one, and a capture that arrives after leaving is stopped.
+- **The Share button:** it explains itself on plain http and in an app whose web view has not switched capture on.
+- web/calls.js 1.1.2. Checks R350 to R354, which run calls.js in Node with stubs.
+
+## 5.29.0 — 2026-10-26
+
+MINOR: **the apps run linked machines** (T-313; linked machines step 7 of 8; Linux and Windows only).
+- **Install.** One template writes a systemd **user** unit (no root, restarts on failure) and a per-user Windows logon
+  task, with `.sh` and `.cmd` twins.
+  - `vr-host machine install | uninstall` writes and removes them.
+  - The machine refuses to start if its state folder (token, key, scope, audit) can be read by others: group or other bits
+    on Linux, a Users / Everyone ACL on Windows.
+- **The AI host's PC role is the library's `Machine`.** The host-side `pc_job` is gone: scope, the one canonicaliser,
+  audit and the kill switch now apply. The hub still relays to older hosts that only have the PC engine, and there is no
+  copy of the canonicaliser outside pgm-net-internal.
+- **Desktop app** (VibeRoller and the HPM builds):
+  - "Link this computer" runs the device-code link and the machine runner while the app is open.
+  - It can install the persistent service.
+  - Its local file paths go through the library canonicaliser.
+  - Capture stays limited to the hub's own page.
+- **Jcode PGM:** `jcodepgm machine link | run | install | uninstall | scope | stop | start | status`, on the mirrored
+  library.
+- **Windows:** the code is written but unverified here (no mingw). The pgm-net-internal README lists the commands to run
+  the same tests on a Windows PC (R339).
+- **Checks:** R334, R335, R336, R339. R330's "late ticket" step is now timed from the first call, which made it flaky
+  under load.
+
+## 5.28.0 — 2026-10-26
+
+MINOR: **linked machines can be worked, only by their owner; and the PGM gateway carries tools** (agent branches,
+reviewed and merged; team note plans/linked-machines.md).
+- **Who may reach a machine** (T-310).
+  - **One rule:** a call that reaches a person's computer is allowed only when the run's account is the machine's owner
+    and that person started the run. This covers a linked machine, the host's PC engine and the browser folder. A new
+    add-only `Run.started_by` holds who started it; workflows and agent-to-agent runs must set it.
+  - **Refused:** admins, watchers, shared-session viewers, planner sessions and runs started on someone's behalf. Watchers
+    never see or answer machine or PC calls.
+  - **Machine tokens:** a machine's token reaches only `/api/machine/poll`, `/reply` and `/unlink`. It is no longer a
+    login.
+  - **Owner away:** the run goes on and ends with a report of what was done, why, and what can be changed.
+  - **Compatibility:** a newer scope document is refused whole. The hub's hello says `machine: {v: 1}`. Older apps keep
+    their PC engine, and the JavaScript hub keeps the browser PC tools.
+  - Checks R327 and R338.
+- **The machine's tools** (T-311). When the owner has a linked machine online, the AI's `mcp__pc__*` tools reach it, with
+  the same results as today's PC host.
+  - **New tools:**
+    - `machine_info`;
+    - `shell_run`: the working folder is confined to the scope (advisory), it is never run as root, with a timeout and an
+      output cap, and it is off under no-shell;
+    - `job_start` / `job_read` / `job_stop` for long commands (the job table lives on the machine and ends at revoke);
+    - `proc_list` / `proc_kill` (own children only);
+    - `re_*` for RE containers on the machine (off by default);
+    - `transfer_get` / `transfer_put` for big files by hub ticket (5 minutes, bound to account, machine and path). Data
+      moves in 4 MB chunks streamed to disk, with resume and sha256.
+  - **Every request** passes one door on the machine, in this order: the kill switch, the hub signature and owner check,
+    the scope, the rate limits, the tool, then one audit line.
+  - **Order of choice:** the owner's online machine first, then the AI host, then the browser folder.
+  - **First app on the new runner:** `vr-host machine link|run|stop|start|status`.
+  - Checks R328 to R330 (a 512 MB / 200 MB transfer with resume).
+- **The PGM gateway carries tools** (T-317).
+  - **Format:** `/v1/chat/completions`, and so the products' gateway, take `tools`, `tool_choice`, assistant `tool_calls`
+    and `tool` messages, and return `tool_calls`.
+  - **Providers:** OpenAI-compatible providers get them as they are. Anthropic keys and host Claude logins go through
+    `tool_use` / `tool_result`. Other kinds answer 400.
+  - Streamed requests are answered as chunks. A request without tools is unchanged.
+  - Check R346. The products' AI member runs a bounded tool loop in pgm-libs 5.24.0 (not tagged yet); HPM 0.6.0's Hyper
+    uses REA's tools through it.
+- bridge/pc-tools-mcp.js 1.0.3.
+- **Merge fix:** T-310 limited a machine token to poll, reply and unlink, which also blocked the machine's side of a T-311
+  transfer (`/api/machine/transfer/<ticket>/…`), so R330 moved 0 MB once both were in. The machine token now also reaches
+  the transfer routes; the ticket stays bound to account, machine, path and direction.
+
+## 5.27.2 — 2026-10-26
+
+PATCH: **Work no longer repeats "Done in 0s"** (T-319).
+- **The bug:** after a send (most often Send now) the transcript could show `Done in 0s · Opus 5.5` four times in a row.
+  Every `result` the page received added a line, and a run can deliver several (empty turns, a result sent again).
+- **Hub:** a run says each `result` once: the same uuid arriving again is dropped (Rust hub work.rs; the frozen JavaScript
+  hub's server.js the same), so the stream, a page that joins the run again and a share never see a repeat.
+- **Page:** one Done / Stopped line per run (a later result of the same run, or one seen before, updates the line, with
+  the turn count); a run that ended at once without output says why ("Ended at once: interrupted by Send now" / "you
+  stopped it" / the result subtype or error / the stderr tail / "nothing to resume or answer"); identical status lines
+  in a row collapse into one with a ×N count.
+- Checks R347 to R349; fake-claude gets MULTIRESULT and DUPRESULT.
+
+## 5.27.1 — 2026-10-26
+
+PATCH: **RE base image 1.0.1: REA's Frida tools work** (T-315).
+- **The bug:** the `frida` npm package's native binding was never installed, because `npm ci --ignore-scripts` skips
+  its install step. So `list_frida_devices` and REA's other Frida tools failed with "Could not locate the bindings
+  file". The frida command-line tool was not affected.
+- **The fix:** the image now unpacks the official prebuilt `frida-v17.23.2-napi-v8-linux-x64` binding into
+  `node_modules/frida/build/`, with its SHA-256 pinned (GitHub's asset digest, matched against a fresh download). No
+  install script runs.
+- **Smoke test:** a new check calls `list_frida_devices` through REA's MCP server; 28 of 28 pass.
+- **Image:** `localhost/pgm-re-base:1.0.1` (2.36 GB) is the new default in pgm-sandbox-internal. 1.0.0 is kept.
+
+## 5.27.0 — 2026-10-26
+
+MINOR: **REA inside Work runs, and linked machines steps 2, 3 and 6** (agent branches, reviewed and merged; team notes
+plans/rea.md and plans/linked-machines.md).
+- **REA from Work runs** (T-254). Once a run has an RE container, three team tools reach REA inside it:
+  - `re_skill{id, file?}`: REA's workflow guide, read from the container, about 9k tokens, only when asked;
+  - `re_tools{id, filter?, tool?}`: names only by default (5 KB instead of 47 KB), a search, or one tool's schema;
+  - `re_call{id, tool, args?}`: REA's result unchanged, with its untrusted-content marker. Results over 40 KB are saved
+    to /work/out.
+
+  How it works:
+  - One long-lived MCP session per container (`exec -i`), closed on stop.
+  - Owner only; planner sessions are refused.
+  - The Work prompt gets one short line; nothing REA-related loads before a container is up.
+  - The MCP-over-exec client lives in pgm-sandbox-internal, for Jcode PGM and HPM later.
+  - Checks R341 to R345, with a fake MCP server in a tiny test image. Checked by hand against the real image: 229 tools.
+
+  bridge/team-mcp.js 1.3.0, bridge/team.js 1.1.3.
+- **Owner-only enforcement** (T-308).
+  - **Per-run secret:** each Work run has its own secret for its MCP tools. The hub takes account, session and run from
+    the run itself and refuses a request that says otherwise. The old shared secret still works for older run configs,
+    logged as deprecated (`legacySharedSecret: false` turns it off).
+  - **Owner check:** a call that names a machine reaches it only for its owner. Another person's run, and an admin's,
+    get 403 with no fallback.
+  - **Signing:** the hub has one ed25519 signing key (`bridge/hub-signing.key`, owner-only) and signs every PC request it
+    forwards. vr-host pins the key from its hello (new cap `signed-pc`) and refuses a bad signature, another key, a
+    replay, an expired request, another owner or actor, or changed arguments. Older hosts and hubs keep working unsigned.
+  - Checks R323 and R324.
+- **Linking and revoking machines** (T-309).
+  - **Linking:** a computer links to an account with the device code (client `vr-machine`). The approval screen data
+    shows what is asking, its key fingerprint and the default scope (one folder). Each machine has its own ed25519 key and
+    signs its replies; its token works for that account only.
+  - **Routes:** `GET /api/machines` (owner only), rename / pause, unlink. Admins get only `GET /api/machines/count`.
+  - **Revoking:** unlinking ends the machine's poll at once, and the machine is told "revoked" and wipes its token. A new
+    password or "sign out everywhere" also unlinks the account's machines, unless `keepMachines: true`.
+  - **Re-linking** offers "replace the old record" and starts at the default scope.
+  - **HPM** keeps its own accounts, so a machine links to each hub separately.
+  - Checks R325 and R326.
+- **The machine's guards** (T-312; pgm-net-internal::machine):
+  - a hash-chained, rotating audit log that never holds file contents (the hub's copy is readable by the owner only);
+  - a kill switch (a `KILL` file or `machine stop`) that survives a restart and only the machine can clear;
+  - per-class rate limits;
+  - admin rights only after approval on the machine, and the app refuses to run as root or Administrator;
+  - scope changes: widening from the web waits for approval on the machine, narrowing applies at once and is audited,
+    grants expire, and no tool reaches the scope file.
+
+  Checks R331 to R333.
+- **Deploy:** `pack-data` and `restore-data` carry `hub-signing.key` on a hub move. restore-data had fallen behind
+  pack-data and would have refused work.json, ai-hosts.json and gateway; it now accepts everything pack-data writes.
+- **Not yet in use:** the linked-machine parts are library and hub groundwork. A machine does no jobs until T-311, and the
+  web panel comes with T-314.
+
+## 5.26.0 — 2026-10-25
+
+MINOR: **reverse-engineering containers, the linked-machines library core, and Node 24 prepared** (agent branches,
+reviewed and merged).
+- **The RE base image** (T-253; team note plans/rea.md). `native/containers/re-base` builds `localhost/pgm-re-base:1.0.0`
+  (2.25 GB, amd64).
+  - **What's inside, all pinned and checksum-verified:**
+    - REA (`rea-agents` 6.8.0 on Node 24.22.1; installed with `npm ci --ignore-scripts`, `rea setup` never run);
+    - Ghidra 12.1.4 and Temurin JDK 21.0.13;
+    - Frida 17.24.3, LLDB, GDB, ADB 37.0.1, radare2 6.2.4, strace and ltrace.
+  - **Layout:** `/work/in`, `/work/out` and `/work/tmp`, a non-root user, and REA's skill at `/opt/rea/skill`.
+  - **Smoke test:** 27 of 27 pass with no network (REA's MCP server lists 229 tools; a JS analysis and a Ghidra headless
+    analysis both run).
+  - **Scripts:** `build.sh` / `build.cmd`. The Windows build is not tested yet.
+- **RE containers** (T-303). New library `pgm-sandbox-internal` 0.1.0, Podman or Docker.
+  - **Copies:** each job gets a throw-away copy of the base image. At most 3 run at once (configurable), and the rest wait
+    in a FIFO queue.
+  - **Control:** only the owner controls a copy; an admin may stop any.
+  - **Data:** in and out through exchange folders.
+  - **Lifetime:** a copy is deleted entirely on stop. Idle copies are flagged, never killed, and running copies are
+    adopted back after a hub restart.
+  - **Isolation:** `--cap-drop ALL` plus `SYS_PTRACE` (for lldb, strace and frida), `no-new-privileges`, no network
+    unless asked, CPU / memory / pids limits, and no mounts beyond the exchange folders.
+  - **Routes and tools:** `/api/re/{start,list,status,exec,put,get,stop}` and the team tools `re_start`, `re_status`,
+    `re_list`, `re_exec`, `re_put`, `re_get`, `re_stop`. Rust hub only; the JavaScript hub answers "not available on this
+    hub" (bridge/team.js 1.1.2, bridge/team-mcp.js 1.2.0).
+  - **Config:** `re: { image, maxConcurrent, idleWarnHours, engineArgs, … }`. On this server rootless podman needs
+    `engineArgs: ["--root", "/var/tmp/gee-podman/root", "--runroot", "/var/tmp/gee-podman/run"]`.
+  - **Checks:** R316 to R320 run against real podman.
+- **Linked machines, step 1 of 8** (T-307; team note plans/linked-machines.md). New module `machine` in pgm-net-internal:
+  - **Scope model and evaluator:** ten presets, deny wins, the most specific entry wins, time-limited grants, and a tool
+    list per scope.
+  - **Path canonicaliser:** one for every tool, with Linux and Windows rules. Symlink and junction escapes are refused,
+    and opens are safe against a swapped link.
+  - **Safety floor:** the token, the device key, the scope file and the audit log are unreachable under every scope.
+  - **Checks:** R321, R322 and R340. Nothing uses it yet.
+- **Node 24 prepared** (T-304; deploy/node-upgrade.md).
+  - **Why:** the 2026-10-21 security release fixed four high-severity bugs that the server's Node 22.23.3 has.
+  - **Tested:** both suites pass on Node 24.22.1 LTS in throw-away hubs. The old Node 22 also still passes, so AI hosts
+    on 22 keep working.
+  - **Setup:** `deploy/setup-server.sh` installs Node line `VR_NODE_LINE` (24), checked against SHASUMS256.txt.
+  - **Not done yet:** the live server's Node is unchanged; the switch is a go-live step.
+- **Suite:** R31 (no hashes in tracked files) now skips the container pin files: Containerfile digests and download
+  checksums, and the pip and npm locks. They hold published checksums, like native/Cargo.lock.
+
+## 5.25.3 — 2026-10-25
+
+PATCH: **the local Ollama probe works in a browser, and is one shared module** (T-209).
+- **Fix:** T-208's browser probe could never work, because the page's CSP `connect-src` did not allow
+  `http://127.0.0.1:11434`. The fetch and the "running but blocked" ping were refused, and only the desktop app's path
+  worked. The CSP now allows it (R95 and R311 check it).
+- **One module:** the probe, the blocked-ping hint, the desktop `ollama_local` call, the tags parser and the "Local (this
+  computer)" render helpers move out of the page into `web/localai.js` 1.0.0. It needs no page globals; the page passes
+  its hooks in. The same file is in the pgm-libs web kit (5.22.0) and Hyper Prod Man 0.4.0, so there is no second copy.
+- web/index.html 1.25.1, web/sw.js 1.0.5. R310 to R314 now read the module.
+- **A person's own AI signs as itself outside Work** (T-301 follow-up). The board routes take an optional `asAgent: true`.
+  The write is then signed "<person> · Claude" (claim key `<user>#agent`), like a Work run's. It is still that person's
+  account and rights, and the field is not stored. Jcode PGM's planner sends it; older hubs ignore it. R315.
+- **Suite:** R308 matched a task id as a substring, and the plan note's own header names T-281, which holds "T-28". It
+  failed as soon as the second approval's first task became T-28. It now matches the table cell, and the check names
+  which of its conditions failed.
+
+## 5.25.2 — 2026-10-25
+
+PATCH: **planner mode is one library** (T-301, the library law).
+- **New crate:** `pgm-plan-internal` (pgm-libs 5.23.0, mirrored into native/crates and Jcode PGM's pgm/libs). It holds:
+  - the draft check, the parents / sub-tasks table and the approve / change / reject state machine;
+  - the writer, in the hub's order, behind a `PlanHub` trait;
+  - the planner helpers (plan_parse, plan_existing, plan_roles, plan_owner, plan_glossary, with fallbacks) and the
+    helper-set detection.
+- **One copy:** pgm-ai-internal's plan.rs and planner.rs are now thin adapters over it (the hub implements `PlanHub` over
+  its own stores), and Jcode PGM implements the same trait over the signed-in hub's routes. Nothing is copied any more.
+- **Behaviour is unchanged:** R300 to R309 pass. The planner fixtures moved into the crate.
+
+## 5.25.1 — 2026-10-25
+
+PATCH: **the context meter no longer shows 200 %+ on a 1M model** (T-302, Gee's report).
+- **What happened:** the hub showed a 200 000-token window until a run's result reported its own window, and believed a
+  result that said 200 000 even for a 1M model. A long first run, or a 1M model whose result reports 200k, showed the
+  tokens far past the window (200 %+, and "full: start a New chat").
+- **Now** the window shown (`/api/usage` `context.window`) is:
+  - what the result reported, else the configured default;
+  - at least 1M for a model id tagged `[1m]`;
+  - never less than what the session already holds: past the window it moves to the 1M tier, and past that to the
+    tokens themselves.
+- `usage::context_window` is unit-tested. The Jcode PGM side of the same bug is fixed separately.
+
+## 5.25.0 — 2026-10-25
+
+MINOR: **the planner drafts before it writes, with exact helpers, and the person's own Ollama is found** (agent branches,
+reviewed and merged).
+- **Planner helpers** (T-276, T-277, T-278): five team tools the planner calls instead of guessing.
+  - `plan_parse` splits a rough idea list into ideas, each with its model, person, blocked-on and source lines. It
+    handles `---` blocks, person sections, a short plus a long version of the same list, and run-on chat.
+  - `plan_existing` finds matching open tasks and tasks done in the last 30 days.
+  - `plan_roles` and `plan_owner` assign an owner by marker, then by role keywords, then by the lighter workload. They
+    never leave the owner empty ("mills to pick" is asked).
+  - `plan_glossary` reads plans/glossary.md.
+  - The planner prompt now says to use them in that order, and that "blocked on" means based on.
+  - The roles are read from plans/roles.md (a json block), then from the Roles part of plans/task-assignments.md, then
+    from a built-in list. The note is proposed, not written.
+  - Checks R300 to R304.
+- **Approve, then write** (T-279, T-281).
+  - **The draft:** a planner session shows its whole plan with `plan_draft`. The session turns yellow and the page shows
+    a draft card. The person can approve all, approve some parents, ask for a change or reject
+    (`POST /api/work/plan/answer`; `GET /api/work/plans` restores open drafts after a reload).
+  - **The write:** only then does the hub write, as "<person> · Claude", in this order:
+    - the source note, word for word, to plans/<topic>-original.md;
+    - the parents, then the sub-tasks named `T-<parent> · n/m`;
+    - then the changes to existing tasks. It never deletes or completes a task.
+  - **Refused in a planner session:** the AI's own task_create, task_update, task_move, task_delete, claim and complete.
+  - **Afterwards:** one plan summary goes to the chat, the owner map is appended to plans/<topic>-plan.md, and the tool
+    result lists the new tasks for each owner.
+  - Checks R305 to R309; R266 now expects the refusal.
+- **Local Ollama** (T-208). The page and the desktop app look for the person's own Ollama and list its models as "Local
+  (this computer)" in Settings → AI source and, greyed, in the Work model list.
+  - **Desktop app:** asks Ollama directly (`ollama_local`).
+  - **Browser:** asks 127.0.0.1:11434. If Ollama runs but the page is not allowed, it shows a one-line `OLLAMA_ORIGINS`
+    hint.
+  - **When no AI host of theirs lends it:** the desktop app offers "Start this computer's AI host".
+  - **Without Ollama:** nothing shows, and the default stays as it was. R310 to R314.
+- **Fix:** co-view now starts in the page. web/coview.js's `COVIEW` is a top-level const, not on `window`, so the page's
+  `window.COVIEW` check never started it (found while moving co-view into the pgm-libs kit, T-194).
+- **Merge fix:** the planner helper dispatcher answered every `plan_*` tool, so `plan_draft` never reached the Work relay
+  once both branches were in ("Unknown planner tool"). It now passes `plan_draft` through. R305 to R309 caught it.
+- web/index.html 1.25.0, bridge/team-mcp.js 1.1.0.
+
+## 5.24.0 — 2026-10-25
+
+MINOR: **co-view (look at the same thing together) and multi-session Work proven end to end** (agent branches, reviewed
+and merged).
+- **Co-view** (T-244). Co-view shares the product view itself, not pixels.
+  - **How it works:** the sharer's page posts WHICH view it shows (a screen plus an item such as a board task, a note,
+    a conversation or a shared Work session; `/api/coview/*`). Each viewer's page opens the same view itself, through
+    the normal routes and with its own permissions.
+  - **Privacy:** what a viewer may not read reaches them only as "hidden", with no id and no content, and they see "Not
+    shared with you".
+  - **Controls:** the sharer can invite a viewer to take over and can take the lead back. A viewer can stop following;
+    the sharer can end the co-view for everyone.
+  - **Older pages and hubs:** an older hub (and the JavaScript fallback) answers "Unknown endpoint", so the buttons stay
+    hidden.
+  - **Files:** web/coview.js 1.0.0, web/board.js 1.0.6, web/notes.js 1.0.3. R295 to R299.
+  - **Still to do:** moving it into the shared kit for Hyper Prod Man and ShaDow.
+- **Multi-session Work proven end to end** (T-290). R280 to R284 cover three people on two native hosts with up to 5
+  sessions each:
+  - the per-user and per-provider limits, and the owner's bypass;
+  - a hub restart mid-run (every session comes back as it was);
+  - a host killed mid-run;
+  - a shared session across a restart;
+  - an older page next to the sessions.
+  - **Fix found by it:** limits an owner sets from the page are now kept in the host's stored hello, so they survive a
+    hub restart. Before, the hub went back to the limits of the host's last hello.
+  - **Still to do:** the Windows host run.
+
+## 5.23.1 — 2026-10-25
+
+PATCH: **screen sharing in the desktop app** (T-243, an agent branch, reviewed and merged).
+- **Permissions:** the app's main window grants screen capture, microphone and camera only to the hub's own page
+  (scheme, host and port must match exactly), through WebView2's permission event on Windows and WebKitGTK's permission
+  signal on Linux. On Linux, media streams are switched on for that window only. The Tools window never gets capture.
+- **The page can tell:** `app_info` says whether this platform can share (`screenShare`, `screenShareWhy`,
+  `screenShareAudio`). Linux needs WebKitGTK 2.38+ with PipeWire and xdg-desktop-portal; the platform matrix is in
+  native/crates/vr-desktop/src/capture.rs.
+- **Calls:** web/calls.js reads that flag, hiding the Share button and saying why when the app cannot share
+  (web/calls.js 1.1.1).
+- R290, and R165's smoke check requires the new field.
+- **Suite:** native/smoke-desktop.sh lets Xvfb pick a free display itself (`-displayfd`), so suites running side by side
+  no longer collide on one display (R165 failed once that way).
+
+## 5.23.0 — 2026-10-25
+
+MINOR: **planner mode, screen sharing with sound, and other tools' sessions** (agent branches, reviewed and merged).
+- **Planner mode in Work** (T-275; team note plans/planner-mode.md). A session can be a planner session
+  (`POST /api/work/sessions/new {mode: "planner"}`, "New planner session" on the page, a Planner badge, "Leave
+  planner").
+  - **Tools:** its runs get read-only tools (Read, Glob, Grep; WebFetch / WebSearch and read-only git only if the
+    config allows them) plus the board and team servers. No PC tools, and Edit, Write and NotebookEdit are denied; the
+    permission mode is forced to "default".
+  - **The hub enforces it too:** the relay refuses PC tools, notes_delete and channel / group creation for those runs,
+    and notes_write outside `plans/`.
+  - **The prompt** carries the planner rulebook, read from the note at run time.
+  - Normal sessions are unchanged. R265 to R269.
+- **Screen sharing with an audio choice** (T-242). "Share screen" asks for the audio first: none, tab / system audio,
+  or that plus the microphone, mixed into one track. The share's sound is a fourth sender, switched on only between
+  up-to-date pages (signal field `sa`), so older pages are unaffected. The call line says who is sharing; a shared
+  screen can be enlarged (Esc to shrink). Browser differences are documented in web/calls.js (1.1.0). R275 to R279.
+- **Other tools' sessions in the list** (T-289, the hub part). `POST /api/work/sessions/report {source, device?,
+  sessions[]}` lets a tool (Jcode PGM first) report its sessions in the six states. They are kept in memory for 3
+  minutes unless refreshed, and the person's `GET /api/work/sessions` gains `external[]` and `counts.externalWorking`
+  (optional fields). R285 to R289.
+- Merging: the page's own session (T-238) and planner mode now combine; planner mode's session wins while it is on.
+
+## 5.22.0 — 2026-10-25
+
+MINOR: **my projects, reopen-after-reload, own platform first** (agent branches, reviewed and merged).
+- **My projects** (T-239). Settings has a My projects section, a per-person index of the shared projects area.
+  - **Per project:** whether you have a worktree, when you last used it, uncommitted / unmerged work, and who else has
+    a worktree there.
+  - **Pin or hide** a project in your own list (`<profile>/projects.json`, add-only).
+  - **Discovery:** the area's other projects and your Forgejo repos are listed, never cloned.
+  - **Remove my worktree:** takes away only your own. Uncommitted work is committed first and unmerged work is kept
+    under `refs/viberoller/removed/<user>/`; refused while a session of yours works there.
+  - **Delete a project:** an admin can delete one that nobody else has a worktree in. It is moved to `_trash` inside
+    the projects root, never erased.
+  - Routes: `/api/projects/mine`, `/pin`, `/hide`, `/remove-worktree`, `/delete`. R255 to R259.
+- **Reopen after a reload** (T-241). A setting, "Reopen what I had open after a reload" (prefs `reopen`, default on).
+  Off, a reload starts fresh on the menu and the team room; the conversation stays on the hub. The Rust and the frozen
+  JavaScript prefs keep the key (bridge/server.js 4.3.1). R260.
+- **Your platform first** (T-251). Downloads shows your own platform first and the others under "Other platforms";
+  `/api/downloads` carries a `platform` hint from the User-Agent. The updaters already pick their own OS / arch: the
+  desktop app and vr-host ask for their build-time target. R261.
+
+## 5.21.0 — 2026-10-25
+
+MINOR: **start work, and team-only product downloads** (agent branches, reviewed and merged).
+- **Start work** (T-238). Opening Work with nothing going on, or the new "New session" button, offers one flow with four
+  starts:
+  1. pick a project you have;
+  2. clone a repo, by address or from a searchable list of the Forgejo repos you can see
+     (`GET /api/projects/repos?q=`, run as you; it says when your Forgejo token is missing);
+  3. start a new empty project, made private on Forgejo and published so origin is Forgejo
+     (`POST /api/projects/create {name}`: repo-create, new, publish; bad name 400, taken 409);
+  4. go straight to the AI with no project (a session with `none: true` works in your own scratch folder
+     `<projectsRoot>/_scratch/<user>`, with no git and no worktree law).
+  Each start opens a new Work session in your own worktree (`sessions/new` makes it at once and returns where it is).
+  The page remembers the open session. R245 to R249, with the runner's fake Forgejo now answering repo search, create
+  and git smart-HTTP. bridge/worktree.js 2.4.1.
+- **Team-only product downloads** (T-250). The Download panel gets a Products section: every product and version
+  (ShaDow Chat, Hyper Prod Man, Prod Suit, Jcode PGM; config `releases`), with your platform first.
+  - The hub reads the releases from Forgejo with its own token (env `VR_FORGEJO_TOKEN`, else forgejo.json
+    `releaseToken` / `token`), caches them for 5 minutes, and streams each file to signed-in people only
+    (`GET /api/releases`, `GET /api/releases/file?product&tag&asset`).
+  - Only assets in the catalogue can be asked for. No token reaches the page or the log.
+  - This lets the release repos go private (plans/release-audit.md). R270 to R274.
+- **No flaky restarts in the suite:** R195 and R177 no longer switch the fake build back after a fixed 1.5 s; they wait
+  until the restart was seen, and their until-waits go up to 60 s (testing law, rule 2: R195 had failed once under load).
+
+## 5.20.0 — 2026-10-25
+
+MINOR: **presence for AIs and tools** (T-264, an agent branch, reviewed and merged).
+- **Full status in the team tools:** `team_presence` and `hub_status` return the whole status: presence, label,
+  working and workingSessions, acceptingWork, dnd, text, since, where. The older fields are unchanged.
+- **"Tell me when …":** new team tools `notify_when_available {user, what: available | back | online | free,
+  message?}`, `notify_list` and `notify_cancel`. A person's Claude asks to be told when someone is available; the asker
+  then gets a private message from "<asker> · Claude".
+  - Up to 5 per asker, kept for 24 h (Chat/notify-watches.json, a new file).
+  - They honour appear offline and never say more than the status shows the asker.
+- **A status-change event:** `Chat::subscribe_status()`, which notify uses first and workflow triggers (T-186) can use
+  later.
+- R250 to R254. bridge/team-mcp.js 1.0.3.
+
+## 5.19.0 — 2026-10-25
+
+MINOR: **the question UI, and device-code sign-in** (agent branches, reviewed and merged).
+- **The AI's questions get a real UI** (T-246, T-248).
+  - **The series:** one question at a time with Back / Next / Done.
+  - **The kinds:** radio buttons, checkboxes, a checklist with select all / none and a filter, "my own answer" fields.
+  - **The default:** the recommended answer is marked, with a countdown and "Use the recommended".
+  - **Reloads and other devices:** a half-answered series survives a reload. A closed question shows who answered it
+    (you, the default, or mixed).
+  - **Desktop app:** it notifies when a question arrives in the background.
+  - **Settings, "When the AI asks"** (prefs `ask`, add-only): wait N minutes (default 10) then use the recommended
+    answers, or never; "any activity waits". The hub takes the wait from the question's own timeoutSec, then the
+    person's setting, then config, then 600.
+  - **Sound:** a distinct "User action required" tone (`ask`, own volume), plus optional speech. Do not disturb mutes
+    sound, speech and notification.
+  - R240 to R244. bridge/server.js cleanPrefs keeps the new prefs (4.3.0).
+- **Device-code sign-in** (T-236, the hub half). A tool (Jcode PGM first) signs in without a password:
+  - **The routes:** `POST /api/device/start` gives a short user code and a link (`?device=CODE`); the person approves
+    or refuses it under Settings → Connections → Signed-in devices; `POST /api/device/poll` then gives the tool its own
+    token.
+  - **The device tokens:** separate from page sessions, kept only as a hash (new file device-tokens.json), listed with
+    their last use, and revoked in Settings (`GET /api/devices`, `POST /api/devices/revoke`). A revoked token stops
+    working on every route.
+  - **Safety:** approving needs the person's own page session; polling, start and wrong codes are rate limited; codes
+    expire after 10 minutes; an admin password reset or sign-out revokes the person's devices.
+  - R235 to R239.
+
+## 5.18.0 — 2026-10-25
+
+MINOR: **git at a glance, and presence says where people work** (agent branches, reviewed and merged).
+- **Git at a glance** (T-240). The Work page has a Git panel for your own worktree of the open session:
+  - what it shows: the branch, ahead / behind, and the changed files with stage checkboxes;
+  - commit: what is ticked, as you (your Forgejo login if any);
+  - Update and Merge: they run only through `bridge/worktree.js`, so Forgejo-first and the versioning law stay in force.
+    For a session's own worktree, Merge brings its commits home into your `work/<user>` (`home --session`).
+  - Every action is refused (409) while that session works.
+  - Routes: `GET /api/work/git` and `POST /api/work/git/{stage,unstage,commit,update,merge}`, with an optional
+    `session`. No raw push, no reset. R225 to R229.
+- **Where people work** (T-260). Status carries an optional `where` {project, branch, task?, since, source}, from:
+  - the person's running Work session (`work`);
+  - their held board claim (the task);
+  - live reports from other sources (`POST /api/presence {device, source, where}`, e.g. Jcode PGM or the desktop app
+    later).
+  It is hidden by "hide where" and by appearing offline; the person always sees their own. The team tools carry it too,
+  and the page's tooltip reads "on <project> · <task>". Board claims now record when they were made (add-only).
+  R230 to R234.
+
+## 5.17.0 — 2026-10-25
+
+MINOR: **the AI asks you, time accounting, and presence on the board** (built by Work-run agents in their own worktrees,
+reviewed and merged by the orchestrating run).
+- **The AI asks you** (T-245 = T-195 · 1/4; team note plans/question-protocol.md). A Work run calls the team tool
+  `ask_user` with a series of single choice, multi choice, checkbox list or text questions, each with a recommended
+  answer and "my own answer".
+  - The page gets a `bridge_question` event, the asking session turns yellow (`waiting` = question), and the person
+    answers through `POST /api/work/answer` (or "use the recommended"; `GET /api/work/questions` lists open ones).
+  - The answers return to the AI as one tool result.
+  - An unanswered question takes the recommended answers after its timeout (10 minutes by default; `timeoutSec` 0 waits).
+  - The relays loop on `{pending, id}` so no HTTP call is held for minutes. A minimal answer card is on the page; the
+    full UI is T-246. R210 to R214.
+- **Time accounting and an activity log** (T-263; plans/presence.md § 6).
+  - **Active time:** kept as spans of activity. A quiet longer than `workGapMs` (config `presence.workGapMs`, default 15
+    minutes) ends a span and is not counted.
+  - **AI time:** AI working time (`aiMs`, and `agentMs` summed over sessions) keeps adding while the person is away or
+    offline. Away time is kept too.
+  - **Storage:** per person per day in `profiles/<user>/activity/<day>.json`, with an event log of status changes and
+    working sessions.
+  - **Route:** `GET /api/presence/time?user=&from=&to=`. The team sees totals; the person sees their own spans and
+    events.
+  - The page reports input at most once a minute (`active: true`). R205 to R209.
+- **Presence on the task board** (T-262). Every card carries the live status of its claim holder (`holder`) and its
+  assignee (`assigneeStatus`), and a claim whose holder is offline and not working through a run of theirs is marked
+  (`holderOffline`). The board view and `board_list` return `people`: who is available (accepting work and not offline)
+  and what each holds. The board MCP tools return the same, so an AI can check before assigning. All optional fields.
+  web/board.js shows the holder's label and marks the assign picker. R215 to R219.
+
+## 5.16.0 — 2026-10-25
+
+MINOR: **an AI host sets its own Work-session limits** (T-286, taken over from Gee with Sponge's word; plans/multi-session.md
+§ 6). New host settings (ai-node.json, shown and changed in the `vr-host` control app like every other):
+`sessions.perUser` (working sessions per person, default 5), `sessions.perProvider` (default 3), per provider
+`provider.<id>.maxSessions`, `sessions.exceptions` (per-person limits, `name=n, …`) and `sessions.ownerBypass` (default on:
+the owner is not limited on their own host).
+- **The host announces them in hello** as `sessionLimits` (optional: an older host sends none and gets the hub's
+  defaults; an older hub ignores it). The hub uses them for the 429 of T-285: a person's exception first, then the
+  provider's own limit, then the host's; the owner bypass only when the host allows it.
+- **Its owner sets them from Settings → My AI hosts**: a new control action `limits` (POST /api/hosts/control
+  {id, action: "limits", limits: {...}}, owner only like the other controls). The host saves them in its own settings
+  file (the same checks as the control app: 1 to 100, user names) and the hub shows them at once. GET /api/hosts/status
+  names each host's `sessionLimits`; /api/work/sessions' per-host counts use them.
+- **Page** (web/index.html 1.19.2): the host's live line says its limits; a "Session limits…" button opens a small form
+  (per person, per provider, exceptions, "I may exceed them on my own host").
+- **Tests:** a unit test of the host settings (defaults, setting, validation, clearing); R204 (a native host in the
+  scratch setup announces the defaults, its owner sets new limits from the page, the host saves them, a bad value and a
+  non-owner are refused).
+
+## 5.15.3 — 2026-10-25
+
+PATCH: **a session waiting on you** (T-288, the part that has a source today). When a run stops short of a tool it was
+not allowed (Claude Code's permission_denials), its session is **waiting** (yellow, which beats red) with what it needs
+({kind: "permission", tools}); the next message to that session answers it. The Work page now says so ("Claude was not
+allowed to use Bash, so it stopped short. Answer to go on") and plays the mention sound (do not disturb mutes it).
+Presence's status gains workingSessions (how many of a person's sessions work at once). Questions (T-195) and plan
+approvals (T-273) will set the same waiting state when they exist. R202. web/index.html 1.19.1.
+Also: **a share shows the session that is shared.** `POST /api/work/share` takes an optional `session` (none = the first
+one, as before); only that session's lines reach the watchers, sharing another session moves the share, and the watch
+answer names it and says whether that session is busy. R203.
+
+## 5.15.2 — 2026-10-25
+
+PATCH: **a PC tool call reaches the session that asked.** With several sessions running, a run's PC tool call (the
+folder open in the person's browser) went to the first session's run if that one was running, so the page of the
+session that asked never saw it. Each session's run now gets its own MCP config naming its session (MILLS_SESSION;
+.mcp-runtime-hub-<id>.json), bridge/pc-tools-mcp.js sends it along (an older hub ignores it), and the hub hands the call
+to that session's run. R201 (written with the fix; it sends the call while the first session runs with no browser
+answering). bridge/pc-tools-mcp.js 1.0.2. R200 failed once in four runs without a recorded reason; its commits now wait
+only for a git index.lock (the hub's background freshness check runs git in the same worktrees, the likely cause) and
+its detail names each commit's outcome, so a repeat explains itself (testing law, rule 2).
+
+## 5.15.1 — 2026-10-25
+
+PATCH: **a session's worktree follows the worktree law, and its work comes home** (T-292, the rest of it).
+`node bridge/worktree.js check | auto | update | home <user> --session <id>`: a session's worktree builds on the
+person's own work/<user> (not straight on Forgejo's), so it is STALE (exit 3) when work/<user> has moved on; `update
+--session` fast-forwards or merges that in (it refuses with uncommitted changes, changing nothing); `home --session`
+merges the session's commits into work/<user> in the person's own worktree ("Merge into my work"; a conflict changes
+nothing and says what to do). The hub checks a session's worktree at each of its runs and in the background for
+sessions used that day; a session run's system prompt carries its own freshness law and its latest check. New
+`POST /api/work/sessions/home {id}` for the session menu. R200. bridge/worktree.js 2.4.0.
+
+## 5.15.0 — 2026-10-25
+
+MINOR: **many Work sessions at once, each in its own worktree, with limits** (T-284, T-292, T-285; team note
+plans/multi-session.md). A person has many sessions; each keeps its own conversation + queue, harness session, provider
+/ model and project, and several run at the same time (a second message to the SAME session is still 409, R14).
+- **The first session** (made from what the person had) keeps its state where it always was (work.json,
+  work-current.json): older pages, the frozen JavaScript hub and every route called without a session mean it, exactly
+  as before. Other sessions: <profile>/work-sessions/<id>.json; the list in work-sessions.json; the person's folders
+  in work-folders.json (all new files, add-only).
+- **Each session its own worktree** (T-292): `<user>.<id>` on `work/<user>.<id>`, made at its first run from the
+  person's `work/<user>` (pgm-collab-internal `Worktrees::ensure_session`). Its run's system prompt says how its work
+  comes home. Deleting a session commits what was left and keeps an unmerged branch under `refs/viberoller/sessions/`
+  (`remove_session`). LAWS.md: a line in the worktree law.
+- **States** (waiting, working, done-unseen, draft, idle, ready; the first that applies) and the **liveness check**: a run
+  that sends nothing of its own for 12 minutes (config workSessions.stallAfterMs) is ended as stalled, so its session is
+  idle and frees its slot.
+- **Routes:** GET /api/work/sessions (with counts per host), POST /api/work/sessions/new | open | rename | pin | seen |
+  hide | move | archive | delete (delete force-stops its run), /api/work/folders (new | rename | delete | order),
+  /api/work/draft; /api/chat, /api/stop, /api/work/attach, /api/work/current, /api/work/queue, /api/model,
+  /api/workspace and /api/archive/save | open take an optional `session`. The run's first event names its session.
+- **Limits** (T-285): only working sessions count, 5 per person per host and 3 per provider on it (config
+  workSessions.perUser / perProvider); a host's owner is not limited on their own host; over the limit /api/chat answers
+  429 with { error, limit { host, used, max, provider? } }.
+- R197 (sessions, worktrees, states, hide, folders, delete) and R198 (limits) were written as spec() first and are plain
+  checks now.
+
+## 5.14.0 — 2026-10-25
+
+MINOR: **presence and activity, the hub side** (T-259; team note plans/presence.md). A person is as present as their
+most active device: each tab sends its own `device` id on the room long poll and on `POST /api/presence` (an older page
+counts as one device, "legacy", as before), so an idle laptop no longer makes an active phone look away. Next to
+online / away / offline: **working** (any Work run of theirs; the run's start and end reach pages through the long poll)
+and **accepting work** (their own switch). The **label** others see follows plans/presence.md § 2 (Offline · Away ·
+Online · Working · Available for work · Working + available). A person can **appear away / offline** (with an until),
+set **do not disturb** (it only mutes their own sounds and desktop notifications; nothing is blocked) and a **status
+text with an until** (the profile's status line). New: `GET /api/presence` (everyone's status), `GET|POST
+/api/presence/me`; the room answer carries `status`; the old `presence` list applies appear offline / away, so older
+pages show it too; `hub_status` / `team_presence` gain label, working, acceptingWork, dnd, text. Saved in state.json
+"presence" and profile.textUntil (add-only; the JavaScript hub ignores them). The page: a device id per tab, dnd muting
+(sounds, read-aloud, desktop and reminder notifications; the settings' test sounds still play). R196 is now a check.
+web/index.html 1.19.0, web/board.js 1.0.4.
+
+## 5.13.8 — 2026-10-25
+
+PATCH: **a picture the browser kept no longer makes a page think an older build is running.** Unity's pictures
+(/api/assistant/image) are cacheable for a day (private, max-age=86400), and the Rust hub stamped them with its build
+(X-VR-Version). After 5.13.3 went live a page showed a picture kept from 5.13.2, read 5.13.2 from it, reloaded "for" it
+and then said "VibeRoller 5.13.2+a837cb1 is running, but this page still got 5.13.3+40a831f". The hub no longer names
+its build on an answer a browser may keep (pgm-net-internal `http::cacheable`), and the page ignores the build on such
+an answer (copies already kept still carry it for up to a day). R199 (written first: it failed with the build on the
+picture). web/index.html 1.18.1.
+
+## 5.13.7 — 2026-10-25
+
+PATCH: **Sponge's session and presence decisions in the specs and their checks** (T-282, T-258). Each Work session gets
+its own worktree (work/<user>.<sid>, T-292); only working sessions count against the limits, and a run that stalls or
+goes silent without saying done is ended and counts as idle; closing a session hides it; one menu (the dots and the
+right-click) with delete (force-stops its runs), archive and the person's own folders; do not disturb only mutes
+notifications; active time vs AI working time with a 15-minute gap (T-263). R197 checks per-session worktrees, open
+while running, hide / unhide, folders and delete-while-running; R198 counts working sessions. Team notes
+plans/multi-session.md and plans/presence.md. No behaviour changed.
+
+## 5.13.6 — 2026-10-25
+
+PATCH: **the specs for presence and multi-session Work, as checks first** (T-259, T-283). Team notes
+`plans/presence.md` (presence per device, most active wins × working / accepting work, the derived label and its
+order, appear away / offline, do not disturb, custom text with an until, the protocol on the existing room long poll)
+and `plans/multi-session.md` (the session model, its storage next to work-current.json as a mirror, the six states
+and which wins, the routes, limits 5 per host / 3 per provider with 429, what must keep working, compatibility).
+`spec()` checks R196 (presence), R197 (sessions) and R198 (limits) in --rust-hub; they say SPEC until T-259 / T-284 /
+T-285 build them. No behaviour changed.
+
+## 5.13.5 — 2026-10-25
+
+PATCH: **switching to the Rust hub alone is the config line and a graceful restart** (T-256). vr-run read
+`rustHub.alone` only when it started, so on the live server the graceful restart after 5.13.3 kept the JavaScript hub
+running behind the Rust one, and the swap needed a restart of the whole service (which also ends the Work run that asks
+for it). vr-run now reads it again whenever a build asks for a restart (exit 75): the next build starts with `--alone`
+and the JavaScript hub behind it stops (it stays the last resort); setting it back to false starts it behind again (both directions in R195).
+R195 (written first, under the testing law: it failed on 5.13.4 with the JavaScript hub still behind).
+
+## 5.13.4 — 2026-10-25
+
+PATCH: **the testing law** (LAWS.md). Five rules for every project's tests: check what the code does, not how it does
+it (a refactor that changes no behaviour must not break a check; static source checks only where there is nothing to
+observe); name checks like sentences; fix or delete a flaky check the same day (no retry-until-green); coverage is a
+floor (every change gets a check for what it does and how it fails); a bug gets a failing check before its fix (the
+CHANGELOG names it; a feature not built yet gets a `spec()`).
+
 ## 5.13.3 — 2026-10-24
 
 PATCH: **the Rust fallback chain actually fills up** (T-157). The auto-deploy marked a version's native build good only

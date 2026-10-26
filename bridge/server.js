@@ -261,7 +261,8 @@ function runClaude(acct, message, fresh, res, context, preWm = null) {
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
   acct.stream = res;
   const keepAlive = setInterval(() => emit(acct, { type: 'ping' }), 15000);
-  const onEvent = (ev) => { if (ev && ev.session_id) acct.state.claudeSessionId = ev.session_id; if (source) noteUsage(acct, ev, source); else if (!/rate_limit/.test(String(ev.type || ''))) noteUsage(acct, ev, 'hub'); shares.mirrorEvent(acct, ev); emit(acct, ev); };
+  const seenResults = new Set(); // T-319: one result per uuid in a run: a repeat of the same one is dropped
+  const onEvent = (ev) => { if (ev && ev.type === "result" && ev.uuid) { if (seenResults.has(ev.uuid)) return; seenResults.add(ev.uuid); } if (ev && ev.session_id) acct.state.claudeSessionId = ev.session_id; if (source) noteUsage(acct, ev, source); else if (!/rate_limit/.test(String(ev.type || ''))) noteUsage(acct, ev, 'hub'); shares.mirrorEvent(acct, ev); emit(acct, ev); };
   const finish = (code) => {
     clearInterval(keepAlive);
     for (const [id, p] of acct.pending) { clearTimeout(p.timer); send(p.res, 200, { ok: false, error: 'Run ended' }); acct.pending.delete(id); }
@@ -451,13 +452,14 @@ function cleanPrefs(p, prev = {}) {
   if (p.nick !== undefined) out.nick = String(p.nick).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 32);
   if (p.color !== undefined) out.color = Number.isInteger(p.color) && p.color >= 0 && p.color < PALETTE_SIZE ? p.color : null;
   if (p.toasts !== undefined) out.toasts = !!p.toasts;
+  if (p.reopen !== undefined) out.reopen = !!p.reopen; // T-241: reopen the previous conversation after a reload (absent = on)
   if (p.autoScroll !== undefined) out.autoScroll = p.autoScroll === true; // follow new messages even when scrolled up (off by default)
   if (p.theme !== undefined) out.theme = /^[\w-]{0,40}$/.test(String(p.theme)) ? String(p.theme) : ''; // app setting: follows the person to every browser ('' = VibeRoller default)
   if (p.autosave !== undefined) out.autosave = Math.max(0, Math.min(120, Math.round(Number(p.autosave) || 0))); // minutes, 0 = off
   if (p.sound && typeof p.sound === 'object') {
     const s = { ...(prev.sound || {}) };
     if (p.sound.on !== undefined) s.on = !!p.sound.on;
-    for (const k of ['message', 'mention', 'reply', 'call', 'board']) if (p.sound[k] !== undefined) s[k] = Math.max(0, Math.min(100, Math.round(Number(p.sound[k]) || 0)));
+    for (const k of ['message', 'mention', 'reply', 'call', 'board', 'ask']) if (p.sound[k] !== undefined) s[k] = Math.max(0, Math.min(100, Math.round(Number(p.sound[k]) || 0)));
     if (p.sound.set === 'classic' || p.sound.set === 'patterns') s.set = p.sound.set; // the sound style (5.11.0)
     out.sound = s;
   }
@@ -470,7 +472,15 @@ function cleanPrefs(p, prev = {}) {
     if (p.tts.rate !== undefined) t.rate = Math.max(50, Math.min(200, Math.round(Number(p.tts.rate) || 100)));
     if (p.tts.voice !== undefined) t.voice = String(p.tts.voice).slice(0, 120);
     if (p.tts.scope !== undefined) t.scope = p.tts.scope === 'mine' ? 'mine' : 'all';
+    if (p.tts.ask !== undefined) t.ask = !!p.tts.ask; // say "User action required" with a question (T-248)
     out.tts = t;
+  }
+  if (p.ask && typeof p.ask === 'object') { // when the AI asks (T-248): wait `minutes` without you, then the recommended answers; any activity waits
+    const a = { ...(prev.ask || {}) };
+    if (p.ask.auto !== undefined) a.auto = !!p.ask.auto;
+    if (p.ask.minutes !== undefined) a.minutes = Math.max(1, Math.min(1440, Math.round(Number(p.ask.minutes) || 10)));
+    if (p.ask.activity !== undefined) a.activity = !!p.ask.activity;
+    out.ask = a;
   }
   if (p.audio && typeof p.audio === 'object') { // microphone processing, for voice clips and calls
     const a = { ...(prev.audio || {}) };

@@ -132,9 +132,22 @@ impl Usage {
         };
         // the session's cache ledger (TOKENS.md): paid vs cached input over its turns, and the hit ratio
         let cache = if ctx["cache"].is_object() { let k = &ctx["cache"]; let g = |n: &str| k[n].as_u64().unwrap_or(0); let total = g("paid") + g("read") + g("write"); json!({ "turns": g("turns"), "paid": g("paid"), "read": g("read"), "write": g("write"), "hit": if total == 0 { 0.0 } else { g("read") as f64 / total as f64 } }) } else { Value::Null };
-        let c = if ctx.is_object() && ctx["session"].as_str().unwrap_or("") == session { json!({ "tokens": ctx["tokens"], "window": ctx["window"].as_u64().unwrap_or(self.context_window), "model": ctx["model"], "cache": cache }) } else { Value::Null };
+        let c = if ctx.is_object() && ctx["session"].as_str().unwrap_or("") == session { json!({ "tokens": ctx["tokens"], "window": context_window(ctx, self.context_window), "model": ctx["model"], "cache": cache }) } else { Value::Null };
         json!({ "now": now, "of": if source.is_empty() { "hub" } else { source }, "five_hour": win("five_hour", &b["fiveStart"], FIVE_H), "seven_day": win("seven_day", &b["weekStart"], SEVEN_D), "context": c })
     }
+}
+/// The larger window a model can have (Claude's 1M context).
+const LARGE_WINDOW: u64 = 1_000_000;
+/// The window to show for a context (T-302): what the run's result reported (else the configured default), at least 1M for
+/// a model id tagged `[1m]`, and never less than what the session already holds. A 1M model whose result says 200 000, or
+/// a long first run before any result, used to show 200 %+ of a 200k window; past the window it is corrected to the next
+/// tier (1M), and past that to the tokens themselves.
+pub fn context_window(ctx: &Value, default: u64) -> u64 {
+    let mut w = ctx["window"].as_u64().filter(|w| *w > 0).unwrap_or(default);
+    if ctx["model"].as_str().map(|m| m.to_ascii_lowercase().contains("[1m]")).unwrap_or(false) { w = w.max(LARGE_WINDOW); }
+    let tokens = ctx["tokens"].as_u64().unwrap_or(0);
+    if tokens > w { w = if tokens <= LARGE_WINDOW { LARGE_WINDOW } else { tokens }; }
+    w
 }
 /// The context a run's event shows (input + cache tokens of the latest reply; the window from the result).
 pub fn note_context(ctx: &mut Value, ev: &Value, session: &str) {
@@ -157,6 +170,18 @@ pub fn note_context(ctx: &mut Value, ev: &Value, session: &str) {
 mod tests {
     use super::*;
     use pgm_context_internal::ledger::parse_usage;
+
+    #[test]
+    fn the_window_is_never_below_what_the_session_holds() {
+        // T-302: a 1M model shown as 200k with 200 %+ (Gee, 2026-10-25)
+        assert_eq!(context_window(&json!({ "tokens": 50_000, "window": 200_000 }), 200_000), 200_000);
+        assert_eq!(context_window(&json!({ "tokens": 50_000 }), 200_000), 200_000, "no result yet: the configured default");
+        assert_eq!(context_window(&json!({ "tokens": 450_000, "window": 200_000 }), 200_000), 1_000_000, "past 200k: the 1M tier");
+        assert_eq!(context_window(&json!({ "tokens": 450_000 }), 200_000), 1_000_000, "a long first run before any result");
+        assert_eq!(context_window(&json!({ "tokens": 10_000, "model": "claude-opus-5-5[1m]" }), 200_000), 1_000_000, "the [1m] tag");
+        assert_eq!(context_window(&json!({ "tokens": 1_200_000, "window": 1_000_000 }), 200_000), 1_200_000, "never above 100 %");
+        assert_eq!(context_window(&json!({ "tokens": 10_000, "window": 0 }), 200_000), 200_000, "a zero window is no window");
+    }
 
     #[test]
     fn answers_are_summed_per_person_and_provider_and_survive_a_restart() {

@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "note": "The team's roles for planner mode (plans/roles.md in the team Notes, this JSON in a json fence). owner order: marker (Person M), then keywords, then the lighter workload. Edit freely: user is the board username; keywords are matched as stems (a phrase needs all its words).",
+ "fallback": "mills",
+ "people": [
+  {
+   "user": "sponge", "name": "Sponge", "initial": "S",
+   "specialties": ["product management", "focused design and spec-driven development", "infrastructure / sysadmin", "systems direction", "prompt engineering", "debugging / testing"],
+   "keywords": ["hub", "protocol", "infrastructure", "sysadmin", "server", "spec", "test", "debug", "prompt", "release", "deploy", "updater", "login", "session", "git", "screen sharing", "sound", "download", "relay", "backend", "gateway", "rust"]
+  },
+  {
+   "user": "mills", "name": "Mills", "initial": "M",
+   "specialties": ["organisation", "treasury / secretary", "task decomposition and refinement", "accept / reject / defer", "planning", "documentation", "legal", "scope and alignment", "graphical design"],
+   "keywords": ["design", "ui", "ux", "panel", "sidebar", "menu", "right click", "layout", "visual", "decomposition", "refine", "document", "docs", "legal", "scope", "organisation", "archive", "calendar", "website", "builder", "drag", "theme", "graphic", "look"]
+  },
+  {
+   "user": "gee", "name": "Gee", "initial": "G",
+   "specialties": ["creative direction", "conceptual design", "systems architecture", "planning", "research", "prompt engineering", "investor relations"],
+   "keywords": ["architecture", "research", "creative", "concept", "workflow", "node", "ollama", "model", "llm", "jev", "delegation", "orchestration", "investor", "trigger", "schedule", "integration"]
+  }
+ ]
+}

@@ -5,6 +5,7 @@
 //   message contains "ASSISTTOOL" → adds a task through the Unity section's tool relay
 //   message contains "PCTOOL" → calls the pc "list" tool through the hub, like the real MCP relay
 //   message contains "CLAUDETOOL" → runs one fake tool (Bash) before answering
+//   message contains "DENIED" → the result says a tool was refused for want of permission (permission_denials)
 //   message contains "USAGE"  → reports token usage (54,000 of a 200,000 context window) and a
 //                               5-hour rate-limit event (42% used, resets in 2 h), like the real stream
 // The answer echoes the model and the working folder (cwd) so the runner can check both.
@@ -27,12 +28,73 @@ process.stdin.on('end', async () => {
   if (input.includes('SLOW')) await sleep(4000);
   if (input.includes('PCTOOL')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.pc.env;
-    const r = await fetch(env.MILLS_BRIDGE + '/internal/pc-tool', {
+    const r = await fetch((process.env.FAKE_CLAUDE_BRIDGE || env.MILLS_BRIDGE) + '/internal/pc-tool', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
-      body: JSON.stringify({ name: 'list', args: { path: '' } }),
+      body: JSON.stringify({ name: 'list', args: { path: '' }, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }), // as pc-tools-mcp.js sends it
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PC:' + JSON.stringify(r) }] } });
+  }
+  // "MACHTOOL=<hex>" (T-308): relay probes with the run's own credentials, each as the spec says, printing every HTTP status + body.
+  // The hex is a JSON array of { route: 'pc-tool' | 'board' | 'team', body, secret?: 'run' | <literal>, account?: <header> | null (none),
+  // session?: 'run' }; "run" is the secret / session of THIS run's MCP config (env.MILLS_INTERNAL / MILLS_SESSION).
+  if (/MACHTOOL=[0-9a-f]+/.test(input)) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.pc.env;
+    const probes = JSON.parse(Buffer.from(input.match(/MACHTOOL=([0-9a-f]+)/)[1], 'hex').toString('utf8'));
+    const res = [];
+    for (const p of probes) {
+      const h = { 'Content-Type': 'application/json', 'X-Mills-Internal': p.secret === undefined || p.secret === 'run' ? env.MILLS_INTERNAL : p.secret };
+      const acct = p.account === undefined ? env.MILLS_ACCOUNT : p.account; if (acct !== null) h['X-Mills-Account'] = acct;
+      const body = { ...(p.body || {}), ...(p.session === 'run' && env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) };
+      const r = await fetch(env.MILLS_BRIDGE + '/internal/' + (p.route || 'pc-tool'), { method: 'POST', headers: h, body: JSON.stringify(body) })
+        .then(async (x) => ({ status: x.status, body: await x.json().catch(() => ({})) })).catch((e) => ({ status: 0, body: { error: e.message } }));
+      res.push(r);
+    }
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'MACH:' + JSON.stringify(res) }] } });
+  }
+  // "ASKTOOL" (T-245): ask the person two questions through the team MCP relay's ask_user and print the answers.
+  // "ASKTOOL TIMEOUT": a 2-second timeout (the defaults must come back). "ASKTOOL POLL": polls every second like the MCP relay does.
+  if (input.includes('ASKTOOL')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const tool = (args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name: 'ask_user', args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const timeout = input.includes('ASKTOOL TIMEOUT'), poll = input.includes('ASKTOOL POLL');
+    let r = await tool({ title: 'r210', ...(timeout ? { timeoutSec: 2 } : poll ? { timeoutSec: 30, pollSec: 1 } : {}), questions: [
+      { id: 'which', text: 'Which way?', kind: 'single', options: ['left', { id: 'right', label: 'Right', hint: 'the other one' }], default: 'right' },
+      { id: 'what', text: 'Which parts?', kind: 'checklist', options: ['a', 'b', 'c'], default: ['a', 'c'] }] });
+    while (r.ok && r.result && r.result.pending) r = await tool({ poll: r.result.id, ...(poll ? { pollSec: 1 } : {}) });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'ASK:' + JSON.stringify(r) }] } });
+  }
+  // "PLANDRAFT" (T-279): a planner run shows a draft through the team relay's plan_draft and prints the result (the hub writes it once approved).
+  // "PLANTOPIC=<word>" names the plan; "PLANCHANGE=T-n" adds a change to that existing task (tied to the 1st parent when "PLANCHANGEPARENT");
+  // "PLANDIRECT" first tries task_create itself (refused for a planner); "PLANTWICE": when the person asks for a change, drafts again.
+  if (input.includes('PLANDRAFT')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const call = (route, name, args) => fetch(env.MILLS_BRIDGE + '/internal/' + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const topic = (input.match(/PLANTOPIC=([a-z0-9]+)/) || [])[1] || 'r305';
+    const change = (input.match(/PLANCHANGE=(T-\d+)/) || [])[1];
+    const rep = {};
+    if (input.includes('PLANDIRECT')) { const d = await call('board', 'task_create', { title: 'planner direct ' + topic }); rep.direct = d.ok ? 'made' : d.error; const m = await call('board', 'task_update', { id: change || 'T-1', title: 'x' }); rep.directUpdate = m.ok ? 'done' : m.error; const g = await call('board', 'board_list', {}); rep.listOk = g.ok; }
+    const draft = (n) => ({ title: 'Plan ' + topic, sourceText: 'Idea one: the alpha.\n\nIdea two: the beta, blocked on the alpha. (' + topic + ' ' + n + ')', parents: [
+      { title: 'Alpha ' + topic, body: 'What: alpha.', owner: 't-user', labels: ['viberoller'], priority: 1, subtasks: [{ title: 'spec', owner: 't-user' }, { title: 'build', owner: 'mills', priority: 3 }] },
+      { title: 'Beta ' + topic, body: 'What: beta.', owner: 'mills', priority: 3, blockedOn: 'Alpha ' + topic, subtasks: [{ title: 'ui' }] },
+      { title: 'Gamma ' + topic, body: 'What: gamma.', owner: 't-user', subtasks: [{ title: 'only' }] }],
+      existingChanges: change ? [{ id: change, change: { labels: ['planned-' + topic], priority: 2 }, reason: 'the plan touches it', ...(input.includes('PLANCHANGEPARENT') ? { parent: 0 } : {}) }] : [],
+      notPlanned: [{ text: 'a vague wish', why: 'too vague' }] });
+    let r = await call('team', 'plan_draft', draft(1));
+    while (r.ok && r.result && r.result.pending) r = await call('team', 'plan_draft', { poll: r.result.id });
+    if (input.includes('PLANTWICE') && r.ok && r.result && r.result.changeRequested) {
+      rep.first = r.result.comment;
+      r = await call('team', 'plan_draft', draft(2));
+      while (r.ok && r.result && r.result.pending) r = await call('team', 'plan_draft', { poll: r.result.id });
+    }
+    rep.result = r;
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLAN:' + JSON.stringify(rep) }] } });
   }
   // "BOARDTOOL": act on the team board through the board MCP relay, like Claude in a Work run:
   // create a task, claim it, add a progress note.
@@ -82,6 +144,41 @@ process.stdin.on('end', async () => {
     const d = await tool('notes_delete', { path: 'plans/Claude Plan.md' });
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'NOTES:' + JSON.stringify({ wrote: w.ok && w.result.by, listed: l.ok ? l.result.notes.map((n) => n.path) : l.error, read: r.ok ? r.result.text.includes('needle-notes-r118') : r.error, bad: bad.ok, deleted: d.ok }) }] } });
   }
+  // "PLANNERPROBE" (T-275): what this run was handed (tools, permission mode, MCP servers, whether the prompt is the planner's), then
+  // a notes_write outside plans/ and one inside it through the team relay, like a run trying a forbidden thing.
+  // "PLANNERPC": one pc "write" call through the team server's env (a planner run has no pc server; the hub must still refuse).
+  if (input.includes('PLANNERPROBE') || input.includes('PLANNERPC')) {
+    const cfg = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers;
+    const env = cfg.team.env;
+    const call = (route, name, args) => fetch(env.MILLS_BRIDGE + '/internal/' + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const rep = { servers: Object.keys(cfg).sort().join('+'), allowed: opt('--allowedTools'), denied: opt('--disallowedTools'), perm: opt('--permission-mode'), planPrompt: /PLANNER MODE/.test(opt('--append-system-prompt')) };
+    if (input.includes('PLANNERPC')) { const mach = (input.match(/PLANNERMACHINE=([a-z0-9-]+)/) || [])[1]; const r = await call('pc-tool', 'write', { path: 'x.txt', content: 'x', ...(mach ? { machine: mach } : {}) }); rep.pc = r.ok ? 'done' : r.error; }
+    else {
+      const bad = await call('team', 'notes_write', { path: 'planner-outside-r265.md', text: 'x' });
+      const good = await call('team', 'notes_write', { path: 'plans/planner-inside-r265.md', text: '# plan r265' });
+      const tricky = await call('team', 'notes_write', { path: 'plans/../planner-tricky-r265.md', text: 'x' });
+      const board = await call('board', 'task_create', { title: 'planner task r265' });
+      Object.assign(rep, { outside: bad.ok ? 'written' : bad.error, inside: good.ok ? 'written' : good.error, tricky: tricky.ok ? 'written' : tricky.error, board: board.ok ? 'made' : board.error });
+    }
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLANNER:' + JSON.stringify(rep) }] } });
+  }
+  // "PLANNERPLAN" (T-276/277/278): what a planner session does first: the planner tools through the team relay (named with this
+  // session), and the order the prompt tells it to use them in.
+  if (input.includes('PLANNERPLAN')) {
+    const cfg = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers;
+    const env = cfg.team.env;
+    const call = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args, ...(env.MILLS_SESSION ? { session: env.MILLS_SESSION } : {}) }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const prompt = opt('--append-system-prompt') || '';
+    const at = ['plan_glossary', 'plan_roles', 'plan_parse', 'plan_existing', 'plan_owner'].map((t) => prompt.indexOf(t));
+    const gl = await call('plan_glossary', {}), ps = await call('plan_parse', { text: '--- opus\n[Hub relay tests]\nCheck the hub relay with tests.\n' }), ow = await call('plan_owner', { idea: { title: 'Hub relay tests' } });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'PLANRES:' + JSON.stringify({ order: at.every((x) => x >= 0) && at.every((x, i) => i === 0 || x > at[i - 1]), basedOn: /blocked on[^.]*means based on/i.test(prompt), glossary: gl.ok ? gl.result.words.length : gl.error, ideas: ps.ok ? ps.result.ideas.length : ps.error, owner: ow.ok ? ow.result.owner : ow.error }) }] } });
+  }
   // "TEAMMORE": the wider team tools: a channel + a group made by Claude, the hub picture, past-session search, the AIs available.
   if (input.includes('TEAMMORE')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
@@ -110,6 +207,33 @@ process.stdin.on('end', async () => {
     const bad = await tool('team_say', { text: 'x', to: 'nobody-here' });
     const who = await tool('team_presence', {});
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'TEAM:' + JSON.stringify({ all: all.ok && all.result.as, dm: dm.ok && dm.result.to, bad: bad.ok, people: who.ok ? who.result.people.length : -1 }) }] } });
+  }
+  // the team MCP relay as a Work run's Claude reaches it (the HYPERWORK and NOTIFYTOOL scripts below)
+  const relayTool = () => {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    return (name, args) => fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+  };
+  // "HYPERWORK <name>": send a prompt through a Hyper Workflow with the team tools hyperwork_list / hyperwork_run, like
+  // Claude in a Work run (R465): the run is the person's own
+  const hw = /HYPERWORK (\S+)/.exec(input);
+  if (hw) {
+    const tool = relayTool();
+    const list = await tool('hyperwork_list', { q: hw[1].slice(0, 4) });
+    const run = await tool('hyperwork_run', { name: hw[1], prompt: 'sent by the AI', wait: 30 });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'HW:' + JSON.stringify({ listed: list.ok ? list.result.map((w) => w.name) : list.error, ok: run.ok, run: run.ok ? run.result : run.error }) }] } });
+  }
+  // "NOTIFYTOOL [[name, args], ...] END" (T-264): calls those team tools in order through the team MCP relay and prints
+  // "NOTIFY:" + the list of their answers (R250 to R254).
+  if (input.includes('NOTIFYTOOL')) {
+    const tool = relayTool();
+    const m = input.match(/NOTIFYTOOL (\[\[.*?\]\]) END/s);
+    const calls = m ? JSON.parse(m[1]) : [];
+    const res = [];
+    for (const [name, args] of calls) res.push(await tool(name, args));
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'NOTIFY:' + JSON.stringify(res) }] } });
   }
   // "LIMITPARTIAL": a 5h event with only a status (no utilization, no reset time), then a 7d event
   // reporting utilization as a percentage (55) — the hub must keep the 5h numbers and read 55 as 55 %.
@@ -153,9 +277,15 @@ process.stdin.on('end', async () => {
   const fjDir = (process.env.PATH || '').split(path.delimiter)[0] || '';
   const fjW = (() => { try { return fs.readFileSync(path.join(fjDir, 'fj'), 'utf8'); } catch { return ''; } })();
   const fjKeys = (() => { const d = (fjW.match(/(?:XDG_DATA_HOME|APPDATA)='([^']+)'/) || [])[1]; if (!d) return ''; try { const k = JSON.parse(fs.readFileSync(path.join(d, ...(process.platform === 'win32' ? ['forgejo-cli', 'forgejo-cli', 'data'] : ['forgejo-cli']), 'keys.json'), 'utf8')); return Object.entries(k.hosts || {}).map(([h, v]) => `${h}=${v.type}`).join('+'); } catch { return 'nokeys'; } })();
-  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | fjw=${/made by VibeRoller/.test(fjW) ? 'wrapper:' + fjKeys : ''} | relay=${relay} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')} | adddir=${opt('--add-dir') || ''} | sysvolatile=${/\d+ min ago|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(opt('--append-system-prompt') || '')} | syslaw=${/Worktree law/.test(opt('--append-system-prompt') || '')}` }],
+  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | fjw=${/made by VibeRoller/.test(fjW) ? 'wrapper:' + fjKeys : ''} | relay=${relay} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')} | adddir=${opt('--add-dir') || ''} | sysvolatile=${/\d+ min ago|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(opt('--append-system-prompt') || '')} | syslaw=${/Worktree law/.test(opt('--append-system-prompt') || '')} | sysnone=${/NO PROJECT/.test(opt('--append-system-prompt') || '')}` }],
     ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
   // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
-  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
-    ...(usage ? { modelUsage: { [model]: { inputTokens: 4000, outputTokens: 300, contextWindow: 200000 } } } : {}) });
+  // "MULTIRESULT" (T-319): extra empty turns, each ending in its own result with its own uuid (a real run does this when background work
+  // reports back); "DUPRESULT": the final result delivered three times, the same uuid (the hub must say it once)
+  if (input.includes('MULTIRESULT')) for (let i = 0; i < 3; i++) out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 3, num_turns: 1, session_id: session, uuid: crypto.randomUUID(), result: '' });
+  const finalUuid = crypto.randomUUID();
+  for (let i = 0; i < (input.includes('DUPRESULT') ? 3 : 1); i++)
+  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: session, uuid: finalUuid, result: input.includes('FULLECHO') ? 'echo: ' + input : `echo: ${input.slice(-200)} | model=${model}`,
+    ...(usage ? { modelUsage: { [model]: { inputTokens: 4000, outputTokens: 300, contextWindow: 200000 } } } : {}),
+    ...(input.includes('DENIED') ? { permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_denied', tool_input: { command: 'rm -rf build' } }] } : {}) });
 });

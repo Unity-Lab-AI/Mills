@@ -43,6 +43,15 @@ pub trait ChatHost: Send + Sync {
     /// The chat's AI member was called: answer `target` privately ('' = where she was called), with `caller`'s tools,
     /// in `conv` (a channel / group, '' = # Everyone).
     fn agent_called(&self, target: String, caller: String, conv: String);
+    /// Is any run or session of this person's busy (presence's "working"; plans/presence.md)? Its changes must reach
+    /// [`Chat::room_changed`].
+    fn working(&self, _u: &str) -> bool { false }
+    /// How many of this person's sessions work now (shown next to "working").
+    fn working_count(&self, u: &str) -> u64 { u64::from(self.working(u)) }
+    /// Where their most recently started running session works: (project, branch, started at ms) (T-260).
+    fn working_where(&self, _u: &str) -> Option<(String, String, u64)> { None }
+    /// The board task they hold a claim on: (id, title, claimed at ms) (T-260).
+    fn held_task(&self, _u: &str) -> Option<(String, String, u64)> { None }
 }
 /// An answer.
 pub type Resp = hyper::Response<Body>;
@@ -53,9 +62,75 @@ const MAX_CT: usize = 1_600_000;
 const TYPING_MS: u64 = 6000; const GONE_MS: u64 = 8000; const ONLINE_MS: u64 = 70000;
 const ICE_DEFAULT: &str = r#"[{"urls":"stun:stun.l.google.com:19302"}]"#;
 
+/// One person's presence (plans/presence.md): `online` / `idle` are worked out from their devices (the most active one
+/// wins), `screen` is the last one any device named.
 #[derive(Default, Clone)]
-struct Pres { online: bool, idle: bool, screen: String, at: u64, seen: u64, polls: u32, gen: u64 }
+struct Pres { online: bool, idle: bool, screen: String, at: u64, seen: u64, devices: HashMap<String, Dev> }
+/// One page / app instance (its `device` id; an older page without one is "legacy"): live while it holds a long poll
+/// (and 8 s after the last one closed), idle when it says so (5 min without input, hidden, or the screen locked).
+#[derive(Default, Clone)]
+struct Dev { polls: u32, gen: u64, live: bool, idle: bool, locked: bool, seen: u64, wh: Option<Value> }
+/// What a source (Jcode PGM, the desktop app, a workflow) says its person works at: `where` = { project, branch, task: {id, title}?, since? }
+/// and `source` (letters, digits, - and _, up to 20). None = it cleared it (or sent junk). `since` is kept while it stays the same.
+fn clean_where(w: &Value, source: &str, before: &Option<Value>, now: u64) -> Option<Value> {
+    if !w.is_object() { return None; }
+    let t = |k: &str, n: usize| guilds::take_units(w[k].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).collect::<String>().trim(), n);
+    let (project, branch) = (t("project", 80), t("branch", 120));
+    let task = if w["task"].is_object() { let id = guilds::take_units(w["task"]["id"].as_str().unwrap_or("").trim(), 20); if id.is_empty() { Value::Null } else { json!({ "id": id, "title": guilds::take_units(w["task"]["title"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).collect::<String>().trim(), 160) }) } } else { Value::Null };
+    if project.is_empty() && branch.is_empty() && task.is_null() { return None; }
+    let same = before.as_ref().map(|b| b["project"] == json!(project) && b["branch"] == json!(branch) && b["task"] == task && b["source"] == json!(source)).unwrap_or(false);
+    let since = if same { before.as_ref().and_then(|b| b["since"].as_u64()).unwrap_or(now) } else { w["since"].as_u64().filter(|s| *s <= now).unwrap_or(now) };
+    let mut v = json!({ "project": project, "branch": branch, "since": since, "source": source });
+    if !task.is_null() { v["task"] = task; }
+    Some(v)
+}
+impl Pres {
+    /// online = any live device; idle (away) = every live device idle
+    fn derive(&mut self) {
+        let live: Vec<&Dev> = self.devices.values().filter(|d| d.live).collect();
+        self.online = !live.is_empty();
+        self.idle = self.online && live.iter().all(|d| d.idle || d.locked);
+    }
+    fn dev(&mut self, id: &str) -> &mut Dev { self.devices.entry(id.to_string()).or_default() }
+}
+/// A device id as a page sends it: letters, digits, - and _, up to 40 ("" = an older page: "legacy").
+fn device_id(v: Option<&str>) -> String { match v.map(str::trim).filter(|x| !x.is_empty() && x.len() <= 40 && x.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')) { Some(x) => x.to_string(), None => "legacy".into() } }
+/// What a person set about their presence (state.json "presence", and profile.status / profile.textUntil): read once,
+/// kept until they change it (or their profile changes: keys_changed).
+#[derive(Default, Clone)]
+struct Manual { over: String, over_until: u64, dnd: bool, dnd_until: u64, accepting: bool, hide_where: bool, text: String, text_until: u64 }
+impl Manual {
+    fn from_state(st: &Value) -> Manual {
+        let p = &st["presence"]; let pr = &st["profile"];
+        Manual { over: s(p, "override"), over_until: p["overrideUntil"].as_u64().unwrap_or(0), dnd: p["dnd"] == json!(true), dnd_until: p["dndUntil"].as_u64().unwrap_or(0), accepting: p["acceptingWork"] == json!(true), hide_where: p["hideWhere"] == json!(true), text: s(pr, "status"), text_until: pr["textUntil"].as_u64().unwrap_or(0) }
+    }
+    /// what holds right now (an `until` that passed is as if it was never set)
+    fn now(&self, now: u64) -> Manual {
+        let mut m = self.clone();
+        if m.over_until > 0 && now >= m.over_until { m.over = String::new(); m.over_until = 0; }
+        if !matches!(m.over.as_str(), "away" | "offline") { m.over = "auto".into(); }
+        if m.dnd_until > 0 && now >= m.dnd_until { m.dnd = false; m.dnd_until = 0; }
+        if m.text_until > 0 && now >= m.text_until { m.text = String::new(); m.text_until = 0; }
+        m
+    }
+}
+/// The label others see (plans/presence.md § 2): the first rule that matches.
+fn label_of(shown: &str, over: &str, working: bool, accepting: bool) -> &'static str {
+    if over == "offline" { return "Offline"; }
+    if working && accepting && shown != "offline" { return "Working + available"; }
+    if working { return "Working"; }
+    match shown { "offline" => "Offline", "away" => "Away", _ if accepting => "Available for work", _ => "Online" }
+}
+/// One "tell me when" request of an asker's AI (the team tool notify_when_available).
+#[derive(Clone)]
+struct Watch { id: String, asker: String, user: String, what: String, message: String, at: u64, until: u64 }
+const WATCH_MAX: usize = 5; const WATCH_TTL_MS: u64 = 24 * 3600 * 1000;
 struct Store { messages: Vec<Value>, seq: i64, rev: i64 }
+/// One co-view (T-244): the sharer's page tells the hub what it shows ({screen, item, scroll}); viewers follow it in their own page.
+#[derive(Clone)]
+struct CoView { sharer: String, conv: String, lead: String, viewers: Vec<(String, u64)>, invited: Vec<String>, view: Value, seq: u64, log: Vec<Value>, since: String, seen: u64 }
+#[derive(Default)]
+struct CoViews { list: Vec<CoView>, ver: u64 }
 #[derive(Default)]
 struct Calls { calls: Vec<(String, Vec<(String, Value)>)>, mailbox: HashMap<String, Vec<Value>>, n: u64, ver: u64 }
 
@@ -70,6 +145,17 @@ pub struct Chat {
     keys_ver: AtomicU64,
     room_woke: Notify,
     presence: Mutex<HashMap<String, Pres>>,
+    /// what each person set (read from their state.json once; dropped when their profile changes)
+    manual: Mutex<HashMap<String, Manual>>,
+    /// each person's last label and since when (the label's `since`)
+    labels: Mutex<HashMap<String, (String, u64)>>,
+    /// time accounting + activity log (activity.rs)
+    acct: Mutex<crate::activity::Tracker>,
+    /// The status-change event (T-264): see [`Chat::subscribe_status`]. `last_status` = each person's last public status.
+    status_tx: tokio::sync::broadcast::Sender<Value>,
+    last_status: Mutex<HashMap<String, Value>>,
+    /// "tell me when X is available" (notify_when_available), kept in Chat/notify-watches.json
+    watches: Mutex<Vec<Watch>>,
     typing: Mutex<HashMap<String, (String, u64)>>,
     agent_key: ChatKey,
     agent_pub: Value,
@@ -79,6 +165,8 @@ pub struct Chat {
     agent_busy: Mutex<Option<(String, String)>>,
     calls: Mutex<Calls>,
     call_woke: Mutex<HashMap<String, Arc<Notify>>>,
+    coview: Mutex<CoViews>,
+    coview_woke: Notify,
     avatars: Mutex<HashMap<String, String>>,
     agent_name: String,
     agent_on: bool,
@@ -128,11 +216,12 @@ impl Chat {
         let agent_on = !users.iter().any(|u| u.0 == AGENT) && cfg.get("roomAgent") != Some(&json!(false));
         let home = cfg.get("homeServerName").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).unwrap_or("VibeRoller");
         let g = Guilds::new(&dir, root.join("server-owners.json"), &agent_name, home, users);
+        let watches: Vec<Watch> = read_json(&dir.join("notify-watches.json")).and_then(|v| v.as_array().cloned()).unwrap_or_default().iter().map(|w| Watch { id: s(w, "id"), asker: s(w, "asker"), user: s(w, "user"), what: s(w, "what"), message: s(w, "message"), at: w["at"].as_u64().unwrap_or(0), until: w["until"].as_u64().unwrap_or(0) }).filter(|w| !w.id.is_empty() && !w.asker.is_empty()).collect();
         Chat { dir, store: Mutex::new(Store { messages, seq, rev }), keys: Mutex::new(keys), seen: Mutex::new(seen), seen_dirty: Notify::new(), guilds: g, room_ver: AtomicU64::new(1), keys_ver: AtomicU64::new(1), room_woke: Notify::new(),
-            presence: Mutex::default(), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
+            presence: Mutex::default(), manual: Mutex::default(), labels: Mutex::default(), acct: Mutex::default(), status_tx: tokio::sync::broadcast::channel(64).0, last_status: Mutex::default(), watches: Mutex::new(watches), typing: Mutex::default(), agent_key, agent_pub, agent_seen: Mutex::new(agent_seen), agent_busy: Mutex::new(None), calls: Mutex::default(), call_woke: Mutex::default(), coview: Mutex::default(), coview_woke: Notify::new(), avatars: Mutex::default(), agent_name, agent_on, handle, mills: mills.to_path_buf() }
     }
     pub fn room_changed(&self) { self.room_ver.fetch_add(1, Ordering::SeqCst); self.room_woke.notify_waiters(); }
-    pub fn keys_changed(&self) { self.keys_ver.fetch_add(1, Ordering::SeqCst); self.avatars.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.room_changed(); }
+    pub fn keys_changed(&self) { self.keys_ver.fetch_add(1, Ordering::SeqCst); self.avatars.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.manual.lock().unwrap_or_else(|e| e.into_inner()).clear(); self.room_changed(); }
     pub fn has_key(&self, u: &str) -> bool { self.keys.lock().unwrap_or_else(|e| e.into_inner()).contains_key(u) }
     fn pub_of(&self, u: &str) -> Option<Value> { self.keys.lock().unwrap_or_else(|e| e.into_inner()).get(u).map(|k| k["pub"].clone()) }
     fn save_keys(&self) { write_json(&self.dir.join("keys.json"), &Value::Object(self.keys.lock().unwrap_or_else(|e| e.into_inner()).clone())); }
@@ -215,26 +304,54 @@ fn conv_member(hub: &dyn ChatHost, conv: &str, user: &str, us: &[(String, String
 // ---------- presence + typing ----------
 impl Chat {
     fn pres_set(&self, user: &str, f: impl FnOnce(&mut Pres)) {
-        let changed = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); let before = (p.online, p.idle, p.screen.clone()); f(p); p.seen = now_ms(); let after = (p.online, p.idle, p.screen.clone()); if before != after { p.at = now_ms(); true } else { false } };
+        let changed = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); let before = (p.online, p.idle, p.screen.clone()); let wb = Chat::wsig(p); f(p); p.derive(); p.seen = now_ms(); let after = (p.online, p.idle, p.screen.clone()); let moved = before != after; if moved { p.at = now_ms(); } moved || wb != Chat::wsig(p) };
         if changed { self.room_changed(); }
     }
-    pub fn touch(&self, user: &str) { self.presence.lock().unwrap_or_else(|e| e.into_inner()).entry(user.to_string()).or_default().seen = now_ms(); }
-    fn poll_opened(&self, user: &str) { { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); p.polls += 1; p.gen += 1; } self.pres_set(user, |p| p.online = true); }
-    fn poll_closed(self: &Arc<Self>, user: &str) {
-        let gen = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); p.polls = p.polls.saturating_sub(1); if p.polls > 0 { return; } p.gen += 1; p.gen };
-        let (c, u) = (self.clone(), user.to_string());
-        tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(GONE_MS)).await; let still = c.presence.lock().unwrap_or_else(|e| e.into_inner()).get(&u).map(|p| p.gen == gen && p.polls == 0).unwrap_or(false); if still { c.pres_set(&u, |p| { p.online = false; p.idle = false; }); } });
+    /// what the live devices say they work at (a change of it wakes pages)
+    fn wsig(p: &Pres) -> String { let mut v: Vec<String> = p.devices.iter().filter(|(_, d)| d.live).filter_map(|(k, d)| d.wh.as_ref().map(|w| format!("{k}={w}"))).collect(); v.sort(); v.join("|") }
+    /// A source's report for one device: it counts as live while it keeps reporting (ONLINE_MS), whatever it names itself.
+    fn report_where(&self, user: &str, dev: &str, w: Option<&Value>, source: &str) {
+        self.pres_set(user, |p| { let now = now_ms(); let d = p.dev(dev); if let Some(w) = w { d.wh = clean_where(w, source, &d.wh, now); } if !source.is_empty() && d.polls == 0 { d.live = true; } d.seen = now; });
     }
-    pub fn gone(&self, user: &str) { { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let p = m.entry(user.to_string()).or_default(); p.polls = 0; p.gen += 1; } self.pres_set(user, |p| { p.online = false; p.idle = false; }); }
+    /// The live device reports of one person, newest first.
+    fn reported_where(&self, user: &str, now: u64) -> Vec<Value> {
+        let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(p) = m.get_mut(user) else { return vec![] }; Chat::expire(p, now);
+        let mut v: Vec<Value> = p.devices.values().filter(|d| d.live).filter_map(|d| d.wh.clone()).collect();
+        v.sort_by_key(|w| std::cmp::Reverse(w["since"].as_u64().unwrap_or(0))); v
+    }
+    pub fn touch(&self, user: &str) { self.presence.lock().unwrap_or_else(|e| e.into_inner()).entry(user.to_string()).or_default().seen = now_ms(); }
+    fn poll_opened(&self, user: &str, dev: &str) { self.pres_set(user, |p| { let d = p.dev(dev); d.polls += 1; d.gen += 1; d.live = true; d.seen = now_ms(); }); }
+    fn poll_closed(self: &Arc<Self>, user: &str, dev: &str) {
+        let gen = { let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner()); let d = m.entry(user.to_string()).or_default().dev(dev); d.polls = d.polls.saturating_sub(1); d.seen = now_ms(); if d.polls > 0 { return; } d.gen += 1; d.gen };
+        let (c, u, dv) = (self.clone(), user.to_string(), dev.to_string());
+        tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(GONE_MS)).await; let still = c.presence.lock().unwrap_or_else(|e| e.into_inner()).get(&u).and_then(|p| p.devices.get(&dv)).map(|d| d.gen == gen && d.polls == 0 && d.live).unwrap_or(false); if still { c.pres_set(&u, |p| { let d = p.dev(&dv); d.live = false; d.idle = false; d.wh = None; }); } });
+    }
+    /// Every device of this person gone at once (signed out, or an older page's pagehide).
+    pub fn gone(&self, user: &str) { self.pres_set(user, |p| { for d in p.devices.values_mut() { d.polls = 0; d.gen += 1; d.live = false; d.idle = false; d.wh = None; } }); }
+    /// One device gone at once (its page was closed).
+    fn device_gone(&self, user: &str, dev: &str) { self.pres_set(user, |p| { let d = p.dev(dev); d.polls = 0; d.gen += 1; d.live = false; d.idle = false; d.wh = None; }); }
+    /// Devices not seen for ONLINE_MS are gone (a page that vanished without saying so).
+    fn expire(p: &mut Pres, now: u64) { let mut lapsed = false; for d in p.devices.values_mut() { if d.live && now.saturating_sub(d.seen) > ONLINE_MS && d.polls == 0 { d.live = false; d.idle = false; d.wh = None; lapsed = true; } } if lapsed { let was = (p.online, p.idle); p.derive(); if was != (p.online, p.idle) { p.at = now; } } }
+    /// The old presence list (older pages and the team tools read it): what others are shown, so it applies a person's
+    /// "appear offline / away".
     pub fn presence_list(&self, us: &[(String, String, bool)]) -> Vec<Value> {
-        let now = now_ms(); let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_ms(); let manual = self.manual.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner());
         let mut out: Vec<(String, Value)> = vec![];
         for (u, p) in m.iter_mut() {
             if !us.iter().any(|x| x.0 == *u) { continue; }
-            if p.online && now - p.seen > ONLINE_MS { p.online = false; p.idle = false; p.at = now; }
-            out.push((u.clone(), json!({ "user": u, "online": p.online, "idle": p.online && p.idle, "screen": if p.online { p.screen.clone() } else { String::new() }, "at": p.at, "seen": p.seen })));
+            Chat::expire(p, now);
+            let over = manual.get(u).map(|x| x.now(now).over).unwrap_or_default();
+            let online = p.online && over != "offline"; let idle = online && (p.idle || over == "away");
+            out.push((u.clone(), json!({ "user": u, "online": online, "idle": idle, "screen": if online { p.screen.clone() } else { String::new() }, "at": p.at, "seen": p.seen })));
         }
         out.sort_by(|a, b| a.0.cmp(&b.0)); out.into_iter().map(|x| x.1).collect()
+    }
+    /// Where a person really is (online / away / offline) and how many devices are live.
+    fn real_presence(&self, u: &str, now: u64) -> (&'static str, u64, usize) {
+        let mut m = self.presence.lock().unwrap_or_else(|e| e.into_inner());
+        match m.get_mut(u) { None => ("offline", 0, 0), Some(p) => { Chat::expire(p, now); (if !p.online { "offline" } else if p.idle { "away" } else { "online" }, p.seen, p.devices.values().filter(|d| d.live).count()) } }
     }
     pub fn online(&self, us: &[(String, String, bool)]) -> Vec<String> { self.presence_list(us).into_iter().filter(|p| p["online"] == json!(true)).map(|p| s(&p, "user")).collect() }
     pub fn set_typing(self: &Arc<Self>, user: &str, conv: &str, on: bool) {
@@ -252,6 +369,150 @@ fn typing_for(hub: &dyn ChatHost, user: &str, us: &[(String, String, bool)]) -> 
     let mut out: Vec<Value> = list.into_iter().filter(|(u, conv)| u != user && conv_member(hub, conv, user, us)).map(|(u, conv)| json!({ "user": u, "conv": conv })).collect();
     if let Some((target, conv)) = c.agent_busy.lock().unwrap_or_else(|e| e.into_inner()).clone() { if c.agent_enabled(us) && (target.is_empty() || target == user) { out.push(json!({ "user": AGENT, "conv": if target.is_empty() { if conv.is_empty() { "room".to_string() } else { conv } } else { let mut v = [AGENT.to_string(), user.to_string()]; v.sort(); format!("dm:{}|{}", v[0], v[1]) } })); } }
     out
+}
+
+// ---------- time accounting (activity.rs, plans/presence.md section 6) ----------
+/// How long a quiet ends an active span (config presence.workGapMs, default 15 minutes).
+fn gap_ms(hub: &dyn ChatHost) -> u64 { hub.cfg().get("presence").and_then(|p| p["workGapMs"].as_u64()).filter(|x| *x >= 100).unwrap_or(crate::activity::DEFAULT_GAP_MS) }
+/// They did something: input on a device (active: true) or a message.
+fn note_active(hub: &dyn ChatHost, a: &Account) { hub.chat().acct.lock().unwrap_or_else(|e| e.into_inner()).touch(&a.username, &a.dir, now_ms(), gap_ms(hub)); }
+/// Once a second: AI time, away time and the log of status changes, for every account.
+fn account_tick(hub: &dyn ChatHost) {
+    let now = now_ms(); let gap = gap_ms(hub); let c = hub.chat();
+    for a in hub.accounts() {
+        let (real, _, _) = c.real_presence(&a.username, now);
+        let label = status_of(hub, &a.username, &a.username, now)["label"].as_str().unwrap_or("").to_string();
+        c.acct.lock().unwrap_or_else(|e| e.into_inner()).tick(&a.username, &a.dir, now, gap, real != "offline", hub.working_count(&a.username), &label);
+        status_event(hub, &a.username, now);
+    }
+}
+impl Chat {
+    /// The status-change event (T-264). Whenever what the team is shown about a person changes (presence, label, working,
+    /// accepting work, do not disturb), the hub sends `{ type: "status", user, at, presence, label, working,
+    /// acceptingWork, dnd, text, from: { presence, label, working, acceptingWork } }` to every subscriber. It is the
+    /// PUBLIC status (as a stranger sees it): appear offline hides the change, and nothing is in it a team member could
+    /// not read from GET /api/presence. Checked once a second (the account tick), so it lags a change by up to a second.
+    /// Subscribers must be quick and must not block: take the receiver in a task (see [`start`]; notify_when_available
+    /// is the first subscriber, workflow triggers (T-186) can be the next). A slow subscriber loses the oldest events
+    /// (RecvError::Lagged), it never holds the hub back.
+    pub fn subscribe_status(&self) -> tokio::sync::broadcast::Receiver<Value> { self.status_tx.subscribe() }
+    fn save_watches(&self, w: &[Watch]) {
+        write_json(&self.dir.join("notify-watches.json"), &Value::Array(w.iter().map(|x| json!({ "id": x.id, "asker": x.asker, "user": x.user, "what": x.what, "message": x.message, "at": x.at, "until": x.until })).collect()));
+    }
+    /// Drops expired watches (and saves when some went); returns what is left, as a copy.
+    fn watches_now(&self, now: u64) -> Vec<Watch> {
+        let mut g = self.watches.lock().unwrap_or_else(|e| e.into_inner());
+        let n = g.len(); g.retain(|w| w.until > now);
+        if g.len() != n { self.save_watches(&g); }
+        g.clone()
+    }
+}
+/// Sends the status event when a person's public status changed since the last tick (the first sight sets, sends nothing).
+fn status_event(hub: &dyn ChatHost, u: &str, now: u64) {
+    let c = hub.chat(); let st = status_of(hub, u, "", now);
+    let key = |v: &Value| json!([v["presence"], v["label"], v["working"], v["acceptingWork"], v["dnd"]]);
+    let prev = c.last_status.lock().unwrap_or_else(|e| e.into_inner()).insert(u.to_string(), st.clone());
+    let Some(prev) = prev else { return };
+    if key(&prev) == key(&st) { return; }
+    let _ = c.status_tx.send(json!({ "type": "status", "user": u, "at": now, "presence": st["presence"], "label": st["label"], "working": st["working"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"],
+        "from": { "presence": prev["presence"], "label": prev["label"], "working": prev["working"], "acceptingWork": prev["acceptingWork"] } }));
+}
+/// Does this status (or event) satisfy what the asker waits for?
+fn watch_matches(what: &str, st: &Value) -> bool {
+    let (pres, working, accepting) = (st["presence"].as_str().unwrap_or("offline"), st["working"] == json!(true), st["acceptingWork"] == json!(true));
+    match what { "online" => pres != "offline", "back" => pres == "online", "available" => accepting && pres != "offline", "free" => !working, _ => false }
+}
+fn watch_phrase(what: &str) -> &'static str { match what { "online" => "is online now", "back" => "is back", "free" => "is free now (not working)", _ => "is available now" } }
+/// The first subscriber of the status event: tells the asker's chat when the person they wait for matches.
+fn notify_event(hub: &dyn ChatHost, ev: &Value) {
+    let c = hub.chat(); let now = now_ms(); let user = s(ev, "user");
+    let due: Vec<Watch> = {
+        let mut g = c.watches.lock().unwrap_or_else(|e| e.into_inner());
+        let n = g.len(); g.retain(|w| w.until > now);
+        let (hit, keep): (Vec<Watch>, Vec<Watch>) = g.iter().cloned().partition(|w| w.user == user && watch_matches(&w.what, ev));
+        let changed = hit.len() + keep.len() != n || !hit.is_empty();
+        *g = keep; if changed { c.save_watches(&g); }
+        hit
+    };
+    for w in due {
+        if !c.has_key(&w.asker) { continue; }
+        let at = chrono::DateTime::from_timestamp_millis(w.at as i64).map(|d| d.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
+        let mut text = format!("{} {} (asked by your Claude at {at})", hub.name_of(&user), watch_phrase(&w.what));
+        if !w.message.is_empty() { text.push_str(&format!(". Note: {}", w.message)); }
+        agent_say(hub, &text, &w.asker, &format!("{} · Claude", hub.name_of(&w.asker)), &w.asker, "");
+    }
+}
+
+// ---------- the status (plans/presence.md): presence × working / accepting work, the label, what a person set ----------
+fn manual_of(hub: &dyn ChatHost, u: &str) -> Manual {
+    let c = hub.chat();
+    if let Some(m) = c.manual.lock().unwrap_or_else(|e| e.into_inner()).get(u).cloned() { return m; }
+    let m = hub.account(u).and_then(|a| read_json(&a.dir.join("state.json"))).map(|st| Manual::from_state(&st)).unwrap_or_default();
+    c.manual.lock().unwrap_or_else(|e| e.into_inner()).insert(u.to_string(), m.clone());
+    m
+}
+/// What a person works at now: their most recent source (a running Work session here, or what Jcode PGM / the desktop app
+/// reported), with the board task they hold a claim on. { project, branch, task: {id, title}?, since, source }
+fn where_of(hub: &dyn ChatHost, u: &str, now: u64) -> Option<Value> {
+    let mut best = hub.working_where(u).map(|(project, branch, since)| json!({ "project": project, "branch": branch, "since": since, "source": "work" }));
+    if let Some(r) = hub.chat().reported_where(u, now).into_iter().next() { if best.as_ref().map(|b| r["since"].as_u64() > b["since"].as_u64()).unwrap_or(true) { best = Some(r); } }
+    let held = hub.held_task(u).map(|(id, title, at)| (json!({ "id": id, "title": title }), at));
+    match (best, held) {
+        (Some(mut w), Some((t, _))) => { if w["task"].is_null() { w["task"] = t; } Some(w) }
+        (Some(w), None) => Some(w),
+        (None, Some((t, at))) => Some(json!({ "task": t, "since": at, "source": "board" })),
+        (None, None) => None,
+    }
+}
+/// One person's status as `viewer` sees it (themselves: with `real`, their actual presence).
+pub fn status_of(hub: &dyn ChatHost, u: &str, viewer: &str, now: u64) -> Value {
+    let c = hub.chat();
+    let m = manual_of(hub, u).now(now);
+    let (real, seen, devices) = c.real_presence(u, now);
+    let shown = if m.over == "offline" { "offline" } else if m.over == "away" && real != "offline" { "away" } else { real };
+    let working = hub.working(u);
+    let label = label_of(shown, &m.over, working, m.accepting);
+    let since = { let mut l = c.labels.lock().unwrap_or_else(|e| e.into_inner()); let e = l.entry(u.to_string()).or_insert_with(|| (label.to_string(), now)); if e.0 != label { *e = (label.to_string(), now); } e.1 };
+    let hidden = m.over == "offline"; // appear offline: nothing else is shown
+    let mut v = json!({ "user": u, "presence": shown, "label": label, "working": working && !hidden, "workingSessions": if hidden || !working { 0 } else { hub.working_count(u) }, "acceptingWork": m.accepting && !hidden, "dnd": m.dnd && !hidden,
+        "text": if hidden { String::new() } else { m.text.clone() }, "since": since, "seen": if hidden { 0 } else { seen }, "devices": if hidden { 0 } else { devices } });
+    // where they work (T-260): left out when they hide it or appear offline; the person always sees their own
+    if !hidden && (!m.hide_where || viewer == u) && (shown != "offline" || working) { if let Some(w) = where_of(hub, u, now) { v["where"] = w; } }
+    if viewer == u { v["real"] = json!(real); v["override"] = json!(m.over); v["overrideUntil"] = json!(m.over_until); v["dndUntil"] = json!(m.dnd_until); v["textUntil"] = json!(m.text_until); v["hideWhere"] = json!(m.hide_where); if hidden { v["text"] = json!(m.text); } }
+    v
+}
+/// Everyone's status (every account), as `viewer` sees it.
+fn status_list(hub: &dyn ChatHost, viewer: &str, us: &[(String, String, bool)]) -> Vec<Value> {
+    let now = now_ms(); let mut names: Vec<&String> = us.iter().map(|x| &x.0).collect(); names.sort();
+    names.into_iter().map(|u| status_of(hub, u, viewer, now)).collect()
+}
+/// POST /api/presence/me: what a person sets about their presence; Err = 400 with why.
+fn set_manual(hub: &dyn ChatHost, a: &Account, b: &Value) -> Result<bool, String> {
+    let now = now_ms();
+    let until = |k: &str| -> Result<Option<u64>, String> { match b.get(k) { None => Ok(None), Some(Value::Null) => Ok(Some(0)), Some(v) => match v.as_f64() { Some(x) if x == 0.0 => Ok(Some(0)), Some(x) if x > now as f64 => Ok(Some(x as u64)), _ => Err(format!("{k} must be a time in the future (ms), or null.")) } } };
+    let flag = |k: &str| -> Result<Option<bool>, String> { match b.get(k) { None => Ok(None), Some(Value::Bool(x)) => Ok(Some(*x)), Some(_) => Err(format!("{k} must be true or false.")) } };
+    let over = match b.get("override") { None => None, Some(v) => match v.as_str() { Some(x @ ("auto" | "away" | "offline")) => Some(x.to_string()), _ => return Err("override must be \"auto\", \"away\" or \"offline\".".into()) } };
+    let text = match b.get("text") { None => None, Some(Value::Null) => Some(String::new()), Some(Value::String(t)) => { let t: String = t.chars().filter(|c| !c.is_control() || *c == ' ').collect::<String>().split_whitespace().collect::<Vec<_>>().join(" "); if t.chars().count() > 80 { return Err("The status text can be up to 80 characters.".into()); } Some(t) } Some(_) => return Err("text must be a string.".into()) };
+    let (over_until, dnd_until, text_until) = (until("overrideUntil")?, until("dndUntil")?, until("textUntil")?);
+    let (dnd, accepting, hide_where) = (flag("dnd")?, flag("acceptingWork")?, flag("hideWhere")?);
+    let f = a.dir.join("state.json");
+    let mut st = read_json(&f).filter(Value::is_object).unwrap_or(json!({}));
+    if !st["presence"].is_object() { st["presence"] = json!({}); }
+    { let p = &mut st["presence"];
+      if let Some(o) = &over { p["override"] = json!(o); p["overrideUntil"] = json!(over_until.unwrap_or(0)); } else if let Some(t) = over_until { p["overrideUntil"] = json!(t); }
+      if let Some(d) = dnd { p["dnd"] = json!(d); p["dndUntil"] = json!(dnd_until.unwrap_or(0)); } else if let Some(t) = dnd_until { p["dndUntil"] = json!(t); }
+      if let Some(x) = accepting { p["acceptingWork"] = json!(x); }
+      if let Some(x) = hide_where { p["hideWhere"] = json!(x); } }
+    let text_changed = text.is_some() || text_until.is_some();
+    if text_changed {
+        if !st["profile"].is_object() { st["profile"] = json!({}); }
+        if let Some(t) = &text { st["profile"]["status"] = json!(t); st["profile"]["textUntil"] = json!(text_until.unwrap_or(0)); } else if let Some(t) = text_until { st["profile"]["textUntil"] = json!(t); }
+    }
+    write_json(&f, &st);
+    hub.chat().manual.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), Manual::from_state(&st));
+    // an until that passes changes what others see: their pages hear it then
+    for t in [over_until, dnd_until, text_until].into_iter().flatten().filter(|t| *t > now) { let c = hub.chat().clone(); tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(t - now + 50)).await; c.room_changed(); }); }
+    Ok(text_changed)
 }
 
 // ---------- Unity: what she reads, what she posts ----------
@@ -359,8 +620,9 @@ pub fn public_prefs_of(hub: &dyn ChatHost, a: &Account) -> Value { public_prefs(
 fn public_prefs(hub: &dyn ChatHost, a: &Account) -> Value {
     let st = read_json(&a.dir.join("state.json")).unwrap_or(json!({}));
     let p = &st["profile"];
+    let status = if p["textUntil"].as_u64().map(|t| t > 0 && now_ms() >= t).unwrap_or(false) { String::new() } else { s(p, "status") }; // its until passed (plans/presence.md)
     json!({ "nick": st["prefs"]["nick"].as_str().unwrap_or(""), "color": if st["prefs"]["color"].is_null() { Value::Null } else { st["prefs"]["color"].clone() },
-        "profile": { "bio": s(p, "bio"), "pronouns": s(p, "pronouns"), "status": s(p, "status"), "location": s(p, "location"), "links": if p["links"].is_array() { p["links"].clone() } else { json!([]) }, "accent": if p["accent"].is_null() { Value::Null } else { p["accent"].clone() }, "timezone": s(p, "timezone"), "avatar": avatar(hub, &a.username) } })
+        "profile": { "bio": s(p, "bio"), "pronouns": s(p, "pronouns"), "status": status, "location": s(p, "location"), "links": if p["links"].is_array() { p["links"].clone() } else { json!([]) }, "accent": if p["accent"].is_null() { Value::Null } else { p["accent"].clone() }, "timezone": s(p, "timezone"), "avatar": avatar(hub, &a.username) } })
 }
 
 // ---------- calls ----------
@@ -387,11 +649,19 @@ pub fn calls_leave(hub: &dyn ChatHost, user: &str) {
 /// The chat's background work: calls nobody polls for a minute end, temporary members who went offline leave, receipts
 /// are saved, a rolled-back deploy is announced.
 pub fn start(hub: Arc<dyn ChatHost>) {
+    let h = hub.clone();
+    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(1)).await; account_tick(&*h); } });
+    // the status event's first subscriber: notify_when_available
+    let h = hub.clone(); let mut rx = hub.chat().subscribe_status();
+    tokio::spawn(async move { loop { match rx.recv().await { Ok(ev) => notify_event(&*h, &ev), Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue, Err(_) => break } } });
     // browsers long-poll at least every 25 s while in a call; 60 s of silence = gone
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(10)).await; let now = now_ms(); let mut changed = vec![];
         { let mut cs = h.chat().calls.lock().unwrap_or_else(|e| e.into_inner()); for (c, ps) in cs.calls.iter_mut() { let n = ps.len(); ps.retain(|(_, p)| now.saturating_sub(p["seen"].as_u64().unwrap_or(0)) <= 60000); if ps.len() != n { changed.push(c.clone()); } } cs.calls.retain(|(_, ps)| !ps.is_empty()); }
         if !changed.is_empty() { let us = users(&*h); for c in changed { calls_changed(&*h, &c, &us); } } } });
+    // a co-view's people who stopped polling for a minute drop out (a lead who did: the sharer leads again; the sharer: it ends)
+    let h = hub.clone();
+    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(10)).await; coview_sweep(&*h, now_ms()); } });
     // temporary members who went offline leave; ended timeouts go
     let h = hub.clone();
     tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(20)).await; let us = users(&*h); let on = h.chat().online(&us); if h.chat().guilds.sweep(&|u| on.iter().any(|x| x == u)) { h.chat().room_changed(); } } });
@@ -450,7 +720,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
     let c = &hub.chat(); let u = a.username.as_str();
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let p = r.path.as_str();
-    if !(p.starts_with("/api/room/") || p == "/api/presence" || p.starts_with("/api/call/") || p == "/api/guilds" || p.starts_with("/api/guilds/") || p == "/api/admin/room/clear") { return None; }
+    if !(p.starts_with("/api/room/") || p == "/api/presence" || p == "/api/presence/me" || p == "/api/presence/time" || p.starts_with("/api/call/") || p.starts_with("/api/coview/") || p == "/api/guilds" || p.starts_with("/api/guilds/") || p == "/api/admin/room/clear") { return None; }
     let us = users(hub); let agent_on = c.agent_enabled(&us);
     let b = r.json();
     Some(match p {
@@ -494,7 +764,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             for (k, val) in [("ts", json!(iso())), ("fromPub", mine), ("iv", b["iv"].clone()), ("ct", b["ct"].clone()), ("keys", Value::Object(slots))] { msg[k] = val; }
             if b["blob"].as_str().map(|x| !x.is_empty()).unwrap_or(false) { msg["blob"] = b["blob"].clone(); }
             if !file_ids.is_empty() { msg["files"] = json!(file_ids); }
-            c.append(msg.clone());
+            c.append(msg.clone()); note_active(hub, a);
             if to.is_empty() { c.guilds.note_post_by(if conv.is_empty() { "room" } else { &conv }, u); }
             agent_hear(hub, &msg).await;
             answer(200, json!({ "seq": seqn }))
@@ -556,21 +826,40 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             if r.param("wait").as_deref() != Some("1") { c.touch(u); return Some(room_answer(hub, r, u, &us)); }
             // judged before this page's own coming online moves the version; listening starts after it
             let stale = r.param("ver").and_then(|x| x.parse::<u64>().ok()) != Some(c.room_ver.load(Ordering::SeqCst));
-            c.poll_opened(u);
+            let dev = device_id(r.param("device").as_deref());
+            c.poll_opened(u, &dev);
             let woke = c.room_woke.notified(); tokio::pin!(woke); woke.as_mut().enable();
-            struct Open(Arc<Chat>, String);
-            impl Drop for Open { fn drop(&mut self) { self.0.poll_closed(&self.1); } }
+            struct Open(Arc<Chat>, String, String);
+            impl Drop for Open { fn drop(&mut self) { self.0.poll_closed(&self.1, &self.2); } }
             let chat_arc = hub.chat().clone();
-            let guard = Open(chat_arc, u.to_string());
+            let guard = Open(chat_arc, u.to_string(), dev);
             if !stale { let _ = tokio::time::timeout(Duration::from_secs(25), woke).await; }
             drop(guard);
             room_answer(hub, r, u, &us)
         }
         "/api/presence" if post => {
-            if !(b["gone"].is_null() || b["gone"] == json!(false)) { c.gone(u); }
-            else { let screen = b["screen"].as_str().map(|x| guilds::take_units(x, 12)); let idle = b.get("idle").map(|x| !(x.is_null() || *x == json!(false) || *x == json!(0) || *x == json!(""))); c.pres_set(u, |pr| { if let Some(sc) = screen { pr.screen = sc; } if let Some(i) = idle { pr.idle = i; } }); }
+            let truthy = |x: &Value| !(x.is_null() || *x == json!(false) || *x == json!(0) || *x == json!(""));
+            let named = b["device"].as_str().map(|x| !x.trim().is_empty()).unwrap_or(false); let dev = device_id(b["device"].as_str());
+            if truthy(&b["gone"]) { if named { c.device_gone(u, &dev); } else { c.gone(u); } } // an older page without a device id: everything, as before
+            else { let screen = b["screen"].as_str().map(|x| guilds::take_units(x, 12)); let idle = b.get("idle").map(truthy); let locked = b.get("locked").map(truthy); c.pres_set(u, |pr| { if let Some(sc) = screen { pr.screen = sc; } let d = pr.dev(&dev); if let Some(i) = idle { d.idle = i; } if let Some(l) = locked { d.locked = l; } d.seen = now_ms(); }); if truthy(&b["active"]) { note_active(hub, a); }
+                // a source reports what it works at (T-260): { where: { project, branch, task?, since? } | null, source: "jcode" | "app" | ... }; a report keeps its device live
+                let source: String = b["source"].as_str().unwrap_or("").trim().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(20).collect();
+                if !source.is_empty() || b.get("where").is_some() { c.report_where(u, &dev, b.get("where"), if source.is_empty() { "app" } else { &source }); } }
             answer(200, json!({ "ok": true }))
         }
+        "/api/presence/time" if get => {
+            let target = r.param("user").filter(|x| !x.is_empty()).unwrap_or_else(|| u.to_string());
+            let Some(acc) = hub.account(&target) else { return Some(answer(404, json!({ "error": "No such person." }))); };
+            let today = crate::activity::day_of(now_ms()); let (from, to) = (r.param("from").filter(|x| !x.is_empty()).unwrap_or_else(|| today.clone()), r.param("to").filter(|x| !x.is_empty()).unwrap_or(today));
+            c.acct.lock().unwrap_or_else(|e| e.into_inner()).flush(now_ms());
+            match crate::activity::days(&acc.dir, &from, &to, target == u) { Ok(days) => answer(200, json!({ "user": target, "from": from, "to": to, "workGapMs": gap_ms(hub), "days": days })), Err(e) => answer(400, json!({ "error": e })) }
+        }
+        "/api/presence" if get => answer(200, json!({ "people": status_list(hub, u, &us) })),
+        "/api/presence/me" if get => answer(200, status_of(hub, u, u, now_ms())),
+        "/api/presence/me" if post => match set_manual(hub, a, &b) {
+            Ok(text_changed) => { if text_changed { c.keys_changed(); } else { c.room_changed(); } answer(200, status_of(hub, u, u, now_ms())) }
+            Err(e) => answer(400, json!({ "error": e })),
+        },
         "/api/room/blob" if get => {
             let n = r.param("seq").and_then(|x| x.parse::<i64>().ok()).unwrap_or(-1);
             let rd = reader(hub, u, &us);
@@ -578,6 +867,7 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             match st.messages.iter().find(|m| m["seq"].as_i64() == Some(n)).filter(|m| m["blob"].is_string() && rd.visible(m) && !m["keys"][u].is_null()) { Some(m) => answer(200, json!({ "blob": m["blob"] })), None => answer(404, json!({ "error": "Not found." })) }
         }
         p if p.starts_with("/api/call/") => return Some(calls_route(hub, r, a, &us, &b).await),
+        p if p.starts_with("/api/coview/") => return Some(coview_route(hub, r, a, &us, &b).await),
         "/api/guilds" if get => { let ctx = ctx!(hub, us.clone()); answer(200, c.guilds.view(u, &ctx)) }
         p if post && p.starts_with("/api/guilds/") => match guild_op_name(p) {
             Some(op) => {
@@ -638,7 +928,7 @@ fn room_answer(hub: &dyn ChatHost, r: &Req, u: &str, us: &[(String, String, bool
     let mut seen_out = Map::new();
     for (who, convs) in c.seen.lock().unwrap_or_else(|e| e.into_inner()).iter() { for (cv, v) in convs.as_object().cloned().unwrap_or_default() { if rd.sees_conv(&cv) { seen_out.entry(who.clone()).or_insert(json!({}))[&cv] = v; } } }
     answer(200, json!({ "messages": out, "latest": latest, "latestRev": latest_rev, "seen": seen_out, "shares": hub.shares_for(u), "ver": c.room_ver.load(Ordering::SeqCst), "keysVer": c.keys_ver.load(Ordering::SeqCst), "guildsVer": c.guilds.version(), "notesVer": hub.notes_version(),
-        "online": c.online(us), "presence": c.presence_list(us), "typing": typing_for(hub, u, us) }))
+        "status": status_list(hub, u, us), "online": c.online(us), "presence": c.presence_list(us), "typing": typing_for(hub, u, us) }))
 }
 async fn calls_route(hub: &dyn ChatHost, r: &Req, a: &Account, us: &[(String, String, bool)], b: &Value) -> Resp {
     let c = &hub.chat(); let u = a.username.as_str();
@@ -693,6 +983,136 @@ async fn calls_route(hub: &dyn ChatHost, r: &Req, a: &Account, us: &[(String, St
     }
 }
 
+// ---------- co-view (T-244): share the product view itself ----------
+// The sharer's page posts what it shows; the hub keeps ONE co-view per sharer in memory and carries only {screen, item: {kind, id}, scroll}
+// (never content). A viewer's page follows by opening the same screen + item itself, through the normal routes with its own permissions.
+const COVIEW_SCREENS: [&str; 7] = ["menu", "shell", "room", "board", "cal", "notes", "assist"];
+const COVIEW_KINDS: [&str; 4] = ["board-task", "note", "work-session", "conv"];
+const COVIEW_LOG: usize = 60; const COVIEW_GONE_MS: u64 = 60000;
+fn coview_screen(v: &Value) -> String { v.as_str().filter(|x| COVIEW_SCREENS.contains(x)).map(|x| x.to_string()).unwrap_or_default() }
+fn coview_item(v: &Value) -> Value {
+    let (kind, id) = (s(v, "kind"), guilds::take_units(&s(v, "id").chars().filter(|c| !c.is_control()).collect::<String>(), 200));
+    if COVIEW_KINDS.contains(&kind.as_str()) && !id.is_empty() { json!({ "kind": kind, "id": id }) } else { Value::Null }
+}
+fn coview_valid_conv(hub: &dyn ChatHost, conv: &str, us: &[(String, String, bool)]) -> bool {
+    if conv == "room" { return true; }
+    if let Some((x, y)) = dm_of(conv) { return x < y && us.iter().any(|q| q.0 == x) && us.iter().any(|q| q.0 == y); }
+    let ctx = ctx!(hub, us.to_vec()); guilds::is_guild_conv(conv) && hub.chat().guilds.exists(conv, &ctx)
+}
+/// The item as THIS person may be told of it: a conversation or a shared Work session they cannot see is only marked `hidden`.
+fn coview_item_for(hub: &dyn ChatHost, u: &str, item: &Value, us: &[(String, String, bool)]) -> Value {
+    if item.is_null() { return Value::Null; }
+    let id = s(item, "id");
+    let ok = match s(item, "kind").as_str() {
+        "conv" => coview_valid_conv(hub, &id, us) && conv_member(hub, &id, u, us),
+        "work-session" => id == u || hub.shares_for(u).iter().any(|x| s(x, "user") == id),
+        _ => true, // a note / task: only its id travels; the viewer's own page asks the normal route (which answers them, or refuses)
+    };
+    if ok { item.clone() } else { json!({ "kind": item["kind"], "hidden": true }) }
+}
+fn coview_bump(c: &Chat) { c.coview.lock().unwrap_or_else(|e| e.into_inner()).ver += 1; c.coview_woke.notify_waiters(); }
+fn coview_touch(c: &Chat, u: &str) { let now = now_ms(); for v in c.coview.lock().unwrap_or_else(|e| e.into_inner()).list.iter_mut() { if v.sharer == u { v.seen = now; } if let Some(x) = v.viewers.iter_mut().find(|x| x.0 == u) { x.1 = now; } } }
+fn coview_sweep(hub: &dyn ChatHost, now: u64) {
+    let c = &hub.chat(); let mut changed = false;
+    { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+      let n = g.list.len(); g.list.retain(|v| now.saturating_sub(v.seen) <= COVIEW_GONE_MS); changed |= g.list.len() != n;
+      for v in g.list.iter_mut() { let n = v.viewers.len(); v.viewers.retain(|x| now.saturating_sub(x.1) <= COVIEW_GONE_MS);
+        if v.viewers.len() != n { changed = true; let names: Vec<String> = v.viewers.iter().map(|x| x.0.clone()).collect(); v.invited.retain(|x| names.contains(x));
+            if v.lead != v.sharer && !names.contains(&v.lead) { v.lead = v.sharer.clone(); v.seq += 1; let e = json!({ "seq": v.seq, "kind": "lead", "lead": v.lead, "by": v.sharer }); v.log.push(e); } } } }
+    if changed { coview_bump(c); }
+}
+/// What this person's page needs: the co-views open to them, and the one they are in (with the views after `after`).
+fn coview_state(hub: &dyn ChatHost, u: &str, us: &[(String, String, bool)], after: u64) -> Value {
+    let c = &hub.chat(); let (list, ver) = { let g = c.coview.lock().unwrap_or_else(|e| e.into_inner()); (g.list.clone(), g.ver) };
+    let mut available = vec![]; let mut mine = Value::Null;
+    for v in list {
+        let role = if v.sharer == u { "sharer" } else if v.viewers.iter().any(|x| x.0 == u) { "viewer" } else { "" };
+        if role.is_empty() { if conv_member(hub, &v.conv, u, us) { available.push(json!({ "id": v.sharer, "name": hub.name_of(&v.sharer), "conv": v.conv, "lead": v.lead, "leadName": hub.name_of(&v.lead), "screen": v.view["screen"], "viewers": v.viewers.len(), "since": v.since })); } continue; }
+        let mine_or_filtered = |e: &Value| -> Value { let mut e = e.clone(); if s(&e, "by") != u && !e["item"].is_null() { e["item"] = coview_item_for(hub, u, &e["item"], us); } e };
+        let mut view = mine_or_filtered(&v.view); view["seq"] = json!(v.seq);
+        mine = json!({ "id": v.sharer, "role": role, "sharer": v.sharer, "sharerName": hub.name_of(&v.sharer), "conv": v.conv, "lead": v.lead, "leadName": hub.name_of(&v.lead), "isLead": v.lead == u,
+            "viewers": v.viewers.iter().map(|x| json!({ "user": x.0, "name": hub.name_of(&x.0) })).collect::<Vec<_>>(), "invited": v.invited.iter().any(|x| x == u), "since": v.since,
+            "view": view, "seq": v.seq, "views": v.log.iter().filter(|e| e["seq"].as_u64().unwrap_or(0) > after).map(|e| mine_or_filtered(e)).collect::<Vec<_>>() });
+    }
+    json!({ "ver": ver, "available": available, "mine": mine })
+}
+async fn coview_route(hub: &dyn ChatHost, r: &Req, a: &Account, us: &[(String, String, bool)], b: &Value) -> Resp {
+    let c = &hub.chat(); let u = a.username.as_str(); let now = now_ms();
+    let reply = |hub: &dyn ChatHost| answer(200, { let mut v = coview_state(hub, u, us, 0); v["ok"] = json!(true); v });
+    match (r.method.as_str(), r.path.as_str()) {
+        ("GET", "/api/coview/poll") => {
+            let ver: Option<u64> = r.param("ver").and_then(|x| x.parse().ok());
+            let after: u64 = r.param("after").and_then(|x| x.parse::<f64>().ok()).map(|f| f as u64).unwrap_or(0);
+            coview_touch(c, u);
+            let woke = c.coview_woke.notified(); tokio::pin!(woke); woke.as_mut().enable();
+            let stale = ver != Some(c.coview.lock().unwrap_or_else(|e| e.into_inner()).ver);
+            if r.param("wait").as_deref() == Some("1") && !stale { let _ = tokio::time::timeout(Duration::from_secs(25), woke).await; }
+            coview_touch(c, u);
+            answer(200, coview_state(hub, u, us, after))
+        }
+        ("POST", "/api/coview/start") => {
+            let conv = { let x = s(b, "conv"); if x.is_empty() { "room".to_string() } else { x } };
+            if !coview_valid_conv(hub, &conv, us) || !conv_member(hub, &conv, u, us) { return answer(400, json!({ "error": "Unknown conversation." })); }
+            let (screen, item) = (coview_screen(&b["screen"]), coview_item(&b["item"]));
+            { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+              for v in g.list.iter_mut() { v.viewers.retain(|x| x.0 != u); v.invited.retain(|x| x != u); if v.lead == u && v.sharer != u { v.lead = v.sharer.clone(); } }
+              if let Some(v) = g.list.iter_mut().find(|v| v.sharer == u) { if v.conv != conv { v.conv = conv.clone(); v.viewers.clear(); v.invited.clear(); v.lead = u.to_string(); } v.seen = now; }
+              else { g.list.push(CoView { sharer: u.to_string(), conv, lead: u.to_string(), viewers: vec![], invited: vec![], view: json!({ "screen": screen, "item": item, "scroll": Value::Null, "by": u }), seq: 1,
+                  log: vec![json!({ "seq": 1, "by": u, "screen": screen, "item": item, "scroll": Value::Null })], since: iso(), seen: now }); } }
+            coview_bump(c); reply(hub)
+        }
+        ("POST", "/api/coview/join") => {
+            let who = s(b, "sharer");
+            let (exists, conv, own) = { let g = c.coview.lock().unwrap_or_else(|e| e.into_inner()); (g.list.iter().any(|v| v.sharer == who), g.list.iter().find(|v| v.sharer == who).map(|v| v.conv.clone()).unwrap_or_default(), g.list.iter().any(|v| v.sharer == u)) };
+            if !exists || who == u { return answer(404, json!({ "error": "That co-view is not running." })); }
+            if !conv_member(hub, &conv, u, us) { return answer(403, json!({ "error": "That co-view is not shared with you." })); }
+            if own { return answer(409, json!({ "error": "End your own co-view first." })); }
+            { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+              for v in g.list.iter_mut() { if v.sharer != who { v.viewers.retain(|x| x.0 != u); v.invited.retain(|x| x != u); if v.lead == u { v.lead = v.sharer.clone(); } } }
+              if let Some(v) = g.list.iter_mut().find(|v| v.sharer == who) { v.viewers.retain(|x| x.0 != u); v.viewers.push((u.to_string(), now)); } }
+            coview_bump(c); reply(hub)
+        }
+        ("POST", "/api/coview/stop") => {
+            { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+              g.list.retain(|v| v.sharer != u);
+              for v in g.list.iter_mut() { v.viewers.retain(|x| x.0 != u); v.invited.retain(|x| x != u);
+                  if v.lead == u { v.lead = v.sharer.clone(); v.seq += 1; let e = json!({ "seq": v.seq, "kind": "lead", "lead": v.lead, "by": u }); v.log.push(e); } } }
+            coview_bump(c); answer(200, json!({ "ok": true, "ver": c.coview.lock().unwrap_or_else(|e| e.into_inner()).ver, "mine": Value::Null }))
+        }
+        ("POST", "/api/coview/view") => {
+            let screen = coview_screen(&b["screen"]);
+            if screen.is_empty() { return answer(400, json!({ "error": "Unknown screen." })); }
+            let item = coview_item(&b["item"]);
+            let scroll = b["scroll"].as_f64().map(|f| json!((f.clamp(0.0, 1.0) * 1000.0).round() / 1000.0)).unwrap_or(Value::Null);
+            let res = { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+                match g.list.iter_mut().find(|v| v.sharer == u || v.viewers.iter().any(|x| x.0 == u)) {
+                    None => Err((409, "You are not in a co-view.")),
+                    Some(v) if v.lead != u => Err((403, "Only the lead shows the view.")),
+                    Some(v) => { v.seen = if v.sharer == u { now } else { v.seen };
+                        if v.view["screen"] == json!(screen) && v.view["item"] == item && v.view["scroll"] == scroll { Ok((v.seq, false)) }
+                        else { v.seq += 1; v.view = json!({ "screen": screen, "item": item, "scroll": scroll, "by": u }); let e = json!({ "seq": v.seq, "by": u, "screen": screen, "item": item, "scroll": scroll }); v.log.push(e);
+                            if v.log.len() > COVIEW_LOG { let k = v.log.len() - COVIEW_LOG; v.log.drain(0..k); } Ok((v.seq, true)) } } } };
+            match res { Err((code, e)) => answer(code, json!({ "error": e })), Ok((seq, changed)) => { if changed { coview_bump(c); } answer(200, json!({ "ok": true, "seq": seq })) } }
+        }
+        ("POST", "/api/coview/handover") | ("POST", "/api/coview/invite") | ("POST", "/api/coview/take") => {
+            let (to, op) = (s(b, "to"), r.path.rsplit('/').next().unwrap_or("").to_string());
+            let res = { let mut g = c.coview.lock().unwrap_or_else(|e| e.into_inner());
+                match g.list.iter_mut().find(|v| v.sharer == u || v.viewers.iter().any(|x| x.0 == u)) {
+                    None => Err((409, "You are not in a co-view.")),
+                    Some(v) => {
+                        let target = if op == "take" { u.to_string() } else { to.clone() };
+                        let is_member = |x: &str, v: &CoView| v.sharer == x || v.viewers.iter().any(|y| y.0 == x);
+                        if op != "take" && v.sharer != u && v.lead != u { Err((403, "Only the sharer (or the lead) hands over.")) }
+                        else if !is_member(&target, v) || (op == "invite" && target == v.sharer) { Err((404, "That person is not in this co-view.")) }
+                        else if op == "take" && !v.invited.iter().any(|x| x == u) && v.sharer != u { Err((403, "You have not been invited to take over.")) }
+                        else if op == "invite" { if !v.invited.contains(&target) { v.invited.push(target); } Ok(()) }
+                        else { v.invited.retain(|x| *x != target); v.lead = target.clone(); v.seq += 1; let e = json!({ "seq": v.seq, "kind": "lead", "lead": target, "by": u }); v.log.push(e); Ok(()) } } } };
+            match res { Err((code, e)) => answer(code, json!({ "error": e })), Ok(()) => { coview_bump(c); reply(hub) } }
+        }
+        _ => answer(404, json!({ "error": "Unknown endpoint" })),
+    }
+}
+
 /// The JavaScript hub asking (its Unity: post, read what she was sent, show her composing; its profiles changed).
 pub fn front(hub: &dyn ChatHost, what: &str, b: &Value) -> Value {
     let c = &hub.chat();
@@ -712,7 +1132,9 @@ pub fn team_tool(hub: &dyn ChatHost, name: &str, args: &Value, a: &Account) -> V
     let ok = |v: Value| json!({ "ok": true, "result": v }); let no = |e: String| json!({ "ok": false, "error": e });
     let disp = |x: &str| hub.name_of(x);
     let now = now_ms() as i64;
-    let people = || -> Vec<Value> { c.presence_list(&us).into_iter().map(|p| { let seen = p["seen"].as_i64().unwrap_or(0); json!({ "user": p["user"], "name": disp(&s(&p, "user")), "state": if p["online"] == json!(true) { if p["idle"] == json!(true) { "away" } else { "online" } } else { "offline" }, "screen": s(&p, "screen"), "lastSeen": if seen > 0 { json!(guilds_iso(seen)) } else { Value::Null }, "agoMin": if seen > 0 { json!(((now - seen) as f64 / 60000.0).round() as i64) } else { Value::Null } }) }).collect() };
+    // (plans/presence.md: with the label, working / accepting work, do not disturb and the status text, so an AI can check
+    // before it assigns or messages)
+    let people = || -> Vec<Value> { c.presence_list(&us).into_iter().map(|p| { let seen = p["seen"].as_i64().unwrap_or(0); let st = status_of(hub, &s(&p, "user"), u, now as u64); json!({ "user": p["user"], "name": disp(&s(&p, "user")), "state": if p["online"] == json!(true) { if p["idle"] == json!(true) { "away" } else { "online" } } else { "offline" }, "presence": st["presence"], "label": st["label"], "working": st["working"], "workingSessions": st["workingSessions"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "since": st["since"], "where": st["where"], "screen": s(&p, "screen"), "lastSeen": if seen > 0 { json!(guilds_iso(seen)) } else { Value::Null }, "agoMin": if seen > 0 { json!(((now - seen) as f64 / 60000.0).round() as i64) } else { Value::Null } }) }).collect() };
     match name {
         "team_channel_create" | "team_group_create" => {
             let ctx = ctx!(hub, us.clone());
@@ -765,8 +1187,39 @@ pub fn team_tool(hub: &dyn ChatHost, name: &str, args: &Value, a: &Account) -> V
         }
         "team_presence" => {
             let mut list = people();
-            for (x, _, _) in &us { if !list.iter().any(|p| p["user"] == json!(x)) { list.push(json!({ "user": x, "name": disp(x), "state": "offline", "screen": "", "lastSeen": Value::Null, "agoMin": Value::Null })); } }
+            for (x, _, _) in &us { if !list.iter().any(|p| p["user"] == json!(x)) { let st = status_of(hub, x, u, now as u64); list.push(json!({ "user": x, "name": disp(x), "state": "offline", "presence": st["presence"], "label": st["label"], "working": st["working"], "workingSessions": st["workingSessions"], "acceptingWork": st["acceptingWork"], "dnd": st["dnd"], "text": st["text"], "since": st["since"], "where": st["where"], "screen": "", "lastSeen": Value::Null, "agoMin": Value::Null })); } }
             ok(json!({ "you": u, "people": list }))
+        }
+        // "tell me when X is available / back" (T-264): remembered per asker (5 at most, 24 h), answered by the status event
+        "notify_when_available" => {
+            let who = s(args, "user").trim().to_lowercase();
+            let target = us.iter().find(|x| x.0 == who).or_else(|| us.iter().find(|x| x.1.to_lowercase() == who || disp(&x.0).to_lowercase() == who)).map(|x| x.0.clone());
+            let Some(target) = target else { return no(format!("No account called \"{who}\".")); };
+            if target == u { return no("That is you: you know when you are available.".into()); }
+            let what = { let w = s(args, "what").trim().to_lowercase(); if w.is_empty() { "available".to_string() } else { w } };
+            if !matches!(what.as_str(), "available" | "back" | "online" | "free") { return no("what must be \"available\", \"back\", \"online\" or \"free\".".into()); }
+            let message = guilds::take_units(s(args, "message").chars().filter(|ch| !ch.is_control()).collect::<String>().trim(), 200);
+            let st = status_of(hub, &target, u, now as u64);
+            if watch_matches(&what, &st) { return ok(json!({ "registered": false, "already": true, "user": target, "name": disp(&target), "label": st["label"], "status": st })); }
+            let list = c.watches_now(now as u64);
+            let mine = list.iter().filter(|w| w.asker == u).count();
+            let dup = list.iter().any(|w| w.asker == u && w.user == target && w.what == what);
+            if !dup && mine >= WATCH_MAX { return no(format!("You already wait for {WATCH_MAX} people; cancel one first (notify_cancel).")); }
+            let w = Watch { id: format!("n{}", pgm_core_internal::crypto::random_hex(4)), asker: u.to_string(), user: target.clone(), what: what.clone(), message, at: now as u64, until: now as u64 + WATCH_TTL_MS };
+            { let mut g = c.watches.lock().unwrap_or_else(|e| e.into_inner()); g.retain(|x| !(x.asker == u && x.user == target && x.what == what)); g.push(w.clone()); c.save_watches(&g); }
+            ok(json!({ "registered": true, "id": w.id, "user": target, "name": disp(&target), "what": what, "expiresAt": guilds_iso(w.until as i64), "label": st["label"] }))
+        }
+        "notify_list" => {
+            let mine: Vec<Value> = c.watches_now(now as u64).into_iter().filter(|w| w.asker == u).map(|w| json!({ "id": w.id, "user": w.user, "name": disp(&w.user), "what": w.what, "message": w.message, "askedAt": guilds_iso(w.at as i64), "expiresAt": guilds_iso(w.until as i64) })).collect();
+            ok(json!({ "watching": mine }))
+        }
+        "notify_cancel" => {
+            let (id, who) = (s(args, "id").trim().to_string(), s(args, "user").trim().to_lowercase());
+            if id.is_empty() && who.is_empty() && args["all"] != json!(true) { return no("Give an \"id\" (from notify_list), a \"user\", or \"all\": true.".into()); }
+            let mut g = c.watches.lock().unwrap_or_else(|e| e.into_inner()); let n = g.len();
+            g.retain(|w| !(w.asker == u && (args["all"] == json!(true) || (!id.is_empty() && w.id == id) || (!who.is_empty() && w.user == who))));
+            let gone = n - g.len(); if gone > 0 { c.save_watches(&g); }
+            ok(json!({ "cancelled": gone }))
         }
         _ => no(format!("Unknown team tool: {name}")),
     }

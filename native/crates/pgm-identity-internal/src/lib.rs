@@ -12,6 +12,7 @@
 //! - the caller's address behind Cloudflare (CF-Connecting-IP) or nginx (X-Real-IP / X-Forwarded-For)
 //! On its first start it takes over an older hub's sessions (`<root>/hub-state.json`) and locks (each account's
 //! state.json `lockedDevice`), so nobody is signed out or loses a device by the move.
+pub mod devices;
 use pgm_core_internal::json::{read_json, write_json_private as write_json};
 use pgm_core_internal::now_ms;
 use pgm_core_internal::time::iso_now;
@@ -68,6 +69,8 @@ pub struct Auth {
     sessions: Mutex<Map<String, Value>>, // sha256(token) → { user, exp }
     locks: Mutex<Map<String, Value>>,    // username → { device, at, devices?, allowNext? }
     fails: Mutex<HashMap<String, Fail>>,
+    /// device-code sign-in and the per-device tokens (devices.rs)
+    pub devices: devices::Devices,
     last_sweep: Mutex<Instant>,
 }
 
@@ -75,7 +78,7 @@ impl Auth {
     /// The accounts under `root`; `default_user` is the account `root` itself is; `behind_proxy`: the caller's address
     /// may come from X-Real-IP / X-Forwarded-For (nginx in front); `tag` starts its log lines.
     pub fn new(root: &Path, default_user: &str, behind_proxy: bool, tag: &str) -> Auth {
-        let a = Auth { root: root.to_path_buf(), default_user: default_user.to_string(), behind_proxy, tag: tag.to_string(), sessions: Mutex::default(), locks: Mutex::default(), fails: Mutex::default(), last_sweep: Mutex::new(Instant::now()) };
+        let a = Auth { root: root.to_path_buf(), default_user: default_user.to_string(), behind_proxy, tag: tag.to_string(), sessions: Mutex::default(), locks: Mutex::default(), fails: Mutex::default(), devices: devices::Devices::new(root), last_sweep: Mutex::new(Instant::now()) };
         a.take_over();
         a
     }
@@ -140,8 +143,16 @@ impl Auth {
         if self.behind_proxy { if let Some(x) = r.header("x-real-ip").map(String::from).or_else(|| r.header("x-forwarded-for").map(|v| v.split(',').next().unwrap_or("").to_string())) { return x.trim().to_string(); } }
         String::new()
     }
-    /// Who a request belongs to (a valid Bearer session), or None. An expired / orphaned session is dropped.
+    /// Who a request belongs to (a valid Bearer session, or a device token), or None.
     pub fn session_user(&self, r: &Req) -> Option<String> {
+        if let Some(u) = self.page_session_user(r) { return Some(u); }
+        let tok = r.header("authorization").and_then(|a| a.strip_prefix("Bearer "))?;
+        if self.devices.is_machine_token(tok) { return None; } // T-310: a linked machine's token is never a login (the front refuses it first, 403)
+        let u = self.devices.user_of(tok)?;
+        self.account(&u).map(|_| u)
+    }
+    /// Who a page session (not a device token) belongs to. An expired / orphaned session is dropped.
+    pub fn page_session_user(&self, r: &Req) -> Option<String> {
         let tok = r.header("authorization").and_then(|a| a.strip_prefix("Bearer "))?;
         let k = token_key(tok);
         let mut s = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
@@ -150,8 +161,15 @@ impl Auth {
         if rec["exp"].as_u64().unwrap_or(0) < now_ms() || self.account(&user).is_none() { s.remove(&k); drop(s); self.save_sessions(); return None; }
         Some(user)
     }
+    /// The client a request's session signed in with (`{kind, name, …}` as the sign-in sent it), when it said.
+    pub fn session_client(&self, r: &Req) -> Option<Value> {
+        let tok = r.header("authorization").and_then(|a| a.strip_prefix("Bearer "))?;
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).get(&token_key(tok)).and_then(|s| s.get("client").cloned()).filter(Value::is_object)
+    }
     pub fn forget_session(&self, key: &str) { if self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(key).is_some() { self.save_sessions(); } }
-    pub fn drop_sessions(&self, user: &str) { self.sessions.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| s["user"].as_str() != Some(user)); self.save_sessions(); }
+    pub fn drop_sessions(&self, user: &str) { self.drop_sessions_ex(user, false) }
+    /// `keep_machines`: the person ticked "keep my machines linked": their linked machines stay (everything else goes).
+    pub fn drop_sessions_ex(&self, user: &str, keep_machines: bool) { self.devices.revoke_all_ex(user, keep_machines);self.sessions.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| s["user"].as_str() != Some(user)); self.save_sessions(); }
     pub fn signed_in(&self, user: &str) -> usize { let now = now_ms(); self.sessions.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|s| s["user"].as_str() == Some(user) && s["exp"].as_u64().unwrap_or(0) > now).count() }
     pub fn lock_of(&self, user: &str) -> Option<Value> { self.locks.lock().unwrap_or_else(|e| e.into_inner()).get(user).cloned() }
     pub fn unlock(&self, user: &str) { self.locks.lock().unwrap_or_else(|e| e.into_inner()).remove(user); self.save_locks(); }
@@ -208,7 +226,10 @@ impl Auth {
             }
         }
         let token = pgm_core_internal::crypto::random_hex(32);
-        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(token_key(&token), json!({ "user": acct.username, "exp": now_ms() + SESSION_MS }));
+        // the client it signed in with (`{kind, …}`, optional): a run-only one (jcode) is held to its rights by the routes
+        let mut rec = json!({ "user": acct.username, "exp": now_ms() + SESSION_MS });
+        if b["client"].is_object() { rec["client"] = b["client"].clone(); }
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(token_key(&token), rec);
         self.save_sessions();
         Login::SignedIn { token, user: acct.username, client: b["client"].clone(), ip: self.outside_ip(r) }
     }

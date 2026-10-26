@@ -12,7 +12,7 @@ use pgm_core_internal::now_ms;
 use pgm_net_internal::hostlink::Job;
 
 /// What the hub may ask.
-pub const ACTIONS: [&str; 5] = ["pause", "resume", "restart", "update", "logs"];
+pub const ACTIONS: [&str; 6] = ["pause", "resume", "restart", "update", "logs", "limits"];
 /// The first words of the off file when the hub paused the host. A host paused on its own machine stops polling (the
 /// hub sees it offline and cannot reach it); one paused from the hub keeps listening so the hub can resume it.
 pub const MARK: &str = "AI paused from the hub";
@@ -95,9 +95,17 @@ pub fn report(h: &crate::host::runner::Host) -> Value {
 }
 
 /// Applies one control and answers `{ ok, result, lines? }`.
-pub fn apply(h: &crate::host::runner::Host, action: &str) -> Value {
+pub fn apply(h: &crate::host::runner::Host, action: &str, body: &Value) -> Value {
     let f = &h.folder;
     match action {
+        // the owner set this host's Work-session limits on the hub's page (T-286): saved like the control app saves them
+        "limits" => {
+            let mut s = match crate::host::settings::HostSettings::load(&h.cfg.path) { Ok(s) => s, Err(e) => return json!({ "ok": false, "result": e.to_string() }) };
+            if let Err(e) = s.set_session_limits(&body["limits"]) { return json!({ "ok": false, "result": e.to_string() }); }
+            if let Err(e) = s.save() { return json!({ "ok": false, "result": format!("Could not save the settings: {e}") }); }
+            log("session limits changed from the hub (its owner, in Settings → My AI hosts)");
+            json!({ "ok": true, "result": "Session limits saved.", "limits": s.session_limits() })
+        }
         "pause" => {
             let _ = std::fs::write(f.off(), format!("{MARK} at {}\n", now_ms()));
             log("paused from the hub (its owner asked in Settings → My AI hosts)");
@@ -129,8 +137,9 @@ pub fn apply(h: &crate::host::runner::Host, action: &str) -> Value {
 
 /// A control job from the hub, answered with one short line.
 pub async fn control_job(h: H, job: Job) {
+    let body = job.body_bytes().ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(json!({}));
     let out = match job.body_bytes().map_err(|e| e.to_string()).and_then(|b| parse(&b)) {
-        Ok(a) => apply(&h, &a),
+        Ok(a) => apply(&h, &a, &body),
         Err(e) => json!({ "ok": false, "result": e }),
     };
     let status = if out["ok"] == json!(true) { 200 } else { 400 };

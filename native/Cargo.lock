@@ -3352,11 +3352,13 @@ dependencies = [
  "pgm-dist-internal",
  "pgm-identity-internal",
  "pgm-net-internal",
+ "pgm-plan-internal",
  "pgm-platform-internal",
  "regex",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "tokio",
 ]
@@ -3468,16 +3470,35 @@ name = "pgm-net-internal"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ed25519-dalek",
  "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "pgm-core-internal",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
+]
+
+[[package]]
+name = "pgm-orchestrator-internal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pgm-plan-internal"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde_json",
 ]
 
 [[package]]
@@ -3489,6 +3510,46 @@ dependencies = [
  "tokio",
  "windows-service",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pgm-sandbox-internal"
+version = "0.1.0"
+dependencies = [
+ "pgm-core-internal",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pgm-workflow-command-internal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "pgm-workflow-engine-internal"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "pgm-collab-internal",
+ "pgm-core-internal",
+ "pgm-orchestrator-internal",
+ "pgm-workflow-command-internal",
+ "pgm-workflow-internal",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "pgm-workflow-internal"
+version = "0.1.0"
+dependencies = [
+ "pgm-core-internal",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6089,6 +6150,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "pgm-ai-internal",
+ "pgm-net-internal",
  "portable-pty",
  "reqwest",
  "serde",
@@ -6100,6 +6162,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "vr-core",
+ "webkit2gtk",
 ]
 
 [[package]]
@@ -6111,7 +6174,9 @@ dependencies = [
  "libc",
  "pgm-ai-internal",
  "pgm-core-internal",
+ "pgm-net-internal",
  "pgm-platform-internal",
+ "pgm-sandbox-internal",
  "ratatui",
  "reqwest",
  "serde",
@@ -6147,6 +6212,8 @@ dependencies = [
  "pgm-identity-internal",
  "pgm-net-internal",
  "pgm-platform-internal",
+ "pgm-sandbox-internal",
+ "pgm-workflow-engine-internal",
  "regex",
  "reqwest",
  "scrypt",

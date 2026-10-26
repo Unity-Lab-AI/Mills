@@ -15,6 +15,7 @@ for (const b of document.querySelectorAll('nav button')) b.onclick = () => {
   for (const s of document.querySelectorAll('.tab')) s.classList.toggle('on', s.id === b.dataset.tab);
   if (b.dataset.tab === 'host') hostRefresh();
   if (b.dataset.tab === 'proxy') proxyRefresh();
+  if (b.dataset.tab === 'machine') machineRefresh();
   if (b.dataset.tab === 'build') drawSaved();
   const where = cwd ? '/' + cwd : 'the projects folder'; for (const id of ['termWhere', 'buildWhere', 'gitWhere']) $(id).textContent = where;
 };
@@ -114,6 +115,31 @@ async function hostRefresh() {
   if (s.lastError) box.append(el('div', 'bad', s.lastError));
 }
 for (const b of document.querySelectorAll('[data-host]')) b.onclick = async () => { try { $('hostOut').textContent = await call('host_act', { what: b.dataset.host }); } catch (e) { $('hostOut').textContent = String(e); } setTimeout(hostRefresh, 1500); };
+
+// ---------- this computer as a linked machine ----------
+let mTimer = 0;
+async function machineRefresh() {
+  clearTimeout(mTimer);
+  const s = await call('machine_status').catch((e) => ({ error: String(e) }));
+  const box = $('mState'); box.textContent = '';
+  if (s.error) { box.append(el('span', 'bad', s.error)); return; }
+  if (s.linking && s.linking.active) { box.append(el('b', '', 'Approve this computer on the web: '), el('code', '', s.linking.code || '…'), ' (Settings, My machines, signed in as yourself).'); }
+  else if (!s.linked) { box.append(el('span', 'bad', 'Not linked.'), ' Choose a folder and press Link this computer.'); }
+  else {
+    box.append(el('b', '', `Linked as ${s.owner}`), ' · ', el('span', s.stopped ? 'bad' : (s.mode === 'off' ? '' : 'ok'), s.stopped ? 'STOPPED on this computer (' + (s.stoppedInfo || 'kill switch') + ')' : s.mode === 'persistent' ? 'persistent service' : s.mode === 'while open' ? 'while this app is open' : 'not serving now'), el('div', '', 'Scope: ' + s.scope));
+  }
+  if (s.linking && s.linking.error) box.append(el('div', 'bad', s.linking.error));
+  if (s.stateError) box.append(el('div', 'bad', s.stateError));
+  if (s.last) box.append(el('div', '', s.last));
+  if (s.linking && s.linking.active) mTimer = setTimeout(machineRefresh, 2000);
+}
+$('mPick').onclick = async () => { const f = await call('pick_folder').catch(fail); if (f) $('mFolder').value = f; };
+$('mLink').onclick = async () => {
+  const folder = $('mFolder').value.trim() || S.projects; if (!folder) return toast('Choose the folder the AI may use.', true);
+  try { const code = await call('machine_link', { folder, name: $('mName').value.trim() }); $('mOut').textContent = 'Code: ' + code; machineRefresh(); } catch (e) { fail(e); machineRefresh(); }
+};
+for (const [id, what] of [['mStart', 'start'], ['mStop', 'stop']]) $(id).onclick = async () => { try { await call('machine_act', { what }); } catch (e) { fail(e); } machineRefresh(); };
+for (const [id, install] of [['mInstall', true], ['mUninstall', false]]) $(id).onclick = async () => { try { $('mOut').textContent = await call('machine_service', { install }); } catch (e) { $('mOut').textContent = String(e); } machineRefresh(); };
 
 // ---------- the API proxy ----------
 async function proxyRefresh() { const p = await call('proxy_status'); $('pPort').value = S.proxyPort; $('pState').textContent = p.running ? 'Running: ' + p.url : 'Stopped' + (S.hasProxyKey ? '' : ' (no key saved yet)'); }

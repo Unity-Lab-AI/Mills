@@ -12,6 +12,7 @@ use tokio::sync::RwLock;
 use crate::host::folder::{log, Folder};
 use crate::host::{control, relay, work};
 use crate::host::settings::{HostSettings, Provider};
+use std::path::{Path, PathBuf};
 use pgm_core_internal::{now_ms, Error, Result};
 use pgm_net_internal::hostlink::{Hello, HubLink, Job, OfferedProvider, Poll};
 
@@ -39,6 +40,91 @@ pub struct Host {
     pub update_deferred_since: Mutex<u64>,
     /// Wakes the status reporter now (a control changed something the hub should hear about at once).
     pub nudge: tokio::sync::Notify,
+    /// The hub's signing key as this host pinned it (T-308): once known, every PC job must carry a request the hub signed for this host's owner. None = an older hub that signs nothing: jobs are accepted as before.
+    pub hub_pin: crate::host::pin::HubPin,
+    /// The PC role (T-313): the linked-machines library's `Machine` over `pc.folder`, made at the first PC job. The old
+    /// host-side `pc_job` (a lexical-only path check) is gone; every PC call passes the library's door.
+    pc: Mutex<Option<(std::path::PathBuf, Arc<pgm_net_internal::machine::exec::Machine>)>>,
+    /// Unity's brain on this machine (T-293): when Ollama was last started from here, whether `ollama create` runs now,
+    /// and what was already said in the log (said once).
+    pub brain: Mutex<Brain>,
+}
+#[derive(Default)]
+pub struct Brain { pub ollama_started_at: u64, pub loading: bool, pub noted_missing: bool, pub noted_no_modelfile: bool }
+/// Between two tries to start an installed Ollama from here.
+const START_OLLAMA_EVERY_MS: u64 = 10 * 60_000;
+
+/// Where Unity's Modelfile would be when `unity.modelfile` is not set, in the order it is looked for: next to the hub
+/// checkout this host works from (`<hubRepo>/../Backrooms/models/<brain>/Modelfile`, where the hub itself looked when it
+/// ran on this PC), inside the host folder (`<folder>/models/<brain>/Modelfile`), and next to the host folder's parents
+/// (`<folder>/../Backrooms/…` up to three levels up).
+pub fn brain_modelfile_candidates(folder: &Path, hub_repo: Option<&Path>, brain: &str) -> Vec<PathBuf> {
+    let tail = |base: PathBuf| base.join("Backrooms").join("models").join(brain).join("Modelfile");
+    let mut v = vec![];
+    if let Some(r) = hub_repo { v.push(tail(r.join(".."))); }
+    v.push(folder.join("models").join(brain).join("Modelfile"));
+    let mut up = folder.to_path_buf();
+    for _ in 0..3 { up = up.join(".."); v.push(tail(up.clone())); }
+    v
+}
+/// The Modelfile to load the brain from: the configured one (whether or not it exists: a wrong setting is said, not
+/// silently replaced), else the first candidate that exists.
+pub fn brain_modelfile(cfg: &HostSettings, folder: &Path) -> Option<PathBuf> {
+    if let Some(p) = cfg.unity_modelfile() { return Some(p); }
+    brain_modelfile_candidates(folder, cfg.hub_repo().as_deref(), &cfg.unity_model()).into_iter().find(|p| p.is_file())
+}
+/// Is the brain among these model names? ("unity-brain" = "unity-brain:latest".)
+pub fn has_brain(models: &[String], brain: &str) -> bool { crate::unity::has_brain(models, brain) }
+
+/// Starts an installed Ollama that is not answering (the hub did this when it ran on this PC; now the host does, T-293):
+/// `ollama serve` in the background, then up to 20 s for it to answer. Nothing when the program is not here, when
+/// `autoDetect.startOllama` is off, or when it was tried in the last 10 minutes. True when Ollama answers afterwards.
+async fn start_ollama_here(h: &H, url: &str) -> bool {
+    if !h.cfg.start_ollama() { return false; }
+    let cmd = h.cfg.ollama_command();
+    let Some(exe) = pgm_platform_internal::proc::which(&cmd) else { return false };
+    { let mut b = h.brain.lock().unwrap_or_else(|e| e.into_inner()); if now_ms().saturating_sub(b.ollama_started_at) < START_OLLAMA_EVERY_MS { return false; } b.ollama_started_at = now_ms(); }
+    let dir = h.folder.dir.clone();
+    match pgm_platform_internal::proc::spawn_detached(&exe.display().to_string(), &["serve".to_string()], &dir, &h.folder.f("ollama.log")) {
+        Ok(()) => log(format!("Ollama is installed here but was not running: started `{cmd} serve` (its output goes to ollama.log)")),
+        Err(e) => { log(format!("could not start `{cmd} serve`: {e}")); return false; }
+    }
+    for _ in 0..20 { tokio::time::sleep(Duration::from_secs(1)).await; if probe_ollama(&h.http, url).await.is_some() { return true; } }
+    log("Ollama was started but does not answer yet; looked at again every minute");
+    false
+}
+/// Loads Unity's brain into this machine's Ollama when it is missing (T-293): `ollama create <brain> -f <Modelfile>` in
+/// the background, once at a time; when it is done the host looks again and tells the hub what it now offers. Said once
+/// when there is no Modelfile to load it from (the hub then answers on a stand-in model).
+fn ensure_brain(h: &H, models: &[String]) {
+    let brain = h.cfg.unity_model();
+    if has_brain(models, &brain) { return; }
+    let Some(mf) = brain_modelfile(&h.cfg, &h.folder.dir) else {
+        let mut b = h.brain.lock().unwrap_or_else(|e| e.into_inner());
+        if !b.noted_no_modelfile { b.noted_no_modelfile = true; log(format!("Ollama here has no {brain} and no Modelfile for it was found (looked at {}): Unity answers on a stand-in model until it is loaded; set unity.modelfile in ai-node.json to load it from here", brain_modelfile_candidates(&h.folder.dir, h.cfg.hub_repo().as_deref(), &brain).iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))); }
+        return;
+    };
+    if !mf.is_file() {
+        let mut b = h.brain.lock().unwrap_or_else(|e| e.into_inner());
+        if !b.noted_missing { b.noted_missing = true; log(format!("unity.modelfile points at {}, which is not a file: Unity's brain {brain} is not loaded from here", mf.display())); }
+        return;
+    }
+    { let mut b = h.brain.lock().unwrap_or_else(|e| e.into_inner()); if b.loading { return; } b.loading = true; }
+    let h2 = h.clone();
+    tokio::spawn(async move {
+        log(format!("loading Unity's brain {brain} into Ollama from {} (one time, a few minutes)...", mf.display()));
+        let cmd = h2.cfg.ollama_command();
+        let out = pgm_platform_internal::proc::command(&cmd).args(["create", &brain, "-f", &mf.display().to_string()]).current_dir(mf.parent().unwrap_or(&h2.folder.dir)).stdin(std::process::Stdio::null()).output().await;
+        match out {
+            Ok(o) if o.status.success() => log(format!("{brain} is loaded into Ollama; Unity runs on it from here")),
+            Ok(o) => log(format!("`{cmd} create {brain}` failed: {}", format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)).trim().lines().last().unwrap_or("").chars().take(300).collect::<String>())),
+            Err(e) => log(format!("could not run `{cmd} create {brain}`: {e}")),
+        }
+        h2.brain.lock().unwrap_or_else(|e| e.into_inner()).loading = false;
+        let before = offered(&h2);
+        detect_local(&h2).await;
+        if offered(&h2) != before && h2.link.read().await.key.is_some() && !h2.busy() { log("what this host offers changed: saying hello again"); h2.link.write().await.key = None; }
+    });
 }
 /// The longest an automatic update waits for quiet minutes before it takes any moment with nothing in flight.
 pub const UPDATE_MAX_WAIT_MS: u64 = 30 * 60_000;
@@ -95,14 +181,17 @@ pub async fn detect_local(h: &H) {
     let mut d = Detected::default();
     let mut seen = json!({});
     if !off {
-        if let Some(models) = probe_ollama(&h.http, &url).await {
+        let mut found = probe_ollama(&h.http, &url).await;
+        if found.is_none() && start_ollama_here(h, &url).await { found = probe_ollama(&h.http, &url).await; }
+        if let Some(models) = found {
+            ensure_brain(h, &models);
             seen = json!({ "ollama": url, "models": models });
             let configured_engine = h.cfg.engines().iter().any(|(k, _)| k == "ollama");
             let configured_endpoint = h.cfg.all_providers().iter().any(|p| p.kind == "openai" && (p.base_url.contains(":11434") || p.id == "ollama"));
             if !configured_engine { d.ollama_engine = Some(url.clone()); }
             if !configured_endpoint && !models.is_empty() {
                 d.ollama_provider = Some(Provider { id: "ollama".into(), kind: "openai".into(), label: format!("{}'s Ollama (this machine)", if h.cfg.user().is_empty() { "this host".to_string() } else { h.cfg.user() }), models, enabled: true,
-                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new(), jcode_command: String::new(), jcode_provider: String::new(), jcode_args: vec![] });
+                    share_with_group: false, allowed_users: vec![], max5h: None, max7d: None, max_sessions: None, base_url: format!("{url}/v1"), api_key: String::new(), config_dir: String::new(), codex_home: String::new(), command: String::new(), jcode_command: String::new(), jcode_provider: String::new(), jcode_args: vec![] });
             }
         }
     }
@@ -217,7 +306,7 @@ pub async fn run(folder: Folder, selftest: bool, update_flag: bool) -> i32 {
     let http = match pgm_net_internal::client::http_client(Duration::from_secs(20)) { Ok(c) => c, Err(e) => { eprintln!("[ai-host] {e}"); release_lock(&folder); return 1; } };
     let status = json!({ "pid": std::process::id(), "version": VERSION, "native": true, "target": TARGET, "hub": cfg.hub(), "id": cfg.id(), "startedAt": now_ms(), "connected": false, "connectedAt": 0, "lastOkAt": 0, "downSince": 0, "lastError": "", "active": 0, "runs": 0, "lastJobAt": 0, "paused": false, "lastUpdate": "", "lastUpdateAt": 0 });
     let h: H = Arc::new(Host { nickname: Mutex::new(cfg.nickname()), folder: folder.clone(), cfg, link: RwLock::new(link), http, status: Mutex::new(status.as_object().cloned().unwrap_or_default()), status_dirty: Mutex::new(true),
-        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0), nudge: tokio::sync::Notify::new() });
+        active: AtomicUsize::new(0), last_job_at: AtomicU64::new(0), runs: Mutex::new(HashMap::new()), usage: Mutex::new(HashMap::new()), updating: Mutex::new(false), detected: Mutex::new(Detected::default()), update_deferred_since: Mutex::new(0), nudge: tokio::sync::Notify::new(), hub_pin: crate::host::pin::HubPin::new(), pc: Mutex::new(None), brain: Mutex::default() });
     h.write_status_now();
     let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<i32>(4);
     background(h.clone(), exit_tx.clone());
@@ -310,7 +399,9 @@ fn hello_body(h: &Host) -> Hello {
         OfferedProvider { id: p.id.clone(), kind: p.relay_kind().to_string(), label: p.label.clone(), models: p.models.clone(), allowed_users: allowed, max5h: p.max5h, max7d: p.max7d }
     }).collect();
     Hello { nonce: pgm_core_internal::crypto::random_hex(16), user: h.cfg.user(), providers, engines: h.engines().into_iter().map(|(k, _)| k).collect(), pc: h.cfg.pc_folder().is_some(),
-        version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::caps_for(work_jcode) }
+        version: VERSION.to_string(), os: if cfg!(windows) { "win32".into() } else if cfg!(target_os = "macos") { "darwin".into() } else { "linux".into() }, caps: pgm_net_internal::hostlink::caps_for(work_jcode),
+        // read from the file, so limits changed from the hub (the `limits` control) are what the next hello says
+        session_limits: Some(crate::host::settings::HostSettings::load(&h.cfg.path).map(|s| s.session_limits()).unwrap_or_else(|_| h.cfg.session_limits())) }
 }
 async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     detect_local(h).await;
@@ -327,6 +418,7 @@ async fn hello(h: &H, exit: &tokio::sync::mpsc::Sender<i32>) -> Result<()> {
     log(format!("connected to {} as \"{nick}\"{}: {} provider(s) [{}], engines {}{}, key {kid}", h.cfg.hub(), if h.cfg.user().is_empty() { String::new() } else { format!(" ({})", h.cfg.user()) },
         body.providers.len(), body.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(", "), if engines.is_empty() { "none".into() } else { engines.join(", ") },
         h.cfg.pc_folder().map(|p| format!(", computer access to {}", p.display())).unwrap_or_default()));
+    for l in h.hub_pin.hello(&h.folder.dir, &a.hub_key, &(if a.user.is_empty() { h.cfg.user() } else { a.user.clone() })) { log(l); }
     let hv = a.update.as_ref().map(|u| u.version.clone()).unwrap_or_default();
     h.set_status(json!({ "connected": true, "connectedAt": now_ms(), "lastOkAt": now_ms(), "nickname": nick, "kid": kid, "owner": h.cfg.user(), "group": a.group, "hubVersion": hv, "lastError": "" }));
     update_confirmed(h);
@@ -385,7 +477,7 @@ fn dispatch(h: H, job: Job) {
         else if job.kind == "work" {
             if h.cfg.allow_work() { work::work_job(h, job).await; }
             else { h.link.read().await.reply(&job.id, 403, &ct_json(), br#"{"error":"This host shares its AI only, not its computer."}"#).await; }
-        } else if job.engine == "pc" { let h2 = h.clone(); h.track(pc_job(h2, job)).await; }
+        } else if job.engine == "pc" { let h2 = h.clone(); h.track(machine_job(h2, job)).await; }
         else { let h2 = h.clone(); h.track(relay_job(h2, job)).await; }
     });
 }
@@ -459,29 +551,56 @@ async fn answer(h: &H, job: &Job, r: reqwest::Response, hdrs: Map<String, Value>
     Ok(())
 }
 
-/// Direct computer access: the five PC tools on pc.folder, never above it.
-async fn pc_job(h: H, job: Job) {
-    let out = (|| -> std::result::Result<String, String> {
-        let root = h.cfg.pc_folder().ok_or("This host offers no computer access (pc.folder is not set).")?;
-        let name = job.path.trim_start_matches('/');
-        let args: Value = if job.body.is_empty() { json!({}) } else { serde_json::from_slice(&job.body_bytes().map_err(|e| e.to_string())?).map_err(|e| e.to_string())? };
-        let rel = args["path"].as_str().unwrap_or("").replace('\\', "/");
-        let segs: Vec<&str> = rel.split('/').filter(|s| !s.is_empty() && *s != ".").collect();
-        if segs.contains(&"..") { return Err("Paths cannot go above the shared folder.".into()); }
-        let full = segs.iter().fold(root.clone(), |p, s| p.join(s));
-        if !full.starts_with(&root) { return Err("Paths cannot go above the shared folder.".into()); }
-        let rel = segs.join("/");
-        match name {
-            "list" => { let mut v: Vec<String> = std::fs::read_dir(&full).map_err(|e| e.to_string())?.filter_map(|e| e.ok()).map(|e| { let n = e.file_name().to_string_lossy().to_string(); if e.path().is_dir() { n + "/" } else { n } }).collect(); v.sort(); Ok(if v.is_empty() { "(empty folder)".into() } else { v.join("\n") }) }
-            "read" => { if std::fs::metadata(&full).map_err(|e| e.to_string())?.len() > 5_000_000 { return Err("That file is larger than 5 MB.".into()); } std::fs::read_to_string(&full).map_err(|e| e.to_string()) }
-            "write" => { if rel.is_empty() { return Err("Missing file name.".into()); } let c = args["content"].as_str().unwrap_or(""); if let Some(p) = full.parent() { std::fs::create_dir_all(p).map_err(|e| e.to_string())?; } std::fs::write(&full, c).map_err(|e| e.to_string())?; Ok(format!("Wrote {rel} ({} chars)", c.chars().count())) }
-            "delete" => { if rel.is_empty() { return Err("Refusing to delete the whole folder.".into()); } if full.is_dir() { std::fs::remove_dir_all(&full) } else { std::fs::remove_file(&full) }.or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }).map_err(|e| e.to_string())?; Ok(format!("Deleted {rel}")) }
-            "mkdir" => { std::fs::create_dir_all(&full).map_err(|e| e.to_string())?; Ok(format!("Created folder {rel}")) }
-            n => Err(format!("Unknown tool {n}")),
-        }
-    })();
-    let body = match out { Ok(r) => json!({ "ok": true, "result": r }), Err(e) => json!({ "ok": false, "error": e }) };
-    h.link.read().await.reply(&job.id, 200, &ct_json(), body.to_string().as_bytes()).await;
+
+/// The five tools the AI host has always offered over its `pc` engine; the PC role serves these and nothing else.
+const PC_TOOLS: [&str; 5] = ["list", "read", "write", "delete", "mkdir"];
+
+/// The scope of the PC role: one folder, read-write, the five file tools only (no shell, no processes), with the AI host's
+/// old freedom from rate limits and burst confirms (nobody is at the machine to confirm; the hub's run already paces itself).
+fn pc_scope_json(folder: &std::path::Path) -> String {
+    json!({ "v": 1, "preset": "folder", "paths": [{ "path": folder.display().to_string(), "access": "rw" }], "tools": { "shell": false, "processes": false },
+        "limits": { "callsPerMin": 100000, "perClass": { "file": 100000, "shell": 1, "net": 1, "transfer": 1 } }, "confirm": { "burst": 100000 } }).to_string()
+}
+
+/// The library's `Machine` for `pc.folder` (its state folder `pc-machine` is private, in the host folder: audit log, KILL file,
+/// scope.json written from the setting, never edited by hand).
+fn pc_machine(h: &Host) -> std::result::Result<Arc<pgm_net_internal::machine::exec::Machine>, String> {
+    let root = h.cfg.pc_folder().ok_or("This host offers no computer access (pc.folder is not set).")?;
+    let mut slot = h.pc.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((f, m)) = slot.as_ref() { if *f == root { return Ok(m.clone()); } }
+    let dir = h.folder.dir.join("pc-machine");
+    pgm_core_internal::fs::private_dir(&dir).map_err(|e| e.to_string())?;
+    let scope = dir.join("scope.json");
+    let want = pc_scope_json(&root);
+    if std::fs::read_to_string(&scope).ok().as_deref() != Some(want.as_str()) { std::fs::write(&scope, &want).map_err(|e| e.to_string())?; pgm_core_internal::fs::private(&scope); }
+    let m = Arc::new(pgm_net_internal::machine::exec::Machine::open(&dir, "pc", "vr-host").map_err(|e| e.to_string())?);
+    *slot = Some((root, m.clone()));
+    Ok(m)
+}
+
+/// The PC role (computer access to one folder for the owner's Work runs), served by the linked-machines library: the same
+/// door a linked machine uses (`Machine::handle`: kill switch, the hub's signature, the scope and its one canonicaliser, the audit
+/// line). An older hub that signs nothing is served as before, as the owner, through the same scope and canonicaliser.
+async fn machine_job(h: H, job: Job) {
+    let tool = job.path.trim_start_matches('/').to_string();
+    let out: Value = async {
+        let m = pc_machine(&h)?;
+        let body = job.body_bytes().map_err(|e| e.to_string())?;
+        if !PC_TOOLS.contains(&tool.as_str()) { return Err(format!("Unknown tool {tool}")); }
+        // T-308: when this host pinned the hub's signing key, the request must be one the hub signed for this host's owner (host/pin.rs)
+        let sig = job.headers.get(pgm_net_internal::machine::sign::HEADER).and_then(Value::as_str).unwrap_or("").to_string();
+        let r = match h.hub_pin.verifier() {
+            Some(v) => { m.set_verifier(Some(v)); m.handle(&tool, &body, &sig).await }
+            None => {
+                m.set_verifier(None);
+                let args: Value = if body.is_empty() { json!({}) } else { serde_json::from_slice(&body).map_err(|e| e.to_string())? };
+                m.run_as(&pgm_net_internal::machine::Actor { account: h.cfg.user(), session: String::new(), run: String::new() }, &tool, &args).await
+            }
+        };
+        if r["ok"] != json!(true) { log(format!("pc {tool}: {}", r["error"].as_str().unwrap_or("failed"))); }
+        Ok(r)
+    }.await.unwrap_or_else(|e: String| json!({ "ok": false, "error": e }));
+    h.link.read().await.reply(&job.id, 200, &ct_json(), out.to_string().as_bytes()).await;
 }
 
 /// Updates of this binary from the hub (on by default; "autoUpdate": false switches them off): the signed manifest for
@@ -537,6 +656,45 @@ async fn do_update(h: &H) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    /// R335: the PC role is the library's `Machine` over the folder: the five tools answer as they always did, a `..`, a link out of the
+    /// folder and the tools that are not the five (shell, processes) are refused by the library's scope and canonicaliser.
+    #[tokio::test]
+    async fn the_pc_role_is_the_librarys_machine() {
+        use pgm_net_internal::machine::{exec::Machine, Actor};
+        use serde_json::json;
+        let d = std::env::temp_dir().join(format!("vr-pcrole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (root, state) = (d.join("home"), d.join("state"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        std::fs::write(state.join("scope.json"), super::pc_scope_json(&root)).unwrap();
+        let m = Machine::open(&state, "pc", "vr-host").unwrap();
+        let me = Actor { account: "ann".into(), session: String::new(), run: String::new() };
+        let call = |t: &'static str, a: serde_json::Value| { let (m, me) = (&m, &me); async move { m.run_as(me, t, &a).await } };
+        assert_eq!(call("write", json!({ "path": "a/b.txt", "content": "héllo" })).await, json!({ "ok": true, "result": "Wrote a/b.txt (5 chars)" }));
+        assert_eq!(call("read", json!({ "path": "./a//b.txt" })).await["result"], json!("héllo"));
+        assert_eq!(call("list", json!({})).await["result"], json!("a/"));
+        assert_eq!(call("delete", json!({ "path": "" })).await["error"], json!("Refusing to delete the whole folder."));
+        assert_eq!(call("mkdir", json!({ "path": "x/y" })).await["result"], json!("Created folder x/y"));
+        // out of the folder: refused, nothing written
+        for p in ["../escape.txt", "a/../../escape.txt", "/etc/hostname"] { assert_ne!(call("write", json!({ "path": p, "content": "no" })).await["ok"], json!(true), "{p}"); }
+        assert!(!d.join("escape.txt").exists());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc", root.join("out")).unwrap();
+            assert_ne!(call("read", json!({ "path": "out/hostname" })).await["ok"], json!(true), "a link out of the folder");
+            assert_ne!(call("write", json!({ "path": "out/evil", "content": "x" })).await["ok"], json!(true));
+        }
+        // only the five tools: no shell, no processes
+        for t in ["shell_run", "job_start", "proc_list", "proc_kill", "nonsense"] { assert_ne!(call(t, json!({ "cmd": "echo hi" })).await["ok"], json!(true), "{t}"); }
+        // the host's own state (scope, audit) is never reachable through the role
+        assert_ne!(call("read", json!({ "path": state.join("scope.json").display().to_string() })).await["ok"], json!(true));
+        let audit = std::fs::read_to_string(state.join("machine-audit.jsonl")).unwrap();
+        assert!(audit.lines().count() >= 10 && !audit.contains("héllo"), "every call leaves a line, never contents");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn engine_paths() {
         assert!(super::path_ok("/api/generate"));
@@ -545,6 +703,30 @@ mod tests {
         assert!(!super::path_ok("/a/../b"));
         assert!(!super::path_ok("//evil"));
         assert!(!super::path_ok("/a b"));
+    }
+    #[test]
+    fn the_brains_modelfile_is_looked_for_next_to_the_hub_and_the_host_folder() {
+        use std::path::{Path, PathBuf};
+        let c = super::brain_modelfile_candidates(Path::new("/h/ai-host"), Some(Path::new("/h/VibeRoller")), "unity-brain");
+        assert_eq!(c[0], PathBuf::from("/h/VibeRoller/../Backrooms/models/unity-brain/Modelfile"), "the hub's own default first");
+        assert_eq!(c[1], PathBuf::from("/h/ai-host/models/unity-brain/Modelfile"));
+        assert_eq!(c[2], PathBuf::from("/h/ai-host/../Backrooms/models/unity-brain/Modelfile"));
+        assert_eq!(c.len(), 5);
+        let none = super::brain_modelfile_candidates(Path::new("/h/ai-host"), None, "unity-brain");
+        assert_eq!(none.len(), 4);
+        // a configured Modelfile is taken as given (a wrong path is said, not swapped for another)
+        let dir = std::env::temp_dir().join(format!("vr-brain-{}", std::process::id())); let _ = std::fs::remove_dir_all(&dir); std::fs::create_dir_all(dir.join("models").join("unity-brain")).unwrap();
+        let mut s = super::HostSettings::new(dir.join("ai-node.json")); s.raw.insert("unity".into(), serde_json::json!({ "modelfile": "/nowhere/Modelfile" }));
+        assert_eq!(super::brain_modelfile(&s, &dir), Some(PathBuf::from("/nowhere/Modelfile")));
+        s.raw.remove("unity");
+        assert_eq!(super::brain_modelfile(&s, &dir), None, "no Modelfile anywhere yet");
+        std::fs::write(dir.join("models").join("unity-brain").join("Modelfile"), "FROM llama3\n").unwrap();
+        assert_eq!(super::brain_modelfile(&s, &dir), Some(dir.join("models").join("unity-brain").join("Modelfile")));
+        assert_eq!(s.unity_model(), "unity-brain"); assert!(s.start_ollama()); assert_eq!(s.ollama_command(), "ollama");
+        s.raw.insert("autoDetect".into(), serde_json::json!({ "startOllama": false })); assert!(!s.start_ollama());
+        assert!(super::has_brain(&["llama3:8b".into(), "unity-brain:latest".into()], "unity-brain"));
+        assert!(!super::has_brain(&["llama3:8b".into()], "unity-brain"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn ollama_tags_give_the_model_names() {

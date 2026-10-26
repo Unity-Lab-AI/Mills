@@ -39,7 +39,8 @@ enum Waiting { Whole(oneshot::Sender<Result<Relayed, HostErr>>), Stream(mpsc::Se
 struct Pending { kind: String, host: String, waiting: Option<Waiting>, token: String, account: String, display: String, provider: String, last: u64, picked: bool, project: String, started: u64 }
 
 #[derive(Default)]
-struct Live { status: Value, status_at: u64, seen: u64, queue: Vec<Value>, waiters: usize, cancel: HashSet<String>, hello: Option<Value>, key: Option<HostKey>, kid: String, usage: Map<String, Value>, relay_ok: Map<String, Value>, notify: Arc<Notify> }
+/// `limits`: the session limits its owner just set from the page (T-286), until its next hello says them itself.
+struct Live { status: Value, status_at: u64, seen: u64, queue: Vec<Value>, waiters: usize, cancel: HashSet<String>, hello: Option<Value>, key: Option<HostKey>, kid: String, usage: Map<String, Value>, relay_ok: Map<String, Value>, notify: Arc<Notify>, limits: Option<Value> }
 
 pub struct AiHosts {
     root: PathBuf,
@@ -51,9 +52,16 @@ pub struct AiHosts {
     was_up: Mutex<HashMap<String, (bool, u64)>>,
     offline_ms: u64,
     release_at: Mutex<(u64, String, String)>,
+    /// engine → the host Unity found her brain on (`prefer_engine_host`, T-293)
+    preferred: Mutex<HashMap<String, String>>,
     pub usage: Arc<crate::usage::Usage>,
     /// something people see changed (a hello, a host up / down, its usage, the registry): the JavaScript hub hears it
     pub dirty: Notify,
+    /// The hub's one signing key (T-308, machine::sign): made once in the data folder (hub-signing.key, owner-only), signs
+    /// every PC / machine request forwarded to a host. None only when the file could not be made (logged): requests then go unsigned.
+    sign: Option<Arc<pgm_net_internal::machine::HubKey>>,
+    /// Linked machines (T-311): the job queue their polls drain, the signed replies, big-file tickets and the transfer area.
+    pub machines: Arc<crate::machine_jobs::MachineJobs>,
 }
 fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; let (x, y) = (pgm_core_internal::crypto::sha256(a.as_bytes()), pgm_core_internal::crypto::sha256(b.as_bytes())); bool::from(x.ct_eq(&y)) }
 fn clean_users(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')).take(50).collect()).unwrap_or_default() }
@@ -97,6 +105,11 @@ pub fn check_scope(scope: &Scope, owner: &str, label: &str, use_: &str, model: &
     Ok(())
 }
 fn job_id() -> String { use base64::Engine; base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pgm_core_internal::crypto::random_bytes(9)) }
+/// Does a host's hello list this model among any of its providers' models? ("unity-brain" = "unity-brain:latest".)
+pub fn hello_has_model(hello: &Value, model: &str) -> bool {
+    let want = model.trim_end_matches(":latest");
+    hello["providers"].as_array().map(|ps| ps.iter().any(|p| p["models"].as_array().map(|ms| ms.iter().filter_map(Value::as_str).any(|m| m.trim_end_matches(":latest") == want)).unwrap_or(false))).unwrap_or(false)
+}
 
 impl AiHosts {
     pub fn new(root: &std::path::Path, cfg: &pgm_core_internal::config::Config, usage: Arc<crate::usage::Usage>) -> Arc<AiHosts> {
@@ -105,8 +118,10 @@ impl AiHosts {
         let legacy: Vec<Value> = cfg.get("aiNodes").and_then(Value::as_object).map(|m| m.iter().filter(|(n, s)| !n.is_empty() && n.len() <= 40 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && s.as_str().map(|s| s.len() >= 24).unwrap_or(false))
             .map(|(n, s)| json!({ "id": n, "user": "", "nickname": n, "secret": s, "legacy": true, "createdAt": Value::Null, "share": {} })).collect()).unwrap_or_default();
         let (version, commit) = release_now(root);
+        let sign: Option<Arc<pgm_net_internal::machine::HubKey>> = match pgm_net_internal::machine::HubKey::load_or_create(&root.join("hub-signing.key")) { Ok(k) => Some(Arc::new(k)), Err(e) => { eprintln!("[ai-host] no hub signing key ({e}): PC requests to hosts go unsigned until it is fixed"); None } };
         let h = Arc::new(AiHosts { root: root.to_path_buf(), cfg: cfg.clone(), db: Mutex::new(db), legacy, live: Mutex::default(), pending: Mutex::default(), was_up: Mutex::default(),
-            offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), usage, dirty: Notify::new() });
+            offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), preferred: Mutex::default(), usage, dirty: Notify::new(),
+            machines: Arc::new(crate::machine_jobs::MachineJobs::new(root, sign.clone(), cfg.get("machineTransferMaxMB").and_then(Value::as_u64).unwrap_or(4096))), sign });
         h.restore_sessions();
         h
     }
@@ -299,15 +314,30 @@ impl AiHosts {
                 "caps": n.and_then(|n| n.hello.as_ref().map(|h| h["caps"].clone())).unwrap_or(json!([])), "kid": n.map(|n| n.kid.clone()).unwrap_or_default(), "version": n.and_then(|n| n.hello.as_ref().map(|h| h["version"].clone())).unwrap_or(json!("")), "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null) })
         }).collect()
     }
-    fn pick_engine_host(&self, engine: &str) -> Option<String> {
+    /// The hosts that may lend this engine right now, best first: the one pinned by config (`assistant.node`) alone when
+    /// it is set; else every online host lending it that is the hub's own (config) or a hub admin's (Unity's engines
+    /// see everyone's prompts, voice and pictures: never just anyone's), those whose hello lists Unity's brain among
+    /// their models first (T-293), then by id, so the order is the same on every call.
+    pub fn engine_hosts(&self, engine: &str) -> Vec<String> {
         if let Some(want) = self.cfg.get("assistant").and_then(|a| a["node"].as_str()).filter(|s| !s.is_empty()) {
             let ok = self.online(want) && self.live.lock().unwrap_or_else(|e| e.into_inner()).get(want).map(|n| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).unwrap_or(false);
-            return if ok { Some(want.to_string()) } else { None };
+            return if ok { vec![want.to_string()] } else { vec![] };
         }
-        let ids: Vec<String> = self.live.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, n)| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).map(|(id, _)| id.clone()).collect();
-        // Unity's engines see everyone's prompts, voice and pictures: only a host from the hub's config or one of a hub
-        // admin's lends them, never just anyone's
-        ids.into_iter().find(|id| self.online(id) && self.record(id).map(|r| r["legacy"] == json!(true) || self.owner_is_admin(&r)).unwrap_or(false))
+        let brain = self.cfg.get("assistant").and_then(|a| a["model"].as_str()).filter(|s| !s.is_empty()).unwrap_or("unity-brain").to_string();
+        let mut ids: Vec<(String, bool)> = self.live.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, n)| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).map(|(id, n)| (id.clone(), n.hello.as_ref().map(|h| hello_has_model(h, &brain)).unwrap_or(false))).collect();
+        ids.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ids.into_iter().map(|(id, _)| id).filter(|id| self.online(id) && self.record(id).map(|r| r["legacy"] == json!(true) || self.owner_is_admin(&r)).unwrap_or(false)).collect()
+    }
+    /// Unity found out which host's Ollama has her brain (unity.rs asks each one's /api/tags, T-293): that host is asked
+    /// first for this engine while it lends it; None forgets the choice.
+    pub fn prefer_engine_host(&self, engine: &str, host: Option<String>) {
+        let mut p = self.preferred.lock().unwrap_or_else(|e| e.into_inner());
+        match host { Some(h) => { p.insert(engine.to_string(), h); } None => { p.remove(engine); } }
+    }
+    fn pick_engine_host(&self, engine: &str) -> Option<String> {
+        let hosts = self.engine_hosts(engine);
+        if let Some(p) = self.preferred.lock().unwrap_or_else(|e| e.into_inner()).get(engine) { if hosts.iter().any(|h| h == p) { return Some(p.clone()); } }
+        hosts.into_iter().next()
     }
 
     fn owner_is_admin(&self, r: &Value) -> bool {
@@ -375,6 +405,12 @@ impl AiHosts {
         let id = self.pick_engine_host(engine).ok_or_else(|| herr(503, OFFLINE_TEXT))?;
         self.relay(&id, engine, path, method, headers, body, "engine", false).await
     }
+    /// The same call to one named host (one of `engine_hosts`): how Unity asks each Ollama what it has (T-293).
+    pub async fn engine_fetch_on(self: &Arc<Self>, host: &str, engine: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
+        if !ENGINES.contains(&engine) { return Err(herr(400, format!("Unknown engine {engine}"))); }
+        if !self.engine_hosts(engine).iter().any(|h| h == host) { return Err(herr(503, format!("{host} does not lend the {engine} engine right now."))); }
+        self.relay(host, engine, path, method, headers, body, "engine", false).await
+    }
     pub async fn provider_fetch(self: &Arc<Self>, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
         if !self.online(host) { return Err(herr(503, format!("That AI host ({}) is offline right now.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(host.into())))); }
         self.relay(host, &format!("provider:{pid}"), path, method, headers, body, "provider", false).await
@@ -404,10 +440,45 @@ impl AiHosts {
         self.usage.note_windows(&format!("h:{host}/{pid}"), &rec);
         self.changed();
     }
-    pub async fn pc_tool(self: &Arc<Self>, host: &str, name: &str, args: &Value) -> Result<Value, HostErr> {
-        let r = self.relay(host, "pc", &format!("/{name}"), "POST", vec![("content-type".into(), "application/json".into())], args.to_string().into_bytes(), "pc", false).await?;
+    /// The account the hub registered a host to (Settings → My AI hosts), "" for none. Never the name a host says it has.
+    fn registered_owner(r: &Value) -> String { r["user"].as_str().unwrap_or("").to_string() }
+    /// A machine the caller NAMED (its id or nickname), for the account that is calling (T-308, plans/linked-machines.md
+    /// section 4.3): only that machine's registered owner may use it. Another person's machine is refused with 403 and no
+    /// fallback to anything else, whoever asks, an admin or another person's run included. Ok = the host id.
+    pub fn machine_for(&self, named: &str, account: &str) -> Result<String, (u16, String)> {
+        let n = named.trim().to_lowercase();
+        let found = if n.is_empty() { None } else { self.all_records().into_iter().find(|r| r["id"].as_str().map(|i| i.to_lowercase() == n).unwrap_or(false) || r["nickname"].as_str().map(|i| i.to_lowercase() == n).unwrap_or(false)) };
+        let Some(r) = found else { return Err((404, format!("There is no machine called {named}."))) };
+        let owner = Self::registered_owner(&r);
+        if account.is_empty() || owner.is_empty() || owner != account { return Err((403, "That machine belongs to someone else.".into())); }
+        let id = r["id"].as_str().unwrap_or("").to_string();
+        let nick = r["nickname"].as_str().unwrap_or(&id).to_string();
+        let pc = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).and_then(|n| n.hello.as_ref().map(|h| h["pc"] == json!(true))).unwrap_or(false);
+        if !self.online(&id) { return Err((503, format!("Your machine {nick} is offline right now."))); }
+        if !pc { return Err((400, format!("Your machine {nick} does not offer computer access (no pc.folder set on it)."))); }
+        Ok(id)
+    }
+    /// A PC tool on a host, SIGNED by the hub for the machine's owner and the actor (machine::sign): the host verifies it when it
+    /// knows the hub's key (hello, cap `signed-pc`); an older host ignores the header and works as before. The hub's own check
+    /// is the first line: this is the second, so a bug in a caller can never sign a request for someone else's machine.
+    pub async fn pc_tool(self: &Arc<Self>, host: &str, name: &str, args: &Value, actor: &pgm_net_internal::machine::Actor) -> Result<Value, HostErr> {
+        let owner = self.record(host).map(|r| Self::registered_owner(&r)).unwrap_or_default();
+        if owner.is_empty() || owner != actor.account { return Err(herr(403, "That machine belongs to someone else.")); }
+        let body = args.to_string().into_bytes();
+        let mut headers: Vec<(String, String)> = vec![("content-type".into(), "application/json".into())];
+        if let Some(k) = &self.sign {
+            let env = pgm_net_internal::machine::Envelope::new(&owner, actor.clone(), name, &body, host, (now_ms() / 1000) as i64);
+            headers.push((pgm_net_internal::machine::sign::HEADER.into(), k.sign(&env).to_header()));
+        }
+        let r = self.relay(host, "pc", &format!("/{name}"), "POST", headers, body, "pc", true).await?;
         let b = r.bytes().await;
         serde_json::from_slice(&b).map_err(|e| herr(502, e.to_string()))
+    }
+    /// The frozen JavaScript hub's PC call (`/__front/ai/pc-tool`): it already chose the person's own host, so the actor is
+    /// that host's registered owner (compatibility; the JavaScript hub never names a run).
+    pub async fn pc_tool_front(self: &Arc<Self>, host: &str, name: &str, args: &Value) -> Result<Value, HostErr> {
+        let owner = self.record(host).map(|r| Self::registered_owner(&r)).unwrap_or_default();
+        self.pc_tool(host, name, args, &pgm_net_internal::machine::Actor { account: owner, session: String::new(), run: "js-hub".into() }).await
     }
     /// A Work run on a host (2.x hosts and hosts that allow Work): Claude Code runs there; events come back sealed.
     pub fn run_work(self: &Arc<Self>, host: &str, pid: &str, payload: Value) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
@@ -507,13 +578,13 @@ impl AiHosts {
                 // its computer (PC tools) only for the owner the hub registered it to (Settings → My AI hosts / "Run on
                 // this PC"), never for a name a host says it belongs to: only Gee works on Gee's computer
                 let pc = b["pc"] == json!(true) && !r["user"].as_str().unwrap_or("").is_empty();
-                let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"], &caps), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps });
+                let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"], &caps), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps, "sessionLimits": clean_limits(&b["sessionLimits"]) });
                 let kid = key.id();
-                { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }
+                { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.entry(id.clone()).or_default(); n.key = Some(key); n.kid = kid.clone(); n.limits = None; n.hello = Some(hello.clone()); n.relay_ok = Map::new(); }
                 self.save_sessions();
                 println!("[ai-host] {} ({}) connected: {} provider(s), engines {}, key {kid}{}", r["nickname"].as_str().unwrap_or(""), if hello["user"].as_str().unwrap_or("").is_empty() { "no owner" } else { hello["user"].as_str().unwrap_or("") }, hello["providers"].as_array().map(|a| a.len()).unwrap_or(0), if hello["engines"].as_array().map(|a| a.is_empty()).unwrap_or(true) { "none".to_string() } else { hello["engines"].as_array().unwrap().iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(", ") }, if caps.is_empty() { ", an older host".to_string() } else { format!(", can {}", caps.join(" ")) });
                 if !caps.iter().any(|c| c == "relay") { self.probe_relays(id.clone()); }
-                (200, Ok(json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "serverNonce": server_nonce, "kid": kid, "pollMs": POLL_MS, "offlineMs": self.offline_ms, "group": clean_users(self.cfg.get("hostGroup").unwrap_or(&Value::Null)), "update": { "version": self.release().0, "commit": self.release().1 } })))
+                (200, Ok(json!({ "id": id, "nickname": r["nickname"], "user": r["user"], "serverNonce": server_nonce, "kid": kid, "pollMs": POLL_MS, "offlineMs": self.offline_ms, "hubKey": self.sign.as_ref().map(|k| k.public_hex()).unwrap_or_default(), "hubKid": self.sign.as_ref().map(|k| k.kid()).unwrap_or_default(), "machine": { "v": pgm_net_internal::compat::MACHINE_V }, "group": clean_users(self.cfg.get("hostGroup").unwrap_or(&Value::Null)), "update": { "version": self.release().0, "commit": self.release().1 } })))
             }
             // how the host is doing (cap `control`): kept for the owner's page, nothing more
             "/node/status" if post => {
@@ -731,7 +802,7 @@ impl AiHosts {
             let caps: Vec<Value> = n.and_then(|n| n.hello.as_ref().and_then(|h| h["caps"].as_array().cloned())).unwrap_or_default();
             let fresh = n.map(|n| now_ms().saturating_sub(n.status_at) < 60_000).unwrap_or(false);
             json!({ "id": id, "nickname": r["nickname"], "online": base["online"], "paused": base["paused"], "since": was.get(id).map(|(_, s)| json!(pgm_core_internal::time::iso_at(*s as i64))).unwrap_or(Value::Null),
-                "seen": base["seen"], "version": base["version"], "os": base["os"], "caps": caps, "control": can_control(&caps),
+                "seen": base["seen"], "version": base["version"], "os": base["os"], "caps": caps, "control": can_control(&caps), "sessionLimits": n.and_then(limits_of), // (from the entry held here: session_limits() would take the same lock again)
                 "status": n.map(|n| n.status.clone()).filter(|s| s.is_object()).unwrap_or(Value::Null), "statusAgeMs": n.filter(|n| n.status_at > 0).map(|n| now_ms().saturating_sub(n.status_at)).unwrap_or(0), "statusFresh": fresh,
                 "queued": n.map(|n| n.queue.len()).unwrap_or(0), "inUse": pend.iter().filter(|(h, _)| h == id).map(|(_, v)| v.clone()).collect::<Vec<_>>(),
                 "providers": base["providers"].as_array().map(|a| a.iter().map(|p| json!({ "id": p["id"], "label": p["label"], "kind": p["kind"], "usage": p["usage"], "max5h": p["max5h"], "max7d": p["max7d"], "capped": p["capped"] })).collect::<Vec<_>>()).unwrap_or_default() })
@@ -739,13 +810,20 @@ impl AiHosts {
     }
     /// Asks one of the person's own hosts to pause / resume / restart / update / send its log. Owner only (an admin is
     /// not the owner), only for a host that announced `control`, and only while it is connected.
-    pub async fn control(self: &Arc<Self>, user: &str, id: &str, action: &str) -> Result<Value, HostErr> {
+    /// The Work-session limits a host set (T-286): what its owner set from the page, else what its hello said; None = the
+    /// host says nothing (an older host): the hub's defaults apply.
+    pub fn session_limits(&self, id: &str) -> Option<Value> {
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        live.get(id).and_then(limits_of)
+    }
+    pub async fn control(self: &Arc<Self>, user: &str, id: &str, action: &str, extra: &Value) -> Result<Value, HostErr> {
         let r = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).cloned().filter(|r| !user.is_empty() && r["user"] == json!(user)).ok_or_else(|| herr(403, "Not your host: only the person who owns an AI host can control it (admins too)."))?;
         let (caps, connected) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(id); (n.and_then(|n| n.hello.as_ref().and_then(|h| h["caps"].as_array().cloned())).unwrap_or_default(), n.map(|n| n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms).unwrap_or(false)) };
         check_control(&caps, action).map_err(|(s, m)| herr(s, m))?;
         let nick = r["nickname"].as_str().unwrap_or(id).to_string();
         if !connected { return Err(herr(503, format!("{nick} is offline right now: it cannot be controlled from here until it connects."))); }
-        let body = json!({ "action": action }).to_string().into_bytes();
+        let mut body = json!({ "action": action }); if action == "limits" { body["limits"] = extra.clone(); }
+        let body = body.to_string().into_bytes();
         let ans = tokio::time::timeout(Duration::from_secs(20), self.relay(id, "control", "/control", "POST", vec![("content-type".into(), "application/json".into())], body, "control", false)).await
             .map_err(|_| herr(504, format!("{nick} did not answer in time.")))??;
         let status = ans.status;
@@ -753,16 +831,32 @@ impl AiHosts {
         if status >= 400 || out["ok"] != json!(true) { return Err(herr(if status >= 400 { status } else { 502 }, out["result"].as_str().or(out["error"]["message"].as_str()).unwrap_or("The host refused.").to_string())); }
         // pause / resume are visible at once; the host's own report follows
         if action == "pause" || action == "resume" { if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(id) { if !n.status.is_object() { n.status = json!({}); } n.status["paused"] = json!(action == "pause"); n.status["pausedBy"] = json!(if action == "pause" { "hub" } else { "" }); n.status_at = now_ms(); } }
+        // what its owner set also goes into the hello kept for a hub restart: a host that keeps its session does not say hello
+        // again, so without this the hub would go back to the limits of that host's last hello (found by T-290)
+        if action == "limits" && out["limits"].is_object() {
+            if let Some(n) = self.live.lock().unwrap_or_else(|e| e.into_inner()).get_mut(id) { n.limits = Some(out["limits"].clone()); if let Some(h) = n.hello.as_mut().and_then(Value::as_object_mut) { h.insert("sessionLimits".into(), clean_limits(&out["limits"])); } }
+            self.save_sessions();
+        }
         println!("[ai-host] {} ({user}) asked {nick} to {action} from the page", id);
         self.changed();
-        Ok(json!({ "ok": true, "result": out["result"], "lines": out["lines"] }))
+        Ok(json!({ "ok": true, "result": out["result"], "lines": out["lines"], "limits": out["limits"] }))
     }
 }
+/// A host's announced session limits, kept only in their known shape (numbers 1 to 100, real names); None = none sent.
+fn clean_limits(v: &Value) -> Value {
+    if !v.is_object() { return Value::Null; }
+    let n = |x: &Value| x.as_u64().filter(|n| (1..=100).contains(n));
+    let name = |k: &str| !k.is_empty() && k.len() <= 32 && k.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let map = |m: &Value| -> Map<String, Value> { m.as_object().map(|o| o.iter().filter(|(k, _)| name(k)).filter_map(|(k, x)| n(x).map(|x| (k.clone(), json!(x)))).collect()).unwrap_or_default() };
+    json!({ "perUser": n(&v["perUser"]).unwrap_or(5), "perProvider": n(&v["perProvider"]).unwrap_or(3), "providers": map(&v["providers"]), "exceptions": map(&v["exceptions"]), "ownerBypass": v["ownerBypass"] != json!(false) })
+}
+/// A host's session limits from its live entry: what its owner set from the page, else what its hello said.
+fn limits_of(n: &Live) -> Option<Value> { n.limits.clone().or_else(|| n.hello.as_ref().and_then(|h| h.get("sessionLimits").cloned())).filter(Value::is_object) }
 /// Does a host's hello say it takes control jobs?
 pub fn can_control(caps: &[Value]) -> bool { caps.iter().any(|c| c == pgm_net_internal::hostlink::CAP_CONTROL) }
 /// May this action go to a host with these caps? An older host gets a clear message, not a job it cannot read.
 pub fn check_control(caps: &[Value], action: &str) -> Result<(), (u16, String)> {
-    if !["pause", "resume", "restart", "update", "logs"].contains(&action) { return Err((400, format!("Unknown action {action:?}: pause, resume, restart, update or logs."))); }
+    if !["pause", "resume", "restart", "update", "logs", "limits"].contains(&action) { return Err((400, format!("Unknown action {action:?}: pause, resume, restart, update, logs or limits."))); }
     if !can_control(caps) { return Err((400, "This host is older than 5.13: update it to control it from here.".into())); }
     Ok(())
 }
@@ -793,6 +887,12 @@ fn pick_headers(v: &Value) -> Vec<(String, String)> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hello_lists_the_brain_among_its_models() {
+        let h = serde_json::json!({ "engines": ["ollama"], "providers": [{ "id": "claude", "models": ["claude-opus-5-5"] }, { "id": "ollama", "kind": "openai", "models": ["llama3.1:8b", "unity-brain:latest"] }] });
+        assert!(super::hello_has_model(&h, "unity-brain")); assert!(super::hello_has_model(&h, "unity-brain:latest")); assert!(!super::hello_has_model(&h, "qwen3"));
+        assert!(!super::hello_has_model(&serde_json::json!({ "engines": ["ollama"] }), "unity-brain"), "an older host's hello: no models known");
+    }
     use super::*;
     #[test]
     fn a_scope_limits_models_and_uses_and_defaults_to_everything() {

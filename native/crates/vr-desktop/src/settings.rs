@@ -23,6 +23,8 @@ pub struct Settings {
     pub proxy_on: bool,
     /// the AI host this app controls (a folder with vr-host + ai-node.json); empty = <app data>/ai-host
     pub host_dir: String,
+    /// this computer is linked as a machine and the while-open runner comes back at start (off = paused by the person)
+    pub machine_on: bool,
     /// close the window to the tray instead of quitting
     pub close_to_tray: bool,
     pub auto_update: bool,
@@ -33,7 +35,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings { hub: DEFAULT_HUB.into(), projects: String::new(), builds: Default::default(), forgejo_url: "https://git.unityailab.com".into(), forgejo_token: String::new(),
-            proxy_port: 8789, proxy_key: String::new(), proxy_on: false, host_dir: String::new(), close_to_tray: true, auto_update: true, hub_session: String::new() }
+            proxy_port: 8789, proxy_key: String::new(), proxy_on: false, host_dir: String::new(), machine_on: false, close_to_tray: true, auto_update: true, hub_session: String::new() }
     }
 }
 /// What the Tools window sees: everything but the secrets (shown as set / not set).

@@ -12,6 +12,6 @@ pub use pgm_ai_internal::work::*;
 
 fn d(hub: &Arc<Hub>) -> Arc<dyn AiHub> { hub.clone() }
 pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> { pgm_ai_internal::work::route(&d(hub), r, a).await.map(Routed::Answer) }
-pub async fn tool(hub: &Arc<Hub>, which: &str, account: &str, b: &Value) -> Value { pgm_ai_internal::work::tool(&d(hub), which, account, b).await }
+pub async fn tool_for(hub: &Arc<Hub>, which: &str, caller: &Caller, b: &Value) -> (u16, Value) { pgm_ai_internal::work::tool_for(&d(hub), which, caller, b).await }
 pub async fn llm(hub: &Arc<Hub>, r: &Req) -> Routed { Routed::Answer(pgm_ai_internal::work::llm(&d(hub), r).await) }
 pub fn start(hub: &Arc<Hub>) { pgm_ai_internal::work::start(&d(hub)) }

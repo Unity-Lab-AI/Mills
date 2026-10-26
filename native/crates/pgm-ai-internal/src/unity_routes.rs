@@ -77,7 +77,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let st = u.store(a); let ol = u.ollama_state.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let h = st["history"].as_array().cloned().unwrap_or_default();
             let now = pgm_core_internal::now_ms() as i64;
-            answer(200, json!({ "brain": u.brain_of(a), "brains": brains(&**hub), "tools": { "pc": u.group_on(a, "pc"), "code": u.group_on(a, "code") }, "local": { "up": ol.up, "model": ol.model, "name": u.local_model },
+            answer(200, json!({ "brain": u.brain_of(a), "brains": brains(&**hub), "tools": { "pc": u.group_on(a, "pc"), "code": u.group_on(a, "code") }, "local": { "up": ol.up, "model": ol.model, "name": u.local_model, "standin": ol.standin },
                 "pending": u.pending.lock().unwrap_or_else(|e| e.into_inner()).get(un).cloned().unwrap_or(Value::Null), "notices": u.notices.lock().unwrap_or_else(|e| e.into_inner()).remove(un).unwrap_or_default(),
                 "history": h.iter().skip(h.len().saturating_sub(40)).cloned().collect::<Vec<_>>(),
                 "counts": { "tasks": st["tasks"].as_array().map(|t| t.iter().filter(|x| x["status"] == json!("pending")).count()).unwrap_or(0), "reminders": st["reminders"].as_array().map(|t| t.iter().filter(|x| x["fired"] != json!(true)).count()).unwrap_or(0), "events": st["events"].as_array().map(|t| t.iter().filter(|x| x["at"].as_i64().unwrap_or(0) >= now).count()).unwrap_or(0) } }))

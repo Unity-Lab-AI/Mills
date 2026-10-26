@@ -24,6 +24,10 @@ impl ChatHost for Hub {
     fn notes_version(&self) -> u64 { self.mods.notes.version() }
     fn ai_hosts_status(&self) -> Vec<Value> { self.mods.ai.status() }
     fn agent_called(&self, target: String, caller: String, conv: String) { if let Some(h) = self.me() { pgm_ai_internal::unity_routes::run_agent(&h, target, caller, conv); } }
+    fn working(&self, u: &str) -> bool { self.mods.work.busy(u) }
+    fn working_count(&self, u: &str) -> u64 { self.mods.work.working_count(u) }
+    fn working_where(&self, u: &str) -> Option<(String, String, u64)> { self.mods.work.working_where(u) }
+    fn held_task(&self, u: &str) -> Option<(String, String, u64)> { self.mods.board.held_by(u) }
 }
 
 impl AiHub for Hub {
@@ -42,11 +46,13 @@ impl AiHub for Hub {
     fn name_of(&self, u: &str) -> String { self.mods.name_of(u) }
     fn work_message(&self, a: &Account, message: &str, where_: Value) -> Value { self.mods.files.work_message(a, message, where_) }
     fn board_tool(&self, op: &str, account: &str, args: &Value) -> Value {
-        let out = self.mods.board_op(op, &self.mods.actor(account, true), args);
+        let out = super::board_op_presence(self, op, &self.mods.actor(account, true), args);
         if out.status == 200 { json!({ "ok": true, "result": out.body }) } else { json!({ "ok": false, "error": out.body["error"] }) }
     }
     fn notes_tool(&self, name: &str, args: &Value, actor: &str) -> Value { self.mods.notes.tool(name, args, actor) }
     fn team_tool(&self, name: &str, args: &Value, a: &Account) -> Value { pgm_hcom_internal::chat::team_tool(self, name, args, a) }
+    fn re_tool<'a>(&'a self, name: &'a str, args: &'a Value, a: &'a Account) -> Fut<'a, Value> { Box::pin(async move { self.mods.re.tool(name, args, a).await }) }
+    fn machines_of(&self, u: &str) -> Vec<Value> { self.mods.auth.devices.machines_of(u) }
     fn chat_has_key(&self, u: &str) -> bool { self.mods.chat.has_key(u) }
     fn chat_agent_on(&self, users: &[(String, String, bool)]) -> bool { self.mods.chat.agent_on(users) }
     fn chat_room_changed(&self) { self.mods.chat.room_changed() }

@@ -19,6 +19,8 @@
   "update": { "quietMinutes": 3, "checkMinutes": 5 },
   "reconnect": { "maxDelaySeconds": 5 },
   "security": { "engineGuard": true, "allowInsecureHub": false },
+  "autoDetect": { "ollama": true, "startOllama": true },
+  "unity": { "model": "unity-brain", "modelfile": "", "ollamaCommand": "ollama" },
   "allowWork": false,
   "pc": { "folder": "" },
   "work": { "hubRepo": "", "projectsRoot": "", "claudeCommand": "claude" }

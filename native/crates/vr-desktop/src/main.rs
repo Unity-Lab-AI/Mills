@@ -8,14 +8,18 @@
 //! - "tools" is this app's own page (ui/, built into the program; never loaded from the network): the local projects
 //!   folder without browser permission prompts, an integrated terminal, a build / run runner, git with Forgejo sign-in,
 //!   the local API proxy (127.0.0.1 → the hub's OpenAI / Anthropic API with the person's key), the AI host switch and
-//!   the app's updates. So even a page on the hub that someone managed to inject script into cannot touch this computer.
+//!   the app's updates, and this computer as a linked machine (machine.rs: link it, serve the hub's tool calls while the app is
+//!   open, or install the persistent service). So even a page on the hub that someone managed to inject script into cannot
+//!   touch this computer, and cannot link it, widen its scope or start its runner: those commands are the Tools window's only.
 //! A tray icon (show, Tools, the AI host on / off, updates, quit), native notifications, one instance at a time, close to
 //! the tray, and updates signed with VibeRoller's release key (update.rs).
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod aihost;
+mod capture;
 mod install;
 mod local;
+mod machine;
 mod proxy;
 mod settings;
 mod update;
@@ -30,13 +34,13 @@ use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 /// as that product's app (native/build-products.sh sets VR_APP_NAME and the product's address as the default hub).
 const APP_NAME: &str = match option_env!("VR_APP_NAME") { Some(n) => n, None => "VibeRoller" };
 
-struct App { store: settings::Store, terms: Arc<local::Terms>, runs: Arc<local::Runs>, proxy: proxy::Proxy, host_dir: String }
+struct App { store: settings::Store, terms: Arc<local::Terms>, runs: Arc<local::Runs>, proxy: proxy::Proxy, host_dir: String, machine: Arc<machine::MachineApp>, machine_dir: std::path::PathBuf }
 type S<'a> = State<'a, App>;
 type R<T> = Result<T, String>;
 
 // ---------- for both windows ----------
 #[tauri::command]
-fn app_info(st: S) -> Value { json!({ "version": update::VERSION, "target": update::TARGET, "hub": st.store.get().hub, "native": true, "os": std::env::consts::OS }) }
+fn app_info(st: S) -> Value { let mut v = json!({ "version": update::VERSION, "target": update::TARGET, "hub": st.store.get().hub, "native": true, "os": std::env::consts::OS }); if let (Some(o), Some(c)) = (v.as_object_mut(), capture::capability().as_object()) { o.extend(c.clone()); } v }
 /// `vr-desktop --smoke`: the build check opens the Tools window, whose page reports back through this command once it
 /// has loaded and reached the app (then the app ends: 0 = the page, its script and the IPC all work).
 static SMOKE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -72,6 +76,14 @@ fn open_external(url: String) -> R<()> {
     let r = if cfg!(windows) { std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", &url]).spawn() } else if cfg!(target_os = "macos") { std::process::Command::new("open").arg(&url).spawn() } else { std::process::Command::new("xdg-open").arg(&url).spawn() };
     r.map(|_| ()).map_err(|e| e.to_string())
 }
+/// The person's own Ollama (OLLAMA_HOST, else 127.0.0.1:11434), asked from here so no browser CORS limit applies (T-208).
+#[tauri::command]
+async fn ollama_local() -> Value {
+    match tokio::task::spawn_blocking(pgm_ai_internal::host::runner::probe_ollama_blocking).await.ok().flatten() {
+        Some((url, models)) => json!({ "found": true, "url": url, "models": models }),
+        None => json!({ "found": false, "models": [] }),
+    }
+}
 #[tauri::command]
 fn host_status(st: S) -> Value { aihost::status(&st.host_dir) }
 #[tauri::command]
@@ -87,6 +99,44 @@ fn host_setup(st: S, config: Value) -> R<String> {
 }
 
 // ---------- the Tools window only ----------
+// This computer as a linked machine (machine.rs). None of these is in the hub capability.
+#[tauri::command]
+fn machine_status(st: S) -> Value { st.machine.status(&st.machine_dir, &st.store.get().hub) }
+/// "Link this computer": shows a code to approve on the web, signed in as yourself; once approved the while-open runner starts.
+#[tauri::command]
+async fn machine_link(app: AppHandle, folder: String, name: String) -> R<String> {
+    tokio::task::spawn_blocking(move || {
+        let st = app.state::<App>();
+        let hub = st.store.get().hub;
+        let (m, dir, app2) = (st.machine.clone(), st.machine_dir.clone(), app.clone());
+        let hub2 = hub.clone();
+        st.machine.link(&hub, &st.machine_dir, &folder, &name, Arc::new(move || {
+            let st = app2.state::<App>();
+            let _ = st.store.patch(json!({ "machineOn": true }));
+            let _ = m.start(&hub2, &dir);
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn machine_act(st: S, what: String) -> R<Value> {
+    let hub = st.store.get().hub;
+    match what.as_str() {
+        "start" => { st.machine.start(&hub, &st.machine_dir)?; let _ = st.store.patch(json!({ "machineOn": true })); }
+        "stop" => { st.machine.stop(); let _ = st.store.patch(json!({ "machineOn": false })); }
+        _ => return Err("unknown action".into()),
+    }
+    Ok(st.machine.status(&st.machine_dir, &hub))
+}
+/// "Keep it running when the app is closed" / remove it again (the bundled vr-host's install subcommand).
+#[tauri::command]
+async fn machine_service(app: AppHandle, install: bool) -> R<String> {
+    tokio::task::spawn_blocking(move || {
+        let st = app.state::<App>();
+        let r = st.machine.service(&st.machine_dir, install);
+        if install && r.is_ok() { let _ = st.store.patch(json!({ "machineOn": false })); }
+        r
+    }).await.map_err(|e| e.to_string())?
+}
 #[tauri::command]
 fn settings_get(st: S) -> Value { let mut v = serde_json::to_value(st.store.public()).unwrap_or(json!({})); v["hostDir"] = json!(st.host_dir); v }
 #[tauri::command]
@@ -133,6 +183,8 @@ fn show_tools(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    // `<app> machine run --state <dir>`: the persistent mode (the service starts it), no window
+    if let Some(code) = machine::cli(&std::env::args().collect::<Vec<_>>()) { std::process::exit(code); }
     if std::env::args().any(|a| a == "--selftest") { println!("vr-desktop {} ({}) loads", update::VERSION, update::TARGET); return; }
     if std::env::args().any(|a| a == "--install") { match install::install() { Ok(m) => { println!("{m}"); return; } Err(e) => { eprintln!("{e}"); std::process::exit(1); } } }
     let smoke = std::env::args().any(|a| a == "--smoke");
@@ -142,8 +194,8 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, host_act, host_setup, settings_get, settings_set, pick_folder,
-            fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here])
+        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, host_setup, settings_get, settings_set, pick_folder,
+            fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here, machine_status, machine_link, machine_act, machine_service])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
             let store = settings::Store::load(dir.clone());
@@ -151,7 +203,10 @@ fn main() {
             if let Some(h) = std::env::args().skip_while(|a| a != "--hub").nth(1) { store.s.lock().unwrap_or_else(|e| e.into_inner()).hub = h; SMOKE_MAIN.store(SMOKE.load(std::sync::atomic::Ordering::SeqCst), std::sync::atomic::Ordering::SeqCst); }
             let s = store.get();
             let host_dir = if s.host_dir.is_empty() { app.path().app_data_dir().unwrap_or(dir).join("ai-host").display().to_string() } else { s.host_dir.clone() };
-            app.manage(App { store, terms: Arc::default(), runs: Arc::default(), proxy: proxy::Proxy::default(), host_dir });
+            let machine_dir = machine::state_dir(&app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller")));
+            app.manage(App { store, terms: Arc::default(), runs: Arc::default(), proxy: proxy::Proxy::default(), host_dir, machine: Arc::default(), machine_dir: machine_dir.clone() });
+            // the while-open runner comes back by itself when this computer is linked and the person has not paused it
+            if s.machine_on && !SMOKE.load(std::sync::atomic::Ordering::SeqCst) { let _ = app.state::<App>().machine.start(&s.hub, &machine_dir); }
             let hub = s.hub.trim_end_matches('/').to_string();
             // the hub's page: only the harmless commands (see the top of this file)
             app.add_capability(tauri::ipc::CapabilityBuilder::new("hub").remote(format!("{hub}/*")).window("main")
@@ -159,10 +214,14 @@ fn main() {
                 .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup"))?;
             let url: tauri::Url = hub.parse().map_err(|e| format!("bad hub address {hub}: {e}"))?;
             let host = url.host_str().unwrap_or("").to_string();
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).title(APP_NAME).inner_size(1320.0, 880.0).min_inner_size(420.0, 520.0)
+            let hub_for_perm = hub.clone();
+            let main_win = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).title(APP_NAME).inner_size(1320.0, 880.0).min_inner_size(420.0, 520.0)
+                // screen sharing / microphone / camera: only for the hub's own page (capture.rs); the Tools window has no handler
+                .on_permission_request(move |wv, kind| capture::decide(&kind, wv.url().map(|u| u.to_string()).unwrap_or_default().as_str(), &hub_for_perm))
                 // links to other sites open in the browser, not in the app
                 .on_navigation(move |u| { let same = u.host_str() == Some(host.as_str()) || u.scheme() == "tauri" || u.scheme() == "about" || u.scheme() == "blob" || u.scheme() == "data"; if !same && (u.scheme() == "https" || u.scheme() == "http") { let _ = open_external(u.to_string()); } same })
                 .build()?;
+            capture::enable_in_webview(&main_win);
             // the tray
             let h = app.handle();
             let show = MenuItem::with_id(h, "show", "Show VibeRoller", true, None::<&str>)?;
@@ -194,7 +253,7 @@ fn main() {
                     let h2 = app.handle().clone();
                     std::thread::spawn(move || for _ in 0..15 {
                         std::thread::sleep(std::time::Duration::from_secs(2));
-                        if let Some(w) = h2.get_webview_window("main") { let _ = w.eval("if (window.__TAURI__ && window.__TAURI__.core && typeof NATIVE !== 'undefined' && NATIVE) window.__TAURI__.core.invoke('app_info').then((i) => window.__TAURI__.core.invoke('notify', { title: 'smoke-main', body: location.host + ' ' + i.version + ' tools-tile ' + !document.getElementById('goTools').hidden }))"); }
+                        if let Some(w) = h2.get_webview_window("main") { let _ = w.eval("if (window.__TAURI__ && window.__TAURI__.core && typeof NATIVE !== 'undefined' && NATIVE) window.__TAURI__.core.invoke('app_info').then((i) => window.__TAURI__.core.invoke('notify', { title: 'smoke-main', body: location.host + ' ' + i.version + ' tools-tile ' + !document.getElementById('goTools').hidden + ' share-field ' + (typeof i.screenShare) }))"); }
                     });
                 }
             }

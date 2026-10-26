@@ -188,6 +188,11 @@ async fn run_build(o: &Opts, commit: &str, idx: usize, back: Arc<Mutex<Back>>, s
     }
 }
 
+/// Does bridge/'s config say the Rust hub serves alone ("rustHub": { "alone": true }; config.local.json before config.json)?
+fn alone_in_config(root: &Path) -> bool {
+    pgm_core_internal::json::read_json(&root.join("config.local.json")).or_else(|| pgm_core_internal::json::read_json(&root.join("config.json"))).map(|c| c["rustHub"]["alone"] == json!(true)).unwrap_or(false)
+}
+
 fn fell_back(o: &Opts, from: &str, to: &str, why: &str) {
     let at = now_s();
     pgm_core_internal::json::write_json(&o.root.join(".fell-back"), &json!({ "from": from, "to": to, "why": why, "at": at }));
@@ -202,9 +207,11 @@ async fn main() {
     if args.iter().any(|a| a == "--version") { println!("vr-run {}", env!("CARGO_PKG_VERSION")); return; }
     let Some(root) = arg(&args, "--root").map(PathBuf::from) else { eprintln!("usage: vr-run --root <bridge> --port <p> --builds <dist/target> [--health-every 10] [--health-timeout 5] [--retry-after 600] [--back <port>] [--alone]"); std::process::exit(2); };
     let port: u16 = arg(&args, "--port").and_then(|p| p.parse().ok()).unwrap_or(7777);
-    // --alone (FR6): no JavaScript hub at all, whatever bridge/ holds (config "rustHub": { "alone": true } says the same)
-    let alone = args.iter().any(|a| a == "--alone") || pgm_core_internal::json::read_json(&root.join("config.local.json")).or_else(|| pgm_core_internal::json::read_json(&root.join("config.json"))).map(|c| c["rustHub"]["alone"] == json!(true)).unwrap_or(false);
-    let o = Opts {
+    // --alone (FR6): no JavaScript hub behind, whatever bridge/ holds (config "rustHub": { "alone": true } says the same;
+    // read again at every restart a build asks for, so the swap is the config line and a graceful restart, R195)
+    let alone_arg = args.iter().any(|a| a == "--alone");
+    let alone = alone_arg || alone_in_config(&root);
+    let mut opts = Opts {
         root: std::path::absolute(&root).unwrap_or(root), port, alone,
         back: arg(&args, "--back").and_then(|p| p.parse().ok()).unwrap_or(port + 2),
         builds: arg(&args, "--builds").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("native/dist")),
@@ -214,7 +221,7 @@ async fn main() {
     };
     let secret = pgm_core_internal::crypto::random_hex(24);
     // alone: the JavaScript hub is not run behind the Rust one, but it stays known as the last resort (bridge/server.js)
-    let b = Back::new(&o.root, o.back, &secret, !o.alone);
+    let b = Back::new(&opts.root, opts.back, &secret, !opts.alone);
     let back = Arc::new(Mutex::new(b));
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
@@ -228,7 +235,7 @@ async fn main() {
     let mut retries: u32 = 0;
     'chain: loop {
         // after the first retry the newest build is only tried hourly: a fallback that works is not bounced every 10 minutes
-        let o = { let mut oo = o.clone(); if retries > 1 { oo.retry_after = oo.retry_after.max(3600); } oo };
+        let o = { let mut oo = opts.clone(); if retries > 1 { oo.retry_after = oo.retry_after.max(3600); } oo };
         let cands = candidates(&o.builds);
         if cands.is_empty() && !back.lock().await.can_fallback() { log(&format!("no build under {} (native/build.sh makes one); waiting", o.builds.display())); tokio::time::sleep(Duration::from_secs(10)).await; if *stop_rx.borrow() { return; } continue; }
         let newest = cands.first().cloned().unwrap_or_default();
@@ -239,7 +246,15 @@ async fn main() {
             let next = cands.iter().skip(i + 1).find(|x| !bad.contains(x)).cloned();
             match run_build(&o, c, i, back.clone(), &stop_rx).await {
                 Outcome::Stop => { log("stopping"); return; }
-                Outcome::Restart => { bad.clear(); retries = 0; continue 'chain; }
+                Outcome::Restart => {
+                    let now_alone = alone_arg || alone_in_config(&o.root);
+                    if now_alone != o.alone {
+                        log(&format!("rustHub.alone is now {now_alone}: {}", if now_alone { "the Rust hub serves alone (the JavaScript hub stays the last resort)" } else { "the JavaScript hub runs behind the Rust one again" }));
+                        opts.alone = now_alone;
+                        let mut b = back.lock().await; b.behind = !now_alone; if now_alone { b.stop().await; }
+                    }
+                    bad.clear(); retries = 0; continue 'chain;
+                }
                 Outcome::Retry => { log(&format!("trying the newest build {newest} again")); bad.clear(); retries += 1; continue 'chain; }
                 Outcome::Bad(why) => {
                     bad.push(c.clone());

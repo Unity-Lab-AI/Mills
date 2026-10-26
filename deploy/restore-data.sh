@@ -10,7 +10,7 @@ ARCHIVE=${1:-}; APP=$(cd "$(dirname "$0")/.." && pwd)
 [ "$(id -u)" != 0 ] || { echo "Run as the hub's account, not root."; exit 1; }
 [ -f "$ARCHIVE" ] || { echo "Usage: sh deploy/restore-data.sh <viberoller-data-*.tar.gz>"; exit 1; }
 [ -d "$APP/bridge" ] || { echo "$APP is not the live checkout: run deploy/setup-server.sh first."; exit 1; }
-tar -tzf "$ARCHIVE" | grep -qv '^\(bridge/\(auth\|state\|hub-state\|usage\|assistant\|providers\|forgejo\|forgejo-users\|server-owners\)\.json\|bridge/profiles\|bridge/profiles-deleted\|Chat\|Archive\|Board\|Notes\|Avatars\|Images\|Api\)' && { echo "The archive holds more than hub data (code or unknown folders): refusing. Pack it with deploy/pack-data."; exit 1; }
+tar -tzf "$ARCHIVE" | grep -qv '^\(bridge/\(auth\|state\|work\|work-current\|api-keys\|hub-state\|front-sessions\|device-locks\|release-key\|usage\|assistant\|providers\|forgejo\|forgejo-users\|server-owners\|ai-hosts\)\.json\|bridge/hub-signing\.key\|bridge/gateway\|bridge/profiles\|bridge/profiles-deleted\|Chat\|Archive\|Board\|Notes\|Avatars\|Images\|Api\)' && { echo "The archive holds more than hub data (code or unknown folders): refusing. Pack it with deploy/pack-data."; exit 1; }
 if [ -f "$APP/bridge/auth.json" ] || [ -d "$APP/bridge/profiles" ]; then
   echo "This server already has account data. Refusing to overwrite it. Move it away first if that is what you want:"; echo "  ls -la $APP/bridge/profiles $APP/bridge/auth.json"; exit 1
 fi

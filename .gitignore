@@ -78,6 +78,8 @@ bridge/ai-hosts.json
 # the release key that signs the native binaries (bridge/native-releases.js): its secret never leaves this machine
 bridge/release-key.json
 bridge/ai-host-sessions.json
+bridge/hub-signing.key
+bridge/hub-signing.key.tmp
 bridge/.mcp-host-*.json
 # the Rust hub's own data (since 3.x behind it, the hub since 4.0.0): sessions, device locks, API keys, Work state
 bridge/front-sessions.json

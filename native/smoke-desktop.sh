@@ -26,17 +26,19 @@ merge() { # $1 system folder, $2 sysroot folder, $3 name
 merge /usr/bin "$S/usr/bin" bin
 merge /usr/lib/x86_64-linux-gnu "$S/usr/lib/x86_64-linux-gnu" lib
 merge /usr/share "$S/usr/share" share
-D=$(( 90 + $(id -u) % 9 ))
+# the display: Xvfb picks a free one itself (-displayfd), so runs side by side never take the same one (a fixed
+# number per user made parallel suites collide: R165 failed once that way)
 mkdir -p "$TMP/home"
 cat > "$TMP/run.sh" <<EOF
 mount --bind /usr/bin "$TMP/orig-bin" && mount --bind "$TMP/bin" /usr/bin || exit 70
 mount --bind /usr/lib/x86_64-linux-gnu "$TMP/orig-lib" && mount --bind "$TMP/lib" /usr/lib/x86_64-linux-gnu || exit 70
 mount --bind /usr/share "$TMP/orig-share" && mount --bind "$TMP/share" /usr/share || exit 70
-/usr/bin/Xvfb ":$D" -screen 0 1280x900x24 -nolisten tcp >"$TMP/xvfb.log" 2>&1 &
+/usr/bin/Xvfb -displayfd 3 -screen 0 1280x900x24 -nolisten tcp 3>"$TMP/display" >"$TMP/xvfb.log" 2>&1 &
 XP=\$!
-sleep 3
-kill -0 \$XP 2>/dev/null || { echo "Xvfb did not start"; tail -5 "$TMP/xvfb.log"; exit 71; }
-HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/home/.config" XDG_DATA_HOME="$TMP/home/.local/share" DISPLAY=":$D" NO_AT_BRIDGE=1 \
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$TMP/display" ] && break; sleep 1; done
+D=\$(tr -dc 0-9 < "$TMP/display")
+kill -0 \$XP 2>/dev/null && [ -n "\$D" ] || { echo "Xvfb did not start"; tail -5 "$TMP/xvfb.log"; exit 71; }
+HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/home/.config" XDG_DATA_HOME="$TMP/home/.local/share" DISPLAY=":\$D" NO_AT_BRIDGE=1 \
   WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 GIO_USE_PROXY_RESOLVER=dummy \
   timeout 60 "$BIN" --smoke ${HUB:+--hub "$HUB"} > "$TMP/app.log" 2>&1
 C=\$?
