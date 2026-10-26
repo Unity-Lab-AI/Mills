@@ -7,6 +7,24 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.29.1 — 2026-10-26
+
+PATCH: **screen sharing in calls, fixed as far as the code shows** (T-320). Found by reading and testing the code; the
+exact report still needs details from whoever saw it.
+- **The share tile:** it follows the hub's share flag. It no longer vanishes when a still screen stops sending (Firefox
+  mutes such a track), and it no longer waits for an unmute to appear.
+- **The share's sound:** kept per person, so a tile that appears after the audio has it. Before, the audio was dropped.
+- **After a hub restart:** a quiet re-join keeps the share flag; it used to send only camera and mic.
+- **Leaving and re-joining between two polls:** that person gets a fresh connection. A hub restart still keeps the old
+  ones.
+- **Lost signals:** a lost offer or answer is retried and reported instead of being swallowed. The offerer restarts ICE
+  after 5 seconds of "disconnected".
+- **Clearer errors:** share errors say what happened (refused, nothing to share or the Linux portal, a capture error,
+  plain http).
+- **The picker:** a second click no longer opens a second one, and a capture that arrives after leaving is stopped.
+- **The Share button:** it explains itself on plain http and in an app whose web view has not switched capture on.
+- web/calls.js 1.1.2. Checks R350 to R354, which run calls.js in Node with stubs.
+
 ## 5.29.0 — 2026-10-26
 
 MINOR: **the apps run linked machines** (T-313; linked machines step 7 of 8; Linux and Windows only).
