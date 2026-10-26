@@ -24,6 +24,7 @@ pub mod downloads_text;
 pub mod files;
 pub mod forgejo;
 pub mod gateway;
+pub mod machines;
 pub mod guilds;
 pub mod perms;
 pub mod native_releases;
@@ -81,6 +82,7 @@ impl Modules {
         let mills = root.join("..");
         let usage = Arc::new(usage::Usage::new(root, cfg, true));
         let auth = auth::Auth::new(root, cfg);
+        machines::init(&auth);
         let accounts = auth.accounts();
         let api = openai::Api::new(root, &accounts);
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
@@ -310,7 +312,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         if p == "/api/device/poll" { let (s, v) = a.devices.poll(b["deviceCode"].as_str().unwrap_or("")); return answer(s, v); }
         let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
         let client = b["client"].as_str().map(String::from).unwrap_or_else(|| b["client"]["app"].as_str().unwrap_or("").to_string());
-        return match a.devices.start(&client, b["device"].as_str().unwrap_or(""), b["expiresIn"].as_u64(), &ip) {
+        // (a `vr-machine` client also says its public key, machine id, os, app, mode and default folder: T-309)
+        return match a.devices.start_ex(&client, b["device"].as_str().unwrap_or(""), b["expiresIn"].as_u64(), &ip, &b) {
             Ok(mut v) => { v["verificationUrl"] = json!(format!("{}/?device={}", hub.mods.public_url(&hub.cfg).trim_end_matches('/'), v["userCode"].as_str().unwrap_or(""))); answer(200, v) }
             Err((s, e)) => answer(s, json!({ "error": e })),
         };
@@ -334,12 +337,14 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         return match (p, r.method.clone()) {
             ("/api/devices", hyper::Method::GET) => answer(200, json!({ "devices": a.devices.list(&u, bearer) })),
             ("/api/devices/revoke", hyper::Method::POST) => {
-                if a.devices.revoke(&u, b["id"].as_str().unwrap_or("")) { println!("[vr-hub] {u} revoked a signed-in device."); answer(200, json!({ "ok": true })) } else { answer(404, json!({ "error": "No such device." })) }
+                let id = b["id"].as_str().unwrap_or("");
+                if a.page_session_user(r).is_none() && a.devices.machines_of(&u).iter().any(|m| m["id"].as_str() == Some(id)) { return answer(403, json!({ "error": "A machine is unlinked from the page, signed in with your own session." })); }
+                if a.devices.revoke(&u, id) { println!("[vr-hub] {u} revoked a signed-in device."); answer(200, json!({ "ok": true })) } else { answer(404, json!({ "error": "No such device." })) }
             }
             ("/api/device/approve" | "/api/device/deny", hyper::Method::POST) => {
                 if a.page_session_user(r).is_none() { return answer(403, json!({ "error": "Approve it on the page, signed in with your own session." })); }
                 let ok = p == "/api/device/approve";
-                match a.devices.decide(&u, b["userCode"].as_str().unwrap_or(""), ok) {
+                match a.devices.decide_ex(&u, b["userCode"].as_str().unwrap_or(""), ok, b["replace"].as_str()) {
                     Ok(v) => { println!("[vr-hub] {u} {} a device sign-in.", if ok { "approved" } else { "refused" }); answer(200, v) }
                     Err((s, e)) => answer(s, json!({ "error": e })),
                 }
@@ -347,6 +352,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             _ => answer(405, json!({ "error": "Method not allowed." })),
         };
     }
+    // linked machines (T-309): the owner's list / rename / unlink, the admin's count, the machine's own poll and signed replies
+    if p.starts_with("/api/machine") || p == "/api/device/peek" { if let Some(x) = machines::route(hub, r).await { return x; } }
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
     let me = || { let mut h = vec![("x-vr-notes-ver".to_string(), hub.mods.notes.version().to_string())]; if let Some(u) = &user { h.push(("x-vr-user".to_string(), u.clone())); } h };
     // ----- the board and the notes: this hub's own now -----
@@ -419,6 +426,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/allow-device" | "/api/admin/signout") {
         let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
         if !a.account(u).map(|x| x.admin).unwrap_or(false) { return Routed::Answer(jresp(403, &json!({ "error": "Admins only." }))); }
+        let keep_machines = r.json()["keepMachines"].as_bool() == Some(true);
         let target = r.json()["username"].as_str().and_then(|t| a.account(t));
         let Some(t) = target else { return Routed::Answer(jresp(400, &json!({ "error": "No such account." }))) };
         return Routed::Answer(match p {
@@ -427,8 +435,10 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 let f = t.dir.join("auth.json");
                 let tmp = f.with_extension("json.tmp");
                 if std::fs::write(&tmp, serde_json::to_string_pretty(&auth::hash_password(&pw)).unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, &f)).is_err() { return Routed::Answer(jresp(500, &json!({ "error": "Could not save the password." }))); }
-                if t.username != *u { a.drop_sessions(&t.username); }
-                println!("[vr-hub] {u} set a new password for \"{}\".", t.username);
+                // a new password revokes the account's linked machines too, unless "keep my machines linked" is ticked (T-309, Sponge's answer 4)
+                let keep = keep_machines;
+                if t.username != *u { a.drop_sessions_ex(&t.username, keep); } else if !keep { a.devices.revoke_all_ex(&t.username, false); }
+                println!("[vr-hub] {u} set a new password for \"{}\"{}.", t.username, if keep { " (machines kept linked)" } else { "" });
                 jresp(200, &json!({ "username": t.username, "password": pw }))
             }
             "/api/admin/unlock" => { a.unlock(&t.username); jresp(200, &json!({ "ok": true })) }
@@ -436,7 +446,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 Ok(n) => { println!("[vr-hub] {u} let \"{}\" add one more device (it has {n}).", t.username); jresp(200, &json!({ "ok": true, "username": t.username, "devices": n })) }
                 Err(e) => jresp(400, &json!({ "error": e })),
             },
-            _ => { if t.username != *u { a.drop_sessions(&t.username); } jresp(200, &json!({ "ok": true })) }
+            _ => { if t.username != *u { a.drop_sessions_ex(&t.username, keep_machines); } jresp(200, &json!({ "ok": true })) }
         });
     }
     Routed::Pass(me())
