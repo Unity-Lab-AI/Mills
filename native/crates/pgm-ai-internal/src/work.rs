@@ -983,6 +983,11 @@ async fn tool_inner(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Valu
     let named = { let m = s(b, "machine"); if m.is_empty() { s(&args, "machine") } else { m } };
     let mut args = args;
     if let Some(o) = args.as_object_mut() { o.remove("machine"); }
+    // T-311: the owner's own linked machine, when one is online (or the caller named it); the caller's account is the actor and the owner
+    match ai.machines.route(&hub.machines_of(account), account, &named, &name, &args, &caller.actor()).await {
+        crate::machine_jobs::Routed::Done(v) => return v,
+        crate::machine_jobs::Routed::Pass => {}
+    }
     let host = if named.is_empty() { ai.pc_host_for(account) } else {
         match ai.machine_for(&named, account) {
             Ok(h) => Some(h),

@@ -63,7 +63,7 @@ pub struct Link {
     pub http: reqwest::Client,
 }
 
-struct Loaded { scope: Scope, text: String, mtime: Option<SystemTime>, limits: Limits, max_jobs: usize, max_file_mb: u64, job_ttl: u64 }
+struct Loaded { scope: Scope, mtime: Option<SystemTime>, max_jobs: usize, max_file_mb: u64, job_ttl: u64 }
 
 pub struct Machine {
     pub id: String,
@@ -108,7 +108,7 @@ impl Machine {
         let jobs = Arc::new(JobTable::new(&state_dir.join("jobs"), children));
         let m = Machine {
             id: machine_id.to_string(), app: app.to_string(), state_dir: state_dir.to_path_buf(), scope_file, floor,
-            loaded: RwLock::new(Loaded { scope: Scope::nothing(), text: String::new(), mtime: None, limits: Limits::default(), max_jobs: 4, max_file_mb: 2048, job_ttl: JOB_TTL_SECS }),
+            loaded: RwLock::new(Loaded { scope: Scope::nothing(), mtime: None, max_jobs: 4, max_file_mb: 2048, job_ttl: JOB_TTL_SECS }),
             limiter: Mutex::new(Limiter::new(Limits::default())), burst: BurstGuard::new(Limits::default().confirm_burst), audit: AuditLog::open(&audit_file)?,
             kill: Arc::new(Kill::open(state_dir)), jobs, containers: Mutex::new(None), verifier: Mutex::new(None), link: Mutex::new(None), start: std::time::Instant::now(),
         };
@@ -138,7 +138,7 @@ impl Machine {
         let limits = Limits::from_scope_json(&text);
         let (max_jobs, max_file_mb, job_ttl) = parse_limits(&text);
         *lk(&self.limiter) = Limiter::new(limits.clone());
-        *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Loaded { scope, text, mtime, limits, max_jobs, max_file_mb, job_ttl };
+        *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Loaded { scope, mtime, max_jobs, max_file_mb, job_ttl };
     }
     fn scope(&self) -> Scope { self.loaded.read().unwrap_or_else(|e| e.into_inner()).scope.clone() }
     /// The scope in words (what the card and the tray show, and what `machine_info` tells the AI).
@@ -344,6 +344,10 @@ impl Machine {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "exec_tests.rs"]
+mod tests;
 
 /// Is this process running with administrator / root rights? (The shell is never run that way.)
 fn is_elevated() -> bool {

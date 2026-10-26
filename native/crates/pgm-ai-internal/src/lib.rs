@@ -31,6 +31,8 @@ pub mod host;
 pub mod hub;
 pub mod jcode;
 pub mod local_proxy;
+pub mod machine_jobs;
+pub mod machine_transfer;
 pub mod openai;
 pub mod plan;
 pub mod planner;

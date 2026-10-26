@@ -57,7 +57,9 @@ pub struct AiHosts {
     pub dirty: Notify,
     /// The hub's one signing key (T-308, machine::sign): made once in the data folder (hub-signing.key, owner-only), signs
     /// every PC / machine request forwarded to a host. None only when the file could not be made (logged): requests then go unsigned.
-    sign: Option<pgm_net_internal::machine::HubKey>,
+    sign: Option<Arc<pgm_net_internal::machine::HubKey>>,
+    /// Linked machines (T-311): the job queue their polls drain, the signed replies, big-file tickets and the transfer area.
+    pub machines: Arc<crate::machine_jobs::MachineJobs>,
 }
 fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; let (x, y) = (pgm_core_internal::crypto::sha256(a.as_bytes()), pgm_core_internal::crypto::sha256(b.as_bytes())); bool::from(x.ct_eq(&y)) }
 fn clean_users(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')).take(50).collect()).unwrap_or_default() }
@@ -109,9 +111,10 @@ impl AiHosts {
         let legacy: Vec<Value> = cfg.get("aiNodes").and_then(Value::as_object).map(|m| m.iter().filter(|(n, s)| !n.is_empty() && n.len() <= 40 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && s.as_str().map(|s| s.len() >= 24).unwrap_or(false))
             .map(|(n, s)| json!({ "id": n, "user": "", "nickname": n, "secret": s, "legacy": true, "createdAt": Value::Null, "share": {} })).collect()).unwrap_or_default();
         let (version, commit) = release_now(root);
+        let sign: Option<Arc<pgm_net_internal::machine::HubKey>> = match pgm_net_internal::machine::HubKey::load_or_create(&root.join("hub-signing.key")) { Ok(k) => Some(Arc::new(k)), Err(e) => { eprintln!("[ai-host] no hub signing key ({e}): PC requests to hosts go unsigned until it is fixed"); None } };
         let h = Arc::new(AiHosts { root: root.to_path_buf(), cfg: cfg.clone(), db: Mutex::new(db), legacy, live: Mutex::default(), pending: Mutex::default(), was_up: Mutex::default(),
             offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), usage, dirty: Notify::new(),
-            sign: match pgm_net_internal::machine::HubKey::load_or_create(&root.join("hub-signing.key")) { Ok(k) => Some(k), Err(e) => { eprintln!("[ai-host] no hub signing key ({e}): PC requests to hosts go unsigned until it is fixed"); None } } });
+            machines: Arc::new(crate::machine_jobs::MachineJobs::new(root, sign.clone(), cfg.get("machineTransferMaxMB").and_then(Value::as_u64).unwrap_or(4096))), sign });
         h.restore_sessions();
         h
     }

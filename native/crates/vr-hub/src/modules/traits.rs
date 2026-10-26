@@ -52,6 +52,7 @@ impl AiHub for Hub {
     fn notes_tool(&self, name: &str, args: &Value, actor: &str) -> Value { self.mods.notes.tool(name, args, actor) }
     fn team_tool(&self, name: &str, args: &Value, a: &Account) -> Value { pgm_hcom_internal::chat::team_tool(self, name, args, a) }
     fn re_tool<'a>(&'a self, name: &'a str, args: &'a Value, a: &'a Account) -> Fut<'a, Value> { Box::pin(async move { self.mods.re.tool(name, args, a).await }) }
+    fn machines_of(&self, u: &str) -> Vec<Value> { self.mods.auth.devices.machines_of(u) }
     fn chat_has_key(&self, u: &str) -> bool { self.mods.chat.has_key(u) }
     fn chat_agent_on(&self, users: &[(String, String, bool)]) -> bool { self.mods.chat.agent_on(users) }
     fn chat_room_changed(&self) { self.mods.chat.room_changed() }
