@@ -5,7 +5,7 @@ T-253 / T-254). One library for the hub, the AI host, native apps and Jcode PGM.
 with `Cli::podman()` (Linux) and `Cli::docker()` (Windows) implementations; a program or a test may bring its own.
 
 ```rust
-let cfg = Config::from_json(root, &json!({ "image": "localhost/pgm-re-base:1.0.0", "maxConcurrent": 3 }));
+let cfg = Config::from_json(root, &json!({ "image": "localhost/pgm-re-base:1.0.1", "maxConcurrent": 3 }));
 let m = Manager::new(Box::new(Cli::named("auto")), cfg);
 m.reconcile()?;                                  // after a restart: adopt running copies, list orphans
 let me = Actor::new("alice", false);

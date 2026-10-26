@@ -44,7 +44,7 @@ fn real_rea_end_to_end() {
     if std::env::var("SANDBOX_REAL_IMAGE").is_err() { eprintln!("skipped: set SANDBOX_REAL_IMAGE=1 to run against localhost/pgm-re-base"); return; }
     let args: Vec<String> = std::env::var("SANDBOX_ENGINE_ARGS").unwrap_or_default().split_whitespace().map(String::from).collect();
     let root = std::env::temp_dir().join(format!("pgm-sbx-rea-{}", std::process::id()));
-    let mut cfg = Config::new(&root, "localhost/pgm-re-base:1.0.0"); cfg.name_prefix = "pgm-re-unit-".into();
+    let mut cfg = Config::new(&root, "localhost/pgm-re-base:1.0.1"); cfg.name_prefix = "pgm-re-unit-".into();
     let m = Manager::new(Box::new(Cli::podman().with_env(env()).with_args(args.clone())), cfg);
     let a = Actor::new("alice", false);
     let s = m.start(&a, "real REA end to end", &StartOpts::default()).unwrap();
