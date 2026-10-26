@@ -214,6 +214,8 @@ fn answer(status: u16, v: Value) -> Routed { Routed::Answer(jresp(status, &v)) }
 /// The JavaScript hub's own "moving house" switch (bridge/.maintenance): its text is the new address.
 fn maintenance(hub: &Hub) -> Option<String> { std::fs::read_to_string(hub.root.join(".maintenance")).ok().map(|t| { let t = t.trim().to_string(); if t.is_empty() { "the server".into() } else { t } }) }
 
+/// The routes a linked machine's own token may call (T-310).
+pub fn machine_token_may(path: &str) -> bool { matches!(path, "/api/machine/poll" | "/api/machine/reply" | "/api/machine/unlink") }
 pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     let p = r.path.as_str();
     // the regression runner's hook (VR_TEST_HOOKS=1 in the environment; nothing but the runner sets it): a panic inside
@@ -222,6 +224,11 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         if std::env::var("VR_TEST_HOOKS").ok().as_deref() != Some("1") { return answer(404, json!({ "error": "Not found" })); }
         if r.param("lock").as_deref() == Some("gateway") { let _held = hub.mods.gateway.hold_for_test(); panic!("test panic inside the gateway's products lock"); }
         panic!("test panic");
+    }
+    // T-310 (plans/linked-machines.md 4.1): a linked machine's device token reaches ONLY /api/machine/* (poll, reply, unlink); on
+    // every other route it is refused (403), before any module looks at it. Ordinary device tokens (T-236, Jcode) are unchanged.
+    if let Some(t) = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")) {
+        if hub.mods.auth.devices.is_machine_token(t) && !machine_token_may(p) { return answer(403, json!({ "error": "A linked machine's token reaches only /api/machine/ (poll, reply, unlink)." })); }
     }
     // the front itself: who answers here (for the tools and the regression suite; nothing private)
     if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules(), "alone": hub.alone() }))); }

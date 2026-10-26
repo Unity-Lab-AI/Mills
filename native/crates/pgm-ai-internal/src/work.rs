@@ -37,7 +37,10 @@ const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSe
 struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String, project: String, branch: String, started: u64,
     /// The run's own secret (T-308): minted when the run starts, put in ITS MCP config, forgotten when the run ends (the record
     /// leaves `runs`). The hub finds the run, so the account and session, from it; the headers of a call never say who it is.
-    secret: String, account: String, sid: String, sess_env: String }
+    secret: String, account: String, sid: String, sess_env: String,
+    /// Who started the run (T-310, plans/linked-machines.md 4.5): the run's own account for a run its person started; another account when it was started
+    /// on that person's behalf (a workflow someone else defined or scheduled, an agent-to-agent task). The machine rule needs both to be the owner.
+    started_by: String }
 /// Who a tool call is, as the hub's own records say (never a header the caller typed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
@@ -174,6 +177,25 @@ impl Work {
             }
             None => Relay::Run(Caller { account: account.to_string(), session: session.to_string(), sid: String::new(), run: job.to_string(), legacy: false }),
         }
+    }
+    /// Who started this run, when its record is known (T-310). A run the person started themselves says their own account.
+    pub fn started_by_of(&self, run: &str) -> Option<String> {
+        if run.is_empty() { return None; }
+        self.runs.lock().unwrap_or_else(|e| e.into_inner()).values().find(|r| r.id == run).map(|r| r.started_by.clone())
+    }
+    /// For whatever starts a run on someone's behalf (Hyper Workflows: a workflow another person defined or scheduled; T-294
+    /// agent-to-agent tasks): say who started it, right after the run record exists. A run whose starter is not its account
+    /// reaches no machine and no PC folder of that account (`machine_rule`). Returns false when no such run is going.
+    pub fn set_started_by(&self, run: &str, who: &str) -> bool {
+        if run.is_empty() || who.is_empty() { return false; }
+        self.runs.lock().unwrap_or_else(|e| e.into_inner()).values_mut().find(|r| r.id == run).map(|r| { r.started_by = who.to_string(); }).is_some()
+    }
+    /// A PC tool answered by a person's page (POST /api/pc-result): only a pending call of one of THEIR OWN runs is answered, so a
+    /// watcher of a shared session, an admin or anyone else can never answer (or cause) a call of someone else's run (T-310).
+    pub fn answer_pc(&self, user: &str, id: &str, v: Value) -> bool {
+        let pre = format!("{user}#");
+        let entry = self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().filter(|(k, _)| *k == user || k.starts_with(&pre)).find_map(|(_, run)| run.pending.remove(id));
+        match entry { Some(tx) => { let _ = tx.send(v); true } None => false }
     }
     pub fn forget(&self, u: &str) { self.states.lock().unwrap_or_else(|e| e.into_inner()).remove(u); }
     pub fn drop_provider(&self, a: &Account, id: &str) { if self.state(a)["provider"] == json!(id) { self.update(a, |m| { m.remove("provider"); }); } }
@@ -383,6 +405,7 @@ impl Work {
             format!("{name} has opened a folder on THEIR OWN PC in their browser. To build or edit anything on their PC, use the mcp__pc__* tools"),
             format!("(list, read, write, delete, mkdir) with paths relative to that folder. Your built-in file tools act on the host's VibeRoller folder, not {name}'s PC."),
             format!("Shell commands cannot run on {name}'s PC; if something needs running there, tell {name} exactly what to run."),
+            format!("The PC tools (and a linked machine of {name}'s) act only for {name}, in a run {name} started. If {name} is away, do not stop and do not wait: carry on with the best recommended defaults for the task, and finish with a short report of what you did, why you chose it over the other options, and what {name} can change (name the options)."),
             format!("The VibeRoller team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as \"{name} · Claude\"."),
             "When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.".into(),
             "You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry.".into(),
@@ -825,7 +848,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() } });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()) });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     w.busy_changed.notify_one();
@@ -979,6 +1002,13 @@ async fn tool_inner(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Valu
     // T-308 (plans/linked-machines.md 4.3): a call that NAMES a machine reaches it only for that machine's owner, whoever asks (an admin
     // and another person's run get 403, no fallback to the browser folder or to any other machine); a call that names none goes to the
     // caller's own pc host first, as before. Either way the request to the host is signed for the owner with this caller as the actor.
+    // T-310 (4.1, 4.5): the run's account must have started the run itself. A run started on someone's behalf (a workflow another person
+    // defined or scheduled, an agent-to-agent task) never reaches the account's machines or folder. Availability plays no part: an owner
+    // who is away still has their own run go on (Sponge, Q7).
+    if let Err(why) = machine_rule(account, account, &w.started_by_of(&caller.run).unwrap_or_else(|| account.to_string())) {
+        eprintln!("[work] refused: {account}'s run {} (started by {}) called {name}: {why}", if caller.run.is_empty() { "-" } else { &caller.run }, w.started_by_of(&caller.run).unwrap_or_default());
+        return json!({ "ok": false, "error": why, "_status": 403 });
+    }
     let ai = hub.ai();
     let named = { let m = s(b, "machine"); if m.is_empty() { s(&args, "machine") } else { m } };
     let mut args = args;
@@ -1084,6 +1114,7 @@ impl Work {
     }
     fn share_event(&self, owner: &str, ev: &Value) {
         if !self.shares.lock().unwrap_or_else(|e| e.into_inner()).contains_key(owner) { return; }
+        if !watcher_sees(ev["type"].as_str().unwrap_or("")) { return; } // a PC / machine call is never shown to a watcher (T-310)
         if ev["type"] == json!("assistant") && ev["message"].is_object() {
             for b in ev["message"]["content"].as_array().cloned().unwrap_or_default() {
                 if b["type"] == json!("text") && !s(&b, "text").trim().is_empty() { self.share_line(owner, "claude", &s(&b, "text")); }
@@ -1131,9 +1162,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/chat" if post => chat(hub, a, r).await,
         "/api/stop" if post => { let Some(sx) = sess(&r.json()) else { return Some(no_session()) }; w.stop(&**hub, &sx.key); answer(200, json!({ "ok": true })) }
         "/api/pc-result" if post => {
-            let b = r.json(); let pre = format!("{u}#");
-            let entry = w.runs.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().filter(|(k, _)| *k == u || k.starts_with(&pre)).find_map(|(_, run)| run.pending.remove(&s(&b, "id")));
-            if let Some(tx) = entry { let mut v = json!({ "ok": b["ok"].as_bool().unwrap_or(false) || (!b["ok"].is_null() && b["ok"] != json!(false) && b["ok"] != json!(0) && b["ok"] != json!("")) }); for k in ["result", "error"] { if let Some(x) = b.get(k) { v[k] = x.clone(); } } let _ = tx.send(v); }
+            let b = r.json();
+            let mut v = json!({ "ok": b["ok"].as_bool().unwrap_or(false) || (!b["ok"].is_null() && b["ok"] != json!(false) && b["ok"] != json!(0) && b["ok"] != json!("")) }); for k in ["result", "error"] { if let Some(x) = b.get(k) { v[k] = x.clone(); } }
+            w.answer_pc(u, &s(&b, "id"), v); // only the person's own pending calls (a watcher's answer finds none)
             answer(200, json!({ "ok": true }))
         }
         // the AI's question (T-245): the page answers it, or says the person is busy with it (the timeout starts over)
@@ -1433,6 +1464,25 @@ pub fn planner_allowed_tools(cfg_tools: &[String]) -> Vec<String> {
 }
 /// What a planner run is denied whatever the permission mode (Claude's --disallowedTools; deny wins over allow and over bypass).
 pub const PLANNER_DENIED: &str = "Edit,MultiEdit,Write,NotebookEdit,mcp__pc";
+/// The machine rule, in one place (T-310, plans/linked-machines.md 4.1 and 4.5; Sponge 2026-10-25 answer 6): a call that reaches a
+/// person's computer (a linked machine, their AI host's pc engine, their browser's folder) is allowed only when the run's account IS
+/// the machine's owner AND that same person started the run. Each is taken from the hub's records, never from a field the caller typed.
+/// An admin, a watcher of a shared session, another person's agent and a run started on the owner's behalf by someone else fail it.
+/// Whether the owner is present plays no part. Hyper Workflows and agent-to-agent tasks set the starter with `Work::set_started_by`.
+pub fn machine_rule(account: &str, owner: &str, started_by: &str) -> Result<(), &'static str> {
+    if account.is_empty() || owner.is_empty() || account != owner { return Err("That machine belongs to someone else."); }
+    if started_by != owner { return Err("This run was started on someone else's behalf: it never uses your machine or your PC folder (only a run you started yourself does)."); }
+    Ok(())
+}
+/// The regression runner's way to start a run "on someone's behalf" before Hyper Workflows and T-294 exist: `_testStartedBy` in the chat
+/// body, honoured only when the environment has VR_TEST_HOOKS=1 (nothing but the runner's throwaway hub sets it, as for /__vr-test/).
+fn test_started_by(b: &Value) -> Option<String> {
+    if std::env::var("VR_TEST_HOOKS").ok().as_deref() != Some("1") { return None; }
+    b["_testStartedBy"].as_str().filter(|x| !x.is_empty()).map(String::from)
+}
+/// May a watcher of a shared Work session see this event of the run? Never a PC or machine call (`pc_tool`, `machine_*`): they carry
+/// paths and contents of the owner's computer, and a watcher can answer none (T-310; plans/linked-machines.md 4.5).
+pub fn watcher_sees(event_type: &str) -> bool { event_type != "pc_tool" && !event_type.starts_with("machine_") }
 /// Why a tool call from a planner session's run is refused ("" = allowed): no PC tools, no deleting notes or making channels,
 /// notes written only under plans/ (case-insensitive, no "..").
 pub fn planner_refusal(which: &str, name: &str, args: &Value) -> String {
@@ -1466,7 +1516,7 @@ mod tests {
     fn put_run(w: &Work, key: &str, account: &str, sid: &str, sess_env: &str, secret: &str, id: &str, remote: &str) {
         let (tx, _rx) = mpsc::unbounded_channel();
         w.runs.lock().unwrap().insert(key.into(), Run { id: id.into(), tx, pid: None, remote: remote.into(), pending: HashMap::new(), ev: RunLog::default(), last: 0, answered: false, prov: String::new(), project: String::new(), branch: String::new(), started: 0,
-            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into() });
+            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into() });
     }
     /// T-308: the per-run secret names the run; the account and session come from the run record; a header that disagrees is refused;
     /// the deprecated shared secret still works (and says so); nothing else is ours.
@@ -1520,6 +1570,43 @@ mod tests {
         // a job whose run is not (yet) on record: the account the token belongs to, nothing else
         assert_eq!(w.job_caller("job-1", "carol", "", ""), Relay::Run(Caller { account: "carol".into(), session: String::new(), sid: String::new(), run: "job-1".into(), legacy: false }));
         assert!(matches!(w.job_caller("job-1", "carol", "bob", ""), Relay::Refused(_)));
+    }
+
+    /// T-310 (R327): the machine rule: the run's account is the owner AND the owner started the run; availability plays no part.
+    #[test]
+    fn a_machine_call_needs_the_owner_to_be_the_account_and_the_starter() {
+        assert!(machine_rule("sponge", "sponge", "sponge").is_ok());
+        assert_eq!(machine_rule("gee", "sponge", "gee"), Err("That machine belongs to someone else."), "another person's run");
+        assert!(machine_rule("admin", "sponge", "admin").is_err(), "an admin is another person");
+        assert!(machine_rule("sponge", "sponge", "gee").unwrap_err().contains("on someone else's behalf"), "a run another person started on sponge's behalf");
+        assert!(machine_rule("sponge", "sponge", "").is_err() && machine_rule("", "", "").is_err() && machine_rule("sponge", "", "sponge").is_err());
+        // the starter comes from the run record; whatever starts a run on someone's behalf sets it, an own run says its own account
+        let (w, _) = work_here();
+        put_run(&w, "alice", "alice", "s-main", "", "sec-a", "r1", "");
+        assert_eq!(w.started_by_of("r1").as_deref(), Some("alice"));
+        assert!(w.set_started_by("r1", "bob") && w.started_by_of("r1").as_deref() == Some("bob"));
+        assert!(machine_rule("alice", "alice", &w.started_by_of("r1").unwrap()).is_err());
+        assert!(!w.set_started_by("nope", "bob") && !w.set_started_by("r1", "") && w.started_by_of("nope").is_none() && w.started_by_of("").is_none());
+    }
+    /// T-310 (R327): a watcher sees no PC / machine event, cannot answer a call, and the planner refuses a machine tool.
+    #[test]
+    fn watchers_see_no_machine_event_and_answer_none_and_a_planner_has_no_machine() {
+        assert!(!watcher_sees("pc_tool") && !watcher_sees("machine_tool") && !watcher_sees("machine_info") && !watcher_sees("machine_anything"));
+        assert!(watcher_sees("assistant") && watcher_sees("result") && watcher_sees("text"));
+        let (w, _) = work_here();
+        put_run(&w, "alice", "alice", "s-main", "", "sec-a", "r1", "");
+        let (tx, mut rx) = oneshot::channel();
+        w.runs.lock().unwrap().get_mut("alice").unwrap().pending.insert("call-1".into(), tx);
+        assert!(!w.answer_pc("bob", "call-1", json!({ "ok": true })), "a watcher (another account) answers nothing");
+        assert!(rx.try_recv().is_err());
+        assert!(w.answer_pc("alice", "call-1", json!({ "ok": true })) && rx.try_recv().is_ok());
+        assert!(!w.answer_pc("alice", "call-1", json!({ "ok": true })), "answered once");
+        // a shared session's log never takes a PC / machine event
+        w.shares.lock().unwrap().insert("alice".into(), Share { conv: "room".into(), since: String::new(), n: 0, log: vec![], live: json!({}), ver: 0, woke: Arc::new(Notify::new()), sid: "s-main".into(), key: "alice".into() });
+        w.share_event("alice", &json!({ "type": "pc_tool", "id": "c", "name": "write", "args": { "path": "/secret" } }));
+        w.share_event("alice", &json!({ "type": "machine_tool", "id": "c", "name": "fs.write", "args": { "path": "/secret" } }));
+        assert_eq!(w.shares.lock().unwrap().get("alice").unwrap().n, 0);
+        for name in ["list", "read", "write", "delete", "mkdir", "shell_run", "job_start", "machine_info", "fs.write"] { assert!(!planner_refusal("pc", name, &json!({ "machine": "m1" })).is_empty(), "a planner session has no {name}"); }
     }
 
     fn work_here() -> (Work, std::path::PathBuf) {

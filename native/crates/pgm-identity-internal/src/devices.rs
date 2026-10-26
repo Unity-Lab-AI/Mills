@@ -218,6 +218,9 @@ impl Devices {
         Some(user)
     }
     pub fn is_token(&self, token: &str) -> bool { lk(&self.tokens).contains_key(&key(token)) }
+    /// Is this the token of a linked machine (T-310, plans/linked-machines.md 4.1)? Such a token reaches only /api/machine/*:
+    /// the hub refuses it (403) on every other route, whatever the account would have been allowed.
+    pub fn is_machine_token(&self, token: &str) -> bool { lk(&self.tokens).get(&key(token)).map(|r| r["kind"].as_str() == Some("machine")).unwrap_or(false) }
     /// A person's own devices (never the token), `current`: the token this request came with. `kind` is "machine" for a
     /// linked machine (its full card is [`machines_of`](Self::machines_of)), "device" for the rest.
     pub fn list(&self, user: &str, current: Option<&str>) -> Vec<Value> {

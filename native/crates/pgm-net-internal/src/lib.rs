@@ -11,6 +11,7 @@
 //!   gateway's verifier, the product's client)
 
 pub mod client;
+pub mod compat;
 pub mod hostlink;
 pub mod http;
 pub mod machine;

@@ -480,7 +480,7 @@ async function call(p, token, body, extraHeaders = {}, retry = true) {
 const login = (username, password, deviceId) => call('/api/login', null, { username, password, deviceId });
 // Run a chat to completion; answers pc_tool events like a browser would.
 async function chat(token, message, opts = {}) {
-  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}) }) });
+  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}), ...(opts.startedBy ? { _testStartedBy: opts.startedBy } : {}) }) });
   if (r.status !== 200) return { status: r.status, events: [] };
   const events = []; let buf = '';
   const reader = r.body.getReader(), dec = new TextDecoder();
@@ -3548,10 +3548,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const renU = await mc('PATCH', '/api/machines/' + id, U, { name: 'stolen' }), renX = await mc('PATCH', '/api/machines/' + id, X, { name: 'Desk r325' }), renBad = await mc('PATCH', '/api/machines/' + id, X, { name: '  ' });
       const wide = await call('/api/machine/poll', tok, { wait: 0, scope: 'folders: /srv (read-write); shell (advisory)' });
       const afterRename = (await listOf(X))[0] || {};
-      check('R325', 'T-309 link a machine by device code (client vr-machine): a start without a valid ed25519 key is refused (400); start names the default scope (one folder, read-write) and the approval screen (peek, own session only) shows os, app, key fingerprint and that scope; approving links it to the approving account only (its token is that account on the API, not the admin, not anyone else); its replies are signed by its device key and the hub refuses another key, another body, another request and no signature; the owner\'s list has only their machines (kind, mode, online, scope in words, never a token or key), the admin sees counts and online numbers only (no name, os, scope), a machine token cannot manage machines; rename works for the owner only; the hub keeps only a hash of the token',
+      check('R325', 'T-309 link a machine by device code (client vr-machine): a start without a valid ed25519 key is refused (400); start names the default scope (one folder, read-write) and the approval screen (peek, own session only) shows os, app, key fingerprint and that scope; approving links it to the approving account only (its token is that account on /api/machine only: T-310 refuses it everywhere else, see R327); its replies are signed by its device key and the hub refuses another key, another body, another request and no signature; the owner\'s list has only their machines (kind, mode, online, scope in words, never a token or key), the admin sees counts and online numbers only (no name, os, scope), a machine token cannot manage machines; rename works for the owner only; the hub keeps only a hash of the token',
         noKey.status === 400 && s1.status === 200 && d1.kind === 'machine' && /^one folder: \/srv\/r325\/work \(read-write\)/.test((d1.defaultScope || {}).summary || '') && peekNoSession.status === 401 && [404, 429].includes(peekViaDev.status)
         && peek.status === 200 && peek.data.kind === 'machine' && peek.data.os === 'linux' && peek.data.app === 'vr-host' && /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/.test(peek.data.keyFingerprint || '') && /^one folder: /.test((peek.data.defaultScope || {}).summary || '') && Array.isArray(peek.data.replaceable) && !peek.data.replaceable.length
-        && ap.status === 200 && p1.status === 200 && !!tok && !!id && p1.data.kind === 'machine' && whoAmI.username === 't-r325'
+        && ap.status === 200 && p1.status === 200 && !!tok && !!id && p1.data.kind === 'machine' && !whoAmI.username
         && listX.length === 1 && listX[0].id === id && listX[0].kind === 'machine' && listX[0].mode === 'persistent' && listX[0].online === false && /^one folder: /.test(listX[0].scope) && !JSON.stringify(listX).includes(tok) && !JSON.stringify(listX).includes(k1.pub) && !listU.length && !listA.length
         && viaMachine.status === 403 && devList.some((x) => x.id === id && x.kind === 'machine') && raw.includes(crypto.createHash('sha256').update(tok).digest('hex')) && !raw.includes(tok)
         && good.status === 200 && good.data.owner === 't-r325' && good.data.machine === id && wrongKey.status === 403 && tampered.status === 403 && otherReq.status === 403 && noSig.status === 403
@@ -3621,6 +3621,126 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       if (created.password) await call('/api/admin/delete', A, { username: 't-r325' });
     }
   } else { skip('R325', 'linked machines: link by device code', 'the Rust hub\'s: --rust-hub runs it'); skip('R326', 'linked machines: revoke and re-link', 'the Rust hub\'s: --rust-hub runs it'); }
+  // R327 and R338 (T-310, linked machines 4/8): who may reach a linked machine, and compatibility. The hub half runs here (the Rust hub's);
+  // the unit tests, the check calls and the JavaScript hub's half are in the cargo block further down (r327hub / r338hub carry the results).
+  let r327hub = null, r338hub = null;
+  if (RUST_HUB) {
+    const mc = async (method, p, tok, body) => { try { const r = await fetch(H + p, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: {} }; } };
+    const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
+    const mkHost = async (token) => { const made = await call('/api/hosts/new', token, {}); const id = (made.data.host || {}).id || ''; const cj = (await call('/api/hosts/config', token, { id })).data.config || {}; return { id, token: cj.token, nick: (made.data.host || {}).nickname || '' }; };
+    const enc = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const mach = (r) => { const l = texts(r.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } };
+    const listPc = (extra) => ({ route: 'pc-tool', body: { name: 'list', args: { path: '' }, ...(extra || {}) } });
+    const o = {}; const d = [];
+    const created = (await call('/api/admin/create', A, { username: 't-r327', display: 'R327' })).data || {};
+    const X = created.password ? (await login('t-r327', created.password, 'device-r327-xxxxxxxxxx')).data.token : '';
+    const watchStop = { v: false }; let watcher = Promise.resolve(); let hostStub = null;
+    try {
+      // ---- 1. a machine token reaches only /api/machine/poll|reply|unlink (403 everywhere else); an ordinary device token is unchanged
+      const kp = crypto.generateKeyPairSync('ed25519'); const pub = kp.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex');
+      const ms = (await call('/api/device/start', null, { client: 'vr-machine', device: 'r327-box', publicKey: pub, machineId: 'mach-r327-aaaa', os: 'linux', app: 'vr-host', appVersion: '1.2.3', mode: 'persistent', folder: '/srv/r327/work' })).data || {};
+      await call('/api/device/approve', X, { userCode: ms.userCode });
+      const mp = (await call('/api/device/poll', null, { deviceCode: ms.deviceCode })).data || {}; const tokM = mp.token, idM = mp.deviceId;
+      const ds = (await call('/api/device/start', null, { client: 'jcode', device: 'r327-laptop' })).data || {};
+      await call('/api/device/approve', X, { userCode: ds.userCode });
+      const tokD = ((await call('/api/device/poll', null, { deviceCode: ds.deviceCode })).data || {}).token;
+      const gets = ['/api/check', '/api/machines', '/api/devices', '/api/work/current', '/api/board', '/api/notes/list', '/v1/models', '/api/machine/other', '/api/usage'];
+      const posts = [['/api/chat', { message: 'hi' }], ['/api/work/share', { conv: 'room' }], ['/api/devices/revoke', { id: idM }], ['/api/hosts/new', {}], ['/api/device/approve', { userCode: 'AAAA-BBBB' }], ['/api/logout', {}], ['/api/pc-result', { id: 'x', ok: true }], ['/api/admin/create', { username: 't-r327-x' }]];
+      const viaM = []; for (const p of gets) viaM.push((await mc('GET', p, tokM)).status); for (const [p, b] of posts) viaM.push((await mc('POST', p, tokM, b)).status);
+      const mPoll = await mc('POST', '/api/machine/poll', tokM, { wait: 0 });
+      const dChk = await mc('GET', '/api/check', tokD), dList = await mc('GET', '/api/devices', tokD), dBoard = await mc('GET', '/api/board', tokD);
+      const stillLinked = ((await mc('GET', '/api/machines', X)).data.machines || []).some((m) => m.id === idM);
+      o.scope = viaM.every((s) => s === 403) && mPoll.status === 200 && mPoll.data.owner === 't-r327' && dChk.status === 200 && dChk.data.username === 't-r327' && dList.status === 200 && dBoard.status === 200 && stillLinked;
+      d.push(`scope: machine token ${viaM.join('/')} poll ${mPoll.status}; device token check ${dChk.status} devices ${dList.status} board ${dBoard.status}`);
+
+      // ---- 2. a watcher sees no machine / pc event and cannot answer one. (No host of U's is online yet: the call goes to the page.)
+      await call('/api/work/share', U, { conv: 'room' });
+      const wlog = []; let wcur = 0, wsince = '';
+      watcher = (async () => { while (!watchStop.v) {
+        const w = await call('/api/work/watch?user=t-user&after=' + wcur + '&since=' + encodeURIComponent(wsince), A); const dd = w.data || {};
+        for (const e of dd.events || []) wlog.push(e); if (typeof dd.after === 'number') wcur = dd.after; if (dd.since) wsince = dd.since; if (dd.stopped || w.status !== 200) break;
+      } })();
+      let ownerSaw = '', ownerRun = '', wrongAnswer = null, waitedOnOwner = false, finished = false;
+      await (async () => {
+        const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ message: 'PCTOOL r327 watcher', fresh: true }) });
+        const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue; let ev = {}; try { ev = JSON.parse(line); } catch { /* */ }
+            if (ev.type === 'bridge_run') ownerRun = ev.id;
+            if (ev.type === 'pc_tool') (async () => { wrongAnswer = await call('/api/pc-result', A, { id: ev.id, ok: true, result: 'watcher-answer' }); await sleep(600); waitedOnOwner = !finished; await call('/api/pc-result', U, { id: ev.id, ok: true, result: 'owner-answer' }); })();
+            if (ev.type === 'assistant') ownerSaw += JSON.stringify(ev.message);
+          }
+        }
+        finished = true;
+      })();
+      await sleep(300);
+      const attachA = await call('/api/work/attach?run=' + encodeURIComponent(ownerRun) + '&after=0', A);
+      await call('/api/work/share', U, { conv: '' }); watchStop.v = true; await Promise.race([watcher, sleep(5000)]);
+      const wjson = JSON.stringify(wlog);
+      o.watch = /owner-answer/.test(ownerSaw) && !/watcher-answer/.test(ownerSaw) && waitedOnOwner && wrongAnswer && wrongAnswer.status === 200 && wlog.length > 0 && wlog.every((e) => ['user', 'claude', 'tool', 'sys'].includes(e.t) && !('type' in e)) && !/pc_tool|machine_/.test(wjson) && !!ownerRun && attachA.status === 200 && !(attachA.data.events || []).length;
+      d.push(`watch: ${wlog.length} log lines (${[...new Set(wlog.map((e) => e.t))].join('+')}) pc_tool in log ${/pc_tool|machine_/.test(wjson)}; the watcher's answer was ${waitedOnOwner ? 'ignored (the run kept waiting for the owner)' : 'NOT ignored'}; run saw ${/owner-answer/.test(ownerSaw) ? 'the owner\'s answer' : ownerSaw.slice(0, 120)}; attach by the watcher ${(attachA.data.events || []).length} events`);
+
+      // ---- 3. the owner's own (older) AI host: pc engine, no `machine` cap, not even `signed-pc`. A planner session's run never reaches it; a run
+      //         started on U's behalf by someone else never reaches it (nor the browser folder); U's own run does.
+      const hostU = await mkHost(U); const got = [];
+      const ac = new AbortController(); hostStub = ac;
+      const hi = await (await fetch(H + '/node/hello', { method: 'POST', headers: hostHdr(hostU.id, hostU.token), body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex'), user: '', providers: [], engines: [], pc: true, version: '1.0.0', os: 'linux', caps: ['relay'] }) })).json().catch(() => ({}));
+      (async () => { while (!ac.signal.aborted) {
+        const pr = await fetch(H + '/node/poll', { headers: hostHdr(hostU.id, hostU.token), signal: ac.signal }).then((r) => r.json()).catch(() => ({}));
+        for (const j of pr.jobs || []) { got.push(j); await fetch(H + '/node/reply', { method: 'POST', headers: hostHdr(hostU.id, hostU.token), body: JSON.stringify({ id: j.id, status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ ok: true, result: 'host-listing ' + hostU.id })).toString('base64') }) }).catch(() => {}); }
+      } })();
+      for (let i = 0; i < 40; i++) { const hs = (await call('/api/check', U)).data.aiNodes || []; if (hs.some((x) => x.id === hostU.id && x.online)) break; await sleep(250); }
+      const planSid = (await call('/api/work/sessions/new', U, { title: 'r327 planner', background: true, mode: 'planner' })).data.id;
+      const n0 = got.length;
+      const pr1 = await chat(U, 'PLANNERPC PLANNERMACHINE=' + hostU.id + ' please', { session: planSid }), pr2 = await chat(U, 'PLANNERPC please', { session: planSid });
+      const planMsg = (r) => { try { return JSON.parse((texts(r.events).match(/PLANNER:(\{.*\})/) || [])[1]).pc || ''; } catch { return ''; } };
+      const n1 = got.length;
+      const behalf = mach(await chat(U, enc([listPc(), listPc({ machine: hostU.id }), listPc({ machine: hostU.nick }), { route: 'board', body: { name: 'board_list', args: {} } }]), { startedBy: 't-admin', fresh: true }));
+      const n2 = got.length;
+      const own = mach(await chat(U, enc([listPc(), listPc({ machine: hostU.id })]), { fresh: true }));
+      const n3 = got.length;
+      const isListing = (r) => r && r.status === 200 && r.body && r.body.ok === true && r.body.result === 'host-listing ' + hostU.id;
+      o.planner = /Planner mode: PC tools are not available/.test(planMsg(pr1)) && /Planner mode: PC tools are not available/.test(planMsg(pr2)) && n1 === n0;
+      o.behalf = behalf.length === 4 && [0, 1, 2].every((i) => behalf[i].status === 403 && behalf[i].body.ok === false && /on someone else's behalf/.test(JSON.stringify(behalf[i].body))) && behalf[3].status === 200 && n2 === n1;
+      o.own = own.length === 2 && isListing(own[0]) && isListing(own[1]) && n3 === n2 + 2;
+      d.push(`planner: "${planMsg(pr1).slice(0, 50)}" / "${planMsg(pr2).slice(0, 50)}" jobs to the host ${n1 - n0}; on behalf: ${behalf.map((r) => r.status).join('/')} jobs ${n2 - n1}; own run: ${own.map((r) => r.status).join('/')} jobs ${n3 - n2}`);
+      // the same on behalf with no host: the page's folder is not reached either (no pc_tool event leaves, the answer is at once)
+      ac.abort(); await call('/api/hosts/remove', U, { id: hostU.id });
+      const behalfB = mach(await chat(U, enc([listPc()]), { startedBy: 't-admin', fresh: true }));
+      const ownB = await chat(U, 'PCTOOL r327 own page', { fresh: true });
+      o.behalfBrowser = behalfB.length === 1 && behalfB[0].status === 403 && /fake-listing/.test(texts(ownB.events));
+      d.push(`browser: on behalf ${behalfB.map((r) => r.status).join('/')}, own run ${/fake-listing/.test(texts(ownB.events))}`);
+
+      // ---- compatibility (R338): the hub's hello answer announces `machine` (an older host never mentions it and still gets its pc jobs, above),
+      //      a scope document with a higher v at the poll boundary is refused whole, a readable one gives the words
+      o.hello = !!hi.hubKey && hi.machine && hi.machine.v === 1;
+      const listM = async () => ((await mc('GET', '/api/machines', X)).data.machines || []).find((m) => m.id === idM) || {};
+      const before = await listM();
+      const v2 = await mc('POST', '/api/machine/poll', tokM, { wait: 0, scopeDoc: { v: 2, preset: 'folder', paths: [{ path: '/srv/r327/newer', access: 'rw' }], futureThing: true } });
+      const v2text = await mc('POST', '/api/machine/poll', tokM, { wait: 0, scopeDoc: JSON.stringify({ v: 9 }), scope: 'folders: /srv/typed-by-the-machine (read-write)' });
+      const junk = await mc('POST', '/api/machine/poll', tokM, { wait: 0, scopeDoc: 'not json' });
+      const afterV2 = await listM();
+      const v1 = await mc('POST', '/api/machine/poll', tokM, { wait: 0, scopeDoc: { v: 1, preset: 'folder', paths: [{ path: '/srv/r327/other', access: 'rw' }], futureKey: [1] }, scope: 'folders: /srv/typed-by-the-machine (read-write)' });
+      const afterV1 = await listM();
+      o.scopeDoc = v2.status === 200 && /needs a newer hub/.test(v2.data.scopeRefused || '') && /needs a newer hub/.test(v2text.data.scopeRefused || '') && !!junk.data.scopeRefused && afterV2.scope === before.scope && afterV2.scopeIsDefault === true
+        && v1.status === 200 && v1.data.scopeRefused === null && /^one folder: \/srv\/r327\/other/.test(afterV1.scope || '') && !/typed-by-the-machine/.test(afterV1.scope || '') && afterV1.scopeIsDefault === false;
+      d.push(`scope doc: v2 ${v2.status} "${(v2.data.scopeRefused || '').slice(0, 60)}"; kept "${(afterV2.scope || '').slice(0, 40)}"; v1 → "${(afterV1.scope || '').slice(0, 40)}"; hello machine ${JSON.stringify(hi.machine)}`);
+      // the source: no presence / idle check on the machine path (the owner's run just goes on while they are away, Q7) and the sentence is in the prompt
+      const workSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'work.rs'), 'utf8'), hostsSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'ai_hosts.rs'), 'utf8');
+      const toolBody = workSrc.slice(workSrc.indexOf('// pc-tool: the person'), workSrc.indexOf('/// Everything a person may pick')).replace(/\/\/.*$/gm, ''); // the pc path, code only
+      const mfBody = hostsSrc.slice(hostsSrc.indexOf('pub fn machine_for('), hostsSrc.indexOf('pub async fn pc_tool(')).replace(/\/\/.*$/gm, '');
+      o.away = !/presence|idle|is_present|\.away|unattended/i.test(toolBody + mfBody) && /what you did, why you chose it over the other options, and what \{name\} can change/.test(workSrc) && !/unattended/i.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-hub', 'src', 'modules', 'machines.rs'), 'utf8').replace(/\/\/.*$/gm, ''));
+      d.push(`away: no presence check on the machine path ${!/presence|idle|is_present|\.away|unattended/i.test(toolBody + mfBody)}`);
+    } finally {
+      watchStop.v = true; if (hostStub) hostStub.abort();
+      await call('/api/work/share', U, { conv: '' });
+      if (created.password) await call('/api/admin/delete', A, { username: 't-r327' });
+    }
+    r327hub = { ok: ['scope', 'watch', 'planner', 'behalf', 'own', 'behalfBrowser', 'away'].every((k) => o[k] === true), o, detail: d.join(' · ') };
+    r338hub = { ok: ['own', 'hello', 'scopeDoc'].every((k) => o[k] === true), o, detail: d.join(' · ') };
+  }
   // R316 to R320 (T-303): RE containers, the manager of throw-away copies of the base image. A tiny local image (reTestSetup),
   // the real Podman; every container this block starts is removed again, whatever happens
   if (RE_T.ok) {
@@ -5352,7 +5472,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const L331 = 'linked machines audit log (T-312): machine::audit is append-only and hash-chained: every allow and deny leaves one line, an edited, removed, reordered or tail-cut line breaks verify(), rotation keeps the chain across files, file contents are never in it (only a digest), the hub copy has no digest or byte count and only the owner may read it (an admin may not)';
     const L332 = 'linked machines guards (T-312): a KILL file or machine stop stops jobs and the link, survives a restart and only a local action clears it (a remote message cannot); over-limit calls per tool class are refused with a retry-after; elevate without the machine\'s approval fails and never runs the command, an approved one runs once; the app refuses to serve as root / Administrator';
     const L333 = 'linked machines scope changes (T-312): a widening proposal from the web stays pending and changes nothing until the machine approves, a narrowing applies at once and is audited with the old and new scope hash, a grant expires on time and its jobs are told to stop, and no tool can read or change the scope file or its neighbours (floor, under every preset)';
-    if (ct.error) { for (const [id, l] of [['R321', L321], ['R322', L322], ['R340', L340], ['R331', L331], ['R332', L332], ['R333', L333], ['R324', 'signed requests and the machine\'s own check (T-308): machine::sign + the host pin']]) skip(id, l, 'no Rust toolchain here (' + ct.error.code + ')'); }
+    const L327 = 'linked machines who may reach a machine (T-310): a linked machine\'s device token reaches only /api/machine/poll|reply|unlink and is refused (403) on every other route while an ordinary device token is unchanged; a watcher of a shared Work session gets no pc_tool / machine_* event (the share log holds only text lines), cannot answer a call (its /api/pc-result finds nothing, the run waits for the owner) and sees nothing through attach; a planner session\'s machine / pc call is refused and no job reaches the host; the one rule (machine_rule) is run account = machine owner AND the run started by that person: a run started on the owner\'s behalf by someone else (Hyper Workflows, T-294: Work::set_started_by) gets 403 for machine, host pc and the browser folder, the owner\'s own run works; nothing refuses a run because the owner is away (no grant, no presence check) and the prompt says "report what I did, why, what you can change"';
+    const L338 = 'linked machines compatibility (T-310): an older AI host (no machine cap, not even signed-pc) still serves its pc engine and is shown "one folder (older app)"; the hub\'s hello answer announces machine v1 and a newer app against an older hub (no announcement, the frozen JavaScript hub) stays an AI host; a scope document with a higher v (or unreadable) arriving in a machine\'s poll is refused whole at the hub (nothing kept, the typed words ignored) while a readable one gives the words; the frozen JavaScript hub keeps the browser PC-folder tools and has no machine routes';
+    if (ct.error) { for (const [id, l] of [['R327', L327], ['R338', L338], ['R321', L321], ['R322', L322], ['R340', L340], ['R331', L331], ['R332', L332], ['R333', L333], ['R324', 'signed requests and the machine\'s own check (T-308): machine::sign + the host pin']]) skip(id, l, 'no Rust toolchain here (' + ct.error.code + ')'); }
     else {
       const out321 = String(ct.stdout || '') + String(ct.stderr || '');
       const okN = (re) => (out321.match(new RegExp('^test machine::' + re + '[^ ]* \\.\\.\\. ok$', 'gm')) || []).length;
@@ -5380,6 +5502,19 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       check('R331', L331, ct.status === 0 && src331 && okN('audit::') >= 6, detail331);
       check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= 4 && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331);
       check('R333', L333, ct.status === 0 && src331 && okN('changes::') >= 7, detail331);
+      // R327 and R338 (T-310): the unit tests of the rule, the watcher filter and the compatibility module, plus the hub's half from above
+      const ct310 = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', '-p', 'pgm-ai-internal', '-p', 'pgm-identity-internal', '--', 'compat::', 'work::tests::', 'devices::'], { cwd: path.join(MILLS, 'native'), env: env321, encoding: 'utf8', timeout: 1800000 });
+      const out310 = String(ct310.stdout || '') + String(ct310.stderr || '');
+      const t310 = (name) => new RegExp('^test ' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\.\\.\\. ok$', 'm').test(out310);
+      const units327 = ['work::tests::a_machine_call_needs_the_owner_to_be_the_account_and_the_starter', 'work::tests::watchers_see_no_machine_event_and_answer_none_and_a_planner_has_no_machine', 'work::tests::a_planner_may_only_write_notes_under_plans_and_never_use_pc_tools'];
+      const units338 = ['compat::tests::an_older_hub_offers_no_machine_and_a_newer_app_stays_an_ai_host', 'compat::tests::an_older_app_keeps_its_pc_engine_and_gets_no_machine_job', 'compat::tests::a_scope_with_a_higher_v_is_refused_whole_at_the_polls_boundary'];
+      const u327 = units327.filter(t310), u338 = units338.filter(t310);
+      if (!RUST_HUB) skip('R327', L327, 'the Rust hub\'s: --rust-hub runs it');
+      else check('R327', L327, ct310.status === 0 && u327.length === units327.length && !!r327hub && r327hub.ok, `cargo test ${ct310.status}: units ${u327.length}/${units327.length} ${/FAILED|panicked/.test(out310) ? 'FAILURES' : ''} · ${r327hub ? (r327hub.ok ? '' : 'FAILED ' + Object.entries(r327hub.o).filter(([, v]) => v !== true).map(([k]) => k).join(',') + ' · ') + r327hub.detail : 'no hub run'}`);
+      // the frozen JavaScript hub's half (bridge/test/js-fallback.js): the browser PC tools answer, the machine routes are absent, hello announces no machine
+      const js338 = await require('./js-fallback.js').probe({ portFrom: PORT + 380 });
+      check('R338', L338, ct310.status === 0 && u338.length === units338.length && js338.ok && js338.steps.pcBrowser === true && js338.steps.noMachines === true && js338.steps.hostStaysAiHost === true && (!RUST_HUB || (!!r338hub && r338hub.ok)),
+        `cargo test ${ct310.status}: units ${u338.length}/${units338.length} · JavaScript hub alone: ${js338.why.slice(0, 160)} · ${RUST_HUB ? (r338hub ? (r338hub.ok ? 'hub ok' : 'hub FAILED ' + Object.entries(r338hub.o).filter(([, v]) => v !== true).map(([k]) => k).join(',')) : 'no hub run') : 'plain mode: the Rust hub\'s half is skipped'}`);
     }
   }
   // R323 (T-308, linked machines 2/8, the Rust hub's): the per-run secret and the owner check on the hub (plans/linked-machines.md 4.3)

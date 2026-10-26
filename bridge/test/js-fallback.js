@@ -29,6 +29,7 @@ async function probe(opts = {}) {
     fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(B, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
     for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(root, f));
     const port = await freePort(opts.portFrom || 7950);
+    const H0 = 'http://127.0.0.1:' + port; // the fake Claude's PC relay calls this hub (its MCP config names the config port 7777 on purpose)
     const node = 'probe-node', secret = 'probe-node-secret-0123456789abcdef';
     fs.writeFileSync(path.join(B, 'config.json'), JSON.stringify({ port: 7777, tunnel: false, gistId: '', rustHub: false, aiNodes: { [node]: secret }, worktreeRoot: path.join(root, 'worktrees'), projectsRoot: path.join(root, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(B, 'test', 'fake-claude.js')] })); // port 7777 on purpose: MILLS_PORT must win (the fallback takes the port vr-run serves)
     fs.writeFileSync(path.join(root, '.gitignore'), ['bridge/profiles/', 'bridge/*.json', 'Chat/', 'Archive/', 'worktrees/', 'projects/', ''].join('\n'));
@@ -42,7 +43,7 @@ async function probe(opts = {}) {
 
     const logFile = path.join(root, 'hub.log');
     const log = fs.openSync(logFile, 'a');
-    proc = spawn(process.execPath, [path.join(B, 'server.js'), '--no-tunnel'], { cwd: B, stdio: ['ignore', log, log], windowsHide: true, env: { ...process.env, MILLS_SUPERVISED: '1', MILLS_PORT: String(port), VR_SERVING: 'javascript-fallback' } });
+    proc = spawn(process.execPath, [path.join(B, 'server.js'), '--no-tunnel'], { cwd: B, stdio: ['ignore', log, log], windowsHide: true, env: { ...process.env, MILLS_SUPERVISED: '1', MILLS_PORT: String(port), VR_SERVING: 'javascript-fallback', FAKE_CLAUDE_BRIDGE: H0 } });
     const H = `http://127.0.0.1:${port}`;
     const get = async (p, token, headers = {}) => { try { const r = await fetch(H + p, { headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers } }); return { status: r.status, data: await r.json().catch(() => ({})), type: r.headers.get('content-type') || '' }; } catch (e) { return { status: 0, data: {}, type: '' }; } };
     const post = async (p, body, headers = {}) => { try { const r = await fetch(H + p, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: {} }; } };
@@ -67,9 +68,33 @@ async function probe(opts = {}) {
       out.chatStatus = r.status;
     } catch (e) { out.chatStatus = 0; }
     out.steps.work = out.chatStatus === 200 && events.some((e) => e.type === 'system') && events.some((e) => e.type === 'assistant');
+    // T-310 (linked machines 9, R338): this hub keeps the browser PC-folder tools exactly as they are (the page answers the run's
+    // pc_tool through /api/pc-result) and has no machine features: the machine routes are not here ("not available on this hub")
+    let pcText = '';
+    try {
+      const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + T }, body: JSON.stringify({ message: 'PCTOOL fallback probe', fresh: true }) });
+      if (r.status === 200) {
+        const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read(); if (done) break;
+          buf += dec.decode(value, { stream: true }); let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
+            let ev = {}; try { ev = JSON.parse(line); } catch { /* not json */ }
+            if (ev.type === 'pc_tool') post('/api/pc-result', { id: ev.id, ok: true, result: 'fake-listing: a.txt' }, { Authorization: 'Bearer ' + T });
+            if (ev.type === 'assistant') pcText += JSON.stringify(ev.message);
+          }
+        }
+      }
+    } catch (e) { /* the step fails below */ }
+    out.steps.pcBrowser = /fake-listing: a\.txt/.test(pcText); out.pcText = pcText.slice(0, 300);
+    const mach = await get('/api/machines', T), machPoll = await post('/api/machine/poll', { wait: 0 }, { Authorization: 'Bearer ' + T });
+    out.steps.noMachines = mach.status !== 200 && !mach.data.machines && machPoll.status !== 200 && !machPoll.data.owner;
     const hello = await post('/node/hello', { nonce: 'a'.repeat(32) }, { 'X-VR-Host': node, 'X-VR-Host-Token': secret });
     const helloBad = await post('/node/hello', { nonce: 'a'.repeat(32) }, { 'X-VR-Host': node, 'X-VR-Host-Token': 'wrong-secret-0123456789abcdef' });
     out.steps.host = hello.status === 200 && !!hello.data.serverNonce && helloBad.status === 401;
+    out.helloMachine = hello.data.machine; // the frozen hub never announces `machine` (an app stays an AI host against it)
+    out.steps.hostStaysAiHost = hello.data.machine === undefined;
     out.ok = Object.values(out.steps).every(Boolean);
     out.why = Object.entries(out.steps).map(([k, v]) => `${k} ${v ? 'ok' : 'FAILED'}`).join(' · ') + (out.ok ? '' : ` · log tail: ${(fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '').trim().split('\n').slice(-3).join(' | ').slice(0, 300)}`);
   } catch (e) {
