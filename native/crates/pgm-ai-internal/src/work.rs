@@ -40,7 +40,9 @@ struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: 
     secret: String, account: String, sid: String, sess_env: String,
     /// Who started the run (T-310, plans/linked-machines.md 4.5): the run's own account for a run its person started; another account when it was started
     /// on that person's behalf (a workflow someone else defined or scheduled, an agent-to-agent task). The machine rule needs both to be the owner.
-    started_by: String }
+    started_by: String,
+    /// The linked machines this run has used (T-314: {id, name, scope, since}); the Work bar and the owner's card say so until the run ends.
+    machines: Vec<Value> }
 /// Who a tool call is, as the hub's own records say (never a header the caller typed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
@@ -182,6 +184,28 @@ impl Work {
     pub fn started_by_of(&self, run: &str) -> Option<String> {
         if run.is_empty() { return None; }
         self.runs.lock().unwrap_or_else(|e| e.into_inner()).values().find(|r| r.id == run).map(|r| r.started_by.clone())
+    }
+    /// A run of `account` is sending a call to its linked machine `card` (T-314, plans/linked-machines.md 4.6). The first call of
+    /// the run to that machine adds one transcript line, a `bridge_info` that every page shows (an older page as plain text; a newer
+    /// one also lights the in-use bar from its `machine` field). Watchers never get it (only text and results are shared).
+    /// The run is the caller's own run record, else the person's running session; none: nothing to note.
+    pub fn machine_used(&self, caller: &Caller, card: &Value) {
+        let id = s(card, "id");
+        if id.is_empty() { return; }
+        let key = { let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); runs.iter().find(|(_, r)| !caller.run.is_empty() && r.id == caller.run && r.account == caller.account).map(|(k, _)| k.clone()) }.or_else(|| self.run_key_of(&caller.account));
+        let Some(key) = key else { return };
+        let m = json!({ "id": id, "name": card["name"], "scope": card["scope"], "mode": card["mode"], "since": now_ms() });
+        let first = { let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); runs.get_mut(&key).and_then(|r| if r.machines.iter().any(|x| x["id"] == json!(id)) { None } else { r.machines.push(m.clone()); Some(r.sid.clone()) }) };
+        if let Some(sid) = first { self.emit(&key, json!({ "type": "bridge_info", "text": machine_use_line(&s(card, "name"), &s(card, "scope"), &sid), "machine": m })); }
+    }
+    /// The person's own runs that use a linked machine now, by machine id: [{session, run, since}] (the card's in-use line, T-314).
+    pub fn machines_in_use(&self, user: &str) -> HashMap<String, Vec<Value>> {
+        let p = format!("{user}#");
+        let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+        for (k, r) in self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(k, r)| (*k == user || k.starts_with(&p)) && r.account == user) {
+            for m in &r.machines { out.entry(s(m, "id")).or_default().push(json!({ "session": if r.sid.is_empty() { k.split_once('#').map(|x| x.1).unwrap_or("").to_string() } else { r.sid.clone() }, "run": r.id, "since": m["since"] })); }
+        }
+        out
     }
     /// For whatever starts a run on someone's behalf (Hyper Workflows: a workflow another person defined or scheduled; T-294
     /// agent-to-agent tasks): say who started it, right after the run record exists. A run whose starter is not its account
@@ -854,7 +878,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()) });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()), machines: Vec::new() });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     w.busy_changed.notify_one();
@@ -1020,7 +1044,9 @@ async fn tool_inner(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Valu
     let mut args = args;
     if let Some(o) = args.as_object_mut() { o.remove("machine"); }
     // T-311: the owner's own linked machine, when one is online (or the caller named it); the caller's account is the actor and the owner
-    match ai.machines.route(&hub.machines_of(account), account, &named, &name, &args, &caller.actor()).await {
+    let cards = hub.machines_of(account);
+    if let Some(c) = ai.machines.pick(&cards, &named, &name) { w.machine_used(caller, c); } // T-314: the run says which machine it uses
+    match ai.machines.route(&cards, account, &named, &name, &args, &caller.actor()).await {
         crate::machine_jobs::Routed::Done(v) => return v,
         crate::machine_jobs::Routed::Pass => {}
     }
@@ -1493,6 +1519,11 @@ fn test_started_by(b: &Value) -> Option<String> {
 }
 /// May a watcher of a shared Work session see this event of the run? Never a PC or machine call (`pc_tool`, `machine_*`): they carry
 /// paths and contents of the owner's computer, and a watcher can answer none (T-310; plans/linked-machines.md 4.5).
+/// The one transcript line a run gets when it first uses a linked machine (T-314): "your machine › <name>: <scope in words> · session <id>".
+pub fn machine_use_line(name: &str, scope: &str, session: &str) -> String {
+    let name = if name.trim().is_empty() { "your linked machine" } else { name.trim() };
+    format!("your machine › {name}: {} · session {}", if scope.trim().is_empty() { "scope not reported yet" } else { scope.trim() }, if session.is_empty() { "main" } else { session })
+}
 pub fn watcher_sees(event_type: &str) -> bool { event_type != "pc_tool" && !event_type.starts_with("machine_") }
 /// Why a tool call from a planner session's run is refused ("" = allowed): no PC tools, no deleting notes or making channels,
 /// notes written only under plans/ (case-insensitive, no "..").
@@ -1527,7 +1558,7 @@ mod tests {
     fn put_run(w: &Work, key: &str, account: &str, sid: &str, sess_env: &str, secret: &str, id: &str, remote: &str) {
         let (tx, _rx) = mpsc::unbounded_channel();
         w.runs.lock().unwrap().insert(key.into(), Run { id: id.into(), tx, pid: None, remote: remote.into(), pending: HashMap::new(), ev: RunLog::default(), last: 0, answered: false, prov: String::new(), project: String::new(), branch: String::new(), started: 0,
-            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into() });
+            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into(), machines: Vec::new() });
     }
     /// T-308: the per-run secret names the run; the account and session come from the run record; a header that disagrees is refused;
     /// the deprecated shared secret still works (and says so); nothing else is ours.
@@ -1618,6 +1649,33 @@ mod tests {
         w.share_event("alice", &json!({ "type": "machine_tool", "id": "c", "name": "fs.write", "args": { "path": "/secret" } }));
         assert_eq!(w.shares.lock().unwrap().get("alice").unwrap().n, 0);
         for name in ["list", "read", "write", "delete", "mkdir", "shell_run", "job_start", "machine_info", "fs.write"] { assert!(!planner_refusal("pc", name, &json!({ "machine": "m1" })).is_empty(), "a planner session has no {name}"); }
+    }
+
+    /// T-314: a run's first call to a linked machine gives one transcript line (an older page shows it as text) with the machine
+    /// for the in-use bar; a second call adds nothing; the owner's in-use list has the run, nobody else's has anything; the run ends, it is gone.
+    #[test]
+    fn a_runs_machine_is_noted_once_in_its_transcript_and_in_use_until_the_run_ends() {
+        let (w, _) = work_here();
+        put_run(&w, "alice#s2", "alice", "s2", "s2", "sec-a", "r1", "");
+        put_run(&w, "bob", "bob", "", "", "sec-b", "r2", "");
+        let caller = Caller { account: "alice".into(), session: "s2".into(), sid: "s2".into(), run: "r1".into(), legacy: false };
+        let card = json!({ "id": "m1", "name": "box", "scope": "one folder: /home/a/p (read-write); shell (advisory)", "mode": "while open" });
+        w.machine_used(&caller, &card);
+        w.machine_used(&caller, &card);
+        let evs: Vec<Value> = w.runs.lock().unwrap().get("alice#s2").unwrap().ev.since(0).into_iter().filter(|e| e["type"] == json!("bridge_info")).collect();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(s(&evs[0], "text"), "your machine › box: one folder: /home/a/p (read-write); shell (advisory) · session s2");
+        assert_eq!(evs[0]["machine"]["id"], json!("m1"));
+        let u = w.machines_in_use("alice");
+        assert_eq!(u["m1"].len(), 1);
+        assert_eq!(u["m1"][0]["run"], json!("r1"));
+        assert!(w.machines_in_use("bob").is_empty() && w.machines_in_use("ali").is_empty());
+        // another person's call never lands in alice's run (their own run, or nothing)
+        w.machine_used(&Caller { account: "bob".into(), session: String::new(), sid: String::new(), run: "r1".into(), legacy: false }, &json!({ "id": "m9", "name": "b" }));
+        assert!(!w.machines_in_use("alice").contains_key("m9") && w.machines_in_use("bob").contains_key("m9"));
+        w.runs.lock().unwrap().remove("alice#s2");
+        assert!(w.machines_in_use("alice").is_empty());
+        assert_eq!(machine_use_line("", "", ""), "your machine › your linked machine: scope not reported yet · session main");
     }
 
     fn work_here() -> (Work, std::path::PathBuf) {

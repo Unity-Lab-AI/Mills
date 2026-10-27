@@ -72,6 +72,11 @@
   .whoLbl { width: 100%; font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
   .whoChip { display: inline-flex; align-items: center; gap: .4rem; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem .2rem .45rem; font-size: .82rem; animation: msgIn .25s ease; }
   .whoChip.off { color: var(--muted); } .whoChip small { color: var(--muted); font-size: .7rem; }
+  #useBar { display: flex; align-items: center; gap: .3rem; padding: .3rem .6rem; font-size: .85rem; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  #useBar.wide, .mScope.wide { background: color-mix(in srgb, var(--bad) 22%, var(--panel)); color: var(--text); font-weight: 600; }
+  .mCard { border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent); border-radius: .5rem; padding: .45rem .6rem; margin: .4rem 0; display: grid; gap: .2rem; }
+  .mScope.wide { border-radius: .3rem; padding: .1rem .3rem; } .mInUse { color: var(--accent); font-weight: 600; } .mPeek { margin: .3rem 0; display: grid; gap: .2rem; }
+  .mDot { display: inline-block; width: 1rem; text-align: center; font-weight: 700; } .mDot.on { color: var(--good); } .mDot.off { color: var(--muted); } .mDot.paused { color: #fcc419; }
   .pdot { position: relative; width: .7rem; height: .7rem; border-radius: 50%; flex: none; }
   .roomTop .online { color: var(--good); }
   .typingLine { display: flex; align-items: center; gap: .35rem; padding: .15rem .9rem; font-size: .76rem; color: var(--muted); font-style: italic; animation: msgIn .2s ease; }
@@ -1020,6 +1025,8 @@
         <div id="apiBox" class="apiBox"></div></div>
       <div class="setSection"><b>Signed-in devices</b> — tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.
         <div id="devBox" class="apiBox"></div></div>
+      <div class="setSection"><b>My machines</b> — your own computers linked to your account (the VibeRoller app or <code>vr-host machine</code>), so your Work runs can use them within the scope you chose ON that machine. Only you see them and only your runs can use them. Pause or unlink one here; its scope and kill switch are set on the machine.
+        <div id="machBox" class="apiBox"></div></div>
       <div class="setSection"><b>AI source</b> — whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).
         <div id="srcBox" class="apiBox"></div></div>
       <div class="setSection"><b>My AI hosts</b> — your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.
@@ -1260,6 +1267,7 @@
         <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--d --h --m</span></div>
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
       </div>
+      <div id="useBar" hidden role="status"></div><!-- what this run uses on your computer: web/machines.js (T-314) -->
       <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
       <div id="slashMenu" hidden></div>
       <div id="hwMenu" hidden></div><!-- the Hyper Workflows matching "/hyperwork <name>" (web/hyperwork.js, T-207) -->
@@ -2724,6 +2732,7 @@ async function restorePlans() {
   for (const [id] of openPlans) if (!open.some((p) => p.id === id)) closePlan({ id, outcome: 'gone' });
 }
 function handleEvent(ev) {
+  if (typeof MACHINES !== 'undefined') MACHINES.onEvent(ev); // the in-use bar (web/machines.js, T-314)
   if (ev.type === 'bridge_run') { curRun = { id: ev.id, n: 0 }; if (runRes.id !== ev.id) runRes = { id: ev.id, seen: new Set(), n: 0, out: 0, el: null }; return; }
   if (ev.type === 'bridge_plan') { showPlan(ev); scroll(); return; }
   if (ev.type === 'bridge_plan_answered') { closePlan(ev); return; }
@@ -4408,7 +4417,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderDevices(); renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderMyProjects(); renderSource(); renderHosts();
+  renderDevices(); if (typeof MACHINES !== 'undefined') MACHINES.render(); renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderMyProjects(); renderSource(); renderHosts();
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
@@ -5149,6 +5158,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 <script src="calls.js"></script>
 <!-- co-view: share the product view itself, viewers follow in their own page (T-244): web/coview.js -->
 <script src="coview.js"></script>
+<!-- linked machines: Settings > My machines and the in-use bar in Work (T-314): web/machines.js -->
+<script src="machines.js"></script>
 <!-- servers, channels, groups, member column: web/guilds.js · app mode + install: web/app.js -->
 <script src="guilds.js"></script>
 <!-- Server Settings, join / invitations, channel + group dialogs: web/guild-settings.js -->
