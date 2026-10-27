@@ -45,6 +45,7 @@ function check(id, label, pass, detail = '') {
   console.log(`${pass ? 'PASS' : 'FAIL'} ${id.padEnd(4)} ${label}${detail ? '  — ' + detail : ''}`);
   if (STOP_AFTER && id === STOP_AFTER) { const e = new Error('stopped after ' + id); e.stopAfter = true; throw e; }
 }
+const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -553,7 +554,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['sessions.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -575,6 +576,9 @@ async function run() {
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
+  if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
+  if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
+  if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -637,7 +641,7 @@ async function run() {
   const anonStatus = (await fetch(H + '/api/status', { headers: { 'cf-connecting-ip': '203.0.113.9' } }).then((r) => r.json()).catch(() => ({})));
   const localStatus = (await call('/api/status')).data;
   const notFound = (await fetch(H + '/nothing-here.html')).status, dirList = (await fetch(H + '/vendor/')).status, traversal = (await fetch(H + '/..%2f..%2fbridge%2fconfig.json')).status;
-  const hiddenScreens = ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'settings', 'roomFloat', 'callFloat', 'archive'].filter((id) => !new RegExp(`id="${id}"[^>]*\\bhidden\\b`).test(html) && !new RegExp(`<[a-z]+ [^>]*\\bhidden\\b[^>]*id="${id}"`).test(html));
+  const hiddenScreens = ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'settings', 'roomFloat', 'callFloat', 'sessPanel'].filter((id) => !new RegExp(`id="${id}"[^>]*\\bhidden\\b`).test(html) && !new RegExp(`<[a-z]+ [^>]*\\bhidden\\b[^>]*id="${id}"`).test(html));
   check('R110', `login gate: ${routes.length} API routes from the hub source answer 401 without a sign-in (GET + POST); anonymous status through the tunnel carries no pid / busy / supervised; unknown paths, folder listings and path traversal → 404; [static] every screen but the sign-in form ships hidden`,
     routes.length >= 50 && !leaks.length && anonStatus.ok === true && anonStatus.pid === undefined && anonStatus.busy === undefined && anonStatus.supervised === undefined && typeof localStatus.pid === 'number'
     && notFound === 404 && dirList === 404 && traversal === 404 && !hiddenScreens.length && /<form id="login"/.test(html),
@@ -685,7 +689,7 @@ async function run() {
   check('R104', 'past sessions search: matches titles and everything in the transcript (all words, any case), ranked by hits with snippets saying who said it, nothing from other accounts, empty query = the plain list; [static] search box + highlighted matches',
     s1.status === 200 && s2.status === 200 && f1.length === 1 && f1[0].id === s1.data.id && f1[0].hits === 1 && f1[0].snippets.length === 1 && f1[0].snippets[0].cls === 'claude' && /needle-r75/.test(f1[0].snippets[0].text)
     && f2.length === 1 && f2[0].id === s1.data.id && !f3.length && !f4.length && f5.length === 2
-    && /id="archiveQ"/.test(html) && /function markText\(/.test(html) && /\/api\/archive\/search/.test(html),
+    && /id="spQ"/.test(html) && /function markText\(/.test(html) && /\/api\/archive\/search/.test(html),
     `needle ${f1.length}, two words ${f2.length}, absent ${f3.length}, other account ${f4.length}, empty ${f5.length}`);
   for (const s of [s1, s2]) await call('/api/archive/delete', U, { id: s.data.id });
 
@@ -1670,7 +1674,7 @@ async function run() {
     [/function renderAgenda\(/.test(boardJs76) && /#calGrid\.agenda/.test(html), 'calendar agenda on phones'],
     [/env\(safe-area-inset-bottom\)/.test(html), 'safe-area insets'],
     [/#adminBody table \{ display: block; overflow-x: auto;/.test(html), 'admin table scrolls'],
-    [/\.modal \.box, #archive \.box \{ width: 100vw;/.test(html), 'full-screen dialogs on phones'],
+    [/\.modal \.box \{ width: 100vw;/.test(html), 'full-screen dialogs on phones'],
     [/\.floatWin \{ left: 8px !important;/.test(html), 'floating windows fill phones'],
   ].filter(([ok]) => !ok).map(([, n]) => n);
   // Mills Chat app: PWA manifest + service worker + icons, app mode, the Discord-shaped side bar and member column.
@@ -3067,6 +3071,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R196', 'presence and activity (plans/presence.md): a person is as present as their most active device (one active + one idle → online, both idle → away, the last one gone → offline); a run of theirs makes them Working; the accept-work switch makes them Available for work (Working + available during a run); appear offline shows Offline to everyone (also in the old presence list) while they see their real presence, and it ends at its until; the custom text (profile.status) ends at its until; bad override / too-long text → 400; a change reaches pages through the room long poll (status, ver)',
       ok196, has196 ? `mixed ${l196(seen.mixed)} (${seen.mixed.devices} devices) · both idle ${l196(seen.bothIdle)} · one gone ${l196(seen.oneGone)} · run ${l196(seen.run)} · run+accept ${l196(seen.runAccept)} · accept ${l196(seen.accept)} · bad ${seen.badOverride}/${seen.badText} · appear offline: others ${l196(seen.off)} text "${seen.off.text || ''}", old list online ${seen.oldList.online}, self real ${seen.meReal} · room ver moved ${seen.verMoved} status ${seen.inRoom} · after until ${l196(seen.back)} text "${seen.back.text || ''}" · all gone ${l196(seen.allGone)}` : 'GET /api/presence does not exist yet');
   } else skip('R196', 'presence and activity (plans/presence.md)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) await r488Check(); else skip('R488', 'the page shows everyone\'s status (web/presence.js, T-261)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R205-R209: time accounting (plans/presence.md section 6, T-263); the scratch hub's config has presence.workGapMs = 1500
     const day205 = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
     const time205 = async (tok, q = '') => (await call(`/api/presence/time${q}`, tok)).data || {};
@@ -3479,6 +3484,22 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && jsGet.status === 200 && jsGet.body.task.status === 'done' && jsUpd.status === 200 && jsDisk.archivedAt > 0 && /from the JavaScript hub r487/.test(jsDisk.body || ''),
       `open ${openTry.status} · archive ${arch1.status} on board ${onView(view1, a1)} info ${JSON.stringify(view1.archive)} · found ${JSON.stringify(found1.tasks && found1.tasks.map((t) => t.id))} delete ${f1.deleteAt - f1.archivedAt} · restore ${rest.status} ${rest.data.task && rest.data.task.status} again ${restAgain.status} · all ${JSON.stringify(all.data).slice(0, 80)} · agent ${JSON.stringify(agent)} · mcp ${mcpList.filter((n) => /archiv|restore/.test(n))} · js ${jsGet.status}/${jsUpd.status} kept ${jsDisk.archivedAt}`);
   } else skip('R487', 'the board\'s archive (T-190)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R490 (T-280): the planner re-assesses the board, as proposals only
+    const mk = async (title, extra) => (await call('/api/board/create', A, { title, ...extra })).data.task.id;
+    const base = await mk('engine r490 groundwork'); await call('/api/board/complete', A, { id: base });
+    const waits = await mk('waits r490 on the groundwork', { status: 'backlog', labels: ['blocked', 'r490'], assignee: 't-admin', body: `**Blocked on ${base}.** based on it` });
+    const still = await mk('still r490 blocked', { status: 'backlog', labels: ['blocked'], assignee: 't-admin', body: `Blocked on ${waits}.` });
+    const lonely = await mk('nobody r490 owns this');
+    const before = JSON.stringify(((await call('/api/board', A)).data.tasks || []).filter((t) => [waits, still, lonely].includes(t.id)).map((t) => [t.id, t.rev, t.status]));
+    const got = JSON.parse((texts((await chat(A, 'PLANASSESS please', { fresh: true })).events).match(/ASSESS:(\{.*\})/) || [])[1] || '{}');
+    const props = got.proposals || [], has = (kind, id) => props.find((p) => p.kind === kind && (p.ids || []).includes(id));
+    const un = has('unblock', waits) || {};
+    const after = JSON.stringify(((await call('/api/board', A)).data.tasks || []).filter((t) => [waits, still, lonely].includes(t.id)).map((t) => [t.id, t.rev, t.status]));
+    check('R490', 'the planner re-assesses the board (plan_assess): a task marked blocked on something done is proposed for unblocking, with the change ready for the draft (to do, without the blocked label); one still waiting is not; a task without an owner is named; every proposal has a reason; nothing on the board changes',
+      !!un.reason && un.change && un.change.id === waits && un.change.change.status === 'todo' && !(un.change.change.labels || []).includes('blocked') && (un.change.change.labels || []).includes('r490')
+      && !has('unblock', still) && !!has('unowned', lonely) && props.every((p) => p.reason) && before === after,
+      `${props.length} proposals · unblock ${JSON.stringify(un).slice(0, 200)} · still ${!!has('unblock', still)} · unowned ${!!has('unowned', lonely)} · unchanged ${before === after} ${got.error || ''}`);
+  } else skip('R490', 'the planner re-assesses the board (T-280)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};
@@ -3544,6 +3565,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R198', 'session limits (plans/multi-session.md § 6): with the defaults (5 per person per host, 3 per provider) a 4th working session on the same provider answers 429 (idle sessions cost nothing: the 4th exists, only its run is refused) with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R285 to R289 (T-289): other tools (Jcode PGM) report their sessions; the person's list shows them as `external`
     const s285 = {}, now285 = Date.now();
     const rep = (tok, body) => call('/api/work/sessions/report', tok, body);
@@ -5098,7 +5120,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     /height: 100dvh/.test(html) && /html \{ height: 100%; overflow: hidden; \}/.test(html) && /Stay inside the viewport/.test(html)
     && /\.msg \{ min-width: 0; max-width: 100%; overflow-wrap: anywhere/.test(html) && /\.floatWin \{ max-width: calc\(100vw - 16px\)/.test(html));
   check('R51', '[static] Past sessions naming + auto-save (default 5 min, auto-named, keeps overwriting the same saved session)',
-    />Past sessions<\/button>/.test(html) && />Save session<\/button>/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
+    /id="sessToggle"/.test(html) && /Saved conversations/.test(html) && />Save session<\/button>/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
     && /autosave: p\.autosave \?\? 5/.test(html) && /saveToArchive\(true, true\)/.test(html) && /if \(auto\) title = autoName\(\)/.test(html));
   const ids48 = ['callBtn', 'callBanner', 'callCore', 'callTiles', 'callMic', 'callCam', 'callLeave', 'callFloat', 'callSideHost', 'audNoise', 'audEcho', 'audAgc', 'callVolume', 'callQuality', 'micBtn', 'recBar', 'recSend', 'recCancel', 'clipVolume', 'clipAuto','rail', 'panes', 'roomPane', 'roomFloat', 'roomCore', 'roomSide', 'settings', 'setNick', 'setColors', 'volMessage', 'volMention', 'volReply', 'setToasts', 'toasts', 'replyBar', 'mentionList', 'railRoomBadge', 'goSettings', 'setTts', 'ttsVolume', 'ttsRate', 'ttsVoice', 'ttsScope', 'ttsStop'];
   check('R48', '[static] Work rail + resizable / minimizable panes + floating chat, settings in menu / chat / rail, tones, toasts, receipts, edit / delete / reply / @',
@@ -5359,7 +5381,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   { // R169: a page that reloads during a Work reply joins it again (the Rust hub's GET /api/work/attach), and the page
     // never reloads itself in front of you, never stays black, sends the retired GitHub Pages copy to the hub (4.1.4)
     const page169 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    const stat = /async function followRun\(saved, inSend\)/.test(page169) && /\/api\/work\/attach\?run=/.test(page169) && /run: curRun/.test(page169) && /if \(curRun && !runEnded\) await followRun\(curRun, true\)/.test(page169)
+    const stat = /async function followRun\(saved, inSend(, gen0)?\)/.test(page169) && /\/api\/work\/attach\?run=/.test(page169) && /run: curRun/.test(page169) && /curRun && !runEnded\) await followRun\(curRun, true(, gen)?\)/.test(page169)
       && /if \(document\.visibilityState === 'visible'\) \{ updateBar\(pageUpdate\.build\); return; \}/.test(page169) && /function bootTrouble\(msg\)/.test(page169) && /location\.replace\(HUB_HOST \+ '\/'\)/.test(page169);
     if (RUST_HUB) {
       const ctl = new AbortController();
@@ -6014,6 +6036,118 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   // R323 (T-308, linked machines 2/8, the Rust hub's): the per-run secret and the owner check on the hub (plans/linked-machines.md 4.3)
   if (!RUST_HUB) skip('R323', 'per-run MCP secret and the owner check for machines (the Rust hub\'s; --rust-hub runs it)', 'the Rust hub is not in front: run with --rust-hub');
   else await r323Check();
+  // R488 (T-261, Mills' UI for plans/presence.md): what the page shows, driven over HTTP against the scratch hub, and the page's own
+  // presence script evaluated in node (its pure helpers: one shape per label, do not disturb, the hover card's lines, nothing on a hub without presence)
+  async function r488Check() {
+    const got = {}; let P = null;
+    const page = await fetch(H + '/').then((r) => r.text()).catch(() => '');
+    const js = await fetch(H + '/presence.js').then(async (r) => (r.ok ? r.text() : '')).catch(() => '');
+    got.loads = /<script src="presence\.js(\?v=[^"]*)?"><\/script>/.test(page) && js.length > 0; // the hub adds ?v=<build> to every script
+    const ctx488 = require('vm').createContext({}); // no document, no page helpers: the script must still load (the web kit's pages differ)
+    try { P = require('vm').runInContext(js + '\n;PRESENCE', ctx488); } catch (e) { got.vmErr = e.message; }
+    const shapes = P ? P.LABELS.map((l) => P.shapeOf({ label: l })) : [];
+    got.shapes = shapes.join(',');
+    got.distinct = shapes.length === 6 && shapes.every(Boolean) && new Set(shapes).size === 6;
+    got.dnd = P ? P.shapeOf({ label: 'Online', dnd: true }) : ''; got.dndOffline = P ? P.shapeOf({ label: 'Offline', dnd: true }) : '';
+    got.unknown = P ? P.shapeOf(undefined) + '|' + P.shapeOf({ label: 'Something new' }) : 'x';
+    if (P) { // a hub without presence: no status in the long poll, and GET /api/presence fails (404) → nothing is known and nothing throws
+      const before = P.state.ok; P.update(undefined); P.update({ error: 'Unknown endpoint' }); let threw = false;
+      ctx488.json = () => Promise.reject(new Error('Unknown endpoint')); // the page's json() on a 404
+      try { await P.start(); } catch { threw = true; }
+      got.degrades = !before && !P.state.ok && !threw && Object.keys(P.state.map).length === 0;
+    }
+    // the hub: mills sets a status; t-user sees it (GET /api/presence and the room long poll); the page's helpers read it
+    const st = async (tok, u) => (((await call('/api/presence', tok)).data.people || []).find((p) => p.user === u)) || {};
+    let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=r488`, D); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })();
+    await sleep(400); await call('/api/presence', D, { device: 'r488', idle: false, screen: 'room' });
+    const me = await call('/api/presence/me', D, { dnd: true, dndUntil: Date.now() + 600000, text: 'r488 reviewing', acceptingWork: true, hideWhere: true });
+    got.me = me.status === 200 && me.data.real === 'online' && me.data.dnd === true && me.data.hideWhere === true && me.data.dndUntil > Date.now();
+    await sleep(200);
+    const seen = await st(U, 'mills');
+    got.other = seen.label === 'Available for work' && seen.dnd === true && seen.text === 'r488 reviewing' && seen.acceptingWork === true && seen.hideWhere === undefined && seen.real === undefined && seen.where === undefined;
+    got.otherShape = P ? P.shapeOf(seen) : '';
+    const lines = P ? P.describe(seen, Date.now()) : [];
+    got.card = lines.map((l) => l.k).join(',');
+    const room = (await call('/api/room/messages?rev=0', U)).data, inRoom = (room.status || []).find((p) => p.user === 'mills') || {};
+    got.room = inRoom.label === 'Available for work' && inRoom.dnd === true && inRoom.text === 'r488 reviewing';
+    await call('/api/presence/me', D, { override: 'away', overrideUntil: Date.now() + 600000, dnd: false });
+    await sleep(200); const away = await st(U, 'mills'); got.away = away.label + '/' + (P ? P.shapeOf(away) : '');
+    const card = P ? P.describe({ user: 'x', presence: 'away', label: 'Working', working: true, since: Date.now() - 20 * 60000, text: 'deep in it', where: { project: 'Proj', branch: 'work/x', task: { id: 'T-1', title: 'Do it' } }, dnd: true }, Date.now()) : [];
+    got.working = card.map((l) => l.t).join(' | ');
+    const workingOk = /^Working · away \| for 20 min, since .+ \| “deep in it” \| on Proj \(work\/x\) · T-1 Do it \| Do not disturb/.test(got.working);
+    await call('/api/presence/me', D, { override: 'auto', dnd: false, text: '', acceptingWork: false, hideWhere: false });
+    on = false; await call('/api/presence', D, { device: 'r488', gone: true });
+    check('R488', 'the page shows everyone\'s status (web/presence.js, T-261): the hub serves the presence script and the page loads it; it gives each of the six labels its own shape (colour-blind safe) and do not disturb its own (but not over Offline); on a hub without presence it knows nothing and throws nothing; a status set with POST /api/presence/me (do not disturb, text, accepting work, hide where) reaches another person through GET /api/presence and the room long poll without the private fields, the page draws it as the do-not-disturb shape with a hover card of label, since, text and dnd, appear away draws the moon, and a working person away reads "Working · away" with since, text, where and dnd',
+      got.loads && got.distinct && got.dnd === 'minus' && got.dndOffline === 'ring' && got.unknown === '|' && got.degrades && got.me && got.other && got.otherShape === 'minus' && /^label,since,text,dnd(,devices)?$/.test(got.card) && got.room && got.away === 'Away/moon' && workingOk,
+      `loads ${got.loads}${got.vmErr ? ' vm: ' + got.vmErr : ''} · shapes ${got.shapes} · dnd ${got.dnd}/${got.dndOffline} · unknown "${got.unknown}" · degrades ${got.degrades} · me ${got.me} · other ${got.other} (${seen.label}, dnd ${seen.dnd}, "${seen.text}") shape ${got.otherShape} card ${got.card} · room ${got.room} · away ${got.away} · working card "${got.working}"`);
+  }
+  // R489 (T-287): the Work session list. The hub side it relies on, over HTTP, then the panel script as the page gets it,
+  // its pure helpers run here (state → colour / shape / meaning, the groups, the counter and room, the one menu).
+  async function r489Check() {
+    const ss = async (q) => (await call('/api/work/sessions' + (q || ''), U)).data || {};
+    const one = async (id, q) => ((await ss(q)).sessions || []).find((s) => s.id === id) || {};
+    const seen = {};
+    const primary = (await ss()).primary, a = (await call('/api/work/sessions/new', U, { background: true })).data.id;
+    seen.untitled = (await one(a)).title === '';
+    await call('/api/work/sessions/rename', U, { id: a, title: '  r489   named\n' }); seen.title = (await one(a)).title;
+    await call('/api/work/sessions/pin', U, { id: a, pinned: true }); seen.pinned = (await one(a)).pinned === true;
+    await call('/api/work/sessions/pin', U, { id: a, pinned: false }); seen.unpinned = (await one(a)).pinned === false;
+    // a message waiting in a session (e.g. refused with 429) is in the list, so the page sends it when a slot frees
+    await call('/api/work/queue', U, { session: a, queue: ['r489 waits', 'r489 next'], sendNow: null }); seen.queued = (await one(a)).queued;
+    await call('/api/work/queue', U, { session: a, queue: [] }); seen.unqueued = (await one(a)).queued === undefined;
+    const run = chat(U, 'SLOW r489', { session: a }); await sleep(900);
+    const mid = await ss('?archived=1'); seen.working = ((mid.sessions || []).find((s) => s.id === a) || {}).state; seen.counter = (mid.counts || {}).working;
+    seen.room = Object.values((mid.counts || {}).perHost || {}).some((h) => h.used >= 1 && h.max >= 1);
+    await run; await sleep(300); seen.after = (await one(a)).state;
+    const f = (await call('/api/work/folders/new', U, { name: 'r489 f' })).data.id;
+    await call('/api/work/folders/rename', U, { id: f, name: 'r489 g', collapsed: true });
+    const fl = ((await ss()).folders || []).find((x) => x.id === f) || {}; seen.folder = fl.name === 'r489 g' && fl.collapsed === true;
+    await call('/api/work/folders/delete', U, { id: f });
+    seen.archive = (await call('/api/work/sessions/archive', U, { id: a })).status;
+    seen.outOfList = !((await ss()).sessions || []).some((s) => s.id === a); seen.inArchived = (await one(a, '?archived=1')).archived === true;
+    await call('/api/work/sessions/open', U, { id: a }); seen.back = (await one(a)).archived === false && (await ss()).current === a;
+    await call('/api/work/sessions/open', U, { id: primary }); await call('/api/work/sessions/delete', U, { id: a });
+    // the page loads the panel script, and the hub serves it
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/sessions.js'), src = js.status === 200 ? await js.text() : '';
+    seen.served = /<script src="sessions\.js(\?[^"]*)?"><\/script>/.test(page) && js.status === 200 && /javascript/.test(js.headers.get('content-type') || '') && !/id="openArchive"/.test(page) && /id="sessPanel"/.test(page);
+    let S = null; try { const ctx = { window: {} }; require('vm').runInNewContext(src, ctx); S = ctx.window.SESSIONS; } catch (e) { seen.load = e.message; }
+    if (S) {
+      const hue = (hex) => { const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; if (!hex || d < 0.12) return { grey: true }; const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return { h: (h * 60 + 360) % 360 }; };
+      const v = Object.fromEntries(['waiting', 'working', 'done-unseen', 'draft', 'idle', 'ready'].map((st) => [st, S.stateView({ state: st })]));
+      const dots = ['waiting', 'working', 'done-unseen', 'draft', 'idle'], H5 = Object.fromEntries(dots.map((k) => [k, hue(v[k].color)]));
+      seen.colours = H5.waiting.h >= 40 && H5.waiting.h <= 60 && H5.working.h >= 255 && H5.working.h <= 290 && (H5['done-unseen'].h >= 345 || H5['done-unseen'].h <= 10) && H5.draft.h >= 200 && H5.draft.h <= 235 && H5.idle.grey === true;
+      seen.shapes = new Set(dots.map((k) => v[k].shape)).size === 5 && dots.every((k) => v[k].shape) && !v.ready.shape && !v.ready.color;
+      seen.meanings = Object.entries(v).every(([k, x]) => x.state === k && x.title.startsWith(x.name + ': ') && x.title.length > x.name.length + 6);
+      const silent = S.stateView({ state: 'ready', ended: { why: 'silent' } }), stalled = S.stateView({ state: 'idle', ended: { why: 'stalled' } }), perm = S.stateView({ state: 'waiting', waiting: { kind: 'permission', tools: ['Bash'] } });
+      seen.stall = silent.state === 'idle' && /sent nothing/.test(silent.title) && stalled.state === 'idle' && /stopped answering/.test(stalled.title) && /Bash/.test(perm.title) && S.stateView({ state: 'working', ended: { why: 'silent' } }).state === 'working';
+      const now = new Date(2026, 9, 27, 12).getTime(), H1 = 3600e3;
+      const list = [{ id: 't1', lastActivityAt: now - H1 }, { id: 'e1', lastActivityAt: now - 30 * H1 }, { id: 'p1', pinned: true, lastActivityAt: now - 50 * H1 }, { id: 'f1', folder: 'fa', lastActivityAt: now - 2 * H1 },
+        { id: 'h1', hidden: true, title: 'secret plan', lastActivityAt: now }, { id: 'a1', archived: true, lastActivityAt: now }, { id: 't2', lastActivityAt: now - 0.5 * H1 }, { id: 'x1', folder: 'gone', lastActivityAt: now - 40 * H1 }];
+      const folders = [{ id: 'fb', name: 'Empty', order: 1 }, { id: 'fa', name: 'Mine', order: 0 }];
+      const gs = S.groupSessions(list, folders, { now }), key = (g) => g.key + '=' + g.items.map((x) => x.id).join(',');
+      seen.groups = gs.map(key).join(' ');
+      const found = S.groupSessions(list, folders, { now, q: 'SECRET' });
+      seen.grouped = seen.groups === 'pinned=p1 f:fa=f1 f:fb= today=t2,t1 earlier=e1,x1 hidden=h1 archived=a1' && gs.find((g) => g.key === 'hidden').collapsed === true && gs.find((g) => g.key === 'archived').collapsed === true
+        && found.map(key).join(' ') === 'hidden=h1' && found[0].collapsed === false;
+      seen.counterText = S.counterText({ working: 3, waiting: 1 }) + ' | ' + S.counterText({ working: 1, waiting: 2 });
+      const provs = [{ id: 'h:gee1/claude', owner: 'gee', label: 'Claude' }, { id: 'h:my1/claude', owner: 't-user', label: 'Claude' }];
+      const name = (h) => S.hostName(h, provs, 't-user', (u) => (u === 'gee' ? 'Gee' : u));
+      const room = S.roomText({ gee1: { used: 3, max: 5, maxPerProvider: 3, providers: { 'h:gee1/claude': 3 } }, my1: { used: 1 }, hub: { used: 5, max: 5 } }, name);
+      seen.room2 = room.map((r) => r.text + (r.full ? '!' : '')).join(', ');
+      const ids = (s, c) => S.menuItems(s, c).map((x) => x.id).join(',');
+      const m = S.menuItems({ id: 's-1', worktree: { branch: 'work/x.1' }, folder: 'fa' }, { folders });
+      seen.menu = ids({ id: 's-1', worktree: { branch: 'work/x.1' } }, { folders }) === 'open,rename,pin,move,share,home,link,hide,archive,delete'
+        && ids({ id: 's-0', primary: true, worktree: {} }, {}) === 'open,rename,pin,move,share,link,hide,archive'
+        && ids({ id: 's-2', archived: true, hidden: true, pinned: true }, { shared: true }) === 'open,rename,pin,move,share,link,hide,delete'
+        && S.menuItems({ id: 's-2', hidden: true, pinned: true }, { shared: true }).filter((x) => ['pin', 'share', 'hide'].includes(x.id)).map((x) => x.label).join('|') === 'Unpin|Stop sharing|Unhide'
+        && m.find((x) => x.id === 'delete').danger === true && m.find((x) => x.id === 'move').sub.map((x) => x.id + (x.on ? '*' : '')).join(',') === 'move:fb,move:fa*,move:new,move:none'
+        && S.folderMenuItems({ collapsed: true }).map((x) => x.label).join('|') === 'Rename…|Expand|Delete folder…';
+    }
+    const ok = seen.untitled && seen.title === 'r489 named' && seen.pinned && seen.unpinned && seen.queued === 2 && seen.unqueued && seen.working === 'working' && seen.counter >= 1 && seen.room && seen.after === 'done-unseen'
+      && seen.folder && seen.archive === 200 && seen.outOfList && seen.inArchived && seen.back && seen.served && !!S && seen.colours && seen.shapes && seen.meanings && seen.stall && seen.grouped
+      && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
+    check('R489', R489_LABEL, ok, JSON.stringify(seen));
+  }
   async function r323Check() {
     const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
     const mkHost = async (token) => { const made = await call('/api/hosts/new', token, {}); const id = (made.data.host || {}).id || ''; const cj = (await call('/api/hosts/config', token, { id })).data.config || {}; return { id, token: cj.token, nick: (made.data.host || {}).nickname || '' }; };
@@ -6101,6 +6235,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (!RUST_HUB) { for (const [id, l] of [['R328', 'machine tools: files (the pc_* mapping) and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it'); }
   else if (WIN) { for (const [id, l] of [['R328', 'machine tools: files and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the shell and process checks use sh and /proc; run on Linux'); }
   else await machineToolsCheck();
+  // R337 (T-314, linked machines 8/8): the My machines panel and the in-use bar, with a REAL machine runner linked to this scratch hub
+  if (RUST_HUB && !WIN) await r337Check();
+  else skip('R337', 'the My machines panel lists only the owner\'s machines and the Work bar says what a run uses', RUST_HUB ? 'the run uses sh (shell_run); run on Linux' : 'the Rust hub\'s: --rust-hub runs it');
   // R334, R335, R336, R339 (T-313, linked machines 7/8): the apps use the library: the service install and the state folder check
   // (one template, a systemd user unit and a per-user Windows task, .sh and .cmd twins), pc_job retired for the library's door, vr-desktop
   // links this computer, jcodepgm machine, and the cross-test. Windows can't be built or run here: its half is marked pending.
@@ -6412,6 +6549,89 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       if (created.password) await call('/api/admin/delete', A, { username: 't-r330' });
       try { fs.rmSync(mdir, { recursive: true, force: true }); } catch {}
     }
+  }
+  // R337: the owner's list over HTTP (scope in words, mode, status, in-use while a run uses it), nobody else sees or manages it, the
+  // run's one transcript line (a plain bridge_info, so an older page shows it as text) and the page's panel script, its pure helpers
+  // (scope words, bar text, red or not, the dot's shape) run in node, and the bar's state driven by the run's events.
+  async function r337Check() {
+    const L337 = 'the My machines panel lists only the owner\'s machines and the Work bar says what a run uses (T-314): the owner\'s list shows a linked machine with its scope in words (one folder: <its folder>, read-write), its mode and online status, and an empty in-use line; another person (and an admin) sees none of it and cannot rename, pause or unlink it; while the owner\'s run uses it the card says which session uses it and afterwards nothing; the run\'s first machine call adds exactly one plain transcript line "your machine › <name>: <scope> · session …" that any page shows, a run that uses no machine gets none; the page loads web/machines.js with the panel and the bar, whose helpers say "Using the opened folder <name>" for a folder (the browser\'s or the machine\'s), "Using your PC" only for the whole system or unrestricted, red only then, a dot with a different shape for online, offline and paused, and the bar follows the run (on at the first use, the wider place wins, off when the run ends)';
+    const mdir = fs.mkdtempSync(path.join(SCRATCH, 'r337-')), procs = [];
+    const home = path.join(mdir, 'home'), state = path.join(mdir, 'state'); fs.mkdirSync(home, { recursive: true });
+    const mcall = (method, p, tok, body) => fetch(H + p, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) })).catch((e) => ({ status: 0, data: { error: e.message } }));
+    const pc = (name, args, machine) => ({ route: 'pc-tool', body: { name, args: args || {}, machine } });
+    const enc = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const listOf = async (tok) => (await call('/api/machines', tok)).data.machines;
+    const created = (await call('/api/admin/create', A, { username: 't-r337', display: 'R337' })).data || {};
+    const Y = created.password ? (await login('t-r337', created.password, 'device-r337-xxxxxxxxxx')).data.token : '';
+    const o = {}, detail = {};
+    let id = '';
+    try {
+      // link a machine of t-user by device code (the library's runner), with its folder scope and a shell, and run it
+      const linked = await new Promise((resolve) => {
+        const p = spawn(NATIVE_BIN.host, ['machine', 'link', '--hub', H, '--folder', home, '--state', state, '--name', 'r337-box'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VR_MACHINE_ALLOW_ROOT: '1' } });
+        let out = '', approved = false;
+        p.stdout.on('data', (d) => { out += d; const m = /Code: ([A-Z]{4}-[A-Z]{4})/.exec(out); if (m && !approved) { approved = true; call('/api/device/approve', U, { userCode: m[1] }); } });
+        p.stderr.on('data', (d) => { out += d; });
+        p.on('close', (code) => resolve({ code, out }));
+      });
+      try { id = JSON.parse(fs.readFileSync(path.join(state, 'link.json'), 'utf8')).machine; } catch {}
+      o.linked = linked.code === 0 && !!id;
+      const realHome = fs.realpathSync(home);
+      fs.writeFileSync(path.join(state, 'scope.json'), JSON.stringify({ v: 1, preset: 'folder', paths: [{ path: realHome, access: 'rw' }], tools: { shell: { enabled: true, timeoutSec: 30 } } }));
+      const log = fs.openSync(path.join(mdir, 'machine.log'), 'a');
+      procs.push(spawn(NATIVE_BIN.host, ['machine', 'run', '--state', state], { stdio: ['ignore', log, log], env: { ...process.env, VR_MACHINE_ALLOW_ROOT: '1' } }));
+      let card = {};
+      for (let i = 0; i < 80; i++) { card = ((await listOf(U)) || []).find((x) => x.id === id) || {}; if (card.online && /^one folder: /.test(card.scope || '')) break; await sleep(250); }
+      detail.card = `${card.name} · ${card.scope} · ${card.mode} · online ${card.online} · inUse ${JSON.stringify(card.inUse)}`;
+      o.ownerCard = card.name === 'r337-box' && (card.scope || '').startsWith('one folder: ' + realHome + ' (read-write)') && ['persistent', 'while open'].includes(card.mode) && card.online === true && card.paused === false && Array.isArray(card.inUse) && card.inUse.length === 0 && !('token' in card) && !('publicKey' in card);
+      // another person, and an admin, see none of it and cannot manage it
+      const yList = await listOf(Y), aList = await listOf(A);
+      const yRen = await mcall('PATCH', '/api/machines/' + id, Y, { name: 'stolen' }), yPause = await mcall('PATCH', '/api/machines/' + id, Y, { paused: true }), yDel = await mcall('DELETE', '/api/machines/' + id, Y), aDel = await mcall('DELETE', '/api/machines/' + id, A);
+      const after = ((await listOf(U)) || []).find((x) => x.id === id) || {};
+      o.othersSeeNone = Array.isArray(yList) && yList.length === 0 && Array.isArray(aList) && !aList.some((x) => x.id === id || x.name === 'r337-box') && [yRen, yPause, yDel, aDel].every((r) => r.status === 404) && after.name === 'r337-box' && after.paused === false;
+      detail.others = `Y ${JSON.stringify(yList)} A ${aList && aList.length} · ${[yRen, yPause, yDel, aDel].map((r) => r.status).join('/')}`;
+      // the owner's run uses it: the card says so while the run goes (Y still sees nothing), and not after it
+      let seenUse = null, yDuring = null, stop = false;
+      const watcher = (async () => { while (!stop) { const c = ((await listOf(U)) || []).find((x) => x.id === id) || {}; if (!seenUse && (c.inUse || []).length) { seenUse = c.inUse; yDuring = await listOf(Y); } await sleep(150); } })();
+      const run = await chat(U, enc([pc('shell_run', { cmd: 'sleep 3; echo r337' }, id), pc('list', {}, id)]));
+      stop = true; await watcher;
+      const res = (() => { const l = texts(run.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } })();
+      const uses = run.events.filter((e) => e.type === 'bridge_info' && /^your machine › /.test(e.text || ''));
+      const runId = (run.events.find((e) => e.type === 'bridge_run') || {}).id;
+      const afterRun = ((await listOf(U)) || []).find((x) => x.id === id) || {};
+      o.inUse = !!seenUse && seenUse.length === 1 && seenUse[0].run === runId && typeof seenUse[0].session === 'string' && Array.isArray(yDuring) && yDuring.length === 0 && Array.isArray(afterRun.inUse) && afterRun.inUse.length === 0;
+      o.calls = res.length === 2 && res.every((r) => r.body && r.body.ok === true);
+      o.oneLine = uses.length === 1 && uses[0].text.startsWith('your machine › r337-box: one folder: ' + realHome + ' (read-write)') && / · session \S+$/.test(uses[0].text) && uses[0].machine && uses[0].machine.id === id;
+      const plain = await chat(U, 'r337 a run that uses no machine');
+      o.noLineWithout = plain.status === 200 && !plain.events.some((e) => e.type === 'bridge_info' && /^your machine/.test(e.text || ''));
+      detail.run = `use ${JSON.stringify(seenUse)} run ${runId} · calls ${res.map((r) => r.body && r.body.ok).join('/')} · lines ${uses.map((e) => e.text).join(' | ')} · after ${JSON.stringify(afterRun.inUse)}`;
+      // the page: it loads web/machines.js (served by the hub), has the panel and the bar, and the helpers behave
+      const page = await fetch(H + '/').then((r) => r.text()).catch(() => ''), js = await fetch(H + '/machines.js').then((r) => (r.ok ? r.text() : '')).catch(() => '');
+      o.served = /<script src="machines\.js(\?v=[^"]*)?"><\/script>/.test(page) && page.includes('id="machBox"') && page.includes('id="useBar"') && js.includes('const MACHINES');
+      const ctx = { $: () => null, rootHandle: { name: 'proj' } };
+      let M = null; try { M = require('vm').runInNewContext(js + '\n;MACHINES', ctx); } catch (e) { detail.vm = e.message; }
+      if (M) {
+        const full = 'folders: the whole system (read-write); shell (advisory)', unr = 'unrestricted: no limits except the safety floor, shell', one = card.scope, many = 'folders: /a (read-write), /b (read-only); no shell';
+        const st = [M.statusOf({ online: true }), M.statusOf({ online: false }), M.statusOf({ online: true, paused: true })];
+        const bars = { browser: M.barText({ kind: 'browser', folder: 'proj' }), mine: M.barText({ kind: 'machine', name: 'r337-box', scope: one }), full: M.barText({ kind: 'machine', name: 'box', scope: full }), unr: M.barText({ kind: 'machine', name: 'box', scope: unr }), many: M.barText({ kind: 'machine', name: 'box', scope: many }) };
+        o.helpers = M.wide(full) && M.wide(unr) && M.wide('folders: the whole system (read-only); no shell') && !M.wide(one) && !M.wide(many) && !M.wide('') && !M.wide('one folder (picked on the machine), read-write; shell (advisory)')
+          && bars.browser.startsWith('Using the opened folder proj') && bars.mine.startsWith('Using the opened folder ' + realHome + ' on r337-box') && bars.full.startsWith('Using your PC box') && bars.unr.startsWith('Using your PC box') && !/your PC/.test(bars.many + bars.mine + bars.browser)
+          && new Set(st.map((x) => x.glyph)).size === 3 && new Set(st.map((x) => x.cls)).size === 3 && M.inUseLine(card) === '' && M.inUseLine({ inUse: [{ session: 's2', run: 'r' }] }) === 'Now in use by: session s2' && M.parse(one).folder === realHome;
+        detail.bars = JSON.stringify(bars);
+        // the bar follows the run's events: a run starts (off), the browser folder answers (folder), a wide machine (it wins), the run ends (off)
+        const seq = [];
+        for (const ev of [{ type: 'bridge_run', id: 'r1' }, { type: 'pc_tool', id: 'c1' }, { type: 'bridge_info', text: 'your machine › box: ' + full, machine: { id: 'm', name: 'box', scope: full } }, { type: 'pc_tool', id: 'c2' }, { type: 'bridge_done' }]) { M.onEvent(ev); const u = M.using(); seq.push(u ? u.kind + (M.wide(u.scope) ? '!' : '') : '-'); }
+        o.barFollows = seq.join(',') === '-,browser,machine!,machine!,-';
+        detail.seq = seq.join(',');
+      }
+    } finally {
+      for (const p of procs) { try { p.kill('SIGKILL'); } catch {} }
+      if (id) await mcall('DELETE', '/api/machines/' + id, U);
+      if (created.password) await call('/api/admin/delete', A, { username: 't-r337' });
+      try { fs.rmSync(mdir, { recursive: true, force: true }); } catch {}
+    }
+    const keys = ['linked', 'ownerCard', 'othersSeeNone', 'inUse', 'calls', 'oneLine', 'noLineWithout', 'served', 'helpers', 'barFollows'];
+    check('R337', L337, keys.every((k) => o[k] === true), `${keys.filter((k) => o[k] !== true).map((k) => 'FAILED ' + k).join(', ')} · ${Object.entries(detail).map(([k, v]) => k + ': ' + v).join(' · ')}`);
   }
   // R401 to R406 (T-199): the Hyper Workflows library (native/crates/pgm-workflow-internal): one `cargo test` run, its
   // tests named r401_ ... r406_ map back to the checks (a check passes when every test of its id ran and passed)

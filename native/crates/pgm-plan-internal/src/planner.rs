@@ -9,7 +9,9 @@
 //!   notes, else the Roles of `plans/task-assignments.md`, else a built-in list);
 //! - `plan_owner {idea}`: a suggested owner with the reason (marker, then role keywords, then the lighter workload;
 //!   never empty);
-//! - `plan_glossary`: the words and decisions of `plans/glossary.md`.
+//! - `plan_glossary`: the words and decisions of `plans/glossary.md`;
+//! - `plan_assess {staleDays?}` (T-280): the open board re-assessed as proposals (no owner, stale, a claim held by
+//!   someone offline, blocked on something done, overlapping, oversized, ideas waiting, an unbalanced workload).
 //!
 //! Nothing here writes anything; the planner shows its draft and the person approves it first (rule 7).
 use crate::write::PlanHub;
@@ -227,6 +229,95 @@ pub fn existing(tasks: &[Value], title: &str, extra: &[String], now_ms: i64, day
     }
     out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
     out.into_iter().take(limit.clamp(1, 30)).map(|x| x.2).collect()
+}
+
+// ---------- re-assessing the board (T-280; plans/planner-mode.md § 7) ----------
+/// What a task's "Blocked on" line names: task ids (T-12) and sibling steps ("3/6" = the step of the same parent).
+pub fn blocked_refs(body: &str) -> (Vec<String>, Vec<u32>) {
+    let Some(line) = re!(r"(?i)blocked on[^\n]*").find(body).map(|m| m.as_str().to_string()) else { return (vec![], vec![]) };
+    let ids = re!(r"\bT-\d+\b").find_iter(&line).map(|m| m.as_str().to_string()).collect::<BTreeSet<_>>().into_iter().collect();
+    let mut steps: Vec<u32> = vec![];
+    for c in re!(r"\b(\d+)/(\d+)(?:\s+to\s+(\d+)/\d+)?").captures_iter(&line) {
+        let a: u32 = c[1].parse().unwrap_or(0);
+        let b: u32 = c.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(a);
+        for n in a..=b.min(a + 20) { if !steps.contains(&n) { steps.push(n); } }
+    }
+    (ids, steps)
+}
+fn is_open(t: &Value) -> bool { t["status"] != json!("done") }
+fn labels_of(t: &Value) -> Vec<String> { t["labels"].as_array().map(|a| a.iter().filter_map(|l| l.as_str().map(String::from)).collect()).unwrap_or_default() }
+/// The parent a sub-task belongs to: its "T-<n> · k/m:" title, else a T-id label.
+fn parent_of(t: &Value) -> Option<String> {
+    re!(r"^(T-\d+) · \d+/\d+").captures(&s_of(t, "title")).map(|c| c[1].to_string()).or_else(|| labels_of(t).into_iter().find(|l| re!(r"^T-\d+$").is_match(l)))
+}
+fn step_of(t: &Value) -> Option<u32> { re!(r"^T-\d+ · (\d+)/\d+").captures(&s_of(t, "title")).and_then(|c| c[1].parse().ok()) }
+const PRODUCTS: &[&str] = &["viberoller", "hpm", "jcode", "shadow", "prodsuit"];
+
+/// The proposals of a re-assessment (never applied here): `tasks` = the board's list (open and done cards), `status_of`
+/// = a task's status by id when it is not in the list (an archived one), `body_of` = a task's description.
+/// `stale_days`: no change for that long and not done. Each proposal: {kind, ids, reason, change?} where `change` is
+/// ready for plan_draft's existingChanges.
+pub fn assess(tasks: &[Value], status_of: &dyn Fn(&str) -> Option<String>, body_of: &dyn Fn(&str) -> String, roles: &Roles, now_ms: i64, stale_days: i64) -> Value {
+    let by_id: HashMap<String, &Value> = tasks.iter().map(|t| (s_of(t, "id"), t)).collect();
+    let status = |id: &str| by_id.get(id).map(|t| s_of(t, "status")).or_else(|| status_of(id));
+    let open: Vec<&Value> = tasks.iter().filter(|t| is_open(t)).collect();
+    let mut out: Vec<Value> = vec![];
+    let mut push = |kind: &str, ids: Vec<String>, reason: String, change: Value| { let mut p = json!({ "kind": kind, "ids": ids, "reason": reason }); if !change.is_null() { p["change"] = change; } out.push(p); };
+    // children per parent (open or done)
+    let mut kids: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+    for t in tasks { if let Some(p) = parent_of(t) { kids.entry(p).or_default().push(t); } }
+    for t in &open {
+        let id = s_of(t, "id"); let labels = labels_of(t); let idea = labels.iter().any(|l| l == "idea");
+        // no owner
+        if t["assignee"].as_str().filter(|u| !u.is_empty()).is_none() {
+            push("unowned", vec![id.clone()], format!("{id} has no owner: every task needs one (plan_owner suggests who)"), Value::Null);
+        }
+        // stale: no change for stale_days
+        let age = (now_ms - t["updatedAt"].as_i64().unwrap_or(now_ms)) / 86_400_000;
+        if !idea && age >= stale_days { push("stale", vec![id.clone()], format!("{id} has not changed for {age} days ({}): still wanted, or backlog / close it?", s_of(t, "status")), Value::Null); }
+        // a claim nobody holds any more
+        if t["holderOffline"] == json!(true) || t["claim"]["holderOffline"] == json!(true) { push("offlineClaim", vec![id.clone()], format!("{id} is held by {}, who is offline: ask them to release it", t["claim"]["by"].as_str().unwrap_or("someone")), Value::Null); }
+        else if t["stale"] == json!(true) { push("offlineClaim", vec![id.clone()], format!("{id} has a lapsed claim: release it or claim it again"), Value::Null); }
+        // marked blocked: is what it waits on done?
+        if labels.iter().any(|l| l == "blocked") {
+            let (ids, steps) = blocked_refs(&body_of(&id));
+            let mut refs: Vec<String> = ids;
+            if let Some(p) = parent_of(t) { for n in steps { if let Some(s) = kids.get(&p).and_then(|k| k.iter().find(|x| step_of(x) == Some(n))) { refs.push(s_of(s, "id")); } } }
+            refs.retain(|r| r != &id);
+            if refs.is_empty() { continue; }
+            let pending: Vec<&String> = refs.iter().filter(|r| status(r).as_deref() != Some("done")).collect();
+            if pending.is_empty() {
+                let keep: Vec<String> = labels.iter().filter(|l| *l != "blocked").cloned().collect();
+                push("unblock", vec![id.clone()], format!("{id} is marked blocked on {}, and that is done", refs.join(", ")),
+                    json!({ "id": id, "change": { "status": if t["status"] == json!("backlog") { "todo" } else { t["status"].as_str().unwrap_or("todo") }, "labels": keep, "appendNote": format!("Unblocked: {} is done.", refs.join(", ")) }, "reason": "its block is done" }));
+            }
+        }
+        // oversized: many steps, or several products on one task with no steps
+        let n_kids = kids.get(&id).map(|k| k.len()).unwrap_or(0);
+        let products = labels.iter().filter(|l| PRODUCTS.contains(&l.as_str())).count();
+        if n_kids > 8 { push("oversized", vec![id.clone()], format!("{id} has {n_kids} sub-tasks (more than 8): split it into parents"), Value::Null); }
+        else if n_kids == 0 && parent_of(t).is_none() && products >= 3 && !idea { push("oversized", vec![id.clone()], format!("{id} spans {products} products with no sub-tasks: split it per product"), Value::Null); }
+        if idea { push("idea", vec![id.clone()], format!("{id} is an idea waiting for a decision: plan it, defer it, or drop it"), Value::Null); }
+    }
+    // overlaps: open tasks (not parent and child, not siblings) whose titles mostly share their words
+    let sets: Vec<(&Value, BTreeSet<String>)> = open.iter().map(|t| (*t, wordset(&re!(r"^T-\d+ · \d+/\d+:\s*").replace(&s_of(t, "title"), "")))).filter(|x| x.1.len() >= 3).collect();
+    for i in 0..sets.len() { for j in i + 1..sets.len() {
+        let (a, b) = (sets[i].0, sets[j].0); let (ia, ib) = (s_of(a, "id"), s_of(b, "id"));
+        if parent_of(a).as_deref() == Some(ib.as_str()) || parent_of(b).as_deref() == Some(ia.as_str()) || (parent_of(a).is_some() && parent_of(a) == parent_of(b)) { continue; }
+        let sim = jaccard(&sets[i].1, &sets[j].1);
+        if sim >= 0.5 { push("overlap", vec![ia.clone(), ib.clone()], format!("{ia} and {ib} look like the same work ({}% of their title words): merge one into the other", (sim * 100.0).round()), Value::Null); }
+    } }
+    // workload balance among the roles
+    let wl = workload(tasks, roles);
+    let loads: Vec<(String, f64)> = roles.people.iter().map(|p| (p.user.clone(), load_of(&wl, &p.user))).collect();
+    if let (Some(hi), Some(lo)) = (loads.iter().cloned().max_by(|a, b| a.1.total_cmp(&b.1)), loads.iter().cloned().min_by(|a, b| a.1.total_cmp(&b.1))) {
+        if hi.1 >= 6.0 && hi.1 > 2.0 * lo.1.max(1.0) { push("workload", vec![], format!("{} carries a load of {} against {}'s {}: move some of {}'s tasks", hi.0, hi.1, lo.0, lo.1, hi.0), Value::Null); }
+    }
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for p in &out { *counts.entry(s_of(p, "kind")).or_default() += 1; }
+    json!({ "open": open.len(), "staleDays": stale_days, "counts": counts, "proposals": out, "workload": wl,
+        "next": "show these as proposals: the person accepts each one (Mills for scope); put the accepted changes in plan_draft's existingChanges. A planner never deletes or completes a task: propose it in notPlanned.",
+        "notChecked": "tasks waiting on something without saying so, and tasks against a glossary decision: read them (plan_glossary) yourself" })
 }
 
 // ---------- the glossary (T-278) ----------
@@ -535,6 +626,13 @@ pub fn tool(hub: &dyn PlanHub, name: &str, args: &Value, now_ms: i64) -> Option<
             else if args["idea"].is_object() || args["idea"].is_string() { let i = one(&args["idea"]); let mut o = owner(&i, &roles, &wl); o["source"] = json!(roles.source); json!({ "ok": true, "result": o }) }
             else { err("plan_owner needs an idea {title, body?, model?, person?, blockedOn?} (or ideas: [..]).") }
         }
+        "plan_assess" => {
+            let tasks = board_tasks(hub);
+            let get = |id: &str| { let r = hub.board("get", &json!({ "id": id })); if r["ok"] == json!(true) { Some(r["result"]["task"].clone()) } else { None } };
+            let status_of = |id: &str| get(id).map(|t| s_of(&t, "status"));
+            let body_of = |id: &str| get(id).map(|t| s_of(&t, "body")).unwrap_or_default();
+            json!({ "ok": true, "result": assess(&tasks, &status_of, &body_of, &load_roles(hub), now_ms, args["staleDays"].as_i64().unwrap_or(14).max(1)) })
+        }
         "plan_glossary" => {
             let t = note_text(hub, GLOSSARY_NOTE);
             let mut g = glossary(t.as_deref().unwrap_or(BUILTIN_GLOSSARY));
@@ -695,6 +793,47 @@ mod tests {
         assert_eq!(call("plan_glossary", json!({}))["result"]["words"][0]["term"], json!("Zed"));
         assert!(tool(&hub, "plan_draft", &json!({}), 0).is_none() && tool(&hub, "team_say", &json!({}), 0).is_none());
         assert!(hub.calls.borrow().iter().all(|c| c.0 == "list"), "read only");
+    }
+    #[test]
+    fn a_reassessment_proposes_unblocking_owners_stale_claims_overlaps_splits_and_ideas_and_changes_nothing() {
+        const D: i64 = 86_400_000; let now = 100 * D;
+        let t = |id: &str, title: &str, status: &str, who: Option<&str>, labels: &[&str], upd: i64| json!({ "id": id, "title": title, "status": status, "assignee": who, "labels": labels, "updatedAt": upd, "priority": 2 });
+        let mut tasks = vec![
+            t("T-1", "Hyper workflows engine", "done", Some("sponge"), &[], now - D),
+            t("T-2", "Delegation suite", "backlog", Some("gee"), &["blocked", "viberoller"], now - D),
+            t("T-3", "T-2 · 1/3: clock in and out", "backlog", Some("gee"), &["T-2", "blocked"], now - D),
+            t("T-4", "T-2 · 2/3: auto work team", "backlog", Some("gee"), &["T-2", "blocked"], now - D),
+            t("T-5", "Website builder for teams", "backlog", Some("mills"), &["blocked"], now - D),
+            t("T-6", "Nobody owns this", "todo", None, &[], now - D),
+            t("T-7", "Old forgotten thing", "todo", Some("mills"), &[], now - 20 * D),
+            t("T-8", "Notification inbox", "backlog", Some("mills"), &["idea"], now - 30 * D),
+            t("T-9", "Board archive view with search", "todo", Some("mills"), &[], now - D),
+            t("T-10", "Archive view with search for the board", "todo", Some("sponge"), &[], now - D),
+            t("T-11", "Everything everywhere", "todo", Some("sponge"), &["viberoller", "hpm", "jcode"], now - D),
+        ];
+        tasks[6]["claim"] = json!({ "by": "Mills", "holderOffline": true }); tasks[6]["holderOffline"] = json!(true);
+        let bodies: HashMap<&str, &str> = [("T-2", "**Blocked on Hyper Workflows (T-1):** based on it."), ("T-3", "**Blocked on T-1.**"),
+            ("T-4", "**Blocked on 1/3 and T-1.**"), ("T-5", "Blocked on T-1 and T-99 (the editor).")].into_iter().collect();
+        let archived = |id: &str| if id == "T-99" { Some("todo".to_string()) } else { None };
+        let body = |id: &str| bodies.get(id).unwrap_or(&"").to_string();
+        let r = assess(&tasks, &archived, &body, &builtin_roles(), now, 14);
+        let of = |k: &str| r["proposals"].as_array().unwrap().iter().filter(|p| p["kind"] == json!(k)).map(|p| p["ids"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect::<Vec<_>>().join("+")).collect::<Vec<_>>();
+        assert_eq!(of("unblock"), ["T-2", "T-3"], "blocked on something done: unblock; T-4 waits on step 1/3 (open), T-5 on an open archived-lookup task");
+        let u = r["proposals"].as_array().unwrap().iter().find(|p| p["ids"] == json!(["T-2"]) && p["kind"] == json!("unblock")).unwrap();
+        assert_eq!(u["change"]["change"]["status"], json!("todo")); assert_eq!(u["change"]["change"]["labels"], json!(["viberoller"]));
+        assert_eq!(u["change"]["id"], json!("T-2"), "ready for plan_draft's existingChanges");
+        assert_eq!(of("unowned"), ["T-6"]);
+        assert_eq!(of("stale"), ["T-7"], "an idea is not stale, it waits for a decision");
+        assert_eq!(of("offlineClaim"), ["T-7"]);
+        assert_eq!(of("idea"), ["T-8"]);
+        assert_eq!(of("overlap"), ["T-9+T-10"]);
+        assert_eq!(of("oversized"), ["T-11"]);
+        assert_eq!(blocked_refs("**Blocked on (based on) T-294 · 2/6 to 5/6.**"), (vec!["T-294".to_string()], vec![2, 3, 4, 5]));
+        // the tool reads the board through the hub and writes nothing
+        let hub = crate::testkit::FakeHub::default(); *hub.tasks.borrow_mut() = tasks.clone();
+        let v = tool(&hub, "plan_assess", &json!({}), now).unwrap();
+        assert_eq!(v["ok"], json!(true)); assert!(v["result"]["proposals"].as_array().unwrap().len() >= 6);
+        assert!(hub.calls.borrow().iter().all(|(op, _)| op == "get"), "only reads: {:?}", hub.calls.borrow());
     }
     #[test]
     fn the_glossary_note_is_read_into_words_and_decisions() {

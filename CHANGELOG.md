@@ -7,6 +7,38 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.33.0 — 2026-10-27
+
+MINOR: **four last steps that close Sponge's parents** (taken over from Mills at Sponge's request): presence in the
+page (T-261 → T-258), the Work session list (T-287 → T-282), My machines and the in-use bar (T-314 → T-305), and the
+planner's re-assessment of the board (T-280 → T-273). MINOR because the Past sessions dialog is replaced by a panel.
+- **Presence everywhere** (`web/presence.js` 1.0.0, R488): a status shape per label, so colour is never the only
+  signal (online dot, available dot with a check, away moon, offline ring, working gear, working + available diamond,
+  do not disturb a minus), on the DM list, the member column, "Who's here", message authors, the board's assignee
+  avatars, the profile card and the user panel. A hover card shows label, since, text, where, do not disturb. "Team
+  now" (main menu and chat top bar) lists everyone with label, text, project, task and how long. "My status" sets the
+  override with an until, do not disturb, status text, accept work and hide project. A hub without presence shows none
+  of it and nothing breaks (the web kit's products).
+- **The Work session list** (`web/sessions.js` 1.0.0, R489): a hidable sidebar replaces the Past sessions dialog. It is
+  grouped (pinned, folders, today, earlier, hidden, archived) and searchable. Each session has a state dot in colour
+  and shape with its meaning on hover (a stalled run shows idle with its reason), its host, AI and project, and at the
+  top "3 working · 1 needs you" and the room per host ("Gee's host 3/5"). One menu for "…" and right-click: Open,
+  Rename, Pin, Move to folder, Share, Merge into my work, Copy link, Hide, Archive, Delete (asks, force-stops); folders
+  have Rename / Collapse / Delete. Switching keeps each session's draft; a session left while it works goes on and its
+  reply lands in its own conversation; a 429 keeps the message queued and sends it when a slot frees. /sessions and
+  /save open the panel. Hub: the list's summaries carry `queued`.
+- **My machines and the in-use bar** (`web/machines.js` 1.0.0, R337): Settings › Connections lists only your own linked
+  machines with the scope in words (red for the whole system or unrestricted), a status dot with its own shape, the
+  mode, the in-use line and rename / pause / resume / unlink, plus "Link a machine" by code. In Work, a bar says "Using
+  the opened folder <name>", or "Using your PC <name>" (red) only when the run really uses wider access. Hub: a run
+  records which machine it uses (`GET /api/machines` cards gain `inUse`, built only from the owner's own runs), and a
+  run's first call to a machine adds one transcript line, which an older page shows as text. Watchers never get it.
+- **The planner re-assesses the board** (team tool `plan_assess`, `bridge/team-mcp.js` 1.5.0 and the native host's
+  list, R490 and a library test): proposals only, each with a reason: tasks with no owner, stale ones (14 days),
+  claims held by someone offline or lapsed, tasks marked blocked whose block is done (task ids and "n/m" sibling steps
+  resolved; the unblock change ready for plan_draft's existingChanges), overlaps, oversized tasks, ideas waiting, an
+  unbalanced workload. The planner prompt says when to use it.
+
 ## 5.32.0 — 2026-10-27
 
 MINOR: **the board's archive** (T-190, T-226 to T-228). The Done column no longer fills up for good. MINOR because the
