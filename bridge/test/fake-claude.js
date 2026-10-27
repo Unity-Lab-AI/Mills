@@ -128,6 +128,15 @@ process.stdin.on('end', async () => {
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'ARCH:' + JSON.stringify({ id, early: early.ok ? 'archived' : early.error, archivedAt: arch.ok ? arch.result.task.archivedAt : arch.error,
       onBoard: listed.ok ? listed.result.tasks.some((t) => t.id === id) : listed.error, found: found.ok ? found.result.tasks.map((t) => t.id) : found.error, restored: back.ok ? back.result.task.status : back.error }) }] } });
   }
+  // "PLANASSESS": re-assess the board through the team relay (T-280): the proposals, as the planner gets them.
+  if (input.includes('PLANASSESS')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;
+    const r = await fetch(env.MILLS_BRIDGE + '/internal/team', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name: 'plan_assess', args: {} }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'ASSESS:' + JSON.stringify(r.ok ? { proposals: r.result.proposals } : { error: r.error }) }] } });
+  }
   // "BOARDPLAN": plan with the board like Claude would: create with a text due date, read the calendar,
   // move a task, delete one, make a board, and set / clear a due date by text.
   if (input.includes('BOARDPLAN')) {

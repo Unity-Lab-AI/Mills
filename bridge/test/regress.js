@@ -3479,6 +3479,22 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && jsGet.status === 200 && jsGet.body.task.status === 'done' && jsUpd.status === 200 && jsDisk.archivedAt > 0 && /from the JavaScript hub r487/.test(jsDisk.body || ''),
       `open ${openTry.status} · archive ${arch1.status} on board ${onView(view1, a1)} info ${JSON.stringify(view1.archive)} · found ${JSON.stringify(found1.tasks && found1.tasks.map((t) => t.id))} delete ${f1.deleteAt - f1.archivedAt} · restore ${rest.status} ${rest.data.task && rest.data.task.status} again ${restAgain.status} · all ${JSON.stringify(all.data).slice(0, 80)} · agent ${JSON.stringify(agent)} · mcp ${mcpList.filter((n) => /archiv|restore/.test(n))} · js ${jsGet.status}/${jsUpd.status} kept ${jsDisk.archivedAt}`);
   } else skip('R487', 'the board\'s archive (T-190)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R490 (T-280): the planner re-assesses the board, as proposals only
+    const mk = async (title, extra) => (await call('/api/board/create', A, { title, ...extra })).data.task.id;
+    const base = await mk('engine r490 groundwork'); await call('/api/board/complete', A, { id: base });
+    const waits = await mk('waits r490 on the groundwork', { status: 'backlog', labels: ['blocked', 'r490'], assignee: 't-admin', body: `**Blocked on ${base}.** based on it` });
+    const still = await mk('still r490 blocked', { status: 'backlog', labels: ['blocked'], assignee: 't-admin', body: `Blocked on ${waits}.` });
+    const lonely = await mk('nobody r490 owns this');
+    const before = JSON.stringify(((await call('/api/board', A)).data.tasks || []).filter((t) => [waits, still, lonely].includes(t.id)).map((t) => [t.id, t.rev, t.status]));
+    const got = JSON.parse((texts((await chat(A, 'PLANASSESS please', { fresh: true })).events).match(/ASSESS:(\{.*\})/) || [])[1] || '{}');
+    const props = got.proposals || [], has = (kind, id) => props.find((p) => p.kind === kind && (p.ids || []).includes(id));
+    const un = has('unblock', waits) || {};
+    const after = JSON.stringify(((await call('/api/board', A)).data.tasks || []).filter((t) => [waits, still, lonely].includes(t.id)).map((t) => [t.id, t.rev, t.status]));
+    check('R490', 'the planner re-assesses the board (plan_assess): a task marked blocked on something done is proposed for unblocking, with the change ready for the draft (to do, without the blocked label); one still waiting is not; a task without an owner is named; every proposal has a reason; nothing on the board changes',
+      !!un.reason && un.change && un.change.id === waits && un.change.change.status === 'todo' && !(un.change.change.labels || []).includes('blocked') && (un.change.change.labels || []).includes('r490')
+      && !has('unblock', still) && !!has('unowned', lonely) && props.every((p) => p.reason) && before === after,
+      `${props.length} proposals · unblock ${JSON.stringify(un).slice(0, 200)} · still ${!!has('unblock', still)} · unowned ${!!has('unowned', lonely)} · unchanged ${before === after} ${got.error || ''}`);
+  } else skip('R490', 'the planner re-assesses the board (T-280)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};

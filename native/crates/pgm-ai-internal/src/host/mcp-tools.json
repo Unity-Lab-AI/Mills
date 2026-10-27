@@ -1122,6 +1122,19 @@
    }
   },
   {
+   "name": "plan_assess",
+   "description": "Planner helper (T-280): the open board re-assessed, as proposals only (nothing is changed): tasks with no owner, stale ones (no change for staleDays, default 14), claims held by someone offline or lapsed, tasks marked blocked whose block is done (with the change to unblock them, ready for plan_draft existingChanges), overlapping tasks (merge), oversized ones (more than 8 sub-tasks, or 3+ products and no sub-tasks: split), ideas waiting for a decision, and an unbalanced workload. Each proposal has kind, ids and a one-line reason. Show them; the person accepts each one.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "staleDays": {
+      "type": "number",
+      "description": "No change for this many days counts as stale (default 14)"
+     }
+    }
+   }
+  },
+  {
    "name": "plan_owner",
    "description": "Planner helper (T-277): a suggested owner for an idea or a sub-task, with the reason: an explicit marker (person: \"M\" / \"Mills\") first, then role keywords (title hits count more than body hits), a tie or no match by the lighter open workload. Never empty: when nothing fits it says \"mills to pick\" with needsPick: true (ask, do not guess). Also returns suggested labels (the model tag, products named) and a priority (1 unblocks / urgent, 2 normal, 3 blocked or later). A sub-task may have a different owner than its parent: call it for each. Give idea {title, body?, model?, person?, blockedOn?} (or just the title), or ideas: [..] for several at once.",
    "inputSchema": {
