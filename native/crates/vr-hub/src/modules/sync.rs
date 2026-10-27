@@ -12,7 +12,9 @@
 //!                   profile, presence; newest wins. Sign-in sessions, device tokens and device locks never travel
 //!                   (each domain signs in on its own); a deleted account is not deleted on the other hub
 //!   avatar          profile pictures, by content
-//! Not synced yet: chat attachments and Work session records / saved transcripts (see the T-324 report).
+//!   work.archive    saved Work transcripts (Past sessions), per person and id; deletes travel
+//! Not synced yet: chat attachments (the files behind a message), the servers / channels / groups (Chat/guilds.json), and the
+//! live Work session records (work.json, work-sessions/: a session's harness state belongs to the hub that runs it).
 //! Config: `"sync": { "peer": "http://127.0.0.1:<port>", "secretFile": "<path>", "name": "dev" }` (bridge/config.local.json);
 //! no `sync` = no bridge. The routes /__sync/hello and /__sync/push answer only this machine, never through a proxy,
 //! with the shared secret. Files: bridge/sync/ (this hub's own; the JavaScript hub never reads them).
@@ -44,7 +46,7 @@ pub fn start(hub: &Arc<Hub>) {
     let w = Arc::downgrade(hub);
     let kinds: Vec<Arc<dyn Kind>> = vec![
         Arc::new(Tasks(w.clone())), Arc::new(Activity(w.clone(), Mutex::default())), Arc::new(Boards(w.clone())), Arc::new(Notes(w.clone())),
-        Arc::new(Messages(w.clone())), Arc::new(Keys(w.clone())), Arc::new(Seen(w.clone())), Arc::new(Accounts(w.clone())), Arc::new(Avatars(w.clone())),
+        Arc::new(Messages(w.clone())), Arc::new(Keys(w.clone())), Arc::new(Seen(w.clone())), Arc::new(Accounts(w.clone())), Arc::new(Avatars(w.clone())), Arc::new(Archive(w.clone())),
     ];
     let engine = Arc::new(Engine::open(&hub.root.join("sync"), &name, kinds, tag));
     println!("{tag} on: this hub is \"{name}\" ({}), its peer {peer}", engine.id());
@@ -286,6 +288,70 @@ impl Kind for Accounts {
         h.mods.chat.keys_changed(); // names, profiles and presence settings are read again
         Ok(Self::field(&h, u, f).unwrap_or_else(|| v.clone()))
     }
+}
+
+// ---------- Work: saved transcripts ----------
+/// Past sessions (Archive/<id>.json for the default account, Archive/<user>/<id>.json for the others), as "<user>/<id>" →
+/// the saved file. A running session is not one of these: it stays on the hub that runs it.
+struct Archive(Weak<Hub>);
+impl Archive {
+    fn default_user(h: &Hub) -> String { h.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string() }
+    fn dir_of(h: &Hub, u: &str) -> PathBuf { let base = h.mods.mills_dir().join("Archive"); if u == Self::default_user(h) { base } else { base.join(u) } }
+    fn id_ok(id: &str) -> bool { id.len() == 16 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) }
+    /// (user, folder) for every account that may have saved sessions
+    fn folders(h: &Hub) -> Vec<(String, PathBuf)> {
+        let mut v = vec![(Self::default_user(h), Self::dir_of(h, &Self::default_user(h)))];
+        for e in std::fs::read_dir(h.mods.mills_dir().join("Archive")).into_iter().flatten().filter_map(|e| e.ok()) {
+            let n = e.file_name().to_string_lossy().to_string();
+            if e.path().is_dir() && super::auth::valid_username(&n) && n != v[0].0 { v.push((n, e.path())); }
+        }
+        v
+    }
+    fn files(h: &Hub) -> Vec<(String, PathBuf)> {
+        let mut out = vec![];
+        for (u, d) in Self::folders(h) {
+            for e in std::fs::read_dir(&d).into_iter().flatten().filter_map(|e| e.ok()) {
+                let n = e.file_name().to_string_lossy().to_string();
+                if let Some(id) = n.strip_suffix(".json").filter(|i| Self::id_ok(i)) { out.push((format!("{u}/{id}"), e.path())); }
+            }
+        }
+        out
+    }
+}
+impl Kind for Archive {
+    fn name(&self) -> &str { "work.archive" }
+    /// the files' names, sizes and times: read again only when one of them changed
+    fn version(&self) -> Option<u64> {
+        let h = self.0.upgrade()?;
+        let mut sig: Vec<String> = Self::files(&h).into_iter().map(|(id, f)| { let m = std::fs::metadata(&f).ok(); format!("{id}:{}:{}", m.as_ref().map(|m| m.len()).unwrap_or(0), mtime_ms(&f)) }).collect();
+        sig.sort();
+        Some(u64::from_str_radix(&canon::hash(&json!(sig))[..15], 16).unwrap_or(0))
+    }
+    fn snapshot(&self) -> Vec<(String, Value)> { self.0.upgrade().map(|h| Self::files(&h).into_iter().filter_map(|(id, f)| read_obj(&f).map(|v| (id, v))).collect()).unwrap_or_default() }
+    fn deletes(&self) -> bool { true }
+    fn get(&self, id: &str) -> Option<Value> { let h = self.0.upgrade()?; let (u, i) = id.split_once('/')?; read_obj(&Self::dir_of(&h, u).join(format!("{i}.json"))) }
+    fn check(&self, id: &str, v: &Value) -> Result<(), String> {
+        let (u, i) = id.split_once('/').ok_or("a saved session is <user>/<id>")?;
+        if !super::auth::valid_username(u) || !Self::id_ok(i) { return Err("not <user>/<16 hex digits>".into()); }
+        if v["id"].as_str() != Some(i) || !v["transcript"].is_array() || !v["title"].is_string() { return Err("a saved session is { id, title, savedAt, transcript: [...] }".into()); }
+        if v.to_string().len() > 64_000_000 { return Err("too large".into()); }
+        Ok(())
+    }
+    fn stamp(&self, _id: &str, v: &Value) -> Option<(i64, i64)> { Some((0, ms_of_iso(&v["savedAt"]).unwrap_or(0))) }
+    fn put(&self, id: &str, v: &Value) -> Result<Value, String> {
+        let h = self.0.upgrade().ok_or("the hub is stopping")?;
+        let (u, i) = id.split_once('/').ok_or("bad id")?;
+        let d = Self::dir_of(&h, u); std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+        pgm_core_internal::json::write_json(&d.join(format!("{i}.json")), v);
+        Ok(self.get(id).unwrap_or_else(|| v.clone()))
+    }
+    fn remove(&self, id: &str) -> Result<(), String> {
+        let h = self.0.upgrade().ok_or("the hub is stopping")?;
+        let (u, i) = id.split_once('/').ok_or("bad id")?;
+        let _ = std::fs::remove_file(Self::dir_of(&h, u).join(format!("{i}.json")));
+        Ok(())
+    }
+    fn keep_loser(&self, id: &str, c: &Conflict) { keep_aside(&self.0, "work.archive", id, c) }
 }
 
 // ---------- pictures ----------

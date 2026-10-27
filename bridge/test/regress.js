@@ -46,7 +46,7 @@ function check(id, label, pass, detail = '') {
   if (STOP_AFTER && id === STOP_AFTER) { const e = new Error('stopped after ' + id); e.stopAfter = true; throw e; }
 }
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
-const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
+const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -6199,6 +6199,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       // 3. a note written on dev appears on live
       await B('/api/notes/write', tB, { path: 'r491/from-dev.md', text: 'hello from dev\nline 2' });
       seen.note = !!(await until(async () => (await A('/api/notes/read?path=r491/from-dev.md', tA)).data.text === 'hello from dev\nline 2'));
+      // ... and a Work transcript saved on live (Past sessions) is in dev's list
+      const arch = crypto.randomBytes(8).toString('hex');
+      fs.mkdirSync(path.join(base, 'a', 'Archive'), { recursive: true });
+      fs.writeFileSync(path.join(base, 'a', 'Archive', arch + '.json'), JSON.stringify({ id: arch, title: 'r491 saved on live', savedAt: new Date().toISOString(), sessionId: 'sess-r491', transcript: [{ cls: 'user', text: 'hello' }, { cls: 'assistant', text: 'hi there' }] }));
+      seen.archive = !!(await until(async () => (((await B('/api/archive/list', tB, {})).data.items) || []).some((x) => x.id === arch && x.title === 'r491 saved on live' && x.count === 2)));
       // 4. the chat: a key set on live and a message sent there reach dev (same key, same message id)
       const b64 = (n) => crypto.randomBytes(n).toString('base64');
       const jwk = { kty: 'EC', crv: 'P-256', x: crypto.randomBytes(32).toString('base64url'), y: crypto.randomBytes(32).toString('base64url') };
@@ -6262,7 +6267,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.quiet = JSON.stringify(j1) === JSON.stringify(j2) && j1.every((n) => n > 0);
       seen.journals = [j1, j2];
     } finally { await stop('a'); await stop('b'); }
-    const ok = seen.startA && seen.startB && seen.firstPairing && seen.bToA && seen.aToB && seen.note && seen.chatSent === 200 && seen.chat && seen.chatKey
+    const ok = seen.startA && seen.startB && seen.firstPairing && seen.bToA && seen.aToB && seen.note && seen.archive && seen.chatSent === 200 && seen.chat && seen.chatKey
       && seen.devEdit === 200 && seen.isolated && seen.caughtUp && seen.conflictTitle === 'r491 dev\'s title' && seen.loserKept
       && seen.malformed.status === 200 && JSON.stringify(seen.malformed.refused) === '[1,2]' && seen.malformed.held === 1 && seen.malformed.have === 3 && seen.neverApplied
       && seen.gate.every((s) => s === 403) && seen.hello.name === 'live' && seen.sameSignIn && seen.tokenNotShared && seen.status.up === true && seen.status.peer === 'dev' && seen.status.refused && seen.quiet;
