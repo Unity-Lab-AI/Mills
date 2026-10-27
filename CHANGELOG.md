@@ -7,6 +7,25 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.31.1 — 2026-10-27
+
+PATCH: **private product releases and Node 24 on the server** (T-249, T-304).
+- **`worktree.js deploy-key <owner/name> <key.pub> [title]`:** adds a read-only SSH deploy key to a Forgejo repo, as the
+  person whose run it is. It is for a machine that builds or deploys a private repo: the key belongs to no person.
+  - Adding the same key again changes nothing.
+  - A private key, or a file that is not an SSH public key, is refused before anything is sent.
+- **`worktree.js visibility <owner/name> private|public`:** changes only the visibility; nothing is deleted.
+- **Check R486:** both commands against the suite's stand-in Forgejo.
+- **Done with them on the server (2026-10-27):**
+  - the three product repos with downloadable releases (pgm-prodsuit, pgm-hyperprodman, pgm-shadowchat) are private;
+  - their deploys read them with one read-only deploy key (Forgejo's SSH is on port 2222; the team note
+    plans/release-audit.md has the details).
+  - The source-only repos (pgm-libs, VibeRoller, Jcode-PGM) stay public for now: every machine that builds a product
+    fetches pgm-libs anonymously.
+- **deploy/node-upgrade.md:** the server's Node is 24.22.1 since 2026-10-27. Under vr-run, switching is just the
+  `current` link: the hub is Rust, and every Node process (a Work run's MCP helpers, the fallback hub) resolves the link
+  when it starts. No service restart is needed.
+
 ## 5.31.0 — 2026-10-26
 
 MINOR: **REA in Hyper Workflows** (T-255). A new built-in node kind, `rea`, runs a reverse-engineering step in a

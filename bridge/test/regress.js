@@ -131,7 +131,7 @@ function startFakeOllama() {
       if (req.url === '/api/version') return j({ version: 'fake' });
       // fake Forgejo repos (T-238), as the person whose token is fake-personal-token-1 (login tuser-fj): search, create (a bare
       // repo that takes pushes through git's own smart-HTTP backend), get; any other caller is refused
-      if (/^\/api\/v1\/(repos\/search|user\/repos|repos\/[^/?]+\/[^/?]+$)/.test(req.url) || /^\/[^/]+\/[^/]+\.git\//.test(req.url)) {
+      if (/^\/api\/v1\/(repos\/search|user\/repos|repos\/[^/?]+\/[^/?]+$|repos\/[^/?]+\/[^/?]+\/keys(\?|$))/.test(req.url) || /^\/[^/]+\/[^/]+\.git\//.test(req.url)) {
         const auth = req.headers.authorization || '';
         const who = auth === 'token fake-personal-token-1' || (/^Basic /.test(auth) && Buffer.from(auth.slice(6), 'base64').toString() === 'tuser-fj:fake-personal-token-1') ? 'tuser-fj' : '';
         if (!who) { res.writeHead(401); return res.end('{"message":"token"}'); }
@@ -150,7 +150,16 @@ function startFakeOllama() {
           const r = { full_name: full, private: !!b.private, fork: false, mirror: false, description: b.description || '', clone_url: `http://127.0.0.1:${OLLAMA_PORT}/${full}.git` };
           FR.set(full, r); return j(r, 201);
         }
+        // T-249: a repo's deploy keys (list, add) and its visibility (PATCH private)
+        let k = /^\/api\/v1\/repos\/([^/]+)\/([^/]+)\/keys$/.exec(u.pathname);
+        if (k) {
+          const r = FR.get(k[1] + '/' + k[2]); if (!r) return j({ message: 'not found' }, 404);
+          r.keys = r.keys || [];
+          if (req.method === 'POST') { const b = JSON.parse(body || '{}'); fakeForgejo.repoCalls.push('key ' + k[1] + '/' + k[2] + (b.read_only ? ' read-only' : ' read-write')); const key = { id: r.keys.length + 1, title: b.title, key: b.key, read_only: !!b.read_only }; r.keys.push(key); return j(key, 201); }
+          return j(r.keys);
+        }
         let m = /^\/api\/v1\/repos\/([^/]+)\/([^/]+)$/.exec(u.pathname);
+        if (m && req.method === 'PATCH') { const r = FR.get(m[1] + '/' + m[2]); if (!r) return j({ message: 'not found' }, 404); const b = JSON.parse(body || '{}'); if (typeof b.private === 'boolean') r.private = b.private; fakeForgejo.repoCalls.push('patch ' + r.full_name + ' private=' + r.private); return j(r); }
         if (m) { const r = FR.get(m[1] + '/' + m[2]); return r ? j(r) : j({ message: 'not found' }, 404); }
         // git over HTTP: git http-backend does the work
         const cgi = spawn('git', ['http-backend'], { env: { PATH: process.env.PATH, HOME: process.env.HOME || root, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: '1', PATH_INFO: u.pathname, REQUEST_METHOD: req.method, QUERY_STRING: u.search.slice(1), CONTENT_TYPE: req.headers['content-type'] || '', CONTENT_LENGTH: String(Buffer.concat(chunks).length), REMOTE_USER: who, REMOTE_ADDR: '127.0.0.1' } });
@@ -3367,6 +3376,30 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && takenFj.status === 409 && !fs.existsSync(path.join(PR238, 'taken-remote')) && made238.status === 200 && made238.data.project === 'start-new' && made238.data.repo === 'tuser-fj/start-new' && made238.data.private === true && fjRec.private === true && fjRec.description === 'made by r246'
       && origin === `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/start-new.git` && remoteBranches === 'develop,main' && listed.remote === origin && again.status === 409,
       `no token ${nTok.status} local ${noTokLocal} · bad ${bad} · taken ${taken.status}/${takenHub.status} · on Forgejo ${takenFj.status} · made ${made238.status} ${JSON.stringify(made238.data).slice(0, 140)} · private ${fjRec.private} origin ${origin} remote branches ${remoteBranches} · again ${again.status}`);
+    // R486 (T-249): a machine's read-only deploy key and a repo's visibility, through worktree.js as the person
+    {
+      const kdir = fs.mkdtempSync(path.join(SCRATCH, 'r486-')), pub = path.join(kdir, 'k.pub'), priv = path.join(kdir, 'k'), junk = path.join(kdir, 'junk.pub');
+      fs.writeFileSync(pub, 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEr486r486r486r486r486r486r486r486r486r486r48 deploy@lab\n');
+      fs.writeFileSync(priv, '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA\n-----END OPENSSH PRIVATE KEY-----\n');
+      fs.writeFileSync(junk, 'hello there\n');
+      // not spawnSync: the stand-in Forgejo answers from this same process, so a blocking call would wait for itself
+      const wt = (...a) => new Promise((done) => {
+        const c = spawn(process.execPath, [path.join(SB, 'worktree.js'), ...a], { cwd: SB, env: { ...process.env, FORGEJO_TOKEN: 'fake-personal-token-1', FORGEJO_URL: `http://127.0.0.1:${OLLAMA_PORT}` } });
+        let stdout = '', stderr = ''; c.stdout.on('data', (d) => { stdout += d; }); c.stderr.on('data', (d) => { stderr += d; });
+        const t = setTimeout(() => c.kill(), 30000); c.on('close', (status) => { clearTimeout(t); done({ status, stdout, stderr }); });
+      });
+      const add = await wt('deploy-key', 'tuser-fj/start-new', pub, 'lab server'), again = await wt('deploy-key', 'tuser-fj/start-new', pub, 'lab server');
+      const privR = await wt('deploy-key', 'tuser-fj/start-new', priv), junkR = await wt('deploy-key', 'tuser-fj/start-new', junk), noRepo = await wt('deploy-key', 'tuser-fj/nonesuch', pub);
+      const keys = (FR.get('tuser-fj/start-new') || {}).keys || [];
+      const pubR = await wt('visibility', 'tuser-fj/start-new', 'public'), afterPub = (FR.get('tuser-fj/start-new') || {}).private;
+      const privV = await wt('visibility', 'tuser-fj/start-new', 'private'), afterPriv = (FR.get('tuser-fj/start-new') || {}).private, oddV = await wt('visibility', 'tuser-fj/start-new', 'secret');
+      check('R486', 'a machine gets a read-only deploy key on a repo (worktree.js deploy-key, as the person): added once, adding it again changes nothing, a private key or a file that is no SSH public key is refused before anything is sent, an unknown repo is an error; visibility makes a repo public or private and nothing else (a word other than private / public is refused); no token in any output',
+        add.status === 0 && /Added the read-only deploy key "lab server"/.test(add.stdout) && again.status === 0 && /already has this key/.test(again.stdout) && keys.length === 1 && keys[0].read_only === true
+        && privR.status !== 0 && /not an SSH public key/.test(privR.stderr) && junkR.status !== 0 && noRepo.status !== 0
+        && pubR.status === 0 && afterPub === false && privV.status === 0 && /is now private/.test(privV.stdout) && afterPriv === true && oddV.status !== 0
+        && ![add, again, privR, junkR, noRepo, pubR, privV, oddV].some((x) => (x.stdout + x.stderr).includes('fake-personal-token-1')),
+        `add ${add.status} ${add.stdout.trim()} · again ${again.stdout.trim()} · keys ${keys.length} ro ${keys[0] && keys[0].read_only} · private key ${privR.status} ${privR.stderr.trim()} · junk ${junkR.status} · no repo ${noRepo.status} · public ${afterPub} private ${afterPriv} · odd ${oddV.status}`);
+    }
     // R247: a clone start from the repos list; each start is a NEW session that lands in the person's own worktree at once
     const before = (await call('/api/work/sessions', U)).data, n0 = before.sessions.length;
     const cloned = await call('/api/projects', U, { url: `http://127.0.0.1:${OLLAMA_PORT}/tuser-fj/start-new.git`, name: 'start-copy' });
@@ -3407,7 +3440,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       unk.status === 400 && unkNone.status === 400 && hubS.status === 200 && hubS.data.project === 'VibeRoller' && hubWt && !seenByA && /create tuser-fj\/start-new private/.test(repoCalls) && !/create (?!tuser-fj\/)/.test(repoCalls)
       && /id="startPanel"/.test(html238) && /id="startProjects"/.test(html238) && /id="startUrl"/.test(html238) && /id="startRepoQ"/.test(html238) && /id="startNewName"/.test(html238) && /id="startNoneGo"/.test(html238) && /id="startWork"/.test(html238) && /\/api\/projects\/repos\?q=/.test(html238) && /\/api\/projects\/create/.test(html238) && /'session=' \+ encodeURIComponent\(SESSION\)/.test(html238),
       `unknown ${unk.status}/${unkNone.status} · hub project ${hubS.status} ${hubS.data.project} ${hubS.data.dir} · seen by another ${seenByA} · Forgejo calls "${repoCalls.slice(0, 160)}"`);
-  } else for (const id of ['R245', 'R246', 'R247', 'R248', 'R249']) skip(id, 'one start-work flow (T-238)', 'the Rust hub\'s: --rust-hub runs it');
+  } else for (const id of ['R245', 'R246', 'R247', 'R248', 'R249', 'R486']) skip(id, 'one start-work flow (T-238), deploy keys (T-249)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};
