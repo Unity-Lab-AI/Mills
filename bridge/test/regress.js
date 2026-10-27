@@ -553,7 +553,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -575,6 +575,7 @@ async function run() {
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
+  if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -3067,6 +3068,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R196', 'presence and activity (plans/presence.md): a person is as present as their most active device (one active + one idle → online, both idle → away, the last one gone → offline); a run of theirs makes them Working; the accept-work switch makes them Available for work (Working + available during a run); appear offline shows Offline to everyone (also in the old presence list) while they see their real presence, and it ends at its until; the custom text (profile.status) ends at its until; bad override / too-long text → 400; a change reaches pages through the room long poll (status, ver)',
       ok196, has196 ? `mixed ${l196(seen.mixed)} (${seen.mixed.devices} devices) · both idle ${l196(seen.bothIdle)} · one gone ${l196(seen.oneGone)} · run ${l196(seen.run)} · run+accept ${l196(seen.runAccept)} · accept ${l196(seen.accept)} · bad ${seen.badOverride}/${seen.badText} · appear offline: others ${l196(seen.off)} text "${seen.off.text || ''}", old list online ${seen.oldList.online}, self real ${seen.meReal} · room ver moved ${seen.verMoved} status ${seen.inRoom} · after until ${l196(seen.back)} text "${seen.back.text || ''}" · all gone ${l196(seen.allGone)}` : 'GET /api/presence does not exist yet');
   } else skip('R196', 'presence and activity (plans/presence.md)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) await r488Check(); else skip('R488', 'the page shows everyone\'s status (web/presence.js, T-261)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R205-R209: time accounting (plans/presence.md section 6, T-263); the scratch hub's config has presence.workGapMs = 1500
     const day205 = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
     const time205 = async (tok, q = '') => (await call(`/api/presence/time${q}`, tok)).data || {};
@@ -6014,6 +6016,51 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   // R323 (T-308, linked machines 2/8, the Rust hub's): the per-run secret and the owner check on the hub (plans/linked-machines.md 4.3)
   if (!RUST_HUB) skip('R323', 'per-run MCP secret and the owner check for machines (the Rust hub\'s; --rust-hub runs it)', 'the Rust hub is not in front: run with --rust-hub');
   else await r323Check();
+  // R488 (T-261, Mills' UI for plans/presence.md): what the page shows, driven over HTTP against the scratch hub, and the page's own
+  // presence script evaluated in node (its pure helpers: one shape per label, do not disturb, the hover card's lines, nothing on a hub without presence)
+  async function r488Check() {
+    const got = {}; let P = null;
+    const page = await fetch(H + '/').then((r) => r.text()).catch(() => '');
+    const js = await fetch(H + '/presence.js').then(async (r) => (r.ok ? r.text() : '')).catch(() => '');
+    got.loads = /<script src="presence\.js(\?v=[^"]*)?"><\/script>/.test(page) && js.length > 0; // the hub adds ?v=<build> to every script
+    const ctx488 = require('vm').createContext({}); // no document, no page helpers: the script must still load (the web kit's pages differ)
+    try { P = require('vm').runInContext(js + '\n;PRESENCE', ctx488); } catch (e) { got.vmErr = e.message; }
+    const shapes = P ? P.LABELS.map((l) => P.shapeOf({ label: l })) : [];
+    got.shapes = shapes.join(',');
+    got.distinct = shapes.length === 6 && shapes.every(Boolean) && new Set(shapes).size === 6;
+    got.dnd = P ? P.shapeOf({ label: 'Online', dnd: true }) : ''; got.dndOffline = P ? P.shapeOf({ label: 'Offline', dnd: true }) : '';
+    got.unknown = P ? P.shapeOf(undefined) + '|' + P.shapeOf({ label: 'Something new' }) : 'x';
+    if (P) { // a hub without presence: no status in the long poll, and GET /api/presence fails (404) → nothing is known and nothing throws
+      const before = P.state.ok; P.update(undefined); P.update({ error: 'Unknown endpoint' }); let threw = false;
+      ctx488.json = () => Promise.reject(new Error('Unknown endpoint')); // the page's json() on a 404
+      try { await P.start(); } catch { threw = true; }
+      got.degrades = !before && !P.state.ok && !threw && Object.keys(P.state.map).length === 0;
+    }
+    // the hub: mills sets a status; t-user sees it (GET /api/presence and the room long poll); the page's helpers read it
+    const st = async (tok, u) => (((await call('/api/presence', tok)).data.people || []).find((p) => p.user === u)) || {};
+    let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=r488`, D); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })();
+    await sleep(400); await call('/api/presence', D, { device: 'r488', idle: false, screen: 'room' });
+    const me = await call('/api/presence/me', D, { dnd: true, dndUntil: Date.now() + 600000, text: 'r488 reviewing', acceptingWork: true, hideWhere: true });
+    got.me = me.status === 200 && me.data.real === 'online' && me.data.dnd === true && me.data.hideWhere === true && me.data.dndUntil > Date.now();
+    await sleep(200);
+    const seen = await st(U, 'mills');
+    got.other = seen.label === 'Available for work' && seen.dnd === true && seen.text === 'r488 reviewing' && seen.acceptingWork === true && seen.hideWhere === undefined && seen.real === undefined && seen.where === undefined;
+    got.otherShape = P ? P.shapeOf(seen) : '';
+    const lines = P ? P.describe(seen, Date.now()) : [];
+    got.card = lines.map((l) => l.k).join(',');
+    const room = (await call('/api/room/messages?rev=0', U)).data, inRoom = (room.status || []).find((p) => p.user === 'mills') || {};
+    got.room = inRoom.label === 'Available for work' && inRoom.dnd === true && inRoom.text === 'r488 reviewing';
+    await call('/api/presence/me', D, { override: 'away', overrideUntil: Date.now() + 600000, dnd: false });
+    await sleep(200); const away = await st(U, 'mills'); got.away = away.label + '/' + (P ? P.shapeOf(away) : '');
+    const card = P ? P.describe({ user: 'x', presence: 'away', label: 'Working', working: true, since: Date.now() - 20 * 60000, text: 'deep in it', where: { project: 'Proj', branch: 'work/x', task: { id: 'T-1', title: 'Do it' } }, dnd: true }, Date.now()) : [];
+    got.working = card.map((l) => l.t).join(' | ');
+    const workingOk = /^Working · away \| for 20 min, since .+ \| “deep in it” \| on Proj \(work\/x\) · T-1 Do it \| Do not disturb/.test(got.working);
+    await call('/api/presence/me', D, { override: 'auto', dnd: false, text: '', acceptingWork: false, hideWhere: false });
+    on = false; await call('/api/presence', D, { device: 'r488', gone: true });
+    check('R488', 'the page shows everyone\'s status (web/presence.js, T-261): the hub serves the presence script and the page loads it; it gives each of the six labels its own shape (colour-blind safe) and do not disturb its own (but not over Offline); on a hub without presence it knows nothing and throws nothing; a status set with POST /api/presence/me (do not disturb, text, accepting work, hide where) reaches another person through GET /api/presence and the room long poll without the private fields, the page draws it as the do-not-disturb shape with a hover card of label, since, text and dnd, appear away draws the moon, and a working person away reads "Working · away" with since, text, where and dnd',
+      got.loads && got.distinct && got.dnd === 'minus' && got.dndOffline === 'ring' && got.unknown === '|' && got.degrades && got.me && got.other && got.otherShape === 'minus' && /^label,since,text,dnd(,devices)?$/.test(got.card) && got.room && got.away === 'Away/moon' && workingOk,
+      `loads ${got.loads}${got.vmErr ? ' vm: ' + got.vmErr : ''} · shapes ${got.shapes} · dnd ${got.dnd}/${got.dndOffline} · unknown "${got.unknown}" · degrades ${got.degrades} · me ${got.me} · other ${got.other} (${seen.label}, dnd ${seen.dnd}, "${seen.text}") shape ${got.otherShape} card ${got.card} · room ${got.room} · away ${got.away} · working card "${got.working}"`);
+  }
   async function r323Check() {
     const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
     const mkHost = async (token) => { const made = await call('/api/hosts/new', token, {}); const id = (made.data.host || {}).id || ''; const cj = (await call('/api/hosts/config', token, { id })).data.config || {}; return { id, token: cj.token, nick: (made.data.host || {}).nickname || '' }; };

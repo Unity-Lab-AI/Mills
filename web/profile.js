@@ -33,6 +33,7 @@ const PROFILE = (() => {
     const name = el('b', 'pName', (!opts.preview && GUILDS.nickIn(currentConv, u)) || opts.nick || nickOf(u)); name.style.color = inServer || (opts.color != null ? PALETTE[opts.color][lightTheme ? 1 : 0] : colorOf(u));
     body.append(name);
     const sub = el('div', 'pSub', '@' + u + (p.pronouns ? ' · ' + p.pronouns : '') + (m.agent ? ' · BOT' : '')); body.append(sub);
+    if (!opts.preview && typeof PRESENCE !== 'undefined') for (const l of PRESENCE.describe(PRESENCE.state.map[u])) { const d = el('div', 'psL psL-' + l.k, l.t); if (l.k === 'label') d.prepend(PRESENCE.badge(u)); body.append(d); } // their status (web/presence.js; nothing on an older hub)
     if (p.status) body.append(el('div', 'pStatus', p.status));
     if (p.bio) { const b = el('div', 'pBio'); linkify(b, p.bio); body.append(el('div', 'pHead', 'About'), b); }
     const fact = (icon, t) => { const d = el('div', 'pFacts'); d.append(ic(icon, 'lead'), t); body.append(d); };

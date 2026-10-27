@@ -188,7 +188,7 @@
     if (t.recur) { const r = el('span', 'bdRecur'); r.title = 'Repeats ' + RECUR_LABEL[t.recur]; r.append(ic('repeat')); top.append(r); }
     if (t.dueAt) top.append(el('span', 'bdDue ' + dueClass(t), fmtDue(t.dueAt)));
     if (t.forgejo) { const f = el('a', 'bdExt', '#' + t.forgejo.number); f.href = t.forgejo.url; f.target = '_blank'; f.rel = 'noopener noreferrer'; f.title = 'Forgejo issue #' + t.forgejo.number + (t.forgejo.state === 'closed' ? ' (closed)' : ''); f.onclick = (e) => e.stopPropagation(); top.append(f); }
-    if (t.assignee) { const a = el('span', 'bdAva', personName(t.assignee).slice(0, 1).toUpperCase()); a.title = 'Assigned to ' + personName(t.assignee); a.style.background = colorOf(t.assignee); top.append(a); }
+    if (t.assignee) { const a = el('span', 'bdAva', personName(t.assignee).slice(0, 1).toUpperCase()); a.title = 'Assigned to ' + personName(t.assignee); a.style.background = colorOf(t.assignee); if (typeof PRESENCE !== 'undefined') PRESENCE.decorate(a, t.assignee); top.append(a); } // their status shape + hover card (web/presence.js)
     c.append(top, el('div', 'bdTitle', t.title));
     if (t.labels.length) { const l = el('div', 'bdLabels'); for (const x of t.labels) l.append(el('span', 'bdLabel', x)); c.append(l); }
     if (t.claim) { const h = el('div', 'bdClaim' + (t.claim.agent ? ' agent' : '')); h.append(ic(t.claim.agent ? 'bot' : 'flag', 'lead'), t.claim.by + ' · ' + minsLeft(t.claim.until) + ' min' + (t.holder && t.holder.label ? ' · ' + t.holder.label : '') + (t.holderOffline ? ' · offline, may be stale' : '')); if (t.holderOffline) h.classList.add('stale'); c.append(h); }
