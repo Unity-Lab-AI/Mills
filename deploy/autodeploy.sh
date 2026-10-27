@@ -76,7 +76,7 @@ if [ -f "$ST/pending" ]; then
     [ -d "native/dist/$T/$GOOD" ] && sh native/use-build.sh "native/dist/$T" "$GOOD" >> "$LOG" 2>&1 && say "the native build of $(short "$GOOD") is back in service for $T"
   done
   date -u +%Y-%m-%dT%H:%M:%SZ > bridge/.restart
-  printf 'Version %s did not come up within 2 minutes of its restart, so the hub went back to %s (VibeRoller %s), the last version that ran fine. %s stays out until $BRANCH moves on.\n' "$(short "$NEW")" "$(short "$GOOD")" "$(version)" "$(short "$NEW")" > bridge/.rolled-back
+  printf 'Version %s did not come up within 2 minutes of its restart, so the %s went back to %s (VibeRoller %s), the last version that ran fine. %s stays out until %s moves on.\n' "$(short "$NEW")" "$([ "$INSTANCE" = live ] && echo hub || echo "$INSTANCE hub")" "$(short "$GOOD")" "$(version)" "$(short "$NEW")" "$BRANCH" > bridge/.rolled-back
   say "ROLLED BACK: $(short "$NEW") did not come up (hub answered: $(answers && echo "yes, on $(short "$(running)")" || echo no)); back on $(short "$GOOD") ($(label)); $(short "$NEW") is skipped until $BRANCH moves on"
   exit 0
 fi
@@ -98,7 +98,7 @@ if [ -f native/build.sh ] && [ ! -f "$ST/pending" ]; then
   # runs too, not just the new JavaScript; the AI hosts take their new build from it by themselves. A failed trial keeps
   # the old build and says so in the team chat (bridge/.announce/, posted by the hub).
   BC=$(git rev-parse HEAD); LT=x86_64-unknown-linux-gnu; WT=x86_64-pc-windows-gnu
-  TRIAL_FAIL="mkdir -p '$APP/bridge/.announce' && printf '**A new native build was NOT put in service.** The build of %s failed its trial (deploy/trial.sh on a side port against a copy of the data); the build in service stays. See native-build.log on the server.\n' '$(short "$BC")' > '$APP/bridge/.announce/trial-failed-\$(date +%s).txt'"
+  TRIAL_FAIL="mkdir -p '$APP/bridge/.announce' && printf '**A new native build was NOT put in service%s.** The build of %s failed its trial (deploy/trial.sh on a side port against a copy of the data); the build in service stays. See native-build.log on the server.\n' '$([ "$INSTANCE" = live ] || echo " on the $INSTANCE hub")' '$(short "$BC")' > '$APP/bridge/.announce/trial-failed-\$(date +%s).txt'"
   BUILD_CMD="export VR_COMMIT='$BC' VR_STAGE_ONLY=1; nice -n 10 sh '$APP/native/build.sh' > '$BASE/native-build.log' 2>&1 || { echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build FAILED (the last build stays; see native-build.log)\" >> '$LOG'; exit 1; }; if sh '$APP/deploy/trial.sh' '$APP/native/dist/$LT/$BC/vr-hub' '$APP' >> '$BASE/native-build.log' 2>&1; then sh '$APP/native/mark-good.sh' '$APP/native/dist/$LT' '$BC' >> '$BASE/native-build.log' 2>&1; [ -d '$APP/native/dist/$WT/$BC' ] && sh '$APP/native/mark-good.sh' '$APP/native/dist/$WT' '$BC' >> '$BASE/native-build.log' 2>&1; sh '$APP/native/use-build.sh' '$APP/native/dist/$LT' '$BC' >> '$BASE/native-build.log' 2>&1 && { [ -d '$APP/native/dist/$WT/$BC' ] && sh '$APP/native/use-build.sh' '$APP/native/dist/$WT' '$BC' >> '$BASE/native-build.log' 2>&1; true; } && date -u +%Y-%m-%dT%H:%M:%SZ > '$APP/bridge/.restart' && echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build done and tried; graceful restart requested (the new Rust hub)\" >> '$LOG'; else echo \"\$(date '+%Y-%m-%d %H:%M:%S') native build of $(short "$BC") FAILED ITS TRIAL (the build in service stays; see native-build.log)\" >> '$LOG'; $TRIAL_FAIL; fi"
   busy=0
   if [ -n "${INVOCATION_ID:-}" ] && command -v systemd-run >/dev/null; then systemctl --user is-active -q "$NATIVE_UNIT" 2>/dev/null && busy=1
