@@ -70,5 +70,7 @@ function renderAppUser() {
   const dl = document.createElement('button'); dl.type = 'button'; dl.className = 'ghost tiny'; dl.title = 'Download: Vibe Roller Desktop and Vibe Roller AI Host (Windows + Linux)'; dl.append(ic('download')); dl.onclick = () => openDownloads();
   const set = document.createElement('button'); set.type = 'button'; set.className = 'ghost tiny'; set.title = 'Settings: profile, picture, app settings, theme'; set.append(ic('gear')); set.onclick = () => openSettings();
   const out = document.createElement('button'); out.type = 'button'; out.className = 'ghost tiny'; out.title = 'Sign out'; out.append(ic('logout')); out.onclick = () => signOut();
-  box.append(av, who, dl, set, out);
+  box.append(av, who);
+  if (typeof PRESENCE !== 'undefined') box.append(PRESENCE.myButton()); // my status (web/presence.js): hidden on a hub without presence
+  box.append(dl, set, out);
 }

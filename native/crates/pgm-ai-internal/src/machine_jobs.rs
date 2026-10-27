@@ -97,16 +97,26 @@ impl MachineJobs {
         }
     }
 
+    fn usable(&self, c: &Value) -> bool { c["paused"] != json!(true) && c["online"] == json!(true) && c["id"].as_str().map(|i| self.polling(i)).unwrap_or(false) }
+    fn named_is(c: &Value, n: &str) -> bool { c["id"].as_str().map(|i| i.to_lowercase() == n).unwrap_or(false) || c["name"].as_str().map(|i| i.to_lowercase() == n).unwrap_or(false) }
+    /// The card a call goes to when [`MachineJobs::route`] sends it to a machine (None: it passes on or is refused). The run notes it,
+    /// so the Work bar and the owner's card can say which machine is in use (T-314, plans/linked-machines.md 4.6).
+    pub fn pick<'a>(&self, cards: &'a [Value], named: &str, name: &str) -> Option<&'a Value> {
+        if !FILE_TOOLS.contains(&name) && !MACHINE_TOOLS.contains(&name) { return None; }
+        let n = named.trim().to_lowercase();
+        if n.is_empty() { cards.iter().find(|c| self.usable(c)) } else { cards.iter().find(|c| Self::named_is(c, &n)).filter(|c| self.usable(c)) }
+    }
+
     /// Where a PC / machine tool call goes (see the module docs). `cards` are the caller's own machines (`Devices::machines_of`).
     #[allow(clippy::too_many_arguments)]
     pub async fn route(&self, cards: &[Value], account: &str, named: &str, name: &str, args: &Value, actor: &Actor) -> Routed {
         let is_file = FILE_TOOLS.contains(&name);
         let is_machine = MACHINE_TOOLS.contains(&name);
         if !is_file && !is_machine { return Routed::Pass; }
-        let usable = |c: &Value| c["paused"] != json!(true) && c["online"] == json!(true) && c["id"].as_str().map(|i| self.polling(i)).unwrap_or(false);
+        let usable = |c: &Value| self.usable(c);
         let n = named.trim().to_lowercase();
         let chosen: Option<&Value> = if n.is_empty() { cards.iter().find(|c| usable(c)) } else {
-            match cards.iter().find(|c| c["id"].as_str().map(|i| i.to_lowercase() == n).unwrap_or(false) || c["name"].as_str().map(|i| i.to_lowercase() == n).unwrap_or(false)) {
+            match cards.iter().find(|c| Self::named_is(c, &n)) {
                 Some(c) if usable(c) => Some(c),
                 // the caller's own machine, but not listening: say so, never fall back to another place (T-308)
                 Some(c) => return Routed::Done(json!({ "ok": false, "error": format!("Your machine {} is {} right now.", c["name"].as_str().unwrap_or(&n), if c["paused"] == json!(true) { "paused" } else { "offline" }) })),
@@ -241,6 +251,10 @@ mod tests {
         let w = tokio::spawn(async move { loop { if let Some(job) = j2.take("m1").first() { j2.deliver("m1", &job.id, &json!({ "ok": true, "result": "from m1" }).to_string()); return; } tokio::time::sleep(Duration::from_millis(10)).await; } });
         match j.route(&cards, "sponge", "", "list", &json!({}), &a).await { Routed::Done(v) => assert_eq!(v["result"], json!("from m1")), _ => panic!() }
         w.await.unwrap();
+        // pick names the same card route uses (T-314), and none for what passes on or is refused
+        assert_eq!(j.pick(&cards, "", "list").and_then(|c| c["id"].as_str()), Some("m1"));
+        assert_eq!(j.pick(&cards, "BOX-M1", "shell_run").and_then(|c| c["id"].as_str()), Some("m1"));
+        assert!(j.pick(&cards, "", "board_list").is_none() && j.pick(&cards, "other", "list").is_none() && j.pick(&[card("m1", true, true)], "", "list").is_none());
         let _ = std::fs::remove_dir_all(d);
     }
 

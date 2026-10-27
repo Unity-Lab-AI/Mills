@@ -103,7 +103,12 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Option<Routed> {
     if p == "/api/device/peek" && r.method == Method::POST {
         return Some(match a.devices.peek(&u, r.json()["userCode"].as_str().unwrap_or("")) { Ok(v) => answer(200, v), Err((s, e)) => answer(s, json!({ "error": e })) });
     }
-    if p == "/api/machines" && r.method == Method::GET { return Some(answer(200, json!({ "machines": a.devices.machines_of(&u) }))); }
+    if p == "/api/machines" && r.method == Method::GET {
+        // T-314: each card says which of the owner's own runs use it now (the panel's in-use line); [] when none
+        let used = hub.mods.work.machines_in_use(&u);
+        let cards: Vec<Value> = a.devices.machines_of(&u).into_iter().map(|mut c| { let k = c["id"].as_str().unwrap_or("").to_string(); c["inUse"] = json!(used.get(&k).cloned().unwrap_or_default()); c }).collect();
+        return Some(answer(200, json!({ "machines": cards })));
+    }
     if p == "/api/machines/count" && r.method == Method::GET {
         if !a.is_admin(&u) { return Some(answer(403, json!({ "error": "Admins only." }))); }
         let per = a.devices.machine_counts();
