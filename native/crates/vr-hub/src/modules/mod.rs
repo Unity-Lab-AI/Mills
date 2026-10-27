@@ -44,6 +44,33 @@ pub mod worktree;
 /// pgm-core-internal since 5.0.0.
 pub use pgm_core_internal::config::Config;
 
+/// Which hub this is (T-327, the team note plans/dev-hub.md 1 and 2b): config `"instance": "dev"` makes it the dev hub
+/// (dev.portal, Forgejo's develop); absent or `"live"` = the live hub, which behaves exactly as before. With the data in
+/// sync, a background job on both hubs would act twice, so on the dev hub these are OFF unless config
+/// `devAllow: ["<job>", …]` turns one on for a test ("*" = all of them):
+/// - `mirror`: the Forgejo board mirror (the poll and the outbound mirroring of board changes)
+/// - `triggers`: Hyper Workflow triggers (timers, webhooks, events)
+/// - `agents`: Unity / the chat agents answering in the chat (and greeting people who sign in)
+/// - `gateway`: the PGM Gateway's product requests and registrations (the products talk to live)
+/// - `hostUpdates`: AI host updates handed out (hosts belong to live)
+/// What a person does on dev (a message, a task, a Work run they start) is theirs and runs there.
+pub struct Instance { dev: bool, allow: Vec<String> }
+pub const DEV_JOBS: [&str; 5] = ["mirror", "triggers", "agents", "gateway", "hostUpdates"];
+impl Instance {
+    pub fn from_cfg(cfg: &Config) -> Instance {
+        let dev = cfg.get("instance").and_then(Value::as_str).map(|s| s.trim().eq_ignore_ascii_case("dev")).unwrap_or(false);
+        let allow = cfg.get("devAllow").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+        Instance { dev, allow }
+    }
+    pub fn is_dev(&self) -> bool { self.dev }
+    /// "live" or "dev" (/api/status `instance`)
+    pub fn name(&self) -> &'static str { if self.dev { "dev" } else { "live" } }
+    /// May this background job run here? Always on the live hub; on the dev hub only when devAllow names it.
+    pub fn allows(&self, job: &str) -> bool { !self.dev || self.allow.iter().any(|a| a == job || a == "*") }
+    /// The jobs that are off here (empty on the live hub).
+    pub fn off(&self) -> Vec<&'static str> { DEV_JOBS.iter().copied().filter(|j| !self.allows(j)).collect() }
+}
+
 pub enum Routed {
     /// answered here
     Answer(Response<Body>),
@@ -76,6 +103,8 @@ pub struct Modules {
     pub gateway: gateway::Gateway,
     pub re: Arc<re::Re>,
     pub hyperwork: hyperwork::Hyperwork,
+    /// live or dev, and which background jobs run here (T-327)
+    pub instance: Instance,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -91,7 +120,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), mills })
+            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), instance: Instance::from_cfg(cfg), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -111,7 +140,8 @@ impl Modules {
     pub fn has(&self, u: &str) -> bool { self.auth.account(u).is_some() }
     pub fn board_op(&self, op: &str, a: &board::Actor, b: &Value) -> board::Out {
         let out = self.board.op(op, a, b, &|u| self.has(u), &|u| self.name_of(u));
-        self.mirror.changed(&self.board, out.changes.clone());
+        // the outbound mirror (board → Forgejo issues): the live hub's only; on dev the change syncs to live, which mirrors it
+        if self.instance.allows("mirror") { self.mirror.changed(&self.board, out.changes.clone()); }
         out
     }
     fn actor(&self, user: &str, agent: bool) -> board::Actor { board::Actor { user: user.to_string(), agent, name: self.name_of(user) } }
@@ -171,8 +201,12 @@ where F: Fn() -> Fut + Send + Sync + 'static, Fut: std::future::Future<Output = 
     });
 }
 pub fn start_background(hub: &Arc<Hub>) {
-    // the Forgejo → board poll
-    if let Some(every) = hub.mods.mirror.every() {
+    if hub.mods.instance.is_dev() {
+        let off = hub.mods.instance.off();
+        println!("[vr-hub] this is the DEV hub (config instance \"dev\"); off here unless config devAllow turns them on: {}", if off.is_empty() { "nothing (devAllow has them all)".to_string() } else { off.join(", ") });
+    }
+    // the Forgejo → board poll (the live hub's only: on dev it would make every issue twice)
+    if let Some(every) = hub.mods.mirror.every().filter(|_| hub.mods.instance.allows("mirror")) {
         let h = hub.clone();
         forever("Forgejo poll", move || { let h = h.clone(); async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -335,7 +369,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         return Routed::Pass(vec![]);
     }
     // PGM Gateway: a product's signed requests (from this machine only; see gateway.rs), and the products served here
-    if let Some(rest) = p.strip_prefix("/internal/gateway/") { return gateway::route(hub, r, rest).await; }
+    // (on the dev hub the products' requests are live's: T-327)
+    if let Some(rest) = p.strip_prefix("/internal/gateway/") { return if hub.allows("gateway") { gateway::route(hub, r, rest).await } else { answer(503, json!({ "error": "This is the dev hub: PGM products talk to the live hub (config devAllow \"gateway\" turns it on here).", "instance": "dev" })) }; }
     if let Some(rest) = p.strip_prefix("/p/") { return gateway::serve(hub, r, rest).await; }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
     // Hyper Workflows (T-212): webhooks (signed, no session) and this machine's own events
@@ -346,6 +381,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     // the OpenAI- / Anthropic-compatible API: its own bearer keys, for harnesses, not the browser app
     if p == "/v1" || p.starts_with("/v1/") { return openai::v1(hub, r).await; }
     if p.starts_with("/node/") {
+        // AI host updates are handed out by the live hub only (T-327): a host connected to dev keeps what it runs
+        if p.starts_with("/node/update") && !hub.allows("hostUpdates") { return answer(404, json!({ "error": "No updates here: this is the dev hub (AI host updates come from the live hub).", "instance": "dev" })); }
         let (status, out) = hub.mods.ai.route(&r.method, p, &r.query, &r.headers, &r.body, &hub.mods.native).await;
         // a host that said hello is on everyone's list before it hears back
         if p == "/node/hello" && status == 200 { push_ai_state(hub).await; }
