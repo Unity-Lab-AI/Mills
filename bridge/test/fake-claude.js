@@ -110,6 +110,24 @@ process.stdin.on('end', async () => {
     const noted = await tool('task_update', { id, appendNote: 'progress from the agent r70' });
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'BOARD:' + JSON.stringify({ id, made: made.ok, claimed: claimed.ok, noted: noted.ok }) }] } });
   }
+  // "BOARDARCHIVE": the archive through the board MCP relay (T-190): finish a task, archive it, find it, restore it.
+  if (input.includes('BOARDARCHIVE')) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.board.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/board', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const made = await tool('task_create', { title: 'agent archive r487' });
+    const id = made.ok ? made.result.task.id : '';
+    const early = await tool('task_archive', { id });
+    await tool('task_complete', { id });
+    const arch = await tool('task_archive', { id });
+    const listed = await tool('board_list', {});
+    const found = await tool('board_archived', { q: 'r487' });
+    const back = await tool('task_restore', { id, status: 'todo' });
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'ARCH:' + JSON.stringify({ id, early: early.ok ? 'archived' : early.error, archivedAt: arch.ok ? arch.result.task.archivedAt : arch.error,
+      onBoard: listed.ok ? listed.result.tasks.some((t) => t.id === id) : listed.error, found: found.ok ? found.result.tasks.map((t) => t.id) : found.error, restored: back.ok ? back.result.task.status : back.error }) }] } });
+  }
   // "BOARDPLAN": plan with the board like Claude would: create with a text due date, read the calendar,
   // move a task, delete one, make a board, and set / clear a due date by text.
   if (input.includes('BOARDPLAN')) {

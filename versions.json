@@ -1,5 +1,5 @@
 {
-  "project": "5.31.1",
+  "project": "5.32.0",
   "modules": {
     "bridge/ai-node.js": "3.4.0",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -7,7 +7,7 @@
     "bridge/archive.js": "1.0.0",
     "bridge/assistant-tools-mcp.js": "1.0.0",
     "bridge/assistant.js": "1.1.2",
-    "bridge/board-mcp.js": "1.0.1",
+    "bridge/board-mcp.js": "1.1.0",
     "bridge/board.js": "1.0.0",
     "bridge/calls.js": "1.0.0",
     "bridge/common.js": "1.2.1",
@@ -42,7 +42,7 @@
     "bridge/worktree.js": "2.5.0",
     "web/app.js": "1.1.2",
     "web/attach.js": "1.1.0",
-    "web/board.js": "1.0.6",
+    "web/board.js": "1.1.0",
     "web/calls.js": "1.1.2",
     "web/coview.js": "1.0.0",
     "web/editor/core.js": "1.0.0",
@@ -53,7 +53,7 @@
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.1.0",
     "web/hyperwork.js": "1.0.0",
-    "web/index.html": "1.27.0",
+    "web/index.html": "1.27.1",
     "web/library.js": "1.1.0",
     "web/localai.js": "1.0.0",
     "web/md.js": "1.0.1",
