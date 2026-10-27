@@ -174,7 +174,9 @@ impl Engine {
         if !go { return 0; }
         let (items, whole) = match (level, last, ver) {
             (Scan::Full, _, _) | (_, None, _) | (_, _, None) => (k.snapshot(), true),
-            (_, Some(since), Some(_)) => match k.changed(since) { Some(c) => (c, false), None => (k.snapshot(), true) },
+            // a version that went back (the store was cleared and counts again): the whole snapshot
+            (_, Some(since), Some(v)) if v >= since => match k.changed(since) { Some(c) => (c, false), None => (k.snapshot(), true) },
+            _ => (k.snapshot(), true),
         };
         if let Some(v) = ver { inner.versions.insert(name.clone(), v); }
         let t = now(); let mut n = 0;
