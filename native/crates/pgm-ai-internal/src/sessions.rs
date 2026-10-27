@@ -8,6 +8,8 @@
 //! - The list: <profile>/work-sessions.json = { primary, current (the one open on screen), order, sessions: { id: meta } },
 //!   meta = { mode ("planner"; none = work, T-275), title, createdAt, updatedAt, lastActivityAt, folder, pinned, hidden, archived, draft, draftAt, seenAt,
 //!   lastReplyAt, waiting, worktree, ended }. The person's folders: <profile>/work-folders.json.
+//! - The list's summaries carry `queued` (messages still to go) when there are any: the session list (web/sessions.js) sends
+//!   them for a session that is not on screen.
 //! - A session's run is keyed by the person for the primary session (as before) and "<user>#<id>" for the others.
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
@@ -162,6 +164,9 @@ fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
     let mut out = json!({ "noProject": none, "id": sid, "title": m["title"], "state": state_of(m, running, now), "running": running, "primary": sx.primary, "host": host_of(&provider), "provider": provider, "model": s(&st, "model"), "project": project,
         "harness": if s(&st, "sessionHarness").is_empty() { "claude".to_string() } else { s(&st, "sessionHarness") }, "folder": m["folder"], "pinned": m["pinned"] == json!(true), "hidden": m["hidden"] == json!(true), "archived": m["archived"] == json!(true),
         "updatedAt": m["updatedAt"], "lastActivityAt": m["lastActivityAt"], "hasDraft": !s(m, "draft").is_empty(), "worktree": m["worktree"], "mode": mode_of_meta(m) });
+    // messages waiting to go (its queue + a "send now"): the page sends them when the session is free (T-287: a 429 keeps them here)
+    let c = scurrent(a, &sx); let queued = c["queue"].as_array().map(|q| q.len()).unwrap_or(0) + usize::from(c["sendNow"].is_string());
+    if queued > 0 { out["queued"] = json!(queued); }
     if m["ended"].is_object() { out["ended"] = m["ended"].clone(); }
     if m["waiting"].is_object() { out["waiting"] = m["waiting"].clone(); } // what it waits for (T-288): {kind, at, tools?}
     out

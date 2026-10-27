@@ -45,6 +45,7 @@ function check(id, label, pass, detail = '') {
   console.log(`${pass ? 'PASS' : 'FAIL'} ${id.padEnd(4)} ${label}${detail ? '  — ' + detail : ''}`);
   if (STOP_AFTER && id === STOP_AFTER) { const e = new Error('stopped after ' + id); e.stopAfter = true; throw e; }
 }
+const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -553,7 +554,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['sessions.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -575,6 +576,7 @@ async function run() {
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
+  if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -637,7 +639,7 @@ async function run() {
   const anonStatus = (await fetch(H + '/api/status', { headers: { 'cf-connecting-ip': '203.0.113.9' } }).then((r) => r.json()).catch(() => ({})));
   const localStatus = (await call('/api/status')).data;
   const notFound = (await fetch(H + '/nothing-here.html')).status, dirList = (await fetch(H + '/vendor/')).status, traversal = (await fetch(H + '/..%2f..%2fbridge%2fconfig.json')).status;
-  const hiddenScreens = ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'settings', 'roomFloat', 'callFloat', 'archive'].filter((id) => !new RegExp(`id="${id}"[^>]*\\bhidden\\b`).test(html) && !new RegExp(`<[a-z]+ [^>]*\\bhidden\\b[^>]*id="${id}"`).test(html));
+  const hiddenScreens = ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'settings', 'roomFloat', 'callFloat', 'sessPanel'].filter((id) => !new RegExp(`id="${id}"[^>]*\\bhidden\\b`).test(html) && !new RegExp(`<[a-z]+ [^>]*\\bhidden\\b[^>]*id="${id}"`).test(html));
   check('R110', `login gate: ${routes.length} API routes from the hub source answer 401 without a sign-in (GET + POST); anonymous status through the tunnel carries no pid / busy / supervised; unknown paths, folder listings and path traversal → 404; [static] every screen but the sign-in form ships hidden`,
     routes.length >= 50 && !leaks.length && anonStatus.ok === true && anonStatus.pid === undefined && anonStatus.busy === undefined && anonStatus.supervised === undefined && typeof localStatus.pid === 'number'
     && notFound === 404 && dirList === 404 && traversal === 404 && !hiddenScreens.length && /<form id="login"/.test(html),
@@ -685,7 +687,7 @@ async function run() {
   check('R104', 'past sessions search: matches titles and everything in the transcript (all words, any case), ranked by hits with snippets saying who said it, nothing from other accounts, empty query = the plain list; [static] search box + highlighted matches',
     s1.status === 200 && s2.status === 200 && f1.length === 1 && f1[0].id === s1.data.id && f1[0].hits === 1 && f1[0].snippets.length === 1 && f1[0].snippets[0].cls === 'claude' && /needle-r75/.test(f1[0].snippets[0].text)
     && f2.length === 1 && f2[0].id === s1.data.id && !f3.length && !f4.length && f5.length === 2
-    && /id="archiveQ"/.test(html) && /function markText\(/.test(html) && /\/api\/archive\/search/.test(html),
+    && /id="spQ"/.test(html) && /function markText\(/.test(html) && /\/api\/archive\/search/.test(html),
     `needle ${f1.length}, two words ${f2.length}, absent ${f3.length}, other account ${f4.length}, empty ${f5.length}`);
   for (const s of [s1, s2]) await call('/api/archive/delete', U, { id: s.data.id });
 
@@ -1670,7 +1672,7 @@ async function run() {
     [/function renderAgenda\(/.test(boardJs76) && /#calGrid\.agenda/.test(html), 'calendar agenda on phones'],
     [/env\(safe-area-inset-bottom\)/.test(html), 'safe-area insets'],
     [/#adminBody table \{ display: block; overflow-x: auto;/.test(html), 'admin table scrolls'],
-    [/\.modal \.box, #archive \.box \{ width: 100vw;/.test(html), 'full-screen dialogs on phones'],
+    [/\.modal \.box \{ width: 100vw;/.test(html), 'full-screen dialogs on phones'],
     [/\.floatWin \{ left: 8px !important;/.test(html), 'floating windows fill phones'],
   ].filter(([ok]) => !ok).map(([, n]) => n);
   // Mills Chat app: PWA manifest + service worker + icons, app mode, the Discord-shaped side bar and member column.
@@ -3544,6 +3546,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R198', 'session limits (plans/multi-session.md § 6): with the defaults (5 per person per host, 3 per provider) a 4th working session on the same provider answers 429 (idle sessions cost nothing: the 4th exists, only its run is refused) with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R285 to R289 (T-289): other tools (Jcode PGM) report their sessions; the person's list shows them as `external`
     const s285 = {}, now285 = Date.now();
     const rep = (tok, body) => call('/api/work/sessions/report', tok, body);
@@ -5098,7 +5101,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     /height: 100dvh/.test(html) && /html \{ height: 100%; overflow: hidden; \}/.test(html) && /Stay inside the viewport/.test(html)
     && /\.msg \{ min-width: 0; max-width: 100%; overflow-wrap: anywhere/.test(html) && /\.floatWin \{ max-width: calc\(100vw - 16px\)/.test(html));
   check('R51', '[static] Past sessions naming + auto-save (default 5 min, auto-named, keeps overwriting the same saved session)',
-    />Past sessions<\/button>/.test(html) && />Save session<\/button>/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
+    /id="sessToggle"/.test(html) && /Saved conversations/.test(html) && />Save session<\/button>/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
     && /autosave: p\.autosave \?\? 5/.test(html) && /saveToArchive\(true, true\)/.test(html) && /if \(auto\) title = autoName\(\)/.test(html));
   const ids48 = ['callBtn', 'callBanner', 'callCore', 'callTiles', 'callMic', 'callCam', 'callLeave', 'callFloat', 'callSideHost', 'audNoise', 'audEcho', 'audAgc', 'callVolume', 'callQuality', 'micBtn', 'recBar', 'recSend', 'recCancel', 'clipVolume', 'clipAuto','rail', 'panes', 'roomPane', 'roomFloat', 'roomCore', 'roomSide', 'settings', 'setNick', 'setColors', 'volMessage', 'volMention', 'volReply', 'setToasts', 'toasts', 'replyBar', 'mentionList', 'railRoomBadge', 'goSettings', 'setTts', 'ttsVolume', 'ttsRate', 'ttsVoice', 'ttsScope', 'ttsStop'];
   check('R48', '[static] Work rail + resizable / minimizable panes + floating chat, settings in menu / chat / rail, tones, toasts, receipts, edit / delete / reply / @',
@@ -5359,7 +5362,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   { // R169: a page that reloads during a Work reply joins it again (the Rust hub's GET /api/work/attach), and the page
     // never reloads itself in front of you, never stays black, sends the retired GitHub Pages copy to the hub (4.1.4)
     const page169 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    const stat = /async function followRun\(saved, inSend\)/.test(page169) && /\/api\/work\/attach\?run=/.test(page169) && /run: curRun/.test(page169) && /if \(curRun && !runEnded\) await followRun\(curRun, true\)/.test(page169)
+    const stat = /async function followRun\(saved, inSend(, gen0)?\)/.test(page169) && /\/api\/work\/attach\?run=/.test(page169) && /run: curRun/.test(page169) && /curRun && !runEnded\) await followRun\(curRun, true(, gen)?\)/.test(page169)
       && /if \(document\.visibilityState === 'visible'\) \{ updateBar\(pageUpdate\.build\); return; \}/.test(page169) && /function bootTrouble\(msg\)/.test(page169) && /location\.replace\(HUB_HOST \+ '\/'\)/.test(page169);
     if (RUST_HUB) {
       const ctl = new AbortController();
@@ -6014,6 +6017,73 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   // R323 (T-308, linked machines 2/8, the Rust hub's): the per-run secret and the owner check on the hub (plans/linked-machines.md 4.3)
   if (!RUST_HUB) skip('R323', 'per-run MCP secret and the owner check for machines (the Rust hub\'s; --rust-hub runs it)', 'the Rust hub is not in front: run with --rust-hub');
   else await r323Check();
+  // R489 (T-287): the Work session list. The hub side it relies on, over HTTP, then the panel script as the page gets it,
+  // its pure helpers run here (state → colour / shape / meaning, the groups, the counter and room, the one menu).
+  async function r489Check() {
+    const ss = async (q) => (await call('/api/work/sessions' + (q || ''), U)).data || {};
+    const one = async (id, q) => ((await ss(q)).sessions || []).find((s) => s.id === id) || {};
+    const seen = {};
+    const primary = (await ss()).primary, a = (await call('/api/work/sessions/new', U, { background: true })).data.id;
+    seen.untitled = (await one(a)).title === '';
+    await call('/api/work/sessions/rename', U, { id: a, title: '  r489   named\n' }); seen.title = (await one(a)).title;
+    await call('/api/work/sessions/pin', U, { id: a, pinned: true }); seen.pinned = (await one(a)).pinned === true;
+    await call('/api/work/sessions/pin', U, { id: a, pinned: false }); seen.unpinned = (await one(a)).pinned === false;
+    // a message waiting in a session (e.g. refused with 429) is in the list, so the page sends it when a slot frees
+    await call('/api/work/queue', U, { session: a, queue: ['r489 waits', 'r489 next'], sendNow: null }); seen.queued = (await one(a)).queued;
+    await call('/api/work/queue', U, { session: a, queue: [] }); seen.unqueued = (await one(a)).queued === undefined;
+    const run = chat(U, 'SLOW r489', { session: a }); await sleep(900);
+    const mid = await ss('?archived=1'); seen.working = ((mid.sessions || []).find((s) => s.id === a) || {}).state; seen.counter = (mid.counts || {}).working;
+    seen.room = Object.values((mid.counts || {}).perHost || {}).some((h) => h.used >= 1 && h.max >= 1);
+    await run; await sleep(300); seen.after = (await one(a)).state;
+    const f = (await call('/api/work/folders/new', U, { name: 'r489 f' })).data.id;
+    await call('/api/work/folders/rename', U, { id: f, name: 'r489 g', collapsed: true });
+    const fl = ((await ss()).folders || []).find((x) => x.id === f) || {}; seen.folder = fl.name === 'r489 g' && fl.collapsed === true;
+    await call('/api/work/folders/delete', U, { id: f });
+    seen.archive = (await call('/api/work/sessions/archive', U, { id: a })).status;
+    seen.outOfList = !((await ss()).sessions || []).some((s) => s.id === a); seen.inArchived = (await one(a, '?archived=1')).archived === true;
+    await call('/api/work/sessions/open', U, { id: a }); seen.back = (await one(a)).archived === false && (await ss()).current === a;
+    await call('/api/work/sessions/open', U, { id: primary }); await call('/api/work/sessions/delete', U, { id: a });
+    // the page loads the panel script, and the hub serves it
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/sessions.js'), src = js.status === 200 ? await js.text() : '';
+    seen.served = /<script src="sessions\.js(\?[^"]*)?"><\/script>/.test(page) && js.status === 200 && /javascript/.test(js.headers.get('content-type') || '') && !/id="openArchive"/.test(page) && /id="sessPanel"/.test(page);
+    let S = null; try { const ctx = { window: {} }; require('vm').runInNewContext(src, ctx); S = ctx.window.SESSIONS; } catch (e) { seen.load = e.message; }
+    if (S) {
+      const hue = (hex) => { const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; if (!hex || d < 0.12) return { grey: true }; const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return { h: (h * 60 + 360) % 360 }; };
+      const v = Object.fromEntries(['waiting', 'working', 'done-unseen', 'draft', 'idle', 'ready'].map((st) => [st, S.stateView({ state: st })]));
+      const dots = ['waiting', 'working', 'done-unseen', 'draft', 'idle'], H5 = Object.fromEntries(dots.map((k) => [k, hue(v[k].color)]));
+      seen.colours = H5.waiting.h >= 40 && H5.waiting.h <= 60 && H5.working.h >= 255 && H5.working.h <= 290 && (H5['done-unseen'].h >= 345 || H5['done-unseen'].h <= 10) && H5.draft.h >= 200 && H5.draft.h <= 235 && H5.idle.grey === true;
+      seen.shapes = new Set(dots.map((k) => v[k].shape)).size === 5 && dots.every((k) => v[k].shape) && !v.ready.shape && !v.ready.color;
+      seen.meanings = Object.entries(v).every(([k, x]) => x.state === k && x.title.startsWith(x.name + ': ') && x.title.length > x.name.length + 6);
+      const silent = S.stateView({ state: 'ready', ended: { why: 'silent' } }), stalled = S.stateView({ state: 'idle', ended: { why: 'stalled' } }), perm = S.stateView({ state: 'waiting', waiting: { kind: 'permission', tools: ['Bash'] } });
+      seen.stall = silent.state === 'idle' && /sent nothing/.test(silent.title) && stalled.state === 'idle' && /stopped answering/.test(stalled.title) && /Bash/.test(perm.title) && S.stateView({ state: 'working', ended: { why: 'silent' } }).state === 'working';
+      const now = new Date(2026, 9, 27, 12).getTime(), H1 = 3600e3;
+      const list = [{ id: 't1', lastActivityAt: now - H1 }, { id: 'e1', lastActivityAt: now - 30 * H1 }, { id: 'p1', pinned: true, lastActivityAt: now - 50 * H1 }, { id: 'f1', folder: 'fa', lastActivityAt: now - 2 * H1 },
+        { id: 'h1', hidden: true, title: 'secret plan', lastActivityAt: now }, { id: 'a1', archived: true, lastActivityAt: now }, { id: 't2', lastActivityAt: now - 0.5 * H1 }, { id: 'x1', folder: 'gone', lastActivityAt: now - 40 * H1 }];
+      const folders = [{ id: 'fb', name: 'Empty', order: 1 }, { id: 'fa', name: 'Mine', order: 0 }];
+      const gs = S.groupSessions(list, folders, { now }), key = (g) => g.key + '=' + g.items.map((x) => x.id).join(',');
+      seen.groups = gs.map(key).join(' ');
+      const found = S.groupSessions(list, folders, { now, q: 'SECRET' });
+      seen.grouped = seen.groups === 'pinned=p1 f:fa=f1 f:fb= today=t2,t1 earlier=e1,x1 hidden=h1 archived=a1' && gs.find((g) => g.key === 'hidden').collapsed === true && gs.find((g) => g.key === 'archived').collapsed === true
+        && found.map(key).join(' ') === 'hidden=h1' && found[0].collapsed === false;
+      seen.counterText = S.counterText({ working: 3, waiting: 1 }) + ' | ' + S.counterText({ working: 1, waiting: 2 });
+      const provs = [{ id: 'h:gee1/claude', owner: 'gee', label: 'Claude' }, { id: 'h:my1/claude', owner: 't-user', label: 'Claude' }];
+      const name = (h) => S.hostName(h, provs, 't-user', (u) => (u === 'gee' ? 'Gee' : u));
+      const room = S.roomText({ gee1: { used: 3, max: 5, maxPerProvider: 3, providers: { 'h:gee1/claude': 3 } }, my1: { used: 1 }, hub: { used: 5, max: 5 } }, name);
+      seen.room2 = room.map((r) => r.text + (r.full ? '!' : '')).join(', ');
+      const ids = (s, c) => S.menuItems(s, c).map((x) => x.id).join(',');
+      const m = S.menuItems({ id: 's-1', worktree: { branch: 'work/x.1' }, folder: 'fa' }, { folders });
+      seen.menu = ids({ id: 's-1', worktree: { branch: 'work/x.1' } }, { folders }) === 'open,rename,pin,move,share,home,link,hide,archive,delete'
+        && ids({ id: 's-0', primary: true, worktree: {} }, {}) === 'open,rename,pin,move,share,link,hide,archive'
+        && ids({ id: 's-2', archived: true, hidden: true, pinned: true }, { shared: true }) === 'open,rename,pin,move,share,link,hide,delete'
+        && S.menuItems({ id: 's-2', hidden: true, pinned: true }, { shared: true }).filter((x) => ['pin', 'share', 'hide'].includes(x.id)).map((x) => x.label).join('|') === 'Unpin|Stop sharing|Unhide'
+        && m.find((x) => x.id === 'delete').danger === true && m.find((x) => x.id === 'move').sub.map((x) => x.id + (x.on ? '*' : '')).join(',') === 'move:fb,move:fa*,move:new,move:none'
+        && S.folderMenuItems({ collapsed: true }).map((x) => x.label).join('|') === 'Rename…|Expand|Delete folder…';
+    }
+    const ok = seen.untitled && seen.title === 'r489 named' && seen.pinned && seen.unpinned && seen.queued === 2 && seen.unqueued && seen.working === 'working' && seen.counter >= 1 && seen.room && seen.after === 'done-unseen'
+      && seen.folder && seen.archive === 200 && seen.outOfList && seen.inArchived && seen.back && seen.served && !!S && seen.colours && seen.shapes && seen.meanings && seen.stall && seen.grouped
+      && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
+    check('R489', R489_LABEL, ok, JSON.stringify(seen));
+  }
   async function r323Check() {
     const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
     const mkHost = async (token) => { const made = await call('/api/hosts/new', token, {}); const id = (made.data.host || {}).id || ''; const cj = (await call('/api/hosts/config', token, { id })).data.config || {}; return { id, token: cj.token, nick: (made.data.host || {}).nickname || '' }; };

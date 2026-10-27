@@ -346,9 +346,44 @@
   #slashMenu .sl small, #hwMenu button small { color: var(--muted); } #slashMenu .sl .tag, #hwMenu button .tag { margin-left: auto; font-size: .66rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 .4rem; }
   .msg .unqueue { float: right; margin-left: .5rem; background: transparent; color: var(--muted); padding: 0 .3rem; font-size: .8rem; border: 0; }
 
-  #archive, .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 40; }
-  #archive .box, .modal .box { margin: auto; width: min(560px, 94vw); max-height: 86vh; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; }
-  #archive .box > .bar, .modal .box > .bar { padding: .75rem 1rem; color: var(--text); }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; z-index: 40; }
+  .modal .box { margin: auto; width: min(560px, 94vw); max-height: 86vh; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; }
+  .modal .box > .bar { padding: .75rem 1rem; color: var(--text); }
+  /* ── the session list (web/sessions.js, T-287): a sidebar on wide screens, a slide-over on narrow ones ── */
+  #sessPanel { flex: none; width: 272px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  #sessPanel[hidden], #spScrim[hidden] { display: none; }
+  .spHead { display: flex; align-items: center; gap: .4rem; padding: .45rem .5rem .3rem .7rem; }
+  .spHead b { font-size: .9rem; } .spHead .grow { flex: 1; } .spHead button { padding: .25rem .5rem; font-size: .8rem; }
+  #spCount { font-size: .74rem; color: var(--muted); padding: 0 .7rem; }
+  #spRoom { font-size: .72rem; color: var(--muted); padding: .1rem .7rem 0; display: flex; flex-wrap: wrap; gap: .1rem .7rem; } #spRoom .full { color: #e5484d; }
+  #spQ { margin: .4rem .5rem .2rem; width: auto; font-size: .85rem; padding: .35rem .55rem; }
+  #spList { flex: 1; overflow: auto; padding: 0 .3rem .7rem; }
+  .spGroup { margin-top: .45rem; }
+  .spGH { display: flex; align-items: center; gap: .2rem; width: 100%; background: transparent; border: 0; color: var(--muted); font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: .2rem .4rem; text-align: left; cursor: pointer; }
+  .spGH .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .spItem { display: flex; align-items: center; gap: .45rem; padding: .32rem .4rem; border-radius: 6px; cursor: pointer; }
+  .spItem:hover, .spItem:focus-visible { background: color-mix(in srgb, var(--text) 8%, transparent); outline: none; }
+  .spItem.current { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+  .spItem.hid .spTxt b { font-style: italic; } .spItem.ext { cursor: default; }
+  .spDot { flex: none; width: 1rem; text-align: center; font-size: .85rem; line-height: 1; }
+  .spDot.working { animation: spSpin 1.4s linear infinite; } @keyframes spSpin { to { transform: rotate(360deg); } }
+  .spTxt { flex: 1; min-width: 0; } .spTxt b { display: block; font-weight: 500; font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .spTxt small, .spTxt .snip { display: block; font-size: .7rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .spTxt .snip.me::before { content: 'you: '; color: var(--text); } .spTxt .snip.claude::before { content: 'Claude: '; color: var(--text); }
+  .spTxt mark { background: color-mix(in srgb, #ffd43b 55%, transparent); color: inherit; border-radius: 3px; padding: 0 .1rem; }
+  .spAct { flex: none; opacity: 0; background: transparent; border: 0; color: var(--muted); padding: .05rem .3rem; font-size: .8rem; cursor: pointer; }
+  .spItem:hover .spAct, .spItem:focus-within .spAct, .spItem.current .spAct, .spGH:hover .spAct { opacity: 1; } .spAct.danger { color: #e5484d; }
+  @media (hover: none) { .spAct { opacity: 1; } }
+  .spNote { font-size: .78rem; color: var(--muted); padding: .3rem .5rem; }
+  .spMenu { position: fixed; z-index: 60; min-width: 12rem; max-height: 70vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: .25rem; display: flex; flex-direction: column; }
+  .spMenu button { background: transparent; border: 0; color: var(--text); text-align: left; padding: .4rem .65rem; border-radius: 5px; font-weight: 400; font-size: .85rem; }
+  .spMenu button:hover, .spMenu button:focus { background: color-mix(in srgb, var(--text) 10%, transparent); outline: none; }
+  .spMenu button.danger { color: #e5484d; } .spMenu hr { border: 0; border-top: 1px solid var(--line); margin: .2rem 0; width: 100%; }
+  #sessToggle .count { margin-left: .35rem; background: #9b5cff; color: #fff; border-radius: 999px; font-size: .68rem; padding: 0 .4rem; }
+  @media (max-width: 900px) {
+    #sessPanel { position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); z-index: 46; box-shadow: 4px 0 24px rgba(0,0,0,.45); }
+    #spScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 45; }
+  }
   .setBody { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .9rem; font-size: .9rem; }
   .setBody label { display: flex; flex-direction: column; gap: .3rem; }
   .setBody label.chk { flex-direction: row; align-items: center; gap: .5rem; }
@@ -375,8 +410,6 @@
   .startList button { text-align: left; background: transparent; border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: .3rem .5rem; font-size: .85rem; }
   .startList button small { margin-left: .4rem; }
   #startMsg { font-size: .85rem; color: var(--muted); min-height: 1.1rem; } #startMsg.err { color: #e5534b; }
-  #archiveList { overflow: auto; padding: .5rem; display: flex; flex-direction: column; gap: .4rem; }
-  .archiveSearch { padding: .5rem .75rem 0; } .archiveSearch input { font-size: .9rem; }
   .conv .snip { font-size: .76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .15rem; }
   .conv .snip.me::before { content: 'you: '; color: var(--text); } .conv .snip.claude::before { content: 'Claude: '; color: var(--text); }
   .conv mark { background: color-mix(in srgb, #ffd43b 55%, transparent); color: inherit; border-radius: 3px; padding: 0 .1rem; }
@@ -681,7 +714,7 @@
     header { padding: .4rem .55rem; gap: .4rem; }
     header b { font-size: .95rem; }
     header .folder { flex-basis: 100%; order: 9; font-size: .78rem; }
-    #shell header #pickFolder, #shell header #newChat, #shell header #saveChat, #shell header #openArchive, #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
+    #shell header #pickFolder, #shell header #newChat, #shell header #saveChat, #shell header #sessToggle, #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
     #menu .choices button { width: min(320px, 86vw); }
     .menuWho { max-width: 94vw; }
     /* chat: the conversation list is a drawer over the messages */
@@ -712,7 +745,7 @@
     .agDay .calNum { font-size: .8rem; }
     .agDay .calTask { white-space: normal; }
     /* settings and past sessions fill the screen */
-    .modal .box, #archive .box { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; border: 0; }
+    .modal .box { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; border: 0; }
     /* admin: the table scrolls sideways instead of squeezing */
     #adminBody { padding: .6rem; } #adminBody table { display: block; overflow-x: auto; white-space: nowrap; }
     #callTiles { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
@@ -755,7 +788,7 @@
   #usageBar { flex-wrap: wrap; row-gap: .3rem; min-width: 0; overflow: hidden; }
   .uCtx { min-width: min(9rem, 100%); }
   .floatWin { max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); }
-  .modal .box, #archive .box { max-width: calc(100vw - 16px); }
+  .modal .box { max-width: calc(100vw - 16px); }
   #msgMenu { max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; }
   img, video, audio, canvas { max-width: 100%; }
 </style>
@@ -1199,6 +1232,7 @@
 <div id="shell" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <button class="ghost" id="sessToggle" title="Show / hide your sessions: the ongoing ones and the saved ones (Past sessions)"><svg class="ic lead"><use href="#i-dms"/></svg>Sessions<span class="count" id="sessCount" hidden title="working now"></span></button>
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
@@ -1206,7 +1240,6 @@
     <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
     <button class="ghost" id="newPlanner" title="A planner session: Claude only plans onto the board and under plans/ in the notes; it cannot edit files, run builds or use your PC (the hub enforces it)">New planner session</button>
     <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
-    <button class="ghost" id="openArchive" title="Your saved Claude sessions">Past sessions</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
     <select id="workspace" title="Which project Claude works on, always in your own git worktree of it (branch work/you), so nobody else's changes get in the way. New project starts an empty repo in the team's shared projects area; Pull in a repo clones an existing one by its address." hidden></select>
     <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
@@ -1225,6 +1258,17 @@
       <button type="button" data-downloads title="Download: Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux"><i><svg class="ic"><use href="#i-download"/></svg></i><span class="lbl">Download</span></button>
       <button type="button" data-settings title="Settings"><i><svg class="ic"><use href="#i-gear"/></svg></i><span class="lbl">Settings</span></button>
     </nav>
+    <!-- your sessions (web/sessions.js, T-287): ongoing and saved, grouped, searchable, a dot per state -->
+    <aside id="sessPanel" hidden aria-label="Your sessions">
+      <div class="spHead"><b>Sessions</b><span class="grow"></span>
+        <button type="button" id="spNew" title="A new session: pick the project (or none); the AI and model come from the session on screen and can be changed in the header"><svg class="ic lead"><use href="#i-plus"/></svg>New session</button>
+        <button type="button" class="ghost" id="spClose" title="Hide the list (the Sessions button brings it back)" aria-label="Hide the list"><svg class="ic"><use href="#i-close"/></svg></button></div>
+      <div id="spCount" title="Sessions of yours working now, and how many wait on you"></div>
+      <div id="spRoom" hidden title="Your room per AI host: working sessions of the most you may run there at once"></div>
+      <input id="spQ" type="search" placeholder="Search sessions and everything said…" spellcheck="false" autocomplete="off" aria-label="Search your sessions">
+      <div id="spList"></div>
+    </aside>
+    <div id="spScrim" hidden></div>
     <div id="panes">
     <section id="files">
       <div class="bar"><button class="ghost" id="up" title="Up one folder" aria-label="Up one folder"><svg class="ic"><use href="#i-up"/></svg></button><span id="cwd">/</span>
@@ -1292,14 +1336,6 @@
   </main>
 </div>
 
-<div id="archive" hidden>
-  <div class="box">
-    <div class="bar"><span>Past sessions</span><button class="ghost" id="closeArchive">Close</button></div>
-    <div class="archiveSearch"><input id="archiveQ" type="search" placeholder="Search titles and everything said in your sessions…" spellcheck="false" autocomplete="off"></div>
-    <div id="archiveList"></div>
-  </div>
-</div>
-
 <div id="startPanel" class="modal" hidden>
   <div class="box">
     <div class="bar"><span>Start work</span><button class="ghost" id="startClose">Close</button></div>
@@ -1328,6 +1364,7 @@
 <script src="hyperwork.js"></script>
 <script src="attach.js"></script>
 <script src="board.js"></script>
+<script src="sessions.js"></script>
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
 MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
@@ -1482,7 +1519,7 @@ const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '')
 // The Work session on screen ('' = the first one, as older pages and hubs know it): the calls that belong to one
 // session carry ?session=<id> (T-238: Start work opens a new session of its own).
 let SESSION = '';
-const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|work\/(current|queue|attach|git|share|draft))(\/|\?|$)/;
+const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|archive\/(save|open)|work\/(current|queue|attach|git|share|draft))(\/|\?|$)/;
 const withSession = (path) => (SESSION && SESSION_PATHS.test(path) && !/[?&]session=/.test(path) ? path + (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(SESSION) : path);
 // Planner mode (T-275): the id of the planner session open here ('' = the normal Work session). Its requests name it (?session=).
 const PLAN_KEY = NS + 'vr.planSession';
@@ -1496,7 +1533,7 @@ async function api(path, opts = {}) {
   const init = { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } };
   for (let attempt = 1; ; attempt++) {
     let res = null;
-    try { res = await fetch(base + path, init); } catch {}
+    try { res = await fetch(base + path, init); } catch (e) { if (e && e.name === 'AbortError') throw e; } // stopped on purpose (another session was opened): not a restart
     if (res && ![502, 503, 504, 530].includes(res.status)) {
       if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
       // a cacheable answer (Unity's pictures) may be a copy the browser kept from an older build: its build says nothing (R199)
@@ -1871,6 +1908,7 @@ async function enter() {
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
   restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
+  if (/^#\/?work\/s-[0-9a-f]{12}$/.test(location.hash) && !PRODUCT) { history.replaceState(history.state, '', location.pathname + location.search); showScreen('shell'); } // a session's link ("Copy link" in the session list): Work opens it
   if (/^#\/?(workflows|hyperwork)\b/.test(location.hash) && $('workflows')) { const m = /^#\/?(?:workflows|hyperwork)\/([^/?]+)/.exec(location.hash); openWorkflows(m ? decodeURIComponent(m[1]) : ''); } // #workflows, #hyperwork, #workflows/<name>
 }
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
@@ -2278,13 +2316,15 @@ async function startCreate(name) {
 }
 async function startSession(body) {
   if (startBusy) return;
-  if (busy || queue.length || sendNowMessage) return startMsg('Claude is working here: stop it (and clear the queue) first, or let it finish.', true);
   startBusy = true;
   try {
     startMsg('Opening a new session…');
     const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify(body.none ? { none: true } : body) });
-    SESSION = d.id; fresh = true; log.innerHTML = ''; setConversation(null, null, []);
-    me.project = d.project; renderProjects();
+    // the session on screen now (if it is working it goes on, followed by the session list)
+    await SESSIONS.refresh();
+    if (SESSIONS.byId(d.id)) await openWorkSession(d.id);
+    else { SESSION = d.id; log.innerHTML = ''; setConversation(null, null, []); }
+    fresh = true; me.project = d.project; renderProjects();
     if (usageData) { usageData.context = null; paintUsage(); }
     startClose(); gitRefresh();
     sys(d.noProject ? 'New session with no project: only the AI, in your scratch folder ' + d.dir + ' (no git).'
@@ -2317,7 +2357,7 @@ let busy = false, fresh = false, sendNowMessage = null;
 const queue = []; // { message, el }
 function updateStopButton() { $('stop').textContent = busy && $('input').value.trim() ? 'Send now' : 'Stop'; }
 function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); gitRefresh(); }
-$('input').addEventListener('input', updateStopButton);
+$('input').addEventListener('input', () => { updateStopButton(); SESSIONS.typing($('input').value); }); // each session keeps its own draft (web/sessions.js)
 
 // Git at a glance (T-240): your own worktree of this Work session. Stage / commit are plain git; Update and Merge only
 // run bridge/worktree.js on the hub (Forgejo first, the version law), and everything waits while Claude is working.
@@ -2402,20 +2442,27 @@ $('composer').addEventListener('submit', async (e) => {
     catch (err) { sys('Not sent: ' + err.message, true); return; }
     finally { b.disabled = false; setBusy(busy); }
   }
-  $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true;
-  if (busy) enqueue(message); else send(message);
+  $('input').value = ''; updateStopButton(); $('slashMenu').hidden = true; SESSIONS.typing('');
+  if (busy || slotWait) enqueue(message); else send(message);
 });
 // The queue (and a pending "Send now") is kept on the hub (bridge/work-state.js), so a reload, closing the
 // browser or a hub restart loses nothing: every change is saved, and opening Work brings the queue back.
 function saveQueue() { json('/api/work/queue', { method: 'POST', body: JSON.stringify({ queue: queue.map((q) => q.message), sendNow: sendNowMessage }) }).catch(() => {}); }
-function enqueue(message, restoring) {
-  const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', restoring ? 'Queued (kept through the restart / reload): goes next' : 'Queued: goes after the current reply');
+function enqueue(message, restoring, first) { // first: back at the head of the queue (it was refused: over the session limit)
+  const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', first ? 'Waiting for a free session slot: goes as soon as one frees' : restoring ? 'Queued (kept through the restart / reload): goes next' : 'Queued: goes after the current reply');
   const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.append(ic('close')); x.title = 'Remove from queue'; x.setAttribute('aria-label', 'Remove from queue');
   x.onclick = () => { const i = queue.findIndex((q) => q.el === el); if (i >= 0) queue.splice(i, 1); el.remove(); postLive(); saveQueue(); };
-  el.prepend(x); scroll();
-  queue.push({ message, el });
-  postLive();
+  el.prepend(x);
+  if (first && queue.length) { queue[0].el.before(el); queue.unshift({ message, el }); } else queue.push({ message, el });
+  scroll(); postLive();
   if (!restoring) saveQueue();
+}
+// the session list's every refresh (web/sessions.js): a message refused for the session limit goes when a slot frees
+function onSessionSlots(d) {
+  if (!slotWait || busy || !(queue.length || sendNowMessage)) return;
+  const s = SESSIONS.byId(SESSIONS.onScreen()), h = s && (((d && d.counts) || {}).perHost || {})[s.host];
+  if (h && ((h.max && h.used >= h.max) || (h.maxPerProvider && ((h.providers || {})[s.provider] || 0) >= h.maxPerProvider))) return; // still full
+  drain();
 }
 function drain() { // a run just ended: "Send now" text first, then the queue in order
   if (sendNowMessage) { const m = sendNowMessage; sendNowMessage = null; saveQueue(); return send(m); }
@@ -2435,23 +2482,38 @@ function showThinking() {
 }
 function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; } }
 let runOutcome = null; // set by handleEvent: { state, text } for the message being worked on
+// Several Work sessions (T-287): opening another one while this one runs leaves its run going on the hub (the session
+// list follows it in the background); workGen tells a reply loop that the screen now shows another session.
+let workGen = 0, workAbort = null, slotWait = false;
 async function send(message) {
+  const gen = workGen, ac = new AbortController(); workAbort = ac;
   const mine = bubble('me'); renderText(mine, message); record('me', message); scroll(true); // you sent it: to the bottom
   const t0 = Date.now(); runOutcome = null; runEnded = false; curRun = null; runRes = { id: '', seen: new Set(), n: 0, out: 0, el: null }; stopRequested = false;
   msgStatus(mine, 'working', 'Claude is working on this…');
   const tick = setInterval(() => { if (!runOutcome) msgStatus(mine, 'working', 'Claude is working on this… ' + elapsed(t0)); }, 5000);
   setBusy(true); runModel = ''; stderrText = ''; showThinking();
+  SESSIONS.autoTitle(message);
   try {
     postLive();
     const context = watchContext(); // summaries of the shared sessions you are watching, for your own Claude
-    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh, ...(context ? { context } : {}) }) });
+    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh, ...(context ? { context } : {}) }), signal: ac.signal });
+    if (res.status === 429) { // over the session limit: the message stays queued in this session and goes when a slot frees
+      const d = await res.json().catch(() => ({}));
+      clearInterval(tick); hideThinking(); mine.remove();
+      for (let i = transcript.length - 1; i >= 0; i--) if (transcript[i].cls === 'me' && transcript[i].text === message) { transcript.splice(i, 1); break; }
+      saveCurrentSoon(); setBusy(false);
+      enqueue(message, false, true);
+      if (!slotWait) sys((d.error || 'Over your session limit.') + ' Your message waits in this session and goes as soon as a slot frees.', true);
+      slotWait = true; workAbort = null; return;
+    }
+    slotWait = false;
     fresh = false;
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
     try {
       for (;;) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done || gen !== workGen) break;
         buf += dec.decode(value, { stream: true });
         let i;
         while ((i = buf.indexOf('\n')) >= 0) {
@@ -2461,10 +2523,13 @@ async function send(message) {
       }
     } catch {} // the stream broke off (the network, a proxy): the run itself goes on in the hub
     // the reply did not end on this stream: join the run again and follow it to its end
-    if (curRun && !runEnded) await followRun(curRun, true);
-  } catch (err) { sys(err.message, true); runOutcome = { state: 'failed', text: 'Failed: ' + err.message }; }
-  curRun = null; saveCurrentSoon();
+    if (gen === workGen && curRun && !runEnded) await followRun(curRun, true, gen);
+  } catch (err) { if (gen === workGen) { sys(err.message, true); runOutcome = { state: 'failed', text: 'Failed: ' + err.message }; } }
   clearInterval(tick);
+  if (gen !== workGen) return; // another session is on screen now: this one's run goes on, followed by the session list
+  workAbort = null;
+  curRun = null; saveCurrentSoon();
+  SESSIONS.seen();
   msgStatus(mine, ...(runOutcome ? [runOutcome.state, runOutcome.text] : ['stopped', 'Stopped after ' + elapsed(t0)]));
   hideThinking(); setBusy(false); $('input').focus();
   refreshUsage();
@@ -2480,10 +2545,13 @@ let curRun = null, runEnded = false;
 // Joins the person's run: everything after `saved.n`, then each event as it comes, until it ends. inSend = called by
 // send() for its own reply (it keeps its own busy state and status); else (Work opened after a reload) this does both.
 // True when it followed a run. An older hub has no such route: nothing happens.
-async function followRun(saved, inSend) {
+async function followRun(saved, inSend, gen0) {
   let run = (saved && saved.id) || '', after = run ? saved.n || 0 : 0, joined = false;
+  const gen = gen0 === undefined ? workGen : gen0; if (!inSend) workAbort = new AbortController();
+  const signal = workAbort ? workAbort.signal : undefined;
   for (;;) {
-    let d; try { d = await json('/api/work/attach?run=' + encodeURIComponent(run) + '&after=' + after); } catch { break; }
+    let d; try { d = await json('/api/work/attach?run=' + encodeURIComponent(run) + '&after=' + after, { signal }); } catch { break; }
+    if (gen !== workGen) return false; // another session was opened meanwhile
     if (!d || !d.run) break; // nothing running (and nothing that just ended from where this page was)
     if (!joined && !inSend && d.busy) { joined = true; setBusy(true); sys('Claude is still working on your last message: following it live.'); }
     run = d.run; curRun = { id: d.run, n: d.from || 0 };
@@ -2491,7 +2559,8 @@ async function followRun(saved, inSend) {
     curRun = { id: d.run, n: d.next || 0 }; after = curRun.n; saveCurrentSoon();
     if (!d.busy) break;
   }
-  if (joined) { hideThinking(); setBusy(false); refreshUsage(); }
+  if (gen !== workGen) return false;
+  if (joined) { hideThinking(); setBusy(false); refreshUsage(); SESSIONS.seen(); }
   return joined;
 }
 // The hub's one event schema (HubEvent, native/crates/pgm-ai-internal/src/harness.rs): a Work event the hub classified
@@ -2772,8 +2841,8 @@ const SLASH = [
   { cmd: '/hw', desc: 'Short for /hyperwork', args: '<name> <prompt>', local: (a) => hyperwork(a) },
   { cmd: '/workflows', desc: 'Open the Workflows screen: the list, then the visual editor (/workflows <name> opens that one)', args: '[name]', local: (a) => openWorkflows(a) },
   { cmd: '/share', desc: 'Share / stop sharing this Work session with everyone', local: () => $('shareBtn').click() },
-  { cmd: '/save', desc: 'Save this session to Past sessions now', local: () => saveToArchive(false) },
-  { cmd: '/sessions', desc: 'Open Past sessions', local: () => showArchive() },
+  { cmd: '/save', desc: 'Save this session to Past sessions now (the session list shows it)', local: () => { SESSIONS.show(); saveToArchive(false); } },
+  { cmd: '/sessions', desc: 'Open your sessions: ongoing and saved, with search', local: () => SESSIONS.show(true) },
   { cmd: '/board', desc: 'Open the team board', local: () => showScreen('board') },
   { cmd: '/tasks', desc: 'Show / hide the Tasks pane', local: () => togglePane('tasks') },
   { cmd: '/chat', desc: 'Show / hide the team chat pane', local: () => togglePane('roomPane') },
@@ -2884,14 +2953,21 @@ async function enterPlanner(id) {
   planSession = id; try { if (id) sessionStorage.setItem(PLAN_KEY, id); else sessionStorage.removeItem(PLAN_KEY); } catch {}
   fresh = false; log.innerHTML = ''; setConversation(null, null, []); paintPlanner();
   await restoreWork();
-  if (id) { $('convTitle').textContent = 'Planner session'; if (!transcript.length) sys('Planner mode: Claude only plans. It can read, search the board, notes and chat, ask you, add board tasks and write notes under plans/. It cannot edit files, run builds or use your PC.'); }
+  if (id) { $('convTitle').textContent = 'Planner session'; if (!transcript.length) sys(PLANNER_HELLO); }
 }
+// with the session list (T-287) a planner session is one of your sessions: opened like any other, the one on screen goes on
+const PLANNER_HELLO = 'Planner mode: Claude only plans. It can read, search the board, notes and chat, ask you, add board tasks and write notes under plans/. It cannot edit files, run builds or use your PC.';
 $('newPlanner').onclick = async () => {
-  if (busy) return sys('Stop Claude before starting a planner session.', true);
-  try { const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify({ mode: 'planner', title: 'Planner' }) }); await enterPlanner(d.id); }
-  catch (err) { sys('Could not start a planner session: ' + err.message, true); }
+  try {
+    const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify({ mode: 'planner', title: 'Planner' }) });
+    await SESSIONS.refresh();
+    if (SESSIONS.byId(d.id)) { await openWorkSession(d.id); if (planSession === d.id && !transcript.length) sys(PLANNER_HELLO); }
+    else { if (busy) return sys('Stop Claude before starting a planner session.', true); await enterPlanner(d.id); }
+  } catch (err) { sys('Could not start a planner session: ' + err.message, true); }
 };
 $('leavePlanner').onclick = async () => {
+  const L = SESSIONS.data();
+  if (L && L.primary) { await openWorkSession(L.primary); if (!planSession) sys('Back in your normal Work session.'); return; }
   if (busy) return sys('Stop Claude before leaving planner mode.', true);
   await enterPlanner(''); sys('Back in your normal Work session.');
 };
@@ -2966,36 +3042,89 @@ let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSa
 // The conversation on screen is also kept on the hub (bridge/work-state.js) a moment after every change, so
 // opening Work later (after a reload, a restart, on another device) puts it back and Claude continues it.
 let currentSaveTimer = null;
-function saveCurrentSoon() { clearTimeout(currentSaveTimer); currentSaveTimer = setTimeout(saveCurrent, 800); }
-function saveCurrent() { clearTimeout(currentSaveTimer); if (me) json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle, run: curRun }) }).catch(() => {}); }
+let currentDirty = false; // a change not on the hub yet (opening another session saves it first)
+function saveCurrentSoon() { currentDirty = true; clearTimeout(currentSaveTimer); currentSaveTimer = setTimeout(saveCurrent, 800); }
+function saveCurrent() { clearTimeout(currentSaveTimer); currentDirty = false; return me ? json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle, run: curRun }) }).catch(() => {}) : Promise.resolve(); }
 function record(cls, text) { transcript.push({ cls, text }); saveCurrentSoon(); }
 async function restoreWork() { // opening Work: the previous conversation, then the queue (which starts running)
   // which session is open (hubs with many sessions): the page keeps to it; older hubs have only the one
   try {
-    const l = await json('/api/work/sessions'); SESSIONS_OK = Array.isArray(l.sessions); $('startWork').hidden = !SESSIONS_OK;
+    const l = await json('/api/work/sessions?archived=1'); SESSIONS_OK = Array.isArray(l.sessions); $('startWork').hidden = !SESSIONS_OK;
     const cur = (l.sessions || []).find((x) => x.id === l.current);
-    if (cur) { if (l.current !== l.primary) SESSION = l.current; me.project = cur.project; renderProjects(); }
+    if (cur) {
+      if (l.current !== l.primary) SESSION = l.current; me.project = cur.project; renderProjects();
+      planSession = cur.mode === 'planner' ? cur.id : ''; try { if (planSession) sessionStorage.setItem(PLAN_KEY, planSession); else sessionStorage.removeItem(PLAN_KEY); } catch {} paintPlanner(); // the session open on the hub is the one on screen
+    }
+    if (SESSIONS_OK) SESSIONS.start(l); // the session list (web/sessions.js)
+    const want = SESSIONS.linked(); // a link to a session (#work/<id>, "Copy link") opens it
+    if (want && want !== SESSIONS.onScreen() && (l.sessions || []).some((x) => x.id === want)) return openWorkSession(want);
+    if (cur && !$('input').value) $('input').value = SESSIONS.draftOf(l.current);
   } catch { $('startWork').hidden = true; }
-  let s; try { s = await json('/api/work/current'); } catch { return; }
+  if (!(await loadConversation(false))) return;
+  // Work opens with nothing going on: offer the ways to start (once per page load; "Close" keeps this session)
+  if (SESSIONS_OK && !startAuto && !busy && !transcript.length && !queue.length && !sendNowMessage) { startAuto = true; startOpen(); }
+}
+// The session on screen from the hub: its conversation (switching = always; a reload = per "Reopen what I had open"),
+// its queue (which starts running), a reply still going. False = the hub did not answer.
+async function loadConversation(switching, noWait) {
+  const gen = workGen;
+  let s; try { s = await json('/api/work/current'); } catch { return false; }
+  if (gen !== workGen) return false;
   // T-241: with "Reopen what I had open" off the conversation stays on the hub (the next reload with it on brings it back) but a reload starts fresh
-  if ((s.transcript || []).length && !transcript.length && prefs().reopen) {
+  if ((s.transcript || []).length && !transcript.length && (switching || prefs().reopen)) {
     for (const t of s.transcript) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
     archiveId = s.archiveId; archiveTitle = s.archiveTitle; transcript = s.transcript; savedLen = s.transcript.length;
-    if (archiveTitle) label($('convTitle'), 'archive', archiveTitle); else $('convTitle').textContent = 'Unsaved session';
+    if (archiveTitle) label($('convTitle'), 'archive', archiveTitle); else $('convTitle').textContent = switching ? SESSIONS.titleOf(SESSIONS.byId(SESSIONS.onScreen()) || {}) : 'Unsaved session';
     fresh = false;
-    sys('Your previous conversation is back' + (s.updatedAt ? ' (last change ' + new Date(s.updatedAt).toLocaleString() + ')' : '') + ': Claude continues it. "New chat" starts a fresh one.');
+    if (!switching) sys('Your previous conversation is back' + (s.updatedAt ? ' (last change ' + new Date(s.updatedAt).toLocaleString() + ')' : '') + ': Claude continues it. "New chat" starts a fresh one.');
+    scroll(true);
   }
   if (s.sendNow && !sendNowMessage) sendNowMessage = s.sendNow;
   for (const m of s.queue || []) enqueue(m, true);
   if ((s.queue || []).length || s.sendNow) sys('Your queue is back: ' + ((s.queue || []).length + (s.sendNow ? 1 : 0)) + ' message(s) still to go.');
   // a reply still going (the page was reloaded meanwhile): shown live from where this page was, to its end; the queue
   // waits for it (sending now would be refused and the message lost)
-  if (!busy) { await followRun(s.run); curRun = null; saveCurrentSoon(); }
-  restoreQuestions(); // a question still open (a half-answered series comes back with what was typed)
-  restorePlans(); // a draft plan still waiting for approval (T-279)
-  if (!busy && (sendNowMessage || queue.length)) drain();
-  // Work opens with nothing going on: offer the ways to start (once per page load; "Close" keeps this session)
-  if (SESSIONS_OK && !startAuto && !busy && !transcript.length && !queue.length && !sendNowMessage) { startAuto = true; startOpen(); }
+  const tail = async () => {
+    if (!busy) { await followRun(s.run); if (gen !== workGen) return false; curRun = null; saveCurrentSoon(); }
+    restoreQuestions(); // a question still open (a half-answered series comes back with what was typed)
+    restorePlans(); // a draft plan still waiting for approval (T-279)
+    if (!busy && (sendNowMessage || queue.length)) drain();
+    return true;
+  };
+  if (noWait) { tail(); return true; }
+  return tail();
+}
+// Opens another of your Work sessions (the list, a link): what you typed here stays with this one, its reply (if any)
+// goes on on the hub, followed by the session list; the other one comes on screen as it was (its draft too).
+let switching = false;
+async function openWorkSession(id) {
+  const L = SESSIONS.data(); if (!L || switching) return;
+  const leaving = SESSIONS.onScreen(), s = SESSIONS.byId(id); if (!s) return;
+  if (id === leaving) { $('input').focus(); return; }
+  switching = true;
+  try {
+    await json('/api/work/sessions/open', { method: 'POST', body: JSON.stringify({ id }) });
+    SESSIONS.keepDraft(leaving, $('input').value);
+    // leave this one: its reply goes on on the hub; its conversation as it is now (saved before the switch, only when it
+    // changed here: a conversation this page did not show is never overwritten); its queue is on the hub already
+    workGen++; if (workAbort) { try { workAbort.abort(); } catch {} workAbort = null; }
+    if (currentDirty || curRun) await saveCurrent(); else clearTimeout(currentSaveTimer);
+    SESSION = id === L.primary ? '' : id;
+    planSession = s.mode === 'planner' ? id : ''; try { if (planSession) sessionStorage.setItem(PLAN_KEY, planSession); else sessionStorage.removeItem(PLAN_KEY); } catch {}
+    paintPlanner();
+    await SESSIONS.release(id); // the list stops following it in the background (its conversation is saved first)
+    log.innerHTML = ''; queue.length = 0; sendNowMessage = null; transcript = []; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
+    curRun = null; runEnded = false; fresh = false; slotWait = false; hideThinking(); setBusy(false);
+    for (const q of openQuestions.values()) { try { q.stop(); } catch {} } openQuestions.clear(); openPlans.clear();
+    $('convTitle').textContent = SESSIONS.titleOf(s);
+    $('input').value = SESSIONS.draftOf(id); updateStopButton();
+    me.project = s.project; renderProjects();
+    const mv = s.provider && s.provider !== 'host' ? s.provider + '|' + (s.model || '') : s.model || ''; $('model').value = mv; if ($('model').selectedIndex < 0) $('model').value = '';
+    if (usageData) { usageData.context = null; paintUsage(); }
+  } catch (err) { sys('Could not open that session: ' + err.message, true); switching = false; return; }
+  switching = false;
+  refreshUsage(); gitRefresh(); SESSIONS.refresh(); SESSIONS.seen(id);
+  await loadConversation(true, true); // (a reply still going is followed to its end without holding up the caller)
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && me && !$('shell').hidden) restoreQuestions(); });
 function setConversation(id, title, items) {
@@ -3041,50 +3170,13 @@ async function renameConversation(id, current) {
   try {
     const d = await json('/api/archive/rename', { method: 'POST', body: JSON.stringify({ id, title }) });
     if (id === archiveId) setConversation(id, d.title, transcript);
-    if (!$('archive').hidden) showArchive();
+    SESSIONS.refresh(); // the list shows the new name
   } catch (err) { sys(err.message, true); }
 }
-let archiveRun = 0, archiveTimer = null;
-$('archiveQ').addEventListener('input', () => { clearTimeout(archiveTimer); archiveTimer = setTimeout(() => showArchive(true), 220); });
-$('archiveQ').addEventListener('keydown', (e) => { if (e.key === 'Escape') { if ($('archiveQ').value) { $('archiveQ').value = ''; showArchive(true); } else $('archive').hidden = true; } });
 function markText(el, text, words) { // the matched words highlighted, built from text nodes only
   const re = words.length ? new RegExp('(' + words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'ig') : null;
   if (!re) { el.append(text); return; }
   for (const part of text.split(re)) { if (!part) continue; if (words.some((w) => w === part.toLowerCase())) { const m = document.createElement('mark'); m.textContent = part; el.append(m); } else el.append(part); }
-}
-async function showArchive(keepQuery) {
-  $('archive').hidden = false;
-  if (!keepQuery) { $('archiveQ').value = ''; setTimeout(() => $('archiveQ').focus(), 0); }
-  const run = ++archiveRun, q = $('archiveQ').value.trim(), words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const listEl = $('archiveList'); listEl.textContent = 'Loading…';
-  try {
-    const { items } = await json(q ? '/api/archive/search' : '/api/archive/list', { method: 'POST', body: JSON.stringify(q ? { q } : {}) });
-    if (run !== archiveRun) return; // a newer search took over
-    listEl.textContent = '';
-    if (!items.length) listEl.innerHTML = q ? '<div class="sys">Nothing matches that.</div>' : '<div class="sys">No past sessions yet. They are saved automatically (Settings → Auto-save) or with "Save session".</div>';
-    for (const it of items) {
-      const row = document.createElement('div'); row.className = 'conv' + (it.id === archiveId ? ' current' : '');
-      const info = document.createElement('div');
-      const b = document.createElement('b'); markText(b, it.title, words);
-      const s = document.createElement('small'); s.textContent = new Date(it.savedAt).toLocaleString() + ' · ' + it.count + ' entries' + (q ? ' · ' + it.hits + ' match' + (it.hits === 1 ? '' : 'es') : '');
-      info.append(b, s);
-      for (const sn of it.snippets || []) { const d = document.createElement('div'); d.className = 'snip ' + (sn.cls || ''); markText(d, sn.text, words); info.append(d); }
-      const open = document.createElement('button'); open.textContent = 'Open';
-      open.onclick = () => openConversation(it.id);
-      const ren = document.createElement('button'); ren.className = 'ghost'; ren.textContent = 'Rename';
-      ren.onclick = () => renameConversation(it.id, it.title);
-      const del = document.createElement('button'); del.className = 'ghost'; del.textContent = 'Delete';
-      del.onclick = async () => {
-        if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.textContent = 'Confirm'; setTimeout(() => { del.dataset.armed = ''; del.textContent = 'Delete'; }, 3000); return; }
-        try {
-          await json('/api/archive/delete', { method: 'POST', body: JSON.stringify({ id: it.id }) });
-          if (it.id === archiveId) setConversation(null, null, transcript); // chat stays on screen, just unsaved
-          showArchive(true);
-        } catch (err) { sys(err.message, true); }
-      };
-      row.append(info, open, ren, del); listEl.appendChild(row);
-    }
-  } catch (err) { listEl.textContent = ''; sys(err.message, true); $('archive').hidden = true; }
 }
 async function openConversation(id) {
   if (busy) return sys('Stop Claude before opening another conversation.', true);
@@ -3097,13 +3189,12 @@ async function openConversation(id) {
     setConversation(entry.id, entry.title, entry.transcript);
     sys('Continuing "' + entry.title + '" — Claude remembers this conversation.');
     refreshUsage();
-    $('archive').hidden = true; scroll();
+    scroll(); SESSIONS.refresh();
   } catch (err) { sys(err.message, true); }
 }
 $('saveChat').onclick = () => saveToArchive(false);
-$('openArchive').onclick = showArchive;
-$('closeArchive').onclick = () => { $('archive').hidden = true; };
-$('archive').onclick = (e) => { if (e.target.id === 'archive') $('archive').hidden = true; };
+SESSIONS.init(); // the session list (web/sessions.js, T-287): the Sessions button, its search, a session's link
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && me && !$('shell').hidden && SESSIONS_OK) SESSIONS.seen(); });
 $('convTitle').onclick = () => { if (archiveId) renameConversation(archiveId, archiveTitle); else saveToArchive(false); };
 
 // ── Theme picker ── (the theme is an app setting on the account: it follows the person to every browser)
