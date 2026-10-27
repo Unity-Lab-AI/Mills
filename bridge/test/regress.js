@@ -553,7 +553,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -576,6 +576,7 @@ async function run() {
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
+  if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -6164,6 +6165,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (!RUST_HUB) { for (const [id, l] of [['R328', 'machine tools: files (the pc_* mapping) and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it'); }
   else if (WIN) { for (const [id, l] of [['R328', 'machine tools: files and machine_info'], ['R329', 'machine tools: shell, jobs and processes'], ['R330', 'machine tools: big-file transfer by ticket']]) skip(id, l, 'the shell and process checks use sh and /proc; run on Linux'); }
   else await machineToolsCheck();
+  // R337 (T-314, linked machines 8/8): the My machines panel and the in-use bar, with a REAL machine runner linked to this scratch hub
+  if (RUST_HUB && !WIN) await r337Check();
+  else skip('R337', 'the My machines panel lists only the owner\'s machines and the Work bar says what a run uses', RUST_HUB ? 'the run uses sh (shell_run); run on Linux' : 'the Rust hub\'s: --rust-hub runs it');
   // R334, R335, R336, R339 (T-313, linked machines 7/8): the apps use the library: the service install and the state folder check
   // (one template, a systemd user unit and a per-user Windows task, .sh and .cmd twins), pc_job retired for the library's door, vr-desktop
   // links this computer, jcodepgm machine, and the cross-test. Windows can't be built or run here: its half is marked pending.
@@ -6475,6 +6479,89 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       if (created.password) await call('/api/admin/delete', A, { username: 't-r330' });
       try { fs.rmSync(mdir, { recursive: true, force: true }); } catch {}
     }
+  }
+  // R337: the owner's list over HTTP (scope in words, mode, status, in-use while a run uses it), nobody else sees or manages it, the
+  // run's one transcript line (a plain bridge_info, so an older page shows it as text) and the page's panel script, its pure helpers
+  // (scope words, bar text, red or not, the dot's shape) run in node, and the bar's state driven by the run's events.
+  async function r337Check() {
+    const L337 = 'the My machines panel lists only the owner\'s machines and the Work bar says what a run uses (T-314): the owner\'s list shows a linked machine with its scope in words (one folder: <its folder>, read-write), its mode and online status, and an empty in-use line; another person (and an admin) sees none of it and cannot rename, pause or unlink it; while the owner\'s run uses it the card says which session uses it and afterwards nothing; the run\'s first machine call adds exactly one plain transcript line "your machine › <name>: <scope> · session …" that any page shows, a run that uses no machine gets none; the page loads web/machines.js with the panel and the bar, whose helpers say "Using the opened folder <name>" for a folder (the browser\'s or the machine\'s), "Using your PC" only for the whole system or unrestricted, red only then, a dot with a different shape for online, offline and paused, and the bar follows the run (on at the first use, the wider place wins, off when the run ends)';
+    const mdir = fs.mkdtempSync(path.join(SCRATCH, 'r337-')), procs = [];
+    const home = path.join(mdir, 'home'), state = path.join(mdir, 'state'); fs.mkdirSync(home, { recursive: true });
+    const mcall = (method, p, tok, body) => fetch(H + p, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) })).catch((e) => ({ status: 0, data: { error: e.message } }));
+    const pc = (name, args, machine) => ({ route: 'pc-tool', body: { name, args: args || {}, machine } });
+    const enc = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const listOf = async (tok) => (await call('/api/machines', tok)).data.machines;
+    const created = (await call('/api/admin/create', A, { username: 't-r337', display: 'R337' })).data || {};
+    const Y = created.password ? (await login('t-r337', created.password, 'device-r337-xxxxxxxxxx')).data.token : '';
+    const o = {}, detail = {};
+    let id = '';
+    try {
+      // link a machine of t-user by device code (the library's runner), with its folder scope and a shell, and run it
+      const linked = await new Promise((resolve) => {
+        const p = spawn(NATIVE_BIN.host, ['machine', 'link', '--hub', H, '--folder', home, '--state', state, '--name', 'r337-box'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VR_MACHINE_ALLOW_ROOT: '1' } });
+        let out = '', approved = false;
+        p.stdout.on('data', (d) => { out += d; const m = /Code: ([A-Z]{4}-[A-Z]{4})/.exec(out); if (m && !approved) { approved = true; call('/api/device/approve', U, { userCode: m[1] }); } });
+        p.stderr.on('data', (d) => { out += d; });
+        p.on('close', (code) => resolve({ code, out }));
+      });
+      try { id = JSON.parse(fs.readFileSync(path.join(state, 'link.json'), 'utf8')).machine; } catch {}
+      o.linked = linked.code === 0 && !!id;
+      const realHome = fs.realpathSync(home);
+      fs.writeFileSync(path.join(state, 'scope.json'), JSON.stringify({ v: 1, preset: 'folder', paths: [{ path: realHome, access: 'rw' }], tools: { shell: { enabled: true, timeoutSec: 30 } } }));
+      const log = fs.openSync(path.join(mdir, 'machine.log'), 'a');
+      procs.push(spawn(NATIVE_BIN.host, ['machine', 'run', '--state', state], { stdio: ['ignore', log, log], env: { ...process.env, VR_MACHINE_ALLOW_ROOT: '1' } }));
+      let card = {};
+      for (let i = 0; i < 80; i++) { card = ((await listOf(U)) || []).find((x) => x.id === id) || {}; if (card.online && /^one folder: /.test(card.scope || '')) break; await sleep(250); }
+      detail.card = `${card.name} · ${card.scope} · ${card.mode} · online ${card.online} · inUse ${JSON.stringify(card.inUse)}`;
+      o.ownerCard = card.name === 'r337-box' && (card.scope || '').startsWith('one folder: ' + realHome + ' (read-write)') && ['persistent', 'while open'].includes(card.mode) && card.online === true && card.paused === false && Array.isArray(card.inUse) && card.inUse.length === 0 && !('token' in card) && !('publicKey' in card);
+      // another person, and an admin, see none of it and cannot manage it
+      const yList = await listOf(Y), aList = await listOf(A);
+      const yRen = await mcall('PATCH', '/api/machines/' + id, Y, { name: 'stolen' }), yPause = await mcall('PATCH', '/api/machines/' + id, Y, { paused: true }), yDel = await mcall('DELETE', '/api/machines/' + id, Y), aDel = await mcall('DELETE', '/api/machines/' + id, A);
+      const after = ((await listOf(U)) || []).find((x) => x.id === id) || {};
+      o.othersSeeNone = Array.isArray(yList) && yList.length === 0 && Array.isArray(aList) && !aList.some((x) => x.id === id || x.name === 'r337-box') && [yRen, yPause, yDel, aDel].every((r) => r.status === 404) && after.name === 'r337-box' && after.paused === false;
+      detail.others = `Y ${JSON.stringify(yList)} A ${aList && aList.length} · ${[yRen, yPause, yDel, aDel].map((r) => r.status).join('/')}`;
+      // the owner's run uses it: the card says so while the run goes (Y still sees nothing), and not after it
+      let seenUse = null, yDuring = null, stop = false;
+      const watcher = (async () => { while (!stop) { const c = ((await listOf(U)) || []).find((x) => x.id === id) || {}; if (!seenUse && (c.inUse || []).length) { seenUse = c.inUse; yDuring = await listOf(Y); } await sleep(150); } })();
+      const run = await chat(U, enc([pc('shell_run', { cmd: 'sleep 3; echo r337' }, id), pc('list', {}, id)]));
+      stop = true; await watcher;
+      const res = (() => { const l = texts(run.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } })();
+      const uses = run.events.filter((e) => e.type === 'bridge_info' && /^your machine › /.test(e.text || ''));
+      const runId = (run.events.find((e) => e.type === 'bridge_run') || {}).id;
+      const afterRun = ((await listOf(U)) || []).find((x) => x.id === id) || {};
+      o.inUse = !!seenUse && seenUse.length === 1 && seenUse[0].run === runId && typeof seenUse[0].session === 'string' && Array.isArray(yDuring) && yDuring.length === 0 && Array.isArray(afterRun.inUse) && afterRun.inUse.length === 0;
+      o.calls = res.length === 2 && res.every((r) => r.body && r.body.ok === true);
+      o.oneLine = uses.length === 1 && uses[0].text.startsWith('your machine › r337-box: one folder: ' + realHome + ' (read-write)') && / · session \S+$/.test(uses[0].text) && uses[0].machine && uses[0].machine.id === id;
+      const plain = await chat(U, 'r337 a run that uses no machine');
+      o.noLineWithout = plain.status === 200 && !plain.events.some((e) => e.type === 'bridge_info' && /^your machine/.test(e.text || ''));
+      detail.run = `use ${JSON.stringify(seenUse)} run ${runId} · calls ${res.map((r) => r.body && r.body.ok).join('/')} · lines ${uses.map((e) => e.text).join(' | ')} · after ${JSON.stringify(afterRun.inUse)}`;
+      // the page: it loads web/machines.js (served by the hub), has the panel and the bar, and the helpers behave
+      const page = await fetch(H + '/').then((r) => r.text()).catch(() => ''), js = await fetch(H + '/machines.js').then((r) => (r.ok ? r.text() : '')).catch(() => '');
+      o.served = /<script src="machines\.js(\?v=[^"]*)?"><\/script>/.test(page) && page.includes('id="machBox"') && page.includes('id="useBar"') && js.includes('const MACHINES');
+      const ctx = { $: () => null, rootHandle: { name: 'proj' } };
+      let M = null; try { M = require('vm').runInNewContext(js + '\n;MACHINES', ctx); } catch (e) { detail.vm = e.message; }
+      if (M) {
+        const full = 'folders: the whole system (read-write); shell (advisory)', unr = 'unrestricted: no limits except the safety floor, shell', one = card.scope, many = 'folders: /a (read-write), /b (read-only); no shell';
+        const st = [M.statusOf({ online: true }), M.statusOf({ online: false }), M.statusOf({ online: true, paused: true })];
+        const bars = { browser: M.barText({ kind: 'browser', folder: 'proj' }), mine: M.barText({ kind: 'machine', name: 'r337-box', scope: one }), full: M.barText({ kind: 'machine', name: 'box', scope: full }), unr: M.barText({ kind: 'machine', name: 'box', scope: unr }), many: M.barText({ kind: 'machine', name: 'box', scope: many }) };
+        o.helpers = M.wide(full) && M.wide(unr) && M.wide('folders: the whole system (read-only); no shell') && !M.wide(one) && !M.wide(many) && !M.wide('') && !M.wide('one folder (picked on the machine), read-write; shell (advisory)')
+          && bars.browser.startsWith('Using the opened folder proj') && bars.mine.startsWith('Using the opened folder ' + realHome + ' on r337-box') && bars.full.startsWith('Using your PC box') && bars.unr.startsWith('Using your PC box') && !/your PC/.test(bars.many + bars.mine + bars.browser)
+          && new Set(st.map((x) => x.glyph)).size === 3 && new Set(st.map((x) => x.cls)).size === 3 && M.inUseLine(card) === '' && M.inUseLine({ inUse: [{ session: 's2', run: 'r' }] }) === 'Now in use by: session s2' && M.parse(one).folder === realHome;
+        detail.bars = JSON.stringify(bars);
+        // the bar follows the run's events: a run starts (off), the browser folder answers (folder), a wide machine (it wins), the run ends (off)
+        const seq = [];
+        for (const ev of [{ type: 'bridge_run', id: 'r1' }, { type: 'pc_tool', id: 'c1' }, { type: 'bridge_info', text: 'your machine › box: ' + full, machine: { id: 'm', name: 'box', scope: full } }, { type: 'pc_tool', id: 'c2' }, { type: 'bridge_done' }]) { M.onEvent(ev); const u = M.using(); seq.push(u ? u.kind + (M.wide(u.scope) ? '!' : '') : '-'); }
+        o.barFollows = seq.join(',') === '-,browser,machine!,machine!,-';
+        detail.seq = seq.join(',');
+      }
+    } finally {
+      for (const p of procs) { try { p.kill('SIGKILL'); } catch {} }
+      if (id) await mcall('DELETE', '/api/machines/' + id, U);
+      if (created.password) await call('/api/admin/delete', A, { username: 't-r337' });
+      try { fs.rmSync(mdir, { recursive: true, force: true }); } catch {}
+    }
+    const keys = ['linked', 'ownerCard', 'othersSeeNone', 'inUse', 'calls', 'oneLine', 'noLineWithout', 'served', 'helpers', 'barFollows'];
+    check('R337', L337, keys.every((k) => o[k] === true), `${keys.filter((k) => o[k] !== true).map((k) => 'FAILED ' + k).join(', ')} · ${Object.entries(detail).map(([k, v]) => k + ': ' + v).join(' · ')}`);
   }
   // R401 to R406 (T-199): the Hyper Workflows library (native/crates/pgm-workflow-internal): one `cargo test` run, its
   // tests named r401_ ... r406_ map back to the checks (a check passes when every test of its id ran and passed)
