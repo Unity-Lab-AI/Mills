@@ -33,7 +33,10 @@ pub fn status(hub: &Hub, r: &crate::front::Req) -> Value {
     let outside = r.header("cf-connecting-ip").is_some() || (behind && (r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some()));
     if outside { return json!({ "ok": true, "hub": true }); }
     let (build, _) = hub.mods.build.get(hub);
-    json!({ "ok": true, "hub": true, "pid": std::process::id(), "supervised": std::env::var("MILLS_SUPERVISED").is_ok(), "serving": std::env::var("VR_SERVING").unwrap_or_else(|_| "rust".into()), "busy": busy(hub), "version": build.split('+').next().unwrap_or(""), "commit": hub.mods.build.commit(hub) })
+    let mut v = json!({ "ok": true, "hub": true, "pid": std::process::id(), "supervised": std::env::var("MILLS_SUPERVISED").is_ok(), "serving": std::env::var("VR_SERVING").unwrap_or_else(|_| "rust".into()), "busy": busy(hub), "version": build.split('+').next().unwrap_or(""), "commit": hub.mods.build.commit(hub) });
+    // the data bridge to the other hub (T-324), when there is one: peer up?, last exchanges, what waits (add-only)
+    if let Some(b) = hub.mods.sync.get() { v["sync"] = b.summary(); }
+    v
 }
 /// `node bridge/restart.js` (or the admin's restart) drops bridge/.restart. As soon as nobody is busy this hub ends
 /// with 75, and run.js starts it and the JavaScript hub behind it again on the new code (meanwhile no new run starts:

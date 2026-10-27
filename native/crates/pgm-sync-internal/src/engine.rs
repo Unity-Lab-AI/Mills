@@ -39,7 +39,7 @@ pub trait Kind: Send + Sync {
     /// The kind's shape check: a record that fails it is refused and logged, never applied.
     fn check(&self, id: &str, v: &Value) -> Result<(), String>;
     /// (rev, time) of a value: higher wins. None = (0, when the engine saw the change).
-    fn stamp(&self, _v: &Value) -> Option<(i64, i64)> { None }
+    fn stamp(&self, _id: &str, _v: &Value) -> Option<(i64, i64)> { None }
     /// What makes a record the same thing on both copies (for kinds whose ids each copy hands out: two different tasks
     /// may get the same id). None = the id is enough.
     fn identity(&self, _v: &Value) -> Option<String> { None }
@@ -184,7 +184,7 @@ impl Engine {
             if whole { seen.insert(id.clone()); }
             let e = inner.index.entry(name.clone()).or_default().get(&id).cloned().unwrap_or_default();
             if e.mine.as_deref() == Some(h.as_str()) { continue; }
-            let (rev, time) = k.stamp(&v).unwrap_or((0, t));
+            let (rev, time) = k.stamp(&id, &v).unwrap_or((0, t));
             self.journal(inner, &name, &id, Some(v), rev, time);
             inner.index.entry(name.clone()).or_default().insert(id, Entry { mine: Some(h), rev, time, ..e });
             n += 1;
@@ -285,7 +285,7 @@ impl Engine {
         // conflict is when this copy changed the record since the peer last had it: then the loser is kept.
         let never = local.is_none() && e == Entry::default();
         let take = never || {
-            let lorder = if e.mine == lh && (e.rev, e.time) != (0, 0) { (e.rev, e.time) } else { local.as_ref().and_then(|l| k.stamp(l)).unwrap_or((0, now())) };
+            let lorder = if e.mine == lh && (e.rev, e.time) != (0, 0) { (e.rev, e.time) } else { local.as_ref().and_then(|l| k.stamp(&rec.id, l)).unwrap_or((0, now())) };
             (rec.order(), ih.clone().unwrap_or_default()) > (lorder, lh.clone().unwrap_or_default())
         };
         let plain = never || e.peer == lh;

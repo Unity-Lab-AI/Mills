@@ -461,6 +461,89 @@ impl Board {
         m
     }
     pub fn get(&self, id: &str) -> Option<Value> { let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); db["tasks"].as_array()?.iter().find(|t| t["id"] == json!(id)).cloned() }
+
+    // ---------- for a sync with another copy of the board (T-324: a dev hub next to the live one) ----------
+    // A remote change lands in memory and on disk at once and wakes the long poll (the same save as every operation).
+    /// Every task as stored, deleted ones too (their tombstones travel).
+    pub fn sync_tasks(&self) -> Vec<Value> { self.db.lock().unwrap_or_else(|e| e.into_inner())["tasks"].as_array().cloned().unwrap_or_default() }
+    /// Another copy's version of a task, stored as it is (this copy's is replaced); the next task number stays above it.
+    pub fn sync_put_task(&self, t: &Value) -> Value {
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let id = t["id"].as_str().unwrap_or("").to_string();
+        match db["tasks"].as_array_mut().unwrap().iter_mut().find(|x| x["id"] == json!(id)) { Some(x) => *x = t.clone(), None => db["tasks"].as_array_mut().unwrap().push(t.clone()) }
+        let n = task_number(&id).max(db["n"].as_i64().unwrap_or(0)); db["n"] = json!(n);
+        self.save(&mut db);
+        t.clone()
+    }
+    /// This copy's task `id` moves to a new number (the other copy made a different task with the same number at the same
+    /// time, and its number stays); the new id. Logged in the activity.
+    pub fn sync_rekey(&self, id: &str) -> Option<String> {
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let top = db["tasks"].as_array()?.iter().map(|t| task_number(t["id"].as_str().unwrap_or(""))).max().unwrap_or(0).max(db["n"].as_i64().unwrap_or(0));
+        let new_id = format!("T-{}", top + 1);
+        let t = db["tasks"].as_array_mut()?.iter_mut().find(|t| t["id"] == json!(id))?;
+        t["id"] = json!(new_id);
+        let tc = t.clone();
+        db["n"] = json!(top + 1);
+        log(&mut db, Some(&tc), &Actor { user: "sync".into(), agent: false, name: "Sync".into() }, "renumbered", Some(format!("was {id}: the other hub made a different {id} at the same time")));
+        self.save(&mut db);
+        Some(new_id)
+    }
+    /// The activity log as stored.
+    pub fn sync_activity(&self) -> Vec<Value> { self.db.lock().unwrap_or_else(|e| e.into_inner())["activity"].as_array().cloned().unwrap_or_default() }
+    /// An activity entry from the other copy, in time order (an identical one already here is not added twice).
+    pub fn sync_add_activity(&self, e: &Value) {
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let a = db["activity"].as_array_mut().unwrap();
+        if a.iter().any(|x| x == e) { return; }
+        let at = e["at"].as_i64().unwrap_or(0);
+        let pos = a.iter().rposition(|x| x["at"].as_i64().unwrap_or(0) <= at).map(|p| p + 1).unwrap_or(0);
+        a.insert(pos, e.clone());
+        self.save(&mut db);
+    }
+    /// The boards (id + name).
+    pub fn sync_boards(&self) -> Vec<Value> { self.db.lock().unwrap_or_else(|e| e.into_inner())["boards"].as_array().cloned().unwrap_or_default() }
+    /// A board from the other copy (added, or renamed to its name).
+    pub fn sync_put_board(&self, b: &Value) {
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let boards = db["boards"].as_array_mut().unwrap();
+        match boards.iter_mut().find(|x| x["id"] == b["id"]) { Some(x) => { if x == b { return; } *x = b.clone(); } None => boards.push(b.clone()) }
+        self.save(&mut db);
+    }
+}
+
+/// A task's number (T-12 → 12; 0 when it has none).
+fn task_number(id: &str) -> i64 { id.strip_prefix("T-").and_then(|n| n.parse().ok()).unwrap_or(0) }
+/// The shape a task from another copy must have before it is stored (T-324): what the board and both hubs read.
+pub fn sync_task_ok(id: &str, t: &Value) -> Result<(), String> {
+    let o = t.as_object().ok_or("a task is an object")?;
+    if t["id"].as_str() != Some(id) || task_number(id) < 1 { return Err("its id is not T-<number> or not the record's".into()); }
+    let title = t["title"].as_str().ok_or("no title")?;
+    if title.trim().is_empty() || title.chars().count() > 200 { return Err("the title is empty or longer than 200 characters".into()); }
+    if !t["board"].as_str().is_some_and(|b| !b.is_empty() && b.len() <= 60) { return Err("no board".into()); }
+    if !t["status"].as_str().is_some_and(|s| STATUS_IDS.contains(&s)) { return Err("an unknown status".into()); }
+    if !t["rev"].as_i64().is_some_and(|r| r >= 1) { return Err("no revision".into()); }
+    for k in ["createdAt", "updatedAt"] { if !t[k].is_i64() && !t[k].is_u64() { return Err(format!("{k} is not a time")); } }
+    if o.get("body").is_some_and(|b| !b.is_null() && !b.as_str().is_some_and(|s| s.len() <= 4_000_000)) { return Err("the description is not text (or too long)".into()); }
+    if o.get("labels").is_some_and(|l| !l.is_null() && !l.is_array()) { return Err("labels are not a list".into()); }
+    if o.get("priority").is_some_and(|p| !p.is_null() && !p.as_i64().is_some_and(|p| (0..=5).contains(&p))) { return Err("priority is not 0 to 5".into()); }
+    if o.get("deleted").is_some_and(|d| !d.is_boolean()) { return Err("deleted is not true / false".into()); }
+    Ok(())
+}
+/// The activity entry that keeps the losing side of a sync conflict on a task (T-324): who won, and the loser's content
+/// in full (`lost`). The same on both copies (made from the two versions only), so it is kept once. None when nothing
+/// of value lost (the two differed only in claim, archive time, revision or time: say both hubs' sweeps archived it).
+pub fn sync_conflict_entry(id: &str, winner: Option<&Value>, loser: Option<&Value>, winner_from: &str, loser_from: &str) -> Option<Value> {
+    let l = loser?;
+    const CONTENT: [&str; 10] = ["title", "body", "status", "labels", "priority", "dueAt", "recur", "assignee", "board", "deleted"];
+    let w = winner.cloned().unwrap_or(Value::Null);
+    if CONTENT.iter().all(|k| w[*k] == l[*k]) { return None; }
+    let mut lost = serde_json::Map::new();
+    for k in CONTENT.iter().chain(["rev", "updatedAt"].iter()) { if let Some(v) = l.get(*k) { lost.insert((*k).to_string(), v.clone()); } }
+    lost.insert("from".into(), json!(loser_from));
+    let at = w["updatedAt"].as_i64().unwrap_or(0).max(l["updatedAt"].as_i64().unwrap_or(0));
+    Some(json!({ "at": at, "task": id, "title": if w["title"].is_string() { w["title"].clone() } else { l["title"].clone() }, "by": "Sync", "agent": false, "what": "sync conflict",
+        "detail": format!("{winner_from} and {loser_from} changed it at the same time: {winner_from}'s change stays; {loser_from}'s is kept here in full"), "lost": Value::Object(lost) }))
 }
 
 fn live(t: &Value) -> bool { t["deleted"].as_bool() != Some(true) }
@@ -600,6 +683,39 @@ mod tests {
         assert_eq!((back.body["task"]["status"].clone(), back.body["task"]["archivedAt"].clone()), (json!("todo"), Value::Null), "moving an archived task off done restores it");
         b.set_retention(0, 0);
         assert_eq!(b.sweep(now_ms() as i64 + 400 * 86_400_000), (vec![], vec![]), "0 = never");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn another_copys_task_lands_in_memory_and_on_disk_and_a_clash_of_numbers_renumbers_this_copys() {
+        let (b, dir) = scratch("sync");
+        let mine = made(&b, json!({ "title": "mine" }));
+        let v0 = b.version();
+        let theirs = json!({ "id": "T-5", "board": "team", "title": "theirs", "status": "todo", "rev": 3, "createdAt": 1, "updatedAt": 2, "createdBy": "Bob", "claim": null });
+        assert!(sync_task_ok("T-5", &theirs).is_ok());
+        b.sync_put_task(&theirs);
+        assert!(b.version() > v0, "the long poll wakes");
+        assert_eq!(op(&b, "get", json!({ "id": "T-5" })).body["task"]["title"], "theirs");
+        let disk: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("board.json")).unwrap()).unwrap();
+        assert!(disk["tasks"].as_array().unwrap().iter().any(|t| t["id"] == "T-5"), "on disk too");
+        assert_eq!(made(&b, json!({ "title": "next" })), "T-6", "numbers continue above it");
+        let moved = b.sync_rekey(&mine).unwrap();
+        assert_eq!(moved, "T-7");
+        assert_eq!(op(&b, "get", json!({ "id": moved })).body["task"]["title"], "mine");
+        assert!(b.sync_activity().iter().any(|e| e["what"] == "renumbered" && e["task"] == json!(moved)));
+        // shape checks
+        for (bad, why) in [(json!({ "id": "T-5", "board": "team", "title": "", "status": "todo", "rev": 1, "createdAt": 1, "updatedAt": 1 }), "empty title"), (json!({ "id": "T-5", "board": "team", "title": "x", "status": "nope", "rev": 1, "createdAt": 1, "updatedAt": 1 }), "status"), (json!({ "id": "T-6", "board": "team", "title": "x", "status": "todo", "rev": 1, "createdAt": 1, "updatedAt": 1 }), "another id"), (json!({ "id": "T-5", "board": "team", "title": "x", "status": "todo", "createdAt": 1, "updatedAt": 1 }), "no rev")] {
+            assert!(sync_task_ok("T-5", &bad).is_err(), "{why}");
+        }
+        // a conflict's loser goes into the activity in full; a difference in archive time only is no loss
+        let w = json!({ "title": "A", "body": "x", "status": "todo", "rev": 4, "updatedAt": 10 });
+        let l = json!({ "title": "B", "body": "y", "status": "todo", "rev": 4, "updatedAt": 9 });
+        let e = sync_conflict_entry("T-5", Some(&w), Some(&l), "dev", "live").unwrap();
+        assert_eq!((e["lost"]["title"].clone(), e["lost"]["body"].clone(), e["lost"]["from"].clone(), e["at"].clone()), (json!("B"), json!("y"), json!("live"), json!(10)));
+        assert_eq!(e, sync_conflict_entry("T-5", Some(&w), Some(&l), "dev", "live").unwrap(), "the same entry on both copies");
+        let mut l2 = w.clone(); l2["archivedAt"] = json!(5); l2["updatedAt"] = json!(11);
+        assert!(sync_conflict_entry("T-5", Some(&w), Some(&l2), "dev", "live").is_none());
+        b.sync_add_activity(&e); b.sync_add_activity(&e);
+        assert_eq!(b.sync_activity().iter().filter(|x| **x == e).count(), 1, "kept once");
         let _ = std::fs::remove_dir_all(dir);
     }
     #[test]

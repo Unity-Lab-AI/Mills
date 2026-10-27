@@ -6225,6 +6225,7 @@ dependencies = [
  "pgm-net-internal",
  "pgm-platform-internal",
  "pgm-sandbox-internal",
+ "pgm-sync-internal",
  "pgm-workflow-engine-internal",
  "regex",
  "reqwest",

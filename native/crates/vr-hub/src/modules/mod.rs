@@ -14,6 +14,7 @@ pub mod ai_hosts;
 pub mod profile;
 pub mod re;
 pub mod site;
+pub mod sync;
 mod traits;
 pub mod auth;
 pub mod board;
@@ -76,6 +77,8 @@ pub struct Modules {
     pub gateway: gateway::Gateway,
     pub re: Arc<re::Re>,
     pub hyperwork: hyperwork::Hyperwork,
+    /// the data bridge to the other hub on this machine (T-324), when config sync names one
+    pub sync: std::sync::OnceLock<Arc<sync::Bridge>>,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -91,7 +94,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), mills })
+            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), sync: Default::default(), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -196,6 +199,7 @@ pub fn start_background(hub: &Arc<Hub>) {
     chat::start(hub);
     unity_brain::start(hub);
     re::start(hub);
+    sync::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     // the board's archive (T-190): done tasks to the archive after config board.archiveAfterHours (48), archived ones
     // deleted after board.deleteAfterDays (30); 0 = never. Looked at shortly after the start, then every board.sweepSeconds (600).
@@ -267,6 +271,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     // the front itself: who answers here (for the tools and the regression suite; nothing private)
     if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules(), "alone": hub.alone() }))); }
+    // the data bridge's hub-to-hub routes (T-324): the other hub on this machine only, with the shared secret
+    if let Some(rest) = p.strip_prefix("/__sync/") { return sync::route(hub, r, rest).await; }
     // the JavaScript hub asking a module of this one (with the front's secret, from this machine only)
     if let Some(rest) = p.strip_prefix("/__front/") {
         if !from_front(hub, r) { return answer(403, json!({ "ok": false, "error": "forbidden" })); }

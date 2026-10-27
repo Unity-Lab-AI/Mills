@@ -11,7 +11,7 @@ impl Kind for Tasks {
     fn snapshot(&self) -> Vec<(String, Value)> { /* every record: (id, value) */ vec![] }
     fn get(&self, id: &str) -> Option<Value> { None }
     fn check(&self, id: &str, v: &Value) -> Result<(), String> { Ok(()) }       // the shape check
-    fn stamp(&self, v: &Value) -> Option<(i64, i64)> { Some((v["rev"].as_i64()?, v["updatedAt"].as_i64()?)) }
+    fn stamp(&self, _id: &str, v: &Value) -> Option<(i64, i64)> { Some((v["rev"].as_i64()?, v["updatedAt"].as_i64()?)) }
     fn put(&self, id: &str, v: &Value) -> Result<Value, String> { Ok(v.clone()) } // store it (and wake the readers)
     fn keep_loser(&self, id: &str, c: &Conflict) { /* the losing value goes into the record's history */ }
 }

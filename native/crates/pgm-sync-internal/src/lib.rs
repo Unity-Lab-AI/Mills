@@ -51,7 +51,7 @@ mod tests {
         fn deletes(&self) -> bool { self.deletes }
         fn get(&self, id: &str) -> Option<Value> { self.val(id) }
         fn check(&self, _id: &str, v: &Value) -> Result<(), String> { if v.is_object() && v.get("bad").is_none() { Ok(()) } else { Err("not a good object".into()) } }
-        fn stamp(&self, v: &Value) -> Option<(i64, i64)> { if self.merge_max { None } else { Some((v["rev"].as_i64().unwrap_or(0), v["t"].as_i64().unwrap_or(0))) } }
+        fn stamp(&self, _id: &str, v: &Value) -> Option<(i64, i64)> { if self.merge_max { None } else { Some((v["rev"].as_i64().unwrap_or(0), v["t"].as_i64().unwrap_or(0))) } }
         fn identity(&self, v: &Value) -> Option<String> { v["born"].as_str().map(String::from) }
         fn rekey(&self, id: &str) -> Option<String> { let mut d = self.data.lock().unwrap(); let v = d.remove(id)?; let n = format!("{id}-moved"); d.insert(n.clone(), v); *self.ver.lock().unwrap() += 1; Some(n) }
         fn merge(&self, _id: &str, local: Option<&Value>, inc: &Value) -> Option<Value> { if !self.merge_max { return None; } let a = local.and_then(|l| l["n"].as_i64()).unwrap_or(0); Some(json!({ "n": a.max(inc["n"].as_i64().unwrap_or(0)) })) }
