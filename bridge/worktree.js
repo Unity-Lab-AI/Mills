@@ -40,6 +40,8 @@
 //                                                        --restart asks the hub to restart itself gracefully on the new code
 //   node bridge/worktree.js repos [words]                the Forgejo repos you can see (private ones too), as you (your token)
 //   node bridge/worktree.js repo-create <owner/name>     a new empty Forgejo repo (yours or an organisation's); --private, --description
+//   node bridge/worktree.js deploy-key <owner/name> <key.pub> [title]   a read-only SSH deploy key for a machine that builds or deploys it
+//   node bridge/worktree.js visibility <owner/name> private|public    only the visibility changes, nothing is deleted
 //   node bridge/worktree.js publish <owner/name>         put a project on Forgejo: the repo made when missing, a GitHub origin kept
 //                                                        as "upstream", origin = Forgejo, every branch + tag pushed, develop made
 //   node bridge/worktree.js tag <name> [message]         a tag on Forgejo at the project's integration branch, fetched here
@@ -645,7 +647,29 @@ async function tag(name, pj, message = '') {
   return `Tagged ${m[1]}/${m[2]} ${t.name || name} at ${target.slice(0, 7)} (${p.main} on Forgejo).`;
 }
 
-module.exports = { ensure, repair, project, listProjects, create, clone, freshness, describe, update, renew, sessionFreshness, sessionUpdate, sessionHome, fjRepos, fjCreate, publish, tag, pushAll, WT_ROOT, REPO, PROJECTS_ROOT, HUB_PROJECT };
+// A read-only deploy key on a Forgejo repo (T-249): a machine that builds or deploys a private repo reads it with its own
+// SSH key, owned by no person. The same key may sit on several repos; adding one that is already there changes nothing.
+async function deployKey(full, keyFile, title) {
+  const m = String(full || '').match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+  if (!m || !keyFile) throw new Error('Which repo and key? deploy-key <owner/name> <public key file> [title]');
+  const key = fs.readFileSync(keyFile, 'utf8').trim();
+  if (!/^(ssh-ed25519|ssh-rsa|ecdsa-sha2-\S+) [A-Za-z0-9+/=]+/.test(key) || /PRIVATE KEY/.test(key)) throw new Error(`${keyFile} is not an SSH public key.`);
+  const body = key.split(/\s+/).slice(0, 2).join(' ');
+  const have = (await fj('GET', `/repos/${m[1]}/${m[2]}/keys?limit=50`)) || [];
+  const same = have.find((k) => String(k.key || '').split(/\s+/).slice(0, 2).join(' ') === body);
+  if (same) return `${m[1]}/${m[2]} already has this key ("${same.title}", ${same.read_only ? 'read-only' : 'read-write'}).`;
+  const k = await fj('POST', `/repos/${m[1]}/${m[2]}/keys`, { title: title || 'deploy key', key, read_only: true });
+  return `Added the read-only deploy key "${k.title}" to ${m[1]}/${m[2]}.`;
+}
+// Private or public (T-249): only the visibility changes, nothing is deleted.
+async function visibility(full, which) {
+  const m = String(full || '').match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+  if (!m || !['private', 'public'].includes(which)) throw new Error('visibility <owner/name> private|public');
+  const r = await fj('PATCH', `/repos/${m[1]}/${m[2]}`, { private: which === 'private' });
+  return `${r.full_name} is now ${r.private ? 'private' : 'public'}.`;
+}
+
+module.exports = { ensure, repair, project, listProjects, create, clone, freshness, describe, update, renew, sessionFreshness, sessionUpdate, sessionHome, fjRepos, fjCreate, publish, tag, deployKey, visibility, pushAll, WT_ROOT, REPO, PROJECTS_ROOT, HUB_PROJECT };
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
@@ -661,6 +685,8 @@ if (require.main === module) {
   } else if (cmd === 'repo-create') fjCreate(user, { priv, description: desc }).then((r) => console.log(`Made ${r.full_name} (${r.private ? 'private' : 'public'}): ${r.clone_url}`), fail);
   else if (cmd === 'publish') publish(user, pj, { priv, description: desc }).then((l) => console.log(l.join('\n')), fail);
   else if (cmd === 'tag') tag(user, pj, rest.join(' ')).then(console.log, fail);
+  else if (cmd === 'deploy-key') deployKey(user, rest[0], rest.slice(1).join(' ')).then(console.log, fail);
+  else if (cmd === 'visibility') visibility(user, rest[0]).then(console.log, fail);
   else if (sid && ['check', 'auto', 'update', 'home'].includes(cmd)) try { // a Work session's own worktree
     if (cmd === 'check') { const f = sessionFreshness(user, sid, pj); console.log(describeSession(f)); process.exitCode = f.stale ? 3 : 0; }
     else if (cmd === 'auto') { // the hub's background check: fast-forward only a clean session with nothing of its own
@@ -694,6 +720,6 @@ if (require.main === module) {
     else if (cmd === 'sync') console.log(sync(user, pj));
     else if (cmd === 'merge') console.log(merge(user, pj));
     else if (cmd === 'live') { if (pj && pj.toLowerCase() !== HUB_PROJECT.toLowerCase()) throw new Error('live is for VibeRoller itself; other projects are pushed by merge.'); console.log(live({ restart: process.argv.includes('--restart') }).join('\n')); }
-    else { console.error('Usage: node bridge/worktree.js [--project <name>] projects | new <name> | clone <url> [name] | status | repair [--repo <host folder>] | ensure <username> | check <username> | update <username> | renew <username> | check / auto / update / home <username> --session <id> | commit <username> [message] | sync <username> | merge <username> | live [--restart] | repos [words] | repo-create <owner/name> [--private] [--description text] | publish <owner/name> [--private] [--description text] | tag <name> [message]'); process.exit(1); }
+    else { console.error('Usage: node bridge/worktree.js [--project <name>] projects | new <name> | clone <url> [name] | status | repair [--repo <host folder>] | ensure <username> | check <username> | update <username> | renew <username> | check / auto / update / home <username> --session <id> | commit <username> [message] | sync <username> | merge <username> | live [--restart] | repos [words] | repo-create <owner/name> [--private] [--description text] | publish <owner/name> [--private] [--description text] | tag <name> [message] | deploy-key <owner/name> <public key file> [title] | visibility <owner/name> private|public'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }
 }

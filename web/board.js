@@ -83,6 +83,11 @@
       const head = el('header'); head.append(el('span', 'bdColName', s.label), el('span', 'bdCount', String(list.length)));
       const add = el('button', 'ghost bdAdd'); add.type = 'button'; add.title = 'Add a task to ' + s.label; add.append(ic('plus'));
       add.onclick = () => newTask(s.id); head.append(add);
+      if (s.id === 'done' && B.data.archive && list.length) { // "archive all done" (T-190; a hub without the archive sends no `archive`)
+        const ar = el('button', 'ghost bdAdd'); ar.type = 'button'; ar.title = 'Archive every done task on this board (' + keepNote() + ')'; ar.append(ic('archive'));
+        ar.onclick = async () => { if (!window.confirm('Archive all ' + list.length + ' done tasks on this board? ' + keepNote() + '.')) return; const r = await op('archive-done', { board: B.board }); if (r) note(r.archived.length + ' archived'); };
+        head.append(ar);
+      }
       const body = el('div', 'bdCards');
       list.forEach((t, i) => body.append(cardEl(t, i)));
       if (!list.length) body.append(el('div', 'bdNone', 'nothing here'));
@@ -92,9 +97,54 @@
     const stale = B.data.tasks.filter((t) => t.stale && t.board === B.board);
     $('bdStale').hidden = !stale.length;
     if (stale.length) label($('bdStale'), 'warn', stale.length + ' lapsed claim' + (stale.length > 1 ? 's' : '') + ': ' + stale.map((t) => t.id).join(', '));
+    archiveButton();
     renderFoot();
-    if (B.open && !B.data.tasks.some((t) => t.id === B.open)) closeDetail();
+    if (B.open && !B.data.tasks.some((t) => t.id === B.open) && !(B.detail && B.detail.id === B.open && B.detail.archivedAt)) closeDetail();
     else if (B.open && !B.editing) openDetail(B.open, true);
+  }
+  // ── the archive (T-190): done tasks leave the board after a while; readable and restorable until they are deleted ──
+  const fmtDay = (ms) => new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  function keepNote() { const d = B.data && B.data.archive ? B.data.archive.deleteAfterDays : 0; return d > 0 ? 'archived tasks stay restorable for ' + Math.round(d) + ' days, then they are deleted' : 'archived tasks stay until restored'; }
+  function deleteAt(t) { const d = B.data && B.data.archive ? B.data.archive.deleteAfterDays : 0; return t.deleteAt || (t.archivedAt && d > 0 ? t.archivedAt + d * DAY : 0); }
+  function archiveButton() { // in the header, made here so a product's own index.html needs nothing new
+    const on = !!(B.data && B.data.archive);
+    let b = $('bdArchive');
+    if (!b && on) { b = el('button', 'ghost'); b.id = 'bdArchive'; b.type = 'button'; b.onclick = showArchive; const at = $('bdMyDay') || $('bdMine'); if (at) at.after(b); else $('bdStale').before(b); }
+    if (!b) return;
+    b.hidden = !on;
+    if (on) { const a = B.data.archive; label(b, 'archive', 'Archive' + (a.count ? ' (' + a.count + ')' : '')); b.title = 'Archived tasks' + (a.archiveAfterHours > 0 ? ': done tasks move here after ' + Math.round(a.archiveAfterHours) + ' h' : '') + '; ' + keepNote(); }
+  }
+  async function showArchive() {
+    let m = $('bdArch');
+    if (!m) {
+      m = el('div', 'modal'); m.id = 'bdArch';
+      const box = el('div', 'box'), bar = el('div', 'bar'); bar.append(el('span', '', 'Archived tasks'));
+      const x = el('button', 'ghost', 'Close'); x.type = 'button'; x.onclick = () => { m.hidden = true; }; bar.append(x);
+      const q = el('input'); q.id = 'bdArchQ'; q.type = 'search'; q.placeholder = 'Search id, title, label…'; q.spellcheck = false;
+      let t; q.oninput = () => { clearTimeout(t); t = setTimeout(fillArchive, 250); };
+      const body = el('div', 'setBody'); body.id = 'bdArchBody'; box.append(bar, q, body); m.append(box);
+      m.onclick = (e) => { if (e.target === m) m.hidden = true; };
+      document.body.append(m);
+    }
+    m.hidden = false; $('bdArchQ').focus();
+    await fillArchive();
+  }
+  async function fillArchive() {
+    const body = $('bdArchBody'); if (!body) return;
+    let d;
+    try { d = await json('/api/board/archived?board=' + encodeURIComponent(B.board) + '&q=' + encodeURIComponent($('bdArchQ').value.trim())); }
+    catch (e) { body.textContent = ''; body.append(el('div', 'bdErr', e.message)); return; }
+    body.textContent = '';
+    body.append(el('div', 'bdMuted', (d.tasks.length ? d.tasks.length + ' archived on this board. ' : '') + keepNote().replace(/^a/, 'A') + '.'));
+    for (const t of d.tasks) {
+      const row = el('div', 'bdArchRow');
+      const open = el('a', '', t.id + ' · ' + t.title); open.href = '#'; open.onclick = (e) => { e.preventDefault(); $('bdArch').hidden = true; openDetail(t.id); };
+      const when = el('span', 'bdMuted', ' archived ' + fmtDay(t.archivedAt) + (deleteAt(t) ? ' · deleted ' + fmtDay(deleteAt(t)) : ''));
+      const back = label(el('button', 'ghost bdTiny'), 'reply', 'Restore'); back.type = 'button';
+      back.onclick = async () => { if (await op('restore', { id: t.id })) fillArchive(); };
+      row.append(open, when, back); body.append(row);
+    }
+    if (!d.tasks.length) body.append(el('div', 'bdNone', $('bdArchQ').value.trim() ? 'Nothing archived matches.' : 'Nothing is archived on this board.'));
   }
   function renderFoot() {
     if (!B.data) return;
@@ -186,6 +236,7 @@
     const x = el('button', 'ghost'); x.type = 'button'; x.title = 'Close (Esc)'; x.append(ic('close')); x.onclick = closeDetail; head.append(x);
     p.append(head);
     if (held) { const w = el('div', 'bdWarn'); w.append(ic('lock', 'lead'), `${t.claim.by} holds a claim on this task for ${minsLeft(t.claim.until)} more min. Edits are refused until it is released or lapses.`); p.append(w); }
+    if (t.archivedAt) { const w = el('div', 'bdWarn'); w.append(ic('archive', 'lead'), 'Archived ' + fmtDay(t.archivedAt) + (deleteAt(t) ? '; it will be deleted ' + fmtDay(deleteAt(t)) : '') + '. Restore it to put it back on the board.'); p.append(w); }
     const field = (lbl, node) => { const f = el('label', 'bdField'); f.append(el('span', '', lbl), node); p.append(f); return node; };
     const title = field('Title', el('input')); title.value = t.title;
     const bodyWrap = el('div', 'bdBodyWrap');
@@ -225,6 +276,8 @@
       btn('flag', mineHeld ? 'Renew 30 min' : 'Claim 30 min', () => op('claim', { id: t.id, minutes: 30 }).then(() => openDetail(t.id)));
       if (mineHeld) btn('close', 'Release', () => op('release', { id: t.id }).then(() => openDetail(t.id)));
       if (t.status !== 'done') btn('check', t.recur ? 'Complete (repeats)' : 'Complete', () => op('complete', { id: t.id }).then(() => openDetail(t.id)));
+      if (t.archivedAt) btn('reply', 'Restore', () => op('restore', { id: t.id }).then(() => openDetail(t.id)));
+      else if (t.status === 'done' && B.data.archive) btn('archive', 'Archive', () => op('archive', { id: t.id }).then(() => openDetail(t.id)));
     }
     if (OPT.ai) btn('bot', 'Give to Claude', () => giveToClaude(t));
     if (!held) btn('share', 'Delegate', () => delegate(t)); // hand it to a teammate with a signed note (assignee + note in one step)

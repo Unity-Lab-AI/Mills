@@ -2,8 +2,12 @@
 //! at the same time. One task is both the board card and the calendar entry; advisory, time-bounded claims (nobody
 //! else edits a task while it is held; an unrenewed claim lapses); a revision per task (an update based on an older one
 //! is refused); deletes are tombstones; every change goes to the activity log; month-end aware repeats.
+//! The archive (T-190): a done task gets `archivedAt` (by hand, "archive all done", or the sweep after ARCHIVE_AFTER_MS)
+//! and leaves the board and the calendar; it stays readable and restorable until the sweep deletes it (DELETE_AFTER_MS).
+//! Add-only fields (`archivedAt`, `doneAt`): the JavaScript hub reads the same file and shows such a task as done.
 //! Storage: VibeRoller/Board/board.json (the same file and shape the JavaScript module used), written atomically.
-//! People: GET /api/board (long poll ?wait=1&ver=N), /api/board/{create,task,update,move,complete,claim,release,delete,new}.
+//! People: GET /api/board (long poll ?wait=1&ver=N), /api/board/{create,task,update,move,complete,claim,release,delete,new,
+//! archive,restore,archive-done,archived}.
 //! Claude: the board MCP tools, handed over by the JavaScript hub after it checked the run's token (/__front/board/tool).
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use serde_json::{json, Map, Value};
@@ -19,6 +23,9 @@ const CLAIM_DEFAULT_MIN: f64 = 15.0;
 const CLAIM_MAX_MIN: f64 = 240.0;
 const ACTIVITY_KEEP: usize = 3000;
 const DAYS: [&str; 7] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+/// The archive (T-190): a done task is archived after this long, an archived one deleted (a tombstone) after this long.
+pub const ARCHIVE_AFTER_MS: i64 = 48 * 3_600_000;
+pub const DELETE_AFTER_MS: i64 = 30 * 86_400_000;
 
 fn statuses() -> Value { json!([{ "id": "backlog", "label": "Backlog" }, { "id": "todo", "label": "To do" }, { "id": "doing", "label": "Doing" }, { "id": "review", "label": "Review" }, { "id": "done", "label": "Done" }]) }
 
@@ -110,6 +117,8 @@ pub struct Board {
     db: Mutex<Value>,
     pub ver: tokio::sync::watch::Sender<u64>,
     viewers: Mutex<HashMap<String, i64>>,
+    /// (archive a done task after, delete an archived task after) in ms; 0 = never
+    retention: Mutex<(i64, i64)>,
 }
 impl Board {
     pub fn new(dir: PathBuf) -> Board {
@@ -120,7 +129,33 @@ impl Board {
         if !db["activity"].is_array() { db["activity"] = json!([]); }
         if !db["boards"].is_array() || db["boards"].as_array().map(|a| a.is_empty()).unwrap_or(true) { db["boards"] = json!([{ "id": "team", "name": "Team" }]); }
         let (ver, _) = tokio::sync::watch::channel(1u64);
-        Board { file, db: Mutex::new(db), ver, viewers: Mutex::default() }
+        Board { file, db: Mutex::new(db), ver, viewers: Mutex::default(), retention: Mutex::new((ARCHIVE_AFTER_MS, DELETE_AFTER_MS)) }
+    }
+    /// How long a done task stays before the sweep archives it, and an archived one before it is deleted (ms, 0 = never).
+    pub fn set_retention(&self, archive_after_ms: i64, delete_after_ms: i64) { *self.retention.lock().unwrap_or_else(|e| e.into_inner()) = (archive_after_ms.max(0), delete_after_ms.max(0)); }
+    pub fn retention(&self) -> (i64, i64) { *self.retention.lock().unwrap_or_else(|e| e.into_inner()) }
+    /// The archive's sweep at `now` (T-190): done tasks finished longer ago than the archive time are archived (never a
+    /// repeating one, one due in the future, or one somebody holds); tasks archived longer ago than the delete time are
+    /// deleted (the usual tombstone). Returns (archived ids, deleted ids). Signed "Board" in the activity log.
+    pub fn sweep(&self, now: i64) -> (Vec<String>, Vec<String>) {
+        let (arch_after, del_after) = self.retention();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let mut archived = vec![]; let mut deleted = vec![];
+        for t in db["tasks"].as_array_mut().into_iter().flatten().filter(|t| live(t)) {
+            if is_archived(t) {
+                if del_after > 0 && t["archivedAt"].as_i64().unwrap_or(now) <= now - del_after { t["deleted"] = json!(true); t["claim"] = Value::Null; touch(t, now); deleted.push(t.clone()); }
+            } else if arch_after > 0 && t["status"] == json!("done") && t["recur"].as_str().is_none() && !t["dueAt"].as_i64().map(|d| d > now).unwrap_or(false) && !claim_active(t, now)
+                && done_since(t) <= now - arch_after {
+                t["archivedAt"] = json!(now); t["claim"] = Value::Null; touch(t, now); archived.push(t.clone());
+            }
+        }
+        if archived.is_empty() && deleted.is_empty() { return (vec![], vec![]); }
+        let sys = Actor { user: "board".into(), agent: false, name: "Board".into() };
+        for t in &archived { log(&mut db, Some(t), &sys, "archived", Some(format!("done for over {} h", arch_after / 3_600_000))); }
+        for t in &deleted { log(&mut db, Some(t), &sys, "deleted", Some(format!("archived for over {} days", del_after / 86_400_000))); }
+        self.save(&mut db);
+        let ids = |v: &Vec<Value>| v.iter().map(|t| t["id"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+        (ids(&archived), ids(&deleted))
     }
     fn save(&self, db: &mut Value) {
         if let Some(a) = db["activity"].as_array_mut() { if a.len() > ACTIVITY_KEEP { let cut = a.len() - ACTIVITY_KEEP; a.drain(0..cut); } }
@@ -155,12 +190,20 @@ impl Board {
     pub fn view(&self, user: &str, name_of: &dyn Fn(&str) -> String, has: &dyn Fn(&str) -> bool, mirror: Value) -> Value {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let now = now_ms() as i64;
-        let tasks: Vec<&Value> = db["tasks"].as_array().map(|a| a.iter().filter(|t| live(t)).collect()).unwrap_or_default();
+        let tasks: Vec<&Value> = db["tasks"].as_array().map(|a| a.iter().filter(|t| shown(t)).collect()).unwrap_or_default();
         let mut presence: Vec<Value> = vec![];
         for (u, t) in self.viewers.lock().unwrap_or_else(|e| e.into_inner()).iter() { if now - t < 60_000 && has(u) { presence.push(json!({ "user": u, "name": name_of(u), "agent": false })); } }
         for t in &tasks { if claim_active(t, now) && t["claim"]["agent"].as_bool() == Some(true) && !presence.iter().any(|p| p["key"] == t["claim"]["key"]) { presence.push(json!({ "key": t["claim"]["key"], "name": t["claim"]["by"], "agent": true })); } }
         let act: Vec<Value> = db["activity"].as_array().map(|a| a.iter().rev().take(60).cloned().collect()).unwrap_or_default();
-        json!({ "ver": self.version(), "statuses": statuses(), "boards": db["boards"], "tasks": tasks.iter().map(|t| card(t, now)).collect::<Vec<_>>(), "presence": presence, "activity": act, "me": user, "mirror": mirror })
+        let archived = db["tasks"].as_array().map(|a| a.iter().filter(|t| live(t) && is_archived(t)).count()).unwrap_or(0);
+        json!({ "ver": self.version(), "statuses": statuses(), "boards": db["boards"], "tasks": tasks.iter().map(|t| card(t, now)).collect::<Vec<_>>(), "presence": presence, "activity": act, "me": user, "mirror": mirror,
+            "archive": self.archive_info(archived) })
+    }
+
+    /// What a page needs to know about the archive: how many tasks are in it, and the two times (0 = never).
+    fn archive_info(&self, count: usize) -> Value {
+        let (a, d) = self.retention();
+        json!({ "count": count, "archiveAfterHours": a as f64 / 3_600_000.0, "deleteAfterDays": d as f64 / 86_400_000.0 })
     }
 
     // ---------- the operations shared by people and Claude ----------
@@ -223,7 +266,7 @@ impl Board {
                     }
                     if b.get("recur").is_some() { let r = b["recur"].as_str().filter(|r| RECUR.contains(r)); t["recur"] = json!(r); changed.push(r.map(|r| format!("repeats {r}")).unwrap_or_else(|| "no repeat".into())); }
                     if b.get("assignee").is_some() { let asg = b["assignee"].as_str().filter(|u| !u.is_empty() && has(u)).map(String::from); changed.push(asg.as_ref().map(|u| format!("assigned to {}", name_of(u))).unwrap_or_else(|| "unassigned".into())); t["assignee"] = json!(asg); }
-                    if let Some(s) = b["status"].as_str().filter(|s| STATUS_IDS.contains(s)) { if json!(s) != t["status"] { if s == "done" { to_done = true; } else { t["status"] = json!(s); changed.push(format!("moved to {s}")); } } }
+                    if let Some(s) = b["status"].as_str().filter(|s| STATUS_IDS.contains(s)) { if json!(s) != t["status"] { if s == "done" { to_done = true; } else { t["status"] = json!(s); changed.push(format!("moved to {s}")); if unarchive(t) { changed.push("restored from the archive".into()); } } } }
                 }
                 if to_done { return self.op_locked(db, "complete", a, &json!({ "id": id, "skipMirror": skip }), has, name_of); }
                 let t = find_mut(db, &id).unwrap();
@@ -247,8 +290,9 @@ impl Board {
                 let moved = cur["status"] != json!(status);
                 let t = find_mut(db, &id).unwrap();
                 t["status"] = json!(status); touch(t, now);
+                let restored = moved && unarchive(t);
                 let tc = t.clone();
-                if moved { log(db, Some(&tc), a, "moved", Some(format!("to {status}"))); }
+                if moved { log(db, Some(&tc), a, "moved", Some(format!("to {status}{}", if restored { ", restored from the archive" } else { "" }))); }
                 self.save(db);
                 Out { status: 200, body: json!({ "task": card(&tc, now) }), changes: if moved { change("updated", &tc) } else { vec![] } }
             }
@@ -261,7 +305,7 @@ impl Board {
                     let next = next_due(due, &r, anchor).unwrap_or(due);
                     t["dueAt"] = json!(next); t["status"] = json!("todo"); t["claim"] = Value::Null; touch(t, now);
                     detail = Some(format!("repeats {r}: next due {}", chrono::Utc.timestamp_millis_opt(next).single().map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default()));
-                } else { t["status"] = json!("done"); t["claim"] = Value::Null; touch(t, now); detail = None; }
+                } else { if t["status"] != json!("done") { t["doneAt"] = json!(now); } t["status"] = json!("done"); t["claim"] = Value::Null; touch(t, now); detail = None; }
                 let tc = t.clone();
                 log(db, Some(&tc), a, "completed", detail); self.save(db);
                 Out { status: 200, body: json!({ "task": card(&tc, now) }), changes: change("completed", &tc) }
@@ -301,6 +345,52 @@ impl Board {
                 log(db, Some(&tc), a, "deleted", None); self.save(db);
                 Out { status: 200, body: json!({ "ok": true }), changes: change("deleted", &tc) }
             }
+            // ---- the archive (T-190): a done task leaves the board and the calendar, stays readable and restorable ----
+            "archive" => {
+                if let Some(g) = guard(find(db, &id), a, None, now) { return g; }
+                let t = find_mut(db, &id).unwrap();
+                if t["status"] != json!("done") { return no(400, format!("{id} is not done: only a done task can be archived (complete it first).")); }
+                if is_archived(t) { return ok(json!({ "task": card(t, now) })); }
+                t["archivedAt"] = json!(now); t["claim"] = Value::Null; touch(t, now);
+                let tc = t.clone();
+                log(db, Some(&tc), a, "archived", None); self.save(db);
+                ok(json!({ "task": card(&tc, now) }))
+            }
+            "restore" => {
+                if let Some(g) = guard(find(db, &id), a, None, now) { return g; }
+                let to = b["status"].as_str().filter(|s| STATUS_IDS.contains(s)).map(String::from);
+                let t = find_mut(db, &id).unwrap();
+                if !is_archived(t) { return no(400, format!("{id} is not in the archive.")); }
+                unarchive(t);
+                match to.as_deref() { Some(s) if s != "done" => { t["status"] = json!(s); } _ => { t["doneAt"] = json!(now); } } // back on the board for another full stay
+                touch(t, now);
+                let tc = t.clone();
+                log(db, Some(&tc), a, "restored", Some(format!("to {}", tc["status"].as_str().unwrap_or("done")))); self.save(db);
+                Out { status: 200, body: json!({ "task": card(&tc, now) }), changes: if tc["status"] != json!("done") { change("updated", &tc) } else { vec![] } }
+            }
+            "archiveDone" => {
+                let bd = b["board"].as_str().filter(|s| !s.is_empty()).map(String::from);
+                let mut done: Vec<Value> = vec![];
+                for t in db["tasks"].as_array_mut().into_iter().flatten().filter(|t| shown(t) && t["status"] == json!("done") && !held_by_other(t, a, now)) {
+                    if let Some(bd) = &bd { if t["board"] != json!(bd) { continue; } }
+                    t["archivedAt"] = json!(now); t["claim"] = Value::Null; touch(t, now); done.push(t.clone());
+                }
+                for t in &done { log(db, Some(t), a, "archived", Some("archive all done".into())); }
+                if !done.is_empty() { self.save(db); }
+                ok(json!({ "archived": done.iter().map(|t| t["id"].clone()).collect::<Vec<_>>() }))
+            }
+            "archived" => {
+                let (_, del_after) = self.retention();
+                let q = b["q"].as_str().unwrap_or("").trim().to_lowercase();
+                let mut tasks: Vec<Value> = db["tasks"].as_array().unwrap().iter().filter(|t| live(t) && is_archived(t)).filter(|t| {
+                    if let Some(bd) = b["board"].as_str().filter(|s| !s.is_empty()) { if t["board"] != json!(bd) { return false; } }
+                    q.is_empty() || q.split_whitespace().all(|w| t["id"].as_str().unwrap_or("").to_lowercase() == w || t["title"].as_str().unwrap_or("").to_lowercase().contains(w)
+                        || t["labels"].as_array().map(|l| l.iter().any(|x| x.as_str().unwrap_or("").to_lowercase() == w)).unwrap_or(false))
+                }).map(|t| { let mut c = card(t, now); let at = t["archivedAt"].as_i64().unwrap_or(now); c["deleteAt"] = if del_after > 0 { json!(at + del_after) } else { Value::Null }; c }).collect();
+                tasks.sort_by_key(|t| std::cmp::Reverse(t["archivedAt"].as_i64().unwrap_or(0)));
+                let n = tasks.len();
+                ok(json!({ "boards": db["boards"], "tasks": tasks, "archive": self.archive_info(n) }))
+            }
             "newBoard" if b["_noNewBoards"] == json!(true) => no(400, "Boards here are the servers' own: every server has one."),
             "newBoard" => {
                 let name: String = b["name"].as_str().map(|s| s.trim().chars().take(40).collect()).unwrap_or_default();
@@ -314,7 +404,7 @@ impl Board {
                 ok(json!({ "boards": db["boards"] }))
             }
             "list" => {
-                let mut tasks: Vec<Value> = db["tasks"].as_array().unwrap().iter().filter(|t| live(t)).map(|t| card(t, now)).collect();
+                let mut tasks: Vec<Value> = db["tasks"].as_array().unwrap().iter().filter(|t| shown(t)).map(|t| card(t, now)).collect();
                 if let Some(bd) = b["board"].as_str().filter(|s| !s.is_empty()) { tasks.retain(|t| t["board"] == json!(bd)); }
                 if let Some(st) = b["status"].as_str().filter(|s| !s.is_empty()) { tasks.retain(|t| t["status"] == json!(st)); }
                 if b["mine"].as_bool() == Some(true) { tasks.retain(|t| t["assignee"] == json!(a.user) || t["claim"]["key"] == json!(a.key())); }
@@ -328,7 +418,7 @@ impl Board {
                 let start = at(sd.year(), sd.month(), sd.day(), 0, 0).unwrap_or(from);
                 let end = at(ed.year(), ed.month(), ed.day(), 23, 59).unwrap_or(to) + 59_999;
                 let mut by_day: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
-                for t in db["tasks"].as_array().unwrap().iter().filter(|t| live(t)) {
+                for t in db["tasks"].as_array().unwrap().iter().filter(|t| shown(t)) {
                     let Some(due) = t["dueAt"].as_i64() else { continue };
                     if due < start || due > end { continue; }
                     if let Some(bd) = b["board"].as_str().filter(|s| !s.is_empty()) { if t["board"] != json!(bd) { continue; } }
@@ -342,7 +432,7 @@ impl Board {
                     let wd = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map(|d| DAYS[d.weekday().num_days_from_sunday() as usize]).unwrap_or("");
                     json!({ "day": day, "weekday": wd, "tasks": tasks })
                 }).collect();
-                let overdue: Vec<Value> = db["tasks"].as_array().unwrap().iter().filter(|t| live(t) && t["status"] != json!("done") && t["dueAt"].as_i64().map(|d| d < start).unwrap_or(false)).map(|t| card(t, now)).collect();
+                let overdue: Vec<Value> = db["tasks"].as_array().unwrap().iter().filter(|t| shown(t) && t["status"] != json!("done") && t["dueAt"].as_i64().map(|d| d < start).unwrap_or(false)).map(|t| card(t, now)).collect();
                 ok(json!({ "from": day_key(start), "to": day_key(end), "today": day_key(now), "days": days, "overdue": overdue }))
             }
             _ => no(404, "Unknown board operation."),
@@ -364,7 +454,7 @@ impl Board {
     pub fn holdings(&self) -> HashMap<String, (Vec<String>, usize)> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms() as i64;
         let mut m: HashMap<String, (Vec<String>, usize)> = HashMap::new();
-        for t in db["tasks"].as_array().into_iter().flatten().filter(|t| live(t) && t["status"] != json!("done")) {
+        for t in db["tasks"].as_array().into_iter().flatten().filter(|t| shown(t) && t["status"] != json!("done")) {
             if claim_active(t, now) { if let Some(u) = t["claim"]["user"].as_str() { m.entry(u.to_string()).or_default().0.push(t["id"].as_str().unwrap_or("").to_string()); } }
             if let Some(u) = t["assignee"].as_str() { m.entry(u.to_string()).or_default().1 += 1; }
         }
@@ -374,6 +464,17 @@ impl Board {
 }
 
 fn live(t: &Value) -> bool { t["deleted"].as_bool() != Some(true) }
+fn is_archived(t: &Value) -> bool { t["archivedAt"].as_i64().is_some() }
+/// On the board (and the calendar): live and not archived.
+fn shown(t: &Value) -> bool { live(t) && !is_archived(t) }
+/// When a done task was finished: doneAt (since 5.32.0), else its last change.
+fn done_since(t: &Value) -> i64 { t["doneAt"].as_i64().or_else(|| t["updatedAt"].as_i64()).unwrap_or(0) }
+/// Takes a task out of the archive (and forgets when it was done); whether it was in it.
+fn unarchive(t: &mut Value) -> bool {
+    let Some(o) = t.as_object_mut() else { return false };
+    o.remove("doneAt");
+    o.remove("archivedAt").map(|v| !v.is_null()).unwrap_or(false)
+}
 fn find<'a>(db: &'a Value, id: &str) -> Option<&'a Value> { db["tasks"].as_array()?.iter().find(|t| t["id"] == json!(id) && live(t)) }
 fn find_mut<'a>(db: &'a mut Value, id: &str) -> Option<&'a mut Value> { db["tasks"].as_array_mut()?.iter_mut().find(|t| t["id"] == json!(id) && live(t)) }
 fn claim_active(t: &Value, now: i64) -> bool { t["claim"].is_object() && t["claim"]["until"].as_i64().unwrap_or(0) > now }
@@ -402,15 +503,17 @@ fn card(t: &Value, now: i64) -> Value {
     let or_null = |v: &Value| if v.is_null() { Value::Null } else { v.clone() };
     json!({ "id": t["id"], "board": t["board"], "title": t["title"], "status": t["status"], "order": t["order"], "priority": t["priority"].as_i64().unwrap_or(0), "labels": if t["labels"].is_array() { t["labels"].clone() } else { json!([]) },
         "dueAt": or_null(&t["dueAt"]), "recur": or_null(&t["recur"]), "assignee": or_null(&t["assignee"]), "createdBy": t["createdBy"], "updatedAt": t["updatedAt"], "rev": t["rev"],
-        "hasBody": !t["body"].as_str().unwrap_or("").is_empty(), "claim": claim, "stale": t["claim"].is_object() && !claim_active(t, now), "forgejo": fj })
+        "hasBody": !t["body"].as_str().unwrap_or("").is_empty(), "claim": claim, "stale": t["claim"].is_object() && !claim_active(t, now), "forgejo": fj, "archivedAt": or_null(&t["archivedAt"]) })
 }
 /// The MCP tool names → operations (bridge/board.js internal).
 pub fn tool_op(name: &str) -> Option<&'static str> {
-    Some(match name { "board_list" => "list", "task_get" => "get", "task_create" => "create", "task_update" => "update", "task_claim" | "task_renew" => "claim", "task_release" => "release", "task_complete" => "complete", "task_delete" => "remove", "task_move" => "move", "board_new" => "newBoard", "board_calendar" => "calendar", _ => return None })
+    Some(match name { "board_list" => "list", "task_get" => "get", "task_create" => "create", "task_update" => "update", "task_claim" | "task_renew" => "claim", "task_release" => "release", "task_complete" => "complete", "task_delete" => "remove", "task_move" => "move", "board_new" => "newBoard", "board_calendar" => "calendar",
+        "task_archive" => "archive", "task_restore" => "restore", "board_archive_done" => "archiveDone", "board_archived" => "archived", _ => return None })
 }
 /// The HTTP routes for people → operations.
 pub fn route_op(path: &str) -> Option<&'static str> {
-    Some(match path { "/api/board/create" => "create", "/api/board/task" => "get", "/api/board/update" => "update", "/api/board/move" => "move", "/api/board/complete" => "complete", "/api/board/claim" => "claim", "/api/board/release" => "release", "/api/board/delete" => "remove", "/api/board/new" => "newBoard", _ => return None })
+    Some(match path { "/api/board/create" => "create", "/api/board/task" => "get", "/api/board/update" => "update", "/api/board/move" => "move", "/api/board/complete" => "complete", "/api/board/claim" => "claim", "/api/board/release" => "release", "/api/board/delete" => "remove", "/api/board/new" => "newBoard",
+        "/api/board/archive" => "archive", "/api/board/restore" => "restore", "/api/board/archive-done" => "archiveDone", "/api/board/archived" => "archived", _ => return None })
 }
 #[allow(dead_code)]
 pub fn obj(v: &Value) -> Map<String, Value> { v.as_object().cloned().unwrap_or_default() }
@@ -425,6 +528,79 @@ mod tests {
         let mar = next_due(feb, "monthly", 31).unwrap(); assert_eq!(day_key(mar), "2026-03-31");
         let leap = next_due(at(2028, 1, 31, 17, 0).unwrap(), "monthly", 31).unwrap(); assert_eq!(day_key(leap), "2028-02-29");
         assert_eq!(day_key(next_due(jan31, "yearly", 31).unwrap()), "2027-01-31");
+    }
+    fn scratch(name: &str) -> (Board, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("pgm-board-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        (Board::new(dir.clone()), dir)
+    }
+    fn op(b: &Board, op: &str, body: Value) -> Out { b.op(op, &Actor { user: "ann".into(), agent: false, name: "Ann".into() }, &body, &|u| u == "ann", &|u| u.to_string()) }
+    fn ids(v: &Value) -> Vec<String> { v["tasks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect() }
+    fn made(b: &Board, body: Value) -> String { op(b, "create", body).body["task"]["id"].as_str().unwrap().to_string() }
+
+    #[test]
+    fn the_sweep_archives_done_tasks_after_48_hours_and_deletes_them_30_days_later() {
+        let (b, dir) = scratch("sweep");
+        let now = now_ms() as i64; const H: i64 = 3_600_000;
+        let plain = made(&b, json!({ "title": "plain" }));
+        let repeat = made(&b, json!({ "title": "repeats, no due date", "recur": "weekly" }));
+        let future = made(&b, json!({ "title": "due next month", "dueAt": now + 30 * 24 * H }));
+        let held = made(&b, json!({ "title": "held" }));
+        let open = made(&b, json!({ "title": "still open" }));
+        for id in [&plain, &repeat, &future, &held] { assert_eq!(op(&b, "complete", json!({ "id": id })).status, 200); }
+        op(&b, "claim", json!({ "id": held, "minutes": 240 }));
+        assert_eq!(b.sweep(now + 47 * H), (vec![], vec![]), "nothing before 48 h");
+        b.set_retention(H, DELETE_AFTER_MS); // a claim lasts 4 h at most: look while it is still live
+        let (arch, del) = b.sweep(now + 2 * H);
+        assert_eq!(arch, vec![plain.clone()], "only the plain done task: never a repeating one, one due in the future, one held or one open");
+        assert!(del.is_empty());
+        b.set_retention(ARCHIVE_AFTER_MS, DELETE_AFTER_MS);
+        assert_eq!(b.sweep(now + 49 * H).0, vec![held.clone()], "a held one once its claim lapsed");
+        let at = now + 2 * H; // when the plain one was archived
+        assert!(!ids(&b.view("ann", &|u| u.to_string(), &|_| true, Value::Null)).contains(&plain), "an archived task leaves the board");
+        assert!(!ids(&op(&b, "list", json!({})).body).contains(&plain), "and the list");
+        assert_eq!(op(&b, "get", json!({ "id": plain })).body["task"]["archivedAt"], json!(at), "it can still be read");
+        let ar = op(&b, "archived", json!({})).body;
+        assert_eq!(ids(&ar), vec![held.clone(), plain.clone()], "newest first");
+        assert_eq!(ar["tasks"][1]["deleteAt"], json!(at + DELETE_AFTER_MS), "the archive says when it will be deleted");
+        let left = ids(&b.view("ann", &|u| u.to_string(), &|_| true, Value::Null));
+        assert!(left.contains(&open) && left.contains(&repeat) && left.contains(&future));
+        assert_eq!(b.sweep(at + DELETE_AFTER_MS - 1).1, Vec::<String>::new(), "kept for the full 30 days");
+        let (_, del) = b.sweep(at + DELETE_AFTER_MS);
+        assert_eq!(del, vec![plain.clone()]);
+        assert_eq!(op(&b, "get", json!({ "id": plain })).status, 404, "deleted");
+        let disk: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("board.json")).unwrap()).unwrap();
+        let t = disk["tasks"].as_array().unwrap().iter().find(|t| t["id"] == json!(plain)).unwrap();
+        assert_eq!(t["deleted"], json!(true), "the usual tombstone stays in the file");
+        assert!(disk["activity"].as_array().unwrap().iter().any(|e| e["task"] == json!(plain) && e["what"] == json!("deleted") && e["by"] == json!("Board")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn archive_by_hand_restore_and_archive_all_done() {
+        let (b, dir) = scratch("hand");
+        let a = made(&b, json!({ "title": "alpha", "labels": ["ui"], "due": "today" }));
+        let c = made(&b, json!({ "title": "gamma" }));
+        let open = made(&b, json!({ "title": "open" }));
+        assert_eq!(op(&b, "archive", json!({ "id": open })).status, 400, "an open task is not archived");
+        op(&b, "complete", json!({ "id": a })); op(&b, "complete", json!({ "id": c }));
+        let on_cal = |b: &Board| op(b, "calendar", json!({ "from": "today", "to": "+1d" })).body.to_string().contains(&format!("\"{a}\""));
+        assert!(on_cal(&b), "a done task with a due date is on the calendar");
+        assert_eq!(op(&b, "archive", json!({ "id": a })).status, 200);
+        assert!(!on_cal(&b), "an archived one is not");
+        assert_eq!(ids(&op(&b, "archived", json!({ "q": "ui" })).body), vec![a.clone()], "search by label");
+        assert!(ids(&op(&b, "archived", json!({ "q": "nothing-like-it" })).body).is_empty());
+        assert_eq!(op(&b, "restore", json!({ "id": c })).status, 400, "a task not in the archive cannot be restored");
+        let r = op(&b, "restore", json!({ "id": a, "status": "review" }));
+        assert_eq!((r.status, r.body["task"]["status"].clone(), r.body["task"]["archivedAt"].clone()), (200, json!("review"), Value::Null));
+        op(&b, "complete", json!({ "id": a }));
+        let all = op(&b, "archiveDone", json!({})).body;
+        assert_eq!(all["archived"].as_array().unwrap().len(), 2);
+        assert_eq!(ids(&op(&b, "list", json!({})).body), vec![open.clone()]);
+        let back = op(&b, "update", json!({ "id": c, "status": "todo" }));
+        assert_eq!((back.body["task"]["status"].clone(), back.body["task"]["archivedAt"].clone()), (json!("todo"), Value::Null), "moving an archived task off done restores it");
+        b.set_retention(0, 0);
+        assert_eq!(b.sweep(now_ms() as i64 + 400 * 86_400_000), (vec![], vec![]), "0 = never");
+        let _ = std::fs::remove_dir_all(dir);
     }
     #[test]
     fn due_dates() {

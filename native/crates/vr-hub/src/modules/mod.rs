@@ -197,6 +197,22 @@ pub fn start_background(hub: &Arc<Hub>) {
     unity_brain::start(hub);
     re::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
+    // the board's archive (T-190): done tasks to the archive after config board.archiveAfterHours (48), archived ones
+    // deleted after board.deleteAfterDays (30); 0 = never. Looked at shortly after the start, then every board.sweepSeconds (600).
+    let bc = hub.cfg.get("board").cloned().unwrap_or(Value::Null);
+    let hours = bc["archiveAfterHours"].as_f64().unwrap_or(48.0).max(0.0);
+    let days = bc["deleteAfterDays"].as_f64().unwrap_or(30.0).max(0.0);
+    hub.mods.board.set_retention((hours * 3_600_000.0) as i64, (days * 86_400_000.0) as i64);
+    let every = std::time::Duration::from_secs(bc["sweepSeconds"].as_u64().unwrap_or(600).max(1));
+    let h = hub.clone();
+    forever("board archive sweep", move || { let h = h.clone(); async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        loop {
+            let (a, d) = h.mods.board.sweep(pgm_core_internal::now_ms() as i64);
+            if !a.is_empty() || !d.is_empty() { eprintln!("[vr-hub] board archive: {} archived, {} deleted", a.len(), d.len()); }
+            tokio::time::sleep(every).await;
+        }
+    } });
     let h = hub.clone();
     forever("notes watch", move || { let h = h.clone(); async move {
         let mut rx = h.mods.notes.ver.subscribe();
