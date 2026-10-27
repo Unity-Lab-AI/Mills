@@ -3522,6 +3522,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgm-sync-internal"
+version = "0.1.0"
+dependencies = [
+ "pgm-core-internal",
+ "pgm-net-internal",
+ "reqwest",
+ "serde_json",
+ "subtle",
+ "tokio",
+]
+
+[[package]]
 name = "pgm-workflow-command-internal"
 version = "0.1.0"
 dependencies = [

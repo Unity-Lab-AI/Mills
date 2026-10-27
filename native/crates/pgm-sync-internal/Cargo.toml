@@ -1,0 +1,19 @@
+[package]
+name = "pgm-sync-internal"
+description = "PGM_Sync_Internal (PsyGraphMediaSyncInternal): two full copies of a program's data kept the same both ways: a journal of change records per copy, a hub-to-hub exchange with a shared secret (cursor per peer, queue and catch up, no echo), per-kind merge rules (newest wins, the loser kept), shape checks, unknown kinds held until a build knows them"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pgm-core-internal = { path = "../pgm-core-internal" }
+pgm-net-internal = { path = "../pgm-net-internal" }
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls-no-provider", "json"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+subtle = "2.6.1"
+tokio = { version = "1.54.0", features = ["full"] }
