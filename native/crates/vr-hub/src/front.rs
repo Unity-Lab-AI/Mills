@@ -32,6 +32,10 @@ impl Hub {
     }
     /// Is this hub alone (no JavaScript hub behind it)?
     pub fn alone(&self) -> bool { self.backend.is_none() }
+    /// May this background job run on this hub? (T-327: always on live; on the dev hub only what config devAllow names)
+    pub fn allows(&self, job: &str) -> bool { self.mods.instance.allows(job) }
+    /// Is this the dev hub (config `"instance": "dev"`)?
+    pub fn is_dev(&self) -> bool { self.mods.instance.is_dev() }
     pub fn me(&self) -> Option<Arc<dyn pgm_ai_internal::hub::AiHub>> { self.me.upgrade().map(|h| h as Arc<dyn pgm_ai_internal::hub::AiHub>) }
 }
 
@@ -74,7 +78,8 @@ const MAX_BODY: usize = 32 << 20; // the hub takes files up to 24 MB (+ encrypti
 async fn guarded(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Response<Body> {
     use futures_util::FutureExt;
     let (m, p) = (req.method().clone(), req.uri().path().to_string());
-    match std::panic::AssertUnwindSafe(handle(hub, req, peer)).catch_unwind().await {
+    let dev = hub.is_dev();
+    let mut out = match std::panic::AssertUnwindSafe(handle(hub, req, peer)).catch_unwind().await {
         Ok(r) => r,
         Err(e) => {
             let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into());
@@ -83,7 +88,10 @@ async fn guarded(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Res
             r.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust"));
             with_front(r)
         }
-    }
+    };
+    // the dev hub (T-327) is never indexed by a search engine, whatever answered
+    if dev { out.headers_mut().insert("x-robots-tag", hyper::header::HeaderValue::from_static("noindex, nofollow")); }
+    out
 }
 
 async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Response<Body> {

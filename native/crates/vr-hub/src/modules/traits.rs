@@ -23,7 +23,8 @@ impl ChatHost for Hub {
     fn usage_status(&self, a: &Account) -> Value { self.mods.work.usage_status(self, a) }
     fn notes_version(&self) -> u64 { self.mods.notes.version() }
     fn ai_hosts_status(&self) -> Vec<Value> { self.mods.ai.status() }
-    fn agent_called(&self, target: String, caller: String, conv: String) { if let Some(h) = self.me() { pgm_ai_internal::unity_routes::run_agent(&h, target, caller, conv); } }
+    // the chat's agents answer on the live hub only (T-327): on dev the call syncs over and live answers
+    fn agent_called(&self, target: String, caller: String, conv: String) { if !self.allows("agents") { return; } if let Some(h) = self.me() { pgm_ai_internal::unity_routes::run_agent(&h, target, caller, conv); } }
     fn working(&self, u: &str) -> bool { self.mods.work.busy(u) }
     fn working_count(&self, u: &str) -> u64 { self.mods.work.working_count(u) }
     fn working_where(&self, u: &str) -> Option<(String, String, u64)> { self.mods.work.working_where(u) }
@@ -54,7 +55,8 @@ impl AiHub for Hub {
     fn re_tool<'a>(&'a self, name: &'a str, args: &'a Value, a: &'a Account) -> Fut<'a, Value> { Box::pin(async move { self.mods.re.tool(name, args, a).await }) }
     fn machines_of(&self, u: &str) -> Vec<Value> { self.mods.auth.devices.machines_of(u) }
     fn chat_has_key(&self, u: &str) -> bool { self.mods.chat.has_key(u) }
-    fn chat_agent_on(&self, users: &[(String, String, bool)]) -> bool { self.mods.chat.agent_on(users) }
+    // (the sign-in greeting asks this: on the dev hub the agents are off, T-327)
+    fn chat_agent_on(&self, users: &[(String, String, bool)]) -> bool { self.allows("agents") && self.mods.chat.agent_on(users) }
     fn chat_room_changed(&self) { self.mods.chat.room_changed() }
     fn set_agent_busy(&self, v: Option<(String, String)>) { self.mods.chat.set_agent_busy(v) }
     fn agent_blocks(&self, target: &str, conv: &str) -> String { pgm_hcom_internal::chat::agent_blocks(self, target, conv) }

@@ -542,6 +542,176 @@ async function wrapV3(priv, jwk) { // the page's wrapWith: HKDF-SHA256 over the 
 }
 const shared = async (priv, jwk) => subtle.deriveKey({ name: 'ECDH', public: await subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, ECDH, false, []) }, priv, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 
+// ---------- the dev hub (T-326 / T-327, the team note plans/dev-hub.md) ----------
+// R492 (T-326): worktree.js live is gated on the dev hub, against a scratch Forgejo stand-in (a bare repo), a scratch host
+// folder and a stand-in dev hub (its base folder with deploy-state/last-good, and its /api/status answered from here, so
+// worktree.js is spawned, never spawnSync'd).
+const R492_LABEL = 'going live needs the dev hub: worktree.js live refuses when no dev hub is installed (and names --skip-dev "<reason>"), when dev\'s last good commit is not develop\'s head, and when the dev port answers as another hub; it goes ahead when dev verified that exact commit (the merge commit says so); --skip-dev without a reason is refused, with one it goes ahead and the reason is in the output and the merge commit; a merge into develop says it deploys to dev within a minute; worktree.js dev shows what dev runs, its last good commit, develop\'s head, whether live would go ahead and its sync';
+async function r492Check() {
+  const http = require('http');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-r492-'));
+  const fake = { instance: 'dev', commit: '' };
+  const srv = http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, instance: fake.instance, commit: fake.commit, version: '0.0.0-r492', sync: { peer: 'live', pending: 0, lastAt: 'r492-time' }, devOff: ['mirror', 'triggers'] })); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const seen = [];
+  try {
+    const g = (cwd, ...a) => spawnSync('git', ['-c', 'user.name=r492', '-c', 'user.email=r492@example.invalid', ...a], { cwd, encoding: 'utf8' });
+    const origin = path.join(d, 'origin.git'), seed = path.join(d, 'seed'), host = path.join(d, 'host'), devBase = path.join(d, 'dev');
+    g(d, 'init', '-q', '--bare', origin); g(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    fs.mkdirSync(seed); g(seed, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(seed, 'a.txt'), 'one\n'); g(seed, 'add', '-A'); g(seed, 'commit', '-q', '-m', 'first');
+    g(seed, 'branch', 'develop'); g(seed, 'checkout', '-q', 'develop'); fs.writeFileSync(path.join(seed, 'b.txt'), 'two\n'); g(seed, 'add', '-A'); g(seed, 'commit', '-q', '-m', 'on develop');
+    g(seed, 'remote', 'add', 'origin', origin); g(seed, 'push', '-q', 'origin', 'main', 'develop');
+    g(d, 'clone', '-q', origin, host); g(host, 'branch', '-q', 'develop', 'origin/develop');
+    fs.mkdirSync(path.join(host, 'bridge')); fs.writeFileSync(path.join(host, 'bridge', 'config.json'), JSON.stringify({ worktreeRoot: path.join(d, 'wt'), autoDeploy: true }));
+    fs.writeFileSync(path.join(host, '.git', 'info', 'exclude'), 'bridge/\n'); // the host folder stays clean (live refuses a dirty main)
+    const head = (ref) => g(origin, 'rev-parse', ref).stdout.trim(), msg = () => g(origin, 'log', '-1', '--format=%B', 'main').stdout;
+    const wt = (base, ...a) => new Promise((done) => {
+      const c = spawn(process.execPath, [path.join(SB, 'worktree.js'), ...a], { cwd: SB, env: { ...process.env, VIBEROLLER_HUB_REPO: host, VR_DEV_BASE: base, VR_DEV_PORT: String(srv.address().port), GIT_TERMINAL_PROMPT: '0' } });
+      let stdout = '', stderr = ''; c.stdout.on('data', (x) => { stdout += x; }); c.stderr.on('data', (x) => { stderr += x; });
+      const t = setTimeout(() => c.kill(), 90000); c.on('close', (status) => { clearTimeout(t); done({ status, stdout, stderr, out: stdout + stderr }); });
+    });
+    const main0 = head('main'), dev1 = head('develop');
+    // no dev hub at all
+    const noDev = await wt(path.join(d, 'no-such-dev'), 'live');
+    seen.push(`no dev: ${noDev.status} "${noDev.out.trim().slice(0, 120)}"`);
+    // dev installed, but its last good commit is an older one
+    fs.mkdirSync(path.join(devBase, 'deploy-state'), { recursive: true });
+    fs.writeFileSync(path.join(devBase, 'deploy-state', 'last-good'), main0 + '\n');
+    fake.commit = main0;
+    const stale = await wt(devBase, 'live'), report = await wt(devBase, 'dev');
+    seen.push(`stale: ${stale.status} "${stale.out.trim().slice(0, 120)}"`);
+    // dev verified develop's head, but the dev port answers as the live hub
+    fs.writeFileSync(path.join(devBase, 'deploy-state', 'last-good'), dev1 + '\n');
+    fake.commit = dev1; fake.instance = 'live';
+    const notDev = await wt(devBase, 'live');
+    const mainAfterRefusals = head('main');
+    // dev verified develop's head and runs it: live goes ahead
+    fake.instance = 'dev';
+    const ok = await wt(devBase, 'live');
+    const okMsg = msg(), okMain = head('main'), okHas = g(origin, 'merge-base', '--is-ancestor', dev1, 'main').status === 0;
+    seen.push(`verified: ${ok.status} "${ok.out.trim().split('\n').slice(0, 2).join(' / ').slice(0, 160)}"`);
+    // a merge into develop (dev installed) says where it goes next
+    const ens = await wt(devBase, 'ensure', 'r492');
+    const wtDir = path.join(d, 'wt', 'r492');
+    if (fs.existsSync(wtDir)) { fs.writeFileSync(path.join(wtDir, 'c.txt'), 'three\n'); g(wtDir, 'add', '-A'); g(wtDir, 'commit', '-q', '-m', 'r492 work'); }
+    const mg = await wt(devBase, 'merge', 'r492');
+    const dev2 = head('develop');
+    // develop moved on, dev has not verified it: --skip-dev needs a reason, then goes ahead with it
+    const noReason = await wt(devBase, 'live', '--skip-dev');
+    const mainBeforeSkip = head('main');
+    const skipped = await wt(devBase, 'live', '--skip-dev', 'r492 dev is down for maintenance');
+    const skipMsg = msg(), skipHas = g(origin, 'merge-base', '--is-ancestor', dev2, 'main').status === 0;
+    seen.push(`merge: ${mg.status} "${mg.out.trim().split('\n').pop().slice(0, 100)}" · no reason: ${noReason.status} · skip: ${skipped.status} "${skipped.out.trim().split('\n')[0].slice(0, 120)}"`);
+    const pass = noDev.status !== 0 && /not installed/.test(noDev.stderr) && noDev.stderr.includes('--skip-dev "<reason>"')
+      && stale.status !== 0 && stale.stderr.includes(`verified ${main0.slice(0, 7)}`) && stale.stderr.includes(dev1.slice(0, 7))
+      && notDev.status !== 0 && /not the dev hub/.test(notDev.stderr) && mainAfterRefusals === main0
+      && ok.status === 0 && ok.stdout.includes(`Dev verified ${dev1.slice(0, 7)}`) && /Merged develop into main/.test(ok.stdout) && okMain !== main0 && okHas && okMsg.includes(`Verified on the dev hub: ${dev1}`)
+      && ens.status === 0 && mg.status === 0 && /now deploys to the dev hub within a minute/.test(mg.stdout) && dev2 !== dev1
+      && noReason.status !== 0 && /needs the reason/.test(noReason.stderr) && mainBeforeSkip === okMain
+      && skipped.status === 0 && /WITHOUT the dev hub's verification/.test(skipped.stdout) && skipped.stdout.includes('r492 dev is down for maintenance') && skipHas && skipMsg.includes('Not verified on the dev hub (--skip-dev): r492 dev is down for maintenance')
+      && report.status === 0 && /installed: yes/.test(report.stdout) && report.stdout.includes(`last good (verified by its auto-deploy): ${main0.slice(0, 7)}`) && report.stdout.includes(`develop on Forgejo: ${dev1.slice(0, 7)}`) && /instance "dev"/.test(report.stdout) && /would be REFUSED/.test(report.stdout) && /sync: peer live/.test(report.stdout);
+    check('R492', R492_LABEL, pass, seen.join(' · ') + ` · dev report: ${report.stdout.replace(/\s+/g, ' ').slice(0, 300)}${report.stderr ? ' ERR ' + report.stderr.trim() : ''}`);
+  } catch (e) { if (e.stopAfter) throw e; check('R492', R492_LABEL, false, 'the check itself failed: ' + e.message + ' · ' + seen.join(' · ')); }
+  finally { srv.close(); fs.rmSync(d, { recursive: true, force: true }); }
+}
+
+// R493 (T-327): a second scratch Rust hub with config instance "dev" (the same accounts, its own data), next to the normal
+// scratch hub (live). Then the same dev hub again with devAllow naming the jobs, to show it is the gate that stopped them.
+const R493_LABEL = 'the dev hub says so and acts once: with config instance "dev" /api/status says instance dev (and which jobs are off), every page has the DEV band with its build at the top and a title starting "DEV · ", and every answer has X-Robots-Tag noindex; there a timer trigger that is due does not fire, an event trigger starts nothing, @unity gets no answer (and nobody a sign-in greeting), a new board task is not mirrored to Forgejo and products get no gateway; with devAllow naming them the same dev hub does all of those; the normal scratch hub says live and has no band, no DEV title and no noindex';
+async function r493Check() {
+  const seen = [], D = fs.mkdtempSync(path.join(SCRATCH, 'r493-dev-')), DB = path.join(D, 'bridge');
+  let proc = null;
+  const P = await freePort(PORT + 60), DH = `http://127.0.0.1:${P}`;
+  const dcall = async (p, token, body, hdr = {}) => { try { const r = await fetch(DH + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...hdr }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})), headers: r.headers }; } catch (e) { return { status: 0, data: { error: e.message }, headers: new Headers() }; } };
+  const stop = async () => { if (!proc) return; const p = proc; proc = null; const gone = new Promise((r) => p.once('exit', r)); try { p.kill('SIGTERM'); } catch {} await Promise.race([gone, sleep(5000)]); };
+  const start = async (local) => {
+    fs.writeFileSync(path.join(DB, 'config.local.json'), JSON.stringify(local));
+    const log = fs.openSync(path.join(D, 'hub.log'), 'a');
+    proc = spawn(RUST_HUB, ['--port', String(P), '--alone', '--root', DB], { cwd: DB, stdio: ['ignore', log, log], env: { ...process.env } });
+    for (let i = 0; i < 80; i++) { if ((await dcall('/api/status')).status === 200) return true; await sleep(250); }
+    return false;
+  };
+  // a chat message as the page sends it (every member with a key gets a slot, the agent too)
+  const send = async (tok, priv, plain) => {
+    const mem = (await dcall('/api/room/members', tok)).data.members || [], r2 = rand(32), iv2 = rand(12);
+    const body = await subtle.encrypt({ name: 'AES-GCM', iv: iv2 }, await subtle.importKey('raw', r2, 'AES-GCM', false, ['encrypt']), enc.encode(plain));
+    const ks = {};
+    for (const m of mem) if (m.pub) { const kiv = rand(12); ks[m.username] = { iv: toB64(kiv), wk: toB64(await subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await shared(priv, m.pub), r2)) }; }
+    return dcall('/api/room/send', tok, { iv: toB64(iv2), ct: toB64(body), keys: ks });
+  };
+  const fromAgent = async (tok, after) => ((await dcall('/api/room/messages?since=' + after, tok)).data.messages || []).filter((m) => m.from === 'claude');
+  const lastSeq = async (tok) => Math.max(0, ...((await dcall('/api/room/messages?since=0', tok)).data.messages || []).map((m) => m.seq));
+  const page = async (base) => { try { const r = await fetch(base + '/'); return { html: await r.text(), robots: r.headers.get('x-robots-tag') || '' }; } catch (e) { return { html: '', robots: '', error: e.message }; } };
+  const trig = (id) => { for (const f of fs.readdirSync(path.join(D, 'Hyperwork'), { recursive: true })) if (String(f).endsWith(path.sep + id + '.json') || String(f) === id + '.json') { try { return JSON.parse(fs.readFileSync(path.join(D, 'Hyperwork', String(f)), 'utf8')); } catch {} } return null; };
+  const issue = (title) => [...fakeForgejo.issues.values()].find((is) => is.title === title);
+  const waitFor = async (test, ms) => { for (let t = 0; t < ms; t += 300) { const v = await test(); if (v) return v; await sleep(300); } return null; };
+  try {
+    // the dev hub's folder: the scratch hub's accounts and config (its own port, data and folders; no RE containers)
+    fs.mkdirSync(path.join(DB, 'profiles'), { recursive: true });
+    for (const f of ['auth.json', 'forgejo.json']) if (fs.existsSync(path.join(SB, f))) fs.copyFileSync(path.join(SB, f), path.join(DB, f));
+    for (const u of ['t-admin', 't-user']) { fs.mkdirSync(path.join(DB, 'profiles', u)); for (const f of ['auth.json', 'config.json']) if (fs.existsSync(path.join(SB, 'profiles', u, f))) fs.copyFileSync(path.join(SB, 'profiles', u, f), path.join(DB, 'profiles', u, f)); }
+    const cfg = JSON.parse(fs.readFileSync(path.join(SB, 'config.json'), 'utf8'));
+    delete cfg.re; delete cfg.rustHub;
+    Object.assign(cfg, { port: P, worktreeRoot: path.join(D, 'worktrees'), projectsRoot: path.join(D, 'projects') });
+    fs.writeFileSync(path.join(DB, 'config.json'), JSON.stringify(cfg, null, 2));
+    fs.cpSync(path.join(SCRATCH, 'web'), path.join(D, 'web'), { recursive: true });
+    const g = (...a) => spawnSync('git', ['-c', 'user.name=r493', '-c', 'user.email=r493@example.invalid', ...a], { cwd: D, encoding: 'utf8' });
+    fs.writeFileSync(path.join(D, '.gitignore'), 'bridge/\nweb/\nChat/\nBoard/\nNotes/\nHyperwork/\nhub.log\n*\n!.gitignore\n'); g('init', '-q', '-b', 'develop'); g('add', '-A'); g('commit', '-q', '-m', 'r493 develop build');
+    const short = g('rev-parse', 'HEAD').stdout.trim().slice(0, 7);
+    if (!(await start({ instance: 'dev' }))) throw new Error('the dev hub did not start: ' + fs.readFileSync(path.join(D, 'hub.log'), 'utf8').slice(-400));
+    const st = await dcall('/api/status'), stLive = await call('/api/status');
+    const pg = await page(DH), pgLive = await page(H);
+    const title = (pg.html.match(/<title>([^<]*)<\/title>/) || [])[1] || '', titleLive = (pgLive.html.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
+    const band = pg.html.includes('<div id="devBand"') && pg.html.includes(`DEV — develop build ${short}`) && pg.html.indexOf('id="devBand"') > pg.html.indexOf('\n<body');
+    seen.push(`status dev ${st.data.instance} off [${st.data.devOff}] robots "${st.headers.get('x-robots-tag')}" · live ${stLive.data.instance} off ${stLive.data.devOff} · page band ${band} title "${title}" robots "${pg.robots}" · live page band ${pgLive.html.includes('id="devBand"')} title "${titleLive}" robots "${pgLive.robots}"`);
+    // people on dev: the same accounts and passwords
+    const A2 = (await dcall('/api/login', null, { username: 't-admin', password: 'pw-t-admin-0001', deviceId: 'device-aaaaaaaaaaaaaaaa' })).data.token;
+    const U2 = (await dcall('/api/login', null, { username: 't-user', password: 'pw-t-user-0001', deviceId: 'device-bbbbbbbbbbbbbbbb' })).data.token;
+    const kp = await subtle.generateKey(ECDH, true, ['deriveKey']), pub = await subtle.exportKey('jwk', kp.publicKey);
+    const keyUp = await dcall('/api/room/mykey', U2, { pub: { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y }, backup: await lock(kp.privateKey, 'pw-t-user-0001') });
+    // the jobs that must not run on dev
+    const hw = (p, tok, body) => dcall('/api/hyperwork/' + p, tok, body);
+    const wf = await hw('save', A2, { doc: { schema: 1, name: 'r493-noop', nodes: [{ id: 's', kind: 'start' }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'e.result' }] } });
+    await hw('publish', A2, { id: wf.data.id, message: 'x' });
+    const timer = await hw('trigger', A2, { workflow: wf.data.id, kind: 'timer', timer: { every: { n: 60, unit: 'minutes' }, start: Date.now() + 2000 }, title: 'r493 timer' });
+    const evT = await hw('trigger', A2, { workflow: wf.data.id, kind: 'event', event: { name: 'r493-ev' }, title: 'r493 event' });
+    const sendEv = () => dcall('/internal/hyperwork/event', null, { name: 'r493-ev', payload: {} }, { 'X-VR-Event-Secret': 'r472-event-secret-0123456789' });
+    const ev1 = await sendEv();
+    const seq1 = await lastSeq(U2);
+    await send(U2, kp.privateKey, '@unity are you there r493');
+    const task1 = await dcall('/api/board/create', U2, { title: 'r493 dev task', status: 'todo' });
+    const gw1 = await dcall('/internal/gateway/status');
+    const gwAdm1 = await dcall('/api/admin/gateway/products', A2, { id: 'r493-prod', name: 'R493' });
+    await sleep(9000); // past the timer (due 2 s after it was made; the hub looks every 5 s), the agent, the mirror (a 3-second poll)
+    const t1 = trig(timer.data.id) || {}, agent1 = await fromAgent(U2, seq1), iss1 = issue('r493 dev task');
+    seen.push(`dev: timer next ${t1.next ? new Date(t1.next).toISOString().slice(11, 19) : t1.next} runs ${(t1.runs || []).length} · event runs ${JSON.stringify(ev1.data.runs)} · agent ${agent1.length} · task ${task1.status} mirrored ${!!iss1} · gateway ${gw1.status} admin ${gwAdm1.status}`);
+    // the same dev hub, the jobs allowed: they run (the gate is what stopped them)
+    await stop();
+    if (!(await start({ instance: 'dev', devAllow: ['triggers', 'agents', 'mirror', 'gateway'] }))) throw new Error('the dev hub did not start again');
+    const st2 = await dcall('/api/status');
+    const t2 = await waitFor(async () => { const t = trig(timer.data.id); return t && (t.runs || []).length ? t : null; }, 12000) || trig(timer.data.id) || {};
+    const ev2 = await sendEv();
+    const seq2 = await lastSeq(U2);
+    await send(U2, kp.privateKey, '@unity and now r493');
+    const agent2 = await waitFor(async () => { const a = await fromAgent(U2, seq2); return a.length ? a : null; }, 20000) || [];
+    const task2 = await dcall('/api/board/create', U2, { title: 'r493 dev task allowed', status: 'todo' });
+    const iss2 = await waitFor(async () => issue('r493 dev task allowed'), 12000);
+    const gw2 = await dcall('/internal/gateway/status');
+    seen.push(`allowed: off [${st2.data.devOff}] timer runs ${(t2.runs || []).length} · event runs ${(ev2.data.runs || []).length} · agent ${agent2.length} · mirrored ${!!iss2} · gateway ${gw2.status}`);
+    const pass = st.status === 200 && st.data.instance === 'dev' && ['mirror', 'triggers', 'agents', 'gateway', 'hostUpdates'].every((j) => (st.data.devOff || []).includes(j)) && /noindex/.test(st.headers.get('x-robots-tag') || '')
+      && stLive.data.instance === 'live' && stLive.data.devOff === undefined
+      && band && title.startsWith('DEV · ') && /noindex/.test(pg.robots) && pg.html.includes('<meta name="robots" content="noindex')
+      && !pgLive.html.includes('id="devBand"') && !titleLive.startsWith('DEV') && !pgLive.robots && !!pgLive.html
+      && !!A2 && !!U2 && keyUp.status === 200 && wf.status === 200 && timer.status === 200 && evT.status === 200
+      && (t1.runs || []).length === 0 && t1.next === timer.data.next && ev1.status === 200 && Array.isArray(ev1.data.runs) && ev1.data.runs.length === 0
+      && agent1.length === 0 && task1.status === 200 && !iss1 && gw1.status === 503 && gwAdm1.status === 409
+      && st2.data.instance === 'dev' && JSON.stringify(st2.data.devOff) === '["hostUpdates"]'
+      && (t2.runs || []).length >= 1 && (ev2.data.runs || []).length === 1 && agent2.length >= 1 && task2.status === 200 && !!iss2 && gw2.status === 403;
+    check('R493', R493_LABEL, pass, seen.join(' · '));
+  } catch (e) { if (e.stopAfter) throw e; check('R493', R493_LABEL, false, 'the check itself failed: ' + e.message + ' · ' + seen.join(' · ')); }
+  finally { await stop(); if (!KEEP) fs.rmSync(D, { recursive: true, force: true }); }
+}
+
 // ---------- the checklist ----------
 async function run() {
   const devA = 'device-aaaaaaaaaaaaaaaa', devB = 'device-bbbbbbbbbbbbbbbb', devC = 'device-cccccccccccccccc';
@@ -579,6 +749,8 @@ async function run() {
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
   if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
   if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
+  if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
+  if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -3566,6 +3738,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
+  if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R285 to R289 (T-289): other tools (Jcode PGM) report their sessions; the person's list shows them as `external`
     const s285 = {}, now285 = Date.now();
     const rep = (tok, body) => call('/api/work/sessions/report', tok, body);
