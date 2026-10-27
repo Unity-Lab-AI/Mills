@@ -1,0 +1,11 @@
+# VibeRoller DEV auto-deploy (one run; the timer fires it every minute): the same deploy/autodeploy.sh as live, following
+# Forgejo's develop for the dev hub. deploy/setup-dev.sh installs it with the paths filled in.
+[Unit]
+Description=VibeRoller DEV: deploy a new develop from Forgejo to the dev checkout
+
+[Service]
+Type=oneshot
+Environment=PATH=__LIVE__/node/current/bin:/usr/local/bin:/usr/bin:/bin
+Environment=VR_DEPLOY_BRANCH=develop
+Environment=VR_INSTANCE=dev
+ExecStart=/bin/sh __DEV__/app/deploy/autodeploy.sh __DEV__/app

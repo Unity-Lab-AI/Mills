@@ -375,7 +375,16 @@ function startAiNode() {
 // built into their own target folder with a test-only release key (the scratch hub signs with it), so they never mix
 // with the real builds of native/build.sh
 const TEST_RELEASE_KEY = { secret: '4570e54a425b32604b04d14d172976b602af918eb6322d14e929867896b61b50', public: '241fc450dffa7aaf2155ed06404cd10d824f590c7c0c00a70b4ec6fa8e9b5a20' };
-const NATIVE_TARGET = path.join(MILLS, 'native', 'target', 'regress');
+// Clean build law (LAWS.md): the suite's native build goes into a temporary folder of its own, deleted when the run ends
+// (and a folder an earlier run left behind, after a crash, is swept once it is a day old)
+const NATIVE_TARGET = (() => {
+  const base = os.tmpdir();
+  try { for (const d of fs.readdirSync(base)) if (/^vr-regress-/.test(d) && Date.now() - fs.statSync(path.join(base, d)).mtimeMs > 86400e3) fs.rmSync(path.join(base, d), { recursive: true, force: true }); } catch {}
+  const dir = fs.mkdtempSync(path.join(base, 'vr-regress-'));
+  process.on('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => process.exit(130));
+  return dir;
+})();
 const NATIVE_BIN = (() => {
   const exe = (n) => path.join(NATIVE_TARGET, 'release', n + (WIN ? '.exe' : ''));
   return { host: exe('vr-host'), interop: path.join(NATIVE_TARGET, 'release', 'examples', 'interop' + (WIN ? '.exe' : '')) };
@@ -3500,6 +3509,41 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && !has('unblock', still) && !!has('unowned', lonely) && props.every((p) => p.reason) && before === after,
       `${props.length} proposals · unblock ${JSON.stringify(un).slice(0, 200)} · still ${!!has('unblock', still)} · unowned ${!!has('unowned', lonely)} · unchanged ${before === after} ${got.error || ''}`);
   } else skip('R490', 'the planner re-assesses the board (T-280)', 'the Rust hub\'s: --rust-hub runs it');
+  // R494 (T-323): deploy/setup-dev.sh installs the dev hub beside a live one (here a stand-in live base with a bare origin),
+  // copying live's data but never its sign-in sessions, and never writing live's files except `pair`
+  if (WIN) skip('R494', 'the dev hub install (deploy/setup-dev.sh)', 'a server script (sh): Linux only');
+  else {
+    const L = fs.mkdtempSync(path.join(SCRATCH, 'r494-')), app = path.join(L, 'app'), bare = path.join(L, 'origin.git');
+    const g = (dir, ...a) => spawnSync('git', ['-c', 'user.name=r494', '-c', 'user.email=r494@test.invalid', ...a], { cwd: dir, encoding: 'utf8' });
+    fs.mkdirSync(path.join(app, 'deploy'), { recursive: true }); fs.mkdirSync(path.join(app, 'bridge')); fs.mkdirSync(path.join(app, 'Board')); fs.mkdirSync(path.join(app, 'Notes'));
+    fs.writeFileSync(path.join(app, 'versions.json'), '{ "project": "9.9.9" }\n');
+    for (const f of ['setup-dev.sh', 'viberoller-dev-hub.service', 'viberoller-dev-autodeploy.service', 'viberoller-dev-autodeploy.timer']) fs.copyFileSync(path.join(MILLS, 'deploy', f), path.join(app, 'deploy', f));
+    fs.writeFileSync(path.join(app, '.gitignore'), 'bridge/*.json\nBoard/\nNotes/\n');
+    g(L, 'init', '-q', '--bare', '-b', 'main', bare); g(app, 'init', '-q', '-b', 'main'); g(app, 'add', '-A'); g(app, 'commit', '-q', '-m', 'r494');
+    g(app, 'remote', 'add', 'origin', bare); g(app, 'push', '-q', 'origin', 'main'); g(app, 'push', '-q', 'origin', 'main:develop');
+    const liveCfg = JSON.stringify({ port: 7777, publicUrl: 'https://portal.example', rustHub: { enabled: true, backPort: 7779, alone: true }, aiNodes: { pc: 'k' }, allowedOrigins: ['https://x.example'] }, null, 2) + '\n';
+    fs.writeFileSync(path.join(app, 'bridge', 'config.local.json'), liveCfg);
+    fs.writeFileSync(path.join(app, 'bridge', 'auth.json'), '{"users":{"ann":{"hash":"h"}}}'); fs.writeFileSync(path.join(app, 'bridge', 'front-sessions.json'), '{"tok":"ann"}');
+    fs.writeFileSync(path.join(app, 'bridge', 'device-locks.json'), '{}'); fs.writeFileSync(path.join(app, 'Board', 'board.json'), '{"tasks":[{"id":"T-1"}]}'); fs.writeFileSync(path.join(app, 'Notes', 'n.md'), 'note r494');
+    const env = { ...process.env, VR_LIVE_BASE: L, VR_DEV_UNITS: '', VR_DEV_URL: 'https://dev.example' };
+    const run1 = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh')], { env, encoding: 'utf8' });
+    const D = path.join(L, 'dev', 'app'), has = (p) => fs.existsSync(path.join(D, p));
+    const cfg = (() => { try { return JSON.parse(fs.readFileSync(path.join(D, 'bridge', 'config.local.json'), 'utf8')); } catch { return {}; } })();
+    const branch = g(D, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim();
+    fs.writeFileSync(path.join(D, 'Board', 'board.json'), '{"tasks":[{"id":"T-1"},{"id":"T-2"}]}'); // a change on dev
+    const run2 = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh')], { env, encoding: 'utf8' });
+    const kept = fs.readFileSync(path.join(D, 'Board', 'board.json'), 'utf8').includes('T-2'), liveSame = fs.readFileSync(path.join(app, 'bridge', 'config.local.json'), 'utf8') === liveCfg;
+    const pair = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh'), 'pair'], { env, encoding: 'utf8' });
+    const lc = JSON.parse(fs.readFileSync(path.join(app, 'bridge', 'config.local.json'), 'utf8')), dc = JSON.parse(fs.readFileSync(path.join(D, 'bridge', 'config.local.json'), 'utf8'));
+    const secretMode = (() => { try { return (fs.statSync(path.join(L, 'sync.secret')).mode & 0o077) === 0; } catch { return false; } })();
+    check('R494', 'the dev hub install (deploy/setup-dev.sh) clones develop beside live, copies live\'s data once (the board, notes, accounts) but never its sign-in sessions or device unlocks, makes dev\'s settings from live\'s (port 7778, instance dev, its own address, no AI hosts), leaves live\'s files alone, keeps what changed on dev when run again, and only `pair` turns the bridge on for both (one private secret, a graceful restart asked of each)',
+      run1.status === 0 && branch === 'develop' && has('Board/board.json') && has('Notes/n.md') && has('bridge/auth.json') && !has('bridge/front-sessions.json') && !has('bridge/device-locks.json')
+      && cfg.port === 7778 && cfg.instance === 'dev' && cfg.publicUrl === 'https://dev.example' && cfg.rustHub.backPort === 7781 && Object.keys(cfg.aiNodes || {}).length === 0 && !cfg.sync
+      && run2.status === 0 && kept && liveSame
+      && pair.status === 0 && lc.sync && lc.sync.peer === 'http://127.0.0.1:7778' && dc.sync && dc.sync.peer === 'http://127.0.0.1:7777' && lc.sync.secretFile === dc.sync.secretFile && secretMode
+      && fs.existsSync(path.join(app, 'bridge', '.restart')) && fs.existsSync(path.join(D, 'bridge', '.restart')),
+      `install ${run1.status} ${(run1.stdout + run1.stderr).trim().split('\n').slice(-2).join(' / ')} · branch ${branch} · sessions copied ${has('bridge/front-sessions.json')} · cfg ${JSON.stringify(cfg).slice(0, 160)} · again ${run2.status} kept ${kept} live unchanged ${liveSame} · pair ${pair.status} ${JSON.stringify(lc.sync)} ${JSON.stringify(dc.sync)} secret private ${secretMode}`);
+  }
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};
