@@ -73,6 +73,26 @@
   .whoChip { display: inline-flex; align-items: center; gap: .4rem; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem .2rem .45rem; font-size: .82rem; animation: msgIn .25s ease; }
   .whoChip.off { color: var(--muted); } .whoChip small { color: var(--muted); font-size: .7rem; }
   .pdot { position: relative; width: .7rem; height: .7rem; border-radius: 50%; flex: none; }
+  /* ── status badges, hover card, Team now, My status (web/presence.js, T-261): a shape per label, the colour only helps ── */
+  .psHost { position: relative; } .psHost.psOn::after { display: none; } .cv .dot.off.psOn, .pdot.off.psOn { opacity: 1; }
+  .psB { display: inline-flex; width: .78rem; height: .78rem; flex: none; vertical-align: -.1rem; margin-right: .25rem; } .psB[hidden] { display: none; }
+  .psB.psCorner { position: absolute; right: -.3rem; bottom: -.3rem; margin: 0; pointer-events: none; }
+  .psB svg, .psCardTop svg { width: 100%; height: 100%; overflow: visible; }
+  .msgAv + .psB { margin-left: -.55rem; vertical-align: -.25rem; }
+  #psCard { position: fixed; z-index: 60; max-width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .5rem .65rem; box-shadow: 0 8px 26px rgba(0,0,0,.4); font-size: .8rem; pointer-events: none; animation: msgIn .15s ease; }
+  #psCard[hidden] { display: none; }
+  .psCardTop { display: flex; align-items: center; gap: .4rem; } .psCardTop svg { width: .9rem; height: .9rem; flex: none; }
+  .psL { color: var(--muted); margin-top: .15rem; overflow-wrap: anywhere; } .psL-label { color: var(--text, inherit); font-weight: 600; } .psL-dnd { color: #fa5252; } .psL-title { border-top: 1px solid var(--line); margin-top: .35rem; padding-top: .3rem; }
+  .psBar { display: flex; gap: .4rem; justify-content: center; margin: -.2rem 0 .3rem; } .psBar[hidden], .psBtn[hidden] { display: none; }
+  .psBtn { display: inline-flex; align-items: center; gap: .3rem; } .psBtn .psB { margin: 0; }
+  #psPanel { position: fixed; z-index: 55; width: 360px; max-width: 94vw; max-height: 80vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 34px rgba(0,0,0,.45); padding: .55rem .7rem; animation: msgIn .2s ease; }
+  .psHead { display: flex; align-items: center; justify-content: space-between; margin-bottom: .35rem; }
+  .psRow { display: flex; align-items: center; gap: .55rem; padding: .35rem .25rem; border-radius: 6px; } .psRow:hover { background: var(--line); }
+  .psAv { width: 1.7rem; height: 1.7rem; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; color: #111; font-weight: 700; font-size: .75rem; }
+  .psMid { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; } .psMid small { color: var(--muted); font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .psSince { color: var(--muted); font-size: .72rem; white-space: nowrap; } .psEmpty, .psNow { color: var(--muted); font-size: .8rem; margin: .2rem 0 .5rem; }
+  .psMine { display: flex; flex-direction: column; gap: .45rem; } .psField { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; font-size: .82rem; } .psField > span { width: 100%; color: var(--muted); font-size: .74rem; }
+  .psField input[type=text] { flex: 1; min-width: 10rem; } .psErr { color: #fa5252; font-size: .78rem; }
   .roomTop .online { color: var(--good); }
   .typingLine { display: flex; align-items: center; gap: .35rem; padding: .15rem .9rem; font-size: .76rem; color: var(--muted); font-style: italic; animation: msgIn .2s ease; }
   .dots { display: inline-flex; gap: .2rem; margin-left: .35rem; align-items: center; }
@@ -1868,6 +1888,7 @@ async function enter() {
   callPollLoop();
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
   if (typeof COVIEW !== 'undefined') COVIEW.start(); // web/coview.js (T-244)
+  if (typeof PRESENCE !== 'undefined') PRESENCE.start(); // web/presence.js (T-261): GET /api/presence once; a hub without it shows nothing
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
   restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
@@ -1908,7 +1929,7 @@ function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
-  BOARD.stop(); NOTES.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop();
+  BOARD.stop(); NOTES.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
@@ -3406,7 +3427,7 @@ async function renderConvList() {
     if (conv !== 'room') b.dataset.user = convPeer(conv);
     const st = conv !== 'room' && !(memberOf(convPeer(conv)) || {}).agent ? statusOf(convPeer(conv)) : null;
     const dot = document.createElement('span'); dot.className = 'dot' + (st ? ' ' + st.cls : ''); if (color) dot.style.background = color;
-    if (st) { dot.title = st.text; sub = st.text; }
+    if (st) { dot.title = st.text; sub = st.text; if (typeof PRESENCE !== 'undefined') PRESENCE.decorate(dot, convPeer(conv), b); } // the status shape + hover card (web/presence.js)
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = label;
     const s = document.createElement('small'); s.textContent = sub; nm.append(s);
     const badge = document.createElement('span'); badge.className = 'badge'; badge.dataset.convBadge = conv; badge.hidden = true;
@@ -3485,6 +3506,7 @@ async function applyRoom(d) {
   onShares(d.shares || []);
   presenceMap = Object.fromEntries((d.presence || []).map((p) => [p.user, p]));
   statusMap = Object.fromEntries((d.status || []).map((p) => [p.user, p])); // plans/presence.md: label, working, accepting, dnd, text (newer hubs)
+  if (typeof PRESENCE !== 'undefined') PRESENCE.update(d.status); // web/presence.js (T-261): badges, hover cards, Team now (an older hub sends no status: nothing shown)
   onlineSet = new Set((d.presence || []).filter((p) => p.online).map((p) => p.user)); typingList = d.typing || []; renderPresence();
   for (const m of d.messages) await ingest(m, roomLoaded);
   roomLoaded = true;
@@ -3583,7 +3605,7 @@ function renderMsg(rec, bulk) {
   const head = document.createElement('small');
   const who = document.createElement('b'); who.textContent = authorOf(m); who.style.color = authorColor(m); who.title = m.as ? 'Posted by ' + nickOf(m.via || m.from) + '\'s Claude from a Work session' : '@' + m.from;
   const avUrl = PROFILE.avatarOf(m.via || m.from); // a small round picture before the name, when they set one
-  if (avUrl) { const av = document.createElement('img'); av.className = 'msgAv'; av.src = avUrl; av.alt = ''; who.prepend(av); }
+  if (avUrl) { const av = document.createElement('img'); av.className = 'msgAv'; av.src = avUrl; av.alt = ''; who.prepend(av); if (typeof PRESENCE !== 'undefined' && !(memberOf(m.from) || {}).agent) { av.after(PRESENCE.badge(m.via || m.from)); who.dataset.psUser = m.via || m.from; } } // their status shape on the picture, the hover card on the name (web/presence.js)
   if (!(memberOf(m.from) || {}).agent || m.via) { who.dataset.profile = '1'; who.classList.add('pLink'); who.onclick = (ev) => { ev.stopPropagation(); PROFILE.show(m.via || m.from, ev); }; } // the name opens their profile card (Unity has none)
   if (m.as || (memberOf(m.from) || {}).agent) { const tag = document.createElement('span'); tag.className = 'botTag'; tag.textContent = 'BOT'; who.append(tag); } // Unity and the team's Claudes are bots here
   const dt = new Date(m.ts), when = document.createElement('time');
@@ -4240,6 +4262,7 @@ function renderWho() { // the main menu's "Who's here" strip
   for (const m of people.sort((a, b) => (statusOf(b.username).cls === 'on') - (statusOf(a.username).cls === 'on'))) {
     const st = statusOf(m.username), chip = document.createElement('span'); chip.className = 'whoChip ' + st.cls; chip.title = st.text;
     const dot = document.createElement('i'); dot.className = 'pdot ' + st.cls; dot.style.background = colorOf(m.username);
+    if (typeof PRESENCE !== 'undefined') PRESENCE.decorate(dot, m.username, chip);
     chip.append(dot, nickOf(m.username), Object.assign(document.createElement('small'), { textContent: st.cls === 'off' ? (presenceMap[m.username] && presenceMap[m.username].seen ? ago(presenceMap[m.username].seen) : 'offline') : st.text.replace(/^(online|away)( · in )?/, '$1 ') }));
     box.append(chip);
   }
@@ -5149,6 +5172,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 <script src="calls.js"></script>
 <!-- co-view: share the product view itself, viewers follow in their own page (T-244): web/coview.js -->
 <script src="coview.js"></script>
+<!-- presence everywhere (T-261): status shapes on avatars and names, hover cards, Team now, My status: web/presence.js -->
+<script src="presence.js"></script>
 <!-- servers, channels, groups, member column: web/guilds.js · app mode + install: web/app.js -->
 <script src="guilds.js"></script>
 <!-- Server Settings, join / invitations, channel + group dialogs: web/guild-settings.js -->
