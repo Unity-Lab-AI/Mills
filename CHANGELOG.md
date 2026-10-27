@@ -7,6 +7,54 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.32.0 — 2026-10-27
+
+MINOR: **the board's archive** (T-190, T-226 to T-228). The Done column no longer fills up for good. MINOR because the
+first sweep after the go-live archives every task that has been done for more than 48 hours (about 250 on the team
+board): they leave the board, nothing is deleted for 30 days.
+- **Archiving:** a done task gets `archivedAt` and leaves the board, the lists and the calendar. It can still be read
+  (`task_get`, the detail panel says when it will be deleted) and restored, as done or into another column. Moving or
+  updating an archived task off "done" restores it too. Only a done task can be archived.
+- **The sweep** (the Rust hub, shortly after the start and then every 10 minutes): done tasks finished more than 48 h ago
+  go to the archive. A repeating task, one due in the future, or one somebody holds is never archived by it. Tasks
+  archived more than 30 days ago are deleted with the usual tombstone (the auto-deploy's data snapshots keep a copy).
+  Signed "Board" in the activity log. Settings in `config.json`: `board.archiveAfterHours` (48),
+  `board.deleteAfterDays` (30), `board.sweepSeconds` (600); 0 = never.
+- **Routes:** `/api/board/archive`, `/restore`, `/archive-done` ("archive all done", one board or all), `/archived`
+  (newest first, `q` searches ids, titles and labels, each with `deleteAt`). `GET /api/board` gains `archive`
+  (count and the two times); a page without it shows no archive controls.
+- **Board tools for Claude:** `task_archive`, `task_restore`, `board_archive_done`, `board_archived`
+  (`bridge/board-mcp.js` 1.1.0, and the native AI host's own list, `pgm-ai-internal/src/host/mcp-tools.json`, which
+  R164 keeps equal); the Work prompt mentions them.
+- **The page** (`web/board.js` 1.1.0, the shared web kit): an Archive button in the board's header (made by board.js, so
+  a product's own index.html needs nothing) opens the archive with search, the day each task will be deleted and
+  Restore; "archive all done" on the Done column; Archive / Restore in a done task's detail panel.
+- **Compatibility:** add-only fields (`archivedAt`, `doneAt`) in the shared board.json. The frozen JavaScript hub shows
+  an archived task as done and keeps the fields when it writes. An older page simply shows no archive controls.
+- **Checks:** the library's fake-clock tests (nothing before 48 h, what is never archived, deletion after exactly 30
+  days with the tombstone, restore, archive all done, the calendar) and **R487** (end to end in the Rust-hub suite:
+  people, Claude through the board tools, the board MCP server's tool list, the JavaScript hub reading and writing the
+  file).
+
+## 5.31.1 — 2026-10-27
+
+PATCH: **private product releases and Node 24 on the server** (T-249, T-304).
+- **`worktree.js deploy-key <owner/name> <key.pub> [title]`:** adds a read-only SSH deploy key to a Forgejo repo, as the
+  person whose run it is. It is for a machine that builds or deploys a private repo: the key belongs to no person.
+  - Adding the same key again changes nothing.
+  - A private key, or a file that is not an SSH public key, is refused before anything is sent.
+- **`worktree.js visibility <owner/name> private|public`:** changes only the visibility; nothing is deleted.
+- **Check R486:** both commands against the suite's stand-in Forgejo.
+- **Done with them on the server (2026-10-27):**
+  - the three product repos with downloadable releases (pgm-prodsuit, pgm-hyperprodman, pgm-shadowchat) are private;
+  - their deploys read them with one read-only deploy key (Forgejo's SSH is on port 2222; the team note
+    plans/release-audit.md has the details).
+  - The source-only repos (pgm-libs, VibeRoller, Jcode-PGM) stay public for now: every machine that builds a product
+    fetches pgm-libs anonymously.
+- **deploy/node-upgrade.md:** the server's Node is 24.22.1 since 2026-10-27. Under vr-run, switching is just the
+  `current` link: the hub is Rust, and every Node process (a Work run's MCP helpers, the fallback hub) resolves the link
+  when it starts. No service restart is needed.
+
 ## 5.31.0 — 2026-10-26
 
 MINOR: **REA in Hyper Workflows** (T-255). A new built-in node kind, `rea`, runs a reverse-engineering step in a

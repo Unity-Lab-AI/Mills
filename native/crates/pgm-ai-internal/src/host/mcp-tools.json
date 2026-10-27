@@ -540,6 +540,68 @@
    }
   },
   {
+   "name": "task_archive",
+   "description": "Archive a done task: it leaves the board and the calendar but can still be read (task_get) and restored. Done tasks are archived by themselves after about 48 hours; archived tasks are deleted after about 30 days.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "task_restore",
+   "description": "Bring an archived task back onto the board, as done or into another column (status).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Task id, e.g. \"T-12\"."
+     },
+     "status": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "board_archive_done",
+   "description": "Archive every done task (on one board, or all). Only when the person asked to clean up the board.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "board": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "name": "board_archived",
+   "description": "List archived tasks, newest first, with when each will be deleted (deleteAt). q searches ids, titles and labels.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "q": {
+      "type": "string"
+     },
+     "board": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
    "name": "board_new",
    "description": "Make another board (e.g. per project).",
    "inputSchema": {
