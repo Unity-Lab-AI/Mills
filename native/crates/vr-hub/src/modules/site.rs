@@ -38,6 +38,8 @@ pub fn status(hub: &Hub, r: &crate::front::Req) -> Value {
     let mut v = json!({ "ok": true, "hub": true, "instance": inst.name(), "pid": std::process::id(), "supervised": std::env::var("MILLS_SUPERVISED").is_ok(), "serving": std::env::var("VR_SERVING").unwrap_or_else(|_| "rust".into()), "busy": busy(hub), "version": build.split('+').next().unwrap_or(""), "commit": hub.mods.build.commit(hub) });
     // on the dev hub, from this machine: the background jobs that are off here (plans/dev-hub.md 2b)
     if inst.is_dev() { v["devOff"] = json!(inst.off()); }
+    // the data bridge to the other hub (T-324), when there is one: peer up?, last exchanges, what waits (add-only)
+    if let Some(b) = hub.mods.sync.get() { v["sync"] = b.summary(); }
     v
 }
 /// The DEV band (T-327): on the dev hub every page says so at its top (in the page's flow, so it covers no control) and

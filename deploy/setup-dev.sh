@@ -34,13 +34,15 @@ say() { echo "setup-dev: $*"; }
 if [ "${1:-}" = pair ]; then
   SECRET=$LIVE/sync.secret
   [ -s "$SECRET" ] || { (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$SECRET"); say "made the bridge secret $SECRET"; }
-  for side in "$LAPP:7778" "$DAPP:7777"; do
-    app=${side%:*}; peer=${side#*:}
+  # each side: its checkout, the other hub's port, and its own name (it names the conflict copies, e.g. "x - dev copy.md")
+  for side in "$LAPP:7778:live" "$DAPP:7777:dev"; do
+    app=${side%%:*}; rest=${side#*:}; peer=${rest%%:*}; name=${rest#*:}
     "$NODE" -e '
-      const fs = require("fs"), [f, peer, secret] = process.argv.slice(1), c = JSON.parse(fs.readFileSync(f, "utf8"));
-      c.sync = { peer: "http://127.0.0.1:" + peer, secretFile: secret };
+      const fs = require("fs"), [f, peer, secret, name] = process.argv.slice(1);
+      const c = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : {};
+      c.sync = { peer: "http://127.0.0.1:" + peer, secretFile: secret, name };
       fs.writeFileSync(f + ".tmp", JSON.stringify(c, null, 2) + "\n", { mode: 0o600 }); fs.renameSync(f + ".tmp", f);
-    ' "$app/bridge/config.local.json" "$peer" "$SECRET"
+    ' "$app/bridge/config.local.json" "$peer" "$SECRET" "$name"
     date -u +%Y-%m-%dT%H:%M:%SZ > "$app/bridge/.restart"
     say "bridge on in $app (peer 127.0.0.1:$peer); graceful restart asked"
   done

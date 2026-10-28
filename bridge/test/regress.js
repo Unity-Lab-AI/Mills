@@ -46,6 +46,7 @@ function check(id, label, pass, detail = '') {
   if (STOP_AFTER && id === STOP_AFTER) { const e = new Error('stopped after ' + id); e.stopAfter = true; throw e; }
 }
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
+const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -626,7 +627,7 @@ async function r492Check() {
 
 // R493 (T-327): a second scratch Rust hub with config instance "dev" (the same accounts, its own data), next to the normal
 // scratch hub (live). Then the same dev hub again with devAllow naming the jobs, to show it is the gate that stopped them.
-const R493_LABEL = 'the dev hub says so and acts once: with config instance "dev" /api/status says instance dev (and which jobs are off), every page has the DEV band with its build at the top and a title starting "DEV · ", and every answer has X-Robots-Tag noindex; there a timer trigger that is due does not fire, an event trigger starts nothing, @unity gets no answer (and nobody a sign-in greeting), a new board task is not mirrored to Forgejo and products get no gateway; with devAllow naming them the same dev hub does all of those; the normal scratch hub says live and has no band, no DEV title and no noindex';
+const R493_LABEL = 'the dev hub says so and acts once: with config instance "dev" /api/status says instance dev (and which jobs are off), every page has the DEV band with its build at the top and a title starting "DEV · ", and every answer has X-Robots-Tag noindex; there a timer trigger that is due does not fire, an event trigger starts nothing, @unity gets no answer (and nobody a sign-in greeting), a new board task is not mirrored to Forgejo and products get no gateway, and a done task past its archive age stays on the board (the archive sweep is live\'s); with devAllow naming them the same dev hub does all of those; the normal scratch hub says live and has no band, no DEV title and no noindex';
 async function r493Check() {
   const seen = [], D = fs.mkdtempSync(path.join(SCRATCH, 'r493-dev-')), DB = path.join(D, 'bridge');
   let proc = null;
@@ -667,7 +668,7 @@ async function r493Check() {
     const g = (...a) => spawnSync('git', ['-c', 'user.name=r493', '-c', 'user.email=r493@example.invalid', ...a], { cwd: D, encoding: 'utf8' });
     fs.writeFileSync(path.join(D, '.gitignore'), 'bridge/\nweb/\nChat/\nBoard/\nNotes/\nHyperwork/\nhub.log\n*\n!.gitignore\n'); g('init', '-q', '-b', 'develop'); g('add', '-A'); g('commit', '-q', '-m', 'r493 develop build');
     const short = g('rev-parse', 'HEAD').stdout.trim().slice(0, 7);
-    if (!(await start({ instance: 'dev' }))) throw new Error('the dev hub did not start: ' + fs.readFileSync(path.join(D, 'hub.log'), 'utf8').slice(-400));
+    if (!(await start({ instance: 'dev', board: { archiveAfterHours: 0.0005, sweepSeconds: 1 } }))) throw new Error('the dev hub did not start: ' + fs.readFileSync(path.join(D, 'hub.log'), 'utf8').slice(-400));
     const st = await dcall('/api/status'), stLive = await call('/api/status');
     const pg = await page(DH), pgLive = await page(H);
     const title = (pg.html.match(/<title>([^<]*)<\/title>/) || [])[1] || '', titleLive = (pgLive.html.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
@@ -689,14 +690,18 @@ async function r493Check() {
     const seq1 = await lastSeq(U2);
     await send(U2, kp.privateKey, '@unity are you there r493');
     const task1 = await dcall('/api/board/create', U2, { title: 'r493 dev task', status: 'todo' });
+    // a done task, past the archive age (1.8 s here): the board's archive sweep is live's job, so dev leaves it on the board
+    const done1 = (await dcall('/api/board/create', U2, { title: 'r493 done task', status: 'todo' })).data.task || {};
+    await dcall('/api/board/complete', U2, { id: done1.id });
     const gw1 = await dcall('/internal/gateway/status');
     const gwAdm1 = await dcall('/api/admin/gateway/products', A2, { id: 'r493-prod', name: 'R493' });
     await sleep(9000); // past the timer (due 2 s after it was made; the hub looks every 5 s), the agent, the mirror (a 3-second poll)
     const t1 = trig(timer.data.id) || {}, agent1 = await fromAgent(U2, seq1), iss1 = issue('r493 dev task');
-    seen.push(`dev: timer next ${t1.next ? new Date(t1.next).toISOString().slice(11, 19) : t1.next} runs ${(t1.runs || []).length} · event runs ${JSON.stringify(ev1.data.runs)} · agent ${agent1.length} · task ${task1.status} mirrored ${!!iss1} · gateway ${gw1.status} admin ${gwAdm1.status}`);
+    const swept1 = !!((await dcall('/api/board/task?id=' + done1.id, U2)).data.task || {}).archivedAt;
+    seen.push(`dev: timer next ${t1.next ? new Date(t1.next).toISOString().slice(11, 19) : t1.next} runs ${(t1.runs || []).length} · event runs ${JSON.stringify(ev1.data.runs)} · agent ${agent1.length} · task ${task1.status} mirrored ${!!iss1} · gateway ${gw1.status} admin ${gwAdm1.status} · done task archived ${swept1}`);
     // the same dev hub, the jobs allowed: they run (the gate is what stopped them)
     await stop();
-    if (!(await start({ instance: 'dev', devAllow: ['triggers', 'agents', 'mirror', 'gateway'] }))) throw new Error('the dev hub did not start again');
+    if (!(await start({ instance: 'dev', devAllow: ['triggers', 'agents', 'mirror', 'gateway', 'sweep'], board: { archiveAfterHours: 0.0005, sweepSeconds: 1 } }))) throw new Error('the dev hub did not start again');
     const st2 = await dcall('/api/status');
     const t2 = await waitFor(async () => { const t = trig(timer.data.id); return t && (t.runs || []).length ? t : null; }, 12000) || trig(timer.data.id) || {};
     const ev2 = await sendEv();
@@ -706,14 +711,15 @@ async function r493Check() {
     const task2 = await dcall('/api/board/create', U2, { title: 'r493 dev task allowed', status: 'todo' });
     const iss2 = await waitFor(async () => issue('r493 dev task allowed'), 12000);
     const gw2 = await dcall('/internal/gateway/status');
-    seen.push(`allowed: off [${st2.data.devOff}] timer runs ${(t2.runs || []).length} · event runs ${(ev2.data.runs || []).length} · agent ${agent2.length} · mirrored ${!!iss2} · gateway ${gw2.status}`);
-    const pass = st.status === 200 && st.data.instance === 'dev' && ['mirror', 'triggers', 'agents', 'gateway', 'hostUpdates'].every((j) => (st.data.devOff || []).includes(j)) && /noindex/.test(st.headers.get('x-robots-tag') || '')
+    const swept2 = !!(await waitFor(async () => ((await dcall('/api/board/task?id=' + done1.id, U2)).data.task || {}).archivedAt, 12000));
+    seen.push(`allowed: off [${st2.data.devOff}] timer runs ${(t2.runs || []).length} · event runs ${(ev2.data.runs || []).length} · agent ${agent2.length} · mirrored ${!!iss2} · gateway ${gw2.status} · done task archived ${swept2}`);
+    const pass = st.status === 200 && st.data.instance === 'dev' && ['mirror', 'triggers', 'agents', 'gateway', 'hostUpdates', 'sweep'].every((j) => (st.data.devOff || []).includes(j)) && /noindex/.test(st.headers.get('x-robots-tag') || '')
       && stLive.data.instance === 'live' && stLive.data.devOff === undefined
       && band && title.startsWith('DEV · ') && /noindex/.test(pg.robots) && pg.html.includes('<meta name="robots" content="noindex')
       && !pgLive.html.includes('id="devBand"') && !titleLive.startsWith('DEV') && !pgLive.robots && !!pgLive.html
       && !!A2 && !!U2 && keyUp.status === 200 && wf.status === 200 && timer.status === 200 && evT.status === 200
       && (t1.runs || []).length === 0 && t1.next === timer.data.next && ev1.status === 200 && Array.isArray(ev1.data.runs) && ev1.data.runs.length === 0
-      && agent1.length === 0 && task1.status === 200 && !iss1 && gw1.status === 503 && gwAdm1.status === 409
+      && agent1.length === 0 && !!done1.id && !swept1 && swept2 && task1.status === 200 && !iss1 && gw1.status === 503 && gwAdm1.status === 409
       && st2.data.instance === 'dev' && JSON.stringify(st2.data.devOff) === '["hostUpdates"]'
       && (t2.runs || []).length >= 1 && (ev2.data.runs || []).length === 1 && agent2.length >= 1 && task2.status === 200 && !!iss2 && gw2.status === 403;
     check('R493', R493_LABEL, pass, seen.join(' · '));
@@ -758,6 +764,7 @@ async function run() {
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
   if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
   if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
+  if (process.argv.includes('--only-r491') && RUST_HUB) await r491Check(); // development: just R491 (with --stop-after R491)
   if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
@@ -3712,7 +3719,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       run1.status === 0 && branch === 'develop' && has('Board/board.json') && has('Notes/n.md') && has('bridge/auth.json') && !has('bridge/front-sessions.json') && !has('bridge/device-locks.json')
       && cfg.port === 7778 && cfg.instance === 'dev' && cfg.publicUrl === 'https://dev.example' && cfg.rustHub.backPort === 7781 && Object.keys(cfg.aiNodes || {}).length === 0 && !cfg.sync
       && run2.status === 0 && kept && liveSame
-      && pair.status === 0 && lc.sync && lc.sync.peer === 'http://127.0.0.1:7778' && dc.sync && dc.sync.peer === 'http://127.0.0.1:7777' && lc.sync.secretFile === dc.sync.secretFile && secretMode
+      && pair.status === 0 && lc.sync && lc.sync.peer === 'http://127.0.0.1:7778' && dc.sync && dc.sync.peer === 'http://127.0.0.1:7777' && lc.sync.secretFile === dc.sync.secretFile && lc.sync.name === 'live' && dc.sync.name === 'dev' && secretMode
       && fs.existsSync(path.join(app, 'bridge', '.restart')) && fs.existsSync(path.join(D, 'bridge', '.restart')),
       `install ${run1.status} ${(run1.stdout + run1.stderr).trim().split('\n').slice(-2).join(' / ')} · branch ${branch} · sessions copied ${has('bridge/front-sessions.json')} · cfg ${JSON.stringify(cfg).slice(0, 160)} · again ${run2.status} kept ${kept} live unchanged ${liveSame} · pair ${pair.status} ${JSON.stringify(lc.sync)} ${JSON.stringify(dc.sync)} secret private ${secretMode}`);
   }
@@ -3782,6 +3789,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R285 to R289 (T-289): other tools (Jcode PGM) report their sessions; the person's list shows them as `external`
@@ -6365,6 +6373,128 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.folder && seen.archive === 200 && seen.outOfList && seen.inArchived && seen.back && seen.served && !!S && seen.colours && seen.shapes && seen.meanings && seen.stall && seen.grouped
       && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
     check('R489', R489_LABEL, ok, JSON.stringify(seen));
+  }
+  // R491 (T-324, plans/dev-hub.md § 2): two hubs on one machine (live and dev) keep their own full copies and a bridge keeps
+  // them the same both ways. Two Rust hubs of their own (own roots, own ports), paired by config sync (one secret file each),
+  // driven over HTTP like people would.
+  async function r491Check() {
+    const seen = {}; const procs = {}; const base = path.join(SCRATCH, 'r491'); const secret = crypto.randomBytes(24).toString('hex');
+    const pA = await freePort(PORT + 61), pB = await freePort(pA + 1);
+    const { hashPassword } = require(path.join(SB, 'common.js'));
+    const rootOf = (n) => path.join(base, n, 'bridge');
+    const cfgOf = (n, port, peer, sync = true) => ({ port, defaultUsername: 'mills', admin: true, roomAgent: false, ...(sync ? { sync: { peer: `http://127.0.0.1:${peer}`, secretFile: 'sync.secret', name: n === 'a' ? 'live' : 'dev' } } : {}) });
+    for (const [n, port, peer] of [['a', pA, pB], ['b', pB, pA]]) {
+      fs.mkdirSync(rootOf(n), { recursive: true });
+      fs.writeFileSync(path.join(rootOf(n), 'config.json'), JSON.stringify(cfgOf(n, port, peer)));
+      fs.writeFileSync(path.join(rootOf(n), 'sync.secret'), secret + '\n');
+      fs.writeFileSync(path.join(rootOf(n), 'auth.json'), JSON.stringify(hashPassword('pw-r491-mills-01'))); // the same account on both, as a copy of live would have
+    }
+    const http = (port) => async (p, token, body, headers = {}) => {
+      try { const r = await fetch(`http://127.0.0.1:${port}${p}`, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers }, body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: { error: e.message } }; }
+    };
+    const A = http(pA), B = http(pB);
+    const start = async (n) => {
+      const port = n === 'a' ? pA : pB; const log = fs.openSync(path.join(base, n + '.log'), 'a');
+      procs[n] = spawn(RUST_HUB, ['--alone', '--root', rootOf(n), '--port', String(port)], { cwd: rootOf(n), stdio: ['ignore', log, log], windowsHide: true });
+      for (let i = 0; i < 80; i++) { if ((await http(port)('/api/status')).status === 200) return true; await sleep(100); }
+      return false;
+    };
+    const stop = async (n) => { const p = procs[n]; if (!p) return; const gone = new Promise((r) => p.once('exit', r)); try { p.kill('SIGTERM'); } catch {} await Promise.race([gone, sleep(5000)]); procs[n] = null; };
+    const until = async (f, ms = 15000) => { const t0 = Date.now(); for (;;) { const v = await f(); if (v || Date.now() - t0 > ms) return v; await sleep(150); } };
+    const signin = async (H2, user, pw, dev) => (await H2('/api/login', null, { username: user, password: pw, deviceId: dev })).data.token || '';
+    const taskOn = async (H2, tok, id) => { const r = await H2('/api/board/task?id=' + encodeURIComponent(id), tok); return r.status === 200 ? r.data.task : null; };
+    const findTitle = async (H2, tok, title) => (((await H2('/api/board', tok)).data.tasks) || []).find((t) => t.title === title) || null;
+    try {
+      // 1. live alone first, with data of its own; then dev starts and the first pairing is a full exchange
+      seen.startA = await start('a');
+      let tA = await signin(A, 'mills', 'pw-r491-mills-01', 'device-r491-aaaaaaaaaa');
+      const before = (await A('/api/board/create', tA, { title: 'r491 made on live before dev existed' })).data.task || {};
+      await A('/api/notes/write', tA, { path: 'r491/early.md', text: 'written on live early' });
+      seen.startB = await start('b');
+      let tB = await signin(B, 'mills', 'pw-r491-mills-01', 'device-r491-bbbbbbbbbb');
+      seen.firstPairing = !!(await until(async () => (await taskOn(B, tB, before.id)) && (await B('/api/notes/read?path=r491/early.md', tB)).data.text === 'written on live early'));
+      // 2. a task made on either side appears on the other
+      const onB = (await B('/api/board/create', tB, { title: 'r491 made on dev' })).data.task || {};
+      seen.bToA = !!(await until(() => findTitle(A, tA, 'r491 made on dev')));
+      const onA = (await A('/api/board/create', tA, { title: 'r491 made on live' })).data.task || {};
+      seen.aToB = !!(await until(() => findTitle(B, tB, 'r491 made on live')));
+      seen.ids = [before.id, onB.id, onA.id];
+      // 3. a note written on dev appears on live
+      await B('/api/notes/write', tB, { path: 'r491/from-dev.md', text: 'hello from dev\nline 2' });
+      seen.note = !!(await until(async () => (await A('/api/notes/read?path=r491/from-dev.md', tA)).data.text === 'hello from dev\nline 2'));
+      // ... and a Work transcript saved on live (Past sessions) is in dev's list
+      const arch = crypto.randomBytes(8).toString('hex');
+      fs.mkdirSync(path.join(base, 'a', 'Archive'), { recursive: true });
+      fs.writeFileSync(path.join(base, 'a', 'Archive', arch + '.json'), JSON.stringify({ id: arch, title: 'r491 saved on live', savedAt: new Date().toISOString(), sessionId: 'sess-r491', transcript: [{ cls: 'user', text: 'hello' }, { cls: 'assistant', text: 'hi there' }] }));
+      seen.archive = !!(await until(async () => (((await B('/api/archive/list', tB, {})).data.items) || []).some((x) => x.id === arch && x.title === 'r491 saved on live' && x.count === 2)));
+      // 4. the chat: a key set on live and a message sent there reach dev (same key, same message id)
+      const b64 = (n) => crypto.randomBytes(n).toString('base64');
+      const jwk = { kty: 'EC', crv: 'P-256', x: crypto.randomBytes(32).toString('base64url'), y: crypto.randomBytes(32).toString('base64url') };
+      await A('/api/room/mykey', tA, { pub: jwk, backup: { salt: b64(16), iv: b64(12), ct: b64(80) } });
+      const mid = crypto.randomBytes(16).toString('base64url').slice(0, 22);
+      const sent = await A('/api/room/send', tA, { v: 3, mid, iv: b64(12), ct: b64(64), keys: { mills: { iv: b64(12), wk: b64(48) } } });
+      seen.chatSent = sent.status;
+      seen.chat = !!(await until(async () => (((await B('/api/room/messages', tB)).data.messages) || []).some((m) => m.mid === mid)));
+      seen.chatKey = !!(await until(async () => (await B('/api/room/mykey', tB)).data.pub?.x === jwk.x));
+      // 5. dev is down: live changes things; meanwhile dev (started without the bridge) edits the same task; with the bridge
+      //    back, dev catches up and the two edits of that task end equal on both, the loser kept in the activity
+      const shared = (await A('/api/board/create', tA, { title: 'r491 edited on both' })).data.task || {};
+      await until(() => taskOn(B, tB, shared.id));
+      await stop('b');
+      await A('/api/board/update', tA, { id: shared.id, title: 'r491 live\'s title' });
+      const whileDown = (await A('/api/board/create', tA, { title: 'r491 made while dev was down' })).data.task || {};
+      await A('/api/notes/write', tA, { path: 'r491/while-down.md', text: 'dev was away' });
+      fs.writeFileSync(path.join(rootOf('b'), 'config.json'), JSON.stringify(cfgOf('b', pB, pA, false)));
+      await start('b'); tB = await signin(B, 'mills', 'pw-r491-mills-01', 'device-r491-bbbbbbbbbb');
+      await sleep(30); // its edit comes after live's (newest wins)
+      seen.devEdit = (await B('/api/board/update', tB, { id: shared.id, title: 'r491 dev\'s title' })).status;
+      seen.isolated = (await taskOn(B, tB, whileDown.id)) === null; // no bridge: nothing came over
+      await stop('b');
+      fs.writeFileSync(path.join(rootOf('b'), 'config.json'), JSON.stringify(cfgOf('b', pB, pA)));
+      await start('b'); tB = await signin(B, 'mills', 'pw-r491-mills-01', 'device-r491-bbbbbbbbbb');
+      seen.caughtUp = !!(await until(async () => (await taskOn(B, tB, whileDown.id)) && (await B('/api/notes/read?path=r491/while-down.md', tB)).data.text === 'dev was away'));
+      const equal = await until(async () => { const x = await taskOn(A, tA, shared.id), y = await taskOn(B, tB, shared.id); return x && y && x.title === y.title && x.rev === y.rev && x.title === 'r491 dev\'s title' ? x : null; });
+      seen.conflictTitle = equal ? equal.title : [(await taskOn(A, tA, shared.id) || {}).title, (await taskOn(B, tB, shared.id) || {}).title];
+      const lostIn = async (H2, tok) => (((await H2('/api/board/task?id=' + shared.id, tok)).data.activity) || []).find((e) => e.what === 'sync conflict' && e.lost && e.lost.title === 'r491 live\'s title');
+      seen.loserKept = !!(await until(async () => (await lostIn(A, tA)) && (await lostIn(B, tB))));
+      // 6. a malformed record is refused (and never applied); a kind this hub does not know is kept; nothing without the secret
+      const hello = (await A('/__sync/hello?hub=r491-test', null, undefined, { 'x-vr-sync-secret': secret })).data;
+      const rec = (seq, extra) => ({ kind: 'board.task', id: 'T-9091', rev: 1, time: Date.now(), origin: 'r491-test', originName: 'test', seq, ...extra });
+      const bad = await A('/__sync/push', null, { hub: 'r491-test', after: 0, records: [
+        rec(1, { value: { id: 'T-9091', title: 'r491 malformed', board: 'team', status: 'nonsense', rev: 1, createdAt: 1, updatedAt: 1 } }),
+        rec(2, {}),
+        { kind: 'work.session', id: 's-r491', rev: 1, time: 1, origin: 'r491-test', originName: 'test', seq: 3, value: { title: 'a kind from a newer build' } },
+      ] }, { 'x-vr-sync-secret': secret });
+      seen.malformed = { status: bad.status, refused: (bad.data.refused || []).map((x) => x.seq), held: bad.data.held, have: bad.data.have };
+      seen.neverApplied = (await taskOn(A, tA, 'T-9091')) === null;
+      const noSecret = await A('/__sync/push', null, { hub: 'r491-x', records: [] });
+      const wrong = await A('/__sync/push', null, { hub: 'r491-x', records: [] }, { 'x-vr-sync-secret': secret.slice(0, -1) + (secret.endsWith('0') ? '1' : '0') });
+      const proxied = await A('/__sync/hello?hub=x', null, undefined, { 'x-vr-sync-secret': secret, 'X-Forwarded-For': '203.0.113.7' });
+      const helloNo = await A('/__sync/hello?hub=x');
+      seen.gate = [noSecret.status, wrong.status, proxied.status, helloNo.status];
+      seen.hello = { hub: !!hello.hub, name: hello.name };
+      // 7. an account made on live signs in on dev with the same password (the hash travels; sessions do not)
+      const made = (await A('/api/admin/create', tA, { username: 'r491-syncer', display: 'Syncer' })).data;
+      // (waits for the account to be there first: wrong sign-ins while it travels would block the name for 15 minutes; an account
+      // exists on dev once its auth.json does, which travels before its config.json)
+      seen.accountThere = !!(await until(async () => (((await B('/api/admin/accounts', tB)).data.accounts) || []).some((x) => x.username === 'r491-syncer')));
+      seen.sameSignIn = !!(await signin(B, 'r491-syncer', made.password || 'x', 'device-r491-ccccccccc'));
+      seen.tokenNotShared = (await B('/api/board', tA)).status === 401; // live's session token is live's alone
+      // 8. /api/status says how the bridge is, and nothing goes back and forth once both are equal (no echo)
+      const st = (await A('/api/status')).data.sync || {};
+      seen.status = { up: st.peer && st.peer.up, peer: st.peer && st.peer.name, refused: st.refused >= 2 };
+      await sleep(2500);
+      const j1 = [(await A('/api/status')).data.sync?.journal, (await B('/api/status')).data.sync?.journal];
+      await sleep(2500);
+      const j2 = [(await A('/api/status')).data.sync?.journal, (await B('/api/status')).data.sync?.journal];
+      seen.quiet = JSON.stringify(j1) === JSON.stringify(j2) && j1.every((n) => n > 0);
+      seen.journals = [j1, j2];
+    } finally { await stop('a'); await stop('b'); }
+    const ok = seen.startA && seen.startB && seen.firstPairing && seen.bToA && seen.aToB && seen.note && seen.archive && seen.chatSent === 200 && seen.chat && seen.chatKey
+      && seen.devEdit === 200 && seen.isolated && seen.caughtUp && seen.conflictTitle === 'r491 dev\'s title' && seen.loserKept
+      && seen.malformed.status === 200 && JSON.stringify(seen.malformed.refused) === '[1,2]' && seen.malformed.held === 1 && seen.malformed.have === 3 && seen.neverApplied
+      && seen.gate.every((s) => s === 403) && seen.hello.name === 'live' && seen.sameSignIn && seen.tokenNotShared && seen.status.up === true && seen.status.peer === 'dev' && seen.status.refused && seen.quiet;
+    check('R491', R491_LABEL, ok, JSON.stringify(seen));
   }
   async function r323Check() {
     const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });

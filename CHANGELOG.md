@@ -7,6 +7,51 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.34.0 — 2026-10-28
+
+MINOR: **the dev hub, dev.portal.unityailab.com** (T-321 and its steps T-322 … T-327; the plan is the team note
+plans/dev-hub.md). Develop runs on its own hub beside live, with the same accounts and a full copy of the data kept in
+step both ways, so a change is tried on dev instead of by going live. MINOR because going live now needs dev's
+verification, and every build is now clean (slower, no cache kept).
+- **Two new laws** (LAWS.md, T-322): *Dev hub law*: develop runs on dev, and live only gets what ran there.
+  `worktree.js live` refuses a commit the dev hub has not verified (`--skip-dev "<reason>"` overrides, with the reason
+  in the output and the merge commit). *Clean build law*: every build goes into a temporary target folder, which is
+  removed afterwards; no build cache is kept anywhere.
+- **The dev install** (`deploy/setup-dev.sh`, R494; T-323): it clones develop to `/srv/apps/VibeRoller/dev/app` and
+  copies live's data once, never its sign-in sessions or device unlocks. It writes dev's settings (port 7778,
+  `instance: "dev"`, its own URL and origins, no AI host list), installs `viberoller-dev-hub` with its own auto-deploy
+  timer following develop, and starts it. Running it again repairs and changes nothing that is already there.
+  `setup-dev.sh pair` makes the bridge secret (owner-only) and writes `sync: { peer, secretFile, name }` into both hubs'
+  config, `name` "live" on one side and "dev" on the other. `deploy/autodeploy.sh` follows `VR_DEPLOY_BRANCH` (main by
+  default), and its chat lines say which hub rolled back or failed its trial. `deploy/nginx-dev-portal.conf` is the
+  site (noindex, its own rate zones). All three nginx sites now answer `/__sync/` with 404.
+- **The dev instance** (T-326 / T-327, R492, R493): with config `instance: "dev"`, `/api/status` says `instance` and
+  `devOff`, every answer carries `X-Robots-Tag: noindex`, and every page has a striped DEV band with the develop
+  build at its top and a title starting "DEV · " (`web/index.html` 1.29.0 keeps the prefix). Jobs that must act once
+  are off on dev unless config `devAllow` names them: the Forgejo mirror, Hyper Workflow triggers, Unity and the chat
+  agents, the PGM Gateway, AI host updates, and the board's archive sweep. Live archives a task, and the bridge carries
+  that to dev. `worktree.js` 2.6.0: the live gate, `dev` (what dev runs and verified), `--skip-dev`.
+- **The data bridge** (new library crate `pgm-sync-internal`, vr-hub `modules/sync.rs`, R491; T-324): each hub writes
+  its own changes to an add-only journal (`bridge/sync/journal.jsonl`) and pushes them to the other. The receiving hub
+  keeps a cursor, so a hub that was down catches up, and the first pairing is a full exchange.
+  - **What travels:** board tasks (including deletes and activity), notes, chat messages (with edits, deletes, keys and
+    read receipts), accounts (password hash, config, prefs, profile, presence settings), profile pictures, and saved
+    Work transcripts.
+  - **Conflicts:** newest wins, and the losing version is never dropped. It goes to the task's activity log, a
+    "<name> - dev copy.md" note, or `bridge/sync/lost.jsonl`.
+  - **Bad or unknown records:** a malformed record is refused without holding up the rest. A record of a kind this
+    build doesn't know waits in `held.jsonl` until a build that knows it.
+  - **Never synced:** sign-in sessions and device tokens. Each domain signs in on its own, with the same password.
+  - **The routes** (`/__sync/hello`, `/__sync/push`) answer only 127.0.0.1 without a proxy header and with the shared
+    secret. They are 404 when `sync` isn't set, so a hub without it behaves as before.
+  - **Status and the JavaScript hub:** `/api/status` gains `sync` (peer up, last exchanges, queued, held, refused,
+    conflicts). The board, notes and chat libraries gained their sync methods, and their shared files only gained
+    fields, so the JavaScript hub reads them as before.
+  - **Not synced yet:** chat attachments, servers and channels, live Work session state, and deleting an account.
+- **Clean builds** (T-325): `native/build.sh` and `native/build-products.sh` build in a `mktemp` target that is removed
+  when they end. The suite builds the hub in its own temporary folder (`vr-regress-*`, removed on exit, and leftovers
+  over a day old are swept).
+
 ## 5.33.0 — 2026-10-27
 
 MINOR: **four last steps that close Sponge's parents** (taken over from Mills at Sponge's request): presence in the

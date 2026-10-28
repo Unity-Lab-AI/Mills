@@ -14,6 +14,7 @@ pub mod ai_hosts;
 pub mod profile;
 pub mod re;
 pub mod site;
+pub mod sync;
 mod traits;
 pub mod auth;
 pub mod board;
@@ -53,9 +54,10 @@ pub use pgm_core_internal::config::Config;
 /// - `agents`: Unity / the chat agents answering in the chat (and greeting people who sign in)
 /// - `gateway`: the PGM Gateway's product requests and registrations (the products talk to live)
 /// - `hostUpdates`: AI host updates handed out (hosts belong to live)
+/// - `sweep`: the board's archive sweep (live archives a done task once; the bridge carries it to dev)
 /// What a person does on dev (a message, a task, a Work run they start) is theirs and runs there.
 pub struct Instance { dev: bool, allow: Vec<String> }
-pub const DEV_JOBS: [&str; 5] = ["mirror", "triggers", "agents", "gateway", "hostUpdates"];
+pub const DEV_JOBS: [&str; 6] = ["mirror", "triggers", "agents", "gateway", "hostUpdates", "sweep"];
 impl Instance {
     pub fn from_cfg(cfg: &Config) -> Instance {
         let dev = cfg.get("instance").and_then(Value::as_str).map(|s| s.trim().eq_ignore_ascii_case("dev")).unwrap_or(false);
@@ -105,6 +107,8 @@ pub struct Modules {
     pub hyperwork: hyperwork::Hyperwork,
     /// live or dev, and which background jobs run here (T-327)
     pub instance: Instance,
+    /// the data bridge to the other hub on this machine (T-324), when config sync names one
+    pub sync: std::sync::OnceLock<Arc<sync::Bridge>>,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -120,7 +124,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), instance: Instance::from_cfg(cfg), mills })
+            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), instance: Instance::from_cfg(cfg), sync: Default::default(), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -230,6 +234,7 @@ pub fn start_background(hub: &Arc<Hub>) {
     chat::start(hub);
     unity_brain::start(hub);
     re::start(hub);
+    sync::start(hub);
     // the notes changed: pages hear it through the chat's long poll (the JavaScript hub's)
     // the board's archive (T-190): done tasks to the archive after config board.archiveAfterHours (48), archived ones
     // deleted after board.deleteAfterDays (30); 0 = never. Looked at shortly after the start, then every board.sweepSeconds (600).
@@ -239,14 +244,14 @@ pub fn start_background(hub: &Arc<Hub>) {
     hub.mods.board.set_retention((hours * 3_600_000.0) as i64, (days * 86_400_000.0) as i64);
     let every = std::time::Duration::from_secs(bc["sweepSeconds"].as_u64().unwrap_or(600).max(1));
     let h = hub.clone();
-    forever("board archive sweep", move || { let h = h.clone(); async move {
+    if hub.mods.instance.allows("sweep") { forever("board archive sweep", move || { let h = h.clone(); async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         loop {
             let (a, d) = h.mods.board.sweep(pgm_core_internal::now_ms() as i64);
             if !a.is_empty() || !d.is_empty() { eprintln!("[vr-hub] board archive: {} archived, {} deleted", a.len(), d.len()); }
             tokio::time::sleep(every).await;
         }
-    } });
+    } }); }
     let h = hub.clone();
     forever("notes watch", move || { let h = h.clone(); async move {
         let mut rx = h.mods.notes.ver.subscribe();
@@ -301,6 +306,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     }
     // the front itself: who answers here (for the tools and the regression suite; nothing private)
     if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules(), "alone": hub.alone() }))); }
+    // the data bridge's hub-to-hub routes (T-324): the other hub on this machine only, with the shared secret
+    if let Some(rest) = p.strip_prefix("/__sync/") { return sync::route(hub, r, rest).await; }
     // the JavaScript hub asking a module of this one (with the front's secret, from this machine only)
     if let Some(rest) = p.strip_prefix("/__front/") {
         if !from_front(hub, r) { return answer(403, json!({ "ok": false, "error": "forbidden" })); }
