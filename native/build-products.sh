@@ -23,6 +23,10 @@ export OWNER_HOME
 HUB=${PRODUCTS_HUB:-https://portal.unityailab.com}
 GIT=${PRODUCTS_GIT:-https://git.unityailab.com/UnityAILab}
 cd "$HERE"
+# Clean build law (LAWS.md): the builds go into a temporary target folder deleted when this script ends
+mkdir -p "${VR_BUILD_TMP:=$HERE/target/tmp}" # on the disk, not a RAM disk /tmp (native/build.sh says why)
+TGT=$(mktemp -d "$VR_BUILD_TMP/vr-products-XXXXXX")
+trap 'rm -rf "$TGT"' EXIT INT TERM
 # id | name | app identifier (installs beside VibeRoller's and each other's)
 PRODUCTS='prodsuit|PGM Prod Suit|com.psygraphmedia.prodsuit
 shadowchat|PGM ShaDow Chat|com.psygraphmedia.shadowchat
@@ -38,10 +42,10 @@ echo "$PRODUCTS" | while IFS='|' read -r id name ident; do
   # patch over tauri.conf.json; VR_DEFAULT_HUB / VR_APP_NAME: vr-desktop's settings and window title)
   VR_DEFAULT_HUB="$HUB/p/$id" VR_APP_NAME="$name" VR_VERSION="${tag#v}" \
     TAURI_CONFIG="{\"productName\":\"$name\",\"identifier\":\"$ident\"}" \
-    nice -n 10 cargo build -p vr-desktop --release --target "$WIN" --target-dir target/products -q
+    nice -n 10 cargo build -p vr-desktop --release --target "$WIN" --target-dir "$TGT" -q
   out="dist/products/$id-windows-$tag.zip"; stage="dist/products/.stage-$id"; rm -rf "$stage"; mkdir -p "$stage"
-  cp "target/products/$WIN/release/vr-desktop.exe" "$stage/$name.exe"
-  cp "target/products/$WIN/release/WebView2Loader.dll" "$stage/"
+  cp "$TGT/$WIN/release/vr-desktop.exe" "$stage/$name.exe"
+  cp "$TGT/$WIN/release/WebView2Loader.dll" "$stage/"
   printf '%s\n' "$name, the desktop app (Windows), $tag" "" "Unzip anywhere and run \"$name.exe\". It opens $HUB/p/$id/ in its own window." "Sign in with your VibeRoller username and password; the first time, your $name account is made from it." "" "The app is VibeRoller's desktop app with this product's address and name built in (https://git.unityailab.com/UnityAILab/VibeRoller, native/crates/vr-desktop)." > "$stage/README.txt"
   rm -f "$out"; node "$HERE/zip.js" "$out" "$stage" >/dev/null
   rm -rf "$stage"
@@ -53,9 +57,9 @@ echo "$PRODUCTS" | while IFS='|' read -r id name ident; do
     echo "   building the Linux app"
     VR_DEFAULT_HUB="$HUB/p/$id" VR_APP_NAME="$name" VR_VERSION="${tag#v}" \
       TAURI_CONFIG="{\"productName\":\"$name\",\"identifier\":\"$ident\"}" \
-      nice -n 10 cargo build -p vr-desktop --release --target "$LINUX" --target-dir target/products -q
+      nice -n 10 cargo build -p vr-desktop --release --target "$LINUX" --target-dir "$TGT" -q
     outl="dist/products/$id-linux-$tag.tar.gz"; stage="dist/products/.stage-$id"; rm -rf "$stage"; mkdir -p "$stage"
-    cp "target/products/$LINUX/release/vr-desktop" "$stage/$id"
+    cp "$TGT/$LINUX/release/vr-desktop" "$stage/$id"
     printf '%s\n' "$name, the desktop app (Linux x86_64), $tag" "" "Unpack anywhere and run ./$id (it needs the desktop's WebKitGTK: libwebkit2gtk-4.1-0, as VibeRoller's own app). It opens $HUB/p/$id/ in its own window." "Sign in with your VibeRoller username and password; the first time, your $name account is made from it." > "$stage/README.txt"
     rm -f "$outl"; tar -czf "$outl" -C "$stage" .
     rm -rf "$stage"

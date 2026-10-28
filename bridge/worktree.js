@@ -32,12 +32,19 @@
 //   node bridge/worktree.js sync <username>              merge the latest integration branch into work/<username>
 //   node bridge/worktree.js merge <username>             merge work/<username> into the integration branch and push it
 //                                                        (refuses with uncommitted changes; on a conflict nothing is
-//                                                        left half-merged: run sync, resolve, commit, merge again)
+//                                                        left half-merged: run sync, resolve, commit, merge again);
+//                                                        VibeRoller's develop then deploys to the dev hub within a minute
 //   node bridge/worktree.js live [--restart]             VibeRoller only. Go live: Forgejo's develop → main, pushed to Forgejo
 //                                                        FIRST (nothing goes live that Forgejo does not have); the server's
 //                                                        auto-deploy then ships it (health-checked, rolls back by itself);
 //                                                        without an auto-deploy the host folder is fast-forwarded here and
-//                                                        --restart asks the hub to restart itself gracefully on the new code
+//                                                        --restart asks the hub to restart itself gracefully on the new code.
+//                                                        Refused unless the dev hub verified that exact commit of develop
+//                                                        (its deploy-state/last-good, and its /api/status when it answers)
+//        [--skip-dev "<reason>"]                         goes live without dev's verification; the reason is said in the
+//                                                        output and kept in the merge commit
+//   node bridge/worktree.js dev                          the dev hub: installed?, the commit it runs, its last good one,
+//                                                        develop's head on Forgejo, whether live would go ahead, its sync
 //   node bridge/worktree.js repos [words]                the Forgejo repos you can see (private ones too), as you (your token)
 //   node bridge/worktree.js repo-create <owner/name>     a new empty Forgejo repo (yours or an organisation's); --private, --description
 //   node bridge/worktree.js deploy-key <owner/name> <key.pub> [title]   a read-only SSH deploy key for a machine that builds or deploys it
@@ -496,6 +503,8 @@ function merge(username, projectName) {
       const pushed = tryGit(s.dir, 'push', 'origin', `HEAD:refs/heads/${main}`);
       if (!pushed.ok) throw new Error(`Pushing to Forgejo failed, so nothing was merged anywhere (${lastLine(pushed.out)}). ${/could not read|auth|denied|403|401/i.test(pushed.out) ? NO_TOKEN[0].toUpperCase() + NO_TOKEN.slice(1) + ', then merge again.' : 'If Forgejo moved meanwhile, merge again.'}`);
       lines.push(`Merged ${branch} into ${main} (${short(head)})${p.hub ? '' : ' of ' + p.name} and pushed it to Forgejo.`);
+      // T-326: develop is what the dev hub runs; it is tried there before it can go live
+      if (p.hub && main === DEVELOP && devState().installed) lines.push(`${DEVELOP} (${short(head)}) now deploys to the dev hub within a minute (its auto-deploy health-checks it and marks it verified; "node bridge/worktree.js dev" shows where it is). Try it there: "live" goes ahead only once dev has verified this exact commit.`);
       fetchOrigin(repo);
       lines.push(...level(p), ...pushAll(repo, main, ['origin']));
     } else {
@@ -516,12 +525,72 @@ function status(projectName) {
 }
 const projectsText = () => listProjects().map((p) => `${p.name.padEnd(24)} ${p.branch.padEnd(10)} ${p.people.length ? 'worktrees: ' + p.people.join(', ') : 'no worktrees yet'}${p.remote ? '  ← ' + p.remote : ''}\n${''.padEnd(24)} ${p.dir}`).join('\n');
 
+// ---------- the dev hub (T-326; the team note plans/dev-hub.md, section 3) ----------
+// Merging into develop deploys to the dev hub (dev.portal, port 7778, its own auto-deploy following Forgejo's develop);
+// nothing goes live that has not run there. Its base folder (env VR_DEV_BASE, else config devBase, else
+// /srv/apps/VibeRoller/dev) has deploy-state/last-good: one line, the commit its auto-deploy verified last. Its
+// /api/status (env VR_DEV_PORT, else config devPort, else 7778, on 127.0.0.1) says its instance ("dev") and commit.
+const DEV_BASE = path.resolve(process.env.VR_DEV_BASE || CFG.devBase || '/srv/apps/VibeRoller/dev');
+const DEV_PORT = Number(process.env.VR_DEV_PORT || CFG.devPort || 7778) || 7778;
+const DEV_URL = `http://127.0.0.1:${DEV_PORT}`;
+const SKIP_DEV = 'node bridge/worktree.js live --skip-dev "<reason>"';
+function devState() {
+  const installed = fs.existsSync(DEV_BASE) && fs.statSync(DEV_BASE).isDirectory();
+  const f = path.join(DEV_BASE, 'deploy-state', 'last-good');
+  let lastGood = '', lastGoodAt = null;
+  try { lastGood = fs.readFileSync(f, 'utf8').trim().split(/\s+/)[0] || ''; lastGoodAt = fs.statSync(f).mtime; } catch { /* none yet */ }
+  if (!/^[0-9a-f]{7,64}$/i.test(lastGood)) lastGood = '';
+  return { base: DEV_BASE, installed, lastGood: lastGood.toLowerCase(), lastGoodAt, lastGoodFile: f };
+}
+// The dev hub's own word (best effort, 3 s): { up, instance, commit, version, sync, devOff } or { up: false, error }
+async function devStatus() {
+  try {
+    const r = await fetch(DEV_URL + '/api/status', { signal: AbortSignal.timeout(3000) });
+    const d = await r.json();
+    return { up: r.ok && !!d && d.ok === true, instance: String(d.instance || ''), commit: String(d.commit || '').toLowerCase(), version: String(d.version || ''), sync: d.sync, devOff: d.devOff };
+  } catch (e) { return { up: false, error: (e.cause && e.cause.code) || e.name || e.message }; }
+}
+const sameCommit = (a, b) => !!a && !!b && a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));
+// May `target` (the full commit of Forgejo's develop) go live? { ok, lines (what was seen), why (when not) }
+async function devGate(target) {
+  const d = devState();
+  if (!d.installed) return { ok: false, why: `the dev hub is not installed (${d.base} does not exist), so nothing has verified ${short(target)}. Nothing goes live that has not run on dev (plans/dev-hub.md 3.2). To go live without it anyway, say why: ${SKIP_DEV}` };
+  if (!d.lastGood) return { ok: false, why: `the dev hub (${d.base}) has not verified any commit yet (no ${d.lastGoodFile}). Wait for its auto-deploy to verify ${short(target)} ("node bridge/worktree.js dev" shows it), or say why not: ${SKIP_DEV}` };
+  if (!sameCommit(d.lastGood, target)) return { ok: false, why: `the dev hub verified ${short(d.lastGood)}, but develop on Forgejo is at ${short(target)}: that exact commit has not run on dev yet. Wait for dev's auto-deploy to verify it (within a minute or two of the merge; "node bridge/worktree.js dev" shows it), or say why not: ${SKIP_DEV}` };
+  const s = await devStatus();
+  if (s.up && s.instance !== 'dev') return { ok: false, why: `${DEV_URL} answers, but says it is the "${s.instance || 'live'}" hub, not the dev hub: check its config (instance "dev") before going live, or say why not: ${SKIP_DEV}` };
+  if (s.up && s.commit && !sameCommit(s.commit, target)) return { ok: false, why: `the dev hub's last good commit is ${short(target)}, but it runs ${short(s.commit)} now (a rollback or a newer deploy in progress). Look with "node bridge/worktree.js dev", or say why not: ${SKIP_DEV}` };
+  return { ok: true, lines: [`Dev verified ${short(target)} (${d.lastGoodFile}${s.up ? `; the dev hub on ${DEV_URL} runs it` : `; the dev hub does not answer on ${DEV_URL} right now (${s.error}), so its last-good file is the word`}).`] };
+}
+const syncText = (sync) => (sync === undefined || sync === null ? 'none reported' : typeof sync === 'object' ? Object.entries(sync).map(([k, v]) => `${k} ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ').slice(0, 400) : String(sync).slice(0, 400));
+// `dev`: the dev hub's state, and whether live would go ahead now
+async function devReport() {
+  const d = devState(), s = await devStatus(), lines = [`The dev hub (plans/dev-hub.md): ${d.base}`];
+  lines.push(`  installed: ${d.installed ? 'yes' : 'no'}`);
+  lines.push(`  running: ${s.up ? `${s.commit ? short(s.commit) : '(commit unknown)'}${s.version ? ' (' + s.version + ')' : ''}, instance "${s.instance || 'live'}"${s.instance === 'dev' ? '' : ' (NOT a dev hub)'} on ${DEV_URL}` : `not answering on ${DEV_URL} (${s.error})`}`);
+  lines.push(`  last good (verified by its auto-deploy): ${d.lastGood ? `${short(d.lastGood)}${d.lastGoodAt ? ' at ' + d.lastGoodAt.toISOString() : ''}` : 'none yet'}`);
+  let target = '';
+  if (hasOrigin(REPO)) {
+    const f = fetchOrigin(REPO);
+    target = refExists(REPO, 'refs/remotes/origin/' + DEVELOP) ? git(REPO, 'rev-parse', 'origin/' + DEVELOP) : '';
+    lines.push(`  develop on Forgejo: ${target ? short(target) : '(none)'}${f.ok ? '' : ` (could not reach Forgejo: ${f.error}; what is here)`}`);
+  } else lines.push('  develop on Forgejo: (no Forgejo remote here)');
+  const mainUp = upstreamOf(REPO, MAIN);
+  if (target && refExists(REPO, mainUp) && count(REPO, `${mainUp}..${target}`) === 0) lines.push(`  live: nothing to ship (${MAIN} has everything on ${DEVELOP})`);
+  else if (target) { const gate = await devGate(target); lines.push(gate.ok ? `  live: would go ahead (${gate.lines.join(' ')})` : `  live: would be REFUSED: ${gate.why}`); }
+  if (s.up) lines.push(`  sync: ${syncText(s.sync)}`);
+  if (s.up && Array.isArray(s.devOff)) lines.push(`  off on dev: ${s.devOff.length ? s.devOff.join(', ') : 'nothing (config devAllow turns them all on)'}`);
+  return lines;
+}
+
 // Going live (VibeRoller only): Forgejo's develop → Forgejo's main (merged in a scratch checkout and pushed first),
 // then the host folder follows: the server's auto-deploy fetches it (health check, automatic rollback), or, on a hub
 // without one, the host folder is fast-forwarded here and (with --restart) the hub asked to restart itself gracefully
 // (same as node bridge/restart.js: it waits until nobody has a reply in progress, nobody is signed out). Refuses if
 // main's folder has uncommitted changes. This is the one go-live command, so a Work session can ship when asked.
-function live(opts = {}) {
+// With Forgejo it refuses unless the dev hub has verified the exact commit of Forgejo's develop being promoted (T-326,
+// plans/dev-hub.md 3.2: devGate); opts.skipDev = the reason to go without it, said in the output and in the merge commit.
+async function live(opts = {}) {
   const at = worktrees().find((w) => w.branch === MAIN);
   if (!at) throw new Error(`No checkout has ${MAIN} checked out; the host folder should.`);
   if (dirty(at.dir)) throw new Error(`${MAIN} has uncommitted changes in ${at.dir}. Somebody is mid-work there; sort that out first.`);
@@ -559,9 +628,21 @@ function live(opts = {}) {
     return [r.ok ? `${at.dir} is now on ${short(git(at.dir, 'rev-parse', 'HEAD'))}.` : `Could not fast-forward ${at.dir} to ${mainUp}: ${lastLine(r.out)}`, ...(r.ok && opts.restart ? [restart()] : [])];
   };
   if (count(REPO, `${mainUp}..${dev}`) === 0) return [...lines, `Nothing to ship: Forgejo's ${MAIN} (${short(git(REPO, 'rev-parse', mainUp))}) already has everything on ${DEVELOP}.`, ...bringHere()];
+  // nothing goes live that has not run on dev: this exact commit, verified there (or the reason it goes without)
+  const target = git(REPO, 'rev-parse', dev);
+  let note;
+  if (opts.skipDev) {
+    lines.push(`Going live WITHOUT the dev hub's verification of ${short(target)} (--skip-dev): ${opts.skipDev}`);
+    note = `Not verified on the dev hub (--skip-dev): ${opts.skipDev}`;
+  } else {
+    const gate = await devGate(target);
+    if (!gate.ok) throw new Error(`Not live (nothing was changed): ${gate.why}`);
+    lines.push(...gate.lines);
+    note = `Verified on the dev hub: ${target}`;
+  }
   const s = scratch(hp, mainUp);
   try {
-    const r = tryGit(s.dir, ...identity(s.dir, 'VibeRoller'), 'merge', '--no-ff', '-m', `Merge ${DEVELOP} into ${MAIN}`, dev);
+    const r = tryGit(s.dir, ...identity(s.dir, 'VibeRoller'), 'merge', '--no-ff', '-m', `Merge ${DEVELOP} into ${MAIN}\n\n${note}`, target);
     if (!r.ok) { tryGit(s.dir, 'merge', '--abort'); throw new Error(`CONFLICT merging ${DEVELOP} into ${MAIN} (nothing was changed):\n${r.out}`); }
     const pushed = tryGit(s.dir, 'push', 'origin', `HEAD:refs/heads/${MAIN}`);
     if (!pushed.ok) throw new Error(`Pushing ${MAIN} to Forgejo failed, so nothing went live (${lastLine(pushed.out)}). ${/could not read|auth|denied|403|401/i.test(pushed.out) ? NO_TOKEN[0].toUpperCase() + NO_TOKEN.slice(1) + ', then run live again.' : ''}`);
@@ -674,6 +755,7 @@ module.exports = { ensure, repair, project, listProjects, create, clone, freshne
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const take = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv.splice(i, 2)[1] || '' : ''; };
+  const skipDev = argv.includes('--skip-dev') ? take('--skip-dev') : null; // null = not given; '' = given without its reason
   const repoArg = take('--repo'), pj = take('--project') || undefined, desc = take('--description'), sid = take('--session');
   const priv = argv.includes('--private'); if (priv) argv.splice(argv.indexOf('--private'), 1);
   const [cmd, user, ...rest] = argv;
@@ -719,7 +801,12 @@ if (require.main === module) {
     else if (cmd === 'commit') console.log(commit(user, rest.join(' '), pj));
     else if (cmd === 'sync') console.log(sync(user, pj));
     else if (cmd === 'merge') console.log(merge(user, pj));
-    else if (cmd === 'live') { if (pj && pj.toLowerCase() !== HUB_PROJECT.toLowerCase()) throw new Error('live is for VibeRoller itself; other projects are pushed by merge.'); console.log(live({ restart: process.argv.includes('--restart') }).join('\n')); }
-    else { console.error('Usage: node bridge/worktree.js [--project <name>] projects | new <name> | clone <url> [name] | status | repair [--repo <host folder>] | ensure <username> | check <username> | update <username> | renew <username> | check / auto / update / home <username> --session <id> | commit <username> [message] | sync <username> | merge <username> | live [--restart] | repos [words] | repo-create <owner/name> [--private] [--description text] | publish <owner/name> [--private] [--description text] | tag <name> [message] | deploy-key <owner/name> <public key file> [title] | visibility <owner/name> private|public'); process.exit(1); }
+    else if (cmd === 'live') {
+      if (pj && pj.toLowerCase() !== HUB_PROJECT.toLowerCase()) throw new Error('live is for VibeRoller itself; other projects are pushed by merge.');
+      if (skipDev !== null && !skipDev.trim()) throw new Error(`--skip-dev needs the reason, in quotes: ${SKIP_DEV} (it goes into the output and the merge commit). Nothing was changed.`);
+      live({ restart: process.argv.includes('--restart'), skipDev: skipDev ? skipDev.trim().replace(/\s+/g, ' ').slice(0, 300) : '' }).then((l) => console.log(l.join('\n')), fail);
+    }
+    else if (cmd === 'dev') { if (pj && pj.toLowerCase() !== HUB_PROJECT.toLowerCase()) throw new Error('dev is about VibeRoller\'s own dev hub.'); devReport().then((l) => console.log(l.join('\n')), fail); }
+    else { console.error('Usage: node bridge/worktree.js [--project <name>] projects | new <name> | clone <url> [name] | status | repair [--repo <host folder>] | ensure <username> | check <username> | update <username> | renew <username> | check / auto / update / home <username> --session <id> | commit <username> [message] | sync <username> | merge <username> | live [--restart] [--skip-dev "<reason>"] | dev | repos [words] | repo-create <owner/name> [--private] [--description text] | publish <owner/name> [--private] [--description text] | tag <name> [message] | deploy-key <owner/name> <public key file> [title] | visibility <owner/name> private|public'); process.exit(1); }
   } catch (e) { console.error(e.message); process.exit(1); }
 }

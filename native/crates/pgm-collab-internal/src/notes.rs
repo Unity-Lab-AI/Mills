@@ -143,6 +143,66 @@ impl Notes {
         }
         hits
     }
+    // ---------- for a sync with another copy of the notes (T-324: a dev hub next to the live one) ----------
+    /// Every note as (path, { text, mtime (ms), by }).
+    pub fn sync_list(&self) -> Vec<(String, Value)> {
+        let mut out = vec![];
+        fn walk(n: &Notes, sub: &[String], out: &mut Vec<(String, Value)>) {
+            let Ok(rd) = std::fs::read_dir(n.abs(sub)) else { return };
+            for e in rd.filter_map(|e| e.ok()) {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || !seg_ok(&name) { continue; }
+                let mut p = sub.to_vec(); p.push(name.clone());
+                if e.path().is_dir() { walk(n, &p, out); } else if name.to_lowercase().ends_with(".md") { let rel = p.join("/"); if let Some(v) = n.sync_get(&rel) { out.push((rel, v)); } }
+            }
+        }
+        walk(self, &[], &mut out);
+        out
+    }
+    /// One note as { text, mtime, by }, None when there is none at that path (exactly; names differing in case are
+    /// other notes here).
+    pub fn sync_get(&self, rel: &str) -> Option<Value> {
+        let parts = self.segs(rel, true, false).ok()?;
+        let f = self.abs(&parts);
+        if !f.is_file() || self.existing(&parts)?.join("/") != parts.join("/") { return None; }
+        let text = std::fs::read_to_string(&f).ok()?.replace("\r\n", "\n").replace('\r', "\n");
+        let by = self.meta.lock().unwrap_or_else(|e| e.into_inner()).get(&parts.join("/")).and_then(|m| m["by"].as_str().map(String::from)).unwrap_or_default();
+        Some(json!({ "text": text, "mtime": mtime(&f).floor() as i64, "by": by }))
+    }
+    /// Whether a path is one a note may have.
+    pub fn sync_path_ok(&self, rel: &str) -> bool { self.segs(rel, true, false).map(|p| p.join("/") == rel).unwrap_or(false) }
+    /// Another copy's version of a note: written with its time and who saved it (pages hear of it as of any save).
+    pub fn sync_put(&self, rel: &str, text: &str, mtime_ms: i64, by: &str) -> Result<(), String> {
+        let parts = self.segs(rel, true, false).map_err(|e| e.msg)?;
+        let f = self.abs(&parts);
+        if let Some(d) = f.parent() { std::fs::create_dir_all(d).map_err(|e| e.to_string())?; }
+        let tmp = PathBuf::from(format!("{}.tmp", f.display()));
+        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+        if let Ok(h) = std::fs::File::options().write(true).open(&tmp) { let _ = h.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(mtime_ms.max(0) as u64)); }
+        std::fs::rename(&tmp, &f).map_err(|e| e.to_string())?;
+        self.meta.lock().unwrap_or_else(|e| e.into_inner()).insert(parts.join("/"), json!({ "by": by, "at": mtime_ms }));
+        self.save_meta();
+        Ok(())
+    }
+    /// Another copy deleted a note.
+    pub fn sync_remove(&self, rel: &str) -> Result<(), String> {
+        let parts = self.segs(rel, true, false).map_err(|e| e.msg)?;
+        let f = self.abs(&parts);
+        if f.is_file() { std::fs::remove_file(&f).map_err(|e| e.to_string())?; }
+        self.meta.lock().unwrap_or_else(|e| e.into_inner()).remove(&parts.join("/"));
+        self.save_meta();
+        Ok(())
+    }
+    /// Where the losing side of a sync conflict on a note goes: "<name> - <copy> copy.md" next to it (T-324; a note's
+    /// name has letters, digits, spaces, dots, dashes and underscores only, so no brackets), shortened to fit 80 characters.
+    pub fn sync_copy_path(rel: &str, copy: &str) -> String {
+        let copy: String = copy.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(20).collect();
+        let tail = format!(" - {} copy.md", if copy.is_empty() { "other" } else { &copy });
+        let (dir, name) = match rel.rsplit_once('/') { Some((d, n)) => (format!("{d}/"), n), None => (String::new(), rel) };
+        let stem = name.strip_suffix(".md").or_else(|| name.strip_suffix(".MD")).unwrap_or(name);
+        let stem: String = stem.chars().take(80usize.saturating_sub(tail.len())).collect();
+        format!("{dir}{}{tail}", stem.trim_end())
+    }
     /// Claude in a Work run, as "<person> · Claude" (bridge/notes.js call).
     pub fn tool(&self, name: &str, args: &Value, who: &str) -> Value {
         let r = match name {
@@ -157,3 +217,27 @@ impl Notes {
 }
 /// JavaScript's localeCompare for file names, near enough: letters compared ignoring case first.
 fn locale_cmp(a: &str, b: &str) -> std::cmp::Ordering { a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| b.cmp(a)) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn another_copys_note_keeps_its_time_and_author_and_a_conflict_copy_is_a_valid_note_name() {
+        let dir = std::env::temp_dir().join(format!("pgm-notes-sync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let n = Notes::new(dir.clone());
+        let v0 = n.version();
+        n.sync_put("plans/a b.md", "hello\n", 1_700_000_000_123, "Ann").unwrap();
+        assert!(n.version() > v0, "pages hear of it");
+        assert_eq!(n.sync_get("plans/a b.md").unwrap(), json!({ "text": "hello\n", "mtime": 1_700_000_000_123i64, "by": "Ann" }));
+        assert_eq!(n.sync_list().len(), 1);
+        let copy = Notes::sync_copy_path("plans/a b.md", "dev");
+        assert_eq!(copy, "plans/a b - dev copy.md");
+        assert!(n.sync_path_ok(&copy), "the copy's name is one a note may have");
+        let long = format!("{}.md", "x".repeat(77));
+        assert!(n.sync_path_ok(&Notes::sync_copy_path(&long, "live")), "shortened to fit");
+        n.sync_remove("plans/a b.md").unwrap();
+        assert!(n.sync_get("plans/a b.md").is_none() && n.sync_list().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

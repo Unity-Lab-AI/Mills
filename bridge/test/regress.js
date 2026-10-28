@@ -46,6 +46,7 @@ function check(id, label, pass, detail = '') {
   if (STOP_AFTER && id === STOP_AFTER) { const e = new Error('stopped after ' + id); e.stopAfter = true; throw e; }
 }
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
+const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -375,7 +376,19 @@ function startAiNode() {
 // built into their own target folder with a test-only release key (the scratch hub signs with it), so they never mix
 // with the real builds of native/build.sh
 const TEST_RELEASE_KEY = { secret: '4570e54a425b32604b04d14d172976b602af918eb6322d14e929867896b61b50', public: '241fc450dffa7aaf2155ed06404cd10d824f590c7c0c00a70b4ec6fa8e9b5a20' };
-const NATIVE_TARGET = path.join(MILLS, 'native', 'target', 'regress');
+// Clean build law (LAWS.md): the suite's native build goes into a temporary folder of its own, deleted when the run ends
+// (and a folder an earlier run left behind, after a crash, is swept once it is a day old). It lives under native/target/tmp
+// (ignored by git) on the disk, not in os.tmpdir(): /tmp is often a RAM disk, and this build beside a deploy's clean build
+// filled the server's 16 GB one (5.34.1: nine cargo checks failed with nothing to show for it)
+const NATIVE_TARGET = (() => {
+  const base = path.join(__dirname, '..', '..', 'native', 'target', 'tmp');
+  fs.mkdirSync(base, { recursive: true });
+  try { for (const d of fs.readdirSync(base)) if (/^vr-regress-/.test(d) && Date.now() - fs.statSync(path.join(base, d)).mtimeMs > 86400e3) fs.rmSync(path.join(base, d), { recursive: true, force: true }); } catch {}
+  const dir = fs.mkdtempSync(path.join(base, 'vr-regress-'));
+  process.on('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => process.exit(130));
+  return dir;
+})();
 const NATIVE_BIN = (() => {
   const exe = (n) => path.join(NATIVE_TARGET, 'release', n + (WIN ? '.exe' : ''));
   return { host: exe('vr-host'), interop: path.join(NATIVE_TARGET, 'release', 'examples', 'interop' + (WIN ? '.exe' : '')) };
@@ -542,6 +555,181 @@ async function wrapV3(priv, jwk) { // the page's wrapWith: HKDF-SHA256 over the 
 }
 const shared = async (priv, jwk) => subtle.deriveKey({ name: 'ECDH', public: await subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, ECDH, false, []) }, priv, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 
+// ---------- the dev hub (T-326 / T-327, the team note plans/dev-hub.md) ----------
+// R492 (T-326): worktree.js live is gated on the dev hub, against a scratch Forgejo stand-in (a bare repo), a scratch host
+// folder and a stand-in dev hub (its base folder with deploy-state/last-good, and its /api/status answered from here, so
+// worktree.js is spawned, never spawnSync'd).
+const R492_LABEL = 'going live needs the dev hub: worktree.js live refuses when no dev hub is installed (and names --skip-dev "<reason>"), when dev\'s last good commit is not develop\'s head, and when the dev port answers as another hub; it goes ahead when dev verified that exact commit (the merge commit says so); --skip-dev without a reason is refused, with one it goes ahead and the reason is in the output and the merge commit; a merge into develop says it deploys to dev within a minute; worktree.js dev shows what dev runs, its last good commit, develop\'s head, whether live would go ahead and its sync';
+async function r492Check() {
+  const http = require('http');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-r492-'));
+  const fake = { instance: 'dev', commit: '' };
+  const srv = http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, hub: true, instance: fake.instance, commit: fake.commit, version: '0.0.0-r492', sync: { peer: 'live', pending: 0, lastAt: 'r492-time' }, devOff: ['mirror', 'triggers'] })); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const seen = [];
+  try {
+    const g = (cwd, ...a) => spawnSync('git', ['-c', 'user.name=r492', '-c', 'user.email=r492@example.invalid', ...a], { cwd, encoding: 'utf8' });
+    const origin = path.join(d, 'origin.git'), seed = path.join(d, 'seed'), host = path.join(d, 'host'), devBase = path.join(d, 'dev');
+    g(d, 'init', '-q', '--bare', origin); g(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    fs.mkdirSync(seed); g(seed, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(seed, 'a.txt'), 'one\n'); g(seed, 'add', '-A'); g(seed, 'commit', '-q', '-m', 'first');
+    g(seed, 'branch', 'develop'); g(seed, 'checkout', '-q', 'develop'); fs.writeFileSync(path.join(seed, 'b.txt'), 'two\n'); g(seed, 'add', '-A'); g(seed, 'commit', '-q', '-m', 'on develop');
+    g(seed, 'remote', 'add', 'origin', origin); g(seed, 'push', '-q', 'origin', 'main', 'develop');
+    g(d, 'clone', '-q', origin, host); g(host, 'branch', '-q', 'develop', 'origin/develop');
+    fs.mkdirSync(path.join(host, 'bridge')); fs.writeFileSync(path.join(host, 'bridge', 'config.json'), JSON.stringify({ worktreeRoot: path.join(d, 'wt'), autoDeploy: true }));
+    fs.writeFileSync(path.join(host, '.git', 'info', 'exclude'), 'bridge/\n'); // the host folder stays clean (live refuses a dirty main)
+    const head = (ref) => g(origin, 'rev-parse', ref).stdout.trim(), msg = () => g(origin, 'log', '-1', '--format=%B', 'main').stdout;
+    const wt = (base, ...a) => new Promise((done) => {
+      const c = spawn(process.execPath, [path.join(SB, 'worktree.js'), ...a], { cwd: SB, env: { ...process.env, VIBEROLLER_HUB_REPO: host, VR_DEV_BASE: base, VR_DEV_PORT: String(srv.address().port), GIT_TERMINAL_PROMPT: '0' } });
+      let stdout = '', stderr = ''; c.stdout.on('data', (x) => { stdout += x; }); c.stderr.on('data', (x) => { stderr += x; });
+      const t = setTimeout(() => c.kill(), 90000); c.on('close', (status) => { clearTimeout(t); done({ status, stdout, stderr, out: stdout + stderr }); });
+    });
+    const main0 = head('main'), dev1 = head('develop');
+    // no dev hub at all
+    const noDev = await wt(path.join(d, 'no-such-dev'), 'live');
+    seen.push(`no dev: ${noDev.status} "${noDev.out.trim().slice(0, 120)}"`);
+    // dev installed, but its last good commit is an older one
+    fs.mkdirSync(path.join(devBase, 'deploy-state'), { recursive: true });
+    fs.writeFileSync(path.join(devBase, 'deploy-state', 'last-good'), main0 + '\n');
+    fake.commit = main0;
+    const stale = await wt(devBase, 'live'), report = await wt(devBase, 'dev');
+    seen.push(`stale: ${stale.status} "${stale.out.trim().slice(0, 120)}"`);
+    // dev verified develop's head, but the dev port answers as the live hub
+    fs.writeFileSync(path.join(devBase, 'deploy-state', 'last-good'), dev1 + '\n');
+    fake.commit = dev1; fake.instance = 'live';
+    const notDev = await wt(devBase, 'live');
+    const mainAfterRefusals = head('main');
+    // dev verified develop's head and runs it: live goes ahead
+    fake.instance = 'dev';
+    const ok = await wt(devBase, 'live');
+    const okMsg = msg(), okMain = head('main'), okHas = g(origin, 'merge-base', '--is-ancestor', dev1, 'main').status === 0;
+    seen.push(`verified: ${ok.status} "${ok.out.trim().split('\n').slice(0, 2).join(' / ').slice(0, 160)}"`);
+    // a merge into develop (dev installed) says where it goes next
+    const ens = await wt(devBase, 'ensure', 'r492');
+    const wtDir = path.join(d, 'wt', 'r492');
+    if (fs.existsSync(wtDir)) { fs.writeFileSync(path.join(wtDir, 'c.txt'), 'three\n'); g(wtDir, 'add', '-A'); g(wtDir, 'commit', '-q', '-m', 'r492 work'); }
+    const mg = await wt(devBase, 'merge', 'r492');
+    const dev2 = head('develop');
+    // develop moved on, dev has not verified it: --skip-dev needs a reason, then goes ahead with it
+    const noReason = await wt(devBase, 'live', '--skip-dev');
+    const mainBeforeSkip = head('main');
+    const skipped = await wt(devBase, 'live', '--skip-dev', 'r492 dev is down for maintenance');
+    const skipMsg = msg(), skipHas = g(origin, 'merge-base', '--is-ancestor', dev2, 'main').status === 0;
+    seen.push(`merge: ${mg.status} "${mg.out.trim().split('\n').pop().slice(0, 100)}" · no reason: ${noReason.status} · skip: ${skipped.status} "${skipped.out.trim().split('\n')[0].slice(0, 120)}"`);
+    const pass = noDev.status !== 0 && /not installed/.test(noDev.stderr) && noDev.stderr.includes('--skip-dev "<reason>"')
+      && stale.status !== 0 && stale.stderr.includes(`verified ${main0.slice(0, 7)}`) && stale.stderr.includes(dev1.slice(0, 7))
+      && notDev.status !== 0 && /not the dev hub/.test(notDev.stderr) && mainAfterRefusals === main0
+      && ok.status === 0 && ok.stdout.includes(`Dev verified ${dev1.slice(0, 7)}`) && /Merged develop into main/.test(ok.stdout) && okMain !== main0 && okHas && okMsg.includes(`Verified on the dev hub: ${dev1}`)
+      && ens.status === 0 && mg.status === 0 && /now deploys to the dev hub within a minute/.test(mg.stdout) && dev2 !== dev1
+      && noReason.status !== 0 && /needs the reason/.test(noReason.stderr) && mainBeforeSkip === okMain
+      && skipped.status === 0 && /WITHOUT the dev hub's verification/.test(skipped.stdout) && skipped.stdout.includes('r492 dev is down for maintenance') && skipHas && skipMsg.includes('Not verified on the dev hub (--skip-dev): r492 dev is down for maintenance')
+      && report.status === 0 && /installed: yes/.test(report.stdout) && report.stdout.includes(`last good (verified by its auto-deploy): ${main0.slice(0, 7)}`) && report.stdout.includes(`develop on Forgejo: ${dev1.slice(0, 7)}`) && /instance "dev"/.test(report.stdout) && /would be REFUSED/.test(report.stdout) && /sync: peer live/.test(report.stdout);
+    check('R492', R492_LABEL, pass, seen.join(' · ') + ` · dev report: ${report.stdout.replace(/\s+/g, ' ').slice(0, 300)}${report.stderr ? ' ERR ' + report.stderr.trim() : ''}`);
+  } catch (e) { if (e.stopAfter) throw e; check('R492', R492_LABEL, false, 'the check itself failed: ' + e.message + ' · ' + seen.join(' · ')); }
+  finally { srv.close(); fs.rmSync(d, { recursive: true, force: true }); }
+}
+
+// R493 (T-327): a second scratch Rust hub with config instance "dev" (the same accounts, its own data), next to the normal
+// scratch hub (live). Then the same dev hub again with devAllow naming the jobs, to show it is the gate that stopped them.
+const R493_LABEL = 'the dev hub says so and acts once: with config instance "dev" /api/status says instance dev (and which jobs are off), every page has the DEV band with its build at the top and a title starting "DEV · ", and every answer has X-Robots-Tag noindex; there a timer trigger that is due does not fire, an event trigger starts nothing, @unity gets no answer (and nobody a sign-in greeting), a new board task is not mirrored to Forgejo and products get no gateway, and a done task past its archive age stays on the board (the archive sweep is live\'s); with devAllow naming them the same dev hub does all of those; the normal scratch hub says live and has no band, no DEV title and no noindex';
+async function r493Check() {
+  const seen = [], D = fs.mkdtempSync(path.join(SCRATCH, 'r493-dev-')), DB = path.join(D, 'bridge');
+  let proc = null;
+  const P = await freePort(PORT + 60), DH = `http://127.0.0.1:${P}`;
+  const dcall = async (p, token, body, hdr = {}) => { try { const r = await fetch(DH + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...hdr }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})), headers: r.headers }; } catch (e) { return { status: 0, data: { error: e.message }, headers: new Headers() }; } };
+  const stop = async () => { if (!proc) return; const p = proc; proc = null; const gone = new Promise((r) => p.once('exit', r)); try { p.kill('SIGTERM'); } catch {} await Promise.race([gone, sleep(5000)]); };
+  const start = async (local) => {
+    fs.writeFileSync(path.join(DB, 'config.local.json'), JSON.stringify(local));
+    const log = fs.openSync(path.join(D, 'hub.log'), 'a');
+    proc = spawn(RUST_HUB, ['--port', String(P), '--alone', '--root', DB], { cwd: DB, stdio: ['ignore', log, log], env: { ...process.env } });
+    for (let i = 0; i < 80; i++) { if ((await dcall('/api/status')).status === 200) return true; await sleep(250); }
+    return false;
+  };
+  // a chat message as the page sends it (every member with a key gets a slot, the agent too)
+  const send = async (tok, priv, plain) => {
+    const mem = (await dcall('/api/room/members', tok)).data.members || [], r2 = rand(32), iv2 = rand(12);
+    const body = await subtle.encrypt({ name: 'AES-GCM', iv: iv2 }, await subtle.importKey('raw', r2, 'AES-GCM', false, ['encrypt']), enc.encode(plain));
+    const ks = {};
+    for (const m of mem) if (m.pub) { const kiv = rand(12); ks[m.username] = { iv: toB64(kiv), wk: toB64(await subtle.encrypt({ name: 'AES-GCM', iv: kiv }, await shared(priv, m.pub), r2)) }; }
+    return dcall('/api/room/send', tok, { iv: toB64(iv2), ct: toB64(body), keys: ks });
+  };
+  const fromAgent = async (tok, after) => ((await dcall('/api/room/messages?since=' + after, tok)).data.messages || []).filter((m) => m.from === 'claude');
+  const lastSeq = async (tok) => Math.max(0, ...((await dcall('/api/room/messages?since=0', tok)).data.messages || []).map((m) => m.seq));
+  const page = async (base) => { try { const r = await fetch(base + '/'); return { html: await r.text(), robots: r.headers.get('x-robots-tag') || '' }; } catch (e) { return { html: '', robots: '', error: e.message }; } };
+  const trig = (id) => { for (const f of fs.readdirSync(path.join(D, 'Hyperwork'), { recursive: true })) if (String(f).endsWith(path.sep + id + '.json') || String(f) === id + '.json') { try { return JSON.parse(fs.readFileSync(path.join(D, 'Hyperwork', String(f)), 'utf8')); } catch {} } return null; };
+  const issue = (title) => [...fakeForgejo.issues.values()].find((is) => is.title === title);
+  const waitFor = async (test, ms) => { for (let t = 0; t < ms; t += 300) { const v = await test(); if (v) return v; await sleep(300); } return null; };
+  try {
+    // the dev hub's folder: the scratch hub's accounts and config (its own port, data and folders; no RE containers)
+    fs.mkdirSync(path.join(DB, 'profiles'), { recursive: true });
+    for (const f of ['auth.json', 'forgejo.json']) if (fs.existsSync(path.join(SB, f))) fs.copyFileSync(path.join(SB, f), path.join(DB, f));
+    for (const u of ['t-admin', 't-user']) { fs.mkdirSync(path.join(DB, 'profiles', u)); for (const f of ['auth.json', 'config.json']) if (fs.existsSync(path.join(SB, 'profiles', u, f))) fs.copyFileSync(path.join(SB, 'profiles', u, f), path.join(DB, 'profiles', u, f)); }
+    const cfg = JSON.parse(fs.readFileSync(path.join(SB, 'config.json'), 'utf8'));
+    delete cfg.re; delete cfg.rustHub;
+    Object.assign(cfg, { port: P, worktreeRoot: path.join(D, 'worktrees'), projectsRoot: path.join(D, 'projects') });
+    fs.writeFileSync(path.join(DB, 'config.json'), JSON.stringify(cfg, null, 2));
+    fs.cpSync(path.join(SCRATCH, 'web'), path.join(D, 'web'), { recursive: true });
+    const g = (...a) => spawnSync('git', ['-c', 'user.name=r493', '-c', 'user.email=r493@example.invalid', ...a], { cwd: D, encoding: 'utf8' });
+    fs.writeFileSync(path.join(D, '.gitignore'), 'bridge/\nweb/\nChat/\nBoard/\nNotes/\nHyperwork/\nhub.log\n*\n!.gitignore\n'); g('init', '-q', '-b', 'develop'); g('add', '-A'); g('commit', '-q', '-m', 'r493 develop build');
+    const short = g('rev-parse', 'HEAD').stdout.trim().slice(0, 7);
+    if (!(await start({ instance: 'dev', board: { archiveAfterHours: 0.0005, sweepSeconds: 1 } }))) throw new Error('the dev hub did not start: ' + fs.readFileSync(path.join(D, 'hub.log'), 'utf8').slice(-400));
+    const st = await dcall('/api/status'), stLive = await call('/api/status');
+    const pg = await page(DH), pgLive = await page(H);
+    const title = (pg.html.match(/<title>([^<]*)<\/title>/) || [])[1] || '', titleLive = (pgLive.html.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
+    const band = pg.html.includes('<div id="devBand"') && pg.html.includes(`DEV — develop build ${short}`) && pg.html.indexOf('id="devBand"') > pg.html.indexOf('\n<body');
+    seen.push(`status dev ${st.data.instance} off [${st.data.devOff}] robots "${st.headers.get('x-robots-tag')}" · live ${stLive.data.instance} off ${stLive.data.devOff} · page band ${band} title "${title}" robots "${pg.robots}" · live page band ${pgLive.html.includes('id="devBand"')} title "${titleLive}" robots "${pgLive.robots}"`);
+    // people on dev: the same accounts and passwords
+    const A2 = (await dcall('/api/login', null, { username: 't-admin', password: 'pw-t-admin-0001', deviceId: 'device-aaaaaaaaaaaaaaaa' })).data.token;
+    const U2 = (await dcall('/api/login', null, { username: 't-user', password: 'pw-t-user-0001', deviceId: 'device-bbbbbbbbbbbbbbbb' })).data.token;
+    const kp = await subtle.generateKey(ECDH, true, ['deriveKey']), pub = await subtle.exportKey('jwk', kp.publicKey);
+    const keyUp = await dcall('/api/room/mykey', U2, { pub: { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y }, backup: await lock(kp.privateKey, 'pw-t-user-0001') });
+    // the jobs that must not run on dev
+    const hw = (p, tok, body) => dcall('/api/hyperwork/' + p, tok, body);
+    const wf = await hw('save', A2, { doc: { schema: 1, name: 'r493-noop', nodes: [{ id: 's', kind: 'start' }, { id: 'e', kind: 'end' }], edges: [{ id: 'e1', from: 's.prompt', to: 'e.result' }] } });
+    await hw('publish', A2, { id: wf.data.id, message: 'x' });
+    const timer = await hw('trigger', A2, { workflow: wf.data.id, kind: 'timer', timer: { every: { n: 60, unit: 'minutes' }, start: Date.now() + 2000 }, title: 'r493 timer' });
+    const evT = await hw('trigger', A2, { workflow: wf.data.id, kind: 'event', event: { name: 'r493-ev' }, title: 'r493 event' });
+    const sendEv = () => dcall('/internal/hyperwork/event', null, { name: 'r493-ev', payload: {} }, { 'X-VR-Event-Secret': 'r472-event-secret-0123456789' });
+    const ev1 = await sendEv();
+    const seq1 = await lastSeq(U2);
+    await send(U2, kp.privateKey, '@unity are you there r493');
+    const task1 = await dcall('/api/board/create', U2, { title: 'r493 dev task', status: 'todo' });
+    // a done task, past the archive age (1.8 s here): the board's archive sweep is live's job, so dev leaves it on the board
+    const done1 = (await dcall('/api/board/create', U2, { title: 'r493 done task', status: 'todo' })).data.task || {};
+    await dcall('/api/board/complete', U2, { id: done1.id });
+    const gw1 = await dcall('/internal/gateway/status');
+    const gwAdm1 = await dcall('/api/admin/gateway/products', A2, { id: 'r493-prod', name: 'R493' });
+    await sleep(9000); // past the timer (due 2 s after it was made; the hub looks every 5 s), the agent, the mirror (a 3-second poll)
+    const t1 = trig(timer.data.id) || {}, agent1 = await fromAgent(U2, seq1), iss1 = issue('r493 dev task');
+    const swept1 = !!((await dcall('/api/board/task?id=' + done1.id, U2)).data.task || {}).archivedAt;
+    seen.push(`dev: timer next ${t1.next ? new Date(t1.next).toISOString().slice(11, 19) : t1.next} runs ${(t1.runs || []).length} · event runs ${JSON.stringify(ev1.data.runs)} · agent ${agent1.length} · task ${task1.status} mirrored ${!!iss1} · gateway ${gw1.status} admin ${gwAdm1.status} · done task archived ${swept1}`);
+    // the same dev hub, the jobs allowed: they run (the gate is what stopped them)
+    await stop();
+    if (!(await start({ instance: 'dev', devAllow: ['triggers', 'agents', 'mirror', 'gateway', 'sweep'], board: { archiveAfterHours: 0.0005, sweepSeconds: 1 } }))) throw new Error('the dev hub did not start again');
+    const st2 = await dcall('/api/status');
+    const t2 = await waitFor(async () => { const t = trig(timer.data.id); return t && (t.runs || []).length ? t : null; }, 12000) || trig(timer.data.id) || {};
+    const ev2 = await sendEv();
+    const seq2 = await lastSeq(U2);
+    await send(U2, kp.privateKey, '@unity and now r493');
+    const agent2 = await waitFor(async () => { const a = await fromAgent(U2, seq2); return a.length ? a : null; }, 20000) || [];
+    const task2 = await dcall('/api/board/create', U2, { title: 'r493 dev task allowed', status: 'todo' });
+    const iss2 = await waitFor(async () => issue('r493 dev task allowed'), 12000);
+    const gw2 = await dcall('/internal/gateway/status');
+    const swept2 = !!(await waitFor(async () => ((await dcall('/api/board/task?id=' + done1.id, U2)).data.task || {}).archivedAt, 12000));
+    seen.push(`allowed: off [${st2.data.devOff}] timer runs ${(t2.runs || []).length} · event runs ${(ev2.data.runs || []).length} · agent ${agent2.length} · mirrored ${!!iss2} · gateway ${gw2.status} · done task archived ${swept2}`);
+    const pass = st.status === 200 && st.data.instance === 'dev' && ['mirror', 'triggers', 'agents', 'gateway', 'hostUpdates', 'sweep'].every((j) => (st.data.devOff || []).includes(j)) && /noindex/.test(st.headers.get('x-robots-tag') || '')
+      && stLive.data.instance === 'live' && stLive.data.devOff === undefined
+      && band && title.startsWith('DEV · ') && /noindex/.test(pg.robots) && pg.html.includes('<meta name="robots" content="noindex')
+      && !pgLive.html.includes('id="devBand"') && !titleLive.startsWith('DEV') && !pgLive.robots && !!pgLive.html
+      && !!A2 && !!U2 && keyUp.status === 200 && wf.status === 200 && timer.status === 200 && evT.status === 200
+      && (t1.runs || []).length === 0 && t1.next === timer.data.next && ev1.status === 200 && Array.isArray(ev1.data.runs) && ev1.data.runs.length === 0
+      && agent1.length === 0 && !!done1.id && !swept1 && swept2 && task1.status === 200 && !iss1 && gw1.status === 503 && gwAdm1.status === 409
+      && st2.data.instance === 'dev' && JSON.stringify(st2.data.devOff) === '["hostUpdates"]'
+      && (t2.runs || []).length >= 1 && (ev2.data.runs || []).length === 1 && agent2.length >= 1 && task2.status === 200 && !!iss2 && gw2.status === 403;
+    check('R493', R493_LABEL, pass, seen.join(' · '));
+  } catch (e) { if (e.stopAfter) throw e; check('R493', R493_LABEL, false, 'the check itself failed: ' + e.message + ' · ' + seen.join(' · ')); }
+  finally { await stop(); if (!KEEP) fs.rmSync(D, { recursive: true, force: true }); }
+}
+
 // ---------- the checklist ----------
 async function run() {
   const devA = 'device-aaaaaaaaaaaaaaaa', devB = 'device-bbbbbbbbbbbbbbbb', devC = 'device-cccccccccccccccc';
@@ -579,6 +767,9 @@ async function run() {
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
   if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
   if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
+  if (process.argv.includes('--only-r491') && RUST_HUB) await r491Check(); // development: just R491 (with --stop-after R491)
+  if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
+  if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -3500,6 +3691,41 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && !has('unblock', still) && !!has('unowned', lonely) && props.every((p) => p.reason) && before === after,
       `${props.length} proposals · unblock ${JSON.stringify(un).slice(0, 200)} · still ${!!has('unblock', still)} · unowned ${!!has('unowned', lonely)} · unchanged ${before === after} ${got.error || ''}`);
   } else skip('R490', 'the planner re-assesses the board (T-280)', 'the Rust hub\'s: --rust-hub runs it');
+  // R494 (T-323): deploy/setup-dev.sh installs the dev hub beside a live one (here a stand-in live base with a bare origin),
+  // copying live's data but never its sign-in sessions, and never writing live's files except `pair`
+  if (WIN) skip('R494', 'the dev hub install (deploy/setup-dev.sh)', 'a server script (sh): Linux only');
+  else {
+    const L = fs.mkdtempSync(path.join(SCRATCH, 'r494-')), app = path.join(L, 'app'), bare = path.join(L, 'origin.git');
+    const g = (dir, ...a) => spawnSync('git', ['-c', 'user.name=r494', '-c', 'user.email=r494@test.invalid', ...a], { cwd: dir, encoding: 'utf8' });
+    fs.mkdirSync(path.join(app, 'deploy'), { recursive: true }); fs.mkdirSync(path.join(app, 'bridge')); fs.mkdirSync(path.join(app, 'Board')); fs.mkdirSync(path.join(app, 'Notes'));
+    fs.writeFileSync(path.join(app, 'versions.json'), '{ "project": "9.9.9" }\n');
+    for (const f of ['setup-dev.sh', 'viberoller-dev-hub.service', 'viberoller-dev-autodeploy.service', 'viberoller-dev-autodeploy.timer']) fs.copyFileSync(path.join(MILLS, 'deploy', f), path.join(app, 'deploy', f));
+    fs.writeFileSync(path.join(app, '.gitignore'), 'bridge/*.json\nBoard/\nNotes/\n');
+    g(L, 'init', '-q', '--bare', '-b', 'main', bare); g(app, 'init', '-q', '-b', 'main'); g(app, 'add', '-A'); g(app, 'commit', '-q', '-m', 'r494');
+    g(app, 'remote', 'add', 'origin', bare); g(app, 'push', '-q', 'origin', 'main'); g(app, 'push', '-q', 'origin', 'main:develop');
+    const liveCfg = JSON.stringify({ port: 7777, publicUrl: 'https://portal.example', rustHub: { enabled: true, backPort: 7779, alone: true }, aiNodes: { pc: 'k' }, allowedOrigins: ['https://x.example'] }, null, 2) + '\n';
+    fs.writeFileSync(path.join(app, 'bridge', 'config.local.json'), liveCfg);
+    fs.writeFileSync(path.join(app, 'bridge', 'auth.json'), '{"users":{"ann":{"hash":"h"}}}'); fs.writeFileSync(path.join(app, 'bridge', 'front-sessions.json'), '{"tok":"ann"}');
+    fs.writeFileSync(path.join(app, 'bridge', 'device-locks.json'), '{}'); fs.writeFileSync(path.join(app, 'Board', 'board.json'), '{"tasks":[{"id":"T-1"}]}'); fs.writeFileSync(path.join(app, 'Notes', 'n.md'), 'note r494');
+    const env = { ...process.env, VR_LIVE_BASE: L, VR_DEV_UNITS: '', VR_DEV_URL: 'https://dev.example' };
+    const run1 = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh')], { env, encoding: 'utf8' });
+    const D = path.join(L, 'dev', 'app'), has = (p) => fs.existsSync(path.join(D, p));
+    const cfg = (() => { try { return JSON.parse(fs.readFileSync(path.join(D, 'bridge', 'config.local.json'), 'utf8')); } catch { return {}; } })();
+    const branch = g(D, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim();
+    fs.writeFileSync(path.join(D, 'Board', 'board.json'), '{"tasks":[{"id":"T-1"},{"id":"T-2"}]}'); // a change on dev
+    const run2 = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh')], { env, encoding: 'utf8' });
+    const kept = fs.readFileSync(path.join(D, 'Board', 'board.json'), 'utf8').includes('T-2'), liveSame = fs.readFileSync(path.join(app, 'bridge', 'config.local.json'), 'utf8') === liveCfg;
+    const pair = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh'), 'pair'], { env, encoding: 'utf8' });
+    const lc = JSON.parse(fs.readFileSync(path.join(app, 'bridge', 'config.local.json'), 'utf8')), dc = JSON.parse(fs.readFileSync(path.join(D, 'bridge', 'config.local.json'), 'utf8'));
+    const secretMode = (() => { try { return (fs.statSync(path.join(L, 'sync.secret')).mode & 0o077) === 0; } catch { return false; } })();
+    check('R494', 'the dev hub install (deploy/setup-dev.sh) clones develop beside live, copies live\'s data once (the board, notes, accounts) but never its sign-in sessions or device unlocks, makes dev\'s settings from live\'s (port 7778, instance dev, its own address, no AI hosts), leaves live\'s files alone, keeps what changed on dev when run again, and only `pair` turns the bridge on for both (one private secret, a graceful restart asked of each)',
+      run1.status === 0 && branch === 'develop' && has('Board/board.json') && has('Notes/n.md') && has('bridge/auth.json') && !has('bridge/front-sessions.json') && !has('bridge/device-locks.json')
+      && cfg.port === 7778 && cfg.instance === 'dev' && cfg.publicUrl === 'https://dev.example' && cfg.rustHub.backPort === 7781 && Object.keys(cfg.aiNodes || {}).length === 0 && !cfg.sync
+      && run2.status === 0 && kept && liveSame
+      && pair.status === 0 && lc.sync && lc.sync.peer === 'http://127.0.0.1:7778' && dc.sync && dc.sync.peer === 'http://127.0.0.1:7777' && lc.sync.secretFile === dc.sync.secretFile && lc.sync.name === 'live' && dc.sync.name === 'dev' && secretMode
+      && fs.existsSync(path.join(app, 'bridge', '.restart')) && fs.existsSync(path.join(D, 'bridge', '.restart')),
+      `install ${run1.status} ${(run1.stdout + run1.stderr).trim().split('\n').slice(-2).join(' / ')} · branch ${branch} · sessions copied ${has('bridge/front-sessions.json')} · cfg ${JSON.stringify(cfg).slice(0, 160)} · again ${run2.status} kept ${kept} live unchanged ${liveSame} · pair ${pair.status} ${JSON.stringify(lc.sync)} ${JSON.stringify(dc.sync)} secret private ${secretMode}`);
+  }
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
     const one197 = async (id) => ((await ss197()).sessions || []).find((s) => s.id === id) || {};
@@ -3566,6 +3792,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
+  if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R285 to R289 (T-289): other tools (Jcode PGM) report their sessions; the person's list shows them as `external`
     const s285 = {}, now285 = Date.now();
     const rep = (tok, body) => call('/api/work/sessions/report', tok, body);
@@ -5994,7 +6223,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     else {
       const out321 = String(ct.stdout || '') + String(ct.stderr || '');
       const okN = (re) => (out321.match(new RegExp('^test machine::' + re + '[^ ]* \\.\\.\\. ok$', 'gm')) || []).length;
-      const detail321 = `cargo test ${ct.status} scope ${okN('scope::')} paths ${okN('paths::')} floor ${okN('floor::')} integration ${okN('tests::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}`;
+      // when cargo itself fails (a compile error, a killed linker), say what it said: the counts alone read as all zero
+      const why321 = ct.status === 0 ? '' : ` · cargo said: ${(out321.match(/^(error[^\n]*|.*panicked at[^\n]*|.*signal: [^\n]*)/m) || [out321.trim().split('\n').slice(-1)[0] || 'nothing'])[0].slice(0, 300)}`;
+      const detail321 = `cargo test ${ct.status} scope ${okN('scope::')} paths ${okN('paths::')} floor ${okN('floor::')} integration ${okN('tests::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}${why321}`;
       const src321 = ['mod.rs', 'scope.rs', 'paths.rs', 'floor.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
       check('R321', L321, ct.status === 0 && src321 && okN('scope::') >= 12, detail321);
       check('R322', L322, ct.status === 0 && okN('paths::') >= 8, detail321);
@@ -6011,9 +6242,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const src324 = fs.existsSync(path.join(mdir, 'sign.rs')) && /pub mod sign;/.test(fs.readFileSync(path.join(mdir, 'mod.rs'), 'utf8'));
       check('R324', 'signed requests and the machine\'s own check (T-308): one ed25519 hub key made once in the hub\'s data folder (owner-only file), a signed envelope {owner, actor{account, session, run}, tool, args digest, nonce, issuedAt, expiresAt}, and the machine-side verifier refuses a bad signature, a request signed by another key (a lying hub stub), an expired or future request, a repeated nonce (bounded replay cache), an owner that is not its own link, actor.account != owner, another machine id, another tool or other arguments than the ones signed; the host pins the hub\'s key from its hello (an older hub that announces none keeps working unsigned, a different key later is not taken, an unsigned job is refused once pinned)',
         ct.status === 0 && ct323.status === 0 && src324 && signOk.length === signTests.length && pinOk.length === pinTests.length && /signed-pc/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'hostlink.rs'), 'utf8')),
-        `cargo test ${ct.status} / ${ct323.status}: sign ${signOk.length}/${signTests.length}, pin ${pinOk.length}/${pinTests.length} ${/FAILED|panicked/.test(out2) ? 'FAILURES' : ''}`);
+        `cargo test ${ct.status} / ${ct323.status}: sign ${signOk.length}/${signTests.length}, pin ${pinOk.length}/${pinTests.length} ${/FAILED|panicked/.test(out2) ? 'FAILURES' : ''}${why321}`);
       // R331, R332, R333 (T-312, linked machines 6/8): the same cargo run covers the guards
-      const detail331 = `cargo test ${ct.status} audit ${okN('audit::')} kill ${okN('kill::')} limits ${okN('limits::')} elevate ${okN('elevate::')} changes ${okN('changes::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}`;
+      const detail331 = `cargo test ${ct.status} audit ${okN('audit::')} kill ${okN('kill::')} limits ${okN('limits::')} elevate ${okN('elevate::')} changes ${okN('changes::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}${why321}`;
       const src331 = ['audit.rs', 'kill.rs', 'limits.rs', 'elevate.rs', 'changes.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
       check('R331', L331, ct.status === 0 && src331 && okN('audit::') >= 6, detail331);
       check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= 4 && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331);
@@ -6147,6 +6378,128 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.folder && seen.archive === 200 && seen.outOfList && seen.inArchived && seen.back && seen.served && !!S && seen.colours && seen.shapes && seen.meanings && seen.stall && seen.grouped
       && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
     check('R489', R489_LABEL, ok, JSON.stringify(seen));
+  }
+  // R491 (T-324, plans/dev-hub.md § 2): two hubs on one machine (live and dev) keep their own full copies and a bridge keeps
+  // them the same both ways. Two Rust hubs of their own (own roots, own ports), paired by config sync (one secret file each),
+  // driven over HTTP like people would.
+  async function r491Check() {
+    const seen = {}; const procs = {}; const base = path.join(SCRATCH, 'r491'); const secret = crypto.randomBytes(24).toString('hex');
+    const pA = await freePort(PORT + 61), pB = await freePort(pA + 1);
+    const { hashPassword } = require(path.join(SB, 'common.js'));
+    const rootOf = (n) => path.join(base, n, 'bridge');
+    const cfgOf = (n, port, peer, sync = true) => ({ port, defaultUsername: 'mills', admin: true, roomAgent: false, ...(sync ? { sync: { peer: `http://127.0.0.1:${peer}`, secretFile: 'sync.secret', name: n === 'a' ? 'live' : 'dev' } } : {}) });
+    for (const [n, port, peer] of [['a', pA, pB], ['b', pB, pA]]) {
+      fs.mkdirSync(rootOf(n), { recursive: true });
+      fs.writeFileSync(path.join(rootOf(n), 'config.json'), JSON.stringify(cfgOf(n, port, peer)));
+      fs.writeFileSync(path.join(rootOf(n), 'sync.secret'), secret + '\n');
+      fs.writeFileSync(path.join(rootOf(n), 'auth.json'), JSON.stringify(hashPassword('pw-r491-mills-01'))); // the same account on both, as a copy of live would have
+    }
+    const http = (port) => async (p, token, body, headers = {}) => {
+      try { const r = await fetch(`http://127.0.0.1:${port}${p}`, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers }, body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: { error: e.message } }; }
+    };
+    const A = http(pA), B = http(pB);
+    const start = async (n) => {
+      const port = n === 'a' ? pA : pB; const log = fs.openSync(path.join(base, n + '.log'), 'a');
+      procs[n] = spawn(RUST_HUB, ['--alone', '--root', rootOf(n), '--port', String(port)], { cwd: rootOf(n), stdio: ['ignore', log, log], windowsHide: true });
+      for (let i = 0; i < 80; i++) { if ((await http(port)('/api/status')).status === 200) return true; await sleep(100); }
+      return false;
+    };
+    const stop = async (n) => { const p = procs[n]; if (!p) return; const gone = new Promise((r) => p.once('exit', r)); try { p.kill('SIGTERM'); } catch {} await Promise.race([gone, sleep(5000)]); procs[n] = null; };
+    const until = async (f, ms = 15000) => { const t0 = Date.now(); for (;;) { const v = await f(); if (v || Date.now() - t0 > ms) return v; await sleep(150); } };
+    const signin = async (H2, user, pw, dev) => (await H2('/api/login', null, { username: user, password: pw, deviceId: dev })).data.token || '';
+    const taskOn = async (H2, tok, id) => { const r = await H2('/api/board/task?id=' + encodeURIComponent(id), tok); return r.status === 200 ? r.data.task : null; };
+    const findTitle = async (H2, tok, title) => (((await H2('/api/board', tok)).data.tasks) || []).find((t) => t.title === title) || null;
+    try {
+      // 1. live alone first, with data of its own; then dev starts and the first pairing is a full exchange
+      seen.startA = await start('a');
+      let tA = await signin(A, 'mills', 'pw-r491-mills-01', 'device-r491-aaaaaaaaaa');
+      const before = (await A('/api/board/create', tA, { title: 'r491 made on live before dev existed' })).data.task || {};
+      await A('/api/notes/write', tA, { path: 'r491/early.md', text: 'written on live early' });
+      seen.startB = await start('b');
+      let tB = await signin(B, 'mills', 'pw-r491-mills-01', 'device-r491-bbbbbbbbbb');
+      seen.firstPairing = !!(await until(async () => (await taskOn(B, tB, before.id)) && (await B('/api/notes/read?path=r491/early.md', tB)).data.text === 'written on live early'));
+      // 2. a task made on either side appears on the other
+      const onB = (await B('/api/board/create', tB, { title: 'r491 made on dev' })).data.task || {};
+      seen.bToA = !!(await until(() => findTitle(A, tA, 'r491 made on dev')));
+      const onA = (await A('/api/board/create', tA, { title: 'r491 made on live' })).data.task || {};
+      seen.aToB = !!(await until(() => findTitle(B, tB, 'r491 made on live')));
+      seen.ids = [before.id, onB.id, onA.id];
+      // 3. a note written on dev appears on live
+      await B('/api/notes/write', tB, { path: 'r491/from-dev.md', text: 'hello from dev\nline 2' });
+      seen.note = !!(await until(async () => (await A('/api/notes/read?path=r491/from-dev.md', tA)).data.text === 'hello from dev\nline 2'));
+      // ... and a Work transcript saved on live (Past sessions) is in dev's list
+      const arch = crypto.randomBytes(8).toString('hex');
+      fs.mkdirSync(path.join(base, 'a', 'Archive'), { recursive: true });
+      fs.writeFileSync(path.join(base, 'a', 'Archive', arch + '.json'), JSON.stringify({ id: arch, title: 'r491 saved on live', savedAt: new Date().toISOString(), sessionId: 'sess-r491', transcript: [{ cls: 'user', text: 'hello' }, { cls: 'assistant', text: 'hi there' }] }));
+      seen.archive = !!(await until(async () => (((await B('/api/archive/list', tB, {})).data.items) || []).some((x) => x.id === arch && x.title === 'r491 saved on live' && x.count === 2)));
+      // 4. the chat: a key set on live and a message sent there reach dev (same key, same message id)
+      const b64 = (n) => crypto.randomBytes(n).toString('base64');
+      const jwk = { kty: 'EC', crv: 'P-256', x: crypto.randomBytes(32).toString('base64url'), y: crypto.randomBytes(32).toString('base64url') };
+      await A('/api/room/mykey', tA, { pub: jwk, backup: { salt: b64(16), iv: b64(12), ct: b64(80) } });
+      const mid = crypto.randomBytes(16).toString('base64url').slice(0, 22);
+      const sent = await A('/api/room/send', tA, { v: 3, mid, iv: b64(12), ct: b64(64), keys: { mills: { iv: b64(12), wk: b64(48) } } });
+      seen.chatSent = sent.status;
+      seen.chat = !!(await until(async () => (((await B('/api/room/messages', tB)).data.messages) || []).some((m) => m.mid === mid)));
+      seen.chatKey = !!(await until(async () => (await B('/api/room/mykey', tB)).data.pub?.x === jwk.x));
+      // 5. dev is down: live changes things; meanwhile dev (started without the bridge) edits the same task; with the bridge
+      //    back, dev catches up and the two edits of that task end equal on both, the loser kept in the activity
+      const shared = (await A('/api/board/create', tA, { title: 'r491 edited on both' })).data.task || {};
+      await until(() => taskOn(B, tB, shared.id));
+      await stop('b');
+      await A('/api/board/update', tA, { id: shared.id, title: 'r491 live\'s title' });
+      const whileDown = (await A('/api/board/create', tA, { title: 'r491 made while dev was down' })).data.task || {};
+      await A('/api/notes/write', tA, { path: 'r491/while-down.md', text: 'dev was away' });
+      fs.writeFileSync(path.join(rootOf('b'), 'config.json'), JSON.stringify(cfgOf('b', pB, pA, false)));
+      await start('b'); tB = await signin(B, 'mills', 'pw-r491-mills-01', 'device-r491-bbbbbbbbbb');
+      await sleep(30); // its edit comes after live's (newest wins)
+      seen.devEdit = (await B('/api/board/update', tB, { id: shared.id, title: 'r491 dev\'s title' })).status;
+      seen.isolated = (await taskOn(B, tB, whileDown.id)) === null; // no bridge: nothing came over
+      await stop('b');
+      fs.writeFileSync(path.join(rootOf('b'), 'config.json'), JSON.stringify(cfgOf('b', pB, pA)));
+      await start('b'); tB = await signin(B, 'mills', 'pw-r491-mills-01', 'device-r491-bbbbbbbbbb');
+      seen.caughtUp = !!(await until(async () => (await taskOn(B, tB, whileDown.id)) && (await B('/api/notes/read?path=r491/while-down.md', tB)).data.text === 'dev was away'));
+      const equal = await until(async () => { const x = await taskOn(A, tA, shared.id), y = await taskOn(B, tB, shared.id); return x && y && x.title === y.title && x.rev === y.rev && x.title === 'r491 dev\'s title' ? x : null; });
+      seen.conflictTitle = equal ? equal.title : [(await taskOn(A, tA, shared.id) || {}).title, (await taskOn(B, tB, shared.id) || {}).title];
+      const lostIn = async (H2, tok) => (((await H2('/api/board/task?id=' + shared.id, tok)).data.activity) || []).find((e) => e.what === 'sync conflict' && e.lost && e.lost.title === 'r491 live\'s title');
+      seen.loserKept = !!(await until(async () => (await lostIn(A, tA)) && (await lostIn(B, tB))));
+      // 6. a malformed record is refused (and never applied); a kind this hub does not know is kept; nothing without the secret
+      const hello = (await A('/__sync/hello?hub=r491-test', null, undefined, { 'x-vr-sync-secret': secret })).data;
+      const rec = (seq, extra) => ({ kind: 'board.task', id: 'T-9091', rev: 1, time: Date.now(), origin: 'r491-test', originName: 'test', seq, ...extra });
+      const bad = await A('/__sync/push', null, { hub: 'r491-test', after: 0, records: [
+        rec(1, { value: { id: 'T-9091', title: 'r491 malformed', board: 'team', status: 'nonsense', rev: 1, createdAt: 1, updatedAt: 1 } }),
+        rec(2, {}),
+        { kind: 'work.session', id: 's-r491', rev: 1, time: 1, origin: 'r491-test', originName: 'test', seq: 3, value: { title: 'a kind from a newer build' } },
+      ] }, { 'x-vr-sync-secret': secret });
+      seen.malformed = { status: bad.status, refused: (bad.data.refused || []).map((x) => x.seq), held: bad.data.held, have: bad.data.have };
+      seen.neverApplied = (await taskOn(A, tA, 'T-9091')) === null;
+      const noSecret = await A('/__sync/push', null, { hub: 'r491-x', records: [] });
+      const wrong = await A('/__sync/push', null, { hub: 'r491-x', records: [] }, { 'x-vr-sync-secret': secret.slice(0, -1) + (secret.endsWith('0') ? '1' : '0') });
+      const proxied = await A('/__sync/hello?hub=x', null, undefined, { 'x-vr-sync-secret': secret, 'X-Forwarded-For': '203.0.113.7' });
+      const helloNo = await A('/__sync/hello?hub=x');
+      seen.gate = [noSecret.status, wrong.status, proxied.status, helloNo.status];
+      seen.hello = { hub: !!hello.hub, name: hello.name };
+      // 7. an account made on live signs in on dev with the same password (the hash travels; sessions do not)
+      const made = (await A('/api/admin/create', tA, { username: 'r491-syncer', display: 'Syncer' })).data;
+      // (waits for the account to be there first: wrong sign-ins while it travels would block the name for 15 minutes; an account
+      // exists on dev once its auth.json does, which travels before its config.json)
+      seen.accountThere = !!(await until(async () => (((await B('/api/admin/accounts', tB)).data.accounts) || []).some((x) => x.username === 'r491-syncer')));
+      seen.sameSignIn = !!(await signin(B, 'r491-syncer', made.password || 'x', 'device-r491-ccccccccc'));
+      seen.tokenNotShared = (await B('/api/board', tA)).status === 401; // live's session token is live's alone
+      // 8. /api/status says how the bridge is, and nothing goes back and forth once both are equal (no echo)
+      const st = (await A('/api/status')).data.sync || {};
+      seen.status = { up: st.peer && st.peer.up, peer: st.peer && st.peer.name, refused: st.refused >= 2 };
+      await sleep(2500);
+      const j1 = [(await A('/api/status')).data.sync?.journal, (await B('/api/status')).data.sync?.journal];
+      await sleep(2500);
+      const j2 = [(await A('/api/status')).data.sync?.journal, (await B('/api/status')).data.sync?.journal];
+      seen.quiet = JSON.stringify(j1) === JSON.stringify(j2) && j1.every((n) => n > 0);
+      seen.journals = [j1, j2];
+    } finally { await stop('a'); await stop('b'); }
+    const ok = seen.startA && seen.startB && seen.firstPairing && seen.bToA && seen.aToB && seen.note && seen.archive && seen.chatSent === 200 && seen.chat && seen.chatKey
+      && seen.devEdit === 200 && seen.isolated && seen.caughtUp && seen.conflictTitle === 'r491 dev\'s title' && seen.loserKept
+      && seen.malformed.status === 200 && JSON.stringify(seen.malformed.refused) === '[1,2]' && seen.malformed.held === 1 && seen.malformed.have === 3 && seen.neverApplied
+      && seen.gate.every((s) => s === 403) && seen.hello.name === 'live' && seen.sameSignIn && seen.tokenNotShared && seen.status.up === true && seen.status.peer === 'dev' && seen.status.refused && seen.quiet;
+    check('R491', R491_LABEL, ok, JSON.stringify(seen));
   }
   async function r323Check() {
     const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });

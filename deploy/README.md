@@ -100,3 +100,21 @@ The legacy `aiNodes.gee-pc` secret in the server's `config.local.json` keeps wor
 
 Push to `main` on Forgejo; within a minute the server has it (`/srv/apps/VibeRoller/autodeploy.log`, and the version in
 Settings). The GitHub Pages copy is no longer the address; it keeps deploying but points at the tunnel-era hub lookup.
+
+## 7. The dev hub (dev.portal.unityailab.com)
+
+LAWS.md (dev hub law), team note plans/dev-hub.md. A second hub that runs `develop` on 127.0.0.1:7778, with a full copy
+of live's data that the bridge keeps in step both ways. Merging into `develop` deploys to it within a minute;
+`worktree.js live` only promotes a commit the dev hub has verified.
+
+| File | What it is |
+|---|---|
+| `deploy/setup-dev.sh` | as the hub's account, no root, idempotent: clones `develop` to `/srv/apps/VibeRoller/dev/app`, copies live's data once (never sign-in sessions, device unlocks or AI-host sessions), makes its settings from live's (port 7778, `instance: dev`, its own address, no AI hosts), installs and starts the two user services. `setup-dev.sh pair` switches the bridge on for both hubs. |
+| `deploy/viberoller-dev-hub.service`, `viberoller-dev-autodeploy.service` / `.timer` | the dev hub (vr-run on 7778) and its auto-deploy: the same `autodeploy.sh` with `VR_DEPLOY_BRANCH=develop VR_INSTANCE=dev`. Log: `/srv/apps/VibeRoller/dev/autodeploy.log`. |
+| `deploy/nginx-dev-portal.conf` | `dev.portal.unityailab.com` → 127.0.0.1:7778, the live site's settings with its own limit zones, `noindex`. |
+
+Root, once: the DNS record `dev.portal` → the server, `certbot certonly --nginx -d dev.portal.unityailab.com`, and the
+nginx site from `deploy-ready/` (the steps are at the top of `deploy/nginx-dev-portal.conf`).
+
+Every build is clean (LAWS.md, clean build law): `native/build.sh` and `native/build-products.sh` build into a temporary
+folder deleted when they end; only `native/dist/` (the current build and two good ones) stays.
