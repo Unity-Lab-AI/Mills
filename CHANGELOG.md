@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.34.2 — 2026-10-28
+
+PATCH: **the bridge secret is owner-only on the server too.** `setup-dev.sh pair` wrote it with `umask 077`, but the
+folder's default ACL (`/srv/apps/VibeRoller` on the server) still left it `rw-rw----`. It now runs `chmod 600` and
+clears the file's ACL (`setfacl -b`, where it exists). The file on the server was fixed by hand when pairing on
+2026-10-28. R494 checks the mode, as before.
+
 ## 5.34.1 — 2026-10-28
 
 PATCH: **the dev hub never starts on live's build.** `deploy/setup-dev.sh` copied live's native builds so the dev

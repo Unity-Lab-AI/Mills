@@ -36,6 +36,9 @@ say() { echo "setup-dev: $*"; }
 if [ "${1:-}" = pair ]; then
   SECRET=$LIVE/sync.secret
   [ -s "$SECRET" ] || { (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$SECRET"); say "made the bridge secret $SECRET"; }
+  # owner-only even where the folder's default ACL hands the group rw (the server's /srv/apps/VibeRoller does: umask alone
+  # left it rw-rw---- on 2026-10-28)
+  chmod 600 "$SECRET"; command -v setfacl >/dev/null 2>&1 && setfacl -b "$SECRET" 2>/dev/null || true
   # each side: its checkout, the other hub's port, and its own name (it names the conflict copies, e.g. "x - dev copy.md")
   for side in "$LAPP:7778:live" "$DAPP:7777:dev"; do
     app=${side%%:*}; rest=${side#*:}; peer=${rest%%:*}; name=${rest#*:}
