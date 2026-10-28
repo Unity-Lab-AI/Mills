@@ -55,8 +55,11 @@ export OWNER_HOME
 LINUX_SKIP=""; [ "$HAVE_TAURI_LINUX" = 1 ] || { LINUX_SKIP="--exclude vr-desktop"; echo "no WebKitGTK sysroot (sh native/tauri-env.sh setup): the Linux desktop app is skipped" >&2; }
 cd "$HERE"
 # Clean build law (LAWS.md): every build goes into a temporary target folder that is deleted when this script ends, so no
-# build cache survives (only the staged builds under dist/ do). VR_BUILD_TMP names where the folder goes (default: TMPDIR).
-TGT=$(mktemp -d "${VR_BUILD_TMP:-${TMPDIR:-/tmp}}/vr-build-XXXXXX")
+# build cache survives (only the staged builds under dist/ do). VR_BUILD_TMP names where the folder goes; the default is
+# native/target/tmp (ignored by git) on the disk, never TMPDIR: /tmp is often a RAM disk, and two clean builds at once
+# (live and dev after a go-live, or the suite beside a deploy) filled the server's 16 GB one (5.34.1).
+mkdir -p "${VR_BUILD_TMP:=$HERE/target/tmp}"
+TGT=$(mktemp -d "$VR_BUILD_TMP/vr-build-XXXXXX")
 trap 'rm -rf "$TGT"' EXIT INT TERM
 export CARGO_TARGET_DIR="$TGT"
 case "${1:-all}" in

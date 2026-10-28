@@ -24,7 +24,8 @@ HUB=${PRODUCTS_HUB:-https://portal.unityailab.com}
 GIT=${PRODUCTS_GIT:-https://git.unityailab.com/UnityAILab}
 cd "$HERE"
 # Clean build law (LAWS.md): the builds go into a temporary target folder deleted when this script ends
-TGT=$(mktemp -d "${VR_BUILD_TMP:-${TMPDIR:-/tmp}}/vr-products-XXXXXX")
+mkdir -p "${VR_BUILD_TMP:=$HERE/target/tmp}" # on the disk, not a RAM disk /tmp (native/build.sh says why)
+TGT=$(mktemp -d "$VR_BUILD_TMP/vr-products-XXXXXX")
 trap 'rm -rf "$TGT"' EXIT INT TERM
 # id | name | app identifier (installs beside VibeRoller's and each other's)
 PRODUCTS='prodsuit|PGM Prod Suit|com.psygraphmedia.prodsuit
