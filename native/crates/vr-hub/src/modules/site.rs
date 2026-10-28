@@ -31,9 +31,26 @@ pub fn busy(hub: &Hub) -> bool { hub.mods.work.any_busy() || hub.mods.api.busy()
 pub fn status(hub: &Hub, r: &crate::front::Req) -> Value {
     let behind = hub.cfg.get("behindProxy") == Some(&json!(true));
     let outside = r.header("cf-connecting-ip").is_some() || (behind && (r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some()));
-    if outside { return json!({ "ok": true, "hub": true }); }
+    // `instance` (T-327, add-only): always there, "live" or "dev"
+    let inst = &hub.mods.instance;
+    if outside { return json!({ "ok": true, "hub": true, "instance": inst.name() }); }
     let (build, _) = hub.mods.build.get(hub);
-    json!({ "ok": true, "hub": true, "pid": std::process::id(), "supervised": std::env::var("MILLS_SUPERVISED").is_ok(), "serving": std::env::var("VR_SERVING").unwrap_or_else(|_| "rust".into()), "busy": busy(hub), "version": build.split('+').next().unwrap_or(""), "commit": hub.mods.build.commit(hub) })
+    let mut v = json!({ "ok": true, "hub": true, "instance": inst.name(), "pid": std::process::id(), "supervised": std::env::var("MILLS_SUPERVISED").is_ok(), "serving": std::env::var("VR_SERVING").unwrap_or_else(|_| "rust".into()), "busy": busy(hub), "version": build.split('+').next().unwrap_or(""), "commit": hub.mods.build.commit(hub) });
+    // on the dev hub, from this machine: the background jobs that are off here (plans/dev-hub.md 2b)
+    if inst.is_dev() { v["devOff"] = json!(inst.off()); }
+    // the data bridge to the other hub (T-324), when there is one: peer up?, last exchanges, what waits (add-only)
+    if let Some(b) = hub.mods.sync.get() { v["sync"] = b.summary(); }
+    v
+}
+/// The DEV band (T-327): on the dev hub every page says so at its top (in the page's flow, so it covers no control) and
+/// its title starts with "DEV · "; the page script keeps that prefix on every title it sets (it looks for #devBand, so
+/// a page without the band, the live hub's or a product's copy of web/, is unchanged). None on the live hub.
+fn dev_band(hub: &Hub) -> Option<String> {
+    if !hub.mods.instance.is_dev() { return None; }
+    let commit = hub.mods.build.commit(hub);
+    let short: String = commit.chars().take(7).filter(|c| c.is_ascii_alphanumeric()).collect();
+    let sync = if hub.cfg.get("sync").map(|s| s.is_object()).unwrap_or(false) { "data syncs with live" } else { "its data is its own copy (no sync with live set up)" };
+    Some(format!("<div id=\"devBand\" role=\"note\" data-instance=\"dev\">DEV — develop build {}; {sync}</div>", if short.is_empty() { "(unknown)".to_string() } else { short }))
 }
 /// `node bridge/restart.js` (or the admin's restart) drops bridge/.restart. As soon as nobody is busy this hub ends
 /// with 75, and run.js starts it and the JavaScript hub behind it again on the new code (meanwhile no new run starts:
@@ -68,6 +85,11 @@ pub fn page(hub: &Arc<Hub>, path: &str) -> Routed {
         let Ok(mut html) = std::fs::read_to_string(&f) else { return nf() };
         html = html.replace("__MILLS_SERVED__", "hub");
         let pu = public_url(hub); if !pu.is_empty() { html = html.replace("__MILLS_HUB_HOST__", &pu); }
+        if let Some(band) = dev_band(hub) {
+            html = html.replacen("<title>", "<title>DEV · ", 1).replacen("<head>", "<head>\n<meta name=\"robots\" content=\"noindex, nofollow\">", 1);
+            // the body tag at the start of a line (the stylesheet's comments mention "<body>" too)
+            if let Some(at) = html.find("\n<body").and_then(|i| html[i..].find('>').map(|j| i + j + 1)) { html.insert_str(at, &format!("\n{band}")); }
+        }
         let build = vr_core::hub::urlencode(&hub.mods.build.get(hub).0);
         html = regex::Regex::new(r#"(<script src|<link rel="stylesheet" href)="([\w./-]+\.(?:js|css))""#).unwrap().replace_all(&html, |c: &regex::Captures| format!("{}=\"{}?v={build}\"", &c[1], &c[2])).to_string();
         // the page's own inline scripts only
@@ -90,5 +112,5 @@ pub fn check(hub: &Arc<Hub>, a: &Account) -> Value {
         "provider": if s("provider").is_empty() { "host".to_string() } else { s("provider") }, "effectiveProvider": w.effective(ai, &a.username, &s("provider")).map(|p| p["id"].clone()).unwrap_or(json!("")),
         "defaultProvider": w.default_for(ai, &a.username).map(|p| p["id"].clone()).unwrap_or(json!("")), "hubClaude": hub.cfg.get("hubClaude") != Some(&json!(false)),
         "providers": super::work::providers_list(&**hub, &a.username), "version": build.split('+').next().unwrap_or(""), "build": build, "versions": mods,
-        "aiHost": !hub.root.join("ai-host.off").exists(), "aiNodes": ai.status(), "pcHost": ai.pc_host_for(&a.username) })
+        "instance": hub.mods.instance.name(), "aiHost": !hub.root.join("ai-host.off").exists(), "aiNodes": ai.status(), "pcHost": ai.pc_host_for(&a.username) })
 }

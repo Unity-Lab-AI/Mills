@@ -188,6 +188,39 @@ is going to be re-used amongst projects, to help reduce and re-use when possible
 - A library change follows the product release checklist: bump its version, regenerate the lock, build `--locked`,
   tag on Forgejo, then bump the users.
 
+## Dev hub law: develop runs on dev, live only gets what ran there
+
+Sponge, 2026-10-27: *"develop would get its own like dev.portal.unityailab.com that is usable with our existing
+credentials, but allows us to test more changes more rapidly, while keeping the working version as-is so we dont have
+to deploy live to actually test anything."* Spec: team note plans/dev-hub.md.
+
+- **Two hubs, one team:** live (`portal.unityailab.com`, port 7777) runs Forgejo's `main`; dev
+  (`dev.portal.unityailab.com`, port 7778, `/srv/apps/VibeRoller/dev`, config `"instance": "dev"`) runs `develop`.
+  Both are fully usable with the same accounts.
+- **Merging into develop deploys to dev** by itself (its own auto-deploy, health check and rollback). Dev is where
+  changes are tried, often. Dev may break; live may not.
+- **Nothing goes live that has not run on dev:** `worktree.js live` refuses unless the dev hub has verified the exact
+  commit being promoted. `--skip-dev "<reason>"` exists for when dev itself is down, and the reason is recorded.
+- The suite (both modes, 0 failed) is still required before a merge into develop. "Accumulate, then go live once"
+  applies to **live**: many merges may reach dev between two go-lives.
+- **Each hub keeps a full copy of the data, and only the bridge moves data between them** (both ways, newest change
+  wins per record, the losing value is kept). Dev never writes live's files, and live never writes dev's. Nothing made
+  on dev may be lost when it ships.
+- **One-hub jobs run on live only:** the Forgejo mirror, workflow triggers, the chat agents, product registrations and
+  AI-host updates are off on dev unless a test turns one on (plans/dev-hub.md § 2b), so nothing happens twice.
+
+## Clean build law: every build starts clean
+
+Sponge, 2026-10-27: *"a law would need to be put in place to clean build only, meaning we only build with clean builds
+(takes a bit longer), which means we arent bloating any build cache."*
+
+- Every build (both hubs' server deploys, `native/build.sh`, the suite's native build, `native/build-products.sh`,
+  releases, a run's own `cargo build` / `cargo test`) builds into a **temporary target folder that is deleted
+  afterwards**. No `target/` cache survives a build.
+- What stays is only what is used: the finished builds the fallback chain keeps (current + 2 good, `native/dist/`) and
+  the published release files. The crate download cache (`~/.cargo/registry`) is not a build cache and stays.
+- Slower builds are the accepted price: a disk that never fills with build output.
+
 ## Nothing breaks, and nothing is lost
 
 - The server's auto-deploy (`deploy/autodeploy.sh`) snapshots the hub's data before every deploy and checks that the new

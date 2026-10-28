@@ -261,6 +261,88 @@ impl Chat {
         n
     }
 }
+// ---------- for a sync with another copy of the chat (T-324: a dev hub next to the live one) ----------
+// A message is the same on both copies by its `mid` (the page's own id, part of what its encryption is bound to; an
+// older message without one by sender + time). Its `seq` / `rev` are each copy's own numbering: they never travel.
+/// A message's id across copies.
+pub fn sync_id(m: &Value) -> String { match m["mid"].as_str().filter(|x| !x.is_empty()) { Some(mid) => mid.to_string(), None => format!("legacy|{}|{}", s(m, "from"), s(m, "ts")) } }
+fn sync_strip(m: &Value) -> Value { let mut o = m.as_object().cloned().unwrap_or_default(); o.remove("seq"); o.remove("rev"); Value::Object(o) }
+/// (deleted 2 / edited 1 / as sent 0, its time in ms): a delete beats an edit, a later edit an earlier one.
+pub fn sync_stamp(m: &Value) -> (i64, i64) {
+    let t = |k: &str| m[k].as_str().and_then(|x| chrono::DateTime::parse_from_rfc3339(x).ok()).map(|d| d.timestamp_millis());
+    if m["deleted"] == json!(true) { (2, t("editedAt").or(t("ts")).unwrap_or(0)) } else if let Some(e) = t("editedAt") { (1, e) } else { (0, t("ts").unwrap_or(0)) }
+}
+/// The shape a message from another copy must have before it is stored.
+pub fn sync_message_ok(id: &str, m: &Value) -> Result<(), String> {
+    if !m.is_object() { return Err("a message is an object".into()); }
+    if sync_id(m) != id { return Err("its mid is not the record's id".into()); }
+    if !m["from"].as_str().is_some_and(|f| !f.is_empty() && f.len() <= 40) { return Err("no sender".into()); }
+    if !m["ts"].as_str().is_some_and(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok()) { return Err("no time".into()); }
+    if !m["keys"].is_object() { return Err("no key slots".into()); }
+    if m["deleted"] != json!(true) && !(b64ok(&m["iv"], 64) && b64ok(&m["ct"], MAX_CT)) { return Err("no ciphertext".into()); }
+    if m.get("blob").is_some_and(|b| !b64ok(b, MAX_CT)) { return Err("a bad voice clip".into()); }
+    for k in ["to", "conv"] { if m.get(k).is_some_and(|x| !x.is_string()) { return Err(format!("{k} is not text")); } }
+    Ok(())
+}
+impl Chat {
+    /// A number that moves with every message stored, edited or deleted.
+    pub fn sync_rev(&self) -> i64 { self.store.lock().unwrap_or_else(|e| e.into_inner()).rev }
+    /// The messages changed since revision `since` (0 = all), as (id, message without this copy's numbering).
+    pub fn sync_messages(&self, since: i64) -> Vec<(String, Value)> {
+        self.store.lock().unwrap_or_else(|e| e.into_inner()).messages.iter().filter(|m| since == 0 || m["rev"].as_i64().or(m["seq"].as_i64()).unwrap_or(0) > since).map(|m| (sync_id(m), sync_strip(m))).collect()
+    }
+    pub fn sync_message(&self, id: &str) -> Option<Value> { self.store.lock().unwrap_or_else(|e| e.into_inner()).messages.iter().find(|m| sync_id(m) == id).map(sync_strip) }
+    /// Another copy's version of a message: a new one gets this copy's next number, a known one keeps its own. Pages hear
+    /// of it at once; the chat's AI member does not answer it (it answers where it was called).
+    pub fn sync_put_message(&self, id: &str, m: &Value) -> Value {
+        {
+            let mut st = self.store.lock().unwrap_or_else(|e| e.into_inner());
+            st.rev += 1; let rev = st.rev;
+            let mut v = sync_strip(m);
+            if let Some(i) = st.messages.iter().position(|x| sync_id(x) == id) {
+                let seq = st.messages[i]["seq"].clone();
+                v["seq"] = seq; v["rev"] = json!(rev);
+                st.messages[i] = v;
+                Self::save_messages(&st, &self.dir);
+            } else {
+                st.seq += 1; v["seq"] = json!(st.seq); v["rev"] = json!(rev);
+                use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("messages.jsonl")) { let _ = writeln!(f, "{v}"); }
+                st.messages.push(v);
+            }
+        }
+        self.room_changed();
+        sync_strip(m)
+    }
+    /// A number that moves when a chat key (or a profile) changed.
+    pub fn keys_version(&self) -> u64 { self.keys_ver.load(Ordering::SeqCst) }
+    /// Everyone's chat key record (public key + their password-wrapped backup), as (username, record).
+    pub fn sync_keys(&self) -> Vec<(String, Value)> { self.keys.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(k, v)| (k.clone(), v.clone())).collect() }
+    pub fn sync_key(&self, u: &str) -> Option<Value> { self.keys.lock().unwrap_or_else(|e| e.into_inner()).get(u).cloned() }
+    /// Another copy's chat key record for `u` (the same key on both, so every message opens on both).
+    pub fn sync_put_key(&self, u: &str, k: &Value) { self.keys.lock().unwrap_or_else(|e| e.into_inner()).insert(u.into(), k.clone()); self.save_keys(); self.keys_changed(); }
+    /// Read receipts as ("<user>|<conv>", { mid }): the last message read, by its id across copies.
+    pub fn sync_seen(&self) -> Vec<(String, Value)> {
+        let seen = self.seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let st = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut out = vec![];
+        for (u, convs) in &seen {
+            for (conv, n) in convs.as_object().into_iter().flatten() {
+                let Some(n) = n.as_i64() else { continue };
+                if let Some(m) = st.messages.iter().rev().find(|m| m["seq"].as_i64().is_some_and(|q| q <= n)) { out.push((format!("{u}|{conv}"), json!({ "mid": sync_id(m) }))); }
+            }
+        }
+        out
+    }
+    /// This copy's number for a message (by its id across copies).
+    pub fn sync_seq_of(&self, id: &str) -> Option<i64> { self.store.lock().unwrap_or_else(|e| e.into_inner()).messages.iter().find(|m| sync_id(m) == id).and_then(|m| m["seq"].as_i64()) }
+    /// Another copy's read receipt: moves this copy's forward only (never back).
+    pub fn sync_put_seen(&self, user: &str, conv: &str, mid: &str) -> bool {
+        let Some(n) = self.sync_seq_of(mid) else { return false };
+        let changed = { let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner()); let mine = seen.entry(user.to_string()).or_insert(json!({})); if !mine.is_object() { *mine = json!({}); } if n > mine[conv].as_i64().unwrap_or(0) { mine[conv] = json!(n); true } else { false } };
+        if changed { self.seen_dirty.notify_one(); self.room_changed(); }
+        changed
+    }
+}
 fn tombstone(m: &mut Value, gone_files: &mut Vec<String>) {
     let o = m.as_object_mut().unwrap();
     for k in ["iv", "ct", "keys", "fromPub", "editedAt", "blob"] { o.remove(k); }

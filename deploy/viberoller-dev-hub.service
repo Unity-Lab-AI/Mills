@@ -1,0 +1,26 @@
+# VibeRoller's DEV hub (LAWS.md, dev hub law; team note plans/dev-hub.md): Forgejo's develop on 127.0.0.1:7778, behind
+# nginx as dev.portal.unityailab.com. A systemd USER service of the hub's account, as the live one; deploy/setup-dev.sh
+# installs it to ~/.config/systemd/user/ with the paths filled in (__LIVE__ = the live base, __DEV__ = the dev base).
+#   systemctl --user status viberoller-dev-hub       journalctl --user -u viberoller-dev-hub -f
+[Unit]
+Description=VibeRoller DEV hub (develop, behind nginx as dev.portal)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__DEV__/app/bridge
+# the same Claude login and tools as live (one team, one server); the data is the dev hub's own (__DEV__/app)
+Environment=HOME=__LIVE__/home
+Environment=CLAUDE_CONFIG_DIR=__LIVE__/home/.claude
+Environment=PATH=__LIVE__/node/current/bin:__LIVE__/tools/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+Environment=VR_NODE=__LIVE__/node/current/bin/node
+ExecStart=__DEV__/app/native/dist/x86_64-unknown-linux-gnu/vr-run --root __DEV__/app/bridge --port 7778 --builds __DEV__/app/native/dist/x86_64-unknown-linux-gnu
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=0 2
+UMask=0007
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

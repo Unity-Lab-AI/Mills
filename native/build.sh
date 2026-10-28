@@ -54,6 +54,11 @@ export OWNER_HOME
 . "$HERE/tauri-env.sh"
 LINUX_SKIP=""; [ "$HAVE_TAURI_LINUX" = 1 ] || { LINUX_SKIP="--exclude vr-desktop"; echo "no WebKitGTK sysroot (sh native/tauri-env.sh setup): the Linux desktop app is skipped" >&2; }
 cd "$HERE"
+# Clean build law (LAWS.md): every build goes into a temporary target folder that is deleted when this script ends, so no
+# build cache survives (only the staged builds under dist/ do). VR_BUILD_TMP names where the folder goes (default: TMPDIR).
+TGT=$(mktemp -d "${VR_BUILD_TMP:-${TMPDIR:-/tmp}}/vr-build-XXXXXX")
+trap 'rm -rf "$TGT"' EXIT INT TERM
+export CARGO_TARGET_DIR="$TGT"
 case "${1:-all}" in
   test) cargo test --workspace $LINUX_SKIP ;;
   check) cargo check --workspace $LINUX_SKIP --target "$LINUX"; [ "$HAVE_WIN" = 1 ] && cargo check --workspace --target "$WIN" ;;
@@ -68,11 +73,11 @@ case "${1:-all}" in
     # tries the build first (deploy/trial.sh) and puts it in service itself.
     C=${VR_COMMIT:-nocommit-$(date -u +%Y%m%d%H%M%S)}
     for T in "$LINUX" "$WIN"; do
-      [ -d "target/$T/release" ] || continue
+      [ -d "$TGT/$T/release" ] || continue
       S="dist/$T/.stage"; rm -rf "$S"; mkdir -p "$S"
-      for b in vr-host vr-hostw vr-desktop vr-hub vr-run; do for f in "target/$T/release/$b" "target/$T/release/$b.exe"; do [ -f "$f" ] && cp "$f" "$S/"; done; done
+      for b in vr-host vr-hostw vr-desktop vr-hub vr-run; do for f in "$TGT/$T/release/$b" "$TGT/$T/release/$b.exe"; do [ -f "$f" ] && cp "$f" "$S/"; done; done
       # Windows: the desktop app loads WebView2Loader.dll from its own folder (the windows-gnu build cannot link it in)
-      [ -f "target/$T/release/WebView2Loader.dll" ] && cp "target/$T/release/WebView2Loader.dll" "$S/"
+      [ -f "$TGT/$T/release/WebView2Loader.dll" ] && cp "$TGT/$T/release/WebView2Loader.dll" "$S/"
       printf '{"version":"%s","commit":"%s","target":"%s","builtAt":"%s"}\n' "${VR_VERSION:-}" "${VR_COMMIT:-}" "$T" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$S/BUILD.json"
       (cd "$S" && for f in *; do case "$f" in SHA256SUMS|BUILD.json|'*') ;; *) sha256sum "$f";; esac; done > SHA256SUMS)
       rm -rf "dist/$T/$C"; mv "$S" "dist/$T/$C"

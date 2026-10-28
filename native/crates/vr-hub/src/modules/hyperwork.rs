@@ -28,7 +28,14 @@ pub fn start(hub: &Arc<Hub>) {
     let svc = Service::new(hub.mods.mills_dir().join("Hyperwork"), Engine::with_builtins(), dir);
     if hub.mods.hyperwork.svc.set(svc.clone()).is_err() { return; }
     svc.resume_all(true);
-    super::forever("hyperwork deadlines", move || { let svc = svc.clone(); async move { loop { tokio::time::sleep(std::time::Duration::from_secs(5)).await; svc.tick(); } } });
+    // the timers (triggers) are the live hub's: on the dev hub (T-327) only the deadlines of waiting runs are driven
+    let timers = hub.allows("triggers");
+    super::forever("hyperwork deadlines", move || { let svc = svc.clone(); async move { loop { tokio::time::sleep(std::time::Duration::from_secs(5)).await; if timers { svc.tick(); } else { svc.resume_all(false); } } } });
+}
+/// The answer of a trigger that does not fire here: the dev hub's (T-327), unless config devAllow names "triggers".
+fn triggers_off(hub: &Hub) -> Option<Routed> {
+    if hub.allows("triggers") { return None; }
+    Some(answer(202, json!({ "ignored": "dev", "instance": "dev", "error": "This is the dev hub: workflow triggers run on the live hub (config devAllow \"triggers\" turns them on here)." })))
 }
 
 /// A client that may only list, view and run (spec 9.2): jcode, by the client its session signed in with, or any client
@@ -70,6 +77,7 @@ async fn handle(hub: &Arc<Hub>, r: &Req, caller: Caller, rest: &str) -> Routed {
 /// secret) is the key.
 pub fn webhook(hub: &Arc<Hub>, r: &Req, id: &str) -> Routed {
     let Some(svc) = hub.mods.hyperwork.get().cloned() else { return answer(503, json!({ "error": "Hyper Workflows are starting." })) };
+    if let Some(off) = triggers_off(hub) { return off; }
     if r.body.len() > 2_000_000 { return answer(413, json!({ "error": "That payload is too large." })); }
     let header = |k: &str| r.header(k).map(str::to_string);
     let (status, v) = svc.webhook(id, &header, &r.body);
@@ -88,6 +96,7 @@ pub fn event(hub: &Arc<Hub>, r: &Req) -> Routed {
     let b = r.json();
     let name = b["name"].as_str().unwrap_or("");
     if name.is_empty() { return answer(400, json!({ "error": "Which event? (name)" })); }
+    if !hub.allows("triggers") { return answer(200, json!({ "ok": true, "runs": [], "instance": "dev", "note": "This is the dev hub: event triggers run on the live hub (config devAllow \"triggers\" turns them on here)." })); }
     answer(200, json!({ "ok": true, "runs": svc.event(name, &b["payload"]) }))
 }
 
