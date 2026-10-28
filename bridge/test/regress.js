@@ -377,9 +377,12 @@ function startAiNode() {
 // with the real builds of native/build.sh
 const TEST_RELEASE_KEY = { secret: '4570e54a425b32604b04d14d172976b602af918eb6322d14e929867896b61b50', public: '241fc450dffa7aaf2155ed06404cd10d824f590c7c0c00a70b4ec6fa8e9b5a20' };
 // Clean build law (LAWS.md): the suite's native build goes into a temporary folder of its own, deleted when the run ends
-// (and a folder an earlier run left behind, after a crash, is swept once it is a day old)
+// (and a folder an earlier run left behind, after a crash, is swept once it is a day old). It lives under native/target/tmp
+// (ignored by git) on the disk, not in os.tmpdir(): /tmp is often a RAM disk, and this build beside a deploy's clean build
+// filled the server's 16 GB one (5.34.1: nine cargo checks failed with nothing to show for it)
 const NATIVE_TARGET = (() => {
-  const base = os.tmpdir();
+  const base = path.join(__dirname, '..', '..', 'native', 'target', 'tmp');
+  fs.mkdirSync(base, { recursive: true });
   try { for (const d of fs.readdirSync(base)) if (/^vr-regress-/.test(d) && Date.now() - fs.statSync(path.join(base, d)).mtimeMs > 86400e3) fs.rmSync(path.join(base, d), { recursive: true, force: true }); } catch {}
   const dir = fs.mkdtempSync(path.join(base, 'vr-regress-'));
   process.on('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
@@ -6220,7 +6223,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     else {
       const out321 = String(ct.stdout || '') + String(ct.stderr || '');
       const okN = (re) => (out321.match(new RegExp('^test machine::' + re + '[^ ]* \\.\\.\\. ok$', 'gm')) || []).length;
-      const detail321 = `cargo test ${ct.status} scope ${okN('scope::')} paths ${okN('paths::')} floor ${okN('floor::')} integration ${okN('tests::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}`;
+      // when cargo itself fails (a compile error, a killed linker), say what it said: the counts alone read as all zero
+      const why321 = ct.status === 0 ? '' : ` · cargo said: ${(out321.match(/^(error[^\n]*|.*panicked at[^\n]*|.*signal: [^\n]*)/m) || [out321.trim().split('\n').slice(-1)[0] || 'nothing'])[0].slice(0, 300)}`;
+      const detail321 = `cargo test ${ct.status} scope ${okN('scope::')} paths ${okN('paths::')} floor ${okN('floor::')} integration ${okN('tests::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}${why321}`;
       const src321 = ['mod.rs', 'scope.rs', 'paths.rs', 'floor.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
       check('R321', L321, ct.status === 0 && src321 && okN('scope::') >= 12, detail321);
       check('R322', L322, ct.status === 0 && okN('paths::') >= 8, detail321);
@@ -6237,9 +6242,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const src324 = fs.existsSync(path.join(mdir, 'sign.rs')) && /pub mod sign;/.test(fs.readFileSync(path.join(mdir, 'mod.rs'), 'utf8'));
       check('R324', 'signed requests and the machine\'s own check (T-308): one ed25519 hub key made once in the hub\'s data folder (owner-only file), a signed envelope {owner, actor{account, session, run}, tool, args digest, nonce, issuedAt, expiresAt}, and the machine-side verifier refuses a bad signature, a request signed by another key (a lying hub stub), an expired or future request, a repeated nonce (bounded replay cache), an owner that is not its own link, actor.account != owner, another machine id, another tool or other arguments than the ones signed; the host pins the hub\'s key from its hello (an older hub that announces none keeps working unsigned, a different key later is not taken, an unsigned job is refused once pinned)',
         ct.status === 0 && ct323.status === 0 && src324 && signOk.length === signTests.length && pinOk.length === pinTests.length && /signed-pc/.test(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-net-internal', 'src', 'hostlink.rs'), 'utf8')),
-        `cargo test ${ct.status} / ${ct323.status}: sign ${signOk.length}/${signTests.length}, pin ${pinOk.length}/${pinTests.length} ${/FAILED|panicked/.test(out2) ? 'FAILURES' : ''}`);
+        `cargo test ${ct.status} / ${ct323.status}: sign ${signOk.length}/${signTests.length}, pin ${pinOk.length}/${pinTests.length} ${/FAILED|panicked/.test(out2) ? 'FAILURES' : ''}${why321}`);
       // R331, R332, R333 (T-312, linked machines 6/8): the same cargo run covers the guards
-      const detail331 = `cargo test ${ct.status} audit ${okN('audit::')} kill ${okN('kill::')} limits ${okN('limits::')} elevate ${okN('elevate::')} changes ${okN('changes::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}`;
+      const detail331 = `cargo test ${ct.status} audit ${okN('audit::')} kill ${okN('kill::')} limits ${okN('limits::')} elevate ${okN('elevate::')} changes ${okN('changes::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}${why321}`;
       const src331 = ['audit.rs', 'kill.rs', 'limits.rs', 'elevate.rs', 'changes.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
       check('R331', L331, ct.status === 0 && src331 && okN('audit::') >= 6, detail331);
       check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= 4 && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331);

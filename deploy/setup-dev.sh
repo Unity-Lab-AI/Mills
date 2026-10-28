@@ -9,7 +9,7 @@
 #   sh deploy/setup-dev.sh pair            switch the bridge on: both hubs sync with each other (both need a build
 #                                          that has the bridge; asks both for a graceful restart)
 # Environment: VR_LIVE_BASE (default /srv/apps/VibeRoller), VR_DEV_BASE (default $VR_LIVE_BASE/dev),
-#   VR_DEV_URL (default https://dev.portal.unityailab.com), VR_DEV_UNITS (default ~/.config/systemd/user; "" = no services).
+#   VR_DEV_URL (default https://dev.portal.unityailab.com), VR_DEV_UNITS (default the account home .config/systemd/user; "" = no services).
 #
 # What it does, once each (running it again repairs and changes nothing that is there):
 #   1. the dev checkout: a clone of live's origin (Forgejo) on develop, at $VR_DEV_BASE/app;
@@ -25,7 +25,9 @@ set -eu
 LIVE=${VR_LIVE_BASE:-/srv/apps/VibeRoller}
 DEV=${VR_DEV_BASE:-$LIVE/dev}
 URL=${VR_DEV_URL:-https://dev.portal.unityailab.com}
-UNITS=${VR_DEV_UNITS-$HOME/.config/systemd/user}
+# the account's own home, not $HOME: a Work run's HOME is its own folder, where systemd --user never looks
+UHOME=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6); UHOME=${UHOME:-$HOME}
+UNITS=${VR_DEV_UNITS-$UHOME/.config/systemd/user}
 LAPP=$LIVE/app; DAPP=$DEV/app
 NODE=$LIVE/node/current/bin/node; [ -x "$NODE" ] || NODE=node
 say() { echo "setup-dev: $*"; }
@@ -100,6 +102,17 @@ systemctl --user daemon-reload
 # the dev hub may only run a build that keeps the one-hub jobs off (plans/dev-hub.md § 2b): else it would mirror every
 # board change to Forgejo a second time, fire every scheduled workflow twice, and so on
 grep -rqs '"instance"' "$DAPP/native/crates/vr-hub/src" || { say "develop's hub does not know \"instance\" yet (the one-hub jobs would run twice); not started"; exit 1; }
+# ... and the build it runs must be develop's own, not the copy of live's from step 4 (an older vr-hub without the
+# instance would run them all the same): build it now (clean, as the auto-deploy does), try it, put it in service
+LT=x86_64-unknown-linux-gnu; WT=x86_64-pc-windows-gnu; HEADC=$(git -C "$DAPP" rev-parse HEAD)
+BUILT=$(sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p' "$DAPP/native/dist/$LT/BUILD.json" 2>/dev/null | head -n 1)
+if [ -z "$BUILT" ] || ! git -C "$DAPP" cat-file -e "$BUILT^{commit}" 2>/dev/null || ! git -C "$DAPP" diff --quiet "$BUILT" HEAD -- native/; then
+  say "building develop's own native programs first (clean; a few minutes; $DEV/native-build.log)"
+  (cd "$DAPP" && VR_COMMIT=$HEADC VR_STAGE_ONLY=1 nice -n 10 sh native/build.sh > "$DEV/native-build.log" 2>&1) || { say "the native build failed (see $DEV/native-build.log); not started"; exit 1; }
+  sh "$DAPP/deploy/trial.sh" "$DAPP/native/dist/$LT/$HEADC/vr-hub" "$DAPP" >> "$DEV/native-build.log" 2>&1 || { say "develop's build failed its trial (see $DEV/native-build.log); not started"; exit 1; }
+  for t in $LT $WT; do [ -d "$DAPP/native/dist/$t/$HEADC" ] && sh "$DAPP/native/mark-good.sh" "$DAPP/native/dist/$t" "$HEADC" >> "$DEV/native-build.log" 2>&1 && sh "$DAPP/native/use-build.sh" "$DAPP/native/dist/$t" "$HEADC" >> "$DEV/native-build.log" 2>&1; done
+  say "develop's build $(echo "$HEADC" | cut -c1-7) is in service"
+fi
 systemctl --user enable --now viberoller-dev-hub.service viberoller-dev-autodeploy.timer
 i=0; until curl -fsS -m 3 http://127.0.0.1:7778/api/status >/dev/null 2>&1; do i=$((i + 1)); [ "$i" -ge 60 ] && { say "the dev hub did not answer within a minute (journalctl --user -u viberoller-dev-hub)"; exit 1; }; sleep 1; done
 mkdir -p "$DEV/deploy-state"

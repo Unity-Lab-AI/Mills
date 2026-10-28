@@ -7,6 +7,25 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.34.1 — 2026-10-28
+
+PATCH: **the dev hub never starts on live's build.** `deploy/setup-dev.sh` copied live's native builds so the dev
+hub could start at once, but that build (5.33.0) has no `instance`. Until dev's first build of its own, it would have
+run the one-hub jobs a second time (the Forgejo mirror, triggers, Unity, the archive sweep). The script checked only
+develop's source, not the binary it starts. Now, when the build in service isn't develop's own, it first builds
+develop clean, tries it (`deploy/trial.sh`), marks it good, and puts it in service. It starts the dev hub only after
+that, and starts nothing if any step fails. Found while shipping 5.34.0, before the dev hub was ever started.
+- **setup-dev.sh writes the services where systemd looks:** the account's own home from the system's user list,
+  not `$HOME`. A Work run's HOME is its own folder, so the first install wrote the services where nothing found them.
+- **Clean builds go to the disk, not /tmp:** `native/build.sh`, `native/build-products.sh` and the suite now make
+  their temporary target under `native/target/tmp` (ignored by git, still removed at the end). `VR_BUILD_TMP` still
+  overrides it. On the server `/tmp` is a 16 GB RAM disk, and the suite's build beside dev's first clean build filled
+  it: nine cargo checks (R321, R322, R324, R331, R332, R340, …) failed with cargo's exit 101 and nothing else to see.
+  Run again alone, they passed (271 passed, 0 failed). Live's and dev's auto-deploys can build at the same moment
+  after a go-live, so that would have happened on the server too.
+- **Cargo checks say why cargo failed:** the R321 / R324 / R331 family adds cargo's first error line to the detail,
+  instead of counts that read as all zeros.
+
 ## 5.34.0 — 2026-10-28
 
 MINOR: **the dev hub, dev.portal.unityailab.com** (T-321 and its steps T-322 … T-327; the plan is the team note
