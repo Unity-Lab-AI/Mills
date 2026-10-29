@@ -630,7 +630,7 @@ async function r492Check() {
 
 // R493 (T-327): a second scratch Rust hub with config instance "dev" (the same accounts, its own data), next to the normal
 // scratch hub (live). Then the same dev hub again with devAllow naming the jobs, to show it is the gate that stopped them.
-const R495_LABEL = 'live and dev know the same devices: a device that signed in on live signs in on dev without being allowed again; a new device is refused on dev until an admin allows one more device on live, then it gets in on dev and signs in on live too; the allow is used up on both hubs (a third new device is refused on each); a reset on live and the claim after it reach dev (the new device signs in there, the old one is refused)';
+const R495_LABEL = 'live and dev know the same devices: a device that signed in on live signs in on dev without being allowed again; a new device is refused on dev until an admin allows one more device on live, then it gets in on dev and signs in on live too; the allow is used up on both hubs (a third new device is refused on each); a reset on live and the claim after it reach dev (the new device signs in there, the old one is refused); every file the bridge writes is ignored by git (an untracked one stops the auto-deploy)';
 const R493_LABEL = 'the dev hub says so and acts once: with config instance "dev" /api/status says instance dev (and which jobs are off), every page has the DEV band with its build at the top and a title starting "DEV · ", and every answer has X-Robots-Tag noindex; there a timer trigger that is due does not fire, an event trigger starts nothing, @unity gets no answer (and nobody a sign-in greeting), a new board task is not mirrored to Forgejo and products get no gateway, and a done task past its archive age stays on the board (the archive sweep is live\'s); with devAllow naming them the same dev hub does all of those; the normal scratch hub says live and has no band, no DEV title and no noindex';
 async function r493Check() {
   const seen = [], D = fs.mkdtempSync(path.join(SCRATCH, 'r493-dev-')), DB = path.join(D, 'bridge');
@@ -6595,9 +6595,13 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.afterReset = [(await login(B, 'r495-p', 'pw-r495-person-1', dev('t'))).status, (await login(B, 'r495-p', 'pw-r495-person-1', dev('p'))).status];
       seen.equal = JSON.stringify(await lockOn(A, tA, 'r495-p')) === JSON.stringify(await lockOn(B, tB, 'r495-p'));
     } finally { await stop('a'); await stop('b'); }
+    // what the bridge wrote is data: git ignores every file of it (an untracked one stops the auto-deploy, 5.34.0 to 5.34.3)
+    const syncFiles = (() => { try { return fs.readdirSync(path.join(rootOf('a'), 'sync')); } catch { return []; } })();
+    seen.syncFiles = syncFiles;
+    seen.syncIgnored = syncFiles.length > 0 && syncFiles.every((f) => spawnSync('git', ['check-ignore', '-q', 'bridge/sync/' + f], { cwd: MILLS }).status === 0);
     const ok = seen.startA && seen.startB && seen.lockTravelled && seen.sameDeviceOnDev === 200 && seen.personLive === 200 && seen.newRefusedOnDev === 403 && seen.allowOnLive === 200
       && seen.allowReachedDev && seen.newOnDevAfterAllow === 200 && seen.joinedBack && seen.joinedOnLive === 200 && seen.allowUsedOnDev.devices === 2 && !seen.allowUsedOnDev.allowNext
-      && seen.thirdRefused.every((x) => x === 403) && seen.reset === 200 && seen.reclaim === 200 && JSON.stringify(seen.afterReset) === '[200,403]' && seen.equal;
+      && seen.thirdRefused.every((x) => x === 403) && seen.reset === 200 && seen.reclaim === 200 && JSON.stringify(seen.afterReset) === '[200,403]' && seen.equal && seen.syncIgnored;
     check('R495', R495_LABEL, ok, JSON.stringify(seen));
   }
   async function r323Check() {
