@@ -1492,8 +1492,18 @@ function applyTheme(name) {
 applyTheme(store.get('mills.theme'));
 
 // Stable per-browser device id — VibeRoller locks itself to the first device that signs in.
-let deviceId = store.get('mills.device');
-if (!deviceId) { deviceId = crypto.randomUUID() + crypto.randomUUID(); store.set('mills.device', deviceId); }
+// The live hub and its dev hub (portal.x and dev.portal.x) share it through a cookie on the live host, so one browser is
+// one device on both: the live host's own id wins there, the dev host takes the live one when the browser has it.
+function deviceIdFor(loc, doc, st) {
+  const host = loc.hostname, shared = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host) && !/^[\d.]+$/.test(host) ? host.replace(/^dev\./i, '') : '';
+  const cookie = () => { const m = shared && doc.cookie.match(/(?:^|;\s*)vr_device=([0-9a-f-]{32,100})(?:;|$)/); return m ? m[1] : null; };
+  let id = shared && shared !== host ? cookie() || st.get('mills.device') : st.get('mills.device') || cookie();
+  if (!id) id = crypto.randomUUID() + crypto.randomUUID();
+  st.set('mills.device', id);
+  if (shared && (shared === host || !cookie())) doc.cookie = `vr_device=${id}; domain=${shared}; path=/; max-age=315360000; samesite=lax${loc.protocol === 'https:' ? '; secure' : ''}`;
+  return id;
+}
+let deviceId = deviceIdFor(location, document, store);
 let token = sessionStorage.getItem(TOKEN_KEY);
 let base = null;
 
