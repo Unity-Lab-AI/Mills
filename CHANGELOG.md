@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.34.3 — 2026-10-29
+
+PATCH: **dev signs you in like live does.** Nobody could sign in to dev.portal (Sponge, 2026-10-29), not even after
+"Allow one more device": the password travels over the bridge, but each hub kept its own device locks. Dev's copy was
+frozen at the install, live's "allow" never reached it, and dev.portal is another web origin, so the same browser
+brings dev a new device id that dev refuses. Product sign-ins (HPM) only check the password, so they worked.
+- **The bridge carries device locks** (kind `device.lock`, per account): a device known on one hub signs in on the
+  other, an admin's "allow one more device" on either hub lets the next new device in on both, and it is used up on
+  both. Two copies of one lock merge (every device either knows; the allow as the newer change has it). A lock claimed
+  again after a reset replaces the older one. A reset alone does not travel: an account deleted on dev never unlocks it
+  on live. Every lock change now stamps `changedAt` (add-only: the JavaScript hub keeps its locks in state.json and is
+  not touched). pgm-identity-internal: `locks_version`, `sync_locks`, `sync_lock`, `sync_put_lock`, `sync_remove_lock`.
+- **One browser is one device on both** (web/index.html 1.29.1): the page keeps its device id in a cookie for the live
+  host (`vr_device`, domain `portal.…`), which `dev.portal.…` reads too. Live's own id always stays live's; a browser
+  that saw dev first brings that id to live. IP addresses and localhost get no shared cookie.
+- Checks: **R495** (two paired scratch hubs: the device from live signs in on dev, a new one is refused until it is
+  allowed on live, then gets in on dev and on live, the allow is used up on both, a reset and the claim after it reach
+  dev), failing on 5.34.2 first; **R496** (the page's `deviceIdFor` with a stand-in browser); a merge unit test in
+  vr-hub's sync.rs.
+
 ## 5.34.2 — 2026-10-28
 
 PATCH: **the bridge secret is owner-only on the server too.** `setup-dev.sh pair` wrote it with `umask 077`, but the

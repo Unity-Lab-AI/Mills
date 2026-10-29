@@ -6,7 +6,8 @@
 //! - sessions: 12 hours, kept as the sha256 of the token only (`<root>/front-sessions.json`), so a copy of the file
 //!   signs nobody in
 //! - device locks (`<root>/device-locks.json`): an account is locked to the devices that signed in (the first one, and
-//!   up to [`MAX_DEVICES`] more an admin allows one at a time)
+//!   up to [`MAX_DEVICES`] more an admin allows one at a time); every change stamps the lock `changedAt` (ms), so a
+//!   data bridge between two hubs of one team carries it, newest first ([`Auth::sync_locks`] and its neighbours)
 //! - sign-in limits per address: 5 wrong for one name from one address → that address waits 15 minutes for it; 20
 //!   from one address → it waits; at most 3 sign-ins at once from one address
 //! - the caller's address behind Cloudflare (CF-Connecting-IP) or nginx (X-Real-IP / X-Forwarded-For)
@@ -20,6 +21,7 @@ use pgm_net_internal::http::Req;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -67,7 +69,9 @@ pub struct Auth {
     /// how its log lines start ("[vr-hub]")
     tag: String,
     sessions: Mutex<Map<String, Value>>, // sha256(token) → { user, exp }
-    locks: Mutex<Map<String, Value>>,    // username → { device, at, devices?, allowNext? }
+    locks: Mutex<Map<String, Value>>,    // username → { device, at, devices?, allowNext?, changedAt? }
+    /// moves on every change of the locks (the data bridge scans them when it moved)
+    locks_rev: AtomicU64,
     fails: Mutex<HashMap<String, Fail>>,
     /// device-code sign-in and the per-device tokens (devices.rs)
     pub devices: devices::Devices,
@@ -78,7 +82,7 @@ impl Auth {
     /// The accounts under `root`; `default_user` is the account `root` itself is; `behind_proxy`: the caller's address
     /// may come from X-Real-IP / X-Forwarded-For (nginx in front); `tag` starts its log lines.
     pub fn new(root: &Path, default_user: &str, behind_proxy: bool, tag: &str) -> Auth {
-        let a = Auth { root: root.to_path_buf(), default_user: default_user.to_string(), behind_proxy, tag: tag.to_string(), sessions: Mutex::default(), locks: Mutex::default(), fails: Mutex::default(), devices: devices::Devices::new(root), last_sweep: Mutex::new(Instant::now()) };
+        let a = Auth { root: root.to_path_buf(), default_user: default_user.to_string(), behind_proxy, tag: tag.to_string(), sessions: Mutex::default(), locks: Mutex::default(), locks_rev: AtomicU64::new(0), fails: Mutex::default(), devices: devices::Devices::new(root), last_sweep: Mutex::new(Instant::now()) };
         a.take_over();
         a
     }
@@ -112,7 +116,7 @@ impl Auth {
         self.save_sessions(); self.save_locks();
     }
     fn save_sessions(&self) { write_json(&self.sessions_file(), &json!({ "sessions": Value::Object(self.sessions.lock().unwrap_or_else(|e| e.into_inner()).clone()), "sessionsHashed": true })); }
-    fn save_locks(&self) { write_json(&self.locks_file(), &Value::Object(self.locks.lock().unwrap_or_else(|e| e.into_inner()).clone())); }
+    fn save_locks(&self) { self.locks_rev.fetch_add(1, Ordering::Relaxed); write_json(&self.locks_file(), &Value::Object(self.locks.lock().unwrap_or_else(|e| e.into_inner()).clone())); }
 
     /// Is that account an admin? (what accounts() says, for one name)
     pub fn is_admin(&self, user: &str) -> bool { admin_in(&self.root, &self.default_user, user) }
@@ -180,9 +184,17 @@ impl Auth {
         let Some(l) = locks.get_mut(user) else { return Err("No device has claimed this account yet: its next sign-in does.".into()) };
         let n = lock_devices(l).len();
         if n >= MAX_DEVICES { return Err(format!("This account already has {MAX_DEVICES} devices: reset its lock first.")); }
-        l["allowNext"] = json!(true); drop(locks); self.save_locks();
+        l["allowNext"] = json!(true); l["changedAt"] = json!(now_ms()); drop(locks); self.save_locks();
         Ok(n)
     }
+
+    /// For a data bridge (live ⇄ dev): a number that moves when the locks change, every lock (username → lock), one
+    /// lock, storing one as it came from the other hub, and removing one (a reset there).
+    pub fn locks_version(&self) -> u64 { self.locks_rev.load(Ordering::Relaxed) }
+    pub fn sync_locks(&self) -> Vec<(String, Value)> { self.locks.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(k, v)| (k.clone(), v.clone())).collect() }
+    pub fn sync_lock(&self, user: &str) -> Option<Value> { self.lock_of(user) }
+    pub fn sync_put_lock(&self, user: &str, v: &Value) { self.locks.lock().unwrap_or_else(|e| e.into_inner()).insert(user.to_string(), v.clone()); self.save_locks(); }
+    pub fn sync_remove_lock(&self, user: &str) { self.unlock(user) }
 
     fn sweep(&self) { // counters nobody touched for 30 minutes go (never all at once)
         let mut last = self.last_sweep.lock().unwrap_or_else(|e| e.into_inner());
@@ -213,13 +225,14 @@ impl Auth {
         {
             let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
             match locks.get_mut(&acct.username) {
-                None => { locks.insert(acct.username.clone(), json!({ "device": dh, "at": iso_now() })); drop(locks); self.save_locks(); println!("{} {}: claimed by first sign-in.", self.tag, acct.username); }
+                None => { locks.insert(acct.username.clone(), json!({ "device": dh, "at": iso_now(), "changedAt": now_ms() })); drop(locks); self.save_locks(); println!("{} {}: claimed by first sign-in.", self.tag, acct.username); }
                 Some(l) if lock_devices(l).contains(&dh) => {}
                 // the admin allowed one more device: this one joins (the browser and the app on one PC are two devices)
                 Some(l) if l["allowNext"] == json!(true) => {
                     if !l["devices"].is_array() { l["devices"] = json!([]); }
                     l["devices"].as_array_mut().unwrap().push(json!({ "device": dh, "at": iso_now() }));
                     l.as_object_mut().unwrap().remove("allowNext");
+                    l["changedAt"] = json!(now_ms());
                     drop(locks); self.save_locks(); println!("{} {}: another device joined (allowed by an admin).", self.tag, acct.username);
                 }
                 Some(_) => { println!("{} {}: refused a sign-in from another device.", self.tag, acct.username); return a(403, json!({ "error": "This account is locked to its own devices. Ask an admin to allow one more device (or to reset the lock)." })); }

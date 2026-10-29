@@ -9,8 +9,11 @@
 //!   chat.key        each person's chat key (public key + password-wrapped backup), so every message opens on both
 //!   chat.seen       read receipts, moved forward only
 //!   account         per account and field: auth (the password hash: one password signs in on both), config, prefs,
-//!                   profile, presence; newest wins. Sign-in sessions, device tokens and device locks never travel
-//!                   (each domain signs in on its own); a deleted account is not deleted on the other hub
+//!                   profile, presence; newest wins. Sign-in sessions and device tokens never travel (each domain
+//!                   signs in on its own); a deleted account is not deleted on the other hub
+//!   device.lock     each account's device lock, newest change wins: a device known on one hub signs in on the other
+//!                   (the page keeps one device id for portal.* and dev.portal.*), and "allow one more device" on
+//!                   either hub counts on both
 //!   avatar          profile pictures, by content
 //!   work.archive    saved Work transcripts (Past sessions), per person and id; deletes travel
 //! Not synced yet: chat attachments (the files behind a message), the servers / channels / groups (Chat/guilds.json), and the
@@ -46,7 +49,7 @@ pub fn start(hub: &Arc<Hub>) {
     let w = Arc::downgrade(hub);
     let kinds: Vec<Arc<dyn Kind>> = vec![
         Arc::new(Tasks(w.clone())), Arc::new(Activity(w.clone(), Mutex::default())), Arc::new(Boards(w.clone())), Arc::new(Notes(w.clone())),
-        Arc::new(Messages(w.clone())), Arc::new(Keys(w.clone())), Arc::new(Seen(w.clone())), Arc::new(Accounts(w.clone())), Arc::new(Avatars(w.clone())), Arc::new(Archive(w.clone())),
+        Arc::new(Messages(w.clone())), Arc::new(Keys(w.clone())), Arc::new(Seen(w.clone())), Arc::new(Accounts(w.clone())), Arc::new(Avatars(w.clone())), Arc::new(Archive(w.clone())), Arc::new(Locks(w.clone())),
     ];
     let engine = Arc::new(Engine::open(&hub.root.join("sync"), &name, kinds, tag));
     println!("{tag} on: this hub is \"{name}\" ({}), its peer {peer}", engine.id());
@@ -290,6 +293,52 @@ impl Kind for Accounts {
     }
 }
 
+// ---------- device locks ----------
+/// Per account: its device lock (bridge/device-locks.json), so a device that joined on one hub signs in on the other and an
+/// admin's "allow one more device" on either hub lets the next new device in on both. The two copies of one lock (the same
+/// claim, `at`) are merged: every device either hub knows, and `allowNext` as the newer change (`changedAt`) has it. A lock
+/// claimed later (its account's lock was reset, then a device claimed it again) replaces the older one. A reset alone does
+/// not travel (an account deleted on dev must not unlock it on live): the claim after it does.
+struct Locks(Weak<Hub>);
+fn lock_hash_ok(d: &Value) -> bool { d.as_str().is_some_and(|x| x.len() == 64 && x.bytes().all(|b| b.is_ascii_hexdigit())) }
+impl Kind for Locks {
+    fn name(&self) -> &str { "device.lock" }
+    fn version(&self) -> Option<u64> { self.0.upgrade().map(|h| h.mods.auth.locks_version()) }
+    fn snapshot(&self) -> Vec<(String, Value)> { self.0.upgrade().map(|h| h.mods.auth.sync_locks()).unwrap_or_default() }
+    fn get(&self, id: &str) -> Option<Value> { self.0.upgrade()?.mods.auth.sync_lock(id) }
+    fn check(&self, id: &str, v: &Value) -> Result<(), String> {
+        let devices_ok = v.get("devices").is_none_or(|d| d.as_array().is_some_and(|a| a.len() < pgm_identity_internal::MAX_DEVICES && a.iter().all(|x| lock_hash_ok(&x["device"]))));
+        if super::auth::valid_username(id) && lock_hash_ok(&v["device"]) && devices_ok && v.get("allowNext").is_none_or(Value::is_boolean) && v.get("changedAt").is_none_or(Value::is_i64) { Ok(()) }
+        else { Err("a device lock is { device, at, devices?: [{ device, at }], allowNext?, changedAt? } (devices as sha256 hex)".into()) }
+    }
+    fn merge(&self, _id: &str, local: Option<&Value>, inc: &Value) -> Option<Value> { Some(merge_locks(local, inc)) }
+    fn put(&self, id: &str, v: &Value) -> Result<Value, String> { self.0.upgrade().ok_or("the hub is stopping")?.mods.auth.sync_put_lock(id, v); Ok(v.clone()) }
+}
+/// Two copies of one account's lock as one, the same whichever side merges.
+fn merge_locks(local: Option<&Value>, inc: &Value) -> Value {
+    let Some(l) = local else { return inc.clone() };
+    let claimed = |v: &Value| ms_of_iso(&v["at"]).unwrap_or(0);
+    if claimed(l) != claimed(inc) { return if claimed(l) > claimed(inc) { l.clone() } else { inc.clone() }; }
+    let mut all = std::collections::BTreeMap::<String, Value>::new(); // device → when it joined
+    for v in [l, inc] {
+        for (d, at) in std::iter::once((&v["device"], &v["at"])).chain(v["devices"].as_array().into_iter().flatten().map(|x| (&x["device"], &x["at"]))) {
+            if let Some(d) = d.as_str() { all.entry(d.to_string()).or_insert_with(|| at.clone()); }
+        }
+    }
+    let first = if l["device"] == inc["device"] { l["device"].as_str() } else { l["device"].as_str().into_iter().chain(inc["device"].as_str()).min() }.unwrap_or("").to_string();
+    let mut rest: Vec<(String, Value)> = all.into_iter().filter(|(d, _)| *d != first).collect();
+    rest.sort_by(|a, b| (a.1.as_str().unwrap_or(""), &a.0).cmp(&(b.1.as_str().unwrap_or(""), &b.0)));
+    rest.truncate(pgm_identity_internal::MAX_DEVICES - 1);
+    let (cl, ci) = (l["changedAt"].as_i64().unwrap_or(0), inc["changedAt"].as_i64().unwrap_or(0));
+    let allow = |v: &Value| v["allowNext"] == json!(true);
+    let allow_next = if cl != ci { allow(if cl > ci { l } else { inc }) } else { allow(l) || allow(inc) };
+    let mut out = json!({ "device": first, "at": l["at"] });
+    if !rest.is_empty() { out["devices"] = json!(rest.into_iter().map(|(d, at)| json!({ "device": d, "at": at })).collect::<Vec<_>>()); }
+    if allow_next { out["allowNext"] = json!(true); }
+    if cl.max(ci) > 0 { out["changedAt"] = json!(cl.max(ci)); }
+    out
+}
+
 // ---------- Work: saved transcripts ----------
 /// Past sessions (Archive/<id>.json for the default account, Archive/<user>/<id>.json for the others), as "<user>/<id>" →
 /// the saved file. A running session is not one of these: it stays on the hub that runs it.
@@ -399,5 +448,31 @@ impl Kind for Avatars {
         for e in PIC { let _ = std::fs::remove_file(Self::dir(&h).join(format!("{id}.{e}"))); }
         h.mods.chat.keys_changed();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::auth::lock_devices;
+    fn h(c: char) -> String { c.to_string().repeat(64) }
+    #[test]
+    fn two_copies_of_one_lock_merge_to_the_same_lock_on_both_sides() {
+        let live = json!({ "device": h('a'), "at": "2026-10-19T06:28:35.148Z", "allowNext": true });
+        let dev = json!({ "device": h('a'), "at": "2026-10-19T06:28:35.148Z", "devices": [{ "device": h('b'), "at": "2026-10-29T10:00:00.000Z" }], "changedAt": 5 });
+        let (x, y) = (merge_locks(Some(&live), &dev), merge_locks(Some(&dev), &live));
+        assert_eq!(x, y);
+        assert_eq!(lock_devices(&x), vec![h('a'), h('b')]);
+        assert_eq!(x["allowNext"], Value::Null, "the newer change (dev's, which used the allow) wins it");
+        assert_eq!(merge_locks(Some(&x), &x), x, "merging again changes nothing");
+        // neither says when it changed (locks from before 5.34.3): an allow on either counts
+        let old = json!({ "device": h('a'), "at": "2026-10-19T06:28:35.148Z" });
+        assert_eq!(merge_locks(Some(&old), &live)["allowNext"], json!(true));
+        assert_eq!(merge_locks(Some(&live), &old)["allowNext"], json!(true));
+        // a lock claimed later (after a reset) replaces the older one whole, whichever side has it
+        let again = json!({ "device": h('c'), "at": "2026-10-29T11:00:00.000Z", "changedAt": 9 });
+        assert_eq!(merge_locks(Some(&dev), &again), again);
+        assert_eq!(merge_locks(Some(&again), &dev), again);
+        assert_eq!(merge_locks(None, &dev), dev);
     }
 }
