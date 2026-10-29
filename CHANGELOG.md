@@ -7,6 +7,15 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.34.4 — 2026-10-29
+
+PATCH: **both auto-deploys deploy again.** The data bridge (5.34.0) keeps its files in `bridge/sync/`, which the
+whitelist `.gitignore` did not ignore. On the server that untracked folder made `deploy/autodeploy.sh` refuse every new
+version on both hubs ("live checkout has uncommitted changes"): live stayed on 5.34.1 and dev on 20b51c2. `.gitignore`
+now has `bridge/sync/`. Because the auto-deploy checks before it pulls, the two server checkouts were unblocked once
+with the same line in their local `.git/info/exclude`. R495 now also checks that git ignores every file its paired
+hubs' bridge wrote (it failed on 5.34.3 first).
+
 ## 5.34.3 — 2026-10-29
 
 PATCH: **dev signs you in like live does.** Nobody could sign in to dev.portal (Sponge, 2026-10-29), not even after
