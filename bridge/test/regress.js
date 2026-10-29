@@ -630,6 +630,7 @@ async function r492Check() {
 
 // R493 (T-327): a second scratch Rust hub with config instance "dev" (the same accounts, its own data), next to the normal
 // scratch hub (live). Then the same dev hub again with devAllow naming the jobs, to show it is the gate that stopped them.
+const R495_LABEL = 'live and dev know the same devices: a device that signed in on live signs in on dev without being allowed again; a new device is refused on dev until an admin allows one more device on live, then it gets in on dev and signs in on live too; the allow is used up on both hubs (a third new device is refused on each); a reset on live and the claim after it reach dev (the new device signs in there, the old one is refused); every file the bridge writes is ignored by git (an untracked one stops the auto-deploy)';
 const R493_LABEL = 'the dev hub says so and acts once: with config instance "dev" /api/status says instance dev (and which jobs are off), every page has the DEV band with its build at the top and a title starting "DEV · ", and every answer has X-Robots-Tag noindex; there a timer trigger that is due does not fire, an event trigger starts nothing, @unity gets no answer (and nobody a sign-in greeting), a new board task is not mirrored to Forgejo and products get no gateway, and a done task past its archive age stays on the board (the archive sweep is live\'s); with devAllow naming them the same dev hub does all of those; the normal scratch hub says live and has no band, no DEV title and no noindex';
 async function r493Check() {
   const seen = [], D = fs.mkdtempSync(path.join(SCRATCH, 'r493-dev-')), DB = path.join(D, 'bridge');
@@ -770,6 +771,7 @@ async function run() {
   if (process.argv.includes('--only-r491') && RUST_HUB) await r491Check(); // development: just R491 (with --stop-after R491)
   if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
+  if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -3795,6 +3797,39 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
+    // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
+    const page496 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const src496 = (/function deviceIdFor\(loc, doc, st\) \{[\s\S]*?\n\}\n/.exec(page496) || [''])[0];
+    const seen = {};
+    let pick = null; try { pick = require('vm').runInNewContext(src496 + '; deviceIdFor', { crypto }); } catch (e) { seen.load = e.message; }
+    const browser = () => { // cookies by domain (a cookie for portal.x is seen by portal.x and dev.portal.x), storage by host
+      const jar = {}, stores = {};
+      const visit = (hostname, protocol = 'https:') => {
+        const doc = {
+          get cookie() { return Object.entries(jar).filter(([d]) => hostname === d || hostname.endsWith('.' + d)).map(([, v]) => v).join('; '); },
+          set cookie(c) { const d = (/;\s*domain=([^;]+)/.exec(c) || [, hostname])[1]; if (hostname === d || hostname.endsWith('.' + d)) jar[d] = c.split(';')[0]; },
+        };
+        const m = (stores[hostname] = stores[hostname] || {});
+        return pick({ hostname, protocol }, doc, { get: (k) => m[k] || null, set: (k, v) => { m[k] = v; } });
+      };
+      return { visit, jar };
+    };
+    if (pick) {
+      const b1 = browser(); const live1 = b1.visit('portal.example.com'); seen.liveThenDev = b1.visit('dev.portal.example.com') === live1 && b1.visit('portal.example.com') === live1;
+      const b2 = browser(); const dev2 = b2.visit('dev.portal.example.com'); b2.visit('portal.example.com');
+      const b3 = browser(); b3.visit('portal.example.com'); // live first: its own id (kept in its own storage) stays live's
+      const b4 = browser(); const devOnly = b4.visit('dev.portal.example.com'); seen.devAlone = /^[0-9a-f-]{72}$/.test(devOnly) && b4.visit('dev.portal.example.com') === devOnly;
+      seen.devFirstLiveAfter = b2.visit('dev.portal.example.com') === b2.visit('portal.example.com'); // dev's id becomes the shared one
+      const b5 = browser(); const own = b5.visit('portal.example.com'); b5.jar['portal.example.com'] = 'vr_device=' + 'f'.repeat(72); seen.liveKeepsOwn = b5.visit('portal.example.com') === own;
+      const b6 = browser(); seen.otherSitesApart = b6.visit('portal.example.com') !== b6.visit('other.example.org');
+      const b7 = browser(); b7.visit('127.0.0.1', 'http:'); b7.visit('localhost', 'http:'); seen.noCookieOnIpOrLocal = Object.keys(b7.jar).length === 0;
+      const b8 = browser(); b8.visit('portal.example.com'); seen.cookieShape = b8.jar['portal.example.com'] && /^vr_device=[0-9a-f-]{72}$/.test(b8.jar['portal.example.com']);
+    }
+    check('R496', 'one browser is one device on the live hub and its dev hub: a browser that signed in on portal.x brings the same device id to dev.portal.x (a cookie for portal.x, which dev.portal.x reads too), a browser that saw dev first keeps that id on live, live\'s own id always stays live\'s, a dev-only browser keeps its own, and other sites, IP addresses and localhost get no shared cookie',
+      !!pick && seen.liveThenDev && seen.devFirstLiveAfter && seen.liveKeepsOwn && seen.devAlone && seen.otherSitesApart && seen.noCookieOnIpOrLocal && !!seen.cookieShape, JSON.stringify(seen));
+  }
   if (RUST_HUB) { // R285 to R289 (T-289): other tools (Jcode PGM) report their sessions; the person's list shows them as `external`
     const s285 = {}, now285 = Date.now();
     const rep = (tok, body) => call('/api/work/sessions/report', tok, body);
@@ -6500,6 +6535,74 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.malformed.status === 200 && JSON.stringify(seen.malformed.refused) === '[1,2]' && seen.malformed.held === 1 && seen.malformed.have === 3 && seen.neverApplied
       && seen.gate.every((s) => s === 403) && seen.hello.name === 'live' && seen.sameSignIn && seen.tokenNotShared && seen.status.up === true && seen.status.peer === 'dev' && seen.status.refused && seen.quiet;
     check('R491', R491_LABEL, ok, JSON.stringify(seen));
+  }
+  // R495: the bridge carries each account's device lock (two Rust hubs of their own, paired, as in R491). What a person sees:
+  // the device they use on live signs in on dev; an admin's "allow one more device" on live lets the next new device in on dev,
+  // and that device then signs in on live too; the allow is used up on both; a reset on live and the claim after it reach dev.
+  async function r495Check() {
+    const seen = {}; const procs = {}; const base = path.join(SCRATCH, 'r495'); const secret = crypto.randomBytes(24).toString('hex');
+    const pA = await freePort(PORT + 71), pB = await freePort(pA + 1);
+    const { hashPassword } = require(path.join(SB, 'common.js'));
+    const rootOf = (n) => path.join(base, n, 'bridge');
+    for (const [n, port, peer] of [['a', pA, pB], ['b', pB, pA]]) {
+      fs.mkdirSync(rootOf(n), { recursive: true });
+      fs.writeFileSync(path.join(rootOf(n), 'config.json'), JSON.stringify({ port, defaultUsername: 'mills', admin: true, roomAgent: false, sync: { peer: `http://127.0.0.1:${peer}`, secretFile: 'sync.secret', name: n === 'a' ? 'live' : 'dev' } }));
+      fs.writeFileSync(path.join(rootOf(n), 'sync.secret'), secret + '\n');
+      fs.writeFileSync(path.join(rootOf(n), 'auth.json'), JSON.stringify(hashPassword('pw-r495-mills-01')));
+      fs.mkdirSync(path.join(rootOf(n), 'profiles', 'r495-p'), { recursive: true });
+      fs.writeFileSync(path.join(rootOf(n), 'profiles', 'r495-p', 'auth.json'), JSON.stringify(hashPassword('pw-r495-person-1')));
+    }
+    const http = (port) => async (p, token, body) => {
+      try { const r = await fetch(`http://127.0.0.1:${port}${p}`, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: { error: e.message } }; }
+    };
+    const A = http(pA), B = http(pB);
+    const start = async (n) => {
+      const port = n === 'a' ? pA : pB; const log = fs.openSync(path.join(base, n + '.log'), 'a');
+      procs[n] = spawn(RUST_HUB, ['--alone', '--root', rootOf(n), '--port', String(port)], { cwd: rootOf(n), stdio: ['ignore', log, log], windowsHide: true });
+      for (let i = 0; i < 80; i++) { if ((await http(port)('/api/status')).status === 200) return true; await sleep(100); }
+      return false;
+    };
+    const stop = async (n) => { const p = procs[n]; if (!p) return; const gone = new Promise((r) => p.once('exit', r)); try { p.kill('SIGTERM'); } catch {} await Promise.race([gone, sleep(5000)]); procs[n] = null; };
+    const until = async (f, ms = 15000) => { const t0 = Date.now(); for (;;) { const v = await f(); if (v || Date.now() - t0 > ms) return v; await sleep(150); } };
+    const login = async (H2, user, pw, dev) => { const r = await H2('/api/login', null, { username: user, password: pw, deviceId: dev }); return { status: r.status, token: r.data.token || '', error: r.data.error || '' }; };
+    // what the admin sees for an account on that hub (Admin → accounts): how many devices, whether one more is allowed
+    const lockOn = async (H2, tok, user) => { const a = (((await H2('/api/admin/accounts', tok)).data.accounts) || []).find((x) => x.username === user) || {}; return { devices: a.devices || 0, allowNext: !!a.allowNext }; };
+    const dev = (c) => 'device-r495-' + c.repeat(20);
+    try {
+      seen.startA = await start('a'); seen.startB = await start('b');
+      // 1. the admin's device on live, then (once the bridge has carried it) the same device on dev
+      const tA = (await login(A, 'mills', 'pw-r495-mills-01', dev('a'))).token;
+      seen.lockTravelled = !!(await until(async () => fs.existsSync(path.join(rootOf('b'), 'device-locks.json')) && !!JSON.parse(fs.readFileSync(path.join(rootOf('b'), 'device-locks.json'), 'utf8')).mills));
+      const onDev = await login(B, 'mills', 'pw-r495-mills-01', dev('a'));
+      seen.sameDeviceOnDev = onDev.status; const tB = onDev.token;
+      // 2. a person's device claims on live; a new one is refused on dev; the admin allows one more on live; it gets in on dev
+      seen.personLive = (await login(A, 'r495-p', 'pw-r495-person-1', dev('p'))).status;
+      await until(async () => tB && (await lockOn(B, tB, 'r495-p')).devices === 1);
+      seen.newRefusedOnDev = (await login(B, 'r495-p', 'pw-r495-person-1', dev('q'))).status;
+      seen.allowOnLive = (await A('/api/admin/allow-device', tA, { username: 'r495-p' })).status;
+      seen.allowReachedDev = !!(await until(async () => (await lockOn(B, tB, 'r495-p')).allowNext));
+      seen.newOnDevAfterAllow = (await login(B, 'r495-p', 'pw-r495-person-1', dev('q'))).status;
+      // 3. that device joined on dev: it signs in on live too, and the allow is used up on both hubs
+      seen.joinedBack = !!(await until(async () => { const l = await lockOn(A, tA, 'r495-p'); return l.devices === 2 && !l.allowNext; }));
+      seen.joinedOnLive = (await login(A, 'r495-p', 'pw-r495-person-1', dev('q'))).status;
+      seen.allowUsedOnDev = await lockOn(B, tB, 'r495-p');
+      seen.thirdRefused = [(await login(A, 'r495-p', 'pw-r495-person-1', dev('r'))).status, (await login(B, 'r495-p', 'pw-r495-person-1', dev('s'))).status];
+      // 4. a reset on live and the claim after it reach dev: the new device signs in there, the old ones no longer do
+      seen.reset = (await A('/api/admin/unlock', tA, { username: 'r495-p' })).status;
+      await sleep(20);
+      seen.reclaim = (await login(A, 'r495-p', 'pw-r495-person-1', dev('t'))).status;
+      await until(async () => { const l = await lockOn(B, tB, 'r495-p'); return l.devices === 1; });
+      seen.afterReset = [(await login(B, 'r495-p', 'pw-r495-person-1', dev('t'))).status, (await login(B, 'r495-p', 'pw-r495-person-1', dev('p'))).status];
+      seen.equal = JSON.stringify(await lockOn(A, tA, 'r495-p')) === JSON.stringify(await lockOn(B, tB, 'r495-p'));
+    } finally { await stop('a'); await stop('b'); }
+    // what the bridge wrote is data: git ignores every file of it (an untracked one stops the auto-deploy, 5.34.0 to 5.34.3)
+    const syncFiles = (() => { try { return fs.readdirSync(path.join(rootOf('a'), 'sync')); } catch { return []; } })();
+    seen.syncFiles = syncFiles;
+    seen.syncIgnored = syncFiles.length > 0 && syncFiles.every((f) => spawnSync('git', ['check-ignore', '-q', 'bridge/sync/' + f], { cwd: MILLS }).status === 0);
+    const ok = seen.startA && seen.startB && seen.lockTravelled && seen.sameDeviceOnDev === 200 && seen.personLive === 200 && seen.newRefusedOnDev === 403 && seen.allowOnLive === 200
+      && seen.allowReachedDev && seen.newOnDevAfterAllow === 200 && seen.joinedBack && seen.joinedOnLive === 200 && seen.allowUsedOnDev.devices === 2 && !seen.allowUsedOnDev.allowNext
+      && seen.thirdRefused.every((x) => x === 403) && seen.reset === 200 && seen.reclaim === 200 && JSON.stringify(seen.afterReset) === '[200,403]' && seen.equal && seen.syncIgnored;
+    check('R495', R495_LABEL, ok, JSON.stringify(seen));
   }
   async function r323Check() {
     const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });
