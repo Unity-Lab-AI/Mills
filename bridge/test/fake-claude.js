@@ -280,7 +280,9 @@ process.stdin.on('end', async () => {
   let relay = '';
   if (process.env.ANTHROPIC_BASE_URL) {
     try {
-      const r = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (process.env.ANTHROPIC_AUTH_TOKEN || ''), 'anthropic-version': '2023-06-01', 'anthropic-beta': 'claude-code-20250219' }, body: JSON.stringify({ model, max_tokens: 50, messages: [{ role: 'user', content: input.slice(0, 80) }] }) });
+      // ANTHROPIC_CUSTOM_HEADERS: "Name: value" lines, sent with every call (as Claude Code does; Headroom's relay token rides in one)
+      const custom = Object.fromEntries((process.env.ANTHROPIC_CUSTOM_HEADERS || '').split('\n').map((l) => l.split(/:\s*/)).filter((x) => x.length >= 2 && x[0].trim()).map(([k, ...v]) => [k.trim(), v.join(':').trim()]));
+      const r = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST', headers: { ...custom, 'content-type': 'application/json', authorization: 'Bearer ' + (process.env.ANTHROPIC_AUTH_TOKEN || ''), 'anthropic-version': '2023-06-01', 'anthropic-beta': 'claude-code-20250219' }, body: JSON.stringify({ model, max_tokens: 50, messages: [{ role: 'user', content: input.slice(0, 80) }] }) });
       const j = await r.json().catch(() => ({}));
       relay = `${r.status}:${((j.content || [])[0] || {}).text || (j.error || {}).message || ''}`;
       const u = r.headers.get('anthropic-ratelimit-unified-5h-utilization');

@@ -901,7 +901,11 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         // a host's Claude login, shared as AI only: Claude Code runs HERE, only its model calls travel to the host
         let tok = w.llm_token(&a.username, &host_id, &prov_id);
         relay_env = vec![("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{}/llm/{tok}", hub.cfg().port)), ("ANTHROPIC_AUTH_TOKEN".into(), "viberoller-relay".into()), ("ANTHROPIC_API_KEY".into(), String::new()), ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into())];
-        w.emit(&sx.key, json!({ "type": "bridge_info", "text": format!("Using {nick}{}; the work happens here on the server.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI)", hub.name_of(&owner)) }) }));
+        // Headroom (5.36.0, config headroom.url): the run's model calls go through that local compression proxy, which sends
+        // them on to /llm-relay with the run's token in a header; when it does not answer, straight to the relay as before
+        let hr = headroom_up(hub).await;
+        if let Some(u) = &hr { relay_env[0].1 = u.clone(); relay_env.push(("ANTHROPIC_CUSTOM_HEADERS".into(), format!("{RELAY_HEADER}: {tok}"))); }
+        w.emit(&sx.key, json!({ "type": "bridge_info", "text": format!("Using {nick}{}; the work happens here on the server{}.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI)", hub.name_of(&owner)) }, if hr.is_some() { ", through Headroom (context compression)" } else { "" }) }));
     } else if kind == "host-claude" || hjcode {
         // legacy: Claude Code runs on the host (only for a host that allows work); or Jcode PGM there (hjcode, the host
         // announced work-jcode: `harness` and `stateModel` are the optional fields it reads)
@@ -1430,10 +1434,29 @@ pub(crate) fn save_work_current(a: &Account, st: &mut Value) {
     if std::fs::write(&tmp, st.to_string()).is_ok() { let _ = std::fs::rename(&tmp, &f); }
 }
 
+/// The header a run's token travels in through Headroom (/llm-relay).
+pub const RELAY_HEADER: &str = "x-vr-relay";
+/// Headroom's address (config `headroom.url`, a local compression proxy whose upstream is this hub's /llm-relay) when it
+/// answers its /health now; None = not configured, or down (the run goes straight to the relay).
+pub async fn headroom_up(hub: &Arc<dyn AiHub>) -> Option<String> {
+    let url = hub.cfg().get("headroom").and_then(|h| h.get("url")).and_then(Value::as_str)?.trim().trim_end_matches('/').to_string();
+    if !(url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:")) { return None; }
+    let c = reqwest::Client::builder().timeout(Duration::from_millis(1500)).build().ok()?;
+    c.get(format!("{url}/health")).send().await.ok().filter(|r| r.status().is_success()).map(|_| url)
+}
+/// /llm-relay/…: the same relay as /llm/<token>/…, the token in the x-vr-relay header (what Headroom sends on).
+pub async fn llm_relay(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
+    let tok = r.header(RELAY_HEADER).unwrap_or("").trim().to_string();
+    let sub = r.path["/llm-relay".len()..].to_string();
+    llm_via(hub, r, &tok, &sub).await
+}
 /// /llm/<token>/…: this hub's own Claude Code reaching a host's shared login (local only, per-run token).
 pub async fn llm(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
     let rest = &r.path["/llm/".len()..];
     let (tok, sub) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    llm_via(hub, r, tok, sub).await
+}
+async fn llm_via(hub: &Arc<dyn AiHub>, r: &Req, tok: &str, sub: &str) -> Resp {
     let behind = hub.cfg().get("behindProxy") == Some(&json!(true));
     let outside = r.header("cf-connecting-ip").is_some() || (behind && (r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some()));
     let ent = if tok.len() == 48 && tok.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) && !sub.is_empty() { hub.work().llm.lock().unwrap_or_else(|e| e.into_inner()).get(tok).cloned() } else { None };

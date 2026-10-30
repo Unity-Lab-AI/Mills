@@ -380,6 +380,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if let Some(rest) = p.strip_prefix("/internal/gateway/") { return if hub.allows("gateway") { gateway::route(hub, r, rest).await } else { answer(503, json!({ "error": "This is the dev hub: PGM products talk to the live hub (config devAllow \"gateway\" turns it on here).", "instance": "dev" })) }; }
     if let Some(rest) = p.strip_prefix("/p/") { return gateway::serve(hub, r, rest).await; }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
+    if p.starts_with("/llm-relay/") { return work::llm_relay(hub, r).await; } // the same, through Headroom (5.36.0)
     // Hyper Workflows (T-212): webhooks (signed, no session) and this machine's own events
     if let Some(id) = p.strip_prefix("/hooks/hyperwork/") { return if r.method == hyper::Method::POST { hyperwork::webhook(hub, r, id) } else { answer(405, json!({ "error": "POST only" })) }; }
     if p == "/internal/hyperwork/event" && r.method == hyper::Method::POST { return hyperwork::event(hub, r); }
