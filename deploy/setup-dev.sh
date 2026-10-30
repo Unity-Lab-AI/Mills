@@ -16,7 +16,8 @@
 #   2. its data: a copy of live's data (the same files the auto-deploy snapshots), never the sign-in sessions, device
 #      unlocks or AI-host sessions (each hub signs in on its own); copied once, then the bridge keeps the two the same;
 #   3. its settings: live's bridge/config.local.json with port 7778, its own back port, instance "dev", its own
-#      address, and no AI hosts (they belong to live until one opts in);
+#      address, no AI hosts (they belong to live until one opts in), and hubRepo = live's checkout (the shared
+#      worktrees are its worktrees, so a Work session carries on in the same worktree on either hub);
 #   4. its native builds: live's current ones, so it can start before its own first (clean) build;
 #   5. the user services viberoller-dev-hub + the dev auto-deploy timer (following develop), started, and the commit it
 #      came up on recorded as its last good one (worktree.js live reads it).
@@ -77,18 +78,20 @@ fi
 # 3. the settings (made from live's every time, so a change of live's settings reaches dev by running this again;
 #    a bridge setting dev already has is kept)
 "$NODE" -e '
-  const fs = require("fs"), [src, dst, url] = process.argv.slice(1);
+  const fs = require("fs"), [src, dst, url, lapp] = process.argv.slice(1);
   const c = JSON.parse(fs.readFileSync(src, "utf8"));
   let old = {}; try { old = JSON.parse(fs.readFileSync(dst, "utf8")); } catch {}
   c.port = 7778; c.instance = "dev"; c.publicUrl = url;
   c.rustHub = Object.assign({}, c.rustHub || {}, { backPort: 7781 });
   c.aiNodes = {};
   c.allowedOrigins = [url];
+  // the shared worktrees (worktreeRoot, copied from live) are worktrees of the live checkout: dev works in them through it
+  if (!c.hubRepo) c.hubRepo = lapp;
   if (old.sync) c.sync = old.sync; else delete c.sync;
   if (old.devAllow) c.devAllow = old.devAllow;
   fs.writeFileSync(dst + ".tmp", JSON.stringify(c, null, 2) + "\n", { mode: 0o600 }); fs.renameSync(dst + ".tmp", dst);
-' "$LAPP/bridge/config.local.json" "$DAPP/bridge/config.local.json" "$URL"
-say "settings: port 7778, instance dev, $URL"
+' "$LAPP/bridge/config.local.json" "$DAPP/bridge/config.local.json" "$URL" "$LAPP"
+say "settings: port 7778, instance dev, $URL, the worktrees of $LAPP"
 # 4. native builds to start with
 if [ ! -x "$DAPP/native/dist/x86_64-unknown-linux-gnu/vr-run" ] && [ -d "$LAPP/native/dist" ]; then
   mkdir -p "$DAPP/native"; cp -a "$LAPP/native/dist" "$DAPP/native/"

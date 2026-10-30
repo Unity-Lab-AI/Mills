@@ -7,6 +7,15 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.34.5 — 2026-10-30
+
+PATCH: **a Work session carries on on dev.** Continuing a session on dev.portal said "/srv/apps/sharedwork/VibeRoller/sponge
+exists but is not a git worktree of VibeRoller". Dev's settings (copied from live) name the shared worktree folder,
+but dev took its own checkout as VibeRoller's repo, and the worktrees there are live's checkout's. `deploy/setup-dev.sh`
+now gives dev `hubRepo` = live's checkout (unless live's settings name one), the setting the Rust hub and worktree.js
+already read. The dev hub on the server got the same line by hand on 2026-10-30, then a graceful restart. R494 now has
+dev's own worktree.js take up a worktree live made in the shared folder (it failed on 5.34.4 first).
+
 ## 5.34.4 — 2026-10-29
 
 PATCH: **both auto-deploys deploy again.** The data bridge (5.34.0) keeps its files in `bridge/sync/`, which the
