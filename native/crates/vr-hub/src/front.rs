@@ -98,7 +98,7 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
     let (r, parts) = match kit::read(req, peer, MAX_BODY).await { Ok(x) => x, Err(too_big) => return with_front(too_big) };
     // the page's own origins only (bridge/server.js does the same for what it answers): another site's page gets 403;
     // the APIs with their own keys (/v1, /node, /llm) and the internal ones are not for pages
-    let cors = if ["/internal/", "/node/", "/v1", "/llm/", "/__front/"].iter().any(|x| r.path.starts_with(x)) { None } else { r.header("origin").map(String::from) };
+    let cors = if ["/internal/", "/node/", "/v1", "/llm/", "/llm-relay/", "/__front/"].iter().any(|x| r.path.starts_with(x)) { None } else { r.header("origin").map(String::from) };
     if let Some(o) = &cors {
         if !hub.allowed_origin(o) { return with_front(json(403, &serde_json::json!({ "error": "Origin not allowed" }))); }
         if r.method == hyper::Method::OPTIONS { return with_front(kit::preflight(o)); }

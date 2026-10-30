@@ -1,0 +1,26 @@
+# Headroom (headroomlabs-ai/headroom, Apache 2.0) for the DEV hub: a local context-compression proxy between the hub's
+# Claude Code runs and the hub's /llm-relay (5.36.0). Only this machine reaches it (127.0.0.1); its upstream is the dev
+# hub's relay, so the model calls still go out through the host's login as before. No telemetry, no subscription
+# polling, no model downloads. deploy/setup-headroom.sh installs it with the paths filled in (__LIVE__ = the live base,
+# __PORT__ = its port, __HUB__ = the hub port it sends on to).
+#   systemctl --user status viberoller-dev-headroom      journalctl --user -u viberoller-dev-headroom -f
+[Unit]
+Description=Headroom context compression for the VibeRoller DEV hub
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__LIVE__/tools/headroom
+Environment=HOME=__LIVE__/tools/headroom/home
+Environment=HEADROOM_TELEMETRY=off
+Environment=DO_NOT_TRACK=1
+Environment=HF_HUB_OFFLINE=1
+Environment=ANTHROPIC_TARGET_API_URL=http://127.0.0.1:__HUB__/llm-relay
+ExecStart=__LIVE__/tools/headroom/bin/headroom proxy --host 127.0.0.1 --port __PORT__ --mode cache --no-subscription-tracking --no-rate-limit
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

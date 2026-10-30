@@ -7,6 +7,29 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.36.0 — 2026-10-30
+
+MINOR: **Headroom (context compression) for relayed Work runs**, on the dev hub first (Sponge, 2026-10-30).
+[Headroom](https://github.com/headroomlabs-ai/headroom) (Apache 2.0) is a local proxy that shrinks what an agent reads
+(tool output, logs, files, history) before it reaches the model, and keeps the originals retrievable.
+- **How it sits:** a relayed Claude Code run (a host's Claude login, shared as AI only, as every Work run on the server
+  is) normally calls `/llm/<run token>`. With config `headroom.url` (a `127.0.0.1` address) answering its `/health`,
+  the run calls Headroom instead (`ANTHROPIC_BASE_URL`), with its token in `x-vr-relay` (`ANTHROPIC_CUSTOM_HEADERS`).
+  Headroom sends the compressed call on to the hub's new **`/llm-relay`**, which is `/llm/<token>` with the token in
+  that header: same checks (this machine only, a live run token), same host relay. The run's first line says
+  "through Headroom". When Headroom does not answer, the run goes straight to the relay as before. Claude Code stays
+  the Work engine and the client Anthropic sees; nothing about the login changes.
+- **`deploy/setup-headroom.sh`** (no root): uv (checksummed) and `headroom-ai[proxy]` 0.42.0 under `tools/headroom`, the
+  user service `viberoller-dev-headroom` on 127.0.0.1:7787 with the dev hub's `/llm-relay` as its upstream, telemetry
+  off, no subscription polling, no model downloads, then `headroom.url` in the dev hub's settings and a graceful
+  restart of dev. `setup-headroom.sh off` takes it out again. Live has no `headroom` setting: nothing changes there.
+- Jcode PGM as the Work engine was looked at and not built: on the server's Claude (a host's subscription login
+  through the relay) Anthropic refuses jcode's requests, and making it pass as Claude Code is not done (it risks the
+  account). Jcode stays the optional Work harness it was.
+- Checks: **R499** (a stand-in Headroom on the configured address: the run goes through it with its token in the
+  header and reaches the host; `/llm-relay` refuses no token, a made-up one, and calls from outside; with Headroom
+  gone the next run goes straight to the relay). The fake Claude sends `ANTHROPIC_CUSTOM_HEADERS` as Claude Code does.
+
 ## 5.35.0 — 2026-10-30
 
 MINOR: **the prompt enhancer, the genie, Sessions in the rail, a moving DEV band** (Sponge, 2026-10-30).
