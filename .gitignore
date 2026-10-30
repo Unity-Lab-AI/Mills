@@ -36,6 +36,8 @@ bridge/*.tmp
 bridge/sync/
 # the hub's structured logs (T-331 § 4: bridge/logs/hub-YYYY-MM-DD.jsonl, 14 days): data, never shipped
 bridge/logs/
+# word indexes (T-331 § 3: the default account's code_find indexes, bridge/index/): caches, never shipped
+bridge/index/
 
 # Accounts are local to the host: every file under bridge/profiles/ stays off the remotes
 # (display names, admin flags, password hashes, device locks, sessions).

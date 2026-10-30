@@ -316,7 +316,7 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
@@ -3977,6 +3977,59 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.logs.lines > 0 && !seen.logs.secretKeys && !seen.logs.workSecret && !seen.logs.nodeSecret && seen.logs.ignored,
       JSON.stringify(seen));
   } else skip('R502', 'logs, metrics, traces', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R503 (5.39.0, T-331 § 3): searching Past sessions is a lookup in a word index, not a read of every saved session
+    const seen = {}, ids = [];
+    for (let i = 0; i < 6; i++) ids.push((await call('/api/archive/save', U, { title: 'r503 notes ' + i, transcript: [{ cls: 'me', text: 'r503 common words about the hub ' + i }, { cls: 'claude', text: i === 3 ? 'the zephyrine deployment needs a restart' : 'nothing special here' }] })).data.id);
+    const one = (await call('/api/archive/search', U, { q: 'zephyrine' })).data;
+    seen.one = { found: (one.items || []).map((x) => x.id).join() === ids[3], opened: one.opened, snippet: /zephyrine deployment/.test(JSON.stringify(one.items || [])) };
+    const pre = (await call('/api/archive/search', U, { q: 'zephyr deplo' })).data;
+    seen.prefix = (pre.items || []).length === 1 && pre.opened === 1;
+    const all = (await call('/api/archive/search', U, { q: 'r503 common' })).data;
+    seen.all = { n: (all.items || []).length, opened: all.opened };
+    // a session saved now is found at once; a deleted one is gone at once
+    const later = (await call('/api/archive/save', U, { title: 'r503 late', transcript: [{ cls: 'me', text: 'quintessential marmalade' }] })).data.id;
+    seen.newFound = ((await call('/api/archive/search', U, { q: 'marmalade' })).data.items || []).some((x) => x.id === later);
+    await call('/api/archive/delete', U, { id: ids[3] });
+    const gone = (await call('/api/archive/search', U, { q: 'zephyrine' })).data;
+    seen.deletedGone = (gone.items || []).length === 0 && gone.opened === 0;
+    seen.notMine = ((await call('/api/archive/search', A, { q: 'marmalade' })).data.items || []).length === 0;
+    // the index is a cache next to the saved sessions: not one of them, and built again when it is gone
+    const list = (await call('/api/archive/list', U, {})).data.items || [];
+    seen.notAnEntry = !list.some((x) => !/^[0-9a-f]{16}$/.test(x.id || ''));
+    const ixFile = path.join(SCRATCH, 'Archive', 't-user', '.word-index');
+    seen.indexFile = fs.existsSync(ixFile); try { fs.unlinkSync(ixFile); } catch {}
+    seen.rebuilt = ((await call('/api/archive/search', U, { q: 'marmalade' })).data.items || []).some((x) => x.id === later);
+    for (const id of [...ids, later]) await call('/api/archive/delete', U, { id });
+    check('R503', 'searching Past sessions looks words up in an index: a word only one saved session has opens just that one (with its snippet), the start of a word finds it ("zephyr deplo"), a session saved a moment ago is found and a deleted one is gone at once, another person finds nothing of yours, and the index is a cache next to the saved sessions (never listed as one, built again when it is gone)',
+      seen.one.found && seen.one.opened === 1 && seen.one.snippet && seen.prefix && seen.all.n === 6 && seen.all.opened === 6 && seen.newFound && seen.deletedGone && seen.notMine && seen.notAnEntry && seen.indexFile && seen.rebuilt,
+      JSON.stringify(seen));
+  } else skip('R503', 'the Past sessions word index', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R504 (5.39.0, T-331 § 3): code_find, as a run calls it (the fake Claude through its run's own team relay)
+    const enc = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const mach = (r) => { const l = texts(r.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } };
+    const look = async (q, extra = {}) => { const r = mach(await chat(U, enc([{ route: 'team', session: 'run', body: { name: 'code_find', args: { q, ...extra } } }]), { fresh: true }))[0] || {}; return r.body || {}; };
+    const seen = {};
+    const first = await look('ensure', { limit: 5 }); // (the scratch worktree is the page and the bridge: bridge/worktree.js defines ensure)
+    const hits = ((first.result || {}).hits) || [];
+    seen.first = { ok: first.ok, def: hits[0] && hits[0].def === true && hits[0].path === 'bridge/worktree.js' && /^function ensure\(/.test(hits[0].text), limit: hits.length <= 5, indexed: (first.result || {}).indexed, worktree: /worktrees[\\/]t-user$/.test((first.result || {}).worktree || '') };
+    // a file written in the worktree a moment ago is found; only it is read again
+    const wt = path.join(SCRATCH, 'worktrees', 't-user');
+    fs.writeFileSync(path.join(wt, 'r504-fresh.js'), 'function quokkaMarmot() { return 1; }\n');
+    const fresh = await look('quokkaMarmot');
+    seen.fresh = { ok: fresh.ok, found: (((fresh.result || {}).hits) || []).some((h) => h.path === 'r504-fresh.js' && h.def), readNow: (fresh.result || {}).readNow };
+    fs.unlinkSync(path.join(wt, 'r504-fresh.js'));
+    const gone = await look('quokkaMarmot');
+    seen.gone = gone.ok && (((gone.result || {}).hits) || []).length === 0;
+    const empty = await look('   ');
+    seen.empty = empty.ok === false && typeof empty.error === 'string';
+    // the index lives outside the worktree: git sees nothing new there
+    seen.clean = !execFileSync('git', ['status', '--porcelain'], { cwd: wt, encoding: 'utf8' }).split('\n').some((l) => /index|word-index|code-/.test(l));
+    seen.indexFile = fs.readdirSync(path.join(SB, 'profiles', 't-user', 'index')).some((f) => /^code-[0-9a-f]{16}\.json$/.test(f));
+    const listed = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.some((t) => t.name === 'code_find');
+    check('R504', 'code_find: a run looks a name up in its own worktree and gets the definition first (function ensure in bridge/worktree.js), at most as many lines as it asked for; a file written a moment ago is found (and only it read again), a deleted one is gone, an empty query is refused, and the index lives outside the worktree (git sees nothing new); the tool is in both tool lists',
+      seen.first.ok && seen.first.def && seen.first.limit && seen.first.indexed > 30 && seen.first.worktree && seen.fresh.ok && seen.fresh.found && seen.fresh.readNow === 1 && seen.gone && seen.empty && seen.clean && seen.indexFile && listed,
+      JSON.stringify(seen));
+  } else skip('R504', 'code_find', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.

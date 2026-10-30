@@ -160,6 +160,6 @@ mod tests {
         let p = prometheus(); assert!(p.contains("t_runs_total{harness=\"claude\"} 2") && p.contains("t_req_ms_count{route=\"/api/x\",status=\"200\"} 4"));
         assert_eq!(route_of("/api/work/sessions/s-b407838c1c30/open?x=1"), "/api/work/sessions/:id/open");
         assert_eq!(route_of("/api/board/task"), "/api/board/task");
-        assert_eq!(route_of("/llm/0123456789abcdef0123456789abcdef0123456789abcdef/v1/messages"), "/llm/:id/v1/messages");
+        assert_eq!(route_of(&format!("/llm/{}/v1/messages", "ab".repeat(24))), "/llm/:id/v1/messages");
     }
 }

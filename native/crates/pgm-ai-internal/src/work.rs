@@ -448,7 +448,7 @@ impl Work {
             format!("The VibeRoller team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as \"{name} · Claude\"."),
             "When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.".into(),
             "You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry. Done tasks go to the archive by themselves after about 48 hours and are deleted 30 days later: board_archived lists them, task_restore brings one back, task_archive / board_archive_done clean up by hand (only when asked).".into(),
-            format!("Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search ({name}'s past Claude sessions), my_providers (the AIs available), team_channel_create / team_group_create."),
+            format!("Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search ({name}'s past Claude sessions), code_find (look a name or words up in this session's worktree, by an index), my_providers (the AIs available), team_channel_create / team_group_create."),
         ]);
         if self.forgejo_rec(u).map(|r| !s(&r, "token").is_empty()).unwrap_or(false) { parts.push(format!("Forgejo ({}): {name} saved their own token, so git pushes / fetches to that host authenticate as them, FORGEJO_URL / FORGEJO_TOKEN are in your environment for its API (never print the token), and fj (the Forgejo CLI) is signed in as them in this run. node bridge/worktree.js repos [words] lists the repos they can see (private ones too), repo-create <owner/name> makes one, publish <owner/name> --project <name> puts a project on Forgejo (a GitHub origin kept as upstream).", self.forgejo_url())); }
         parts.push("Reverse engineering: re_start gives you a throw-away container with REA and the RE tools; its answer says what to call next. Stop it with re_stop when done.".into());
@@ -1049,6 +1049,19 @@ async fn tool_inner(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Valu
                     "snippets": it["snippets"].as_array().map(|x| x.iter().map(|sn| json!(format!("{}: {}", if sn["cls"] == json!("me") { me.clone() } else { "Claude".into() }, s(sn, "text")))).collect::<Vec<_>>()).unwrap_or_default() })).collect();
                 return json!({ "ok": true, "result": { "query": q, "items": items } });
             }
+            // T-331 § 3: a lookup in the session's worktree, by a word index kept outside it (<profile>/index/code-<hash>.json)
+            "code_find" => {
+                let Some(sx) = sessions::resolve(&a, &s(b, "session")) else { return json!({ "ok": false, "error": "No such session." }) };
+                let wd = match w.session_wt(&a, &sx) { Ok(wd) => wd, Err(e) => return json!({ "ok": false, "error": e }) };
+                let q: String = args["q"].as_str().unwrap_or("").chars().take(200).collect();
+                let limit = args["limit"].as_u64().unwrap_or(40).clamp(1, 200) as usize;
+                let ixf = a.dir.join("index").join(format!("code-{}.json", &pgm_core_internal::crypto::sha256_hex(wd.dir.display().to_string().as_bytes())[..16]));
+                let (dir, project) = (wd.dir.clone(), wd.project.clone());
+                let r = tokio::task::spawn_blocking(move || pgm_collab_internal::codefind::find(&dir, &ixf, &q, limit)).await.unwrap_or_else(|_| json!({ "error": "The lookup failed." }));
+                if let Some(e) = r["error"].as_str() { return json!({ "ok": false, "error": e }); }
+                let mut r = r; r["project"] = json!(project); r["worktree"] = json!(wd.dir.display().to_string());
+                return json!({ "ok": true, "result": r });
+            }
             "my_providers" => {
                 let st = w.state(&a);
                 let list: Vec<Value> = providers_list(&**hub, account).into_iter().map(|p| json!({ "id": p["id"], "label": p["label"], "kind": p["kind"], "owner": if s(&p, "owner").is_empty() { json!("host") } else { p["owner"].clone() }, "shared": p["shared"], "models": p["models"] })).collect();
@@ -1124,13 +1137,24 @@ fn archive_list(dir: &Path) -> Vec<Value> {
     let mut v: Vec<Value> = archive_entries(dir).into_iter().map(|e| json!({ "id": e["id"], "title": e["title"], "savedAt": e["savedAt"], "count": e["transcript"].as_array().map(|t| t.len()).unwrap_or(0) })).collect();
     v.sort_by(|a, b| s(b, "savedAt").cmp(&s(a, "savedAt"))); v
 }
-pub fn archive_search(a: &Account, mills: &Path, q: &str) -> Vec<Value> {
+pub fn archive_search(a: &Account, mills: &Path, q: &str) -> Vec<Value> { archive_search_counted(a, mills, q).0 }
+/// Past sessions with every word of `q` (5.39.0, T-331 § 3): a lookup in the person's word index (`Archive/…/.word-index`,
+/// a cache brought up to date with the saved sessions first: only new and changed ones are read), then only the sessions
+/// it names are opened for their hits and snippets. A query word matches the words it begins ("deplo" finds "deploy").
+/// Also how many saved sessions were opened.
+pub fn archive_search_counted(a: &Account, mills: &Path, q: &str) -> (Vec<Value>, usize) {
     let root = mills.join("bridge");
     let dir = archive_dir(a, mills, &root);
     let words: Vec<String> = q.to_lowercase().split_whitespace().take(8).map(String::from).collect();
-    if words.is_empty() { return archive_list(&dir); }
+    if words.is_empty() { return (archive_list(&dir), 0); }
+    let files: Vec<(String, String)> = std::fs::read_dir(&dir).map(|r| r.filter_map(|e| e.ok()).filter_map(|e| { let n = e.file_name().to_string_lossy().to_string(); let id = n.strip_suffix(".json")?.to_string(); archive_file(&dir, &id).map(|p| (id, pgm_core_internal::index::stamp_of(&p))) }).collect()).unwrap_or_default();
+    let ix = pgm_core_internal::index::shared(&dir.join(".word-index"));
+    let ids = { let mut g = ix.lock().unwrap_or_else(|e| e.into_inner());
+        g.sync(&files, |id| read_json(&dir.join(format!("{id}.json"))).map(|e| s(&e, "title") + "\n" + &e["transcript"].as_array().cloned().unwrap_or_default().iter().map(|t| s(t, "text")).collect::<Vec<_>>().join("\n")));
+        g.find(q) };
+    pgm_core_internal::obs::count("vr_index_lookups", &[("index", "sessions")]);
     let mut out = vec![];
-    for e in archive_entries(&dir) {
+    for e in ids.iter().filter_map(|id| read_json(&dir.join(format!("{id}.json")))) {
         let lines: Vec<Value> = e["transcript"].as_array().cloned().unwrap_or_default().into_iter().filter(|t| t["text"].is_string()).collect();
         let hay = (s(&e, "title") + "\n" + &lines.iter().map(|t| s(t, "text")).collect::<Vec<_>>().join("\n")).to_lowercase();
         if !words.iter().all(|w| hay.contains(w.as_str())) { continue; }
@@ -1150,7 +1174,7 @@ pub fn archive_search(a: &Account, mills: &Path, q: &str) -> Vec<Value> {
         out.push(json!({ "id": e["id"], "title": e["title"], "savedAt": e["savedAt"], "count": lines.len(), "hits": hits, "snippets": snippets }));
     }
     out.sort_by(|a, b| b["hits"].as_u64().cmp(&a["hits"].as_u64()).then(s(b, "savedAt").cmp(&s(a, "savedAt"))));
-    out
+    (out, ids.len())
 }
 fn clean_title(t: &str) -> String { let t: String = t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect(); if t.is_empty() { "Untitled conversation".into() } else { t } }
 fn archive_file(dir: &Path, id: &str) -> Option<PathBuf> { if id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) { Some(dir.join(format!("{id}.json"))) } else { None } }
@@ -1410,7 +1434,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let dir = archive_dir(a, &hub.mills_dir(), hub.root()); let b = r.json();
             match p {
                 "/api/archive/list" => answer(200, json!({ "items": archive_list(&dir) })),
-                "/api/archive/search" => answer(200, json!({ "items": archive_search(a, &hub.mills_dir(), &s(&b, "q").chars().take(200).collect::<String>()) })),
+                "/api/archive/search" => { let (items, opened) = archive_search_counted(a, &hub.mills_dir(), &s(&b, "q").chars().take(200).collect::<String>()); answer(200, json!({ "items": items, "opened": opened })) }
                 "/api/archive/save" => {
                     let Some(tr) = b["transcript"].as_array().filter(|t| !t.is_empty()) else { return Some(answer(400, json!({ "error": "Nothing to save yet." }))) };
                     let Some(sx) = sess(&b) else { return Some(no_session()) };

@@ -7,6 +7,29 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.39.0 — 2026-10-30
+
+MINOR: **word indexes: finding is a lookup, not a scan** (T-331 step 3; team note plans/sessions-always-saved.md § 3).
+- **pgm-core `index`** (a library piece): a `DocIndex` knows which words each document holds and answers "which have all of
+  these words", each query word matching the words it begins ("deplo" finds "deploy"; a word in the middle of another,
+  such as "ploy", no longer does). It is kept on disk through the write buffer and brought up to date before each use:
+  only documents whose time or size changed are read again, gone ones leave. A cache: deleted, it is built again.
+- **Past sessions search** (`/api/archive/search`, the sessions list and the `sessions_search` tool) looks the words up
+  in `Archive/…/.word-index` and opens only the sessions it names (the answer says how many: `opened`).
+- **Notes search** (the Notes screen and `notes_list` with `q`) does the same with `Notes/.word-index` (dot files are
+  never listed as notes nor sent over the live/dev bridge).
+- **`code_find`** (a new team tool for Work runs, pgm-collab `codefind`): a name or a few words looked up in the session's
+  worktree (git's files, source and docs, under 1 MB each), the matching lines with a definition (fn / struct / class /
+  function / def / const …) first. The index lives in the person's profile (`index/code-<hash>.json`), never in the
+  worktree. bridge/team-mcp.js 1.6.0 (and the Rust copy of the tool list).
+- The board is held in memory and filtered there (nothing to scan on disk); chat text is end-to-end encrypted, so the
+  hub cannot index it.
+- `bridge/index/` (the default account's code indexes) is git-ignored, here and in the suite's scratch copy.
+- Checks: **R503** (a word only one saved session has opens just that one; a prefix finds it; saved / deleted show at
+  once; another person finds nothing; the index is never listed and is rebuilt when gone), **R504** (`code_find` from a
+  run: the definition first, the limit, a new file found and only it read again, a deleted one gone, an empty query
+  refused, git sees nothing new); unit tests for the index and for `codefind`.
+
 ## 5.38.0 — 2026-10-30
 
 MINOR: **Work runs journalled through a write buffer; logs, metrics and traces** (T-331 steps 1 and 2; team note

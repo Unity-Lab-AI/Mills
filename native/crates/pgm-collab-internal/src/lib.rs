@@ -6,6 +6,7 @@
 //! - [`worktree`]: projects (a git repository each) and one worktree per person, made on first use
 //! - [`forgejo`]: a Forgejo instance: people's tokens, the board ↔ issues mirror
 
+pub mod codefind;
 pub mod board;
 pub mod forgejo;
 pub mod notes;
