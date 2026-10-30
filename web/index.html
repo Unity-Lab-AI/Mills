@@ -39,7 +39,8 @@
   body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; width: 100%; max-width: 100vw; overflow: hidden; display: flex; flex-direction: column; }
   /* the dev hub's band (T-327; only its hub puts #devBand in the page): always the first row of the page, in its flow, so
      everything else shrinks below it and no control is covered */
-  #devBand { order: -1; flex: 0 0 auto; position: sticky; top: 0; z-index: 80; padding: .2rem .8rem; text-align: center; font: 700 .78rem/1.35 system-ui, sans-serif; letter-spacing: .02em; color: #1a1200; background: repeating-linear-gradient(135deg, #ffc93c 0 14px, #ffb000 14px 28px); border-bottom: 1px solid #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #devBand { order: -1; flex: 0 0 auto; position: sticky; top: 0; z-index: 80; padding: .2rem .8rem; text-align: center; font: 700 .78rem/1.35 system-ui, sans-serif; letter-spacing: .02em; color: #1a1200; background: repeating-linear-gradient(135deg, #ffc93c 0 14px, #ffb000 14px 28px) 0 0 / 39.598px 39.598px; animation: devDrift 4.5s linear infinite; border-bottom: 1px solid #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @keyframes devDrift { to { background-position: -39.598px 0; } } /* the stripes move left, one tile a loop */
   button, input, textarea { font: inherit; color: inherit; }
   button { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: .55rem 1rem; font-weight: 600; cursor: pointer; }
   button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
@@ -407,7 +408,7 @@
   .spMenu button { background: transparent; border: 0; color: var(--text); text-align: left; padding: .4rem .65rem; border-radius: 5px; font-weight: 400; font-size: .85rem; }
   .spMenu button:hover, .spMenu button:focus { background: color-mix(in srgb, var(--text) 10%, transparent); outline: none; }
   .spMenu button.danger { color: #e5484d; } .spMenu hr { border: 0; border-top: 1px solid var(--line); margin: .2rem 0; width: 100%; }
-  #sessToggle .count { margin-left: .35rem; background: #9b5cff; color: #fff; border-radius: 999px; font-size: .68rem; padding: 0 .4rem; }
+  #sessToggle .count { background: #9b5cff; } /* in the rail (5.35.0): its badge, purple = working now */
   @media (max-width: 900px) {
     #sessPanel { position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); z-index: 46; box-shadow: 4px 0 24px rgba(0,0,0,.45); }
     #spScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 45; }
@@ -508,6 +509,9 @@
   #roomComposer .side { display: flex; flex-direction: column; gap: .35rem; }
   /* attachments (web/attach.js): the + button, the tray of picked files, and how sent ones show */
   .attPlus { align-self: flex-start; padding: .45rem; }
+  .leadCol { display: flex; flex-direction: column; gap: .4rem; align-self: flex-start; }
+  #enhance.working .ic { animation: enhSpin 1.1s linear infinite; } #enhance.undo { color: var(--accent, #9b5cff); border-color: currentColor; }
+  @keyframes enhSpin { to { transform: rotate(360deg); } }
   .attTray { display: flex; flex-wrap: wrap; gap: .35rem; padding: .45rem .75rem 0; }
   .attChip { display: inline-flex; align-items: center; gap: .35rem; max-width: 22rem; padding: .2rem .25rem .2rem .55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: .82rem; }
   .attChip .attName, .attHead .attName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -742,7 +746,7 @@
     header { padding: .4rem .55rem; gap: .4rem; }
     header b { font-size: .95rem; }
     header .folder { flex-basis: 100%; order: 9; font-size: .78rem; }
-    #shell header #pickFolder, #shell header #newChat, #shell header #saveChat, #shell header #sessToggle, #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
+    #shell header #pickFolder, #shell header #newChat, #shell header #saveChat, #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
     #menu .choices button { width: min(320px, 86vw); }
     .menuWho { max-width: 94vw; }
     /* chat: the conversation list is a drawer over the messages */
@@ -1052,6 +1056,7 @@
       </details>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
       <label class="chk"><input type="checkbox" id="setReopen"> Reopen what I had open after a reload (the previous Work conversation and the chat you were in; off: a reload starts fresh on the menu, nothing is deleted)</label>
+      <label class="chk"><input type="checkbox" id="setEnhance"> Show the prompt enhancer (the sparkle button <svg class="ic"><use href="#i-sparkle"/></svg> under + in Work: a throw-away Claude rewrites your prompt clearer and task by task, keeping everything you said; you read it before sending)</label>
       <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
       <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
       <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
@@ -1262,7 +1267,6 @@
 <div id="shell" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
-    <button class="ghost" id="sessToggle" title="Show / hide your sessions: the ongoing ones and the saved ones (Past sessions)"><svg class="ic lead"><use href="#i-dms"/></svg>Sessions<span class="count" id="sessCount" hidden title="working now"></span></button>
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <button id="pickFolder">Open folder on my PC</button>
@@ -1279,6 +1283,7 @@
   <main id="app">
     <nav id="rail">
       <button type="button" id="railToggle" title="Expand / collapse this bar"><i><svg class="ic"><use href="#i-menu"/></svg></i><span class="lbl">Panels</span></button>
+      <button type="button" id="sessToggle" title="Show / hide your sessions: the ongoing ones and the saved ones (Past sessions)"><i><svg class="ic"><use href="#i-dms"/></svg></i><span class="lbl">Sessions</span><span class="badge count" id="sessCount" hidden title="working now"></span></button>
       <button type="button" data-pane="files" title="Show / minimize the folder list"><i><svg class="ic"><use href="#i-folder"/></svg></i><span class="lbl">Folder</span></button>
       <button type="button" data-pane="edit" title="Show / minimize the file editor"><i><svg class="ic"><use href="#i-code"/></svg></i><span class="lbl">Editor</span></button>
       <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i><svg class="ic"><use href="#i-bot"/></svg></i><span class="lbl">Claude</span></button>
@@ -1340,7 +1345,10 @@
       <div id="hwMenu" hidden></div><!-- the Hyper Workflows matching "/hyperwork <name>" (web/hyperwork.js, T-207) -->
       <div id="workTray" class="attTray" hidden></div>
       <form id="composer">
-        <button type="button" class="ghost attPlus" id="workAttach" title="Attach files, pictures, videos for Claude (or drop / paste them here)" aria-label="Attach files"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <div class="leadCol">
+          <button type="button" class="ghost attPlus" id="workAttach" title="Attach files, pictures, videos for Claude (or drop / paste them here)" aria-label="Attach files"><svg class="ic"><use href="#i-plus"/></svg></button>
+          <button type="button" class="ghost attPlus" id="enhance" title="Enhance this prompt: a throw-away Claude rewrites it clearer and task by task, keeping everything you said (not a session, nothing of this conversation goes with it). You read it before sending; click again to get your own text back." aria-label="Enhance the prompt"><svg class="ic"><use href="#i-sparkle"/></svg></button>
+        </div>
         <input type="file" id="workFiles" multiple hidden>
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <div class="sendCol">
@@ -1568,12 +1576,12 @@ const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '')
 // The Work session on screen ('' = the first one, as older pages and hubs know it): the calls that belong to one
 // session carry ?session=<id> (T-238: Start work opens a new session of its own).
 let SESSION = '';
-const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|archive\/(save|open)|work\/(current|queue|attach|git|share|draft))(\/|\?|$)/;
+const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|archive\/(save|open)|work\/(current|queue|attach|git|share|draft|enhance))(\/|\?|$)/;
 const withSession = (path) => (SESSION && SESSION_PATHS.test(path) && !/[?&]session=/.test(path) ? path + (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(SESSION) : path);
 // Planner mode (T-275): the id of the planner session open here ('' = the normal Work session). Its requests name it (?session=).
 const PLAN_KEY = NS + 'vr.planSession';
 let planSession = (() => { try { return sessionStorage.getItem(PLAN_KEY) || ''; } catch { return ''; } })();
-const PLAN_PATHS = /^\/api\/(chat|stop|work\/(current|queue|questions|attach|git))(\?|$)/;
+const PLAN_PATHS = /^\/api\/(chat|stop|work\/(current|queue|questions|attach|git|enhance))(\?|$)/;
 async function api(path, opts = {}) {
   // planner mode (T-275) first: its session wins over the one on screen (T-238)
   if (planSession && PLAN_PATHS.test(path) && !/[?&]session=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(planSession);
@@ -1932,6 +1940,7 @@ $('login').addEventListener('submit', async (e) => {
 });
 async function enter() {
   me = await json('/api/check');
+  showEnhance();
   // the desktop app updates itself with this session (updates need an account); an older app has no such command
   if (NATIVE && token) NATIVE.call('set_session', { token }).catch(() => {});
   // app settings follow the account: its saved theme wins over this browser's; an account without one adopts the browser's
@@ -2407,7 +2416,34 @@ let busy = false, fresh = false, sendNowMessage = null;
 const queue = []; // { message, el }
 function updateStopButton() { $('stop').textContent = busy && $('input').value.trim() ? 'Send now' : 'Stop'; }
 function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); gitRefresh(); }
-$('input').addEventListener('input', () => { updateStopButton(); SESSIONS.typing($('input').value); }); // each session keeps its own draft (web/sessions.js)
+$('input').addEventListener('input', () => { updateStopButton(); SESSIONS.typing($('input').value); enhanceLabel(); }); // each session keeps its own draft (web/sessions.js)
+
+// The prompt enhancer (5.35.0): the sparkle button sends the draft to a throw-away one-shot Claude on the hub (/api/work/enhance: no tools, no
+// history, not a session, never counts against the session limits) and puts the clearer, task-by-task version in the box.
+// Nothing is sent: the person reads it first. The button again, while the box still holds that version, brings the original back.
+let enhanceUndo = null; // { before, after }
+function showEnhance() { $('enhance').hidden = prefs().enhance === false; }
+function enhanceLabel() {
+  const b = $('enhance'), undo = !!enhanceUndo && $('input').value === enhanceUndo.after;
+  if (!undo && enhanceUndo && $('input').value !== enhanceUndo.after) enhanceUndo = null;
+  b.classList.toggle('undo', undo);
+  b.setAttribute('aria-label', undo ? 'Bring my own text back' : 'Enhance the prompt');
+}
+$('enhance').onclick = async () => {
+  const box = $('input'), b = $('enhance');
+  if (b.classList.contains('working')) return;
+  if (enhanceUndo && box.value === enhanceUndo.after) { box.value = enhanceUndo.before; enhanceUndo = null; box.dispatchEvent(new Event('input')); box.focus(); return; }
+  const text = box.value;
+  if (!text.trim()) { box.focus(); return; }
+  b.classList.add('working');
+  try {
+    const d = await json('/api/work/enhance', { method: 'POST', body: JSON.stringify({ text }) });
+    if (box.value !== text) { sys('The enhanced prompt came back after you changed the box, so your text was left as it is.'); return; }
+    enhanceUndo = { before: text, after: d.text };
+    box.value = d.text; box.dispatchEvent(new Event('input')); box.focus(); box.setSelectionRange(0, 0); box.scrollTop = 0;
+  } catch (e) { sys('Could not enhance the prompt: ' + e.message, true); }
+  finally { b.classList.remove('working'); enhanceLabel(); }
+};
 
 // Git at a glance (T-240): your own worktree of this Work session. Stage / commit are plain git; Update and Merge only
 // run bridge/worktree.js on the hub (Forgejo first, the version law), and everything waits while Claude is working.
@@ -3450,7 +3486,7 @@ const snippet = (rec) => (rec.m.deleted ? 'message deleted'
   : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
 function prefs() {
   const p = (me && me.prefs) || {};
-  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, reopen: p.reopen !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
+  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, reopen: p.reopen !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, enhance: p.enhance !== false, // autoScroll off by default, the enhancer on
     sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70, ask: (p.sound && p.sound.ask) ?? 80 },
     tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ask: false, ...(p.tts || {}) }, // all = master switch
     ask: { auto: true, minutes: 10, activity: true, ...(p.ask || {}) }, // when the AI asks (T-248): wait N minutes without you, then its recommended answers; any activity waits
@@ -4492,10 +4528,54 @@ function bindSplit(split, left, right) {
     split.addEventListener('pointermove', move); split.addEventListener('pointerup', up);
   });
 }
-function togglePane(id) { layout.show[id] = !layout.show[id]; applyLayout(); }
+// The genie (5.35.0), a black-hole take on the macOS one: what hides is pulled into the button that brings it back (it
+// squeezes, swirls and shrinks into it), what shows bursts out of the button that opened it. The element itself moves
+// (no copy, so it keeps its looks); a hidden one is hidden only when it is inside the button. Off for reduced motion,
+// for a button that is not on screen, and while the same element is already moving (the newest click wins).
+const GENIE_MS = 440;
+const genieOff = (el, btn) => !el || !btn || !el.animate || matchMedia('(prefers-reduced-motion: reduce)').matches || !btn.getClientRects().length;
+function genieAim(el, btn) { const a = el.getBoundingClientRect(), b = btn.getBoundingClientRect(); return { w: a.width, dx: b.left + b.width / 2 - (a.left + a.width / 2), dy: b.top + b.height / 2 - (a.top + a.height / 2) }; }
+function genieKick(btn, delay) { btn.animate([{ transform: 'none' }, { transform: 'scale(1.28)', boxShadow: '0 0 0 5px rgba(155,92,255,.35)' }, { transform: 'none', boxShadow: '0 0 0 0 rgba(155,92,255,0)' }], { duration: 280, delay: delay || 0, easing: 'ease-out' }); }
+function genieStop(el) { if (el && el._genie) { const g = el._genie; el._genie = null; g.cancel(); } }
+// into the button; done() hides it (at once when there is nothing to animate)
+function genieIn(el, btn, done) {
+  genieStop(el);
+  if (genieOff(el, btn) || el.hidden) return done();
+  const { w, dx, dy } = genieAim(el, btn); if (!w) return done();
+  const g = el.animate([
+    { transform: 'none', opacity: 1, filter: 'none', borderRadius: '0px' },
+    { offset: .35, transform: `translate(${dx * .18}px, ${dy * .18}px) scale(.82, .6) rotate(-3deg)`, opacity: 1, filter: 'blur(.5px)', borderRadius: '14px' },
+    { transform: `translate(${dx}px, ${dy}px) scale(.015) rotate(-14deg)`, opacity: .15, filter: 'blur(5px)', borderRadius: '50%' },
+  ], { duration: GENIE_MS, easing: 'cubic-bezier(.55,0,.8,.3)', fill: 'forwards' });
+  el._genie = g; el.style.zIndex = '60'; el.style.pointerEvents = 'none';
+  g.onfinish = () => { if (el._genie !== g) return; el._genie = null; el.style.zIndex = el.style.pointerEvents = ''; done(); g.cancel(); };
+  g.oncancel = () => { el.style.zIndex = el.style.pointerEvents = ''; };
+  genieKick(btn, GENIE_MS * .8);
+}
+// out of the button (call it once the element is shown)
+function genieOut(el, btn) {
+  genieStop(el);
+  if (genieOff(el, btn) || el.hidden) return;
+  const { w, dx, dy } = genieAim(el, btn); if (!w) return;
+  genieKick(btn);
+  const g = el.animate([
+    { transform: `translate(${dx}px, ${dy}px) scale(.015) rotate(14deg)`, opacity: 0, filter: 'blur(6px)', borderRadius: '50%' },
+    { offset: .55, transform: `translate(${dx * .1}px, ${dy * .1}px) scale(.9, .78) rotate(-2deg)`, opacity: 1, filter: 'blur(1px)', borderRadius: '16px' },
+    { offset: .82, transform: 'scale(1.015)', filter: 'none', borderRadius: '4px' },
+    { transform: 'none', opacity: 1, filter: 'none', borderRadius: '0px' },
+  ], { duration: GENIE_MS + 60, easing: 'cubic-bezier(.2,.75,.25,1)' });
+  el._genie = g; g.onfinish = () => { if (el._genie === g) el._genie = null; };
+}
+const paneEl = (id) => (id === 'roomPane' && layout.roomMode === 'float' ? $('roomFloat') : $(id));
+const paneBtn = (id) => document.querySelector(`#rail [data-pane="${id}"]`);
+function togglePane(id) {
+  if (layout.show[id] && !paneEl(id)._genie) return genieIn(paneEl(id), paneBtn(id), () => { layout.show[id] = false; applyLayout(); });
+  if (layout.show[id]) { genieStop(paneEl(id)); return; } // clicked again while it was going: it stays
+  layout.show[id] = true; applyLayout(); genieOut(paneEl(id), paneBtn(id));
+}
 function showRoomInWork() { if (!layout.show.roomPane) { layout.show.roomPane = true; applyLayout(); } }
 document.querySelectorAll('#rail [data-pane]').forEach((b) => { b.onclick = () => togglePane(b.dataset.pane); });
-document.querySelectorAll('[data-min]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); layout.show[b.dataset.min] = false; applyLayout(); }; });
+document.querySelectorAll('[data-min]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); const id = b.dataset.min; if (layout.show[id]) genieIn(paneEl(id), paneBtn(id), () => { layout.show[id] = false; applyLayout(); }); }; });
 $('railToggle').onclick = () => { layout.railOpen = !layout.railOpen; applyLayout(); };
 $('roomFloatBtn').onclick = () => { layout.roomMode = 'float'; applyLayout(); };
 $('floatDock').onclick = () => { layout.roomMode = 'dock'; applyLayout(); };
@@ -4537,7 +4617,7 @@ function openSettings() {
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
   $('volCall').value = P.sound.call; $('volBoard').value = P.sound.board; $('soundSet').value = P.sound.set === 'classic' ? 'classic' : 'patterns';
   $('volAsk').value = P.sound.ask; $('setAskAuto').checked = P.ask.auto !== false; $('setAskMin').value = P.ask.minutes; $('setAskActivity').checked = P.ask.activity !== false; $('setAskTts').checked = !!P.tts.ask;
-  $('setToasts').checked = P.toasts; $('setReopen').checked = P.reopen; $('setAutoScroll').checked = P.autoScroll;
+  $('setToasts').checked = P.toasts; $('setReopen').checked = P.reopen; $('setAutoScroll').checked = P.autoScroll; $('setEnhance').checked = P.enhance;
   $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
   $('ttsRateVal').textContent = (P.tts.rate / 100).toFixed(1) + '×';
@@ -4917,7 +4997,7 @@ document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => play
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
-      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, reopen: $('setReopen').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
+      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, reopen: $('setReopen').checked, autoScroll: $('setAutoScroll').checked, enhance: $('setEnhance').checked, autosave: Number($('setAutosave').value),
       sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), ask: Number($('volAsk').value), set: $('soundSet').value },
       ask: { auto: $('setAskAuto').checked, minutes: Math.max(1, Math.min(1440, Math.round(Number($('setAskMin').value) || 10))), activity: $('setAskActivity').checked },
       tts: { ask: $('setAskTts').checked, all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
@@ -4929,7 +5009,7 @@ $('saveSettings').onclick = async () => {
     document.querySelectorAll('#callTiles .tile:not(.self)').forEach(applyPersonAudio);
     if (call.mic) call.mic.applyConstraints(audioConstraints()).catch(() => {}); // new noise / echo settings apply to the live call too
     document.querySelectorAll('.rmsg audio').forEach((a) => { a.volume = d.prefs.clips ? d.prefs.clips.volume / 100 : 0.9; });
-    me.prefs = d.prefs;
+    me.prefs = d.prefs; showEnhance();
     if (!prefs().tts.on || !prefs().tts.all) ttsStop();
     if (!voiceOn()) stopVoice();
     showVoice();
@@ -4937,9 +5017,10 @@ $('saveSettings').onclick = async () => {
     await refreshMembers(); selectConv(currentConv);
   } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }
 };
-$('closeSettings').onclick = () => { $('settings').hidden = true; };
+$('closeSettings').onclick = () => { const from = settingsFrom; settingsFrom = null; genieIn($('settings').querySelector('.box'), from, () => { $('settings').hidden = true; }); };
 $('settings').onclick = (e) => { if (e.target.id === 'settings') $('settings').hidden = true; };
-document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = openSettings; });
+let settingsFrom = null; // the button Settings came out of (it goes back into it)
+document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = () => { settingsFrom = b; openSettings(); genieOut($('settings').querySelector('.box'), b); }; });
 // ── Downloads (Settings → Downloads): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by the
 // hub from the code it runs. Every Download button (menu, Work's bar, the chat app) opens Settings on this tab. ──
 function openDownloads() {
@@ -5036,7 +5117,7 @@ async function renderProducts(box, note) {
     sec.append(d);
   }
 }
-document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = openDownloads; });
+document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = () => { settingsFrom = b; openDownloads(); genieOut($('settings').querySelector('.box'), b); }; });
 document.querySelector('[data-settab="downloads"]').addEventListener('click', renderDownloads);
 window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) applyLayout(); });
 

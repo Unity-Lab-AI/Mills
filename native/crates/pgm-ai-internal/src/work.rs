@@ -315,7 +315,7 @@ impl Work {
     }
     pub fn effective(&self, ai: &crate::ai_hosts::AiHosts, user: &str, chosen: &str) -> Option<Value> { (if chosen.is_empty() { None } else { self.provider_get(ai, chosen, user) }).or_else(|| self.default_for(ai, user)) }
     /// What a run's `claude` gets for that provider (None: not Claude Code).
-    fn claude_env(p: &Value) -> Option<Vec<(String, String)>> {
+    pub(crate) fn claude_env(p: &Value) -> Option<Vec<(String, String)>> {
         match p["kind"].as_str().unwrap_or("") { "host" | "host-claude" => Some(vec![]), "anthropic" => Some(vec![("ANTHROPIC_API_KEY".into(), s(p, "apiKey"))]), "claude-cli" => Some(vec![("CLAUDE_CONFIG_DIR".into(), s(p, "configDir"))]), _ => None }
     }
     /// Which coding harness runs Work for that provider: "claude" (Claude Code), "jcode" (Jcode PGM), None (neither:
@@ -478,7 +478,7 @@ impl Work {
         self.cfg.get("projectsGitBase").and_then(Value::as_str).map(|b| format!("{}/{}/_repo", b.trim_end_matches('/'), wd.project)).unwrap_or_default()
     }
     // ---------- the login relay: one token per person + host provider, 12 hours, from this machine only ----------
-    fn llm_token(&self, user: &str, host: &str, prov: &str) -> String {
+    pub(crate) fn llm_token(&self, user: &str, host: &str, prov: &str) -> String {
         let mut m = self.llm.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms();
         m.retain(|_, v| v.3 > now);
         if let Some((t, _)) = m.iter().find(|(_, v)| v.0 == user && v.1 == host && v.2 == prov && v.3 - now > 3_600_000) { return t.clone(); }
@@ -1197,6 +1197,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let no_session = || answer(404, json!({ "error": "No such session." }));
     Some(match p {
         "/api/chat" if post => chat(hub, a, r).await,
+        // the prompt enhancer (5.35.0): a throw-away one-shot call, never a Work run (crate::enhance)
+        "/api/work/enhance" if post => crate::enhance::route(hub, a, r).await,
         "/api/stop" if post => { let Some(sx) = sess(&r.json()) else { return Some(no_session()) }; w.stop(&**hub, &sx.key); answer(200, json!({ "ok": true })) }
         "/api/pc-result" if post => {
             let b = r.json();

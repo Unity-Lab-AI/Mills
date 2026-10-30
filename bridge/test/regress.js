@@ -3702,10 +3702,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     fs.mkdirSync(path.join(app, 'deploy'), { recursive: true }); fs.mkdirSync(path.join(app, 'bridge')); fs.mkdirSync(path.join(app, 'Board')); fs.mkdirSync(path.join(app, 'Notes'));
     fs.writeFileSync(path.join(app, 'versions.json'), '{ "project": "9.9.9" }\n');
     for (const f of ['setup-dev.sh', 'viberoller-dev-hub.service', 'viberoller-dev-autodeploy.service', 'viberoller-dev-autodeploy.timer']) fs.copyFileSync(path.join(MILLS, 'deploy', f), path.join(app, 'deploy', f));
+    for (const f of ['worktree.js', 'common.js']) fs.copyFileSync(path.join(MILLS, 'bridge', f), path.join(app, 'bridge', f));
     fs.writeFileSync(path.join(app, '.gitignore'), 'bridge/*.json\nBoard/\nNotes/\n');
     g(L, 'init', '-q', '--bare', '-b', 'main', bare); g(app, 'init', '-q', '-b', 'main'); g(app, 'add', '-A'); g(app, 'commit', '-q', '-m', 'r494');
     g(app, 'remote', 'add', 'origin', bare); g(app, 'push', '-q', 'origin', 'main'); g(app, 'push', '-q', 'origin', 'main:develop');
-    const liveCfg = JSON.stringify({ port: 7777, publicUrl: 'https://portal.example', rustHub: { enabled: true, backPort: 7779, alone: true }, aiNodes: { pc: 'k' }, allowedOrigins: ['https://x.example'] }, null, 2) + '\n';
+    const liveCfg = JSON.stringify({ port: 7777, worktreeRoot: path.join(L, 'wt'), publicUrl: 'https://portal.example', rustHub: { enabled: true, backPort: 7779, alone: true }, aiNodes: { pc: 'k' }, allowedOrigins: ['https://x.example'] }, null, 2) + '\n';
     fs.writeFileSync(path.join(app, 'bridge', 'config.local.json'), liveCfg);
     fs.writeFileSync(path.join(app, 'bridge', 'auth.json'), '{"users":{"ann":{"hash":"h"}}}'); fs.writeFileSync(path.join(app, 'bridge', 'front-sessions.json'), '{"tok":"ann"}');
     fs.writeFileSync(path.join(app, 'bridge', 'device-locks.json'), '{}'); fs.writeFileSync(path.join(app, 'Board', 'board.json'), '{"tasks":[{"id":"T-1"}]}'); fs.writeFileSync(path.join(app, 'Notes', 'n.md'), 'note r494');
@@ -3714,19 +3715,25 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const D = path.join(L, 'dev', 'app'), has = (p) => fs.existsSync(path.join(D, p));
     const cfg = (() => { try { return JSON.parse(fs.readFileSync(path.join(D, 'bridge', 'config.local.json'), 'utf8')); } catch { return {}; } })();
     const branch = g(D, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim();
+    // a person's worktree made by live in the shared folder; dev's own worktree.js takes it up (a session carries on there)
+    g(app, 'branch', 'develop', 'origin/develop');
+    const wtLive = spawnSync(process.execPath, [path.join(app, 'bridge', 'worktree.js'), 'ensure', 'ann'], { cwd: app, encoding: 'utf8' });
+    const wtDev = spawnSync(process.execPath, [path.join(D, 'bridge', 'worktree.js'), 'ensure', 'ann'], { cwd: D, encoding: 'utf8' });
+    const wtDir = path.join(L, 'wt', 'ann'), wtSame = wtLive.status === 0 && wtDev.status === 0 && wtDev.stdout.includes('Exists: ' + wtDir);
     fs.writeFileSync(path.join(D, 'Board', 'board.json'), '{"tasks":[{"id":"T-1"},{"id":"T-2"}]}'); // a change on dev
     const run2 = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh')], { env, encoding: 'utf8' });
     const kept = fs.readFileSync(path.join(D, 'Board', 'board.json'), 'utf8').includes('T-2'), liveSame = fs.readFileSync(path.join(app, 'bridge', 'config.local.json'), 'utf8') === liveCfg;
     const pair = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh'), 'pair'], { env, encoding: 'utf8' });
     const lc = JSON.parse(fs.readFileSync(path.join(app, 'bridge', 'config.local.json'), 'utf8')), dc = JSON.parse(fs.readFileSync(path.join(D, 'bridge', 'config.local.json'), 'utf8'));
     const secretMode = (() => { try { return (fs.statSync(path.join(L, 'sync.secret')).mode & 0o077) === 0; } catch { return false; } })();
-    check('R494', 'the dev hub install (deploy/setup-dev.sh) clones develop beside live, copies live\'s data once (the board, notes, accounts) but never its sign-in sessions or device unlocks, makes dev\'s settings from live\'s (port 7778, instance dev, its own address, no AI hosts), leaves live\'s files alone, keeps what changed on dev when run again, and only `pair` turns the bridge on for both (one private secret, a graceful restart asked of each)',
+    check('R494', 'the dev hub install (deploy/setup-dev.sh) clones develop beside live, copies live\'s data once (the board, notes, accounts) but never its sign-in sessions or device unlocks, makes dev\'s settings from live\'s (port 7778, instance dev, its own address, no AI hosts, live\'s checkout as the one whose worktrees it uses: a worktree live made in the shared folder is the same worktree for dev), leaves live\'s files alone, keeps what changed on dev when run again, and only `pair` turns the bridge on for both (one private secret, a graceful restart asked of each)',
       run1.status === 0 && branch === 'develop' && has('Board/board.json') && has('Notes/n.md') && has('bridge/auth.json') && !has('bridge/front-sessions.json') && !has('bridge/device-locks.json')
       && cfg.port === 7778 && cfg.instance === 'dev' && cfg.publicUrl === 'https://dev.example' && cfg.rustHub.backPort === 7781 && Object.keys(cfg.aiNodes || {}).length === 0 && !cfg.sync
+      && cfg.hubRepo === app && wtSame
       && run2.status === 0 && kept && liveSame
       && pair.status === 0 && lc.sync && lc.sync.peer === 'http://127.0.0.1:7778' && dc.sync && dc.sync.peer === 'http://127.0.0.1:7777' && lc.sync.secretFile === dc.sync.secretFile && lc.sync.name === 'live' && dc.sync.name === 'dev' && secretMode
       && fs.existsSync(path.join(app, 'bridge', '.restart')) && fs.existsSync(path.join(D, 'bridge', '.restart')),
-      `install ${run1.status} ${(run1.stdout + run1.stderr).trim().split('\n').slice(-2).join(' / ')} · branch ${branch} · sessions copied ${has('bridge/front-sessions.json')} · cfg ${JSON.stringify(cfg).slice(0, 160)} · again ${run2.status} kept ${kept} live unchanged ${liveSame} · pair ${pair.status} ${JSON.stringify(lc.sync)} ${JSON.stringify(dc.sync)} secret private ${secretMode}`);
+      `install ${run1.status} ${(run1.stdout + run1.stderr).trim().split('\n').slice(-2).join(' / ')} · branch ${branch} · sessions copied ${has('bridge/front-sessions.json')} · cfg ${JSON.stringify(cfg).slice(0, 160)} · worktree live ${wtLive.status} ${wtLive.stdout.trim()}${wtLive.stderr.trim()} dev ${wtDev.status} ${wtDev.stdout.trim()}${wtDev.stderr.trim().split('\n').pop()} · again ${run2.status} kept ${kept} live unchanged ${liveSame} · pair ${pair.status} ${JSON.stringify(lc.sync)} ${JSON.stringify(dc.sync)} secret private ${secretMode}`);
   }
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
@@ -3797,6 +3804,62 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R497 (5.35.0): the prompt enhancer, driven like the page drives it, against the fake Claude
+    const seen = {};
+    await chat(U, 'r497 earlier talk SECRETCTX497');
+    const n0 = (((await call('/api/work/sessions', U)).data.counts) || {}).working || 0;
+    const draft = 'add a dark mode toggle near the settings button\nand maybe keep the old colours as "classic"';
+    const r1 = await call('/api/work/enhance', U, { text: draft });
+    let got = {}; try { got = JSON.parse(String(r1.data.text || '').replace(/^ENHANCED:/, '')); } catch {}
+    seen.status = r1.status; seen.model = r1.data.model;
+    seen.draftWhole = typeof got.input === 'string' && got.input.includes(draft);
+    seen.noHistory = typeof got.input === 'string' && !got.input.includes('SECRETCTX497') && !/Worktree law|VibeRoller team laws/.test(got.input);
+    seen.how = { tools: got.tools, resume: got.resume, mcp: got.mcp, noPersist: got.noPersist, keeps: got.keeps, files: got.files };
+    seen.folderGone = !!got.cwd && !fs.existsSync(got.cwd) && /vr-enhance-/.test(got.cwd);
+    // not a Work run: nothing working meanwhile, and a Work message goes through while a slow enhancement runs; one at a time per person
+    const slow = call('/api/work/enhance', U, { text: 'SLOW r497 a slow one' });
+    await sleep(600);
+    seen.second = (await call('/api/work/enhance', U, { text: 'r497 another' })).status;
+    seen.workingMeanwhile = (((await call('/api/work/sessions', U)).data.counts) || {}).working || 0;
+    seen.chatMeanwhile = (await chat(U, 'r497 while it enhances')).status;
+    seen.slow = (await slow).status;
+    seen.otherPerson = (await call('/api/work/enhance', A, { text: 'r497 the admin at the same time' })).status;
+    seen.empty = (await call('/api/work/enhance', U, { text: '   ' })).status;
+    seen.long = (await call('/api/work/enhance', U, { text: 'x'.repeat(20001) })).status;
+    seen.anon = (await call('/api/work/enhance', null, { text: 'r497' })).status;
+    seen.n0 = n0;
+    check('R497', 'the prompt enhancer: the sparkle button sends the draft to a throw-away Claude that gets the whole draft and nothing of the conversation (no earlier messages, no laws), runs with no tools, no MCP servers, no resume and no session kept, with its own system prompt (keep everything the person said), in an empty folder that is gone afterwards, and answers the rewrite; it is not a Work run (nothing counts as working, a Work message goes through meanwhile) and runs one at a time per person (a second one is refused 409, another person\'s is not); an empty draft is refused 400, one over 20 000 characters 413, and nobody signed out may use it',
+      seen.status === 200 && seen.draftWhole && seen.noHistory && seen.how.tools === '' && !seen.how.resume && !seen.how.mcp && seen.how.noPersist && seen.how.keeps && Array.isArray(seen.how.files) && seen.how.files.length === 0 && seen.folderGone
+      && seen.second === 409 && seen.workingMeanwhile === n0 && seen.chatMeanwhile === 200 && seen.slow === 200 && seen.otherPerson === 200 && seen.empty === 400 && seen.long === 413 && seen.anon === 401,
+      JSON.stringify(seen));
+  } else skip('R497', 'the prompt enhancer (/api/work/enhance)', 'the Rust hub\'s: --rust-hub runs it');
+  { // R498 (5.35.0): the page: the DEV band drifts, Sessions is in the left rail, the sparkle (SVG) button sits under + in the composer with its switch in
+    // Settings, and the genie (the page's own genieIn / genieOut, run with stand-in elements) hides only once the element is in its button
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), sj = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');
+    const rail = (/<nav id="rail">[\s\S]*?<\/nav>/.exec(page) || [''])[0], hdr = (/<div id="shell" hidden>\s*<header>[\s\S]*?<\/header>/.exec(page) || [''])[0], comp = (/<form id="composer">[\s\S]*?<\/form>/.exec(page) || [''])[0];
+    const seen = { drift: /#devBand \{[^}]*animation: devDrift [^}]*\}/.test(page) && /@keyframes devDrift \{ to \{ background-position: -39\.598px 0; \} \}/.test(page),
+      railHasSessions: /id="sessToggle"/.test(rail) && /id="sessCount"/.test(rail), headerHasNot: !!hdr && !/sessToggle/.test(hdr),
+      enhanceBtn: /id="workAttach"[\s\S]*id="enhance"/.test(comp) && /#i-sparkle/.test(comp), setting: /id="setEnhance"/.test(page) && /enhance: \$\('setEnhance'\)\.checked/.test(page),
+      sessionsAnimate: /genieIn\(\$\('sessPanel'\), \$\('sessToggle'\)/.test(sj) && /genieOut\(\$\('sessPanel'\), \$\('sessToggle'\)\)/.test(sj) };
+    const src = (/\/\/ The genie \(5\.35\.0\)[\s\S]*?(?=\nconst paneEl)/.exec(page) || [''])[0];
+    let G = null; const anims = [];
+    const ctx = { matchMedia: () => ({ matches: false }), setTimeout, console };
+    try { G = require('vm').runInNewContext(src + '\n;({ genieIn, genieOut })', ctx); } catch (e) { seen.load = e.message; }
+    const elem = (rect) => ({ hidden: false, style: {}, getBoundingClientRect: () => rect, getClientRects: () => [rect], animate(k, o) { const a = { k, o, cancel() { this.canceled = true; if (this.oncancel) this.oncancel(); } }; anims.push(a); return a; } });
+    if (G) {
+      const pane = elem({ left: 100, top: 100, width: 400, height: 300 }), btn = elem({ left: 0, top: 120, width: 40, height: 40 });
+      let hid = 0; G.genieIn(pane, btn, () => { hid++; });
+      const pull = anims[0]; seen.notYet = hid === 0;
+      seen.intoButton = !!pull && /translate\(-280px, -110px\) scale\(0?\.015\)/.test(pull.k[pull.k.length - 1].transform) && pull.o.fill === 'forwards';
+      if (pull && pull.onfinish) pull.onfinish(); seen.hidAfter = hid === 1;
+      anims.length = 0; G.genieOut(pane, btn); const push = anims.find((a) => a.k && a.k[0] && /scale\(0?\.015\)/.test(a.k[0].transform || ''));
+      seen.outOfButton = !!push && push.k[push.k.length - 1].transform === 'none';
+      let quick = 0; ctx.matchMedia = () => ({ matches: true }); G.genieIn(pane, btn, () => { quick++; }); seen.reducedMotionAtOnce = quick === 1;
+      ctx.matchMedia = () => ({ matches: false }); let gone = 0; const offscreen = { ...btn, getClientRects: () => [] }; G.genieIn(pane, offscreen, () => { gone++; }); seen.noButtonAtOnce = gone === 1;
+    }
+    check('R498', 'the page: the DEV band\'s stripes drift left (one seamless tile a loop), the Sessions button is in the left rail (with its working count) and no longer in the header, the sparkle (prompt enhancer) button sits under + in the composer with its switch in Settings → App, and the genie pulls a hiding pane into its button and hides it only when it is there, bursts a showing one out of its button, and hides at once for reduced motion or a button that is not on screen; the sessions list uses it from its rail button',
+      !!G && Object.entries(seen).every(([k, v]) => k === 'load' || v === true), JSON.stringify(seen));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
