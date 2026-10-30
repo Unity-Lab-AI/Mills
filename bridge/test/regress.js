@@ -316,7 +316,7 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
@@ -3913,6 +3913,70 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R500', 'the Work page (T-330): the header has no New session, New chat, New planner session, Save session, project picker or Open folder any more; Open folder is in the Folder pane, a planner session starts from the New session panel, and the left rail has Commands: every command says what it does, /clear and /new ask first, /compact takes optional words for its summary ("remove everything about X, keep all about Y and Z"), /model offers a pick, /fix needs its words, /stop runs at once, and the asking is a modal of the page (no browser pop-up)',
       !!C && Object.entries(seen).every(([k, v]) => k === 'load' || v === true), JSON.stringify(seen));
   }
+  if (RUST_HUB) { // R501 (5.38.0, T-331 § 1): a session's runs are journalled as they stream, so a run that left the hub's memory
+    // (here: a graceful restart) is shown again from where the page was, and a deleted session's journal goes with it
+    const seen = {};
+    const r1 = await chat(U, 'r501 journal me', { fresh: true });
+    const run1 = (r1.events.find((e) => e.type === 'bridge_run') || {}).id || '';
+    const live = (await call('/api/work/attach?run=' + run1 + '&after=0', U)).data;
+    seen.run = !!run1; seen.liveCount = (live.events || []).length;
+    const pid0 = (await call('/api/status')).data.pid;
+    fs.writeFileSync(path.join(SB, '.restart'), 'r501');
+    let pid1 = pid0; for (let i = 0; i < 80 && (pid1 === pid0 || !pid1); i++) { await sleep(250); pid1 = (await call('/api/status')).data.pid; }
+    seen.restarted = !!pid1 && pid1 !== pid0;
+    const back = (await call('/api/work/attach?run=' + run1 + '&after=0', U)).data;
+    seen.back = { run: back.run === run1, busy: back.busy, journal: back.journal === true, n: (back.events || []).length };
+    seen.sameEvents = (back.events || []).length === seen.liveCount && (back.events || []).some((e) => e.type === 'result' && /r501 journal me/.test(e.result || '')) && (back.events || []).some((e) => e.type === 'bridge_done');
+    const mid = Math.max(1, Math.floor(seen.liveCount / 2));
+    const part = (await call('/api/work/attach?run=' + run1 + '&after=' + mid, U)).data;
+    seen.fromMid = (part.events || []).length === seen.liveCount - mid && part.from === mid && part.next === back.next;
+    seen.otherCannot = ((await call('/api/work/attach?run=' + run1 + '&after=0', A)).data.events || []).length === 0; // another person's session never shows it
+    const jf = path.join(SB, 'profiles', 't-user', 'work-journal.jsonl');
+    const jl = (() => { try { return fs.readFileSync(jf, 'utf8').trim().split('\n').map((l) => JSON.parse(l)); } catch { return []; } })();
+    seen.userLine = jl.some((l) => l.run === run1 && l.user === 'r501 journal me');
+    seen.noPcTool = !jl.some((l) => l.ev && l.ev.type === 'pc_tool');
+    // a session of its own: its journal is next to its file, and deleting the session deletes it
+    const s2 = (await call('/api/work/sessions/new', U, { project: 'VibeRoller' })).data;
+    await chat(U, 'r501 in a session', { fresh: true, session: s2.id });
+    const j2 = path.join(SB, 'profiles', 't-user', 'work-sessions', s2.id + '.jsonl');
+    // (the hub's write buffer writes in batches every 50 ms: the run's lines are on disk within the next batch)
+    for (let i = 0; i < 30 && !(fs.existsSync(j2) && /r501 in a session/.test(fs.readFileSync(j2, 'utf8'))); i++) await sleep(100);
+    seen.ownJournal = fs.existsSync(j2) && /r501 in a session/.test(fs.readFileSync(j2, 'utf8'));
+    seen.del = (await call('/api/work/sessions/delete', U, { id: s2.id })).status;
+    seen.goneWithIt = !fs.existsSync(j2);
+    check('R501', 'a Work run is journalled as it streams: after a hub restart (the run gone from memory) the page joining it from where it was gets the same events from the session\'s journal (from the start, or from half way), another person gets nothing, the person\'s message is journalled with it, the computer-tool calls are not; a session of its own has its own journal, and deleting the session deletes it',
+      seen.run && seen.liveCount > 2 && seen.restarted && seen.back.run && seen.back.busy === false && seen.back.journal && seen.sameEvents && seen.fromMid && seen.otherCannot && seen.userLine && seen.noPcTool && seen.ownJournal && seen.del === 200 && seen.goneWithIt,
+      JSON.stringify(seen));
+  } else skip('R501', 'Work runs journalled, shown again after a restart', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R502 (5.38.0, T-331 § 4): logs, metrics, traces, driven over HTTP
+    const seen = {};
+    const st = await fetch(H + '/api/status'); seen.requestId = /^[0-9a-f]{16}$/.test(st.headers.get('x-request-id') || '');
+    const r1 = await chat(U, 'r502 traced run', { fresh: true });
+    const run1 = (r1.events.find((e) => e.type === 'bridge_run') || {}).id || '';
+    // (metrics are the hub's memory: R501 restarted it, so this check makes its own relayed run: the host's Claude, straight to the relay)
+    await call('/api/model', A, { provider: 'h:test-node/claude', model: 'claude-haiku-5-5' });
+    const rel = await chat(A, 'r502 relayed run', { fresh: true }); seen.relayed = /relay=200:upstream ok/.test(texts(rel.events));
+    await sleep(200);
+    const m = await call('/api/admin/metrics', A), mu = await call('/api/admin/metrics', U);
+    const c = ((m.data.metrics || {}).counters) || {}, sum = (f) => Object.entries(c).filter(([k]) => f(k)).reduce((n, [, v]) => n + v, 0);
+    seen.metrics = { status: m.status, user: mu.status, requests: sum((k) => k.startsWith('vr_http_requests')), runs: sum((k) => k.startsWith('vr_runs_started')), ended: sum((k) => k.startsWith('vr_runs_ended')),
+      relayDirect: sum((k) => k.startsWith('vr_relay_calls') && k.includes('via="direct"')), store: typeof (m.data.store || {}).writes === 'number', latency: Object.keys((m.data.metrics || {}).latency || {}).some((k) => k.startsWith('vr_http{')) };
+    const t = await call('/api/admin/trace?run=' + run1, A), tu = await call('/api/admin/trace?run=' + run1, U), tb = await call('/api/admin/trace?run=../x', A);
+    const lines = t.data.lines || [];
+    seen.trace = { status: t.status, user: tu.status, bad: tb.status, n: lines.length, started: lines.some((l) => l.what === 'run started' && l.user === 't-user'), ended: lines.some((l) => l.what === 'run ended' && typeof l.took_ms === 'number') };
+    const prom = await fetch(H + '/metrics'), promTxt = await prom.text(), promOut = await fetch(H + '/metrics', { headers: { 'X-Forwarded-For': '8.8.8.8' } });
+    seen.prometheus = { status: prom.status, has: /vr_http_requests_total\{/.test(promTxt) && /vr_relay_ms_bucket/.test(promTxt), outside: promOut.status };
+    // no log line carries a secret: no field named like one, and none of this hub's own secrets in any line
+    const logDir = path.join(SB, 'logs'), logs = (() => { try { return fs.readdirSync(logDir).filter((f) => f.endsWith('.jsonl')).map((f) => fs.readFileSync(path.join(logDir, f), 'utf8')).join(''); } catch { return ''; } })();
+    const secretKeys = logs.split('\n').filter(Boolean).some((l) => { try { return Object.keys(JSON.parse(l)).some((k) => /token|secret|password|authorization|cookie|apikey/i.test(k)); } catch { return true; } });
+    seen.logs = { lines: logs.split('\n').filter(Boolean).length, secretKeys, workSecret: logs.includes(WORK_SECRET), nodeSecret: logs.includes(NODE_SECRET), ignored: spawnSync('git', ['check-ignore', '-q', 'bridge/logs/hub-2026-01-01.jsonl'], { cwd: MILLS }).status === 0 };
+    check('R502', 'the hub can be looked into: every answer has a request id; admins see its metrics (requests, Work runs started and ended, relay calls, latencies, the write buffer) and anyone else gets 403; a run\'s trace lists its log lines (started by whom, ended after how long), admins only, a bad run id refused; /metrics gives the Prometheus text on this machine and nothing through a proxy; no log line has a field named like a secret or any of the hub\'s secrets in it; the logs are never shipped (git ignores them)',
+      seen.requestId && seen.metrics.status === 200 && seen.metrics.user === 403 && seen.metrics.requests >= 5 && seen.metrics.runs >= 2 && seen.metrics.ended >= 2 && seen.relayed && seen.metrics.relayDirect >= 1 && seen.metrics.store && seen.metrics.latency
+      && seen.trace.status === 200 && seen.trace.user === 403 && seen.trace.bad === 400 && seen.trace.started && seen.trace.ended
+      && seen.prometheus.status === 200 && seen.prometheus.has && seen.prometheus.outside === 404
+      && seen.logs.lines > 0 && !seen.logs.secretKeys && !seen.logs.workSecret && !seen.logs.nodeSecret && seen.logs.ignored,
+      JSON.stringify(seen));
+  } else skip('R502', 'logs, metrics, traces', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.

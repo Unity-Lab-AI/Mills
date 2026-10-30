@@ -26,6 +26,8 @@ pub struct Hub {
 }
 impl Hub {
     pub fn new(root: PathBuf, cfg: Config, back: Option<SocketAddr>) -> Result<Arc<Hub>, String> {
+        // T-331 § 4: the hub's structured log (bridge/logs/hub-YYYY-MM-DD.jsonl, 14 days) and its metrics
+        pgm_core_internal::obs::init(&root.join("logs"), "hub");
         let mods = modules::Modules::new(&root, &cfg)?;
         let backend = back.map(|b| Backend::new(b, "x-vr-front-secret", mods.front_secret.as_str()));
         Ok(Arc::new_cyclic(|me| Hub { root, cfg, backend, mods, me: me.clone() }))
@@ -79,10 +81,13 @@ async fn guarded(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Res
     use futures_util::FutureExt;
     let (m, p) = (req.method().clone(), req.uri().path().to_string());
     let dev = hub.is_dev();
+    // T-331 § 4: every request has an id (in its answer's x-request-id and in every log line about it), a count and a time
+    let (t0, rid) = (std::time::Instant::now(), pgm_core_internal::crypto::random_hex(8));
     let mut out = match std::panic::AssertUnwindSafe(handle(hub, req, peer)).catch_unwind().await {
         Ok(r) => r,
         Err(e) => {
             let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into());
+            pgm_core_internal::obs::error("http", "request failed inside the hub", serde_json::json!({ "request": rid, "method": m.as_str(), "route": pgm_core_internal::obs::route_of(&p), "why": why }));
             eprintln!("[vr-hub] a request failed inside the hub: {m} {p}: {why} (answered 500; the hub goes on)");
             let mut r = json(500, &serde_json::json!({ "error": "That request failed inside the hub; it was logged." }));
             r.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust"));
@@ -91,6 +96,14 @@ async fn guarded(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Res
     };
     // the dev hub (T-327) is never indexed by a search engine, whatever answered
     if dev { out.headers_mut().insert("x-robots-tag", hyper::header::HeaderValue::from_static("noindex, nofollow")); }
+    if let Ok(v) = hyper::header::HeaderValue::from_str(&rid) { out.headers_mut().insert("x-request-id", v); }
+    let (ms, status) = (t0.elapsed().as_secs_f64() * 1000.0, out.status().as_u16());
+    let route = if p.starts_with("/api/") || p.starts_with("/llm") || p.starts_with("/v1/") || p.starts_with("/node/") || p.starts_with("/__sync/") || p == "/metrics" { pgm_core_internal::obs::route_of(&p) } else { "(page)".into() };
+    let class = format!("{}xx", status / 100);
+    pgm_core_internal::obs::count("vr_http_requests", &[("route", &route), ("status", &class)]);
+    pgm_core_internal::obs::observe_ms("vr_http", &[("route", &route)], ms);
+    // a failure, and a slow answer (streams are timed to their first byte), are logged with the request's id
+    if status >= 500 || ms > 3000.0 { pgm_core_internal::obs::log(if status >= 500 { "error" } else { "warn" }, "http", if status >= 500 { "request failed" } else { "slow request" }, serde_json::json!({ "request": rid, "method": m.as_str(), "route": route, "status": status, "took_ms": ms.round() })); }
     out
 }
 

@@ -1259,6 +1259,12 @@
     <div id="adminOut">Generated passwords appear here once. Copy them before leaving this page.</div>
     <!-- PGM Gateway (5.1.1): the products this hub is the gateway for (native/crates/vr-hub gateway.rs); hidden when the
          Rust hub is not in front (the gateway is its own) -->
+    <!-- Health (T-331 § 4): the hub's metrics, its write buffer, and one run's trace (the Rust hub's; hidden on a hub without them) -->
+    <div class="setSection" id="healthBox" hidden><b>Health</b> — what this hub has done since it started: requests and failures, Work runs, relay calls, the write buffer, the slowest routes. A run's trace lists every log line about it (its id is in the Work log's first line).
+      <div class="row"><button class="ghost" id="healthRefresh">Refresh</button><input id="traceRun" placeholder="a run id, to see its trace" spellcheck="false" autocomplete="off" style="max-width:16rem"><button class="ghost" id="traceGo">Trace</button></div>
+      <div id="healthOut"></div>
+      <pre id="traceOut" hidden style="max-height:20rem;overflow:auto;font-size:.75rem"></pre>
+    </div>
     <div class="setSection" id="gwBox" hidden><b>PGM Gateway products</b> — programs of their own (PGM Prod Suit, ShaDow Chat, Hyper Prod Man) whose people sign in the first time with their VibeRoller login and, with AI on, use the AI hosts as themselves. A product's secret goes only to the file shown (for the product on this server), never to this page.
       <table><thead><tr><th>Product</th><th>Served here</th><th>People linked</th><th>Secret file</th><th>Actions</th></tr></thead><tbody id="gwRows"></tbody></table>
       <div class="row">
@@ -5381,7 +5387,33 @@ function confirmButton(label, fn) {
   };
   return b;
 }
+// Health (T-331 § 4): GET /api/admin/metrics, summed into a few lines a person reads; a run's trace on demand
+const sumBy = (o, f) => Object.entries(o || {}).filter(([k]) => f(k)).reduce((n, [, v]) => n + (typeof v === 'number' ? v : 0), 0);
+function healthLines(d) {
+  const c = (d.metrics || {}).counters || {}, l = (d.metrics || {}).latency || {}, st = d.store || {};
+  const h = Math.floor((d.uptimeSec || 0) / 3600), m = Math.floor(((d.uptimeSec || 0) % 3600) / 60);
+  const slow = Object.entries(l).filter(([k]) => k.startsWith('vr_http{')).sort((a, b) => b[1].p95Ms - a[1].p95Ms).slice(0, 5).map(([k, v]) => `${(k.match(/route="([^"]*)"/) || [])[1]} p95 ${v.p95Ms} ms (${v.count})`);
+  return [
+    `${d.instance === 'dev' ? 'Dev' : 'Live'} hub ${d.version}, up ${h} h ${m} min`,
+    `Requests: ${sumBy(c, (k) => k.startsWith('vr_http_requests'))}, failed (5xx) ${sumBy(c, (k) => k.startsWith('vr_http_requests') && k.includes('status="5xx"'))}`,
+    `Work runs: started ${sumBy(c, (k) => k.startsWith('vr_runs_started'))}, ok ${sumBy(c, (k) => k.startsWith('vr_runs_ended') && k.includes('"ok"'))}, failed ${sumBy(c, (k) => k.startsWith('vr_runs_ended') && k.includes('"failed"'))}, stopped ${sumBy(c, (k) => k.startsWith('vr_runs_ended') && k.includes('"stopped"'))}`,
+    `Relay calls: ${sumBy(c, (k) => k.startsWith('vr_relay_calls'))} (not 200: ${sumBy(c, (k) => k.startsWith('vr_relay_calls') && !k.includes('status="200"'))}), through Headroom ${sumBy(c, (k) => k.startsWith('vr_relay_calls') && k.includes('via="headroom"'))}`,
+    `Write buffer: ${st.writes || 0} writes in ${st.batches || 0} batches, ${st.queued || 0} queued now (most ${st.maxQueued || 0}), spikes ${st.spikes || 0}${st.inSpike ? ' (one now)' : ''}, errors ${st.errors || 0}${st.lastError ? ' (last: ' + st.lastError + ')' : ''}`,
+    slow.length ? 'Slowest routes: ' + slow.join(' · ') : 'Slowest routes: none yet',
+  ];
+}
+async function loadHealth() {
+  try { const d = await json('/api/admin/metrics'); $('healthBox').hidden = false; $('healthOut').textContent = ''; for (const t of healthLines(d)) { const p = document.createElement('div'); p.textContent = t; $('healthOut').append(p); } }
+  catch { $('healthBox').hidden = true; } // a hub without it (the JavaScript one)
+}
+$('healthRefresh').onclick = loadHealth;
+$('traceGo').onclick = async () => {
+  const id = $('traceRun').value.trim(), out = $('traceOut'); if (!id) return;
+  try { const d = await json('/api/admin/trace?run=' + encodeURIComponent(id)); out.hidden = false; out.textContent = (d.lines || []).length ? d.lines.map((x) => `${x.at}  ${x.level}  ${x.area}  ${x.what}  ${JSON.stringify(Object.fromEntries(Object.entries(x).filter(([k]) => !['at', 'level', 'area', 'what'].includes(k))))}`).join('\n') : 'Nothing in the last two days\' log for that run.'; }
+  catch (e) { out.hidden = false; out.textContent = e.message; }
+};
 async function loadAdmin() {
+  loadHealth();
   try {
     const { accounts } = await json('/api/admin/accounts');
     const rows = $('adminRows'); rows.innerHTML = '';

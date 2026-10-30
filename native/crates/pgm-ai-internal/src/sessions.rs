@@ -39,6 +39,12 @@ impl Sx {
 fn index_file(a: &Account) -> PathBuf { a.dir.join("work-sessions.json") }
 fn folders_file(a: &Account) -> PathBuf { a.dir.join("work-folders.json") }
 fn session_file(a: &Account, sid: &str) -> PathBuf { a.dir.join("work-sessions").join(format!("{sid}.json")) }
+/// A session's journal (T-331, plans/sessions-always-saved.md § 1): every event of its runs, one JSON line each, as the hub
+/// sent it (`{ run, n, at, ev }`; the person's message `{ run, at, user }`), so a run can be shown again after the run
+/// left memory or the hub restarted. The primary session's: `<profile>/work-journal.jsonl`; the others' next to their file.
+pub fn journal_file(a: &Account, sx: &Sx) -> PathBuf { if sx.primary { a.dir.join("work-journal.jsonl") } else { a.dir.join("work-sessions").join(format!("{}.jsonl", sx.sid)) } }
+/// A journal past this size starts over at the next run (the old one kept as `.old.jsonl`, one generation).
+pub const JOURNAL_MAX: u64 = 32 * 1024 * 1024;
 fn new_sid() -> String { format!("s-{}", pgm_core_internal::crypto::random_hex(6)) }
 fn valid_sid(x: &str) -> bool { x.len() == 14 && x.starts_with("s-") && x[2..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) }
 /// A session's mode (T-275): "work" (the default, nothing stored) or "planner" (plan-only tools, enforced by the hub).
@@ -281,6 +287,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let wt = &w.wt; let (u, hex) = (a.username.clone(), sx.hex().to_string());
             let tree = if none { String::new() } else { tokio::task::block_in_place(|| wt.remove_session(&u, &hex, &project)) };
             let _ = std::fs::remove_file(session_file(a, &sx.sid));
+            let j = journal_file(a, &sx); pgm_core_internal::store::global().flush(); let _ = std::fs::remove_file(&j); pgm_core_internal::store::forget_hot(&j); let _ = std::fs::remove_file(j.with_extension("old.jsonl"));
             with_index(a, |v| { if let Some(o) = v["sessions"].as_object_mut() { o.remove(&sx.sid); } let order: Vec<Value> = v["order"].as_array().cloned().unwrap_or_default().into_iter().filter(|x| x != &json!(sx.sid)).collect(); v["order"] = json!(order); if v["current"] == json!(sx.sid) { v["current"] = v["primary"].clone(); } });
             answer(200, json!({ "ok": true, "worktree": tree }))
         }

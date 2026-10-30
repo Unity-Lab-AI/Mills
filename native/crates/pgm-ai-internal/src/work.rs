@@ -34,7 +34,7 @@ const STATE_KEYS: [&str; 7] = ["provider", "model", "claudeSessionId", "claudeSe
 
 /// A run of one session (its key: the person for the primary session, "<user>#<id>" for the others). `last` = when it
 /// last sent something of its own (not the hub's pings): the liveness check ends a run silent for too long.
-struct Run { id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String, project: String, branch: String, started: u64,
+struct Run { /** the session's journal (T-331): every event also goes there */ journal: Option<PathBuf>, id: String, tx: mpsc::UnboundedSender<Result<Bytes, String>>, pid: Option<u32>, remote: String, pending: HashMap<String, oneshot::Sender<Value>>, ev: RunLog, last: u64, answered: bool, prov: String, project: String, branch: String, started: u64,
     /// The run's own secret (T-308): minted when the run starts, put in ITS MCP config, forgotten when the run ends (the record
     /// leaves `runs`). The hub finds the run, so the account and session, from it; the headers of a call never say who it is.
     secret: String, account: String, sid: String, sess_env: String,
@@ -66,6 +66,21 @@ pub enum Relay { Run(Caller), Legacy(String), Refused(&'static str), NotOurs }
 #[derive(Default, Clone)]
 struct RunLog { base: usize, events: Vec<Value>, woke: Arc<tokio::sync::Notify>, results: std::collections::HashSet<String> }
 const RUN_LOG_MAX: usize = 20000;
+/// One event of a run into its session's journal, with its place in the run (the `n` the page joins from).
+fn journal(r: &Run, ev: &Value) {
+    if let Some(j) = &r.journal { if ev["type"] != json!("pc_tool") { pgm_core_internal::store::global().append_line(j, &json!({ "run": r.id, "n": r.ev.next(), "at": now_ms(), "ev": ev })); } }
+}
+/// A run that left memory (it ended more than a few minutes ago, or the hub restarted), from its session's journal:
+/// its events from `after` on, as /api/work/attach answers. None = the journal does not have it.
+fn from_journal(j: &Path, run: &str, after: usize) -> Option<Value> {
+    if run.is_empty() { return None; }
+    let lines = pgm_core_internal::store::read_lines_hot(j);
+    let mine: Vec<&Value> = lines.iter().filter(|l| l["run"] == json!(run) && l["n"].is_u64()).collect();
+    if mine.is_empty() { return None; }
+    let next = mine.iter().filter_map(|l| l["n"].as_u64()).max().map(|n| n as usize + 1).unwrap_or(0);
+    let evs: Vec<Value> = mine.iter().filter(|l| l["n"].as_u64().is_some_and(|n| n as usize >= after)).map(|l| l["ev"].clone()).collect();
+    Some(json!({ "run": run, "busy": false, "from": after, "next": next, "events": evs, "journal": true }))
+}
 impl RunLog {
     fn push(&mut self, ev: Value) { self.events.push(ev); if self.events.len() > RUN_LOG_MAX { let k = self.events.len() - RUN_LOG_MAX; self.events.drain(0..k); self.base += k; } self.woke.notify_waiters(); }
     fn next(&self) -> usize { self.base + self.events.len() }
@@ -488,7 +503,7 @@ impl Work {
     }
 
     // ---------- the run's stream ----------
-    fn emit(&self, key: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { if ev["type"] != json!("ping") { r.last = now_ms(); } let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
+    fn emit(&self, key: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { if ev["type"] != json!("ping") { r.last = now_ms(); journal(r, &ev); } let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     fn on_event(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, ev: Value, source: &str) {
         // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
         // fields as they came plus the `hub` object the page reads first (harness.rs, WORKPLAN 9b)
@@ -524,7 +539,11 @@ impl Work {
         self.ask_end(a, sx); // its open questions end with it (the session is no longer waiting on them)
         self.plan_end(a, sx); // so does an open plan draft (T-279)
         let done = json!({ "type": "bridge_done", "code": code });
+        { let ms = now_ms().saturating_sub(r.started) as f64; let ok = code == json!(0); let result = if ok { "ok" } else if code.is_null() { "stopped" } else { "failed" };
+          pgm_core_internal::obs::count("vr_runs_ended", &[("result", result)]); if r.started > 0 { pgm_core_internal::obs::observe_ms("vr_run", &[("result", result)], ms); }
+          pgm_core_internal::obs::log(if ok || code.is_null() { "info" } else { "warn" }, "work", "run ended", json!({ "run": r.id, "user": a.username, "session": sx.sid, "code": code, "result": result, "took_ms": ms, "provider": r.prov, "project": r.project })); }
         let _ = r.tx.send(line(done.clone()));
+        if let Some(j) = &r.journal { pgm_core_internal::store::global().append_line(j, &json!({ "run": r.id, "n": r.ev.next(), "at": now_ms(), "ev": done })); }
         r.ev.push(done);
         // a page reloading just now still sees how it ended (for a few minutes)
         self.ended.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), (r.id.clone(), r.ev, now_ms()));
@@ -536,7 +555,7 @@ impl Work {
     /// GET /api/work/attach?run=<id>&after=<n>: the person's run so far and as it goes (a long poll, 25 s): the events
     /// after the n-th, whether it is still going, and its id. A page that was reloaded joins its run this way. A PC tool
     /// request goes out again only while it still waits for an answer (never run twice).
-    async fn attach(&self, u: &str, run: &str, after: usize) -> Value {
+    async fn attach(&self, u: &str, run: &str, after: usize, journal: Option<PathBuf>) -> Value {
         let view = |w: &Work| -> (Value, bool, Option<Arc<tokio::sync::Notify>>) {
             if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get(u) {
                 let from = if r.id == run { after } else { 0 };
@@ -548,7 +567,7 @@ impl Work {
             ended.retain(|_, x| now_ms() - x.2 < 5 * 60_000);
             match ended.get(u) {
                 Some((id, ev, _)) if id == run => { let evs: Vec<Value> = ev.since(after).into_iter().filter(|e| e["type"] != json!("pc_tool")).collect(); (json!({ "run": id, "busy": false, "from": after, "next": ev.next(), "events": evs }), true, None) }
-                _ => (json!({ "run": "", "busy": false, "events": [] }), true, None),
+                _ => (journal.as_deref().and_then(|j| from_journal(j, run, after)).unwrap_or_else(|| json!({ "run": "", "busy": false, "events": [] })), true, None),
             }
         };
         let (v, ready, woke) = view(self);
@@ -878,9 +897,14 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     if !source.is_empty() { ai.usage.note_activity(&source); }
     let (tx, rx) = mpsc::unbounded_channel();
     let run_id = pgm_core_internal::crypto::random_hex(8);
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()), machines: Vec::new() });
+    let jf = sessions::journal_file(a, &sx);
+    if std::fs::metadata(&jf).map(|m| m.len() > sessions::JOURNAL_MAX).unwrap_or(false) { pgm_core_internal::store::global().flush(); let _ = std::fs::rename(&jf, jf.with_extension("old.jsonl")); pgm_core_internal::store::forget_hot(&jf); }
+    pgm_core_internal::store::global().append_line(&jf, &json!({ "run": run_id, "at": now_ms(), "user": message, "fresh": fresh }));
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { journal: Some(jf), id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()), machines: Vec::new() });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
+    pgm_core_internal::obs::count("vr_runs_started", &[("harness", harness), ("kind", &kind)]);
+    pgm_core_internal::obs::info("work", "run started", json!({ "run": run_id, "user": a.username, "session": sx.sid, "harness": harness, "provider": s(&prov, "id"), "model": model, "project": wd.project, "resume": resume }));
     w.busy_changed.notify_one();
     // the page hears something every 15 s while Claude thinks
     // and every 15 s the run is checked: a run that sent nothing of its own for stallAfter (12 minutes: longer than the
@@ -905,6 +929,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         // them on to /llm-relay with the run's token in a header; when it does not answer, straight to the relay as before
         let hr = headroom_up(hub).await;
         if let Some(u) = &hr { relay_env[0].1 = u.clone(); relay_env.push(("ANTHROPIC_CUSTOM_HEADERS".into(), format!("{RELAY_HEADER}: {tok}"))); }
+        if hub.cfg().get("headroom").is_some() { pgm_core_internal::obs::count("vr_headroom_runs", &[("through", if hr.is_some() { "headroom" } else { "direct (it was down)" })]); }
         w.emit(&sx.key, json!({ "type": "bridge_info", "text": format!("Using {nick}{}; the work happens here on the server{}.", if owner.is_empty() { String::new() } else { format!(" ({}'s AI)", hub.name_of(&owner)) }, if hr.is_some() { ", through Headroom (context compression)" } else { "" }) }));
     } else if kind == "host-claude" || hjcode {
         // legacy: Claude Code runs on the host (only for a host that allows work); or Jcode PGM there (hjcode, the host
@@ -1310,7 +1335,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         // ----- the Work conversation + queue, kept across restarts -----
         "/api/work/current" if get => { let Some(sx) = sess(&json!({})) else { return Some(no_session()) }; answer(200, sessions::scurrent(a, &sx)) }
-        "/api/work/attach" if get => { let Some(sx) = sess(&json!({})) else { return Some(no_session()) }; answer(200, w.attach(&sx.key, &r.param("run").unwrap_or_default(), r.param("after").and_then(|x| x.parse().ok()).unwrap_or(0)).await) }
+        "/api/work/attach" if get => { let Some(sx) = sess(&json!({})) else { return Some(no_session()) }; answer(200, w.attach(&sx.key, &r.param("run").unwrap_or_default(), r.param("after").and_then(|x| x.parse().ok()).unwrap_or(0), Some(sessions::journal_file(a, &sx))).await) }
         "/api/work/current" if post => {
             let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let mut st = sessions::scurrent(a, &sx);
             let Some(list) = b["transcript"].as_array() else { return Some(answer(400, json!({ "error": "transcript must be a list." }))) };
@@ -1464,7 +1489,14 @@ async fn llm_via(hub: &Arc<dyn AiHub>, r: &Req, tok: &str, sub: &str) -> Resp {
     let _ = exp;
     let path = if r.query.is_empty() { sub.to_string() } else { format!("{sub}?{}", r.query) };
     let headers: Vec<(String, String)> = r.headers.iter().filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string()))).collect();
-    match hub.ai().login_fetch(&host, &prov, &path, r.method.as_str(), headers, r.body.to_vec()).await {
+    let t0 = std::time::Instant::now();
+    let via = if r.header(RELAY_HEADER).is_some() { "headroom" } else { "direct" };
+    let out = hub.ai().login_fetch(&host, &prov, &path, r.method.as_str(), headers, r.body.to_vec()).await;
+    let st = match &out { Ok(rel) => rel.status, Err(e) => if e.status == 0 { 503 } else { e.status } };
+    pgm_core_internal::obs::count("vr_relay_calls", &[("status", &st.to_string()), ("via", via)]);
+    pgm_core_internal::obs::observe_ms("vr_relay", &[("via", via)], t0.elapsed().as_secs_f64() * 1000.0);
+    if let Err(e) = &out { pgm_core_internal::obs::warn("relay", "call failed", json!({ "host": host, "provider": prov, "status": st, "why": e.msg, "via": via })); }
+    match out {
         Ok(rel) => {
             if rel.headers.iter().any(|(k, _)| k.starts_with("anthropic-ratelimit-unified-")) { hub.push_ai_state().await; }
             let mut b = hyper::Response::builder().status(rel.status);
@@ -1582,7 +1614,7 @@ mod tests {
 
     fn put_run(w: &Work, key: &str, account: &str, sid: &str, sess_env: &str, secret: &str, id: &str, remote: &str) {
         let (tx, _rx) = mpsc::unbounded_channel();
-        w.runs.lock().unwrap().insert(key.into(), Run { id: id.into(), tx, pid: None, remote: remote.into(), pending: HashMap::new(), ev: RunLog::default(), last: 0, answered: false, prov: String::new(), project: String::new(), branch: String::new(), started: 0,
+        w.runs.lock().unwrap().insert(key.into(), Run { journal: None, id: id.into(), tx, pid: None, remote: remote.into(), pending: HashMap::new(), ev: RunLog::default(), last: 0, answered: false, prov: String::new(), project: String::new(), branch: String::new(), started: 0,
             secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into(), machines: Vec::new() });
     }
     /// T-308: the per-run secret names the run; the account and session come from the run record; a header that disagrees is refused;
