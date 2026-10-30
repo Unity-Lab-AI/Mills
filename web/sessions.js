@@ -137,7 +137,7 @@
     $('sessToggle').onclick = () => setOpen(!P.open, false, true);
     $('spClose').onclick = () => setOpen(false, false, true);
     $('spScrim').onclick = () => setOpen(false);
-    $('spNew').onclick = () => { if (typeof SESSIONS_OK !== 'undefined' && SESSIONS_OK) startOpen(); else $('newChat').click(); if (!wide()) setOpen(false); };
+    $('spNew').onclick = () => { if (typeof SESSIONS_OK !== 'undefined' && SESSIONS_OK) startOpen(); else newChatNow(); if (!wide()) setOpen(false); };
     let qt = null;
     $('spQ').addEventListener('input', () => { render(); clearTimeout(qt); qt = setTimeout(loadSaved, 250); });
     $('spQ').addEventListener('keydown', (e) => { if (e.key === 'Escape') { if ($('spQ').value) { $('spQ').value = ''; render(); loadSaved(); } else setOpen(false); } });

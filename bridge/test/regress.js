@@ -3665,7 +3665,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const repoCalls = (fakeForgejo.repoCalls || []).join(' | ');
     check('R249', 'start work, the rest: a start naming an unknown or bad project is 400 and opens nothing; the hub\'s own project starts (any case) in the person\'s worktree of it; nobody else sees the session; the Forgejo calls were made as the person only; the page has the Start work panel (project list, clone address box + repos search, new project name, no project) and sends ?session= for the session on screen',
       unk.status === 400 && unkNone.status === 400 && hubS.status === 200 && hubS.data.project === 'VibeRoller' && hubWt && !seenByA && /create tuser-fj\/start-new private/.test(repoCalls) && !/create (?!tuser-fj\/)/.test(repoCalls)
-      && /id="startPanel"/.test(html238) && /id="startProjects"/.test(html238) && /id="startUrl"/.test(html238) && /id="startRepoQ"/.test(html238) && /id="startNewName"/.test(html238) && /id="startNoneGo"/.test(html238) && /id="startWork"/.test(html238) && /\/api\/projects\/repos\?q=/.test(html238) && /\/api\/projects\/create/.test(html238) && /'session=' \+ encodeURIComponent\(SESSION\)/.test(html238),
+      && /id="startPanel"/.test(html238) && /id="startProjects"/.test(html238) && /id="startUrl"/.test(html238) && /id="startRepoQ"/.test(html238) && /id="startNewName"/.test(html238) && /id="startNoneGo"/.test(html238) && /id="spNew"/.test(html238) && /\/api\/projects\/repos\?q=/.test(html238) && /\/api\/projects\/create/.test(html238) && /'session=' \+ encodeURIComponent\(SESSION\)/.test(html238),
       `unknown ${unk.status}/${unkNone.status} · hub project ${hubS.status} ${hubS.data.project} ${hubS.data.dir} · seen by another ${seenByA} · Forgejo calls "${repoCalls.slice(0, 160)}"`);
   } else for (const id of ['R245', 'R246', 'R247', 'R248', 'R249', 'R486']) skip(id, 'one start-work flow (T-238), deploy keys (T-249)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R487 (T-190): the board's archive, for people, for Claude, and still readable by the JavaScript hub
@@ -3888,6 +3888,30 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     }
     check('R498', 'the page: the DEV band\'s stripes drift left (one seamless tile a loop), the Sessions button is in the left rail (with its working count) and no longer in the header, the sparkle (prompt enhancer) button sits under + in the composer with its switch in Settings → App, and the genie pulls a hiding pane into its button and hides it only when it is there, bursts a showing one out of its button, and hides at once for reduced motion or a button that is not on screen; the sessions list uses it from its rail button',
       !!G && Object.entries(seen).every(([k, v]) => k === 'load' || v === true), JSON.stringify(seen));
+  }
+  { // R500 (5.37.0, T-330): fewer header buttons, one New session flow, the Commands panel. The page's own commandNeeds and SLASH
+    // list run on their own (vm); the rest is the page's structure (there is no browser here).
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const hdr = (/<div id="shell" hidden>\s*<header>[\s\S]*?<\/header>/.exec(page) || [''])[0], rail = (/<nav id="rail">[\s\S]*?<\/nav>/.exec(page) || [''])[0];
+    const filesBar = (/<section id="files">\s*<div class="bar">[\s\S]*?<\/div>/.exec(page) || [''])[0], start = (/<div id="startPanel"[\s\S]*?<div id="startMsg"/.exec(page) || [''])[0];
+    const seen = {
+      headerClean: !!hdr && !['startWork', 'newChat', 'newPlanner', 'saveChat', 'workspace', 'pickFolder'].some((id) => hdr.includes(`id="${id}"`)),
+      folderInPane: /id="pickFolder"/.test(filesBar), commandsInRail: /id="cmdToggle"/.test(rail), panel: /id="cmdPanel"/.test(page) && /id="cmdModal" class="modal"/.test(page),
+      plannerInStart: /id="startPlannerGo"/.test(start), noBrowserPrompt: !/window\.(prompt|confirm)\(/.test((/function askCommand[\s\S]*?\n\}\n/.exec(page) || [''])[0]),
+    };
+    const slashSrc = (/const CLEAR_ASK = [\s\S]*?\n\];\n/.exec(page) || [''])[0], needsSrc = (/function commandNeeds\(s\) \{[\s\S]*?\n\}\n/.exec(page) || [''])[0];
+    let C = null; try { C = require('vm').runInNewContext(slashSrc + needsSrc + '; ({ SLASH, commandNeeds })', { $: () => ({}), askCommand: () => Promise.resolve(false), newChatNow() {}, slashModel() {}, hyperwork() {}, openWorkflows() {}, SESSIONS: {}, saveToArchive() {}, showScreen() {}, togglePane() {}, openSettings() {} }); } catch (e) { seen.load = e.message; }
+    if (C) {
+      const by = (c) => C.SLASH.find((x) => x.cmd === c) || {}, need = (c) => C.commandNeeds(by(c));
+      seen.clearAsks = !!need('/clear').confirm && !need('/clear').input && !!need('/new').confirm;
+      const cp = need('/compact'); seen.compactWords = !!cp.input && cp.input.required === false && /remove everything about X, keep all about Y and Z/.test(cp.input.hint);
+      seen.modelPick = Array.isArray(need('/model').choices) && need('/model').choices.includes('opus') && !need('/model').input;
+      seen.fixNeedsWords = !!need('/fix').input && need('/fix').input.required === true;
+      seen.stopRunsNow = !need('/stop').confirm && !need('/stop').input && !need('/stop').choices;
+      seen.everyOneSaysWhat = C.SLASH.every((s) => typeof s.desc === 'string' && s.desc.length > 10);
+    }
+    check('R500', 'the Work page (T-330): the header has no New session, New chat, New planner session, Save session, project picker or Open folder any more; Open folder is in the Folder pane, a planner session starts from the New session panel, and the left rail has Commands: every command says what it does, /clear and /new ask first, /compact takes optional words for its summary ("remove everything about X, keep all about Y and Z"), /model offers a pick, /fix needs its words, /stop runs at once, and the asking is a modal of the page (no browser pop-up)',
+      !!C && Object.entries(seen).every(([k, v]) => k === 'load' || v === true), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
@@ -5214,8 +5238,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       nr.servers === 'board+pc+team' && !nr.denied && nr.planPrompt === false && nr.outside === 'written' && nr.inside === 'written',
       `servers ${nr.servers} · denied "${nr.denied}" · perm ${nr.perm} · prompt ${nr.planPrompt} · outside ${nr.outside} · inside ${nr.inside}`);
     const pg = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    check('R269', 'T-275 [static] the page has "New planner session" next to New chat, a visible Planner badge, a way back to a normal session, and its requests carry the planner session',
-      /id="newPlanner"[^>]*>New planner session/.test(pg) && /id="plannerBadge"/.test(pg) && /id="leavePlanner"/.test(pg) && /mode: 'planner'/.test(pg) && /planSession/.test(pg), 'index.html');
+    check('R269', 'T-275 [static] a planner session starts from the New session panel ("A planner session"), the page shows a visible Planner badge, a way back to a normal session, and its requests carry the planner session',
+      /id="startPlannerGo"[^>]*>Start a planner session/.test(pg) && /id="plannerBadge"/.test(pg) && /id="leavePlanner"/.test(pg) && /mode: 'planner'/.test(pg) && /planSession/.test(pg), 'index.html');
     for (const x of ['planner-outside-r265.md', 'plans/planner-inside-r265.md', 'planner-tricky-r265.md']) await call('/api/notes/delete', U, { path: x });
   } else for (const [id, l] of [['R265', 'a planner session\'s run gets no Edit / Write and no pc server'], ['R266', 'a notes_write outside plans/ is refused for a planner session, inside works'], ['R267', 'a pc tool is refused for a planner session'], ['R268', 'a normal session is unchanged'], ['R269', 'the page has New planner session and the Planner badge']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R305 to R309 (T-279 / T-281): a planner session drafts, the person approves, the HUB writes; the fake Claude's "PLANDRAFT" calls plan_draft through the team relay
@@ -5475,8 +5499,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   check('R56', '[static] layout stays inside the viewport: page = viewport (dvh), flex children may shrink, long text wraps, floating windows clamped',
     /height: 100dvh/.test(html) && /html \{ height: 100%; overflow: hidden; \}/.test(html) && /Stay inside the viewport/.test(html)
     && /\.msg \{ min-width: 0; max-width: 100%; overflow-wrap: anywhere/.test(html) && /\.floatWin \{ max-width: calc\(100vw - 16px\)/.test(html));
-  check('R51', '[static] Past sessions naming + auto-save (default 5 min, auto-named, keeps overwriting the same saved session)',
-    /id="sessToggle"/.test(html) && /Saved conversations/.test(html) && />Save session<\/button>/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
+  check('R51', '[static] Past sessions naming + auto-save (default 5 min, auto-named, keeps overwriting the same saved session); saving now is the /save command',
+    /id="sessToggle"/.test(html) && /Saved conversations/.test(html) && /cmd: '\/save'/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
     && /autosave: p\.autosave \?\? 5/.test(html) && /saveToArchive\(true, true\)/.test(html) && /if \(auto\) title = autoName\(\)/.test(html));
   const ids48 = ['callBtn', 'callBanner', 'callCore', 'callTiles', 'callMic', 'callCam', 'callLeave', 'callFloat', 'callSideHost', 'audNoise', 'audEcho', 'audAgc', 'callVolume', 'callQuality', 'micBtn', 'recBar', 'recSend', 'recCancel', 'clipVolume', 'clipAuto','rail', 'panes', 'roomPane', 'roomFloat', 'roomCore', 'roomSide', 'settings', 'setNick', 'setColors', 'volMessage', 'volMention', 'volReply', 'setToasts', 'toasts', 'replyBar', 'mentionList', 'railRoomBadge', 'goSettings', 'setTts', 'ttsVolume', 'ttsRate', 'ttsVoice', 'ttsScope', 'ttsStop'];
   check('R48', '[static] Work rail + resizable / minimizable panes + floating chat, settings in menu / chat / rail, tones, toasts, receipts, edit / delete / reply / @',
