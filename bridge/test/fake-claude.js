@@ -26,6 +26,13 @@ process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', async () => {
   out({ type: 'system', subtype: 'init', session_id: session, model });
   if (input.includes('SLOW')) await sleep(4000);
+  // the prompt enhancer (5.35.0, R497): its own system prompt; it answers with what it was given and how it was started
+  if (argv.includes('--system-prompt')) {
+    const sys = opt('--system-prompt');
+    out({ type: 'result', subtype: 'success', is_error: false, session_id: session, result: 'ENHANCED:' + JSON.stringify({ input, cwd: process.cwd(), files: fs.readdirSync(process.cwd()), tools: argv.includes('--tools') ? opt('--tools') : null,
+      resume: argv.includes('--resume'), mcp: argv.includes('--mcp-config'), noPersist: argv.includes('--no-session-persistence'), keeps: /KEEP EVERYTHING THE PERSON SAID/.test(sys), model }) });
+    return;
+  }
   if (input.includes('PCTOOL')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.pc.env;
     const r = await fetch((process.env.FAKE_CLAUDE_BRIDGE || env.MILLS_BRIDGE) + '/internal/pc-tool', {

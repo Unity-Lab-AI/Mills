@@ -3804,6 +3804,62 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R497 (5.35.0): the prompt enhancer, driven like the page drives it, against the fake Claude
+    const seen = {};
+    await chat(U, 'r497 earlier talk SECRETCTX497');
+    const n0 = (((await call('/api/work/sessions', U)).data.counts) || {}).working || 0;
+    const draft = 'add a dark mode toggle near the settings button\nand maybe keep the old colours as "classic"';
+    const r1 = await call('/api/work/enhance', U, { text: draft });
+    let got = {}; try { got = JSON.parse(String(r1.data.text || '').replace(/^ENHANCED:/, '')); } catch {}
+    seen.status = r1.status; seen.model = r1.data.model;
+    seen.draftWhole = typeof got.input === 'string' && got.input.includes(draft);
+    seen.noHistory = typeof got.input === 'string' && !got.input.includes('SECRETCTX497') && !/Worktree law|VibeRoller team laws/.test(got.input);
+    seen.how = { tools: got.tools, resume: got.resume, mcp: got.mcp, noPersist: got.noPersist, keeps: got.keeps, files: got.files };
+    seen.folderGone = !!got.cwd && !fs.existsSync(got.cwd) && /vr-enhance-/.test(got.cwd);
+    // not a Work run: nothing working meanwhile, and a Work message goes through while a slow enhancement runs; one at a time per person
+    const slow = call('/api/work/enhance', U, { text: 'SLOW r497 a slow one' });
+    await sleep(600);
+    seen.second = (await call('/api/work/enhance', U, { text: 'r497 another' })).status;
+    seen.workingMeanwhile = (((await call('/api/work/sessions', U)).data.counts) || {}).working || 0;
+    seen.chatMeanwhile = (await chat(U, 'r497 while it enhances')).status;
+    seen.slow = (await slow).status;
+    seen.otherPerson = (await call('/api/work/enhance', A, { text: 'r497 the admin at the same time' })).status;
+    seen.empty = (await call('/api/work/enhance', U, { text: '   ' })).status;
+    seen.long = (await call('/api/work/enhance', U, { text: 'x'.repeat(20001) })).status;
+    seen.anon = (await call('/api/work/enhance', null, { text: 'r497' })).status;
+    seen.n0 = n0;
+    check('R497', 'the prompt enhancer: the sparkle button sends the draft to a throw-away Claude that gets the whole draft and nothing of the conversation (no earlier messages, no laws), runs with no tools, no MCP servers, no resume and no session kept, with its own system prompt (keep everything the person said), in an empty folder that is gone afterwards, and answers the rewrite; it is not a Work run (nothing counts as working, a Work message goes through meanwhile) and runs one at a time per person (a second one is refused 409, another person\'s is not); an empty draft is refused 400, one over 20 000 characters 413, and nobody signed out may use it',
+      seen.status === 200 && seen.draftWhole && seen.noHistory && seen.how.tools === '' && !seen.how.resume && !seen.how.mcp && seen.how.noPersist && seen.how.keeps && Array.isArray(seen.how.files) && seen.how.files.length === 0 && seen.folderGone
+      && seen.second === 409 && seen.workingMeanwhile === n0 && seen.chatMeanwhile === 200 && seen.slow === 200 && seen.otherPerson === 200 && seen.empty === 400 && seen.long === 413 && seen.anon === 401,
+      JSON.stringify(seen));
+  } else skip('R497', 'the prompt enhancer (/api/work/enhance)', 'the Rust hub\'s: --rust-hub runs it');
+  { // R498 (5.35.0): the page: the DEV band drifts, Sessions is in the left rail, the sparkle (SVG) button sits under + in the composer with its switch in
+    // Settings, and the genie (the page's own genieIn / genieOut, run with stand-in elements) hides only once the element is in its button
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), sj = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');
+    const rail = (/<nav id="rail">[\s\S]*?<\/nav>/.exec(page) || [''])[0], hdr = (/<div id="shell" hidden>\s*<header>[\s\S]*?<\/header>/.exec(page) || [''])[0], comp = (/<form id="composer">[\s\S]*?<\/form>/.exec(page) || [''])[0];
+    const seen = { drift: /#devBand \{[^}]*animation: devDrift [^}]*\}/.test(page) && /@keyframes devDrift \{ to \{ background-position: -39\.598px 0; \} \}/.test(page),
+      railHasSessions: /id="sessToggle"/.test(rail) && /id="sessCount"/.test(rail), headerHasNot: !!hdr && !/sessToggle/.test(hdr),
+      enhanceBtn: /id="workAttach"[\s\S]*id="enhance"/.test(comp) && /#i-sparkle/.test(comp), setting: /id="setEnhance"/.test(page) && /enhance: \$\('setEnhance'\)\.checked/.test(page),
+      sessionsAnimate: /genieIn\(\$\('sessPanel'\), \$\('sessToggle'\)/.test(sj) && /genieOut\(\$\('sessPanel'\), \$\('sessToggle'\)\)/.test(sj) };
+    const src = (/\/\/ The genie \(5\.35\.0\)[\s\S]*?(?=\nconst paneEl)/.exec(page) || [''])[0];
+    let G = null; const anims = [];
+    const ctx = { matchMedia: () => ({ matches: false }), setTimeout, console };
+    try { G = require('vm').runInNewContext(src + '\n;({ genieIn, genieOut })', ctx); } catch (e) { seen.load = e.message; }
+    const elem = (rect) => ({ hidden: false, style: {}, getBoundingClientRect: () => rect, getClientRects: () => [rect], animate(k, o) { const a = { k, o, cancel() { this.canceled = true; if (this.oncancel) this.oncancel(); } }; anims.push(a); return a; } });
+    if (G) {
+      const pane = elem({ left: 100, top: 100, width: 400, height: 300 }), btn = elem({ left: 0, top: 120, width: 40, height: 40 });
+      let hid = 0; G.genieIn(pane, btn, () => { hid++; });
+      const pull = anims[0]; seen.notYet = hid === 0;
+      seen.intoButton = !!pull && /translate\(-280px, -110px\) scale\(0?\.015\)/.test(pull.k[pull.k.length - 1].transform) && pull.o.fill === 'forwards';
+      if (pull && pull.onfinish) pull.onfinish(); seen.hidAfter = hid === 1;
+      anims.length = 0; G.genieOut(pane, btn); const push = anims.find((a) => a.k && a.k[0] && /scale\(0?\.015\)/.test(a.k[0].transform || ''));
+      seen.outOfButton = !!push && push.k[push.k.length - 1].transform === 'none';
+      let quick = 0; ctx.matchMedia = () => ({ matches: true }); G.genieIn(pane, btn, () => { quick++; }); seen.reducedMotionAtOnce = quick === 1;
+      ctx.matchMedia = () => ({ matches: false }); let gone = 0; const offscreen = { ...btn, getClientRects: () => [] }; G.genieIn(pane, offscreen, () => { gone++; }); seen.noButtonAtOnce = gone === 1;
+    }
+    check('R498', 'the page: the DEV band\'s stripes drift left (one seamless tile a loop), the Sessions button is in the left rail (with its working count) and no longer in the header, the sparkle (prompt enhancer) button sits under + in the composer with its switch in Settings → App, and the genie pulls a hiding pane into its button and hides it only when it is there, bursts a showing one out of its button, and hides at once for reduced motion or a button that is not on screen; the sessions list uses it from its rail button',
+      !!G && Object.entries(seen).every(([k, v]) => k === 'load' || v === true), JSON.stringify(seen));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.

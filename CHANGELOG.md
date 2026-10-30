@@ -7,6 +7,30 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.35.0 — 2026-10-30
+
+MINOR: **the prompt enhancer, the genie, Sessions in the rail, a moving DEV band** (Sponge, 2026-10-30).
+- **Prompt enhancer** (new: `POST /api/work/enhance`, pgm-ai-internal `enhance.rs`; the Rust hub only, the JavaScript
+  hub is frozen). The sparkle button under + in Work's composer sends the draft to a **throw-away, one-shot** Claude Code
+  call: a fresh empty folder (deleted afterwards), `--tools ""`, no MCP servers, no resume, `--no-session-persistence`,
+  and its own detailed system prompt instead of Claude Code's (`enhance::SYSTEM`: keep everything the person said, add
+  nothing, keep code / paths / quotes exactly, split into tasks, list open points instead of deciding them, answer
+  only the rewritten prompt). Nothing of the conversation goes with it: only the draft and the project's name. It
+  is not a Work run, so it never counts against the session limits, and it runs one at a time per person. It uses
+  the person's own Claude (the session's provider) when Claude Code runs it on this hub, else the hub's own, with
+  the session's model (config `enhanceModel` overrides). The rewrite lands in the box and nothing is sent; the button
+  again brings the original back. Settings → App turns the button off (pref `enhance`, absent = on).
+- **The genie**: a pane minimized from its bar or the left rail is pulled into its rail button (it squeezes, swirls
+  and shrinks into it) and hidden only when it is there; a pane shown from the rail bursts out of its button. The
+  sessions list does the same with its rail button, and Settings / Download with the button that opened them. Off
+  for reduced motion.
+- **Sessions** is a button in the left rail now (with its purple working count), no longer in the Work header.
+- **The DEV band's stripes drift slowly to the left** (one seamless 39.6 px tile per 4.5 s loop).
+- Checks: **R497** (the enhancer against the fake Claude: the whole draft and nothing of the conversation, no tools,
+  no MCP, no resume, no session kept, its own system prompt, an empty folder that is gone afterwards; not a Work run;
+  one at a time; refusals), **R498** (the page, with the page's own genie run on stand-in elements), unit tests in
+  `enhance.rs`. web/index.html 1.30.0, web/sessions.js 1.1.0.
+
 ## 5.34.5 — 2026-10-30
 
 PATCH: **a Work session carries on on dev.** Continuing a session on dev.portal said "/srv/apps/sharedwork/VibeRoller/sponge
