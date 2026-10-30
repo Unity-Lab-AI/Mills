@@ -380,7 +380,15 @@
   .modal .box > .bar { padding: .75rem 1rem; color: var(--text); }
   /* ── the session list (web/sessions.js, T-287): a sidebar on wide screens, a slide-over on narrow ones ── */
   #sessPanel { flex: none; width: 272px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
-  #sessPanel[hidden], #spScrim[hidden] { display: none; }
+  #sessPanel[hidden], #spScrim[hidden], #cmdPanel[hidden] { display: none; }
+  #cmdPanel { flex: none; width: 272px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  #cmdQ { margin: .4rem .5rem .2rem; width: auto; font-size: .85rem; padding: .35rem .55rem; }
+  #cmdList { flex: 1; overflow: auto; padding: 0 .3rem .7rem; }
+  .cmdItem { display: block; width: 100%; text-align: left; background: transparent; border: 0; color: var(--text); padding: .32rem .45rem; border-radius: 6px; font-weight: 400; }
+  .cmdItem:hover, .cmdItem:focus-visible { background: color-mix(in srgb, var(--text) 8%, transparent); outline: none; }
+  .cmdItem code { font-size: .82rem; } .cmdItem .tag { float: right; font-size: .65rem; color: var(--muted); }
+  .cmdItem small { display: block; font-size: .72rem; color: var(--muted); white-space: normal; }
+  #cmdModal .box { max-width: 34rem; } #cmdModal .setBody { gap: .6rem; } #cmdField { min-height: 5.5rem; resize: vertical; } #cmdErr { color: #e5484d; font-size: .8rem; }
   .spHead { display: flex; align-items: center; gap: .4rem; padding: .45rem .5rem .3rem .7rem; }
   .spHead b { font-size: .9rem; } .spHead .grow { flex: 1; } .spHead button { padding: .25rem .5rem; font-size: .8rem; }
   #spCount { font-size: .74rem; color: var(--muted); padding: 0 .7rem; }
@@ -410,7 +418,7 @@
   .spMenu button.danger { color: #e5484d; } .spMenu hr { border: 0; border-top: 1px solid var(--line); margin: .2rem 0; width: 100%; }
   #sessToggle .count { background: #9b5cff; } /* in the rail (5.35.0): its badge, purple = working now */
   @media (max-width: 900px) {
-    #sessPanel { position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); z-index: 46; box-shadow: 4px 0 24px rgba(0,0,0,.45); }
+    #sessPanel, #cmdPanel { position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); z-index: 46; box-shadow: 4px 0 24px rgba(0,0,0,.45); }
     #spScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 45; }
   }
   .setBody { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .9rem; font-size: .9rem; }
@@ -746,7 +754,7 @@
     header { padding: .4rem .55rem; gap: .4rem; }
     header b { font-size: .95rem; }
     header .folder { flex-basis: 100%; order: 9; font-size: .78rem; }
-    #shell header #pickFolder, #shell header #newChat, #shell header #saveChat, #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
+    #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
     #menu .choices button { width: min(320px, 86vw); }
     .menuWho { max-width: 94vw; }
     /* chat: the conversation list is a drawer over the messages */
@@ -1269,13 +1277,7 @@
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
-    <button id="pickFolder">Open folder on my PC</button>
-    <button class="ghost" id="startWork" hidden title="Start work: a new session on a project you have, a repo cloned, a new empty project, or just the AI">New session</button>
-    <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
-    <button class="ghost" id="newPlanner" title="A planner session: Claude only plans onto the board and under plans/ in the notes; it cannot edit files, run builds or use your PC (the hub enforces it)">New planner session</button>
-    <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
-    <select id="workspace" title="Which project Claude works on, always in your own git worktree of it (branch work/you), so nobody else's changes get in the way. New project starts an empty repo in the team's shared projects area; Pull in a repo clones an existing one by its address." hidden></select>
     <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
       <div id="themeMenu" hidden></div></span>
     <button class="ghost" id="logout">Sign out</button>
@@ -1284,6 +1286,7 @@
     <nav id="rail">
       <button type="button" id="railToggle" title="Expand / collapse this bar"><i><svg class="ic"><use href="#i-menu"/></svg></i><span class="lbl">Panels</span></button>
       <button type="button" id="sessToggle" title="Show / hide your sessions: the ongoing ones and the saved ones (Past sessions)"><i><svg class="ic"><use href="#i-dms"/></svg></i><span class="lbl">Sessions</span><span class="badge count" id="sessCount" hidden title="working now"></span></button>
+      <button type="button" id="cmdToggle" title="Commands: every command with what it does; click one to run it (some ask first, some take a few words)"><i><svg class="ic"><use href="#i-hash"/></svg></i><span class="lbl">Commands</span></button>
       <button type="button" data-pane="files" title="Show / minimize the folder list"><i><svg class="ic"><use href="#i-folder"/></svg></i><span class="lbl">Folder</span></button>
       <button type="button" data-pane="edit" title="Show / minimize the file editor"><i><svg class="ic"><use href="#i-code"/></svg></i><span class="lbl">Editor</span></button>
       <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i><svg class="ic"><use href="#i-bot"/></svg></i><span class="lbl">Claude</span></button>
@@ -1304,9 +1307,17 @@
       <div id="spList"></div>
     </aside>
     <div id="spScrim" hidden></div>
+    <!-- the commands (5.37.0, T-330): the composer's / commands, each with what it does; a click runs it, asking first or
+         for its words in a modal when it needs that -->
+    <aside id="cmdPanel" hidden aria-label="Commands">
+      <div class="spHead"><b>Commands</b><span class="grow"></span>
+        <button type="button" class="ghost" id="cmdClose" title="Hide the list" aria-label="Hide the list"><svg class="ic"><use href="#i-close"/></svg></button></div>
+      <input id="cmdQ" type="search" placeholder="Search commands…" spellcheck="false" autocomplete="off" aria-label="Search commands">
+      <div id="cmdList"></div>
+    </aside>
     <div id="panes">
     <section id="files">
-      <div class="bar"><button class="ghost" id="up" title="Up one folder" aria-label="Up one folder"><svg class="ic"><use href="#i-up"/></svg></button><span id="cwd">/</span>
+      <div class="bar"><button class="ghost" id="pickFolder" title="Open a folder on your PC: Claude builds and edits there through this page">Open folder</button><button class="ghost" id="up" title="Up one folder" aria-label="Up one folder"><svg class="ic"><use href="#i-up"/></svg></button><span id="cwd">/</span>
         <button class="ghost" id="newFile" title="New file" aria-label="New file"><svg class="ic"><use href="#i-plus"/></svg></button><button class="ghost" id="refresh" title="Refresh" aria-label="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
         <button class="ghost min" data-min="files" title="Minimize (bring it back from the left bar)">—</button></div>
       <div id="tree"></div>
@@ -1375,9 +1386,21 @@
   </main>
 </div>
 
+<div id="cmdModal" class="modal" hidden>
+  <div class="box">
+    <div class="bar"><span id="cmdTitle">Command</span><button class="ghost" id="cmdCancelX">Close</button></div>
+    <div class="setBody">
+      <div id="cmdText"></div>
+      <select id="cmdSel" hidden></select>
+      <textarea id="cmdField" hidden spellcheck="true"></textarea>
+      <div id="cmdErr" role="status"></div>
+      <div class="row"><button id="cmdGo">Run</button><button class="ghost" id="cmdCancel">Cancel</button></div>
+    </div>
+  </div>
+</div>
 <div id="startPanel" class="modal" hidden>
   <div class="box">
-    <div class="bar"><span>Start work</span><button class="ghost" id="startClose">Close</button></div>
+    <div class="bar"><span>New session</span><button class="ghost" id="startClose">Close</button></div>
     <div class="setBody">
       <section class="startCard" id="startPick"><h3>1 · A project you have</h3>
         <small>Each start is a new session in your own worktree of the project (branch work/you).</small>
@@ -1393,6 +1416,9 @@
       <section class="startCard" id="startNone"><h3>4 · No project</h3>
         <small>Just the AI: a scratch folder of your own, no git, nothing shared.</small>
         <div class="row"><button id="startNoneGo">Start with no project</button></div></section>
+      <section class="startCard" id="startPlanner"><h3>5 · A planner session</h3>
+        <small>Claude only plans: tasks on the board and notes under plans/. It cannot edit files, run builds or use your PC (the hub enforces it).</small>
+        <div class="row"><button id="startPlannerGo">Start a planner session</button></div></section>
       <div id="startMsg" role="status"></div>
     </div>
   </div>
@@ -2287,7 +2313,8 @@ function showModels(d) {
 // The project picker (Work header): every project in the shared projects area, VibeRoller first; each is worked on in
 // your own worktree of it. The two last entries start a new project or pull in an existing repo by its address.
 function renderProjects() {
-  const sel = $('workspace');
+  const sel = $('workspace'); // the header picker went in 5.37.0 (T-330): a session's project is picked when it is made
+  if (!sel) return;
   if (!me || !Array.isArray(me.projects)) { sel.hidden = true; return; }
   sel.textContent = '';
   const opt = (v, l, title) => { const o = document.createElement('option'); o.value = v; o.textContent = l; if (title) o.title = title; sel.append(o); };
@@ -2297,7 +2324,7 @@ function renderProjects() {
   sel.value = me.project === '(none)' ? '__none' : (me.project || 'VibeRoller');
   sel.hidden = false;
 }
-$('workspace').onchange = async () => {
+if ($('workspace')) $('workspace').onchange = async () => {
   const sel = $('workspace'), want = sel.value, before = me.project === '(none)' ? '__none' : (me.project || 'VibeRoller');
   if ((want === '__new' || want === '__clone') && SESSIONS_OK) { sel.value = before; return startOpen(); } // one start flow (T-238)
   try {
@@ -2391,7 +2418,7 @@ async function startSession(body) {
   } catch (err) { startMsg(err.message, true); }
   startBusy = false;
 }
-$('startWork').onclick = startOpen; $('startClose').onclick = startClose;
+$('startClose').onclick = startClose;
 $('startPanel').addEventListener('click', (e) => { if (e.target === $('startPanel')) startClose(); });
 $('startCloneGo').onclick = () => startClone($('startUrl').value.trim(), $('startCloneName').value.trim());
 $('startUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('startCloneGo').click(); });
@@ -2918,17 +2945,18 @@ function handleEvent(ev) {
 
 // ── Slash commands: "/" at the start of the Claude box lists the common ones. Most are passed through to
 // Claude Code exactly as typed (it understands them); a few act on VibeRoller itself ("here").
+const CLEAR_ASK = 'Clear this conversation? Claude starts fresh on your next message. The session, its worktree and its files stay as they are.';
 const SLASH = [
-  { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context)', args: '[focus]' },
-  { cmd: '/clear', desc: 'Start a fresh conversation (same as New chat)', local: () => $('newChat').click() },
-  { cmd: '/new', desc: 'Start a fresh conversation', local: () => $('newChat').click() },
+  { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context). With words after it, the summary follows them', args: '[focus]', hint: 'Optional: what the summary keeps or drops, e.g. "remove everything about X, keep all about Y and Z". Empty = the usual compact.' },
+  { cmd: '/clear', desc: 'Clear the conversation: Claude starts fresh on your next message (the session, its worktree and its files stay)', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/clear', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
+  { cmd: '/new', desc: 'Same as /clear: a fresh conversation in this session', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/new', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
   { cmd: '/stop', desc: 'Stop the current reply', local: () => $('stop').click() },
-  { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', local: (a) => slashModel(a) },
+  { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', choices: ['opus', 'sonnet', 'haiku', 'fable', 'default'], local: (a) => slashModel(a) },
   { cmd: '/hyperwork', desc: 'Send a prompt through a Hyper Workflow (it runs on the hub; type a name to see the list)', args: '<name> <prompt>', local: (a) => hyperwork(a) },
   { cmd: '/hw', desc: 'Short for /hyperwork', args: '<name> <prompt>', local: (a) => hyperwork(a) },
   { cmd: '/workflows', desc: 'Open the Workflows screen: the list, then the visual editor (/workflows <name> opens that one)', args: '[name]', local: (a) => openWorkflows(a) },
   { cmd: '/share', desc: 'Share / stop sharing this Work session with everyone', local: () => $('shareBtn').click() },
-  { cmd: '/save', desc: 'Save this session to Past sessions now (the session list shows it)', local: () => { SESSIONS.show(); saveToArchive(false); } },
+  { cmd: '/save', desc: 'Save this session to Past sessions now (it is auto-saved too; the session list shows it)', local: () => { SESSIONS.show(); saveToArchive(false); } },
   { cmd: '/sessions', desc: 'Open your sessions: ongoing and saved, with search', local: () => SESSIONS.show(true) },
   { cmd: '/board', desc: 'Open the team board', local: () => showScreen('board') },
   { cmd: '/tasks', desc: 'Show / hide the Tasks pane', local: () => togglePane('tasks') },
@@ -2948,6 +2976,73 @@ const SLASH = [
   { cmd: '/docs', desc: 'Ask Claude to update the docs for the change', args: '[what]' },
 ];
 let slashIdx = 0;
+
+// ---------- Commands (5.37.0, T-330): the rail's list of every command; a click runs it ----------
+// What a command needs before it runs: a yes (confirm), words (input: required for <args>, optional for [args]), or a pick.
+function commandNeeds(s) {
+  const a = String(s.args || '');
+  return { confirm: s.confirm || null, choices: s.choices || null, input: !s.choices && a ? { required: a.startsWith('<'), hint: s.hint || '' } : null };
+}
+// Runs a command with its words: a VibeRoller one here, the rest goes to Claude (queued while it is busy).
+function runCommand(s, words) {
+  const w = String(words || '').trim();
+  if (s.local) return s.local(w);
+  const msg = s.cmd + (w ? ' ' + w : '');
+  if (busy || slotWait) enqueue(msg); else send(msg);
+}
+// The command modal: resolves true / false for a confirm, the words (or null when cancelled) for an input or a pick.
+function askCommand(s) {
+  const n = commandNeeds(s);
+  return new Promise((resolve) => {
+    const box = $('cmdModal'), field = $('cmdField'), sel = $('cmdSel');
+    $('cmdTitle').textContent = s.cmd; $('cmdErr').textContent = '';
+    $('cmdText').textContent = n.confirm || s.desc || '';
+    field.hidden = !n.input; sel.hidden = !n.choices; field.value = '';
+    field.placeholder = n.input ? (n.input.hint || (n.input.required ? 'What it needs' : 'Optional')) : '';
+    if (n.choices) { sel.textContent = ''; for (const c of n.choices) { const o = document.createElement('option'); o.value = o.textContent = c; sel.append(o); } }
+    $('cmdGo').textContent = n.confirm ? 'Yes, ' + s.cmd.slice(1) : 'Run';
+    const done = (v) => { box.hidden = true; $('cmdGo').onclick = $('cmdCancel').onclick = $('cmdCancelX').onclick = null; field.onkeydown = null; resolve(v); };
+    $('cmdGo').onclick = () => {
+      if (n.confirm) return done(true);
+      if (n.choices) return done(sel.value);
+      if (n.input && n.input.required && !field.value.trim()) { $('cmdErr').textContent = 'This one needs a few words.'; field.focus(); return; }
+      done(field.value.trim());
+    };
+    $('cmdCancel').onclick = $('cmdCancelX').onclick = () => done(n.confirm ? false : null);
+    field.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('cmdGo').click(); if (e.key === 'Escape') $('cmdCancel').click(); };
+    box.hidden = false;
+    setTimeout(() => (n.input ? field : n.choices ? sel : $('cmdGo')).focus(), 0);
+  });
+}
+// A click in the list: a confirm-only local command asks inside its own action; the rest ask for what they need first.
+async function pickCommand(s) {
+  const n = commandNeeds(s);
+  if (s.local && n.confirm) return s.local('');
+  if (n.input || n.choices) { const w = await askCommand(s); if (w === null) return; return runCommand(s, w); }
+  runCommand(s, '');
+}
+function renderCommands() {
+  const q = $('cmdQ').value.trim().toLowerCase(), list = $('cmdList'); list.textContent = '';
+  const hits = SLASH.filter((s) => !q || s.cmd.includes(q) || s.desc.toLowerCase().includes(q));
+  for (const s of hits) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'cmdItem'; b.title = s.desc + (s.hint ? '\n' + s.hint : '');
+    const c = document.createElement('code'); c.textContent = s.cmd + (s.args ? ' ' + s.args : '');
+    const t = document.createElement('span'); t.className = 'tag'; t.textContent = s.local ? 'here' : 'to Claude';
+    const d = document.createElement('small'); d.textContent = s.desc;
+    b.append(c, t, d); b.onclick = () => pickCommand(s); list.append(b);
+  }
+  if (!hits.length) { const e = document.createElement('div'); e.className = 'spNote'; e.textContent = 'No command matches.'; list.append(e); }
+}
+function setCommandsOpen(on) {
+  const p = $('cmdPanel'), btn = $('cmdToggle');
+  if (!on) { btn.classList.remove('on'); return genieIn(p, btn, () => { p.hidden = true; }); }
+  p.hidden = false; btn.classList.add('on'); renderCommands(); genieOut(p, btn); setTimeout(() => $('cmdQ').focus(), 0);
+}
+$('cmdToggle').onclick = () => setCommandsOpen($('cmdPanel').hidden);
+$('cmdClose').onclick = () => setCommandsOpen(false);
+$('cmdQ').addEventListener('input', renderCommands);
+$('cmdQ').addEventListener('keydown', (e) => { if (e.key === 'Escape') { if ($('cmdQ').value) { $('cmdQ').value = ''; renderCommands(); } else setCommandsOpen(false); } });
+
 function slashQuery() { const v = $('input').value; const m = /^\/(\S*)$/.exec(v); return m ? m[1].toLowerCase() : null; }
 function slashMatches() { const q = slashQuery(); return q === null ? [] : SLASH.filter((s) => s.cmd.slice(1).startsWith(q)); }
 function renderSlash() {
@@ -3020,7 +3115,8 @@ $('stop').onclick = () => {
   if (text) { sendNowMessage = text; $('input').value = ''; updateStopButton(); saveQueue(); sys('Stopping Claude — your message goes next.'); }
   stopRequested = true; api('/api/stop', { method: 'POST' }).catch(() => {});
 };
-$('newChat').onclick = () => {
+// /clear (and /new): the conversation starts over; the session, its worktree and its files stay. Asked first (T-330).
+function newChatNow() {
   if (busy) return sys('Stop Claude before starting a new chat.', true);
   fresh = true; log.innerHTML = ''; setConversation(null, null, []);
   if (usageData) { usageData.context = null; paintUsage(); } // a new session starts with an empty context window
@@ -3044,7 +3140,8 @@ async function enterPlanner(id) {
 }
 // with the session list (T-287) a planner session is one of your sessions: opened like any other, the one on screen goes on
 const PLANNER_HELLO = 'Planner mode: Claude only plans. It can read, search the board, notes and chat, ask you, add board tasks and write notes under plans/. It cannot edit files, run builds or use your PC.';
-$('newPlanner').onclick = async () => {
+$('startPlannerGo').onclick = async () => {
+  startClose();
   try {
     const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify({ mode: 'planner', title: 'Planner' }) });
     await SESSIONS.refresh();
@@ -3136,7 +3233,7 @@ function record(cls, text) { transcript.push({ cls, text }); saveCurrentSoon(); 
 async function restoreWork() { // opening Work: the previous conversation, then the queue (which starts running)
   // which session is open (hubs with many sessions): the page keeps to it; older hubs have only the one
   try {
-    const l = await json('/api/work/sessions?archived=1'); SESSIONS_OK = Array.isArray(l.sessions); $('startWork').hidden = !SESSIONS_OK;
+    const l = await json('/api/work/sessions?archived=1'); SESSIONS_OK = Array.isArray(l.sessions);
     const cur = (l.sessions || []).find((x) => x.id === l.current);
     if (cur) {
       if (l.current !== l.primary) SESSION = l.current; me.project = cur.project; renderProjects();
@@ -3146,7 +3243,7 @@ async function restoreWork() { // opening Work: the previous conversation, then 
     const want = SESSIONS.linked(); // a link to a session (#work/<id>, "Copy link") opens it
     if (want && want !== SESSIONS.onScreen() && (l.sessions || []).some((x) => x.id === want)) return openWorkSession(want);
     if (cur && !$('input').value) $('input').value = SESSIONS.draftOf(l.current);
-  } catch { $('startWork').hidden = true; }
+  } catch {}
   if (!(await loadConversation(false))) return;
   // Work opens with nothing going on: offer the ways to start (once per page load; "Close" keeps this session)
   if (SESSIONS_OK && !startAuto && !busy && !transcript.length && !queue.length && !sendNowMessage) { startAuto = true; startOpen(); }
@@ -3242,7 +3339,7 @@ async function saveToArchive(quiet, auto) {
     setConversation(d.id, d.title, transcript);
     savedLen = transcript.length; lastSaveAt = Date.now();
     if (!quiet) sys('Saved to Past sessions as "' + d.title + '".');
-    else if (auto && savedLen && !$('saveChat').dataset.autoNoted) { $('saveChat').dataset.autoNoted = '1'; sys('Auto-saved to Past sessions as "' + d.title + '" (Settings → Auto-save).'); }
+    else if (auto && savedLen && !autoSaveNoted) { autoSaveNoted = true; sys('Auto-saved to Past sessions as "' + d.title + '" (Settings → Auto-save).'); }
   } catch (err) { if (!auto) sys('Could not save: ' + err.message, true); } // an auto-save before Claude has answered just waits for the next round
 }
 setInterval(() => { // Settings → Auto-save (default every 5 minutes; 0 = off)
@@ -3279,7 +3376,7 @@ async function openConversation(id) {
     scroll(); SESSIONS.refresh();
   } catch (err) { sys(err.message, true); }
 }
-$('saveChat').onclick = () => saveToArchive(false);
+let autoSaveNoted = false; // the first auto-save of a page says so once
 SESSIONS.init(); // the session list (web/sessions.js, T-287): the Sessions button, its search, a session's link
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && me && !$('shell').hidden && SESSIONS_OK) SESSIONS.seen(); });
 $('convTitle').onclick = () => { if (archiveId) renameConversation(archiveId, archiveTitle); else saveToArchive(false); };

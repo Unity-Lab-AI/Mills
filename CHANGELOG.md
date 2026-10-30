@@ -7,6 +7,22 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.37.0 — 2026-10-30
+
+MINOR: **one New session flow, a Commands panel, a lighter Work header** (T-330; Sponge, 2026-10-30). Changes what is
+where on the Work page; nothing on the hub.
+- **Gone from the header:** New session (the sessions list has it), New chat (`/clear` / `/new` do it, and ask first),
+  New planner session (now "5 · A planner session" in the New session panel), Save session (`/save`, and the auto-save;
+  sessions always saved is T-331), the project picker (a session's project is picked when it is made: every session
+  has its own worktree), and Open folder on my PC (now **Open folder** in the Folder pane's own bar).
+- **Commands** (a new rail button under Sessions): every command, searchable, each saying what it does (its tooltip
+  too), here or to Claude. A click runs it. `/clear` and `/new` ask first. One with words opens a modal of the page
+  (never a browser pop-up): `/compact` with optional focus text the summary follows ("remove everything about X, keep
+  all about Y and Z"; empty = the usual compact), `/fix` with its required problem, `/model` with a pick. Typed in
+  the box, `/clear` asks too.
+- Checks: **R500** (the header, the Folder pane, the rail, the panel and the modal; the page's own command list and
+  `commandNeeds` run on stand-ins); R51, R249 and R269 follow the moved buttons. web/index.html 1.31.0, web/sessions.js 1.1.1.
+
 ## 5.36.0 — 2026-10-30
 
 MINOR: **Headroom (context compression) for relayed Work runs**, on the dev hub first (Sponge, 2026-10-30).
