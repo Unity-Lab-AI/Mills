@@ -1060,6 +1060,26 @@
    }
   },
   {
+   "name": "code_find",
+   "description": "Look a name or a few words up in this session's worktree (its source and docs, by a word index the hub keeps up to date): the lines that have them, a definition (fn / struct / class / function / def / const) first. Faster than searching the tree file by file; Grep is still there for patterns.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "q": {
+      "type": "string",
+      "description": "A name (journal_file, journalFile) or a few words"
+     },
+     "limit": {
+      "type": "number",
+      "description": "At most this many lines (default 40, at most 200)"
+     }
+    },
+    "required": [
+     "q"
+    ]
+   }
+  },
+  {
    "name": "plan_parse",
    "description": "Planner helper (T-276): split a person's rough idea list into ideas exactly. Understands `--- opus|fable` blocks with a [Title] and a \"(Blocked on \\\"[Other]\\\")\" line, person sections (Person S / M / G, with a role line checked against the roles), a short and a long version of the same list (duplicates merged, differences such as another model tag noted, what only the short one says added) and plain run-on chat (split at each new wish). Returns ideas [{n, title, body, model, person, personMarker, blockedOn (means: based on), blockedOnIdeas, sourceSpan {from, to} (input lines), form A|B|D, titleGenerated, merged?, differs?, addedFromShort?}], leftovers (markers, role lines, chat: not ideas, each with its line and reason), people (role-line checks) and counts. Call it first on the person's input; check what it returns, do not trust blindly.",
    "inputSchema": {

@@ -7,6 +7,57 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.39.0 — 2026-10-30
+
+MINOR: **word indexes: finding is a lookup, not a scan** (T-331 step 3; team note plans/sessions-always-saved.md § 3).
+- **pgm-core `index`** (a library piece): a `DocIndex` knows which words each document holds and answers "which have all of
+  these words", each query word matching the words it begins ("deplo" finds "deploy"; a word in the middle of another,
+  such as "ploy", no longer does). It is kept on disk through the write buffer and brought up to date before each use:
+  only documents whose time or size changed are read again, gone ones leave. A cache: deleted, it is built again.
+- **Past sessions search** (`/api/archive/search`, the sessions list and the `sessions_search` tool) looks the words up
+  in `Archive/…/.word-index` and opens only the sessions it names (the answer says how many: `opened`).
+- **Notes search** (the Notes screen and `notes_list` with `q`) does the same with `Notes/.word-index` (dot files are
+  never listed as notes nor sent over the live/dev bridge).
+- **`code_find`** (a new team tool for Work runs, pgm-collab `codefind`): a name or a few words looked up in the session's
+  worktree (git's files, source and docs, under 1 MB each), the matching lines with a definition (fn / struct / class /
+  function / def / const …) first. The index lives in the person's profile (`index/code-<hash>.json`), never in the
+  worktree. bridge/team-mcp.js 1.6.0 (and the Rust copy of the tool list).
+- The board is held in memory and filtered there (nothing to scan on disk); chat text is end-to-end encrypted, so the
+  hub cannot index it.
+- `bridge/index/` (the default account's code indexes) is git-ignored, here and in the suite's scratch copy.
+- Checks: **R503** (a word only one saved session has opens just that one; a prefix finds it; saved / deleted show at
+  once; another person finds nothing; the index is never listed and is rebuilt when gone), **R504** (`code_find` from a
+  run: the definition first, the limit, a new file found and only it read again, a deleted one gone, an empty query
+  refused, git sees nothing new); unit tests for the index and for `codefind`.
+
+## 5.38.0 — 2026-10-30
+
+MINOR: **Work runs journalled through a write buffer; logs, metrics and traces** (T-331 steps 1 and 2; team note
+plans/sessions-always-saved.md).
+- **The write buffer** (pgm-core `store`, a library piece): one writer thread; appends batched per file (one write + one
+  fsync per batch, every 50 ms), whole-file rewrites coalesced (only the newest content is written); it measures
+  writes per second, queue depth and flush time, calls a spike (4x the 15-minute median, or a deep queue), widens its
+  window to 250 ms meanwhile and says so once, and past 50 000 queued writes makes a writer wait instead of growing.
+  Nothing queued is dropped: `flush()` for readers, and the hub flushes before it exits (a graceful restart loses
+  nothing). `read_lines` skips a torn last line; `read_lines_hot` is the journals' hot cache (only the new tail is read;
+  unused 8 hours, or past 64 MB in all, it goes; the disk always has everything).
+- **Session journals** (`<profile>/work-journal.jsonl`, `work-sessions/<id>.jsonl`): every event of a run, as the hub
+  sends it, with its run id and place, and the person's message, through the buffer. The page already joins a run
+  from where it was after a reload (`/api/work/attach`); a run that left the hub's memory (ended more than 5 minutes
+  ago, or the hub restarted) now comes back from the journal, so nothing a page missed is lost. Computer-tool calls are
+  not journalled; deleting a session deletes its journal; one past 32 MB starts over (one old copy kept).
+- **Logs, metrics, traces** (pgm-core `obs`): JSON lines in `bridge/logs/hub-YYYY-MM-DD.jsonl` (14 days, git-ignored),
+  a field named like a secret never written and long texts cut. Every answer has an `x-request-id`; failures and slow
+  answers (3 s) are logged with it; every request is counted and timed by route; Work runs (started / ended, by
+  result, how long), relay calls (by status, through Headroom or direct) and Headroom use are counted. **Admin →
+  Health** sums it up (and traces a run by its id: every log line about it). `GET /api/admin/metrics`,
+  `GET /api/admin/trace?run=` (admins), `GET /metrics` (Prometheus text, this machine only).
+- Checks: **R501** (a run shown again from the journal after a hub restart, from the start or half way; another person
+  gets nothing; a session's own journal goes with it), **R502** (request ids, metrics, trace, /metrics, no secrets in
+  the logs, the logs never shipped); unit tests for the buffer (order under 50 writers, coalescing, a spike absorbed,
+  back-pressure, torn lines), the hot cache, and obs (secrets out, traces, metrics). The suite's scratch copy ignores
+  `bridge/logs/` and `bridge/sync/` as the real `.gitignore` does. web/index.html 1.32.0.
+
 ## 5.37.0 — 2026-10-30
 
 MINOR: **one New session flow, a Commands panel, a lighter Work header** (T-330; Sponge, 2026-10-30). Changes what is

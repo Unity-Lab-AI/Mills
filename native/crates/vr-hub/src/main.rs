@@ -35,5 +35,7 @@ fn main() {
         let hub = match front::Hub::new(root, cfg, if alone { None } else { back.map(|b| SocketAddr::from(([127, 0, 0, 1], b))) }) { Ok(h) => h, Err(e) => { eprintln!("[vr-hub] {e}"); return 1; } };
         front::serve(hub, SocketAddr::from(([127, 0, 0, 1], port))).await
     });
+    // what the write buffer holds goes to disk before the process does (T-331: a graceful restart loses nothing)
+    if !pgm_core_internal::store::global().shutdown() { eprintln!("[vr-hub] store: not everything was written within 10 s"); }
     std::process::exit(code);
 }

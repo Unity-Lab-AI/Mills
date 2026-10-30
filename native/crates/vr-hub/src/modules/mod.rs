@@ -402,6 +402,13 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     // never trust these from outside: only the front sets them
     // (the proxy strips any x-vr-front-* / x-vr-user header a caller sent)
     // the page and its files
+    // T-331 § 4: the metrics in Prometheus text, for this machine only (never through a proxy)
+    if p == "/metrics" && r.method == hyper::Method::GET {
+        let outside = r.header("cf-connecting-ip").is_some() || r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some();
+        if !r.peer.ip().is_loopback() || outside { return answer(404, json!({ "error": "Not found" })); }
+        let body = pgm_core_internal::obs::prometheus().into_bytes();
+        return Routed::Answer(hyper::Response::builder().status(200).header("content-type", "text/plain; version=0.0.4").header("cache-control", "no-store").body(crate::front::full(body)).expect("response"));
+    }
     if !p.starts_with("/api/") { return if r.method == hyper::Method::GET && !p.starts_with("/internal/") { site::page(hub, p) } else { Routed::Pass(vec![]) }; }
     // that a hub is here (and, from this machine, its process, whether it is busy, its version): this hub's own (4.0.0)
     if p == "/api/status" && r.method == hyper::Method::GET { return answer(200, site::status(hub, r)); }
@@ -530,6 +537,18 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         };
         if out.is_ok() { push_ai_state(hub).await; }
         return match out { Ok(v) => answer(200, v), Err(e) => answer(400, json!({ "error": e })) };
+    }
+    // Health (T-331 § 4): the hub's metrics, its write buffer, and one run's trace (every log line about it), for admins
+    if r.method == hyper::Method::GET && matches!(p, "/api/admin/metrics" | "/api/admin/trace") {
+        let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
+        if !a.account(u).map(|x| x.admin).unwrap_or(false) { return Routed::Answer(jresp(403, &json!({ "error": "Admins only." }))); }
+        if p == "/api/admin/metrics" {
+            return Routed::Answer(jresp(200, &json!({ "version": crate::VERSION, "instance": if hub.is_dev() { "dev" } else { "live" }, "uptimeSec": pgm_core_internal::obs::uptime_s(),
+                "metrics": pgm_core_internal::obs::snapshot(), "store": pgm_core_internal::store::global().stats(), "sync": hub.mods.sync.get().map(|b| b.summary()) })));
+        }
+        let run = r.param("run").unwrap_or_default();
+        if run.is_empty() || run.len() > 32 || !run.bytes().all(|b| b.is_ascii_hexdigit()) { return Routed::Answer(jresp(400, &json!({ "error": "Say which run (its id)." }))); }
+        return Routed::Answer(jresp(200, &json!({ "run": run, "lines": pgm_core_internal::obs::trace("run", &run) })));
     }
     // the admin's account switches that are this module's (the JavaScript hub keeps making / deleting accounts)
     if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/allow-device" | "/api/admin/signout") {

@@ -14,8 +14,11 @@
 pub mod config;
 pub mod crypto;
 pub mod fs;
+pub mod index;
 pub mod json;
 pub mod notices;
+pub mod obs;
+pub mod store;
 pub mod text;
 pub mod time;
 
