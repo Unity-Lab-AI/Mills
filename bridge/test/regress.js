@@ -4110,6 +4110,31 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       !seen.sendFailed && seen.first.ours === 15 && seen.first.older && seen.first.lastIsNewest && seen.history.chunks >= 3 && seen.history.all && seen.history.ordered && !seen.history.twice && seen.other === 404 && seen.bad === 404 && seen.oldWay === 200 && seen.pageAsks,
       JSON.stringify(seen) + ' seqs ' + Object.keys(bySeq).length);
   } else skip('R506', 'the team chat in chunks', 'the Rust hub\'s: --rust-hub runs it');
+  { // R507 (5.41.1): the hub being away is a badge at the top, never lines in the chat. The page's own badge code runs on a
+    // stand-in page and clock (vm); the request helper is read for what it no longer writes into the chat.
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const src = (/const CONN_GRACE = [\s\S]*?\nfunction connNote\(text\) \{[\s\S]*?\n\}\n/.exec(page) || [''])[0];
+    const apiSrc = (/async function api\(path, opts = \{\}\) \{[\s\S]*?\n\}\n/.exec(page) || [''])[0];
+    let now = 1000; const timers = [], logs = [], els = {};
+    const doc = { getElementById: (id) => els[id] || null, createElement: () => ({ setAttribute() {}, hidden: true, textContent: '', className: '' }), body: { append: (el) => { els[el.id] = el; } } };
+    const ctx = { document: doc, console: { info: (t) => logs.push(t) }, Date: Object.assign(function FakeDate() { return new Date(now); }, { now: () => now }), setTimeout: (f, ms) => { const t = { f, at: now + ms, done: false }; timers.push(t); return t; }, clearTimeout: (t) => { if (t) t.done = true; } };
+    const run = (to) => { now = to; for (const t of timers) if (!t.done && t.at <= now) { t.done = true; t.f(); } };
+    let C = null; try { C = require('vm').runInNewContext(src + '; ({ connState, connNote })', ctx); } catch (e) { var err = e.message; }
+    const seen = { load: !!C || err };
+    if (C) {
+      const badge = () => els.connBadge && !els.connBadge.hidden ? els.connBadge.textContent : '';
+      C.connState(false); run(3000); C.connState(true); run(9000);
+      seen.blip = badge() === '' && logs.length === 2;
+      C.connState(false); run(12000); C.connState(false); run(14000);
+      seen.outage = /Reconnecting/.test(badge());
+      run(18000); C.connState(true); seen.back = badge() === 'Back' && /after 9\.0 s/.test(logs[logs.length - 1]);
+      run(21000); seen.gone = badge() === '';
+      C.connNote('Updated to 9.9.9'); seen.note = /Updated to 9\.9\.9/.test(badge()); run(30000); seen.noteGone = badge() === '';
+    }
+    seen.notInChat = !!apiSrc && !/sys\(['`"]VibeRoller is (restarting|back)/.test(apiSrc) && /connState\(false\)/.test(apiSrc) && /connState\(true\)/.test(apiSrc) && !/sys\(`VibeRoller updated itself/.test(page);
+    check('R507', 'the hub being away never writes into the chat: a blip shorter than 4 s shows nothing (only the browser console logs it), a longer outage shows a "Reconnecting" badge at the top, "Back" when it answers again and then nothing, each outage logged with how long it took; the page updating itself is a short note in the same badge; the request helper writes no restarting / back lines into the chat any more',
+      !!C && seen.blip && seen.outage && seen.back && seen.gone && seen.note && seen.noteGone && seen.notInChat, JSON.stringify(seen));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.

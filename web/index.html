@@ -517,6 +517,8 @@
   #roomComposer .side { display: flex; flex-direction: column; gap: .35rem; }
   /* attachments (web/attach.js): the + button, the tray of picked files, and how sent ones show */
   .attPlus { align-self: flex-start; padding: .45rem; }
+  #connBadge { position: fixed; top: .5rem; left: 50%; transform: translateX(-50%); z-index: 120; padding: .25rem .8rem; border-radius: 999px; font-size: .8rem; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,.3); pointer-events: none; }
+  #connBadge[hidden] { display: none; } #connBadge.down { color: #f5a524; } #connBadge.up { color: #3fb950; }
   .histMore { cursor: pointer; text-align: center; opacity: .75; } .histMore:hover { opacity: 1; }
   .leadCol { display: flex; flex-direction: column; gap: .4rem; align-self: flex-start; }
   #enhance.working .ic { animation: enhSpin 1.1s linear infinite; } #enhance.undo { color: var(--accent, #9b5cff); border-color: currentColor; }
@@ -1605,6 +1607,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // host switch; everything that touches the computer lives in the Tools window, the app's own page.
 const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
 let reconnecting = false;
+// 5.41.1: the hub being away (a restart, a deploy, a dropped long poll) is shown in a small badge at the top, not written
+// into the chat: only when it lasts more than CONN_GRACE (a blip shows nothing), "Back" for a moment when it returns, and
+// every outage logged to the browser console with how long it took. The chat stays the conversation.
+const CONN_GRACE = 4000;
+const CONN = { downAt: 0, timer: null, hideTimer: null };
+function connBadge(text, cls) {
+  let b = document.getElementById('connBadge');
+  if (!b) { b = document.createElement('div'); b.id = 'connBadge'; b.setAttribute('role', 'status'); document.body.append(b); }
+  b.textContent = text; b.className = cls || ''; b.hidden = !text;
+  return b;
+}
+function connState(up) {
+  if (!up) {
+    if (CONN.downAt) return;
+    CONN.downAt = Date.now(); clearTimeout(CONN.hideTimer);
+    console.info('[VibeRoller] the hub did not answer; retrying (' + new Date().toLocaleTimeString() + ')');
+    CONN.timer = setTimeout(() => connBadge('Reconnecting to VibeRoller…', 'down'), CONN_GRACE);
+    return;
+  }
+  if (!CONN.downAt) return;
+  const took = Date.now() - CONN.downAt, shown = took >= CONN_GRACE;
+  CONN.downAt = 0; clearTimeout(CONN.timer);
+  console.info('[VibeRoller] the hub answers again after ' + (took / 1000).toFixed(1) + ' s');
+  if (shown) { connBadge('Back', 'up'); CONN.hideTimer = setTimeout(() => connBadge(''), 2000); }
+}
+function connNote(text) { // a one-off note in the badge (the page updated itself), gone after a few seconds
+  console.info('[VibeRoller] ' + text);
+  clearTimeout(CONN.hideTimer); connBadge(text, 'up'); CONN.hideTimer = setTimeout(() => connBadge(''), 4000);
+}
 const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '').toLowerCase(); return !/no-store|no-cache/.test(cc) && /max-age=([1-9]\d*)/.test(cc); };
 // The Work session on screen ('' = the first one, as older pages and hubs know it): the calls that belong to one
 // session carry ?session=<id> (T-238: Start work opens a new session of its own).
@@ -1625,7 +1656,7 @@ async function api(path, opts = {}) {
     let res = null;
     try { res = await fetch(base + path, init); } catch (e) { if (e && e.name === 'AbortError') throw e; } // stopped on purpose (another session was opened): not a restart
     if (res && ![502, 503, 504, 530].includes(res.status)) {
-      if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
+      if (reconnecting) { reconnecting = false; connState(true); }
       // a cacheable answer (Unity's pictures) may be a copy the browser kept from an older build: its build says nothing (R199)
       const hubBuild = cacheable(res) ? '' : res.headers.get('x-vr-version');
       if (hubBuild && me && (me.build || me.version) && hubBuild !== (me.build || me.version)) pageUpdateAvailable(hubBuild, path);
@@ -1634,8 +1665,8 @@ async function api(path, opts = {}) {
     }
     // No bridge behind the address: it is restarting after a code change (back within seconds,
     // same address) or the admin restarted its window (new address, found again via the gist).
-    if (attempt >= 40) { reconnecting = false; throw new Error('VibeRoller is not responding — ask the admin to check it.'); }
-    if (!reconnecting) { reconnecting = true; sys('VibeRoller is restarting — waiting for it to come back…'); }
+    if (attempt >= 40) { reconnecting = false; connState(true); connBadge('VibeRoller is not responding', 'down'); throw new Error('VibeRoller is not responding — ask the admin to check it.'); }
+    if (!reconnecting) { reconnecting = true; connState(false); }
     await sleep(3000);
     if (attempt % 4 === 0) { try { base = await findBridge(true); } catch {} }
   }
@@ -1711,7 +1742,7 @@ function restoreAfterUpdate() { // the end of enter(): back where you were, with
   if (!s || Date.now() - s.at > 10 * 60e3) return;
   if (s.screen && $(s.screen) && !(s.screen === 'admin' && !me.admin) && !(APP_MODE && s.screen !== 'room')) showScreen(s.screen);
   for (const [id, v] of Object.entries(s.drafts || {})) if ($(id) && !$(id).value) $(id).value = v;
-  sys(`VibeRoller updated itself to ${me.version}. Everything you had open is back.`);
+  connNote(`Updated to ${me.version}: everything you had open is back`);
 }
 async function json(path, opts) {
   const res = await api(path, opts);
