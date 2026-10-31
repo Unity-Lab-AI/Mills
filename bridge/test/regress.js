@@ -4069,6 +4069,47 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.archive.saved && seen.archive.openN === 1 && seen.archive.openFrom === 61 && seen.archive.openTotal === 62 && seen.archiveWhole && seen.oldPage && seen.pageAsks,
       JSON.stringify(seen));
   } else skip('R505', 'the Work conversation in chunks', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R506 (5.41.0): the team chat loads per conversation: its newest ~10 000 characters and everything unread first,
+    // older chunks as the person scrolls up (DMs, channels, groups and # Everyone alike: one rule)
+    const seen = {}, b64 = (n) => crypto.randomBytes(n).toString('base64');
+    const jwk = () => ({ kty: 'EC', crv: 'P-256', x: crypto.randomBytes(32).toString('base64url'), y: crypto.randomBytes(32).toString('base64url') });
+    for (const t of [U, A]) if (!((await call('/api/room/mykey', t)).data || {}).pub) await call('/api/room/mykey', t, { pub: jwk(), backup: { salt: b64(16), iv: b64(12), ct: b64(80) } });
+    const conv = 'dm:t-admin|t-user', mids = [];
+    for (let i = 0; i < 40; i++) {
+      const mid = crypto.randomBytes(16).toString('base64url').slice(0, 22); mids.push(mid);
+      const r = await call('/api/room/send', U, { v: 3, mid, iv: b64(12), ct: b64(1000), to: 't-admin', keys: { 't-user': { iv: b64(12), wk: b64(48) }, 't-admin': { iv: b64(12), wk: b64(48) } } });
+      if (r.status !== 200) { seen.sendFailed = r.status + ' ' + JSON.stringify(r.data).slice(0, 120); break; }
+    }
+    const firstAll = (await call('/api/room/messages?rev=0', A)).data;
+    const ours = (list) => (list || []).filter((m) => mids.includes(m.mid));
+    const bySeq = Object.fromEntries(ours(firstAll.messages).map((m) => [m.mid, m.seq]));
+    // the reader has read up to the 25th of them: the 15 after it are unread
+    const seq25 = (((await call('/api/room/messages?rev=0', U)).data.messages || []).find((m) => m.mid === mids[24]) || {}).seq;
+    await call('/api/room/seen', A, { conv, seq: seq25 });
+    const first = (await call('/api/room/messages?rev=0', A)).data;
+    seen.first = { ours: ours(first.messages).length, older: (first.older || []).includes(conv), lastIsNewest: ours(first.messages).slice(-1)[0]?.mid === mids[39] };
+    // scrolling up: chunk after chunk until there is no more; each oldest first, no message twice, nothing missing
+    let before = Math.min(...first.messages.filter((m) => m.conv === conv || (m.to && [m.from, m.to].sort().join('|') === 't-admin|t-user')).map((m) => m.seq));
+    const got = new Set(ours(first.messages).map((m) => m.mid)); let chunks = 0, more = true, ordered = true, twice = false;
+    while (more && chunks < 20) {
+      const h = (await call('/api/room/history?conv=' + encodeURIComponent(conv) + '&before=' + before + '&chars=10000', A)).data;
+      const list = h.messages || []; chunks++; more = !!h.more;
+      for (let i = 1; i < list.length; i++) if (list[i].seq <= list[i - 1].seq) ordered = false;
+      for (const m of ours(list)) { if (got.has(m.mid)) twice = true; got.add(m.mid); }
+      if (!list.length) break; before = list[0].seq;
+    }
+    seen.history = { chunks, all: mids.every((m) => got.has(m)), ordered, twice };
+    // nobody else reads it; a bad conversation is refused
+    seen.other = (await call('/api/room/history?conv=' + encodeURIComponent(conv), D)).status;
+    seen.bad = (await call('/api/room/history?conv=dm:nobody|zz', A)).status;
+    // a page that asks the old way (no rev) is answered as before
+    seen.oldWay = (await call('/api/room/messages', A)).status;
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    seen.pageAsks = /\/api\/room\/history\?conv=/.test(page) && /roomOlder = new Set\(d\.older/.test(page) && /ingest\(m, false\); \/\/ older: never notified/.test(page);
+    check('R506', 'the team chat loads per conversation: after 40 messages of ~1 000 characters in a DM, the reader who read up to the 25th gets the 15 unread at first (the newest last) and is told there is more; scrolling up loads chunk after chunk, each oldest first, until every message is there, none twice; a third person and a made-up conversation are refused; an older page asking the old way is answered as before; the page asks for history, keeps what each first load says has more, and never notifies about older messages',
+      !seen.sendFailed && seen.first.ours === 15 && seen.first.older && seen.first.lastIsNewest && seen.history.chunks >= 3 && seen.history.all && seen.history.ordered && !seen.history.twice && seen.other === 404 && seen.bad === 404 && seen.oldWay === 200 && seen.pageAsks,
+      JSON.stringify(seen) + ' seqs ' + Object.keys(bySeq).length);
+  } else skip('R506', 'the team chat in chunks', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
@@ -7223,7 +7264,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const rGood = await st(tokOf(m2), tk, goodBody);
       const rChunkOther = await fetch(H + '/api/machine/transfer/' + tk + '/chunk?offset=' + (100 << 20) + '&key=' + f1.id + '&path=big.bin', { method: 'POST', headers: { Authorization: 'Bearer ' + tokOf(m3), 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(16) }).then((r) => r.status);
       const withinTicket = Date.now() - tStart < 9500;
-      await sleep(Math.max(0, 11000 - (Date.now() - tStart), 10500 - (Date.now() - tFirstDone)));
+      // the hub counts a ticket's life in whole seconds (expires = now_s + ttl, refused once expires < now_s), so a 10 s ticket
+      // issued at x.9 s lives until about x+11 s; it was issued before the first call ended, so 11.3 s after that end it is
+      // always gone (10.5 s raced with a quick first call: 2026-10-31)
+      await sleep(Math.max(0, 11000 - (Date.now() - tStart), 11300 - (Date.now() - tFirstDone)));
       const rLate = await st(tokOf(m2), tk, goodBody);
       // resume: the same call again carries on at the byte the hub holds, and ends with the sha256 of the whole file
       const second = await one('transfer_get', { path: 'big.bin' }, m2.id), f2 = res(second) || {};
