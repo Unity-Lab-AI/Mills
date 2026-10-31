@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.41.0 — 2026-10-31
+
+MINOR: **the team chat loads per conversation and fetches its history as you scroll up** (DMs, group DMs, server
+channels and # Everyone alike; Sponge, 2026-10-31).
+- **The first load** (`/api/room/messages?rev=0`, pgm-hcom-internal `first_load`) gives every conversation the reader
+  sees its newest ~10 000 characters (cut at a message; the hub counts the encrypted size, which follows the text) and
+  every message after the reader's seen mark there, so unread counts and mentions stay whole (a conversation never
+  opened: all of it, at most 2 000 at first). Before, it was the newest 500 messages of all conversations together: a
+  busy channel could push a quiet DM's history out entirely. The answer says which conversations have more (`older`).
+- **Scrolling to the top** of a conversation shows "Loading history…" and fetches the next ~10 000 characters of it
+  (`GET /api/room/history?conv=&before=<seq>&chars=`, `more`); the page decrypts them here and draws them above without
+  the view jumping. Older messages are never notified. What was loaded stays in the page.
+- An older page (asking without `rev`, or not knowing `older`) is answered as before; the JavaScript hub keeps its own.
+- **Products:** Hyper Prod Man and ShaDow use the same chat library: when they move to a pgm-libs with this, their
+  pages need the history part too (the web kit), or messages beyond the first window stay on the server.
+- Checks: **R506** (40 DM messages: the 15 unread first, chunk after chunk until all, each oldest first, none twice;
+  another person and a made-up conversation refused; the old way still answered); the unit test
+  `each_conversation_gets_its_newest_window_and_every_unread_message` (a quiet DM is never pushed out by a busy
+  channel; unread beyond the window; never opened = all; a single big message comes whole). web/index.html 1.34.0.
+
 ## 5.40.0 — 2026-10-31
 
 MINOR: **a long Work conversation opens at once and loads its history as you scroll up** (Sponge, 2026-10-31: a

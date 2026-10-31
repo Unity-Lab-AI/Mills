@@ -3690,7 +3690,7 @@ async function decryptMsg(m) {
 }
 
 function resetRoomData() {
-  msgs.clear(); roomRev = 0; roomLoaded = false; seenMap = {}; replyTo = null; editingSeq = null;
+  msgs.clear(); roomRev = 0; roomLoaded = false; roomOlder = new Set(); seenMap = {}; replyTo = null; editingSeq = null;
   if ($('roomLog')) $('roomLog').innerHTML = '';
   updateUnread();
 }
@@ -3761,14 +3761,45 @@ function selectConv(conv) {
   $('roomInput').placeholder = conv === 'room' ? 'Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)'
     : isGuildConv(conv) ? (GUILDS.canPost(conv) ? 'Message ' + convLabel(conv) + '…  (its members only; @unity to call her here)' : convLabel(conv) + ' is an announcement channel: only people with the announce permission post here.')
     : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
-  const log = $('roomLog'); log.innerHTML = '';
-  for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
-  scrollNew(log, true); // opening a conversation: its newest message
+  drawConv(conv);
+  scrollNew($('roomLog'), true); // opening a conversation: its newest message
   for (const b of $('roomSide').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
   const sv = GUILDS.serverOf(conv) || (GUILDS.isDmConv(conv) ? GUILDS.DM : ''); // a DM or group DM opens the Direct messages view
   if (GUILDS.isDmConv(conv)) store.set('mills.lastDm.' + me.username, conv);
   if (sv && GUILDS.state.server !== sv) { GUILDS.state.server = sv; GUILDS.render(); }
   updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers(); GUILDS.renderPins(); renderAppUser(); // the app's user panel (web/app.js) shows the latest name / picture
+}
+// A conversation's messages, oldest first, with the "earlier messages" line on top while the hub has older ones (5.41.0)
+function drawConv(conv) {
+  const log = $('roomLog'); log.innerHTML = '';
+  for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
+  roomHistMark();
+}
+// 5.41.0: the first load gives each conversation its newest ~10 000 characters (and everything unread); scrolling to the
+// top of one loads the next chunk of it from the hub (/api/room/history), decrypts it here and draws it above
+const ROOM_HISTORY_CHARS = 10000;
+let roomOlder = new Set(), roomHistBusy = false;
+$('roomLog').addEventListener('scroll', () => { if (roomOlder.has(currentConv) && $('roomLog').scrollTop < 300) loadOlderRoom(); });
+function roomHistMark() {
+  const log = $('roomLog'); if (!log) return;
+  let m = $('roomHistMore');
+  if (!roomOlder.has(currentConv)) { if (m) m.remove(); return; }
+  if (!m) { m = document.createElement('div'); m.id = 'roomHistMore'; m.className = 'sys histMore'; m.onclick = () => loadOlderRoom(); }
+  m.textContent = roomHistBusy ? 'Loading history…' : 'Earlier messages: scroll up (or click) to load them';
+  if (log.firstChild !== m) log.insertBefore(m, log.firstChild);
+}
+async function loadOlderRoom() {
+  const conv = currentConv, log = $('roomLog');
+  if (roomHistBusy || !roomOlder.has(conv) || !log) return;
+  const first = [...msgs.values()].filter((r) => convOfMsg(r.m) === conv).reduce((a, r) => Math.min(a, r.m.seq), Infinity);
+  roomHistBusy = true; roomHistMark();
+  try {
+    const d = await json('/api/room/history?conv=' + encodeURIComponent(conv) + (Number.isFinite(first) ? '&before=' + first : '') + '&chars=' + ROOM_HISTORY_CHARS);
+    for (const m of d.messages || []) if (!msgs.has(m.seq)) await ingest(m, false); // older: never notified
+    if (!d.more) roomOlder.delete(conv);
+    if (currentConv === conv) { const h0 = log.scrollHeight, top0 = log.scrollTop; drawConv(conv); log.scrollTop = top0 + (log.scrollHeight - h0); }
+  } catch (err) { if (/Unknown conversation/.test(err.message)) roomOlder.delete(conv); }
+  finally { roomHistBusy = false; roomHistMark(); }
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
@@ -3798,7 +3829,9 @@ async function applyRoom(d) {
   statusMap = Object.fromEntries((d.status || []).map((p) => [p.user, p])); // plans/presence.md: label, working, accepting, dnd, text (newer hubs)
   if (typeof PRESENCE !== 'undefined') PRESENCE.update(d.status); // web/presence.js (T-261): badges, hover cards, Team now (an older hub sends no status: nothing shown)
   onlineSet = new Set((d.presence || []).filter((p) => p.online).map((p) => p.user)); typingList = d.typing || []; renderPresence();
+  if (!roomLoaded) roomOlder = new Set(d.older || []); // the first load says which conversations have more on the hub (newer hubs)
   for (const m of d.messages) await ingest(m, roomLoaded);
+  if (!roomLoaded) roomHistMark();
   roomLoaded = true;
   if (pinBootstrap) { pinBootstrap = false; savePins(); } // first load done: from now on only pinned keys count
   refreshReceipts(); updateUnread(); markSeen();
