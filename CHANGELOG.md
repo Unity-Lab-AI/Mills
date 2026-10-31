@@ -7,6 +7,22 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.42.0 — 2026-10-31
+
+MINOR: **visual refresh 1: the Work conversation reads like a document** (Sponge, 2026-10-31: "clean room implementing
+a lot from this", a saved claude.ai/code session page as the example; team note plans/visual-refresh.md says what was
+observed, in our words; none of the example's code, class names, fonts, icons or assets are used).
+- One centred reading column (46rem) whatever the window width; the assistant's answers without a bubble, at a
+  comfortable line height; the person's messages as soft rounded bubbles; headings in answers in a serif face (system
+  serif fonts); tool lines as small quiet chips; status lines quieter; the composer a floating rounded card with a
+  subtle shadow, its border taking the accent while typing. Phones keep a narrower layout.
+- **A Warm theme** (our own palette: warm near-black greys, a clay accent) in the theme menu.
+- **Fix:** code blocks had a fixed near-black background while their text followed the theme: on every light theme
+  code was dark on near-black. They now take a tint of the theme's own colours (Work and the team chat).
+- Every theme gets the new layout: it uses the theme variables only.
+- Check: **R508** (static: no browser in the suite; screenshots were taken with a headless Chrome in a scratch folder
+  when it was made: dark, Warm, light, phone). web/index.html 1.35.0.
+
 ## 5.41.1 — 2026-10-31
 
 PATCH: **no more "VibeRoller is restarting" lines in the chat** (Sponge, 2026-10-31: they piled up while working and

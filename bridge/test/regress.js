@@ -4135,6 +4135,23 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R507', 'the hub being away never writes into the chat: a blip shorter than 4 s shows nothing (only the browser console logs it), a longer outage shows a "Reconnecting" badge at the top, "Back" when it answers again and then nothing, each outage logged with how long it took; the page updating itself is a short note in the same badge; the request helper writes no restarting / back lines into the chat any more',
       !!C && seen.blip && seen.outage && seen.back && seen.gone && seen.note && seen.noteGone && seen.notInChat, JSON.stringify(seen));
   }
+  { // R508 (5.42.0, plans/visual-refresh.md): the Work conversation's refreshed look. [static] no browser runs in the suite, so
+    // the stylesheet is read for what the look needs (screenshots were taken by hand with a headless Chrome when it was made)
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const themes = (() => { try { return JSON.parse(page.match(/const THEMES = (\{.*?\});/)[1]); } catch { return {}; } })();
+    const seen = {
+      column: /--read-w: 46rem/.test(page) && /#chat #log \{ padding: 1\.4rem max\(1rem, calc\(\(100% - var\(--read-w\)\) \/ 2\)\)/.test(page),
+      answerNoBubble: /#chat #log \.msg\.claude \{ background: transparent; border: 0; box-shadow: none;/.test(page),
+      serifHeadings: /--serif: /.test(page) && /\.msg\.claude \.md h3 \{ font-family: var\(--serif\)/.test(page),
+      composerCard: /#chat #composer \{ margin: [^}]*border-radius: 1\.25rem; background: var\(--panel\); box-shadow:/.test(page),
+      quietTools: /#chat #log \.tool \{ border-left: 0;[^}]*align-self: flex-start/.test(page),
+      codeTinted: /\.msg pre, \.rmsg pre \{ background: color-mix\(in srgb, var\(--text\) 7%, var\(--bg\)\); color: var\(--text\); \}/.test(page),
+      warm: !!themes.warm && Object.keys(themes.warm).length === 7,
+      themesOnly: !/#chat #log \.msg\.me \{[^}]*#[0-9a-f]{6}/i.test(page),
+    };
+    check('R508', 'the Work conversation reads like a document (plans/visual-refresh.md): one centred reading column, the assistant\'s answers without a bubble, serif headings in answers, quiet tool chips, the composer as a floating card, code blocks tinted from the theme (readable on light themes too), the person\'s bubble from the theme\'s colours only, and a Warm theme in the menu [static: no browser in the suite]',
+      Object.values(seen).every(Boolean), JSON.stringify(seen));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
