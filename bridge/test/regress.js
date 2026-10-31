@@ -316,12 +316,12 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -2815,6 +2815,35 @@ async function run() {
       && /cap/.test(capErr) && !!ckCap.capped && /echo: after the cap/.test(texts(afterCap.events)) && /offline/.test(offErr2) && offProv.online === false,
       `pick ${pick.status}/${pickBad.status}/${pickNo.status} eff ${ckA.effectiveProvider}; info "${info1}"; run "${t1.slice(0, 200)}"; sess ${sess1 === sess2}; board ${boardOut}; pcA ${pcAOut.slice(0, 60)}; teammate "${pcUOut.slice(0, 120)}"; busy ${busyR} stop ${stoppedCode}; usage ${usageA2.of} ${JSON.stringify(usageA2.five_hour)}; relay bad ${relayBad.status} outside ${relayOutside.status}; cap "${capErr.slice(0, 80)}" ${!!ckCap.capped}; after ${/echo: after/.test(texts(afterCap.events))}; off "${offErr2.slice(0, 60)}" ${offProv.online}`);
 
+    // R499 (5.36.0): Headroom between a relayed run and the relay. A stand-in Headroom on the configured address (it forwards
+    // each call to its upstream, this hub's /llm-relay, as the real proxy does, and records what it saw); then it goes away.
+    if (RUST_HUB) {
+      const hrSeen = [];
+      const hrSrv = require('http').createServer((req, res) => {
+        if (req.method === 'GET' && req.url === '/health') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('{"status":"healthy"}'); }
+        const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', async () => {
+          hrSeen.push({ path: req.url, relayHeader: !!req.headers['x-vr-relay'] });
+          const headers = { ...req.headers }; delete headers.host; delete headers['content-length'];
+          try { const up = await fetch(H + '/llm-relay' + req.url, { method: req.method, headers, body: Buffer.concat(chunks) }); res.writeHead(up.status, { 'content-type': up.headers.get('content-type') || 'application/json' }); res.end(Buffer.from(await up.arrayBuffer())); }
+          catch (e) { res.writeHead(502); res.end(String(e.message)); }
+        });
+      });
+      const listening = await new Promise((r) => { hrSrv.once('error', () => r(false)); hrSrv.listen(PORT + 83, '127.0.0.1', () => r(true)); });
+      const via = await chat(A, 'through headroom r499', { fresh: true });
+      const viaText = texts(via.events), viaInfo = (via.events.find((e) => e.type === 'bridge_info') || {}).text || '';
+      const noTok = await fetch(H + '/llm-relay/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const badTok = await fetch(H + '/llm-relay/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vr-relay': 'a'.repeat(48) }, body: '{}' });
+      const outside = await fetch(H + '/llm-relay/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vr-relay': 'a'.repeat(48), 'X-Forwarded-For': '8.8.8.8', 'CF-Connecting-IP': '8.8.8.8' }, body: '{}' });
+      await new Promise((r) => hrSrv.close(r));
+      const direct = await chat(A, 'headroom gone r499', { fresh: true });
+      const directText = texts(direct.events), directInfo = (direct.events.find((e) => e.type === 'bridge_info') || {}).text || '';
+      check('R499', 'Headroom (context compression) on a relayed run: with config headroom.url answering, the run\'s model calls go to Headroom with the run\'s token in x-vr-relay, Headroom sends them on to this hub\'s /llm-relay, which reaches the host\'s login as /llm/<token> does, and the run says it goes through Headroom; /llm-relay refuses a call without a token, with a made-up one and from outside this machine; with Headroom gone the next run goes straight to the relay and still works',
+        listening && /relay=200:upstream ok/.test(viaText) && /through Headroom/.test(viaInfo) && hrSeen.some((x) => /^\/v1\/messages/.test(x.path) && x.relayHeader)
+        && noTok.status === 401 && badTok.status === 401 && outside.status === 401
+        && /relay=200:upstream ok/.test(directText) && !/Headroom/.test(directInfo),
+        `listening ${listening}; via "${viaInfo}" ${(viaText.match(/relay=[^|]*/) || [''])[0]}; headroom saw ${JSON.stringify(hrSeen)}; refusals ${noTok.status}/${badTok.status}/${outside.status}; direct "${directInfo}" ${(directText.match(/relay=[^|]*/) || [''])[0]}`);
+    } else skip('R499', 'Headroom on a relayed run', 'the Rust hub\'s: --rust-hub runs it');
+
     // R147: a host's exact usage numbers (Anthropic's headers) are what people see, and a restart forgets nothing
     const uDir = fs.mkdtempSync(path.join(SCRATCH, 'usage-'));
     const mkUsage = () => require(path.join(BRIDGE, 'usage.js'))({ ROOT: uDir, config: {}, readJson: (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } }, writeJson: (f, v) => fs.writeFileSync(f, JSON.stringify(v)) });
@@ -3636,7 +3665,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const repoCalls = (fakeForgejo.repoCalls || []).join(' | ');
     check('R249', 'start work, the rest: a start naming an unknown or bad project is 400 and opens nothing; the hub\'s own project starts (any case) in the person\'s worktree of it; nobody else sees the session; the Forgejo calls were made as the person only; the page has the Start work panel (project list, clone address box + repos search, new project name, no project) and sends ?session= for the session on screen',
       unk.status === 400 && unkNone.status === 400 && hubS.status === 200 && hubS.data.project === 'VibeRoller' && hubWt && !seenByA && /create tuser-fj\/start-new private/.test(repoCalls) && !/create (?!tuser-fj\/)/.test(repoCalls)
-      && /id="startPanel"/.test(html238) && /id="startProjects"/.test(html238) && /id="startUrl"/.test(html238) && /id="startRepoQ"/.test(html238) && /id="startNewName"/.test(html238) && /id="startNoneGo"/.test(html238) && /id="startWork"/.test(html238) && /\/api\/projects\/repos\?q=/.test(html238) && /\/api\/projects\/create/.test(html238) && /'session=' \+ encodeURIComponent\(SESSION\)/.test(html238),
+      && /id="startPanel"/.test(html238) && /id="startProjects"/.test(html238) && /id="startUrl"/.test(html238) && /id="startRepoQ"/.test(html238) && /id="startNewName"/.test(html238) && /id="startNoneGo"/.test(html238) && /id="spNew"/.test(html238) && /\/api\/projects\/repos\?q=/.test(html238) && /\/api\/projects\/create/.test(html238) && /'session=' \+ encodeURIComponent\(SESSION\)/.test(html238),
       `unknown ${unk.status}/${unkNone.status} · hub project ${hubS.status} ${hubS.data.project} ${hubS.data.dir} · seen by another ${seenByA} · Forgejo calls "${repoCalls.slice(0, 160)}"`);
   } else for (const id of ['R245', 'R246', 'R247', 'R248', 'R249', 'R486']) skip(id, 'one start-work flow (T-238), deploy keys (T-249)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R487 (T-190): the board's archive, for people, for Claude, and still readable by the JavaScript hub
@@ -3702,10 +3731,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     fs.mkdirSync(path.join(app, 'deploy'), { recursive: true }); fs.mkdirSync(path.join(app, 'bridge')); fs.mkdirSync(path.join(app, 'Board')); fs.mkdirSync(path.join(app, 'Notes'));
     fs.writeFileSync(path.join(app, 'versions.json'), '{ "project": "9.9.9" }\n');
     for (const f of ['setup-dev.sh', 'viberoller-dev-hub.service', 'viberoller-dev-autodeploy.service', 'viberoller-dev-autodeploy.timer']) fs.copyFileSync(path.join(MILLS, 'deploy', f), path.join(app, 'deploy', f));
+    for (const f of ['worktree.js', 'common.js']) fs.copyFileSync(path.join(MILLS, 'bridge', f), path.join(app, 'bridge', f));
     fs.writeFileSync(path.join(app, '.gitignore'), 'bridge/*.json\nBoard/\nNotes/\n');
     g(L, 'init', '-q', '--bare', '-b', 'main', bare); g(app, 'init', '-q', '-b', 'main'); g(app, 'add', '-A'); g(app, 'commit', '-q', '-m', 'r494');
     g(app, 'remote', 'add', 'origin', bare); g(app, 'push', '-q', 'origin', 'main'); g(app, 'push', '-q', 'origin', 'main:develop');
-    const liveCfg = JSON.stringify({ port: 7777, publicUrl: 'https://portal.example', rustHub: { enabled: true, backPort: 7779, alone: true }, aiNodes: { pc: 'k' }, allowedOrigins: ['https://x.example'] }, null, 2) + '\n';
+    const liveCfg = JSON.stringify({ port: 7777, worktreeRoot: path.join(L, 'wt'), publicUrl: 'https://portal.example', rustHub: { enabled: true, backPort: 7779, alone: true }, aiNodes: { pc: 'k' }, allowedOrigins: ['https://x.example'] }, null, 2) + '\n';
     fs.writeFileSync(path.join(app, 'bridge', 'config.local.json'), liveCfg);
     fs.writeFileSync(path.join(app, 'bridge', 'auth.json'), '{"users":{"ann":{"hash":"h"}}}'); fs.writeFileSync(path.join(app, 'bridge', 'front-sessions.json'), '{"tok":"ann"}');
     fs.writeFileSync(path.join(app, 'bridge', 'device-locks.json'), '{}'); fs.writeFileSync(path.join(app, 'Board', 'board.json'), '{"tasks":[{"id":"T-1"}]}'); fs.writeFileSync(path.join(app, 'Notes', 'n.md'), 'note r494');
@@ -3714,19 +3744,25 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const D = path.join(L, 'dev', 'app'), has = (p) => fs.existsSync(path.join(D, p));
     const cfg = (() => { try { return JSON.parse(fs.readFileSync(path.join(D, 'bridge', 'config.local.json'), 'utf8')); } catch { return {}; } })();
     const branch = g(D, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim();
+    // a person's worktree made by live in the shared folder; dev's own worktree.js takes it up (a session carries on there)
+    g(app, 'branch', 'develop', 'origin/develop');
+    const wtLive = spawnSync(process.execPath, [path.join(app, 'bridge', 'worktree.js'), 'ensure', 'ann'], { cwd: app, encoding: 'utf8' });
+    const wtDev = spawnSync(process.execPath, [path.join(D, 'bridge', 'worktree.js'), 'ensure', 'ann'], { cwd: D, encoding: 'utf8' });
+    const wtDir = path.join(L, 'wt', 'ann'), wtSame = wtLive.status === 0 && wtDev.status === 0 && wtDev.stdout.includes('Exists: ' + wtDir);
     fs.writeFileSync(path.join(D, 'Board', 'board.json'), '{"tasks":[{"id":"T-1"},{"id":"T-2"}]}'); // a change on dev
     const run2 = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh')], { env, encoding: 'utf8' });
     const kept = fs.readFileSync(path.join(D, 'Board', 'board.json'), 'utf8').includes('T-2'), liveSame = fs.readFileSync(path.join(app, 'bridge', 'config.local.json'), 'utf8') === liveCfg;
     const pair = spawnSync('sh', [path.join(app, 'deploy', 'setup-dev.sh'), 'pair'], { env, encoding: 'utf8' });
     const lc = JSON.parse(fs.readFileSync(path.join(app, 'bridge', 'config.local.json'), 'utf8')), dc = JSON.parse(fs.readFileSync(path.join(D, 'bridge', 'config.local.json'), 'utf8'));
     const secretMode = (() => { try { return (fs.statSync(path.join(L, 'sync.secret')).mode & 0o077) === 0; } catch { return false; } })();
-    check('R494', 'the dev hub install (deploy/setup-dev.sh) clones develop beside live, copies live\'s data once (the board, notes, accounts) but never its sign-in sessions or device unlocks, makes dev\'s settings from live\'s (port 7778, instance dev, its own address, no AI hosts), leaves live\'s files alone, keeps what changed on dev when run again, and only `pair` turns the bridge on for both (one private secret, a graceful restart asked of each)',
+    check('R494', 'the dev hub install (deploy/setup-dev.sh) clones develop beside live, copies live\'s data once (the board, notes, accounts) but never its sign-in sessions or device unlocks, makes dev\'s settings from live\'s (port 7778, instance dev, its own address, no AI hosts, live\'s checkout as the one whose worktrees it uses: a worktree live made in the shared folder is the same worktree for dev), leaves live\'s files alone, keeps what changed on dev when run again, and only `pair` turns the bridge on for both (one private secret, a graceful restart asked of each)',
       run1.status === 0 && branch === 'develop' && has('Board/board.json') && has('Notes/n.md') && has('bridge/auth.json') && !has('bridge/front-sessions.json') && !has('bridge/device-locks.json')
       && cfg.port === 7778 && cfg.instance === 'dev' && cfg.publicUrl === 'https://dev.example' && cfg.rustHub.backPort === 7781 && Object.keys(cfg.aiNodes || {}).length === 0 && !cfg.sync
+      && cfg.hubRepo === app && wtSame
       && run2.status === 0 && kept && liveSame
       && pair.status === 0 && lc.sync && lc.sync.peer === 'http://127.0.0.1:7778' && dc.sync && dc.sync.peer === 'http://127.0.0.1:7777' && lc.sync.secretFile === dc.sync.secretFile && lc.sync.name === 'live' && dc.sync.name === 'dev' && secretMode
       && fs.existsSync(path.join(app, 'bridge', '.restart')) && fs.existsSync(path.join(D, 'bridge', '.restart')),
-      `install ${run1.status} ${(run1.stdout + run1.stderr).trim().split('\n').slice(-2).join(' / ')} · branch ${branch} · sessions copied ${has('bridge/front-sessions.json')} · cfg ${JSON.stringify(cfg).slice(0, 160)} · again ${run2.status} kept ${kept} live unchanged ${liveSame} · pair ${pair.status} ${JSON.stringify(lc.sync)} ${JSON.stringify(dc.sync)} secret private ${secretMode}`);
+      `install ${run1.status} ${(run1.stdout + run1.stderr).trim().split('\n').slice(-2).join(' / ')} · branch ${branch} · sessions copied ${has('bridge/front-sessions.json')} · cfg ${JSON.stringify(cfg).slice(0, 160)} · worktree live ${wtLive.status} ${wtLive.stdout.trim()}${wtLive.stderr.trim()} dev ${wtDev.status} ${wtDev.stdout.trim()}${wtDev.stderr.trim().split('\n').pop()} · again ${run2.status} kept ${kept} live unchanged ${liveSame} · pair ${pair.status} ${JSON.stringify(lc.sync)} ${JSON.stringify(dc.sync)} secret private ${secretMode}`);
   }
   if (RUST_HUB) { // R197: many Work sessions per person: concurrent runs, each in its own worktree; states with their precedence; open / hide / folders / delete (force-stops)
     const ss197 = async () => (await call('/api/work/sessions', U)).data;
@@ -3797,6 +3833,308 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R497 (5.35.0): the prompt enhancer, driven like the page drives it, against the fake Claude
+    const seen = {};
+    await chat(U, 'r497 earlier talk SECRETCTX497');
+    const n0 = (((await call('/api/work/sessions', U)).data.counts) || {}).working || 0;
+    const draft = 'add a dark mode toggle near the settings button\nand maybe keep the old colours as "classic"';
+    const r1 = await call('/api/work/enhance', U, { text: draft });
+    let got = {}; try { got = JSON.parse(String(r1.data.text || '').replace(/^ENHANCED:/, '')); } catch {}
+    seen.status = r1.status; seen.model = r1.data.model;
+    seen.draftWhole = typeof got.input === 'string' && got.input.includes(draft);
+    seen.noHistory = typeof got.input === 'string' && !got.input.includes('SECRETCTX497') && !/Worktree law|VibeRoller team laws/.test(got.input);
+    seen.how = { tools: got.tools, resume: got.resume, mcp: got.mcp, noPersist: got.noPersist, keeps: got.keeps, files: got.files };
+    seen.folderGone = !!got.cwd && !fs.existsSync(got.cwd) && /vr-enhance-/.test(got.cwd);
+    // not a Work run: nothing working meanwhile, and a Work message goes through while a slow enhancement runs; one at a time per person
+    const slow = call('/api/work/enhance', U, { text: 'SLOW r497 a slow one' });
+    await sleep(600);
+    seen.second = (await call('/api/work/enhance', U, { text: 'r497 another' })).status;
+    seen.workingMeanwhile = (((await call('/api/work/sessions', U)).data.counts) || {}).working || 0;
+    seen.chatMeanwhile = (await chat(U, 'r497 while it enhances')).status;
+    seen.slow = (await slow).status;
+    seen.otherPerson = (await call('/api/work/enhance', A, { text: 'r497 the admin at the same time' })).status;
+    seen.empty = (await call('/api/work/enhance', U, { text: '   ' })).status;
+    seen.long = (await call('/api/work/enhance', U, { text: 'x'.repeat(20001) })).status;
+    seen.anon = (await call('/api/work/enhance', null, { text: 'r497' })).status;
+    seen.n0 = n0;
+    check('R497', 'the prompt enhancer: the sparkle button sends the draft to a throw-away Claude that gets the whole draft and nothing of the conversation (no earlier messages, no laws), runs with no tools, no MCP servers, no resume and no session kept, with its own system prompt (keep everything the person said), in an empty folder that is gone afterwards, and answers the rewrite; it is not a Work run (nothing counts as working, a Work message goes through meanwhile) and runs one at a time per person (a second one is refused 409, another person\'s is not); an empty draft is refused 400, one over 20 000 characters 413, and nobody signed out may use it',
+      seen.status === 200 && seen.draftWhole && seen.noHistory && seen.how.tools === '' && !seen.how.resume && !seen.how.mcp && seen.how.noPersist && seen.how.keeps && Array.isArray(seen.how.files) && seen.how.files.length === 0 && seen.folderGone
+      && seen.second === 409 && seen.workingMeanwhile === n0 && seen.chatMeanwhile === 200 && seen.slow === 200 && seen.otherPerson === 200 && seen.empty === 400 && seen.long === 413 && seen.anon === 401,
+      JSON.stringify(seen));
+  } else skip('R497', 'the prompt enhancer (/api/work/enhance)', 'the Rust hub\'s: --rust-hub runs it');
+  { // R498 (5.35.0): the page: the DEV band drifts, Sessions is in the left rail, the sparkle (SVG) button sits under + in the composer with its switch in
+    // Settings, and the genie (the page's own genieIn / genieOut, run with stand-in elements) hides only once the element is in its button
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), sj = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');
+    const rail = (/<nav id="rail">[\s\S]*?<\/nav>/.exec(page) || [''])[0], hdr = (/<div id="shell" hidden>\s*<header>[\s\S]*?<\/header>/.exec(page) || [''])[0], comp = (/<form id="composer">[\s\S]*?<\/form>/.exec(page) || [''])[0];
+    const seen = { drift: /#devBand \{[^}]*animation: devDrift [^}]*\}/.test(page) && /@keyframes devDrift \{ to \{ background-position: -39\.598px 0; \} \}/.test(page),
+      railHasSessions: /id="sessToggle"/.test(rail) && /id="sessCount"/.test(rail), headerHasNot: !!hdr && !/sessToggle/.test(hdr),
+      enhanceBtn: /id="workAttach"[\s\S]*id="enhance"/.test(comp) && /#i-sparkle/.test(comp), setting: /id="setEnhance"/.test(page) && /enhance: \$\('setEnhance'\)\.checked/.test(page),
+      sessionsAnimate: /genieIn\(\$\('sessPanel'\), \$\('sessToggle'\)/.test(sj) && /genieOut\(\$\('sessPanel'\), \$\('sessToggle'\)\)/.test(sj) };
+    const src = (/\/\/ The genie \(5\.35\.0\)[\s\S]*?(?=\nconst paneEl)/.exec(page) || [''])[0];
+    let G = null; const anims = [];
+    const ctx = { matchMedia: () => ({ matches: false }), setTimeout, console };
+    try { G = require('vm').runInNewContext(src + '\n;({ genieIn, genieOut })', ctx); } catch (e) { seen.load = e.message; }
+    const elem = (rect) => ({ hidden: false, style: {}, getBoundingClientRect: () => rect, getClientRects: () => [rect], animate(k, o) { const a = { k, o, cancel() { this.canceled = true; if (this.oncancel) this.oncancel(); } }; anims.push(a); return a; } });
+    if (G) {
+      const pane = elem({ left: 100, top: 100, width: 400, height: 300 }), btn = elem({ left: 0, top: 120, width: 40, height: 40 });
+      let hid = 0; G.genieIn(pane, btn, () => { hid++; });
+      const pull = anims[0]; seen.notYet = hid === 0;
+      seen.intoButton = !!pull && /translate\(-280px, -110px\) scale\(0?\.015\)/.test(pull.k[pull.k.length - 1].transform) && pull.o.fill === 'forwards';
+      if (pull && pull.onfinish) pull.onfinish(); seen.hidAfter = hid === 1;
+      anims.length = 0; G.genieOut(pane, btn); const push = anims.find((a) => a.k && a.k[0] && /scale\(0?\.015\)/.test(a.k[0].transform || ''));
+      seen.outOfButton = !!push && push.k[push.k.length - 1].transform === 'none';
+      let quick = 0; ctx.matchMedia = () => ({ matches: true }); G.genieIn(pane, btn, () => { quick++; }); seen.reducedMotionAtOnce = quick === 1;
+      ctx.matchMedia = () => ({ matches: false }); let gone = 0; const offscreen = { ...btn, getClientRects: () => [] }; G.genieIn(pane, offscreen, () => { gone++; }); seen.noButtonAtOnce = gone === 1;
+    }
+    check('R498', 'the page: the DEV band\'s stripes drift left (one seamless tile a loop), the Sessions button is in the left rail (with its working count) and no longer in the header, the sparkle (prompt enhancer) button sits under + in the composer with its switch in Settings → App, and the genie pulls a hiding pane into its button and hides it only when it is there, bursts a showing one out of its button, and hides at once for reduced motion or a button that is not on screen; the sessions list uses it from its rail button',
+      !!G && Object.entries(seen).every(([k, v]) => k === 'load' || v === true), JSON.stringify(seen));
+  }
+  { // R500 (5.37.0, T-330): fewer header buttons, one New session flow, the Commands panel. The page's own commandNeeds and SLASH
+    // list run on their own (vm); the rest is the page's structure (there is no browser here).
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const hdr = (/<div id="shell" hidden>\s*<header>[\s\S]*?<\/header>/.exec(page) || [''])[0], rail = (/<nav id="rail">[\s\S]*?<\/nav>/.exec(page) || [''])[0];
+    const filesBar = (/<section id="files">\s*<div class="bar">[\s\S]*?<\/div>/.exec(page) || [''])[0], start = (/<div id="startPanel"[\s\S]*?<div id="startMsg"/.exec(page) || [''])[0];
+    const seen = {
+      headerClean: !!hdr && !['startWork', 'newChat', 'newPlanner', 'saveChat', 'workspace', 'pickFolder'].some((id) => hdr.includes(`id="${id}"`)),
+      folderInPane: /id="pickFolder"/.test(filesBar), commandsInRail: /id="cmdToggle"/.test(rail), panel: /id="cmdPanel"/.test(page) && /id="cmdModal" class="modal"/.test(page),
+      plannerInStart: /id="startPlannerGo"/.test(start), noBrowserPrompt: !/window\.(prompt|confirm)\(/.test((/function askCommand[\s\S]*?\n\}\n/.exec(page) || [''])[0]),
+    };
+    const slashSrc = (/const CLEAR_ASK = [\s\S]*?\n\];\n/.exec(page) || [''])[0], needsSrc = (/function commandNeeds\(s\) \{[\s\S]*?\n\}\n/.exec(page) || [''])[0];
+    let C = null; try { C = require('vm').runInNewContext(slashSrc + needsSrc + '; ({ SLASH, commandNeeds })', { $: () => ({}), askCommand: () => Promise.resolve(false), newChatNow() {}, slashModel() {}, hyperwork() {}, openWorkflows() {}, SESSIONS: {}, saveToArchive() {}, showScreen() {}, togglePane() {}, openSettings() {} }); } catch (e) { seen.load = e.message; }
+    if (C) {
+      const by = (c) => C.SLASH.find((x) => x.cmd === c) || {}, need = (c) => C.commandNeeds(by(c));
+      seen.clearAsks = !!need('/clear').confirm && !need('/clear').input && !!need('/new').confirm;
+      const cp = need('/compact'); seen.compactWords = !!cp.input && cp.input.required === false && /remove everything about X, keep all about Y and Z/.test(cp.input.hint);
+      seen.modelPick = Array.isArray(need('/model').choices) && need('/model').choices.includes('opus') && !need('/model').input;
+      seen.fixNeedsWords = !!need('/fix').input && need('/fix').input.required === true;
+      seen.stopRunsNow = !need('/stop').confirm && !need('/stop').input && !need('/stop').choices;
+      seen.everyOneSaysWhat = C.SLASH.every((s) => typeof s.desc === 'string' && s.desc.length > 10);
+    }
+    check('R500', 'the Work page (T-330): the header has no New session, New chat, New planner session, Save session, project picker or Open folder any more; Open folder is in the Folder pane, a planner session starts from the New session panel, and the left rail has Commands: every command says what it does, /clear and /new ask first, /compact takes optional words for its summary ("remove everything about X, keep all about Y and Z"), /model offers a pick, /fix needs its words, /stop runs at once, and the asking is a modal of the page (no browser pop-up)',
+      !!C && Object.entries(seen).every(([k, v]) => k === 'load' || v === true), JSON.stringify(seen));
+  }
+  if (RUST_HUB) { // R501 (5.38.0, T-331 § 1): a session's runs are journalled as they stream, so a run that left the hub's memory
+    // (here: a graceful restart) is shown again from where the page was, and a deleted session's journal goes with it
+    const seen = {};
+    const r1 = await chat(U, 'r501 journal me', { fresh: true });
+    const run1 = (r1.events.find((e) => e.type === 'bridge_run') || {}).id || '';
+    const live = (await call('/api/work/attach?run=' + run1 + '&after=0', U)).data;
+    seen.run = !!run1; seen.liveCount = (live.events || []).length;
+    const pid0 = (await call('/api/status')).data.pid;
+    fs.writeFileSync(path.join(SB, '.restart'), 'r501');
+    let pid1 = pid0; for (let i = 0; i < 80 && (pid1 === pid0 || !pid1); i++) { await sleep(250); pid1 = (await call('/api/status')).data.pid; }
+    seen.restarted = !!pid1 && pid1 !== pid0;
+    const back = (await call('/api/work/attach?run=' + run1 + '&after=0', U)).data;
+    seen.back = { run: back.run === run1, busy: back.busy, journal: back.journal === true, n: (back.events || []).length };
+    seen.sameEvents = (back.events || []).length === seen.liveCount && (back.events || []).some((e) => e.type === 'result' && /r501 journal me/.test(e.result || '')) && (back.events || []).some((e) => e.type === 'bridge_done');
+    const mid = Math.max(1, Math.floor(seen.liveCount / 2));
+    const part = (await call('/api/work/attach?run=' + run1 + '&after=' + mid, U)).data;
+    seen.fromMid = (part.events || []).length === seen.liveCount - mid && part.from === mid && part.next === back.next;
+    seen.otherCannot = ((await call('/api/work/attach?run=' + run1 + '&after=0', A)).data.events || []).length === 0; // another person's session never shows it
+    const jf = path.join(SB, 'profiles', 't-user', 'work-journal.jsonl');
+    const jl = (() => { try { return fs.readFileSync(jf, 'utf8').trim().split('\n').map((l) => JSON.parse(l)); } catch { return []; } })();
+    seen.userLine = jl.some((l) => l.run === run1 && l.user === 'r501 journal me');
+    seen.noPcTool = !jl.some((l) => l.ev && l.ev.type === 'pc_tool');
+    // a session of its own: its journal is next to its file, and deleting the session deletes it
+    const s2 = (await call('/api/work/sessions/new', U, { project: 'VibeRoller' })).data;
+    await chat(U, 'r501 in a session', { fresh: true, session: s2.id });
+    const j2 = path.join(SB, 'profiles', 't-user', 'work-sessions', s2.id + '.jsonl');
+    // (the hub's write buffer writes in batches every 50 ms: the run's lines are on disk within the next batch)
+    for (let i = 0; i < 30 && !(fs.existsSync(j2) && /r501 in a session/.test(fs.readFileSync(j2, 'utf8'))); i++) await sleep(100);
+    seen.ownJournal = fs.existsSync(j2) && /r501 in a session/.test(fs.readFileSync(j2, 'utf8'));
+    seen.del = (await call('/api/work/sessions/delete', U, { id: s2.id })).status;
+    seen.goneWithIt = !fs.existsSync(j2);
+    check('R501', 'a Work run is journalled as it streams: after a hub restart (the run gone from memory) the page joining it from where it was gets the same events from the session\'s journal (from the start, or from half way), another person gets nothing, the person\'s message is journalled with it, the computer-tool calls are not; a session of its own has its own journal, and deleting the session deletes it',
+      seen.run && seen.liveCount > 2 && seen.restarted && seen.back.run && seen.back.busy === false && seen.back.journal && seen.sameEvents && seen.fromMid && seen.otherCannot && seen.userLine && seen.noPcTool && seen.ownJournal && seen.del === 200 && seen.goneWithIt,
+      JSON.stringify(seen));
+  } else skip('R501', 'Work runs journalled, shown again after a restart', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R502 (5.38.0, T-331 § 4): logs, metrics, traces, driven over HTTP
+    const seen = {};
+    const st = await fetch(H + '/api/status'); seen.requestId = /^[0-9a-f]{16}$/.test(st.headers.get('x-request-id') || '');
+    const r1 = await chat(U, 'r502 traced run', { fresh: true });
+    const run1 = (r1.events.find((e) => e.type === 'bridge_run') || {}).id || '';
+    // (metrics are the hub's memory: R501 restarted it, so this check makes its own relayed run: the host's Claude, straight to the relay)
+    await call('/api/model', A, { provider: 'h:test-node/claude', model: 'claude-haiku-5-5' });
+    const rel = await chat(A, 'r502 relayed run', { fresh: true }); seen.relayed = /relay=200:upstream ok/.test(texts(rel.events));
+    await sleep(200);
+    const m = await call('/api/admin/metrics', A), mu = await call('/api/admin/metrics', U);
+    const c = ((m.data.metrics || {}).counters) || {}, sum = (f) => Object.entries(c).filter(([k]) => f(k)).reduce((n, [, v]) => n + v, 0);
+    seen.metrics = { status: m.status, user: mu.status, requests: sum((k) => k.startsWith('vr_http_requests')), runs: sum((k) => k.startsWith('vr_runs_started')), ended: sum((k) => k.startsWith('vr_runs_ended')),
+      relayDirect: sum((k) => k.startsWith('vr_relay_calls') && k.includes('via="direct"')), store: typeof (m.data.store || {}).writes === 'number', latency: Object.keys((m.data.metrics || {}).latency || {}).some((k) => k.startsWith('vr_http{')) };
+    const t = await call('/api/admin/trace?run=' + run1, A), tu = await call('/api/admin/trace?run=' + run1, U), tb = await call('/api/admin/trace?run=../x', A);
+    const lines = t.data.lines || [];
+    seen.trace = { status: t.status, user: tu.status, bad: tb.status, n: lines.length, started: lines.some((l) => l.what === 'run started' && l.user === 't-user'), ended: lines.some((l) => l.what === 'run ended' && typeof l.took_ms === 'number') };
+    const prom = await fetch(H + '/metrics'), promTxt = await prom.text(), promOut = await fetch(H + '/metrics', { headers: { 'X-Forwarded-For': '8.8.8.8' } });
+    seen.prometheus = { status: prom.status, has: /vr_http_requests_total\{/.test(promTxt) && /vr_relay_ms_bucket/.test(promTxt), outside: promOut.status };
+    // no log line carries a secret: no field named like one, and none of this hub's own secrets in any line
+    const logDir = path.join(SB, 'logs'), logs = (() => { try { return fs.readdirSync(logDir).filter((f) => f.endsWith('.jsonl')).map((f) => fs.readFileSync(path.join(logDir, f), 'utf8')).join(''); } catch { return ''; } })();
+    const secretKeys = logs.split('\n').filter(Boolean).some((l) => { try { return Object.keys(JSON.parse(l)).some((k) => /token|secret|password|authorization|cookie|apikey/i.test(k)); } catch { return true; } });
+    seen.logs = { lines: logs.split('\n').filter(Boolean).length, secretKeys, workSecret: logs.includes(WORK_SECRET), nodeSecret: logs.includes(NODE_SECRET), ignored: spawnSync('git', ['check-ignore', '-q', 'bridge/logs/hub-2026-01-01.jsonl'], { cwd: MILLS }).status === 0 };
+    check('R502', 'the hub can be looked into: every answer has a request id; admins see its metrics (requests, Work runs started and ended, relay calls, latencies, the write buffer) and anyone else gets 403; a run\'s trace lists its log lines (started by whom, ended after how long), admins only, a bad run id refused; /metrics gives the Prometheus text on this machine and nothing through a proxy; no log line has a field named like a secret or any of the hub\'s secrets in it; the logs are never shipped (git ignores them)',
+      seen.requestId && seen.metrics.status === 200 && seen.metrics.user === 403 && seen.metrics.requests >= 5 && seen.metrics.runs >= 2 && seen.metrics.ended >= 2 && seen.relayed && seen.metrics.relayDirect >= 1 && seen.metrics.store && seen.metrics.latency
+      && seen.trace.status === 200 && seen.trace.user === 403 && seen.trace.bad === 400 && seen.trace.started && seen.trace.ended
+      && seen.prometheus.status === 200 && seen.prometheus.has && seen.prometheus.outside === 404
+      && seen.logs.lines > 0 && !seen.logs.secretKeys && !seen.logs.workSecret && !seen.logs.nodeSecret && seen.logs.ignored,
+      JSON.stringify(seen));
+  } else skip('R502', 'logs, metrics, traces', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R503 (5.39.0, T-331 § 3): searching Past sessions is a lookup in a word index, not a read of every saved session
+    const seen = {}, ids = [];
+    for (let i = 0; i < 6; i++) ids.push((await call('/api/archive/save', U, { title: 'r503 notes ' + i, transcript: [{ cls: 'me', text: 'r503 common words about the hub ' + i }, { cls: 'claude', text: i === 3 ? 'the zephyrine deployment needs a restart' : 'nothing special here' }] })).data.id);
+    const one = (await call('/api/archive/search', U, { q: 'zephyrine' })).data;
+    seen.one = { found: (one.items || []).map((x) => x.id).join() === ids[3], opened: one.opened, snippet: /zephyrine deployment/.test(JSON.stringify(one.items || [])) };
+    const pre = (await call('/api/archive/search', U, { q: 'zephyr deplo' })).data;
+    seen.prefix = (pre.items || []).length === 1 && pre.opened === 1;
+    const all = (await call('/api/archive/search', U, { q: 'r503 common' })).data;
+    seen.all = { n: (all.items || []).length, opened: all.opened };
+    // a session saved now is found at once; a deleted one is gone at once
+    const later = (await call('/api/archive/save', U, { title: 'r503 late', transcript: [{ cls: 'me', text: 'quintessential marmalade' }] })).data.id;
+    seen.newFound = ((await call('/api/archive/search', U, { q: 'marmalade' })).data.items || []).some((x) => x.id === later);
+    await call('/api/archive/delete', U, { id: ids[3] });
+    const gone = (await call('/api/archive/search', U, { q: 'zephyrine' })).data;
+    seen.deletedGone = (gone.items || []).length === 0 && gone.opened === 0;
+    seen.notMine = ((await call('/api/archive/search', A, { q: 'marmalade' })).data.items || []).length === 0;
+    // the index is a cache next to the saved sessions: not one of them, and built again when it is gone
+    const list = (await call('/api/archive/list', U, {})).data.items || [];
+    seen.notAnEntry = !list.some((x) => !/^[0-9a-f]{16}$/.test(x.id || ''));
+    const ixFile = path.join(SCRATCH, 'Archive', 't-user', '.word-index');
+    seen.indexFile = fs.existsSync(ixFile); try { fs.unlinkSync(ixFile); } catch {}
+    seen.rebuilt = ((await call('/api/archive/search', U, { q: 'marmalade' })).data.items || []).some((x) => x.id === later);
+    for (const id of [...ids, later]) await call('/api/archive/delete', U, { id });
+    check('R503', 'searching Past sessions looks words up in an index: a word only one saved session has opens just that one (with its snippet), the start of a word finds it ("zephyr deplo"), a session saved a moment ago is found and a deleted one is gone at once, another person finds nothing of yours, and the index is a cache next to the saved sessions (never listed as one, built again when it is gone)',
+      seen.one.found && seen.one.opened === 1 && seen.one.snippet && seen.prefix && seen.all.n === 6 && seen.all.opened === 6 && seen.newFound && seen.deletedGone && seen.notMine && seen.notAnEntry && seen.indexFile && seen.rebuilt,
+      JSON.stringify(seen));
+  } else skip('R503', 'the Past sessions word index', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R504 (5.39.0, T-331 § 3): code_find, as a run calls it (the fake Claude through its run's own team relay)
+    const enc = (spec) => 'MACHTOOL=' + Buffer.from(JSON.stringify(spec)).toString('hex');
+    const mach = (r) => { const l = texts(r.events).split('\n').find((x) => x.startsWith('MACH:')); try { return JSON.parse(l.slice(5)); } catch { return []; } };
+    const look = async (q, extra = {}) => { const r = mach(await chat(U, enc([{ route: 'team', session: 'run', body: { name: 'code_find', args: { q, ...extra } } }]), { fresh: true }))[0] || {}; return r.body || {}; };
+    const seen = {};
+    const first = await look('ensure', { limit: 5 }); // (the scratch worktree is the page and the bridge: bridge/worktree.js defines ensure)
+    const hits = ((first.result || {}).hits) || [];
+    seen.first = { ok: first.ok, def: hits[0] && hits[0].def === true && hits[0].path === 'bridge/worktree.js' && /^function ensure\(/.test(hits[0].text), limit: hits.length <= 5, indexed: (first.result || {}).indexed, worktree: /worktrees[\\/]t-user$/.test((first.result || {}).worktree || '') };
+    // a file written in the worktree a moment ago is found; only it is read again
+    const wt = path.join(SCRATCH, 'worktrees', 't-user');
+    fs.writeFileSync(path.join(wt, 'r504-fresh.js'), 'function quokkaMarmot() { return 1; }\n');
+    const fresh = await look('quokkaMarmot');
+    seen.fresh = { ok: fresh.ok, found: (((fresh.result || {}).hits) || []).some((h) => h.path === 'r504-fresh.js' && h.def), readNow: (fresh.result || {}).readNow };
+    fs.unlinkSync(path.join(wt, 'r504-fresh.js'));
+    const gone = await look('quokkaMarmot');
+    seen.gone = gone.ok && (((gone.result || {}).hits) || []).length === 0;
+    const empty = await look('   ');
+    seen.empty = empty.ok === false && typeof empty.error === 'string';
+    // the index lives outside the worktree: git sees nothing new there
+    seen.clean = !execFileSync('git', ['status', '--porcelain'], { cwd: wt, encoding: 'utf8' }).split('\n').some((l) => /index|word-index|code-/.test(l));
+    seen.indexFile = fs.readdirSync(path.join(SB, 'profiles', 't-user', 'index')).some((f) => /^code-[0-9a-f]{16}\.json$/.test(f));
+    const listed = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.some((t) => t.name === 'code_find');
+    check('R504', 'code_find: a run looks a name up in its own worktree and gets the definition first (function ensure in bridge/worktree.js), at most as many lines as it asked for; a file written a moment ago is found (and only it read again), a deleted one is gone, an empty query is refused, and the index lives outside the worktree (git sees nothing new); the tool is in both tool lists',
+      seen.first.ok && seen.first.def && seen.first.limit && seen.first.indexed > 30 && seen.first.worktree && seen.fresh.ok && seen.fresh.found && seen.fresh.readNow === 1 && seen.gone && seen.empty && seen.clean && seen.indexFile && listed,
+      JSON.stringify(seen));
+  } else skip('R504', 'code_find', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R505 (5.40.0): a long Work conversation loads in chunks: the newest ~10 000 characters first, older ones as asked
+    const seen = {};
+    const sid = (await call('/api/work/sessions/new', U, { project: 'VibeRoller' })).data.id;
+    await chat(U, 'r505 seed', { fresh: true, session: sid }); // a Claude session, so it can be saved to Past sessions
+    const turn = (i, n = 1000) => ({ cls: i % 2 ? 'claude' : 'me', text: ('r505 turn ' + i + ' ').padEnd(n, 'x') });
+    const all60 = Array.from({ length: 60 }, (_, i) => turn(i));
+    await call('/api/work/current', U, { session: sid, transcript: all60 });
+    const cur = (q) => call('/api/work/current?session=' + sid + (q || ''), U);
+    const t1 = (await cur('&tail=10000')).data;
+    seen.first = { n: (t1.transcript || []).length, from: t1.transcriptFrom, total: t1.transcriptTotal, last: ((t1.transcript || []).slice(-1)[0] || {}).text?.slice(0, 13) };
+    const h1 = (await call('/api/work/history?session=' + sid + '&before=50&chars=10000', U)).data;
+    seen.older = { n: (h1.items || []).length, from: h1.from, firstIs40: /^r505 turn 40 /.test(((h1.items || [])[0] || {}).text || '') };
+    const h0 = (await call('/api/work/history?session=' + sid + '&before=5&chars=10000', U)).data;
+    seen.oldest = { n: (h0.items || []).length, from: h0.from };
+    // the page holds turns 50..59 and adds one: its save (from 50) keeps every turn the hub had before 50
+    await call('/api/work/current', U, { session: sid, from: 50, transcript: [...(t1.transcript || []), turn(60)] });
+    const full = (await cur()).data.transcript || [];
+    seen.saved = { n: full.length, first: /^r505 turn 0 /.test((full[0] || {}).text || ''), last: /^r505 turn 60 /.test((full[60] || {}).text || '') };
+    // a last turn of 25 000 characters comes whole (cut at a turn, never inside one)
+    await call('/api/work/current', U, { session: sid, from: 61, transcript: [turn(61, 25000)] });
+    const big = (await cur('&tail=10000')).data;
+    seen.big = { n: (big.transcript || []).length, from: big.transcriptFrom, len: (((big.transcript || [])[0] || {}).text || '').length };
+    // Past sessions: saving from a partly loaded page keeps it all; opening it in chunks makes it the session's own first
+    const sv = (await call('/api/archive/save', U, { session: sid, title: 'r505 long', from: 61, transcript: big.transcript })).data;
+    const op = (await call('/api/archive/open', U, { session: sid, id: sv.id, tail: 10000 })).data;
+    seen.archive = { saved: !!sv.id, openN: (op.transcript || []).length, openFrom: op.transcriptFrom, openTotal: op.transcriptTotal };
+    const afterOpen = (await cur()).data.transcript || [];
+    seen.archiveWhole = afterOpen.length === 62 && /^r505 turn 0 /.test((afterOpen[0] || {}).text || '');
+    // an older page (no tail, no from) gets and saves the whole conversation as before
+    seen.oldPage = ((await cur()).data.transcript || []).length === 62 && (await cur()).data.transcriptFrom === undefined;
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    seen.pageAsks = /\/api\/work\/current\?tail=/.test(page) && /from: transcriptFrom/.test(page) && /\/api\/work\/history\?before=/.test(page);
+    await call('/api/archive/delete', U, { id: sv.id }); await call('/api/work/sessions/delete', U, { id: sid });
+    check('R505', 'a long Work conversation loads in chunks: the page gets the newest ~10 000 characters (60 turns of 1 000: the last 10, starting at turn 50 of 60), "Loading history" gets the 10 before those and the oldest few at the end, a save from a page that holds only its newest part keeps every older turn, a 25 000-character last turn comes whole, saving to Past sessions and opening one in chunks keep it all (the opened one becomes the session\'s own, 62 turns), and an older page still gets and saves the whole conversation',
+      seen.first.n === 10 && seen.first.from === 50 && seen.first.total === 60 && seen.first.last === 'r505 turn 59 ' && seen.older.n === 10 && seen.older.from === 40 && seen.older.firstIs40 && seen.oldest.n === 5 && seen.oldest.from === 0
+      && seen.saved.n === 61 && seen.saved.first && seen.saved.last && seen.big.n === 1 && seen.big.from === 61 && seen.big.len === 25000
+      && seen.archive.saved && seen.archive.openN === 1 && seen.archive.openFrom === 61 && seen.archive.openTotal === 62 && seen.archiveWhole && seen.oldPage && seen.pageAsks,
+      JSON.stringify(seen));
+  } else skip('R505', 'the Work conversation in chunks', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R506 (5.41.0): the team chat loads per conversation: its newest ~10 000 characters and everything unread first,
+    // older chunks as the person scrolls up (DMs, channels, groups and # Everyone alike: one rule)
+    const seen = {}, b64 = (n) => crypto.randomBytes(n).toString('base64');
+    const jwk = () => ({ kty: 'EC', crv: 'P-256', x: crypto.randomBytes(32).toString('base64url'), y: crypto.randomBytes(32).toString('base64url') });
+    for (const t of [U, A]) if (!((await call('/api/room/mykey', t)).data || {}).pub) await call('/api/room/mykey', t, { pub: jwk(), backup: { salt: b64(16), iv: b64(12), ct: b64(80) } });
+    const conv = 'dm:t-admin|t-user', mids = [];
+    for (let i = 0; i < 40; i++) {
+      const mid = crypto.randomBytes(16).toString('base64url').slice(0, 22); mids.push(mid);
+      const r = await call('/api/room/send', U, { v: 3, mid, iv: b64(12), ct: b64(1000), to: 't-admin', keys: { 't-user': { iv: b64(12), wk: b64(48) }, 't-admin': { iv: b64(12), wk: b64(48) } } });
+      if (r.status !== 200) { seen.sendFailed = r.status + ' ' + JSON.stringify(r.data).slice(0, 120); break; }
+    }
+    const firstAll = (await call('/api/room/messages?rev=0', A)).data;
+    const ours = (list) => (list || []).filter((m) => mids.includes(m.mid));
+    const bySeq = Object.fromEntries(ours(firstAll.messages).map((m) => [m.mid, m.seq]));
+    // the reader has read up to the 25th of them: the 15 after it are unread
+    const seq25 = (((await call('/api/room/messages?rev=0', U)).data.messages || []).find((m) => m.mid === mids[24]) || {}).seq;
+    await call('/api/room/seen', A, { conv, seq: seq25 });
+    const first = (await call('/api/room/messages?rev=0', A)).data;
+    seen.first = { ours: ours(first.messages).length, older: (first.older || []).includes(conv), lastIsNewest: ours(first.messages).slice(-1)[0]?.mid === mids[39] };
+    // scrolling up: chunk after chunk until there is no more; each oldest first, no message twice, nothing missing
+    let before = Math.min(...first.messages.filter((m) => m.conv === conv || (m.to && [m.from, m.to].sort().join('|') === 't-admin|t-user')).map((m) => m.seq));
+    const got = new Set(ours(first.messages).map((m) => m.mid)); let chunks = 0, more = true, ordered = true, twice = false;
+    while (more && chunks < 20) {
+      const h = (await call('/api/room/history?conv=' + encodeURIComponent(conv) + '&before=' + before + '&chars=10000', A)).data;
+      const list = h.messages || []; chunks++; more = !!h.more;
+      for (let i = 1; i < list.length; i++) if (list[i].seq <= list[i - 1].seq) ordered = false;
+      for (const m of ours(list)) { if (got.has(m.mid)) twice = true; got.add(m.mid); }
+      if (!list.length) break; before = list[0].seq;
+    }
+    seen.history = { chunks, all: mids.every((m) => got.has(m)), ordered, twice };
+    // nobody else reads it; a bad conversation is refused
+    seen.other = (await call('/api/room/history?conv=' + encodeURIComponent(conv), D)).status;
+    seen.bad = (await call('/api/room/history?conv=dm:nobody|zz', A)).status;
+    // a page that asks the old way (no rev) is answered as before
+    seen.oldWay = (await call('/api/room/messages', A)).status;
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    seen.pageAsks = /\/api\/room\/history\?conv=/.test(page) && /roomOlder = new Set\(d\.older/.test(page) && /ingest\(m, false\); \/\/ older: never notified/.test(page);
+    check('R506', 'the team chat loads per conversation: after 40 messages of ~1 000 characters in a DM, the reader who read up to the 25th gets the 15 unread at first (the newest last) and is told there is more; scrolling up loads chunk after chunk, each oldest first, until every message is there, none twice; a third person and a made-up conversation are refused; an older page asking the old way is answered as before; the page asks for history, keeps what each first load says has more, and never notifies about older messages',
+      !seen.sendFailed && seen.first.ours === 15 && seen.first.older && seen.first.lastIsNewest && seen.history.chunks >= 3 && seen.history.all && seen.history.ordered && !seen.history.twice && seen.other === 404 && seen.bad === 404 && seen.oldWay === 200 && seen.pageAsks,
+      JSON.stringify(seen) + ' seqs ' + Object.keys(bySeq).length);
+  } else skip('R506', 'the team chat in chunks', 'the Rust hub\'s: --rust-hub runs it');
+  { // R507 (5.41.1): the hub being away is a badge at the top, never lines in the chat. The page's own badge code runs on a
+    // stand-in page and clock (vm); the request helper is read for what it no longer writes into the chat.
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const src = (/const CONN_GRACE = [\s\S]*?\nfunction connNote\(text\) \{[\s\S]*?\n\}\n/.exec(page) || [''])[0];
+    const apiSrc = (/async function api\(path, opts = \{\}\) \{[\s\S]*?\n\}\n/.exec(page) || [''])[0];
+    let now = 1000; const timers = [], logs = [], els = {};
+    const doc = { getElementById: (id) => els[id] || null, createElement: () => ({ setAttribute() {}, hidden: true, textContent: '', className: '' }), body: { append: (el) => { els[el.id] = el; } } };
+    const ctx = { document: doc, console: { info: (t) => logs.push(t) }, Date: Object.assign(function FakeDate() { return new Date(now); }, { now: () => now }), setTimeout: (f, ms) => { const t = { f, at: now + ms, done: false }; timers.push(t); return t; }, clearTimeout: (t) => { if (t) t.done = true; } };
+    const run = (to) => { now = to; for (const t of timers) if (!t.done && t.at <= now) { t.done = true; t.f(); } };
+    let C = null; try { C = require('vm').runInNewContext(src + '; ({ connState, connNote })', ctx); } catch (e) { var err = e.message; }
+    const seen = { load: !!C || err };
+    if (C) {
+      const badge = () => els.connBadge && !els.connBadge.hidden ? els.connBadge.textContent : '';
+      C.connState(false); run(3000); C.connState(true); run(9000);
+      seen.blip = badge() === '' && logs.length === 2;
+      C.connState(false); run(12000); C.connState(false); run(14000);
+      seen.outage = /Reconnecting/.test(badge());
+      run(18000); C.connState(true); seen.back = badge() === 'Back' && /after 9\.0 s/.test(logs[logs.length - 1]);
+      run(21000); seen.gone = badge() === '';
+      C.connNote('Updated to 9.9.9'); seen.note = /Updated to 9\.9\.9/.test(badge()); run(30000); seen.noteGone = badge() === '';
+    }
+    seen.notInChat = !!apiSrc && !/sys\(['`"]VibeRoller is (restarting|back)/.test(apiSrc) && /connState\(false\)/.test(apiSrc) && /connState\(true\)/.test(apiSrc) && !/sys\(`VibeRoller updated itself/.test(page);
+    check('R507', 'the hub being away never writes into the chat: a blip shorter than 4 s shows nothing (only the browser console logs it), a longer outage shows a "Reconnecting" badge at the top, "Back" when it answers again and then nothing, each outage logged with how long it took; the page updating itself is a short note in the same badge; the request helper writes no restarting / back lines into the chat any more',
+      !!C && seen.blip && seen.outage && seen.back && seen.gone && seen.note && seen.noteGone && seen.notInChat, JSON.stringify(seen));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
@@ -5122,8 +5460,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       nr.servers === 'board+pc+team' && !nr.denied && nr.planPrompt === false && nr.outside === 'written' && nr.inside === 'written',
       `servers ${nr.servers} · denied "${nr.denied}" · perm ${nr.perm} · prompt ${nr.planPrompt} · outside ${nr.outside} · inside ${nr.inside}`);
     const pg = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    check('R269', 'T-275 [static] the page has "New planner session" next to New chat, a visible Planner badge, a way back to a normal session, and its requests carry the planner session',
-      /id="newPlanner"[^>]*>New planner session/.test(pg) && /id="plannerBadge"/.test(pg) && /id="leavePlanner"/.test(pg) && /mode: 'planner'/.test(pg) && /planSession/.test(pg), 'index.html');
+    check('R269', 'T-275 [static] a planner session starts from the New session panel ("A planner session"), the page shows a visible Planner badge, a way back to a normal session, and its requests carry the planner session',
+      /id="startPlannerGo"[^>]*>Start a planner session/.test(pg) && /id="plannerBadge"/.test(pg) && /id="leavePlanner"/.test(pg) && /mode: 'planner'/.test(pg) && /planSession/.test(pg), 'index.html');
     for (const x of ['planner-outside-r265.md', 'plans/planner-inside-r265.md', 'planner-tricky-r265.md']) await call('/api/notes/delete', U, { path: x });
   } else for (const [id, l] of [['R265', 'a planner session\'s run gets no Edit / Write and no pc server'], ['R266', 'a notes_write outside plans/ is refused for a planner session, inside works'], ['R267', 'a pc tool is refused for a planner session'], ['R268', 'a normal session is unchanged'], ['R269', 'the page has New planner session and the Planner badge']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R305 to R309 (T-279 / T-281): a planner session drafts, the person approves, the HUB writes; the fake Claude's "PLANDRAFT" calls plan_draft through the team relay
@@ -5383,8 +5721,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   check('R56', '[static] layout stays inside the viewport: page = viewport (dvh), flex children may shrink, long text wraps, floating windows clamped',
     /height: 100dvh/.test(html) && /html \{ height: 100%; overflow: hidden; \}/.test(html) && /Stay inside the viewport/.test(html)
     && /\.msg \{ min-width: 0; max-width: 100%; overflow-wrap: anywhere/.test(html) && /\.floatWin \{ max-width: calc\(100vw - 16px\)/.test(html));
-  check('R51', '[static] Past sessions naming + auto-save (default 5 min, auto-named, keeps overwriting the same saved session)',
-    /id="sessToggle"/.test(html) && /Saved conversations/.test(html) && />Save session<\/button>/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
+  check('R51', '[static] Past sessions naming + auto-save (default 5 min, auto-named, keeps overwriting the same saved session); saving now is the /save command',
+    /id="sessToggle"/.test(html) && /Saved conversations/.test(html) && /cmd: '\/save'/.test(html) && !/>Archive<\/button>/.test(html) && /id="setAutosave"/.test(html)
     && /autosave: p\.autosave \?\? 5/.test(html) && /saveToArchive\(true, true\)/.test(html) && /if \(auto\) title = autoName\(\)/.test(html));
   const ids48 = ['callBtn', 'callBanner', 'callCore', 'callTiles', 'callMic', 'callCam', 'callLeave', 'callFloat', 'callSideHost', 'audNoise', 'audEcho', 'audAgc', 'callVolume', 'callQuality', 'micBtn', 'recBar', 'recSend', 'recCancel', 'clipVolume', 'clipAuto','rail', 'panes', 'roomPane', 'roomFloat', 'roomCore', 'roomSide', 'settings', 'setNick', 'setColors', 'volMessage', 'volMention', 'volReply', 'setToasts', 'toasts', 'replyBar', 'mentionList', 'railRoomBadge', 'goSettings', 'setTts', 'ttsVolume', 'ttsRate', 'ttsVoice', 'ttsScope', 'ttsStop'];
   check('R48', '[static] Work rail + resizable / minimizable panes + floating chat, settings in menu / chat / rail, tones, toasts, receipts, edit / delete / reply / @',
@@ -6951,7 +7289,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const rGood = await st(tokOf(m2), tk, goodBody);
       const rChunkOther = await fetch(H + '/api/machine/transfer/' + tk + '/chunk?offset=' + (100 << 20) + '&key=' + f1.id + '&path=big.bin', { method: 'POST', headers: { Authorization: 'Bearer ' + tokOf(m3), 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(16) }).then((r) => r.status);
       const withinTicket = Date.now() - tStart < 9500;
-      await sleep(Math.max(0, 11000 - (Date.now() - tStart), 10500 - (Date.now() - tFirstDone)));
+      // the hub counts a ticket's life in whole seconds (expires = now_s + ttl, refused once expires < now_s), so a 10 s ticket
+      // issued at x.9 s lives until about x+11 s; it was issued before the first call ended, so 11.3 s after that end it is
+      // always gone (10.5 s raced with a quick first call: 2026-10-31)
+      await sleep(Math.max(0, 11000 - (Date.now() - tStart), 11300 - (Date.now() - tFirstDone)));
       const rLate = await st(tokOf(m2), tk, goodBody);
       // resume: the same call again carries on at the byte the hub holds, and ends with the sha256 of the whole file
       const second = await one('transfer_get', { path: 'big.bin' }, m2.id), f2 = res(second) || {};
@@ -7428,7 +7769,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     && pid2 !== pid1 && (ws1.transcript || []).map((t) => t.cls + ':' + t.text).join('|') === 'me:hello r135|claude:answer r135|tool:Read file r135' && ws1.archiveId === 'a-r135' && ws1.archiveTitle === 'Title r135'
     && (ws1.queue || []).join('|') === 'first queued r135|second queued r135' && ws1.sendNow === 'send now r135'
     && /function saveQueue\(\)/.test(html) && /x\.onclick = \(\) => \{[^\n]*saveQueue\(\)/.test(html) && /next\.el\.remove\(\); saveQueue\(\); send\(next\.message\)/.test(html) && /sendNowMessage = text;[^\n]*saveQueue\(\)/.test(html)
-    && /restoreFolder\(\); restoreWork\(\);/.test(html) && /function restoreWork\(/.test(html) && /function record\(cls, text\) \{ transcript\.push\(\{ cls, text \}\); saveCurrentSoon\(\); \}/.test(html) && /transcript = items; saveCurrentSoon\(\)/.test(html),
+    && /restoreFolder\(\); restoreWork\(\);/.test(html) && /function restoreWork\(/.test(html) && /function record\(cls, text\) \{ transcript\.push\(\{ cls, text \}\); saveCurrentSoon\(\); \}/.test(html) && /transcript = items;[^\n]*saveCurrentSoon\(\)/.test(html),
     `after restart (pid ${pid1}→${pid2}): ${JSON.stringify(ws1).slice(0, 220)}`);
 
   const pid3 = (await call('/api/status')).data.pid;

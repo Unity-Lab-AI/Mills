@@ -26,6 +26,13 @@ process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', async () => {
   out({ type: 'system', subtype: 'init', session_id: session, model });
   if (input.includes('SLOW')) await sleep(4000);
+  // the prompt enhancer (5.35.0, R497): its own system prompt; it answers with what it was given and how it was started
+  if (argv.includes('--system-prompt')) {
+    const sys = opt('--system-prompt');
+    out({ type: 'result', subtype: 'success', is_error: false, session_id: session, result: 'ENHANCED:' + JSON.stringify({ input, cwd: process.cwd(), files: fs.readdirSync(process.cwd()), tools: argv.includes('--tools') ? opt('--tools') : null,
+      resume: argv.includes('--resume'), mcp: argv.includes('--mcp-config'), noPersist: argv.includes('--no-session-persistence'), keeps: /KEEP EVERYTHING THE PERSON SAID/.test(sys), model }) });
+    return;
+  }
   if (input.includes('PCTOOL')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.pc.env;
     const r = await fetch((process.env.FAKE_CLAUDE_BRIDGE || env.MILLS_BRIDGE) + '/internal/pc-tool', {
@@ -273,7 +280,9 @@ process.stdin.on('end', async () => {
   let relay = '';
   if (process.env.ANTHROPIC_BASE_URL) {
     try {
-      const r = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (process.env.ANTHROPIC_AUTH_TOKEN || ''), 'anthropic-version': '2023-06-01', 'anthropic-beta': 'claude-code-20250219' }, body: JSON.stringify({ model, max_tokens: 50, messages: [{ role: 'user', content: input.slice(0, 80) }] }) });
+      // ANTHROPIC_CUSTOM_HEADERS: "Name: value" lines, sent with every call (as Claude Code does; Headroom's relay token rides in one)
+      const custom = Object.fromEntries((process.env.ANTHROPIC_CUSTOM_HEADERS || '').split('\n').map((l) => l.split(/:\s*/)).filter((x) => x.length >= 2 && x[0].trim()).map(([k, ...v]) => [k.trim(), v.join(':').trim()]));
+      const r = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST', headers: { ...custom, 'content-type': 'application/json', authorization: 'Bearer ' + (process.env.ANTHROPIC_AUTH_TOKEN || ''), 'anthropic-version': '2023-06-01', 'anthropic-beta': 'claude-code-20250219' }, body: JSON.stringify({ model, max_tokens: 50, messages: [{ role: 'user', content: input.slice(0, 80) }] }) });
       const j = await r.json().catch(() => ({}));
       relay = `${r.status}:${((j.content || [])[0] || {}).text || (j.error || {}).message || ''}`;
       const u = r.headers.get('anthropic-ratelimit-unified-5h-utilization');

@@ -7,6 +7,194 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.41.1 — 2026-10-31
+
+PATCH: **no more "VibeRoller is restarting" lines in the chat** (Sponge, 2026-10-31: they piled up while working and
+while idle, and only a reload cleared them). The page's request helper treated any failed request (a dropped long poll,
+a proxy hiccup) as a restart and wrote "VibeRoller is restarting…" and "VibeRoller is back." into the Work chat.
+- The hub being away is now a small badge at the top of the page, shown only when it lasts more than 4 s (a blip
+  shows nothing), "Back" for 2 s when it answers again, then nothing. Every outage goes to the browser console with how
+  long it took. The page updating itself to a new build is a short note in the same badge, not a chat line.
+- The lines that say something about the conversation stay ("Your previous conversation is back", the queue).
+- Check: **R507** (the page's own badge code on a stand-in page and clock: a 2 s blip shows nothing, a 9 s outage shows
+  Reconnecting, then Back, then nothing, both logged; the request helper writes no restarting / back lines). web/index.html 1.34.1.
+
+## 5.41.0 — 2026-10-31
+
+MINOR: **the team chat loads per conversation and fetches its history as you scroll up** (DMs, group DMs, server
+channels and # Everyone alike; Sponge, 2026-10-31).
+- **The first load** (`/api/room/messages?rev=0`, pgm-hcom-internal `first_load`) gives every conversation the reader
+  sees its newest ~10 000 characters (cut at a message; the hub counts the encrypted size, which follows the text) and
+  every message after the reader's seen mark there, so unread counts and mentions stay whole (a conversation never
+  opened: all of it, at most 2 000 at first). Before, it was the newest 500 messages of all conversations together: a
+  busy channel could push a quiet DM's history out entirely. The answer says which conversations have more (`older`).
+- **Scrolling to the top** of a conversation shows "Loading history…" and fetches the next ~10 000 characters of it
+  (`GET /api/room/history?conv=&before=<seq>&chars=`, `more`); the page decrypts them here and draws them above without
+  the view jumping. Older messages are never notified. What was loaded stays in the page.
+- An older page (asking without `rev`, or not knowing `older`) is answered as before; the JavaScript hub keeps its own.
+- **Products:** Hyper Prod Man and ShaDow use the same chat library: when they move to a pgm-libs with this, their
+  pages need the history part too (the web kit), or messages beyond the first window stay on the server.
+- Checks: **R506** (40 DM messages: the 15 unread first, chunk after chunk until all, each oldest first, none twice;
+  another person and a made-up conversation refused; the old way still answered); the unit test
+  `each_conversation_gets_its_newest_window_and_every_unread_message` (a quiet DM is never pushed out by a busy
+  channel; unread beyond the window; never opened = all; a single big message comes whole). web/index.html 1.34.0.
+
+## 5.40.0 — 2026-10-31
+
+MINOR: **a long Work conversation opens at once and loads its history as you scroll up** (Sponge, 2026-10-31: a
+session worked on for weeks must not take minutes to load; none of that is in Claude's context anyway).
+- **The first look:** opening Work, switching to a session or opening a Past session gives the page only the newest
+  ~10 000 characters, cut at a turn (a 20 000-character last turn comes whole). `GET /api/work/current?tail=<chars>`
+  answers that part with `transcriptFrom` / `transcriptTotal`; `/api/archive/open` with `tail` does the same and makes
+  the whole saved conversation the session's own first.
+- **Scrolling up** to the top shows "Loading history…" and draws the next ~10 000 characters above, without the view
+  jumping (`GET /api/work/history?before=<turn>&chars=`). What was loaded stays in the page.
+- **Nothing is cut short:** the page says where its part starts (`from`) when it saves the conversation or saves it to
+  Past sessions, and the hub keeps every older turn it has. An older page (no `tail`, no `from`) gets and saves the
+  whole conversation as before; an older hub answers the page in full (it ignores `tail`).
+- Check: **R505** (60 turns of 1 000 characters: the last 10 first, then 10 before those, then the oldest 5; a save
+  from the newest part keeps all 61; a 25 000-character turn comes whole; Past sessions saved and opened in chunks keep
+  all 62; an older page gets everything). web/index.html 1.33.0.
+
+## 5.39.1 — 2026-10-31
+
+PATCH: **two live/dev bridge fixes found proving the dev hub** (T-329; a read-only look at both hubs' bridge files).
+- **No false conflicts from old lines** (pgm-sync-internal engine). Live counted 87 conflicts that were none: when the
+  peer's journal came again from the start, an older line moved "what the peer has" back, and every later edit of that
+  record then looked like a conflict (and made a "- dev copy" note identical to an earlier version). Each index entry
+  now also keeps the newest order seen from the peer (two more numbers in index.json, add-only; the bridge's own
+  file); a line older than that is old news (nothing changes, no conflict), and "what the peer has" only moves
+  forward, also when the peer acknowledges a record. Check: the unit test
+  `a_journal_delivered_again_from_the_start_is_old_news_not_a_conflict` (it failed on 5.39.0 first: 1 false conflict).
+- **No turn of a saved transcript vanishes** (vr-hub sync.rs, `work.archive`). A session continued on dev while it runs
+  on live is saved by both hubs; the newer save won and the other hub's turns went without a trace (one of Sponge's
+  lines, 2026-10-31: it survives in dev's bridge journal only). The newer save still wins on both hubs, but a losing
+  copy with turns the winner lacks is now set aside in `bridge/sync/lost.jsonl` too. Check: the unit test
+  `a_transcript_saved_on_both_hubs_keeps_the_newer_and_sets_aside_turns_it_lacks`.
+
+## 5.39.0 — 2026-10-30
+
+MINOR: **word indexes: finding is a lookup, not a scan** (T-331 step 3; team note plans/sessions-always-saved.md § 3).
+- **pgm-core `index`** (a library piece): a `DocIndex` knows which words each document holds and answers "which have all of
+  these words", each query word matching the words it begins ("deplo" finds "deploy"; a word in the middle of another,
+  such as "ploy", no longer does). It is kept on disk through the write buffer and brought up to date before each use:
+  only documents whose time or size changed are read again, gone ones leave. A cache: deleted, it is built again.
+- **Past sessions search** (`/api/archive/search`, the sessions list and the `sessions_search` tool) looks the words up
+  in `Archive/…/.word-index` and opens only the sessions it names (the answer says how many: `opened`).
+- **Notes search** (the Notes screen and `notes_list` with `q`) does the same with `Notes/.word-index` (dot files are
+  never listed as notes nor sent over the live/dev bridge).
+- **`code_find`** (a new team tool for Work runs, pgm-collab `codefind`): a name or a few words looked up in the session's
+  worktree (git's files, source and docs, under 1 MB each), the matching lines with a definition (fn / struct / class /
+  function / def / const …) first. The index lives in the person's profile (`index/code-<hash>.json`), never in the
+  worktree. bridge/team-mcp.js 1.6.0 (and the Rust copy of the tool list).
+- The board is held in memory and filtered there (nothing to scan on disk); chat text is end-to-end encrypted, so the
+  hub cannot index it.
+- `bridge/index/` (the default account's code indexes) is git-ignored, here and in the suite's scratch copy.
+- Checks: **R503** (a word only one saved session has opens just that one; a prefix finds it; saved / deleted show at
+  once; another person finds nothing; the index is never listed and is rebuilt when gone), **R504** (`code_find` from a
+  run: the definition first, the limit, a new file found and only it read again, a deleted one gone, an empty query
+  refused, git sees nothing new); unit tests for the index and for `codefind`.
+
+## 5.38.0 — 2026-10-30
+
+MINOR: **Work runs journalled through a write buffer; logs, metrics and traces** (T-331 steps 1 and 2; team note
+plans/sessions-always-saved.md).
+- **The write buffer** (pgm-core `store`, a library piece): one writer thread; appends batched per file (one write + one
+  fsync per batch, every 50 ms), whole-file rewrites coalesced (only the newest content is written); it measures
+  writes per second, queue depth and flush time, calls a spike (4x the 15-minute median, or a deep queue), widens its
+  window to 250 ms meanwhile and says so once, and past 50 000 queued writes makes a writer wait instead of growing.
+  Nothing queued is dropped: `flush()` for readers, and the hub flushes before it exits (a graceful restart loses
+  nothing). `read_lines` skips a torn last line; `read_lines_hot` is the journals' hot cache (only the new tail is read;
+  unused 8 hours, or past 64 MB in all, it goes; the disk always has everything).
+- **Session journals** (`<profile>/work-journal.jsonl`, `work-sessions/<id>.jsonl`): every event of a run, as the hub
+  sends it, with its run id and place, and the person's message, through the buffer. The page already joins a run
+  from where it was after a reload (`/api/work/attach`); a run that left the hub's memory (ended more than 5 minutes
+  ago, or the hub restarted) now comes back from the journal, so nothing a page missed is lost. Computer-tool calls are
+  not journalled; deleting a session deletes its journal; one past 32 MB starts over (one old copy kept).
+- **Logs, metrics, traces** (pgm-core `obs`): JSON lines in `bridge/logs/hub-YYYY-MM-DD.jsonl` (14 days, git-ignored),
+  a field named like a secret never written and long texts cut. Every answer has an `x-request-id`; failures and slow
+  answers (3 s) are logged with it; every request is counted and timed by route; Work runs (started / ended, by
+  result, how long), relay calls (by status, through Headroom or direct) and Headroom use are counted. **Admin →
+  Health** sums it up (and traces a run by its id: every log line about it). `GET /api/admin/metrics`,
+  `GET /api/admin/trace?run=` (admins), `GET /metrics` (Prometheus text, this machine only).
+- Checks: **R501** (a run shown again from the journal after a hub restart, from the start or half way; another person
+  gets nothing; a session's own journal goes with it), **R502** (request ids, metrics, trace, /metrics, no secrets in
+  the logs, the logs never shipped); unit tests for the buffer (order under 50 writers, coalescing, a spike absorbed,
+  back-pressure, torn lines), the hot cache, and obs (secrets out, traces, metrics). The suite's scratch copy ignores
+  `bridge/logs/` and `bridge/sync/` as the real `.gitignore` does. web/index.html 1.32.0.
+
+## 5.37.0 — 2026-10-30
+
+MINOR: **one New session flow, a Commands panel, a lighter Work header** (T-330; Sponge, 2026-10-30). Changes what is
+where on the Work page; nothing on the hub.
+- **Gone from the header:** New session (the sessions list has it), New chat (`/clear` / `/new` do it, and ask first),
+  New planner session (now "5 · A planner session" in the New session panel), Save session (`/save`, and the auto-save;
+  sessions always saved is T-331), the project picker (a session's project is picked when it is made: every session
+  has its own worktree), and Open folder on my PC (now **Open folder** in the Folder pane's own bar).
+- **Commands** (a new rail button under Sessions): every command, searchable, each saying what it does (its tooltip
+  too), here or to Claude. A click runs it. `/clear` and `/new` ask first. One with words opens a modal of the page
+  (never a browser pop-up): `/compact` with optional focus text the summary follows ("remove everything about X, keep
+  all about Y and Z"; empty = the usual compact), `/fix` with its required problem, `/model` with a pick. Typed in
+  the box, `/clear` asks too.
+- Checks: **R500** (the header, the Folder pane, the rail, the panel and the modal; the page's own command list and
+  `commandNeeds` run on stand-ins); R51, R249 and R269 follow the moved buttons. web/index.html 1.31.0, web/sessions.js 1.1.1.
+
+## 5.36.0 — 2026-10-30
+
+MINOR: **Headroom (context compression) for relayed Work runs**, on the dev hub first (Sponge, 2026-10-30).
+[Headroom](https://github.com/headroomlabs-ai/headroom) (Apache 2.0) is a local proxy that shrinks what an agent reads
+(tool output, logs, files, history) before it reaches the model, and keeps the originals retrievable.
+- **How it sits:** a relayed Claude Code run (a host's Claude login, shared as AI only, as every Work run on the server
+  is) normally calls `/llm/<run token>`. With config `headroom.url` (a `127.0.0.1` address) answering its `/health`,
+  the run calls Headroom instead (`ANTHROPIC_BASE_URL`), with its token in `x-vr-relay` (`ANTHROPIC_CUSTOM_HEADERS`).
+  Headroom sends the compressed call on to the hub's new **`/llm-relay`**, which is `/llm/<token>` with the token in
+  that header: same checks (this machine only, a live run token), same host relay. The run's first line says
+  "through Headroom". When Headroom does not answer, the run goes straight to the relay as before. Claude Code stays
+  the Work engine and the client Anthropic sees; nothing about the login changes.
+- **`deploy/setup-headroom.sh`** (no root): uv (checksummed) and `headroom-ai[proxy]` 0.42.0 under `tools/headroom`, the
+  user service `viberoller-dev-headroom` on 127.0.0.1:7787 with the dev hub's `/llm-relay` as its upstream, telemetry
+  off, no subscription polling, no model downloads, then `headroom.url` in the dev hub's settings and a graceful
+  restart of dev. `setup-headroom.sh off` takes it out again. Live has no `headroom` setting: nothing changes there.
+- Jcode PGM as the Work engine was looked at and not built: on the server's Claude (a host's subscription login
+  through the relay) Anthropic refuses jcode's requests, and making it pass as Claude Code is not done (it risks the
+  account). Jcode stays the optional Work harness it was.
+- Checks: **R499** (a stand-in Headroom on the configured address: the run goes through it with its token in the
+  header and reaches the host; `/llm-relay` refuses no token, a made-up one, and calls from outside; with Headroom
+  gone the next run goes straight to the relay). The fake Claude sends `ANTHROPIC_CUSTOM_HEADERS` as Claude Code does.
+
+## 5.35.0 — 2026-10-30
+
+MINOR: **the prompt enhancer, the genie, Sessions in the rail, a moving DEV band** (Sponge, 2026-10-30).
+- **Prompt enhancer** (new: `POST /api/work/enhance`, pgm-ai-internal `enhance.rs`; the Rust hub only, the JavaScript
+  hub is frozen). The sparkle button under + in Work's composer sends the draft to a **throw-away, one-shot** Claude Code
+  call: a fresh empty folder (deleted afterwards), `--tools ""`, no MCP servers, no resume, `--no-session-persistence`,
+  and its own detailed system prompt instead of Claude Code's (`enhance::SYSTEM`: keep everything the person said, add
+  nothing, keep code / paths / quotes exactly, split into tasks, list open points instead of deciding them, answer
+  only the rewritten prompt). Nothing of the conversation goes with it: only the draft and the project's name. It
+  is not a Work run, so it never counts against the session limits, and it runs one at a time per person. It uses
+  the person's own Claude (the session's provider) when Claude Code runs it on this hub, else the hub's own, with
+  the session's model (config `enhanceModel` overrides). The rewrite lands in the box and nothing is sent; the button
+  again brings the original back. Settings → App turns the button off (pref `enhance`, absent = on).
+- **The genie**: a pane minimized from its bar or the left rail is pulled into its rail button (it squeezes, swirls
+  and shrinks into it) and hidden only when it is there; a pane shown from the rail bursts out of its button. The
+  sessions list does the same with its rail button, and Settings / Download with the button that opened them. Off
+  for reduced motion.
+- **Sessions** is a button in the left rail now (with its purple working count), no longer in the Work header.
+- **The DEV band's stripes drift slowly to the left** (one seamless 39.6 px tile per 4.5 s loop).
+- Checks: **R497** (the enhancer against the fake Claude: the whole draft and nothing of the conversation, no tools,
+  no MCP, no resume, no session kept, its own system prompt, an empty folder that is gone afterwards; not a Work run;
+  one at a time; refusals), **R498** (the page, with the page's own genie run on stand-in elements), unit tests in
+  `enhance.rs`. web/index.html 1.30.0, web/sessions.js 1.1.0.
+
+## 5.34.5 — 2026-10-30
+
+PATCH: **a Work session carries on on dev.** Continuing a session on dev.portal said "/srv/apps/sharedwork/VibeRoller/sponge
+exists but is not a git worktree of VibeRoller". Dev's settings (copied from live) name the shared worktree folder,
+but dev took its own checkout as VibeRoller's repo, and the worktrees there are live's checkout's. `deploy/setup-dev.sh`
+now gives dev `hubRepo` = live's checkout (unless live's settings name one), the setting the Rust hub and worktree.js
+already read. The dev hub on the server got the same line by hand on 2026-10-30, then a graceful restart. R494 now has
+dev's own worktree.js take up a worktree live made in the shared folder (it failed on 5.34.4 first).
+
 ## 5.34.4 — 2026-10-29
 
 PATCH: **both auto-deploys deploy again.** The data bridge (5.34.0) keeps its files in `bridge/sync/`, which the

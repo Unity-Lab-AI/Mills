@@ -27,6 +27,7 @@
 //!   jcode home per person, its events mapped onto the page's event shape)
 
 pub mod ai_hosts;
+pub mod enhance;
 pub mod fj;
 pub mod gitpanel;
 pub mod harness;

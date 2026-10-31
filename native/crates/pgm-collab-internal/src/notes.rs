@@ -119,15 +119,25 @@ impl Notes {
         self.ver.send_modify(|v| *v += 1);
         Ok(json!({ "path": parts.join("/") }))
     }
-    /// Every word must appear (any case) in the path or the text; a snippet around the first hit.
-    pub fn search(&self, q: &str) -> Vec<Value> {
+    /// Every word must appear (any case) in the path or the text; a snippet around the first hit. Since 5.39.0 (T-331 § 3)
+    /// a lookup in the notes' word index (`Notes/.word-index`, a cache brought up to date first: only new and changed
+    /// notes are read) names the notes to open; a query word matches the words it begins.
+    pub fn search(&self, q: &str) -> Vec<Value> { self.search_counted(q).0 }
+    /// `search`, and how many notes were opened for it.
+    pub fn search_counted(&self, q: &str) -> (Vec<Value>, usize) {
         let words: Vec<String> = q.to_lowercase().split_whitespace().take(8).map(String::from).collect();
         let mut all = vec![];
         fn walk(n: &Notes, items: Vec<Value>, out: &mut Vec<Value>) { for e in items { if e["type"] == "folder" { let sub: Vec<String> = e["path"].as_str().unwrap_or("").split('/').map(String::from).collect(); walk(n, n.tree(&sub), out); } else { out.push(e); } } }
         walk(self, self.tree(&[]), &mut all);
-        if words.is_empty() { return all.into_iter().map(|mut n| { n["snippet"] = json!(""); n }).collect(); }
+        if words.is_empty() { return (all.into_iter().map(|mut n| { n["snippet"] = json!(""); n }).collect(), 0); }
+        let abs_of = |p: &str| self.abs(&p.split('/').map(String::from).collect::<Vec<_>>());
+        let now: Vec<(String, String)> = all.iter().filter_map(|n| n["path"].as_str()).map(|p| (p.to_string(), pgm_core_internal::index::stamp_of(&abs_of(p)))).collect();
+        let ix = pgm_core_internal::index::shared(&self.dir.join(".word-index"));
+        let want: std::collections::HashSet<String> = { let mut g = ix.lock().unwrap_or_else(|e| e.into_inner()); g.sync(&now, |p| std::fs::read_to_string(abs_of(p)).ok().map(|t| format!("{p}\n{t}"))); g.find(q).into_iter().collect() };
+        pgm_core_internal::obs::count("vr_index_lookups", &[("index", "notes")]);
+        let opened = want.len();
         let mut hits = vec![];
-        for mut n in all {
+        for mut n in all.into_iter().filter(|n| n["path"].as_str().is_some_and(|p| want.contains(p))) {
             let path = n["path"].as_str().unwrap_or("").to_string();
             let text = std::fs::read_to_string(self.abs(&path.split('/').map(String::from).collect::<Vec<_>>())).unwrap_or_default();
             let low = format!("{}\n{}", path, text).to_lowercase();
@@ -141,7 +151,7 @@ impl Notes {
             });
             hits.push(n);
         }
-        hits
+        (hits, opened)
     }
     // ---------- for a sync with another copy of the notes (T-324: a dev hub next to the live one) ----------
     /// Every note as (path, { text, mtime (ms), by }).

@@ -39,7 +39,8 @@
   body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; width: 100%; max-width: 100vw; overflow: hidden; display: flex; flex-direction: column; }
   /* the dev hub's band (T-327; only its hub puts #devBand in the page): always the first row of the page, in its flow, so
      everything else shrinks below it and no control is covered */
-  #devBand { order: -1; flex: 0 0 auto; position: sticky; top: 0; z-index: 80; padding: .2rem .8rem; text-align: center; font: 700 .78rem/1.35 system-ui, sans-serif; letter-spacing: .02em; color: #1a1200; background: repeating-linear-gradient(135deg, #ffc93c 0 14px, #ffb000 14px 28px); border-bottom: 1px solid #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #devBand { order: -1; flex: 0 0 auto; position: sticky; top: 0; z-index: 80; padding: .2rem .8rem; text-align: center; font: 700 .78rem/1.35 system-ui, sans-serif; letter-spacing: .02em; color: #1a1200; background: repeating-linear-gradient(135deg, #ffc93c 0 14px, #ffb000 14px 28px) 0 0 / 39.598px 39.598px; animation: devDrift 4.5s linear infinite; border-bottom: 1px solid #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @keyframes devDrift { to { background-position: -39.598px 0; } } /* the stripes move left, one tile a loop */
   button, input, textarea { font: inherit; color: inherit; }
   button { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: .55rem 1rem; font-weight: 600; cursor: pointer; }
   button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
@@ -379,7 +380,15 @@
   .modal .box > .bar { padding: .75rem 1rem; color: var(--text); }
   /* ── the session list (web/sessions.js, T-287): a sidebar on wide screens, a slide-over on narrow ones ── */
   #sessPanel { flex: none; width: 272px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
-  #sessPanel[hidden], #spScrim[hidden] { display: none; }
+  #sessPanel[hidden], #spScrim[hidden], #cmdPanel[hidden] { display: none; }
+  #cmdPanel { flex: none; width: 272px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  #cmdQ { margin: .4rem .5rem .2rem; width: auto; font-size: .85rem; padding: .35rem .55rem; }
+  #cmdList { flex: 1; overflow: auto; padding: 0 .3rem .7rem; }
+  .cmdItem { display: block; width: 100%; text-align: left; background: transparent; border: 0; color: var(--text); padding: .32rem .45rem; border-radius: 6px; font-weight: 400; }
+  .cmdItem:hover, .cmdItem:focus-visible { background: color-mix(in srgb, var(--text) 8%, transparent); outline: none; }
+  .cmdItem code { font-size: .82rem; } .cmdItem .tag { float: right; font-size: .65rem; color: var(--muted); }
+  .cmdItem small { display: block; font-size: .72rem; color: var(--muted); white-space: normal; }
+  #cmdModal .box { max-width: 34rem; } #cmdModal .setBody { gap: .6rem; } #cmdField { min-height: 5.5rem; resize: vertical; } #cmdErr { color: #e5484d; font-size: .8rem; }
   .spHead { display: flex; align-items: center; gap: .4rem; padding: .45rem .5rem .3rem .7rem; }
   .spHead b { font-size: .9rem; } .spHead .grow { flex: 1; } .spHead button { padding: .25rem .5rem; font-size: .8rem; }
   #spCount { font-size: .74rem; color: var(--muted); padding: 0 .7rem; }
@@ -407,9 +416,9 @@
   .spMenu button { background: transparent; border: 0; color: var(--text); text-align: left; padding: .4rem .65rem; border-radius: 5px; font-weight: 400; font-size: .85rem; }
   .spMenu button:hover, .spMenu button:focus { background: color-mix(in srgb, var(--text) 10%, transparent); outline: none; }
   .spMenu button.danger { color: #e5484d; } .spMenu hr { border: 0; border-top: 1px solid var(--line); margin: .2rem 0; width: 100%; }
-  #sessToggle .count { margin-left: .35rem; background: #9b5cff; color: #fff; border-radius: 999px; font-size: .68rem; padding: 0 .4rem; }
+  #sessToggle .count { background: #9b5cff; } /* in the rail (5.35.0): its badge, purple = working now */
   @media (max-width: 900px) {
-    #sessPanel { position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); z-index: 46; box-shadow: 4px 0 24px rgba(0,0,0,.45); }
+    #sessPanel, #cmdPanel { position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); z-index: 46; box-shadow: 4px 0 24px rgba(0,0,0,.45); }
     #spScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 45; }
   }
   .setBody { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .9rem; font-size: .9rem; }
@@ -508,6 +517,12 @@
   #roomComposer .side { display: flex; flex-direction: column; gap: .35rem; }
   /* attachments (web/attach.js): the + button, the tray of picked files, and how sent ones show */
   .attPlus { align-self: flex-start; padding: .45rem; }
+  #connBadge { position: fixed; top: .5rem; left: 50%; transform: translateX(-50%); z-index: 120; padding: .25rem .8rem; border-radius: 999px; font-size: .8rem; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,.3); pointer-events: none; }
+  #connBadge[hidden] { display: none; } #connBadge.down { color: #f5a524; } #connBadge.up { color: #3fb950; }
+  .histMore { cursor: pointer; text-align: center; opacity: .75; } .histMore:hover { opacity: 1; }
+  .leadCol { display: flex; flex-direction: column; gap: .4rem; align-self: flex-start; }
+  #enhance.working .ic { animation: enhSpin 1.1s linear infinite; } #enhance.undo { color: var(--accent, #9b5cff); border-color: currentColor; }
+  @keyframes enhSpin { to { transform: rotate(360deg); } }
   .attTray { display: flex; flex-wrap: wrap; gap: .35rem; padding: .45rem .75rem 0; }
   .attChip { display: inline-flex; align-items: center; gap: .35rem; max-width: 22rem; padding: .2rem .25rem .2rem .55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: .82rem; }
   .attChip .attName, .attHead .attName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -742,7 +757,7 @@
     header { padding: .4rem .55rem; gap: .4rem; }
     header b { font-size: .95rem; }
     header .folder { flex-basis: 100%; order: 9; font-size: .78rem; }
-    #shell header #pickFolder, #shell header #newChat, #shell header #saveChat, #shell header #sessToggle, #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
+    #shell header #logout { padding: .35rem .55rem; font-size: .8rem; }
     #menu .choices button { width: min(320px, 86vw); }
     .menuWho { max-width: 94vw; }
     /* chat: the conversation list is a drawer over the messages */
@@ -1052,6 +1067,7 @@
       </details>
       <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
       <label class="chk"><input type="checkbox" id="setReopen"> Reopen what I had open after a reload (the previous Work conversation and the chat you were in; off: a reload starts fresh on the menu, nothing is deleted)</label>
+      <label class="chk"><input type="checkbox" id="setEnhance"> Show the prompt enhancer (the sparkle button <svg class="ic"><use href="#i-sparkle"/></svg> under + in Work: a throw-away Claude rewrites your prompt clearer and task by task, keeping everything you said; you read it before sending)</label>
       <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
       <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
       <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
@@ -1246,6 +1262,12 @@
     <div id="adminOut">Generated passwords appear here once. Copy them before leaving this page.</div>
     <!-- PGM Gateway (5.1.1): the products this hub is the gateway for (native/crates/vr-hub gateway.rs); hidden when the
          Rust hub is not in front (the gateway is its own) -->
+    <!-- Health (T-331 § 4): the hub's metrics, its write buffer, and one run's trace (the Rust hub's; hidden on a hub without them) -->
+    <div class="setSection" id="healthBox" hidden><b>Health</b> — what this hub has done since it started: requests and failures, Work runs, relay calls, the write buffer, the slowest routes. A run's trace lists every log line about it (its id is in the Work log's first line).
+      <div class="row"><button class="ghost" id="healthRefresh">Refresh</button><input id="traceRun" placeholder="a run id, to see its trace" spellcheck="false" autocomplete="off" style="max-width:16rem"><button class="ghost" id="traceGo">Trace</button></div>
+      <div id="healthOut"></div>
+      <pre id="traceOut" hidden style="max-height:20rem;overflow:auto;font-size:.75rem"></pre>
+    </div>
     <div class="setSection" id="gwBox" hidden><b>PGM Gateway products</b> — programs of their own (PGM Prod Suit, ShaDow Chat, Hyper Prod Man) whose people sign in the first time with their VibeRoller login and, with AI on, use the AI hosts as themselves. A product's secret goes only to the file shown (for the product on this server), never to this page.
       <table><thead><tr><th>Product</th><th>Served here</th><th>People linked</th><th>Secret file</th><th>Actions</th></tr></thead><tbody id="gwRows"></tbody></table>
       <div class="row">
@@ -1262,16 +1284,9 @@
 <div id="shell" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
-    <button class="ghost" id="sessToggle" title="Show / hide your sessions: the ongoing ones and the saved ones (Past sessions)"><svg class="ic lead"><use href="#i-dms"/></svg>Sessions<span class="count" id="sessCount" hidden title="working now"></span></button>
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
-    <button id="pickFolder">Open folder on my PC</button>
-    <button class="ghost" id="startWork" hidden title="Start work: a new session on a project you have, a repo cloned, a new empty project, or just the AI">New session</button>
-    <button class="ghost" id="newChat" title="Start a fresh conversation">New chat</button>
-    <button class="ghost" id="newPlanner" title="A planner session: Claude only plans onto the board and under plans/ in the notes; it cannot edit files, run builds or use your PC (the hub enforces it)">New planner session</button>
-    <button class="ghost" id="saveChat" title="Save this session now (it is also auto-saved, see Settings)">Save session</button>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
-    <select id="workspace" title="Which project Claude works on, always in your own git worktree of it (branch work/you), so nobody else's changes get in the way. New project starts an empty repo in the team's shared projects area; Pull in a repo clones an existing one by its address." hidden></select>
     <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
       <div id="themeMenu" hidden></div></span>
     <button class="ghost" id="logout">Sign out</button>
@@ -1279,6 +1294,8 @@
   <main id="app">
     <nav id="rail">
       <button type="button" id="railToggle" title="Expand / collapse this bar"><i><svg class="ic"><use href="#i-menu"/></svg></i><span class="lbl">Panels</span></button>
+      <button type="button" id="sessToggle" title="Show / hide your sessions: the ongoing ones and the saved ones (Past sessions)"><i><svg class="ic"><use href="#i-dms"/></svg></i><span class="lbl">Sessions</span><span class="badge count" id="sessCount" hidden title="working now"></span></button>
+      <button type="button" id="cmdToggle" title="Commands: every command with what it does; click one to run it (some ask first, some take a few words)"><i><svg class="ic"><use href="#i-hash"/></svg></i><span class="lbl">Commands</span></button>
       <button type="button" data-pane="files" title="Show / minimize the folder list"><i><svg class="ic"><use href="#i-folder"/></svg></i><span class="lbl">Folder</span></button>
       <button type="button" data-pane="edit" title="Show / minimize the file editor"><i><svg class="ic"><use href="#i-code"/></svg></i><span class="lbl">Editor</span></button>
       <button type="button" data-pane="chat" title="Show / minimize the Claude chat"><i><svg class="ic"><use href="#i-bot"/></svg></i><span class="lbl">Claude</span></button>
@@ -1299,9 +1316,17 @@
       <div id="spList"></div>
     </aside>
     <div id="spScrim" hidden></div>
+    <!-- the commands (5.37.0, T-330): the composer's / commands, each with what it does; a click runs it, asking first or
+         for its words in a modal when it needs that -->
+    <aside id="cmdPanel" hidden aria-label="Commands">
+      <div class="spHead"><b>Commands</b><span class="grow"></span>
+        <button type="button" class="ghost" id="cmdClose" title="Hide the list" aria-label="Hide the list"><svg class="ic"><use href="#i-close"/></svg></button></div>
+      <input id="cmdQ" type="search" placeholder="Search commands…" spellcheck="false" autocomplete="off" aria-label="Search commands">
+      <div id="cmdList"></div>
+    </aside>
     <div id="panes">
     <section id="files">
-      <div class="bar"><button class="ghost" id="up" title="Up one folder" aria-label="Up one folder"><svg class="ic"><use href="#i-up"/></svg></button><span id="cwd">/</span>
+      <div class="bar"><button class="ghost" id="pickFolder" title="Open a folder on your PC: Claude builds and edits there through this page">Open folder</button><button class="ghost" id="up" title="Up one folder" aria-label="Up one folder"><svg class="ic"><use href="#i-up"/></svg></button><span id="cwd">/</span>
         <button class="ghost" id="newFile" title="New file" aria-label="New file"><svg class="ic"><use href="#i-plus"/></svg></button><button class="ghost" id="refresh" title="Refresh" aria-label="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
         <button class="ghost min" data-min="files" title="Minimize (bring it back from the left bar)">—</button></div>
       <div id="tree"></div>
@@ -1340,7 +1365,10 @@
       <div id="hwMenu" hidden></div><!-- the Hyper Workflows matching "/hyperwork <name>" (web/hyperwork.js, T-207) -->
       <div id="workTray" class="attTray" hidden></div>
       <form id="composer">
-        <button type="button" class="ghost attPlus" id="workAttach" title="Attach files, pictures, videos for Claude (or drop / paste them here)" aria-label="Attach files"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <div class="leadCol">
+          <button type="button" class="ghost attPlus" id="workAttach" title="Attach files, pictures, videos for Claude (or drop / paste them here)" aria-label="Attach files"><svg class="ic"><use href="#i-plus"/></svg></button>
+          <button type="button" class="ghost attPlus" id="enhance" title="Enhance this prompt: a throw-away Claude rewrites it clearer and task by task, keeping everything you said (not a session, nothing of this conversation goes with it). You read it before sending; click again to get your own text back." aria-label="Enhance the prompt"><svg class="ic"><use href="#i-sparkle"/></svg></button>
+        </div>
         <input type="file" id="workFiles" multiple hidden>
         <textarea id="input" placeholder="Tell Claude what to build…  (Enter to send, Shift+Enter for a new line)"></textarea>
         <div class="sendCol">
@@ -1367,9 +1395,21 @@
   </main>
 </div>
 
+<div id="cmdModal" class="modal" hidden>
+  <div class="box">
+    <div class="bar"><span id="cmdTitle">Command</span><button class="ghost" id="cmdCancelX">Close</button></div>
+    <div class="setBody">
+      <div id="cmdText"></div>
+      <select id="cmdSel" hidden></select>
+      <textarea id="cmdField" hidden spellcheck="true"></textarea>
+      <div id="cmdErr" role="status"></div>
+      <div class="row"><button id="cmdGo">Run</button><button class="ghost" id="cmdCancel">Cancel</button></div>
+    </div>
+  </div>
+</div>
 <div id="startPanel" class="modal" hidden>
   <div class="box">
-    <div class="bar"><span>Start work</span><button class="ghost" id="startClose">Close</button></div>
+    <div class="bar"><span>New session</span><button class="ghost" id="startClose">Close</button></div>
     <div class="setBody">
       <section class="startCard" id="startPick"><h3>1 · A project you have</h3>
         <small>Each start is a new session in your own worktree of the project (branch work/you).</small>
@@ -1385,6 +1425,9 @@
       <section class="startCard" id="startNone"><h3>4 · No project</h3>
         <small>Just the AI: a scratch folder of your own, no git, nothing shared.</small>
         <div class="row"><button id="startNoneGo">Start with no project</button></div></section>
+      <section class="startCard" id="startPlanner"><h3>5 · A planner session</h3>
+        <small>Claude only plans: tasks on the board and notes under plans/. It cannot edit files, run builds or use your PC (the hub enforces it).</small>
+        <div class="row"><button id="startPlannerGo">Start a planner session</button></div></section>
       <div id="startMsg" role="status"></div>
     </div>
   </div>
@@ -1564,16 +1607,45 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // host switch; everything that touches the computer lives in the Tools window, the app's own page.
 const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
 let reconnecting = false;
+// 5.41.1: the hub being away (a restart, a deploy, a dropped long poll) is shown in a small badge at the top, not written
+// into the chat: only when it lasts more than CONN_GRACE (a blip shows nothing), "Back" for a moment when it returns, and
+// every outage logged to the browser console with how long it took. The chat stays the conversation.
+const CONN_GRACE = 4000;
+const CONN = { downAt: 0, timer: null, hideTimer: null };
+function connBadge(text, cls) {
+  let b = document.getElementById('connBadge');
+  if (!b) { b = document.createElement('div'); b.id = 'connBadge'; b.setAttribute('role', 'status'); document.body.append(b); }
+  b.textContent = text; b.className = cls || ''; b.hidden = !text;
+  return b;
+}
+function connState(up) {
+  if (!up) {
+    if (CONN.downAt) return;
+    CONN.downAt = Date.now(); clearTimeout(CONN.hideTimer);
+    console.info('[VibeRoller] the hub did not answer; retrying (' + new Date().toLocaleTimeString() + ')');
+    CONN.timer = setTimeout(() => connBadge('Reconnecting to VibeRoller…', 'down'), CONN_GRACE);
+    return;
+  }
+  if (!CONN.downAt) return;
+  const took = Date.now() - CONN.downAt, shown = took >= CONN_GRACE;
+  CONN.downAt = 0; clearTimeout(CONN.timer);
+  console.info('[VibeRoller] the hub answers again after ' + (took / 1000).toFixed(1) + ' s');
+  if (shown) { connBadge('Back', 'up'); CONN.hideTimer = setTimeout(() => connBadge(''), 2000); }
+}
+function connNote(text) { // a one-off note in the badge (the page updated itself), gone after a few seconds
+  console.info('[VibeRoller] ' + text);
+  clearTimeout(CONN.hideTimer); connBadge(text, 'up'); CONN.hideTimer = setTimeout(() => connBadge(''), 4000);
+}
 const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '').toLowerCase(); return !/no-store|no-cache/.test(cc) && /max-age=([1-9]\d*)/.test(cc); };
 // The Work session on screen ('' = the first one, as older pages and hubs know it): the calls that belong to one
 // session carry ?session=<id> (T-238: Start work opens a new session of its own).
 let SESSION = '';
-const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|archive\/(save|open)|work\/(current|queue|attach|git|share|draft))(\/|\?|$)/;
+const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|archive\/(save|open)|work\/(current|queue|attach|git|share|draft|enhance|history))(\/|\?|$)/;
 const withSession = (path) => (SESSION && SESSION_PATHS.test(path) && !/[?&]session=/.test(path) ? path + (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(SESSION) : path);
 // Planner mode (T-275): the id of the planner session open here ('' = the normal Work session). Its requests name it (?session=).
 const PLAN_KEY = NS + 'vr.planSession';
 let planSession = (() => { try { return sessionStorage.getItem(PLAN_KEY) || ''; } catch { return ''; } })();
-const PLAN_PATHS = /^\/api\/(chat|stop|work\/(current|queue|questions|attach|git))(\?|$)/;
+const PLAN_PATHS = /^\/api\/(chat|stop|work\/(current|queue|questions|attach|git|enhance|history))(\?|$)/;
 async function api(path, opts = {}) {
   // planner mode (T-275) first: its session wins over the one on screen (T-238)
   if (planSession && PLAN_PATHS.test(path) && !/[?&]session=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(planSession);
@@ -1584,7 +1656,7 @@ async function api(path, opts = {}) {
     let res = null;
     try { res = await fetch(base + path, init); } catch (e) { if (e && e.name === 'AbortError') throw e; } // stopped on purpose (another session was opened): not a restart
     if (res && ![502, 503, 504, 530].includes(res.status)) {
-      if (reconnecting) { reconnecting = false; sys('VibeRoller is back.'); }
+      if (reconnecting) { reconnecting = false; connState(true); }
       // a cacheable answer (Unity's pictures) may be a copy the browser kept from an older build: its build says nothing (R199)
       const hubBuild = cacheable(res) ? '' : res.headers.get('x-vr-version');
       if (hubBuild && me && (me.build || me.version) && hubBuild !== (me.build || me.version)) pageUpdateAvailable(hubBuild, path);
@@ -1593,8 +1665,8 @@ async function api(path, opts = {}) {
     }
     // No bridge behind the address: it is restarting after a code change (back within seconds,
     // same address) or the admin restarted its window (new address, found again via the gist).
-    if (attempt >= 40) { reconnecting = false; throw new Error('VibeRoller is not responding — ask the admin to check it.'); }
-    if (!reconnecting) { reconnecting = true; sys('VibeRoller is restarting — waiting for it to come back…'); }
+    if (attempt >= 40) { reconnecting = false; connState(true); connBadge('VibeRoller is not responding', 'down'); throw new Error('VibeRoller is not responding — ask the admin to check it.'); }
+    if (!reconnecting) { reconnecting = true; connState(false); }
     await sleep(3000);
     if (attempt % 4 === 0) { try { base = await findBridge(true); } catch {} }
   }
@@ -1670,7 +1742,7 @@ function restoreAfterUpdate() { // the end of enter(): back where you were, with
   if (!s || Date.now() - s.at > 10 * 60e3) return;
   if (s.screen && $(s.screen) && !(s.screen === 'admin' && !me.admin) && !(APP_MODE && s.screen !== 'room')) showScreen(s.screen);
   for (const [id, v] of Object.entries(s.drafts || {})) if ($(id) && !$(id).value) $(id).value = v;
-  sys(`VibeRoller updated itself to ${me.version}. Everything you had open is back.`);
+  connNote(`Updated to ${me.version}: everything you had open is back`);
 }
 async function json(path, opts) {
   const res = await api(path, opts);
@@ -1932,6 +2004,7 @@ $('login').addEventListener('submit', async (e) => {
 });
 async function enter() {
   me = await json('/api/check');
+  showEnhance();
   // the desktop app updates itself with this session (updates need an account); an older app has no such command
   if (NATIVE && token) NATIVE.call('set_session', { token }).catch(() => {});
   // app settings follow the account: its saved theme wins over this browser's; an account without one adopts the browser's
@@ -2278,7 +2351,8 @@ function showModels(d) {
 // The project picker (Work header): every project in the shared projects area, VibeRoller first; each is worked on in
 // your own worktree of it. The two last entries start a new project or pull in an existing repo by its address.
 function renderProjects() {
-  const sel = $('workspace');
+  const sel = $('workspace'); // the header picker went in 5.37.0 (T-330): a session's project is picked when it is made
+  if (!sel) return;
   if (!me || !Array.isArray(me.projects)) { sel.hidden = true; return; }
   sel.textContent = '';
   const opt = (v, l, title) => { const o = document.createElement('option'); o.value = v; o.textContent = l; if (title) o.title = title; sel.append(o); };
@@ -2288,7 +2362,7 @@ function renderProjects() {
   sel.value = me.project === '(none)' ? '__none' : (me.project || 'VibeRoller');
   sel.hidden = false;
 }
-$('workspace').onchange = async () => {
+if ($('workspace')) $('workspace').onchange = async () => {
   const sel = $('workspace'), want = sel.value, before = me.project === '(none)' ? '__none' : (me.project || 'VibeRoller');
   if ((want === '__new' || want === '__clone') && SESSIONS_OK) { sel.value = before; return startOpen(); } // one start flow (T-238)
   try {
@@ -2382,7 +2456,7 @@ async function startSession(body) {
   } catch (err) { startMsg(err.message, true); }
   startBusy = false;
 }
-$('startWork').onclick = startOpen; $('startClose').onclick = startClose;
+$('startClose').onclick = startClose;
 $('startPanel').addEventListener('click', (e) => { if (e.target === $('startPanel')) startClose(); });
 $('startCloneGo').onclick = () => startClone($('startUrl').value.trim(), $('startCloneName').value.trim());
 $('startUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('startCloneGo').click(); });
@@ -2407,7 +2481,34 @@ let busy = false, fresh = false, sendNowMessage = null;
 const queue = []; // { message, el }
 function updateStopButton() { $('stop').textContent = busy && $('input').value.trim() ? 'Send now' : 'Stop'; }
 function setBusy(b) { busy = b; $('send').textContent = b ? 'Queue' : 'Send'; $('stop').hidden = !b; updateStopButton(); gitRefresh(); }
-$('input').addEventListener('input', () => { updateStopButton(); SESSIONS.typing($('input').value); }); // each session keeps its own draft (web/sessions.js)
+$('input').addEventListener('input', () => { updateStopButton(); SESSIONS.typing($('input').value); enhanceLabel(); }); // each session keeps its own draft (web/sessions.js)
+
+// The prompt enhancer (5.35.0): the sparkle button sends the draft to a throw-away one-shot Claude on the hub (/api/work/enhance: no tools, no
+// history, not a session, never counts against the session limits) and puts the clearer, task-by-task version in the box.
+// Nothing is sent: the person reads it first. The button again, while the box still holds that version, brings the original back.
+let enhanceUndo = null; // { before, after }
+function showEnhance() { $('enhance').hidden = prefs().enhance === false; }
+function enhanceLabel() {
+  const b = $('enhance'), undo = !!enhanceUndo && $('input').value === enhanceUndo.after;
+  if (!undo && enhanceUndo && $('input').value !== enhanceUndo.after) enhanceUndo = null;
+  b.classList.toggle('undo', undo);
+  b.setAttribute('aria-label', undo ? 'Bring my own text back' : 'Enhance the prompt');
+}
+$('enhance').onclick = async () => {
+  const box = $('input'), b = $('enhance');
+  if (b.classList.contains('working')) return;
+  if (enhanceUndo && box.value === enhanceUndo.after) { box.value = enhanceUndo.before; enhanceUndo = null; box.dispatchEvent(new Event('input')); box.focus(); return; }
+  const text = box.value;
+  if (!text.trim()) { box.focus(); return; }
+  b.classList.add('working');
+  try {
+    const d = await json('/api/work/enhance', { method: 'POST', body: JSON.stringify({ text }) });
+    if (box.value !== text) { sys('The enhanced prompt came back after you changed the box, so your text was left as it is.'); return; }
+    enhanceUndo = { before: text, after: d.text };
+    box.value = d.text; box.dispatchEvent(new Event('input')); box.focus(); box.setSelectionRange(0, 0); box.scrollTop = 0;
+  } catch (e) { sys('Could not enhance the prompt: ' + e.message, true); }
+  finally { b.classList.remove('working'); enhanceLabel(); }
+};
 
 // Git at a glance (T-240): your own worktree of this Work session. Stage / commit are plain git; Update and Merge only
 // run bridge/worktree.js on the hub (Forgejo first, the version law), and everything waits while Claude is working.
@@ -2882,17 +2983,18 @@ function handleEvent(ev) {
 
 // ── Slash commands: "/" at the start of the Claude box lists the common ones. Most are passed through to
 // Claude Code exactly as typed (it understands them); a few act on VibeRoller itself ("here").
+const CLEAR_ASK = 'Clear this conversation? Claude starts fresh on your next message. The session, its worktree and its files stay as they are.';
 const SLASH = [
-  { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context)', args: '[focus]' },
-  { cmd: '/clear', desc: 'Start a fresh conversation (same as New chat)', local: () => $('newChat').click() },
-  { cmd: '/new', desc: 'Start a fresh conversation', local: () => $('newChat').click() },
+  { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context). With words after it, the summary follows them', args: '[focus]', hint: 'Optional: what the summary keeps or drops, e.g. "remove everything about X, keep all about Y and Z". Empty = the usual compact.' },
+  { cmd: '/clear', desc: 'Clear the conversation: Claude starts fresh on your next message (the session, its worktree and its files stay)', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/clear', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
+  { cmd: '/new', desc: 'Same as /clear: a fresh conversation in this session', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/new', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
   { cmd: '/stop', desc: 'Stop the current reply', local: () => $('stop').click() },
-  { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', local: (a) => slashModel(a) },
+  { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', choices: ['opus', 'sonnet', 'haiku', 'fable', 'default'], local: (a) => slashModel(a) },
   { cmd: '/hyperwork', desc: 'Send a prompt through a Hyper Workflow (it runs on the hub; type a name to see the list)', args: '<name> <prompt>', local: (a) => hyperwork(a) },
   { cmd: '/hw', desc: 'Short for /hyperwork', args: '<name> <prompt>', local: (a) => hyperwork(a) },
   { cmd: '/workflows', desc: 'Open the Workflows screen: the list, then the visual editor (/workflows <name> opens that one)', args: '[name]', local: (a) => openWorkflows(a) },
   { cmd: '/share', desc: 'Share / stop sharing this Work session with everyone', local: () => $('shareBtn').click() },
-  { cmd: '/save', desc: 'Save this session to Past sessions now (the session list shows it)', local: () => { SESSIONS.show(); saveToArchive(false); } },
+  { cmd: '/save', desc: 'Save this session to Past sessions now (it is auto-saved too; the session list shows it)', local: () => { SESSIONS.show(); saveToArchive(false); } },
   { cmd: '/sessions', desc: 'Open your sessions: ongoing and saved, with search', local: () => SESSIONS.show(true) },
   { cmd: '/board', desc: 'Open the team board', local: () => showScreen('board') },
   { cmd: '/tasks', desc: 'Show / hide the Tasks pane', local: () => togglePane('tasks') },
@@ -2912,6 +3014,73 @@ const SLASH = [
   { cmd: '/docs', desc: 'Ask Claude to update the docs for the change', args: '[what]' },
 ];
 let slashIdx = 0;
+
+// ---------- Commands (5.37.0, T-330): the rail's list of every command; a click runs it ----------
+// What a command needs before it runs: a yes (confirm), words (input: required for <args>, optional for [args]), or a pick.
+function commandNeeds(s) {
+  const a = String(s.args || '');
+  return { confirm: s.confirm || null, choices: s.choices || null, input: !s.choices && a ? { required: a.startsWith('<'), hint: s.hint || '' } : null };
+}
+// Runs a command with its words: a VibeRoller one here, the rest goes to Claude (queued while it is busy).
+function runCommand(s, words) {
+  const w = String(words || '').trim();
+  if (s.local) return s.local(w);
+  const msg = s.cmd + (w ? ' ' + w : '');
+  if (busy || slotWait) enqueue(msg); else send(msg);
+}
+// The command modal: resolves true / false for a confirm, the words (or null when cancelled) for an input or a pick.
+function askCommand(s) {
+  const n = commandNeeds(s);
+  return new Promise((resolve) => {
+    const box = $('cmdModal'), field = $('cmdField'), sel = $('cmdSel');
+    $('cmdTitle').textContent = s.cmd; $('cmdErr').textContent = '';
+    $('cmdText').textContent = n.confirm || s.desc || '';
+    field.hidden = !n.input; sel.hidden = !n.choices; field.value = '';
+    field.placeholder = n.input ? (n.input.hint || (n.input.required ? 'What it needs' : 'Optional')) : '';
+    if (n.choices) { sel.textContent = ''; for (const c of n.choices) { const o = document.createElement('option'); o.value = o.textContent = c; sel.append(o); } }
+    $('cmdGo').textContent = n.confirm ? 'Yes, ' + s.cmd.slice(1) : 'Run';
+    const done = (v) => { box.hidden = true; $('cmdGo').onclick = $('cmdCancel').onclick = $('cmdCancelX').onclick = null; field.onkeydown = null; resolve(v); };
+    $('cmdGo').onclick = () => {
+      if (n.confirm) return done(true);
+      if (n.choices) return done(sel.value);
+      if (n.input && n.input.required && !field.value.trim()) { $('cmdErr').textContent = 'This one needs a few words.'; field.focus(); return; }
+      done(field.value.trim());
+    };
+    $('cmdCancel').onclick = $('cmdCancelX').onclick = () => done(n.confirm ? false : null);
+    field.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('cmdGo').click(); if (e.key === 'Escape') $('cmdCancel').click(); };
+    box.hidden = false;
+    setTimeout(() => (n.input ? field : n.choices ? sel : $('cmdGo')).focus(), 0);
+  });
+}
+// A click in the list: a confirm-only local command asks inside its own action; the rest ask for what they need first.
+async function pickCommand(s) {
+  const n = commandNeeds(s);
+  if (s.local && n.confirm) return s.local('');
+  if (n.input || n.choices) { const w = await askCommand(s); if (w === null) return; return runCommand(s, w); }
+  runCommand(s, '');
+}
+function renderCommands() {
+  const q = $('cmdQ').value.trim().toLowerCase(), list = $('cmdList'); list.textContent = '';
+  const hits = SLASH.filter((s) => !q || s.cmd.includes(q) || s.desc.toLowerCase().includes(q));
+  for (const s of hits) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'cmdItem'; b.title = s.desc + (s.hint ? '\n' + s.hint : '');
+    const c = document.createElement('code'); c.textContent = s.cmd + (s.args ? ' ' + s.args : '');
+    const t = document.createElement('span'); t.className = 'tag'; t.textContent = s.local ? 'here' : 'to Claude';
+    const d = document.createElement('small'); d.textContent = s.desc;
+    b.append(c, t, d); b.onclick = () => pickCommand(s); list.append(b);
+  }
+  if (!hits.length) { const e = document.createElement('div'); e.className = 'spNote'; e.textContent = 'No command matches.'; list.append(e); }
+}
+function setCommandsOpen(on) {
+  const p = $('cmdPanel'), btn = $('cmdToggle');
+  if (!on) { btn.classList.remove('on'); return genieIn(p, btn, () => { p.hidden = true; }); }
+  p.hidden = false; btn.classList.add('on'); renderCommands(); genieOut(p, btn); setTimeout(() => $('cmdQ').focus(), 0);
+}
+$('cmdToggle').onclick = () => setCommandsOpen($('cmdPanel').hidden);
+$('cmdClose').onclick = () => setCommandsOpen(false);
+$('cmdQ').addEventListener('input', renderCommands);
+$('cmdQ').addEventListener('keydown', (e) => { if (e.key === 'Escape') { if ($('cmdQ').value) { $('cmdQ').value = ''; renderCommands(); } else setCommandsOpen(false); } });
+
 function slashQuery() { const v = $('input').value; const m = /^\/(\S*)$/.exec(v); return m ? m[1].toLowerCase() : null; }
 function slashMatches() { const q = slashQuery(); return q === null ? [] : SLASH.filter((s) => s.cmd.slice(1).startsWith(q)); }
 function renderSlash() {
@@ -2984,7 +3153,8 @@ $('stop').onclick = () => {
   if (text) { sendNowMessage = text; $('input').value = ''; updateStopButton(); saveQueue(); sys('Stopping Claude — your message goes next.'); }
   stopRequested = true; api('/api/stop', { method: 'POST' }).catch(() => {});
 };
-$('newChat').onclick = () => {
+// /clear (and /new): the conversation starts over; the session, its worktree and its files stay. Asked first (T-330).
+function newChatNow() {
   if (busy) return sys('Stop Claude before starting a new chat.', true);
   fresh = true; log.innerHTML = ''; setConversation(null, null, []);
   if (usageData) { usageData.context = null; paintUsage(); } // a new session starts with an empty context window
@@ -3008,7 +3178,8 @@ async function enterPlanner(id) {
 }
 // with the session list (T-287) a planner session is one of your sessions: opened like any other, the one on screen goes on
 const PLANNER_HELLO = 'Planner mode: Claude only plans. It can read, search the board, notes and chat, ask you, add board tasks and write notes under plans/. It cannot edit files, run builds or use your PC.';
-$('newPlanner').onclick = async () => {
+$('startPlannerGo').onclick = async () => {
+  startClose();
   try {
     const d = await json('/api/work/sessions/new', { method: 'POST', body: JSON.stringify({ mode: 'planner', title: 'Planner' }) });
     await SESSIONS.refresh();
@@ -3090,17 +3261,46 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 // ---------- past sessions (saved Claude conversations, stored on the host PC in VibeRoller/Archive) ----------
 let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSaveAt = 0;
+// 5.40.0: the page holds a conversation from turn `transcriptFrom` on (the newest ~10 000 characters at first, more as it
+// is scrolled up); the hub keeps the rest, and every save says where the page's part starts
+const HISTORY_CHARS = 10000;
+let transcriptFrom = 0, historyBusy = false;
+function historyMark() { // the line above the oldest turn on screen while older ones are on the hub
+  let m = $('histMore');
+  if (transcriptFrom <= 0) { if (m) m.remove(); return null; }
+  if (!m) { m = document.createElement('div'); m.id = 'histMore'; m.className = 'sys histMore'; m.onclick = () => loadOlder(); }
+  m.textContent = historyBusy ? 'Loading history…' : 'Earlier messages: scroll up (or click) to load them';
+  if (log.firstChild !== m) log.insertBefore(m, log.firstChild);
+  return m;
+}
+async function loadOlder() { // the next chunk above, drawn without moving what is on screen
+  if (historyBusy || transcriptFrom <= 0) return;
+  historyBusy = true; historyMark();
+  const gen = workGen, at = transcriptFrom;
+  try {
+    const d = await json('/api/work/history?before=' + at + '&chars=' + HISTORY_CHARS);
+    if (gen !== workGen || at !== transcriptFrom) return; // another conversation came on screen meanwhile
+    const items = d.items || [], first = $('histMore') ? $('histMore').nextSibling : log.firstChild, n0 = log.children.length, h0 = log.scrollHeight, top0 = log.scrollTop;
+    for (const t of items) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
+    const added = [...log.children].slice(n0);
+    for (const el of added) log.insertBefore(el, first);
+    log.scrollTop = top0 + (log.scrollHeight - h0);
+    transcript = items.concat(transcript); savedLen += items.length; transcriptFrom = d.from || 0;
+  } catch (err) { sys('Could not load earlier messages: ' + err.message, true); }
+  finally { historyBusy = false; historyMark(); }
+}
+log.addEventListener('scroll', () => { if (transcriptFrom > 0 && log.scrollTop < 300) loadOlder(); });
 // The conversation on screen is also kept on the hub (bridge/work-state.js) a moment after every change, so
 // opening Work later (after a reload, a restart, on another device) puts it back and Claude continues it.
 let currentSaveTimer = null;
 let currentDirty = false; // a change not on the hub yet (opening another session saves it first)
 function saveCurrentSoon() { currentDirty = true; clearTimeout(currentSaveTimer); currentSaveTimer = setTimeout(saveCurrent, 800); }
-function saveCurrent() { clearTimeout(currentSaveTimer); currentDirty = false; return me ? json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle, run: curRun }) }).catch(() => {}) : Promise.resolve(); }
+function saveCurrent() { clearTimeout(currentSaveTimer); currentDirty = false; return me ? json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, from: transcriptFrom, archiveId, archiveTitle, run: curRun }) }).catch(() => {}) : Promise.resolve(); }
 function record(cls, text) { transcript.push({ cls, text }); saveCurrentSoon(); }
 async function restoreWork() { // opening Work: the previous conversation, then the queue (which starts running)
   // which session is open (hubs with many sessions): the page keeps to it; older hubs have only the one
   try {
-    const l = await json('/api/work/sessions?archived=1'); SESSIONS_OK = Array.isArray(l.sessions); $('startWork').hidden = !SESSIONS_OK;
+    const l = await json('/api/work/sessions?archived=1'); SESSIONS_OK = Array.isArray(l.sessions);
     const cur = (l.sessions || []).find((x) => x.id === l.current);
     if (cur) {
       if (l.current !== l.primary) SESSION = l.current; me.project = cur.project; renderProjects();
@@ -3110,7 +3310,7 @@ async function restoreWork() { // opening Work: the previous conversation, then 
     const want = SESSIONS.linked(); // a link to a session (#work/<id>, "Copy link") opens it
     if (want && want !== SESSIONS.onScreen() && (l.sessions || []).some((x) => x.id === want)) return openWorkSession(want);
     if (cur && !$('input').value) $('input').value = SESSIONS.draftOf(l.current);
-  } catch { $('startWork').hidden = true; }
+  } catch {}
   if (!(await loadConversation(false))) return;
   // Work opens with nothing going on: offer the ways to start (once per page load; "Close" keeps this session)
   if (SESSIONS_OK && !startAuto && !busy && !transcript.length && !queue.length && !sendNowMessage) { startAuto = true; startOpen(); }
@@ -3119,12 +3319,12 @@ async function restoreWork() { // opening Work: the previous conversation, then 
 // its queue (which starts running), a reply still going. False = the hub did not answer.
 async function loadConversation(switching, noWait) {
   const gen = workGen;
-  let s; try { s = await json('/api/work/current'); } catch { return false; }
+  let s; try { s = await json('/api/work/current?tail=' + HISTORY_CHARS); } catch { return false; }
   if (gen !== workGen) return false;
   // T-241: with "Reopen what I had open" off the conversation stays on the hub (the next reload with it on brings it back) but a reload starts fresh
   if ((s.transcript || []).length && !transcript.length && (switching || prefs().reopen)) {
     for (const t of s.transcript) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
-    archiveId = s.archiveId; archiveTitle = s.archiveTitle; transcript = s.transcript; savedLen = s.transcript.length;
+    archiveId = s.archiveId; archiveTitle = s.archiveTitle; transcript = s.transcript; savedLen = s.transcript.length; transcriptFrom = s.transcriptFrom || 0; historyMark();
     if (archiveTitle) label($('convTitle'), 'archive', archiveTitle); else $('convTitle').textContent = switching ? SESSIONS.titleOf(SESSIONS.byId(SESSIONS.onScreen()) || {}) : 'Unsaved session';
     fresh = false;
     if (!switching) sys('Your previous conversation is back' + (s.updatedAt ? ' (last change ' + new Date(s.updatedAt).toLocaleString() + ')' : '') + ': Claude continues it. "New chat" starts a fresh one.');
@@ -3164,7 +3364,7 @@ async function openWorkSession(id) {
     planSession = s.mode === 'planner' ? id : ''; try { if (planSession) sessionStorage.setItem(PLAN_KEY, planSession); else sessionStorage.removeItem(PLAN_KEY); } catch {}
     paintPlanner();
     await SESSIONS.release(id); // the list stops following it in the background (its conversation is saved first)
-    log.innerHTML = ''; queue.length = 0; sendNowMessage = null; transcript = []; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
+    log.innerHTML = ''; queue.length = 0; sendNowMessage = null; transcript = []; transcriptFrom = 0; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
     curRun = null; runEnded = false; fresh = false; slotWait = false; hideThinking(); setBusy(false);
     for (const q of openQuestions.values()) { try { q.stop(); } catch {} } openQuestions.clear(); openPlans.clear();
     $('convTitle').textContent = SESSIONS.titleOf(s);
@@ -3178,8 +3378,8 @@ async function openWorkSession(id) {
   await loadConversation(true, true); // (a reply still going is followed to its end without holding up the caller)
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && me && !$('shell').hidden) restoreQuestions(); });
-function setConversation(id, title, items) {
-  archiveId = id; archiveTitle = title; transcript = items; saveCurrentSoon();
+function setConversation(id, title, items, from) {
+  archiveId = id; archiveTitle = title; transcript = items; transcriptFrom = from || 0; saveCurrentSoon(); historyMark();
   savedLen = items.length; // what is on screen now counts as saved (a fresh chat, an opened session, or a just-deleted one)
   if (!id && !items.length) lastSaveAt = 0;
   if (title) label($('convTitle'), 'archive', title); else $('convTitle').textContent = 'Unsaved session';
@@ -3202,11 +3402,11 @@ async function saveToArchive(quiet, auto) {
     }
   }
   try {
-    const d = await json('/api/archive/save', { method: 'POST', body: JSON.stringify({ id: archiveId, title, transcript }) });
+    const d = await json('/api/archive/save', { method: 'POST', body: JSON.stringify({ id: archiveId, title, transcript, from: transcriptFrom }) });
     setConversation(d.id, d.title, transcript);
     savedLen = transcript.length; lastSaveAt = Date.now();
     if (!quiet) sys('Saved to Past sessions as "' + d.title + '".');
-    else if (auto && savedLen && !$('saveChat').dataset.autoNoted) { $('saveChat').dataset.autoNoted = '1'; sys('Auto-saved to Past sessions as "' + d.title + '" (Settings → Auto-save).'); }
+    else if (auto && savedLen && !autoSaveNoted) { autoSaveNoted = true; sys('Auto-saved to Past sessions as "' + d.title + '" (Settings → Auto-save).'); }
   } catch (err) { if (!auto) sys('Could not save: ' + err.message, true); } // an auto-save before Claude has answered just waits for the next round
 }
 setInterval(() => { // Settings → Auto-save (default every 5 minutes; 0 = off)
@@ -3232,18 +3432,18 @@ function markText(el, text, words) { // the matched words highlighted, built fro
 async function openConversation(id) {
   if (busy) return sys('Stop Claude before opening another conversation.', true);
   try {
-    const entry = await json('/api/archive/open', { method: 'POST', body: JSON.stringify({ id }) });
+    const entry = await json('/api/archive/open', { method: 'POST', body: JSON.stringify({ id, tail: HISTORY_CHARS }) });
     log.innerHTML = ''; fresh = false;
     for (const t of entry.transcript) {
       if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text);
     }
-    setConversation(entry.id, entry.title, entry.transcript);
+    setConversation(entry.id, entry.title, entry.transcript, entry.transcriptFrom);
     sys('Continuing "' + entry.title + '" — Claude remembers this conversation.');
     refreshUsage();
     scroll(); SESSIONS.refresh();
   } catch (err) { sys(err.message, true); }
 }
-$('saveChat').onclick = () => saveToArchive(false);
+let autoSaveNoted = false; // the first auto-save of a page says so once
 SESSIONS.init(); // the session list (web/sessions.js, T-287): the Sessions button, its search, a session's link
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && me && !$('shell').hidden && SESSIONS_OK) SESSIONS.seen(); });
 $('convTitle').onclick = () => { if (archiveId) renameConversation(archiveId, archiveTitle); else saveToArchive(false); };
@@ -3450,7 +3650,7 @@ const snippet = (rec) => (rec.m.deleted ? 'message deleted'
   : (rec.audio ? 'Voice clip (' + clipLen(rec.audio.s || 0) + ')' + (rec.text ? ' ' : '') : '') + rec.text.replace(/\s+/g, ' ').slice(0, 90));
 function prefs() {
   const p = (me && me.prefs) || {};
-  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, reopen: p.reopen !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, // off by default
+  return { nick: p.nick || '', color: p.color ?? null, toasts: p.toasts !== false, reopen: p.reopen !== false, autosave: p.autosave ?? 5, autoScroll: p.autoScroll === true, enhance: p.enhance !== false, // autoScroll off by default, the enhancer on
     sound: { on: true, message: 50, mention: 70, reply: 70, set: 'patterns', ...(p.sound || {}), call: (p.sound && p.sound.call) ?? (p.sound && p.sound.mention) ?? 70, board: (p.sound && p.sound.board) ?? (p.sound && p.sound.mention) ?? 70, ask: (p.sound && p.sound.ask) ?? 80 },
     tts: { all: true, unity: false, on: false, volume: 80, rate: 100, voice: '', scope: 'all', ask: false, ...(p.tts || {}) }, // all = master switch
     ask: { auto: true, minutes: 10, activity: true, ...(p.ask || {}) }, // when the AI asks (T-248): wait N minutes without you, then its recommended answers; any activity waits
@@ -3521,7 +3721,7 @@ async function decryptMsg(m) {
 }
 
 function resetRoomData() {
-  msgs.clear(); roomRev = 0; roomLoaded = false; seenMap = {}; replyTo = null; editingSeq = null;
+  msgs.clear(); roomRev = 0; roomLoaded = false; roomOlder = new Set(); seenMap = {}; replyTo = null; editingSeq = null;
   if ($('roomLog')) $('roomLog').innerHTML = '';
   updateUnread();
 }
@@ -3592,14 +3792,45 @@ function selectConv(conv) {
   $('roomInput').placeholder = conv === 'room' ? 'Message everyone…  (Enter to send, Shift+Enter for a new line, @ to mention)'
     : isGuildConv(conv) ? (GUILDS.canPost(conv) ? 'Message ' + convLabel(conv) + '…  (its members only; @unity to call her here)' : convLabel(conv) + ' is an announcement channel: only people with the announce permission post here.')
     : 'Private message to ' + nickOf(convPeer(conv)) + '…  (only the two of you can read it)';
-  const log = $('roomLog'); log.innerHTML = '';
-  for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
-  scrollNew(log, true); // opening a conversation: its newest message
+  drawConv(conv);
+  scrollNew($('roomLog'), true); // opening a conversation: its newest message
   for (const b of $('roomSide').querySelectorAll('.cv')) b.classList.toggle('on', b.querySelector('[data-conv-badge]').dataset.convBadge === conv);
   const sv = GUILDS.serverOf(conv) || (GUILDS.isDmConv(conv) ? GUILDS.DM : ''); // a DM or group DM opens the Direct messages view
   if (GUILDS.isDmConv(conv)) store.set('mills.lastDm.' + me.username, conv);
   if (sv && GUILDS.state.server !== sv) { GUILDS.state.server = sv; GUILDS.render(); }
   updateUnread(); markSeen(); renderCallBanner(); renderShareBanner(); renderPresence(); GUILDS.renderMembers(); GUILDS.renderPins(); renderAppUser(); // the app's user panel (web/app.js) shows the latest name / picture
+}
+// A conversation's messages, oldest first, with the "earlier messages" line on top while the hub has older ones (5.41.0)
+function drawConv(conv) {
+  const log = $('roomLog'); log.innerHTML = '';
+  for (const rec of [...msgs.values()].sort((a, b) => a.m.seq - b.m.seq)) { rec.el = null; if (convOfMsg(rec.m) === conv) renderMsg(rec, true); }
+  roomHistMark();
+}
+// 5.41.0: the first load gives each conversation its newest ~10 000 characters (and everything unread); scrolling to the
+// top of one loads the next chunk of it from the hub (/api/room/history), decrypts it here and draws it above
+const ROOM_HISTORY_CHARS = 10000;
+let roomOlder = new Set(), roomHistBusy = false;
+$('roomLog').addEventListener('scroll', () => { if (roomOlder.has(currentConv) && $('roomLog').scrollTop < 300) loadOlderRoom(); });
+function roomHistMark() {
+  const log = $('roomLog'); if (!log) return;
+  let m = $('roomHistMore');
+  if (!roomOlder.has(currentConv)) { if (m) m.remove(); return; }
+  if (!m) { m = document.createElement('div'); m.id = 'roomHistMore'; m.className = 'sys histMore'; m.onclick = () => loadOlderRoom(); }
+  m.textContent = roomHistBusy ? 'Loading history…' : 'Earlier messages: scroll up (or click) to load them';
+  if (log.firstChild !== m) log.insertBefore(m, log.firstChild);
+}
+async function loadOlderRoom() {
+  const conv = currentConv, log = $('roomLog');
+  if (roomHistBusy || !roomOlder.has(conv) || !log) return;
+  const first = [...msgs.values()].filter((r) => convOfMsg(r.m) === conv).reduce((a, r) => Math.min(a, r.m.seq), Infinity);
+  roomHistBusy = true; roomHistMark();
+  try {
+    const d = await json('/api/room/history?conv=' + encodeURIComponent(conv) + (Number.isFinite(first) ? '&before=' + first : '') + '&chars=' + ROOM_HISTORY_CHARS);
+    for (const m of d.messages || []) if (!msgs.has(m.seq)) await ingest(m, false); // older: never notified
+    if (!d.more) roomOlder.delete(conv);
+    if (currentConv === conv) { const h0 = log.scrollHeight, top0 = log.scrollTop; drawConv(conv); log.scrollTop = top0 + (log.scrollHeight - h0); }
+  } catch (err) { if (/Unknown conversation/.test(err.message)) roomOlder.delete(conv); }
+  finally { roomHistBusy = false; roomHistMark(); }
 }
 function recolorChat() { if (!$('roomLog')) return; renderConvList(); selectConv(currentConv); }
 
@@ -3629,7 +3860,9 @@ async function applyRoom(d) {
   statusMap = Object.fromEntries((d.status || []).map((p) => [p.user, p])); // plans/presence.md: label, working, accepting, dnd, text (newer hubs)
   if (typeof PRESENCE !== 'undefined') PRESENCE.update(d.status); // web/presence.js (T-261): badges, hover cards, Team now (an older hub sends no status: nothing shown)
   onlineSet = new Set((d.presence || []).filter((p) => p.online).map((p) => p.user)); typingList = d.typing || []; renderPresence();
+  if (!roomLoaded) roomOlder = new Set(d.older || []); // the first load says which conversations have more on the hub (newer hubs)
   for (const m of d.messages) await ingest(m, roomLoaded);
+  if (!roomLoaded) roomHistMark();
   roomLoaded = true;
   if (pinBootstrap) { pinBootstrap = false; savePins(); } // first load done: from now on only pinned keys count
   refreshReceipts(); updateUnread(); markSeen();
@@ -4492,10 +4725,54 @@ function bindSplit(split, left, right) {
     split.addEventListener('pointermove', move); split.addEventListener('pointerup', up);
   });
 }
-function togglePane(id) { layout.show[id] = !layout.show[id]; applyLayout(); }
+// The genie (5.35.0), a black-hole take on the macOS one: what hides is pulled into the button that brings it back (it
+// squeezes, swirls and shrinks into it), what shows bursts out of the button that opened it. The element itself moves
+// (no copy, so it keeps its looks); a hidden one is hidden only when it is inside the button. Off for reduced motion,
+// for a button that is not on screen, and while the same element is already moving (the newest click wins).
+const GENIE_MS = 440;
+const genieOff = (el, btn) => !el || !btn || !el.animate || matchMedia('(prefers-reduced-motion: reduce)').matches || !btn.getClientRects().length;
+function genieAim(el, btn) { const a = el.getBoundingClientRect(), b = btn.getBoundingClientRect(); return { w: a.width, dx: b.left + b.width / 2 - (a.left + a.width / 2), dy: b.top + b.height / 2 - (a.top + a.height / 2) }; }
+function genieKick(btn, delay) { btn.animate([{ transform: 'none' }, { transform: 'scale(1.28)', boxShadow: '0 0 0 5px rgba(155,92,255,.35)' }, { transform: 'none', boxShadow: '0 0 0 0 rgba(155,92,255,0)' }], { duration: 280, delay: delay || 0, easing: 'ease-out' }); }
+function genieStop(el) { if (el && el._genie) { const g = el._genie; el._genie = null; g.cancel(); } }
+// into the button; done() hides it (at once when there is nothing to animate)
+function genieIn(el, btn, done) {
+  genieStop(el);
+  if (genieOff(el, btn) || el.hidden) return done();
+  const { w, dx, dy } = genieAim(el, btn); if (!w) return done();
+  const g = el.animate([
+    { transform: 'none', opacity: 1, filter: 'none', borderRadius: '0px' },
+    { offset: .35, transform: `translate(${dx * .18}px, ${dy * .18}px) scale(.82, .6) rotate(-3deg)`, opacity: 1, filter: 'blur(.5px)', borderRadius: '14px' },
+    { transform: `translate(${dx}px, ${dy}px) scale(.015) rotate(-14deg)`, opacity: .15, filter: 'blur(5px)', borderRadius: '50%' },
+  ], { duration: GENIE_MS, easing: 'cubic-bezier(.55,0,.8,.3)', fill: 'forwards' });
+  el._genie = g; el.style.zIndex = '60'; el.style.pointerEvents = 'none';
+  g.onfinish = () => { if (el._genie !== g) return; el._genie = null; el.style.zIndex = el.style.pointerEvents = ''; done(); g.cancel(); };
+  g.oncancel = () => { el.style.zIndex = el.style.pointerEvents = ''; };
+  genieKick(btn, GENIE_MS * .8);
+}
+// out of the button (call it once the element is shown)
+function genieOut(el, btn) {
+  genieStop(el);
+  if (genieOff(el, btn) || el.hidden) return;
+  const { w, dx, dy } = genieAim(el, btn); if (!w) return;
+  genieKick(btn);
+  const g = el.animate([
+    { transform: `translate(${dx}px, ${dy}px) scale(.015) rotate(14deg)`, opacity: 0, filter: 'blur(6px)', borderRadius: '50%' },
+    { offset: .55, transform: `translate(${dx * .1}px, ${dy * .1}px) scale(.9, .78) rotate(-2deg)`, opacity: 1, filter: 'blur(1px)', borderRadius: '16px' },
+    { offset: .82, transform: 'scale(1.015)', filter: 'none', borderRadius: '4px' },
+    { transform: 'none', opacity: 1, filter: 'none', borderRadius: '0px' },
+  ], { duration: GENIE_MS + 60, easing: 'cubic-bezier(.2,.75,.25,1)' });
+  el._genie = g; g.onfinish = () => { if (el._genie === g) el._genie = null; };
+}
+const paneEl = (id) => (id === 'roomPane' && layout.roomMode === 'float' ? $('roomFloat') : $(id));
+const paneBtn = (id) => document.querySelector(`#rail [data-pane="${id}"]`);
+function togglePane(id) {
+  if (layout.show[id] && !paneEl(id)._genie) return genieIn(paneEl(id), paneBtn(id), () => { layout.show[id] = false; applyLayout(); });
+  if (layout.show[id]) { genieStop(paneEl(id)); return; } // clicked again while it was going: it stays
+  layout.show[id] = true; applyLayout(); genieOut(paneEl(id), paneBtn(id));
+}
 function showRoomInWork() { if (!layout.show.roomPane) { layout.show.roomPane = true; applyLayout(); } }
 document.querySelectorAll('#rail [data-pane]').forEach((b) => { b.onclick = () => togglePane(b.dataset.pane); });
-document.querySelectorAll('[data-min]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); layout.show[b.dataset.min] = false; applyLayout(); }; });
+document.querySelectorAll('[data-min]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); const id = b.dataset.min; if (layout.show[id]) genieIn(paneEl(id), paneBtn(id), () => { layout.show[id] = false; applyLayout(); }); }; });
 $('railToggle').onclick = () => { layout.railOpen = !layout.railOpen; applyLayout(); };
 $('roomFloatBtn').onclick = () => { layout.roomMode = 'float'; applyLayout(); };
 $('floatDock').onclick = () => { layout.roomMode = 'dock'; applyLayout(); };
@@ -4537,7 +4814,7 @@ function openSettings() {
   $('setSound').checked = P.sound.on; $('volMessage').value = P.sound.message; $('volMention').value = P.sound.mention; $('volReply').value = P.sound.reply;
   $('volCall').value = P.sound.call; $('volBoard').value = P.sound.board; $('soundSet').value = P.sound.set === 'classic' ? 'classic' : 'patterns';
   $('volAsk').value = P.sound.ask; $('setAskAuto').checked = P.ask.auto !== false; $('setAskMin').value = P.ask.minutes; $('setAskActivity').checked = P.ask.activity !== false; $('setAskTts').checked = !!P.tts.ask;
-  $('setToasts').checked = P.toasts; $('setReopen').checked = P.reopen; $('setAutoScroll').checked = P.autoScroll;
+  $('setToasts').checked = P.toasts; $('setReopen').checked = P.reopen; $('setAutoScroll').checked = P.autoScroll; $('setEnhance').checked = P.enhance;
   $('setTtsAll').checked = P.tts.all; $('setTtsUnity').checked = P.tts.unity;
   $('setTts').checked = P.tts.on; $('ttsVolume').value = P.tts.volume; $('ttsRate').value = P.tts.rate; $('ttsScope').value = P.tts.scope;
   $('ttsRateVal').textContent = (P.tts.rate / 100).toFixed(1) + '×';
@@ -4917,7 +5194,7 @@ document.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => play
 $('saveSettings').onclick = async () => {
   try {
     const d = await json('/api/prefs', { method: 'POST', body: JSON.stringify({
-      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, reopen: $('setReopen').checked, autoScroll: $('setAutoScroll').checked, autosave: Number($('setAutosave').value),
+      nick: $('setNick').value, color: pickedColor, toasts: $('setToasts').checked, reopen: $('setReopen').checked, autoScroll: $('setAutoScroll').checked, enhance: $('setEnhance').checked, autosave: Number($('setAutosave').value),
       sound: { on: $('setSound').checked, message: Number($('volMessage').value), mention: Number($('volMention').value), reply: Number($('volReply').value), call: Number($('volCall').value), board: Number($('volBoard').value), ask: Number($('volAsk').value), set: $('soundSet').value },
       ask: { auto: $('setAskAuto').checked, minutes: Math.max(1, Math.min(1440, Math.round(Number($('setAskMin').value) || 10))), activity: $('setAskActivity').checked },
       tts: { ask: $('setAskTts').checked, all: $('setTtsAll').checked, unity: $('setTtsUnity').checked, on: $('setTts').checked, volume: Number($('ttsVolume').value), rate: Number($('ttsRate').value), voice: $('ttsVoice').value, scope: $('ttsScope').value },
@@ -4929,7 +5206,7 @@ $('saveSettings').onclick = async () => {
     document.querySelectorAll('#callTiles .tile:not(.self)').forEach(applyPersonAudio);
     if (call.mic) call.mic.applyConstraints(audioConstraints()).catch(() => {}); // new noise / echo settings apply to the live call too
     document.querySelectorAll('.rmsg audio').forEach((a) => { a.volume = d.prefs.clips ? d.prefs.clips.volume / 100 : 0.9; });
-    me.prefs = d.prefs;
+    me.prefs = d.prefs; showEnhance();
     if (!prefs().tts.on || !prefs().tts.all) ttsStop();
     if (!voiceOn()) stopVoice();
     showVoice();
@@ -4937,9 +5214,10 @@ $('saveSettings').onclick = async () => {
     await refreshMembers(); selectConv(currentConv);
   } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }
 };
-$('closeSettings').onclick = () => { $('settings').hidden = true; };
+$('closeSettings').onclick = () => { const from = settingsFrom; settingsFrom = null; genieIn($('settings').querySelector('.box'), from, () => { $('settings').hidden = true; }); };
 $('settings').onclick = (e) => { if (e.target.id === 'settings') $('settings').hidden = true; };
-document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = openSettings; });
+let settingsFrom = null; // the button Settings came out of (it goes back into it)
+document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = () => { settingsFrom = b; openSettings(); genieOut($('settings').querySelector('.box'), b); }; });
 // ── Downloads (Settings → Downloads): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by the
 // hub from the code it runs. Every Download button (menu, Work's bar, the chat app) opens Settings on this tab. ──
 function openDownloads() {
@@ -5036,7 +5314,7 @@ async function renderProducts(box, note) {
     sec.append(d);
   }
 }
-document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = openDownloads; });
+document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = () => { settingsFrom = b; openDownloads(); genieOut($('settings').querySelector('.box'), b); }; });
 document.querySelector('[data-settab="downloads"]').addEventListener('click', renderDownloads);
 window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) applyLayout(); });
 
@@ -5203,7 +5481,33 @@ function confirmButton(label, fn) {
   };
   return b;
 }
+// Health (T-331 § 4): GET /api/admin/metrics, summed into a few lines a person reads; a run's trace on demand
+const sumBy = (o, f) => Object.entries(o || {}).filter(([k]) => f(k)).reduce((n, [, v]) => n + (typeof v === 'number' ? v : 0), 0);
+function healthLines(d) {
+  const c = (d.metrics || {}).counters || {}, l = (d.metrics || {}).latency || {}, st = d.store || {};
+  const h = Math.floor((d.uptimeSec || 0) / 3600), m = Math.floor(((d.uptimeSec || 0) % 3600) / 60);
+  const slow = Object.entries(l).filter(([k]) => k.startsWith('vr_http{')).sort((a, b) => b[1].p95Ms - a[1].p95Ms).slice(0, 5).map(([k, v]) => `${(k.match(/route="([^"]*)"/) || [])[1]} p95 ${v.p95Ms} ms (${v.count})`);
+  return [
+    `${d.instance === 'dev' ? 'Dev' : 'Live'} hub ${d.version}, up ${h} h ${m} min`,
+    `Requests: ${sumBy(c, (k) => k.startsWith('vr_http_requests'))}, failed (5xx) ${sumBy(c, (k) => k.startsWith('vr_http_requests') && k.includes('status="5xx"'))}`,
+    `Work runs: started ${sumBy(c, (k) => k.startsWith('vr_runs_started'))}, ok ${sumBy(c, (k) => k.startsWith('vr_runs_ended') && k.includes('"ok"'))}, failed ${sumBy(c, (k) => k.startsWith('vr_runs_ended') && k.includes('"failed"'))}, stopped ${sumBy(c, (k) => k.startsWith('vr_runs_ended') && k.includes('"stopped"'))}`,
+    `Relay calls: ${sumBy(c, (k) => k.startsWith('vr_relay_calls'))} (not 200: ${sumBy(c, (k) => k.startsWith('vr_relay_calls') && !k.includes('status="200"'))}), through Headroom ${sumBy(c, (k) => k.startsWith('vr_relay_calls') && k.includes('via="headroom"'))}`,
+    `Write buffer: ${st.writes || 0} writes in ${st.batches || 0} batches, ${st.queued || 0} queued now (most ${st.maxQueued || 0}), spikes ${st.spikes || 0}${st.inSpike ? ' (one now)' : ''}, errors ${st.errors || 0}${st.lastError ? ' (last: ' + st.lastError + ')' : ''}`,
+    slow.length ? 'Slowest routes: ' + slow.join(' · ') : 'Slowest routes: none yet',
+  ];
+}
+async function loadHealth() {
+  try { const d = await json('/api/admin/metrics'); $('healthBox').hidden = false; $('healthOut').textContent = ''; for (const t of healthLines(d)) { const p = document.createElement('div'); p.textContent = t; $('healthOut').append(p); } }
+  catch { $('healthBox').hidden = true; } // a hub without it (the JavaScript one)
+}
+$('healthRefresh').onclick = loadHealth;
+$('traceGo').onclick = async () => {
+  const id = $('traceRun').value.trim(), out = $('traceOut'); if (!id) return;
+  try { const d = await json('/api/admin/trace?run=' + encodeURIComponent(id)); out.hidden = false; out.textContent = (d.lines || []).length ? d.lines.map((x) => `${x.at}  ${x.level}  ${x.area}  ${x.what}  ${JSON.stringify(Object.fromEntries(Object.entries(x).filter(([k]) => !['at', 'level', 'area', 'what'].includes(k))))}`).join('\n') : 'Nothing in the last two days\' log for that run.'; }
+  catch (e) { out.hidden = false; out.textContent = e.message; }
+};
 async function loadAdmin() {
+  loadHealth();
   try {
     const { accounts } = await json('/api/admin/accounts');
     const rows = $('adminRows'); rows.innerHTML = '';

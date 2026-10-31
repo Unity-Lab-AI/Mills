@@ -34,6 +34,10 @@ bridge/*.tmp
 # the live/dev data bridge's own files (journal, index, held / lost records): data, never shipped (an untracked one
 # stops both auto-deploys: "uncommitted changes", 5.34.0 to 5.34.3)
 bridge/sync/
+# the hub's structured logs (T-331 § 4: bridge/logs/hub-YYYY-MM-DD.jsonl, 14 days): data, never shipped
+bridge/logs/
+# word indexes (T-331 § 3: the default account's code_find indexes, bridge/index/): caches, never shipped
+bridge/index/
 
 # Accounts are local to the host: every file under bridge/profiles/ stays off the remotes
 # (display names, admin flags, password hashes, device locks, sessions).

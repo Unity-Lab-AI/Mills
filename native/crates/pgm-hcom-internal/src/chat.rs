@@ -8,6 +8,7 @@
 use pgm_core_internal::config::Config;
 use pgm_identity_internal::Account;
 use pgm_net_internal::http::{json as resp_json, Body, Req};
+use std::collections::BTreeMap;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -904,6 +905,22 @@ pub async fn route(hub: &dyn ChatHost, r: &Req, a: &Account) -> Option<Resp> {
             }
             answer(200, json!({ "ok": true }))
         }
+        // 5.41.0: one conversation's messages before `before` (a seq), about `chars` characters of them, oldest first;
+        // `more` says whether there are still older ones
+        "/api/room/history" if get => {
+            let conv = r.param("conv").unwrap_or_default();
+            let before = r.param("before").and_then(|x| x.parse::<f64>().ok()).map(|f| f as i64).unwrap_or(i64::MAX);
+            let chars = r.param("chars").and_then(|x| x.parse::<usize>().ok()).unwrap_or(HISTORY_CHARS).clamp(1000, 200_000);
+            let rd = reader(hub, u, &us);
+            if !rd.sees_conv(&conv) { return Some(answer(404, json!({ "error": "Unknown conversation." }))); }
+            let strip = |m: &Value| -> Value { let mut o = m.as_object().cloned().unwrap_or_default(); let key = o.remove("keys").map(|k| k[u].clone()).filter(|k| !k.is_null()).unwrap_or(Value::Null); let blob = o.remove("blob"); o.insert("key".into(), key); if let Some(bl) = blob.and_then(|b| b.as_str().map(|x| x.len())) { o.insert("blobLen".into(), json!(bl)); } Value::Object(o) };
+            let st = c.store.lock().unwrap_or_else(|e| e.into_inner());
+            let list: Vec<&Value> = st.messages.iter().filter(|m| rd.visible(m) && conv_of(m) == conv && m["seq"].as_i64().unwrap_or(0) < before).collect();
+            let mut n = 0usize; let mut from = list.len();
+            for (i, m) in list.iter().enumerate().rev() { from = i; n += msg_chars(m); if n >= chars { break; } }
+            let out: Vec<Value> = list[from..].iter().map(|m| strip(m)).collect();
+            return Some(answer(200, json!({ "conv": conv, "messages": out, "more": from > 0 })));
+        }
         "/api/room/messages" if get => {
             if r.param("wait").as_deref() != Some("1") { c.touch(u); return Some(room_answer(hub, r, u, &us)); }
             // judged before this page's own coming online moves the version; listening starts after it
@@ -998,19 +1015,51 @@ fn room_answer(hub: &dyn ChatHost, r: &Req, u: &str, us: &[(String, String, bool
     let c = &hub.chat();
     let rd = reader(hub, u, us);
     let strip = |m: &Value| -> Value { let mut o = m.as_object().cloned().unwrap_or_default(); let key = o.remove("keys").map(|k| k[u].clone()).filter(|k| !k.is_null()).unwrap_or(Value::Null); let blob = o.remove("blob"); o.insert("key".into(), key); if let Some(bl) = blob.and_then(|b| b.as_str().map(|x| x.len())) { o.insert("blobLen".into(), json!(bl)); } Value::Object(o) };
+    let mut older: Vec<String> = vec![];
     let (out, latest, latest_rev): (Vec<Value>, i64, i64) = {
         let st = c.store.lock().unwrap_or_else(|e| e.into_inner());
         let mine: Vec<&Value> = st.messages.iter().filter(|m| rd.visible(m)).collect();
         let pick: Vec<&Value> = if let Some(rv) = r.param("rev") {
             let after: i64 = rv.parse::<f64>().map(|f| f as i64).unwrap_or(0);
-            if after != 0 { mine.into_iter().filter(|m| m["rev"].as_i64().or(m["seq"].as_i64()).unwrap_or(0) > after).collect() } else { let k = mine.len().saturating_sub(500); mine[k..].to_vec() }
+            if after != 0 { mine.into_iter().filter(|m| m["rev"].as_i64().or(m["seq"].as_i64()).unwrap_or(0) > after).collect() } else {
+                // 5.41.0: the first load is per conversation: its newest ~10 000 characters (cut at a message) and every
+                // message after the reader's seen mark (so unread counts and mentions are whole); the rest comes from
+                // /api/room/history as the person scrolls up (`older` says which conversations have more)
+                let seen_of = c.seen.lock().unwrap_or_else(|e| e.into_inner()).get(u).cloned().unwrap_or(json!({}));
+                first_load(&mine, &seen_of, HISTORY_CHARS, &mut older)
+            }
         } else { let since: i64 = r.param("since").and_then(|x| x.parse::<f64>().ok()).map(|f| f as i64).unwrap_or(0); let l: Vec<&Value> = mine.into_iter().filter(|m| m["seq"].as_i64().unwrap_or(0) > since).collect(); let k = l.len().saturating_sub(300); l[k..].to_vec() };
         (pick.into_iter().map(strip).collect(), st.seq, st.rev)
     };
     let mut seen_out = Map::new();
     for (who, convs) in c.seen.lock().unwrap_or_else(|e| e.into_inner()).iter() { for (cv, v) in convs.as_object().cloned().unwrap_or_default() { if rd.sees_conv(&cv) { seen_out.entry(who.clone()).or_insert(json!({}))[&cv] = v; } } }
     answer(200, json!({ "messages": out, "latest": latest, "latestRev": latest_rev, "seen": seen_out, "shares": hub.shares_for(u), "ver": c.room_ver.load(Ordering::SeqCst), "keysVer": c.keys_ver.load(Ordering::SeqCst), "guildsVer": c.guilds.version(), "notesVer": hub.notes_version(),
-        "status": status_list(hub, u, us), "online": c.online(us), "presence": c.presence_list(us), "typing": typing_for(hub, u, us) }))
+        "status": status_list(hub, u, us), "online": c.online(us), "presence": c.presence_list(us), "typing": typing_for(hub, u, us), "older": older }))
+}
+/// How much of a conversation a page gets at first, and per "Loading history…" (characters of text, cut at a message).
+pub const HISTORY_CHARS: usize = 10_000;
+/// About how many characters a message's text is: its ciphertext is base64 of the text plus a little (the hub never reads it).
+fn msg_chars(m: &Value) -> usize { m["ct"].as_str().map(|c| c.len() * 3 / 4).unwrap_or(0).max(1) }
+/// The first load: for each conversation the reader sees, its newest `chars` characters (the message that crosses the line
+/// comes whole) and every message after the reader's seen mark there (all of them, never opened: at most 2 000);
+/// `older` gets the conversations with more before.
+fn first_load<'a>(mine: &[&'a Value], seen: &Value, chars: usize, older: &mut Vec<String>) -> Vec<&'a Value> {
+    let mut by: BTreeMap<String, Vec<&'a Value>> = BTreeMap::new();
+    for m in mine { by.entry(conv_of(m)).or_default().push(m); }
+    let mut keep: Vec<&'a Value> = vec![];
+    for (conv, list) in by {
+        // the seen mark is the seq of the last message read there (POST /api/room/seen); none = nothing read yet
+        let seen_seq = seen[&conv].as_i64().unwrap_or(0);
+        let unread_from = list.iter().position(|m| m["seq"].as_i64().unwrap_or(0) > seen_seq).unwrap_or(list.len());
+        let mut n = 0usize; let mut from = list.len();
+        for (i, m) in list.iter().enumerate().rev() { from = i; n += msg_chars(m); if n >= chars { break; } }
+        // unread beyond the window come too, but never more than 2 000 messages at first
+        let from = from.min(unread_from).max(list.len().saturating_sub(2000));
+        if from > 0 { older.push(conv); }
+        keep.extend(&list[from..]);
+    }
+    keep.sort_by_key(|m| m["seq"].as_i64().unwrap_or(0));
+    keep
 }
 async fn calls_route(hub: &dyn ChatHost, r: &Req, a: &Account, us: &[(String, String, bool)], b: &Value) -> Resp {
     let c = &hub.chat(); let u = a.username.as_str();
@@ -1307,3 +1356,36 @@ pub fn team_tool(hub: &dyn ChatHost, name: &str, args: &Value, a: &Account) -> V
     }
 }
 fn guilds_iso(ms: i64) -> String { pgm_core_internal::time::iso_at(ms) }
+
+#[cfg(test)]
+mod first_load_tests {
+    use super::*;
+    fn msg(seq: i64, conv: &str, chars: usize, mid: &str) -> Value { json!({ "seq": seq, "conv": conv, "mid": mid, "ct": "A".repeat((chars * 4 + 2) / 3) }) }
+    #[test]
+    fn each_conversation_gets_its_newest_window_and_every_unread_message() {
+        // a busy channel (300 messages of 1 000 characters) next to a quiet DM (3 short ones, long ago)
+        let mut all: Vec<Value> = (0..3).map(|i| msg(i + 1, "dm:ann|bob", 50, &format!("d{i}"))).collect();
+        all.extend((0..300).map(|i| msg(i + 10, "ch:s/general", 1000, &format!("c{i}"))));
+        let refs: Vec<&Value> = all.iter().collect();
+        let mut older = vec![];
+        let got = first_load(&refs, &json!({ "ch:s/general": 309, "dm:ann|bob": 3 }), HISTORY_CHARS, &mut older);
+        let n = |conv: &str| got.iter().filter(|m| m["conv"] == json!(conv)).count();
+        assert_eq!(n("dm:ann|bob"), 3, "a quiet DM is never pushed out by a busy channel");
+        assert_eq!(n("ch:s/general"), 10, "the channel: its newest ~10 000 characters");
+        assert_eq!(older, vec!["ch:s/general".to_string()]);
+        assert!(got.windows(2).all(|w| w[0]["seq"].as_i64() < w[1]["seq"].as_i64()), "oldest first");
+        // read up to seq 259 (c249): the 50 unread after it come too, beyond the 10-message window
+        let mut older2 = vec![];
+        let got2 = first_load(&refs, &json!({ "ch:s/general": 259, "dm:ann|bob": 3 }), HISTORY_CHARS, &mut older2);
+        assert_eq!(got2.iter().filter(|m| m["conv"] == json!("ch:s/general")).count(), 50);
+        // a conversation never opened is all unread (here all 300), up to 2 000 at first
+        let mut older4 = vec![];
+        let got4 = first_load(&refs, &json!({ "dm:ann|bob": 3 }), HISTORY_CHARS, &mut older4);
+        assert_eq!(got4.iter().filter(|m| m["conv"] == json!("ch:s/general")).count(), 300); assert!(older4.is_empty());
+        // a single message bigger than the window comes whole, alone
+        let big = vec![msg(1, "room", 50, "r0"), msg(2, "room", 25_000, "r1")];
+        let mut older3 = vec![];
+        let got3 = first_load(&big.iter().collect::<Vec<_>>(), &json!({ "room": 2 }), HISTORY_CHARS, &mut older3);
+        assert_eq!(got3.len(), 1); assert_eq!(older3, vec!["room".to_string()]);
+    }
+}

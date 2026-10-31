@@ -100,6 +100,30 @@ mod tests {
     }
 
     #[test]
+    fn a_journal_delivered_again_from_the_start_is_old_news_not_a_conflict() {
+        // 2026-10-31 (T-329): live counted 87 conflicts that were none: the peer's journal came again from the start and
+        // its older lines moved "what the peer has" back, so every later edit of those records looked like a conflict
+        // a = dev (its install copy journalled the note first), b = live (the note was edited there later)
+        let (a, b) = (side("redo", "dev", || Mem::new("note")), side("redo", "live", || Mem::new("note")));
+        a.k.set("N-1", json!({ "rev": 0, "t": 10, "text": "v1" }));
+        both(&a, &b);
+        b.k.set("N-1", json!({ "rev": 0, "t": 20, "text": "v2" }));
+        both(&a, &b);
+        assert_eq!(a.k.val("N-1").unwrap()["text"], "v2");
+        // dev's whole journal again (after a restart): its only line for the note is the old one
+        let recs = a.e.outgoing(0, 1 << 30, 100_000);
+        b.e.receive(a.e.id(), 0, &recs);
+        assert_eq!(b.k.val("N-1").unwrap()["text"], "v2", "an old line never undoes a newer one");
+        // then a normal edit on dev is a plain update on live: no conflict counted, nothing kept aside, on either side
+        a.k.set("N-1", json!({ "rev": 0, "t": 30, "text": "v3" }));
+        both(&a, &b);
+        assert_eq!(b.k.val("N-1").unwrap()["text"], "v3");
+        assert_eq!((a.e.status()["conflicts"].as_u64(), b.e.status()["conflicts"].as_u64()), (Some(0), Some(0)), "{} / {}", a.e.status(), b.e.status());
+        assert!(a.k.lost.lock().unwrap().is_empty() && b.k.lost.lock().unwrap().is_empty());
+        done(&[&a, &b]);
+    }
+
+    #[test]
     fn simultaneous_edits_end_equal_on_both_sides_and_the_loser_is_kept() {
         let (a, b) = (side("conflict", "live", || Mem::new("task")), side("conflict", "dev", || Mem::new("task")));
         a.k.set("T-1", json!({ "rev": 1, "t": 10, "title": "start" }));

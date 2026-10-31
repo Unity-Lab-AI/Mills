@@ -121,18 +121,23 @@
   }
   function typing(text) { clearTimeout(P.draftTimer); const id = onScreen(); P.draftTimer = setTimeout(() => keepDraft(id, text), 1200); }
 
-  function setOpen(on, focus) {
+  // anim (5.35.0): a click on the Sessions button opens or closes it with the genie (the page's genieIn / genieOut)
+  function setOpen(on, focus, anim) {
+    const g = anim && typeof genieIn === 'function';
+    if (!on && P.open && g && !$('sessPanel').hidden) { P.open = false; $('sessToggle').classList.remove('on'); if (wide()) store.set('vr.sessPanel', '0'); $('spScrim').hidden = true; genieIn($('sessPanel'), $('sessToggle'), () => { if (!P.open) $('sessPanel').hidden = true; }); return; }
+    if (g) genieStop($('sessPanel'));
     P.open = !!on; $('sessPanel').hidden = !P.open; $('spScrim').hidden = !P.open || wide();
+    if (g && P.open) genieOut($('sessPanel'), $('sessToggle'));
     $('sessToggle').classList.toggle('on', P.open);
     if (wide()) store.set('vr.sessPanel', P.open ? '1' : '0');
     if (P.open) { render(); refresh(); if (focus) setTimeout(() => $('spQ').focus(), 0); }
   }
   function show(focus) { setOpen(true, focus); }
   function init() {
-    $('sessToggle').onclick = () => setOpen(!P.open);
-    $('spClose').onclick = () => setOpen(false);
+    $('sessToggle').onclick = () => setOpen(!P.open, false, true);
+    $('spClose').onclick = () => setOpen(false, false, true);
     $('spScrim').onclick = () => setOpen(false);
-    $('spNew').onclick = () => { if (typeof SESSIONS_OK !== 'undefined' && SESSIONS_OK) startOpen(); else $('newChat').click(); if (!wide()) setOpen(false); };
+    $('spNew').onclick = () => { if (typeof SESSIONS_OK !== 'undefined' && SESSIONS_OK) startOpen(); else newChatNow(); if (!wide()) setOpen(false); };
     let qt = null;
     $('spQ').addEventListener('input', () => { render(); clearTimeout(qt); qt = setTimeout(loadSaved, 250); });
     $('spQ').addEventListener('keydown', (e) => { if (e.key === 'Escape') { if ($('spQ').value) { $('spQ').value = ''; render(); loadSaved(); } else setOpen(false); } });
