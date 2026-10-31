@@ -293,6 +293,19 @@ impl Kind for Accounts {
     }
 }
 
+/// Of two saves of one transcript, the newer (savedAt, then the bigger content as a tie-break): the same on both hubs.
+fn archive_pick<'a>(a: &'a Value, b: &'a Value) -> (&'a Value, &'a Value) {
+    let key = |v: &Value| (ms_of_iso(&v["savedAt"]).unwrap_or(0), v["transcript"].as_array().map(|t| t.len()).unwrap_or(0), canon::canonical(v));
+    if key(b) > key(a) { (b, a) } else { (a, b) }
+}
+/// Does `loser` hold a turn (who + text) that `winner` does not (counting repeats)?
+fn has_turns_beyond(loser: &Value, winner: &Value) -> bool {
+    let turn = |t: &Value| (t["cls"].as_str().unwrap_or("").to_string(), t["text"].as_str().unwrap_or("").to_string());
+    let mut have: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for t in winner["transcript"].as_array().into_iter().flatten() { *have.entry(turn(t)).or_default() += 1; }
+    loser["transcript"].as_array().into_iter().flatten().any(|t| match have.get_mut(&turn(t)) { Some(n) if *n > 0 => { *n -= 1; false } _ => true })
+}
+
 // ---------- device locks ----------
 /// Per account: its device lock (bridge/device-locks.json), so a device that joined on one hub signs in on the other and an
 /// admin's "allow one more device" on either hub lets the next new device in on both. The two copies of one lock (the same
@@ -401,6 +414,15 @@ impl Kind for Archive {
         Ok(())
     }
     fn keep_loser(&self, id: &str, c: &Conflict) { keep_aside(&self.0, "work.archive", id, c) }
+    /// Both hubs may save one session's transcript (a session continued on dev while it runs on live: 2026-10-31,
+    /// T-329). The newer save still wins on both, but a losing copy with turns the winner lacks is set aside (lost.jsonl)
+    /// even when it was no conflict by the engine's rule: no turn ever vanishes without a trace.
+    fn merge(&self, id: &str, local: Option<&Value>, inc: &Value) -> Option<Value> {
+        let l = local?;
+        let (winner, loser) = archive_pick(l, inc);
+        if has_turns_beyond(loser, winner) { keep_aside(&self.0, "work.archive", id, &Conflict { winner: Some(winner), loser: Some(loser), winner_from: "the newer save", loser_from: "the older save" }); }
+        Some(winner.clone())
+    }
 }
 
 // ---------- pictures ----------
@@ -456,6 +478,21 @@ mod tests {
     use super::*;
     use crate::modules::auth::lock_devices;
     fn h(c: char) -> String { c.to_string().repeat(64) }
+    #[test]
+    fn a_transcript_saved_on_both_hubs_keeps_the_newer_and_sets_aside_turns_it_lacks() {
+        let t = |v: &[(&str, &str)]| json!(v.iter().map(|(c, x)| json!({ "cls": c, "text": x })).collect::<Vec<_>>());
+        let dev = json!({ "id": "ab", "savedAt": "2026-10-31T00:20:00.000Z", "transcript": t(&[("me", "hi"), ("claude", "hello"), ("me", "Its in, and I am on dev now")]) });
+        let live = json!({ "id": "ab", "savedAt": "2026-10-31T00:39:00.000Z", "transcript": t(&[("me", "hi"), ("claude", "hello"), ("me", "next"), ("claude", "done")]) });
+        // the same winner whichever hub decides
+        assert_eq!(archive_pick(&dev, &live).0, &live); assert_eq!(archive_pick(&live, &dev).0, &live);
+        // dev's copy has a turn live's lacks: it is set aside; a plain longer save of the same conversation is not
+        assert!(has_turns_beyond(&dev, &live));
+        let shorter = json!({ "savedAt": "2026-10-31T00:10:00.000Z", "transcript": t(&[("me", "hi"), ("claude", "hello")]) });
+        assert!(!has_turns_beyond(&shorter, &live));
+        // a repeated line counts: two "ok"s are not covered by one
+        let two = json!({ "transcript": t(&[("me", "ok"), ("me", "ok")]) }); let one = json!({ "transcript": t(&[("me", "ok")]) });
+        assert!(has_turns_beyond(&two, &one) && !has_turns_beyond(&one, &two));
+    }
     #[test]
     fn two_copies_of_one_lock_merge_to_the_same_lock_on_both_sides() {
         let live = json!({ "device": h('a'), "at": "2026-10-19T06:28:35.148Z", "allowNext": true });
