@@ -1358,11 +1358,32 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             answer(200, json!({ "project": pj.name, "dir": wd.dir.display().to_string(), "branch": wd.branch }))
         }
         // ----- the Work conversation + queue, kept across restarts -----
-        "/api/work/current" if get => { let Some(sx) = sess(&json!({})) else { return Some(no_session()) }; answer(200, sessions::scurrent(a, &sx)) }
+        // 5.40.0: ?tail=<characters> answers only the newest part of the conversation (cut at a turn), with where it starts
+        // (transcriptFrom) and how many turns there are (transcriptTotal); an older page asks without it and gets it all
+        "/api/work/current" if get => {
+            let Some(sx) = sess(&json!({})) else { return Some(no_session()) };
+            let mut st = sessions::scurrent(a, &sx);
+            if let Some(chars) = r.param("tail").and_then(|x| x.parse::<usize>().ok()) { tail_of(&mut st, chars); }
+            answer(200, st)
+        }
+        // the turns before `before`, about `chars` characters of them (cut at a turn): the page's "Loading history…"
+        "/api/work/history" if get => {
+            let Some(sx) = sess(&json!({})) else { return Some(no_session()) };
+            let st = sessions::scurrent(a, &sx);
+            let list = st["transcript"].as_array().cloned().unwrap_or_default();
+            let before = r.param("before").and_then(|x| x.parse::<usize>().ok()).unwrap_or(list.len()).min(list.len());
+            let chars = r.param("chars").and_then(|x| x.parse::<usize>().ok()).unwrap_or(HISTORY_CHARS).clamp(1000, 500_000);
+            let from = chunk_start(&list[..before], chars);
+            answer(200, json!({ "items": list[from..before].to_vec(), "from": from, "total": list.len() }))
+        }
         "/api/work/attach" if get => { let Some(sx) = sess(&json!({})) else { return Some(no_session()) }; answer(200, w.attach(&sx.key, &r.param("run").unwrap_or_default(), r.param("after").and_then(|x| x.parse().ok()).unwrap_or(0), Some(sessions::journal_file(a, &sx))).await) }
         "/api/work/current" if post => {
             let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let mut st = sessions::scurrent(a, &sx);
             let Some(list) = b["transcript"].as_array() else { return Some(answer(400, json!({ "error": "transcript must be a list." }))) };
+            // 5.40.0: the page holds the turns from `from` on (it loaded the rest only as far as it was scrolled): the hub keeps
+            // the turns before it as they are, so a partly loaded page never cuts the conversation short
+            let older: Vec<Value> = match b["from"].as_u64().filter(|f| *f > 0) { Some(f) => st["transcript"].as_array().map(|t| t.iter().take(f as usize).cloned().collect()).unwrap_or_default(), None => vec![] };
+            let list: Vec<Value> = older.into_iter().chain(list.iter().cloned()).collect();
             let mut out: Vec<Value> = list.iter().skip(list.len().saturating_sub(3000)).filter(|t| ["me", "claude", "tool"].contains(&t["cls"].as_str().unwrap_or("")) && t["text"].is_string()).map(|t| json!({ "cls": t["cls"], "text": s(t, "text").chars().take(200 * 1024).collect::<String>() })).collect();
             let mut total = 0usize; let mut keep = 0usize;
             for (i, t) in out.iter().enumerate().rev() { total += t["text"].as_str().map(|x| x.encode_utf16().count()).unwrap_or(0); if total > 6 * 1024 * 1024 { keep = i + 1; break; } }
@@ -1438,6 +1459,12 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                 "/api/archive/save" => {
                     let Some(tr) = b["transcript"].as_array().filter(|t| !t.is_empty()) else { return Some(answer(400, json!({ "error": "Nothing to save yet." }))) };
                     let Some(sx) = sess(&b) else { return Some(no_session()) };
+                    // 5.40.0: a page holding the turns from `from` on: the older ones come from the session's conversation here
+                    let tr: Vec<Value> = match b["from"].as_u64().filter(|f| *f > 0) {
+                        Some(f) => sessions::scurrent(a, &sx)["transcript"].as_array().map(|t| t.iter().take(f as usize).cloned().collect::<Vec<_>>()).unwrap_or_default().into_iter().chain(tr.iter().cloned()).collect(),
+                        None => tr.clone(),
+                    };
+                    let tr = &tr;
                     let sid = s(&sessions::sstate(w, a, &sx), "claudeSessionId");
                     if sid.is_empty() { return Some(answer(400, json!({ "error": "This conversation has no Claude session yet." }))); }
                     let id = if s(&b, "id").is_empty() { pgm_core_internal::crypto::random_hex(8) } else { s(&b, "id") };
@@ -1455,7 +1482,14 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                     let Some(f) = archive_file(&dir, &s(&b, "id")) else { return Some(answer(400, json!({ "error": "Bad conversation id." }))) };
                     let Some(entry) = read_json(&f) else { return Some(answer(404, json!({ "error": "Conversation not found." }))) };
                     let sid = entry["sessionId"].clone(); sessions::supdate(w, a, &sx, |m| { m.insert("claudeSessionId".into(), sid); });
-                    answer(200, entry)
+                    // 5.40.0: with `tail`, the hub makes the whole saved conversation this session's own first (the page then only
+                    // holds its newest part and saves from there on), and answers that part
+                    let Some(chars) = b["tail"].as_u64() else { return Some(answer(200, entry)) };
+                    let mut cur = sessions::scurrent(a, &sx);
+                    cur["transcript"] = entry["transcript"].clone(); cur["archiveId"] = entry["id"].clone(); cur["archiveTitle"] = entry["title"].clone(); cur["run"] = Value::Null;
+                    sessions::save_scurrent(a, &sx, &mut cur);
+                    let mut e = entry; tail_of(&mut e, chars as usize);
+                    answer(200, e)
                 }
                 "/api/archive/rename" => {
                     let Some(f) = archive_file(&dir, &s(&b, "id")) else { return Some(answer(400, json!({ "error": "Bad conversation id." }))) };
@@ -1492,6 +1526,22 @@ pub async fn headroom_up(hub: &Arc<dyn AiHub>) -> Option<String> {
     if !(url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:")) { return None; }
     let c = reqwest::Client::builder().timeout(Duration::from_millis(1500)).build().ok()?;
     c.get(format!("{url}/health")).send().await.ok().filter(|r| r.status().is_success()).map(|_| url)
+}
+/// How much of a conversation a page gets at first, and per "Loading history…" (characters, cut at a turn).
+pub const HISTORY_CHARS: usize = 10_000;
+/// Where the newest `chars` characters of a transcript start: at a turn, so the turn that crosses the line comes whole
+/// (a 20 000-character turn at the end means 20 000 characters).
+pub fn chunk_start(list: &[Value], chars: usize) -> usize {
+    let mut n = 0usize;
+    for (i, t) in list.iter().enumerate().rev() { n += t["text"].as_str().map(|x| x.chars().count()).unwrap_or(0); if n >= chars { return i; } }
+    0
+}
+/// A conversation (`{ transcript, … }`) cut to its newest part, with transcriptFrom / transcriptTotal.
+fn tail_of(st: &mut Value, chars: usize) {
+    let list = st["transcript"].as_array().cloned().unwrap_or_default();
+    let from = chunk_start(&list, chars.clamp(1000, 500_000));
+    st["transcriptFrom"] = json!(from); st["transcriptTotal"] = json!(list.len());
+    st["transcript"] = json!(list[from..].to_vec());
 }
 /// /llm-relay/…: the same relay as /llm/<token>/…, the token in the x-vr-relay header (what Headroom sends on).
 pub async fn llm_relay(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {

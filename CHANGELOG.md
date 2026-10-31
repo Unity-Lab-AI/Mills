@@ -7,6 +7,23 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.40.0 — 2026-10-31
+
+MINOR: **a long Work conversation opens at once and loads its history as you scroll up** (Sponge, 2026-10-31: a
+session worked on for weeks must not take minutes to load; none of that is in Claude's context anyway).
+- **The first look:** opening Work, switching to a session or opening a Past session gives the page only the newest
+  ~10 000 characters, cut at a turn (a 20 000-character last turn comes whole). `GET /api/work/current?tail=<chars>`
+  answers that part with `transcriptFrom` / `transcriptTotal`; `/api/archive/open` with `tail` does the same and makes
+  the whole saved conversation the session's own first.
+- **Scrolling up** to the top shows "Loading history…" and draws the next ~10 000 characters above, without the view
+  jumping (`GET /api/work/history?before=<turn>&chars=`). What was loaded stays in the page.
+- **Nothing is cut short:** the page says where its part starts (`from`) when it saves the conversation or saves it to
+  Past sessions, and the hub keeps every older turn it has. An older page (no `tail`, no `from`) gets and saves the
+  whole conversation as before; an older hub answers the page in full (it ignores `tail`).
+- Check: **R505** (60 turns of 1 000 characters: the last 10 first, then 10 before those, then the oldest 5; a save
+  from the newest part keeps all 61; a 25 000-character turn comes whole; Past sessions saved and opened in chunks keep
+  all 62; an older page gets everything). web/index.html 1.33.0.
+
 ## 5.39.1 — 2026-10-31
 
 PATCH: **two live/dev bridge fixes found proving the dev hub** (T-329; a read-only look at both hubs' bridge files).

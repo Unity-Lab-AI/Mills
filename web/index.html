@@ -517,6 +517,7 @@
   #roomComposer .side { display: flex; flex-direction: column; gap: .35rem; }
   /* attachments (web/attach.js): the + button, the tray of picked files, and how sent ones show */
   .attPlus { align-self: flex-start; padding: .45rem; }
+  .histMore { cursor: pointer; text-align: center; opacity: .75; } .histMore:hover { opacity: 1; }
   .leadCol { display: flex; flex-direction: column; gap: .4rem; align-self: flex-start; }
   #enhance.working .ic { animation: enhSpin 1.1s linear infinite; } #enhance.undo { color: var(--accent, #9b5cff); border-color: currentColor; }
   @keyframes enhSpin { to { transform: rotate(360deg); } }
@@ -1608,12 +1609,12 @@ const cacheable = (res) => { const cc = (res.headers.get('cache-control') || '')
 // The Work session on screen ('' = the first one, as older pages and hubs know it): the calls that belong to one
 // session carry ?session=<id> (T-238: Start work opens a new session of its own).
 let SESSION = '';
-const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|archive\/(save|open)|work\/(current|queue|attach|git|share|draft|enhance))(\/|\?|$)/;
+const SESSION_PATHS = /^\/api\/(chat|stop|model|workspace|archive\/(save|open)|work\/(current|queue|attach|git|share|draft|enhance|history))(\/|\?|$)/;
 const withSession = (path) => (SESSION && SESSION_PATHS.test(path) && !/[?&]session=/.test(path) ? path + (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(SESSION) : path);
 // Planner mode (T-275): the id of the planner session open here ('' = the normal Work session). Its requests name it (?session=).
 const PLAN_KEY = NS + 'vr.planSession';
 let planSession = (() => { try { return sessionStorage.getItem(PLAN_KEY) || ''; } catch { return ''; } })();
-const PLAN_PATHS = /^\/api\/(chat|stop|work\/(current|queue|questions|attach|git|enhance))(\?|$)/;
+const PLAN_PATHS = /^\/api\/(chat|stop|work\/(current|queue|questions|attach|git|enhance|history))(\?|$)/;
 async function api(path, opts = {}) {
   // planner mode (T-275) first: its session wins over the one on screen (T-238)
   if (planSession && PLAN_PATHS.test(path) && !/[?&]session=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(planSession);
@@ -3229,12 +3230,41 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 // ---------- past sessions (saved Claude conversations, stored on the host PC in VibeRoller/Archive) ----------
 let transcript = [], archiveId = null, archiveTitle = null, savedLen = 0, lastSaveAt = 0;
+// 5.40.0: the page holds a conversation from turn `transcriptFrom` on (the newest ~10 000 characters at first, more as it
+// is scrolled up); the hub keeps the rest, and every save says where the page's part starts
+const HISTORY_CHARS = 10000;
+let transcriptFrom = 0, historyBusy = false;
+function historyMark() { // the line above the oldest turn on screen while older ones are on the hub
+  let m = $('histMore');
+  if (transcriptFrom <= 0) { if (m) m.remove(); return null; }
+  if (!m) { m = document.createElement('div'); m.id = 'histMore'; m.className = 'sys histMore'; m.onclick = () => loadOlder(); }
+  m.textContent = historyBusy ? 'Loading history…' : 'Earlier messages: scroll up (or click) to load them';
+  if (log.firstChild !== m) log.insertBefore(m, log.firstChild);
+  return m;
+}
+async function loadOlder() { // the next chunk above, drawn without moving what is on screen
+  if (historyBusy || transcriptFrom <= 0) return;
+  historyBusy = true; historyMark();
+  const gen = workGen, at = transcriptFrom;
+  try {
+    const d = await json('/api/work/history?before=' + at + '&chars=' + HISTORY_CHARS);
+    if (gen !== workGen || at !== transcriptFrom) return; // another conversation came on screen meanwhile
+    const items = d.items || [], first = $('histMore') ? $('histMore').nextSibling : log.firstChild, n0 = log.children.length, h0 = log.scrollHeight, top0 = log.scrollTop;
+    for (const t of items) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
+    const added = [...log.children].slice(n0);
+    for (const el of added) log.insertBefore(el, first);
+    log.scrollTop = top0 + (log.scrollHeight - h0);
+    transcript = items.concat(transcript); savedLen += items.length; transcriptFrom = d.from || 0;
+  } catch (err) { sys('Could not load earlier messages: ' + err.message, true); }
+  finally { historyBusy = false; historyMark(); }
+}
+log.addEventListener('scroll', () => { if (transcriptFrom > 0 && log.scrollTop < 300) loadOlder(); });
 // The conversation on screen is also kept on the hub (bridge/work-state.js) a moment after every change, so
 // opening Work later (after a reload, a restart, on another device) puts it back and Claude continues it.
 let currentSaveTimer = null;
 let currentDirty = false; // a change not on the hub yet (opening another session saves it first)
 function saveCurrentSoon() { currentDirty = true; clearTimeout(currentSaveTimer); currentSaveTimer = setTimeout(saveCurrent, 800); }
-function saveCurrent() { clearTimeout(currentSaveTimer); currentDirty = false; return me ? json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, archiveId, archiveTitle, run: curRun }) }).catch(() => {}) : Promise.resolve(); }
+function saveCurrent() { clearTimeout(currentSaveTimer); currentDirty = false; return me ? json('/api/work/current', { method: 'POST', body: JSON.stringify({ transcript, from: transcriptFrom, archiveId, archiveTitle, run: curRun }) }).catch(() => {}) : Promise.resolve(); }
 function record(cls, text) { transcript.push({ cls, text }); saveCurrentSoon(); }
 async function restoreWork() { // opening Work: the previous conversation, then the queue (which starts running)
   // which session is open (hubs with many sessions): the page keeps to it; older hubs have only the one
@@ -3258,12 +3288,12 @@ async function restoreWork() { // opening Work: the previous conversation, then 
 // its queue (which starts running), a reply still going. False = the hub did not answer.
 async function loadConversation(switching, noWait) {
   const gen = workGen;
-  let s; try { s = await json('/api/work/current'); } catch { return false; }
+  let s; try { s = await json('/api/work/current?tail=' + HISTORY_CHARS); } catch { return false; }
   if (gen !== workGen) return false;
   // T-241: with "Reopen what I had open" off the conversation stays on the hub (the next reload with it on brings it back) but a reload starts fresh
   if ((s.transcript || []).length && !transcript.length && (switching || prefs().reopen)) {
     for (const t of s.transcript) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
-    archiveId = s.archiveId; archiveTitle = s.archiveTitle; transcript = s.transcript; savedLen = s.transcript.length;
+    archiveId = s.archiveId; archiveTitle = s.archiveTitle; transcript = s.transcript; savedLen = s.transcript.length; transcriptFrom = s.transcriptFrom || 0; historyMark();
     if (archiveTitle) label($('convTitle'), 'archive', archiveTitle); else $('convTitle').textContent = switching ? SESSIONS.titleOf(SESSIONS.byId(SESSIONS.onScreen()) || {}) : 'Unsaved session';
     fresh = false;
     if (!switching) sys('Your previous conversation is back' + (s.updatedAt ? ' (last change ' + new Date(s.updatedAt).toLocaleString() + ')' : '') + ': Claude continues it. "New chat" starts a fresh one.');
@@ -3303,7 +3333,7 @@ async function openWorkSession(id) {
     planSession = s.mode === 'planner' ? id : ''; try { if (planSession) sessionStorage.setItem(PLAN_KEY, planSession); else sessionStorage.removeItem(PLAN_KEY); } catch {}
     paintPlanner();
     await SESSIONS.release(id); // the list stops following it in the background (its conversation is saved first)
-    log.innerHTML = ''; queue.length = 0; sendNowMessage = null; transcript = []; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
+    log.innerHTML = ''; queue.length = 0; sendNowMessage = null; transcript = []; transcriptFrom = 0; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
     curRun = null; runEnded = false; fresh = false; slotWait = false; hideThinking(); setBusy(false);
     for (const q of openQuestions.values()) { try { q.stop(); } catch {} } openQuestions.clear(); openPlans.clear();
     $('convTitle').textContent = SESSIONS.titleOf(s);
@@ -3317,8 +3347,8 @@ async function openWorkSession(id) {
   await loadConversation(true, true); // (a reply still going is followed to its end without holding up the caller)
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && me && !$('shell').hidden) restoreQuestions(); });
-function setConversation(id, title, items) {
-  archiveId = id; archiveTitle = title; transcript = items; saveCurrentSoon();
+function setConversation(id, title, items, from) {
+  archiveId = id; archiveTitle = title; transcript = items; transcriptFrom = from || 0; saveCurrentSoon(); historyMark();
   savedLen = items.length; // what is on screen now counts as saved (a fresh chat, an opened session, or a just-deleted one)
   if (!id && !items.length) lastSaveAt = 0;
   if (title) label($('convTitle'), 'archive', title); else $('convTitle').textContent = 'Unsaved session';
@@ -3341,7 +3371,7 @@ async function saveToArchive(quiet, auto) {
     }
   }
   try {
-    const d = await json('/api/archive/save', { method: 'POST', body: JSON.stringify({ id: archiveId, title, transcript }) });
+    const d = await json('/api/archive/save', { method: 'POST', body: JSON.stringify({ id: archiveId, title, transcript, from: transcriptFrom }) });
     setConversation(d.id, d.title, transcript);
     savedLen = transcript.length; lastSaveAt = Date.now();
     if (!quiet) sys('Saved to Past sessions as "' + d.title + '".');
@@ -3371,12 +3401,12 @@ function markText(el, text, words) { // the matched words highlighted, built fro
 async function openConversation(id) {
   if (busy) return sys('Stop Claude before opening another conversation.', true);
   try {
-    const entry = await json('/api/archive/open', { method: 'POST', body: JSON.stringify({ id }) });
+    const entry = await json('/api/archive/open', { method: 'POST', body: JSON.stringify({ id, tail: HISTORY_CHARS }) });
     log.innerHTML = ''; fresh = false;
     for (const t of entry.transcript) {
       if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text);
     }
-    setConversation(entry.id, entry.title, entry.transcript);
+    setConversation(entry.id, entry.title, entry.transcript, entry.transcriptFrom);
     sys('Continuing "' + entry.title + '" — Claude remembers this conversation.');
     refreshUsage();
     scroll(); SESSIONS.refresh();
