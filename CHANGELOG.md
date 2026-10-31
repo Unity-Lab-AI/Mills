@@ -7,6 +7,22 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.39.1 — 2026-10-31
+
+PATCH: **two live/dev bridge fixes found proving the dev hub** (T-329; a read-only look at both hubs' bridge files).
+- **No false conflicts from old lines** (pgm-sync-internal engine). Live counted 87 conflicts that were none: when the
+  peer's journal came again from the start, an older line moved "what the peer has" back, and every later edit of that
+  record then looked like a conflict (and made a "- dev copy" note identical to an earlier version). Each index entry
+  now also keeps the newest order seen from the peer (two more numbers in index.json, add-only; the bridge's own
+  file); a line older than that is old news (nothing changes, no conflict), and "what the peer has" only moves
+  forward, also when the peer acknowledges a record. Check: the unit test
+  `a_journal_delivered_again_from_the_start_is_old_news_not_a_conflict` (it failed on 5.39.0 first: 1 false conflict).
+- **No turn of a saved transcript vanishes** (vr-hub sync.rs, `work.archive`). A session continued on dev while it runs
+  on live is saved by both hubs; the newer save won and the other hub's turns went without a trace (one of Sponge's
+  lines, 2026-10-31: it survives in dev's bridge journal only). The newer save still wins on both hubs, but a losing
+  copy with turns the winner lacks is now set aside in `bridge/sync/lost.jsonl` too. Check: the unit test
+  `a_transcript_saved_on_both_hubs_keeps_the_newer_and_sets_aside_turns_it_lacks`.
+
 ## 5.39.0 — 2026-10-30
 
 MINOR: **word indexes: finding is a lookup, not a scan** (T-331 step 3; team note plans/sessions-always-saved.md § 3).

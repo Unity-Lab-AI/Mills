@@ -56,7 +56,7 @@ pub trait Kind: Send + Sync {
 }
 
 #[derive(Clone, Default, Debug, PartialEq)]
-struct Entry { mine: Option<String>, peer: Option<String>, rev: i64, time: i64 }
+struct Entry { mine: Option<String>, peer: Option<String>, rev: i64, time: i64, /** the newest order seen from the peer for this record (2026-10-31): an older line is old news */ prev: i64, ptime: i64 }
 
 /// How much a scan looks at.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -138,7 +138,7 @@ impl Engine {
                 let e = index.entry(k.clone()).or_default();
                 for (id, x) in ids.as_object().into_iter().flatten() {
                     let s = |i: usize| x[i].as_str().map(String::from);
-                    e.insert(id.clone(), Entry { mine: s(0), peer: s(1), rev: x[2].as_i64().unwrap_or(0), time: x[3].as_i64().unwrap_or(0) });
+                    e.insert(id.clone(), Entry { mine: s(0), peer: s(1), rev: x[2].as_i64().unwrap_or(0), time: x[3].as_i64().unwrap_or(0), prev: x[4].as_i64().unwrap_or(0), ptime: x[5].as_i64().unwrap_or(0) });
                 }
             }
         }
@@ -257,9 +257,14 @@ impl Engine {
         let mut lh = local.as_ref().map(hash);
         let mut e = inner.index.get(&name).and_then(|m| m.get(&rec.id)).cloned().unwrap_or_default();
         let put_entry = |inner: &mut Inner, e: Entry| { inner.index.entry(name.clone()).or_default().insert(rec.id.clone(), e); };
+        // old news (the peer's journal delivered again from the start): a line older than the newest version the peer is
+        // known to have had changes nothing here, counts as no conflict, and never moves "what the peer has" back
+        if (e.prev, e.ptime) != (0, 0) && rec.order() < (e.prev, e.ptime) { rep.same += 1; return; }
+        // what the peer has: only ever forward (its newest order with it)
+        let saw = |e: &mut Entry| { if rec.order() >= (e.prev, e.ptime) { e.peer = ih.clone(); e.prev = rec.rev; e.ptime = rec.time; } };
         if lh == ih {
             if e == Entry::default() { e.rev = rec.rev; e.time = rec.time; }
-            e.mine = lh; e.peer = ih; rep.same += 1;
+            e.mine = lh; saw(&mut e); rep.same += 1;
             return put_entry(inner, e);
         }
         // two different things under one id (each copy hands out ids): the greater identity moves to a new id, on its own copy
@@ -279,7 +284,7 @@ impl Engine {
                 if Some(hash(&m)) != lh {
                     match k.put(&rec.id, &m) { Ok(stored) => { e.mine = Some(hash(&stored)); rep.applied += 1; inner.stats.applied += 1; } Err(why) => return self.refuse(inner, rep, rec.seq, &name, &rec.id, &why) }
                 } else { rep.kept.push(rec.seq); }
-                e.peer = ih; e.rev = e.rev.max(rec.rev); e.time = e.time.max(rec.time);
+                saw(&mut e); e.rev = e.rev.max(rec.rev); e.time = e.time.max(rec.time);
                 return put_entry(inner, e);
             }
         }
@@ -301,7 +306,7 @@ impl Engine {
             let r = match &rec.value { Some(v) => k.put(&rec.id, v).map(|s| Some(hash(&s))), None => k.remove(&rec.id).map(|_| None) };
             match r { Ok(m) => { e.mine = m; e.rev = rec.rev; e.time = rec.time; rep.applied += 1; inner.stats.applied += 1; } Err(why) => return self.refuse(inner, rep, rec.seq, &name, &rec.id, &why) }
         } else { rep.kept.push(rec.seq); }
-        e.peer = ih;
+        saw(&mut e);
         put_entry(inner, e);
     }
     fn hold(&self, raw: &Value) {
@@ -343,7 +348,8 @@ impl Engine {
             let Ok(r) = Record::from_value(v) else { continue };
             if skip.contains(&r.seq) { continue; }
             let e = inner.index.entry(r.kind.clone()).or_default().entry(r.id.clone()).or_default();
-            e.peer = r.value.as_ref().map(hash);
+            // the peer has this version now, with its order (so an older line of the peer's own arriving later is old news)
+            if r.order() >= (e.prev, e.ptime) { e.peer = r.value.as_ref().map(hash); e.prev = r.rev; e.ptime = r.time; }
         }
         inner.peer.last_out = now();
         inner.dirty = true;
@@ -380,7 +386,7 @@ impl Engine {
         let mut idx = Map::new();
         for (k, m) in &inner.index {
             let mut o = Map::new();
-            for (id, e) in m { o.insert(id.clone(), json!([e.mine, e.peer, e.rev, e.time])); }
+            for (id, e) in m { o.insert(id.clone(), json!([e.mine, e.peer, e.rev, e.time, e.prev, e.ptime])); }
             idx.insert(k.clone(), Value::Object(o));
         }
         drop(inner);
