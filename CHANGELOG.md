@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.41.1 — 2026-10-31
+
+PATCH: **no more "VibeRoller is restarting" lines in the chat** (Sponge, 2026-10-31: they piled up while working and
+while idle, and only a reload cleared them). The page's request helper treated any failed request (a dropped long poll,
+a proxy hiccup) as a restart and wrote "VibeRoller is restarting…" and "VibeRoller is back." into the Work chat.
+- The hub being away is now a small badge at the top of the page, shown only when it lasts more than 4 s (a blip
+  shows nothing), "Back" for 2 s when it answers again, then nothing. Every outage goes to the browser console with how
+  long it took. The page updating itself to a new build is a short note in the same badge, not a chat line.
+- The lines that say something about the conversation stay ("Your previous conversation is back", the queue).
+- Check: **R507** (the page's own badge code on a stand-in page and clock: a 2 s blip shows nothing, a 9 s outage shows
+  Reconnecting, then Back, then nothing, both logged; the request helper writes no restarting / back lines). web/index.html 1.34.1.
+
 ## 5.41.0 — 2026-10-31
 
 MINOR: **the team chat loads per conversation and fetches its history as you scroll up** (DMs, group DMs, server
