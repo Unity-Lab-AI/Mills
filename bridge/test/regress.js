@@ -4030,6 +4030,45 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.first.ok && seen.first.def && seen.first.limit && seen.first.indexed > 30 && seen.first.worktree && seen.fresh.ok && seen.fresh.found && seen.fresh.readNow === 1 && seen.gone && seen.empty && seen.clean && seen.indexFile && listed,
       JSON.stringify(seen));
   } else skip('R504', 'code_find', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R505 (5.40.0): a long Work conversation loads in chunks: the newest ~10 000 characters first, older ones as asked
+    const seen = {};
+    const sid = (await call('/api/work/sessions/new', U, { project: 'VibeRoller' })).data.id;
+    await chat(U, 'r505 seed', { fresh: true, session: sid }); // a Claude session, so it can be saved to Past sessions
+    const turn = (i, n = 1000) => ({ cls: i % 2 ? 'claude' : 'me', text: ('r505 turn ' + i + ' ').padEnd(n, 'x') });
+    const all60 = Array.from({ length: 60 }, (_, i) => turn(i));
+    await call('/api/work/current', U, { session: sid, transcript: all60 });
+    const cur = (q) => call('/api/work/current?session=' + sid + (q || ''), U);
+    const t1 = (await cur('&tail=10000')).data;
+    seen.first = { n: (t1.transcript || []).length, from: t1.transcriptFrom, total: t1.transcriptTotal, last: ((t1.transcript || []).slice(-1)[0] || {}).text?.slice(0, 13) };
+    const h1 = (await call('/api/work/history?session=' + sid + '&before=50&chars=10000', U)).data;
+    seen.older = { n: (h1.items || []).length, from: h1.from, firstIs40: /^r505 turn 40 /.test(((h1.items || [])[0] || {}).text || '') };
+    const h0 = (await call('/api/work/history?session=' + sid + '&before=5&chars=10000', U)).data;
+    seen.oldest = { n: (h0.items || []).length, from: h0.from };
+    // the page holds turns 50..59 and adds one: its save (from 50) keeps every turn the hub had before 50
+    await call('/api/work/current', U, { session: sid, from: 50, transcript: [...(t1.transcript || []), turn(60)] });
+    const full = (await cur()).data.transcript || [];
+    seen.saved = { n: full.length, first: /^r505 turn 0 /.test((full[0] || {}).text || ''), last: /^r505 turn 60 /.test((full[60] || {}).text || '') };
+    // a last turn of 25 000 characters comes whole (cut at a turn, never inside one)
+    await call('/api/work/current', U, { session: sid, from: 61, transcript: [turn(61, 25000)] });
+    const big = (await cur('&tail=10000')).data;
+    seen.big = { n: (big.transcript || []).length, from: big.transcriptFrom, len: (((big.transcript || [])[0] || {}).text || '').length };
+    // Past sessions: saving from a partly loaded page keeps it all; opening it in chunks makes it the session's own first
+    const sv = (await call('/api/archive/save', U, { session: sid, title: 'r505 long', from: 61, transcript: big.transcript })).data;
+    const op = (await call('/api/archive/open', U, { session: sid, id: sv.id, tail: 10000 })).data;
+    seen.archive = { saved: !!sv.id, openN: (op.transcript || []).length, openFrom: op.transcriptFrom, openTotal: op.transcriptTotal };
+    const afterOpen = (await cur()).data.transcript || [];
+    seen.archiveWhole = afterOpen.length === 62 && /^r505 turn 0 /.test((afterOpen[0] || {}).text || '');
+    // an older page (no tail, no from) gets and saves the whole conversation as before
+    seen.oldPage = ((await cur()).data.transcript || []).length === 62 && (await cur()).data.transcriptFrom === undefined;
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    seen.pageAsks = /\/api\/work\/current\?tail=/.test(page) && /from: transcriptFrom/.test(page) && /\/api\/work\/history\?before=/.test(page);
+    await call('/api/archive/delete', U, { id: sv.id }); await call('/api/work/sessions/delete', U, { id: sid });
+    check('R505', 'a long Work conversation loads in chunks: the page gets the newest ~10 000 characters (60 turns of 1 000: the last 10, starting at turn 50 of 60), "Loading history" gets the 10 before those and the oldest few at the end, a save from a page that holds only its newest part keeps every older turn, a 25 000-character last turn comes whole, saving to Past sessions and opening one in chunks keep it all (the opened one becomes the session\'s own, 62 turns), and an older page still gets and saves the whole conversation',
+      seen.first.n === 10 && seen.first.from === 50 && seen.first.total === 60 && seen.first.last === 'r505 turn 59 ' && seen.older.n === 10 && seen.older.from === 40 && seen.older.firstIs40 && seen.oldest.n === 5 && seen.oldest.from === 0
+      && seen.saved.n === 61 && seen.saved.first && seen.saved.last && seen.big.n === 1 && seen.big.from === 61 && seen.big.len === 25000
+      && seen.archive.saved && seen.archive.openN === 1 && seen.archive.openFrom === 61 && seen.archive.openTotal === 62 && seen.archiveWhole && seen.oldPage && seen.pageAsks,
+      JSON.stringify(seen));
+  } else skip('R505', 'the Work conversation in chunks', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
@@ -7661,7 +7700,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     && pid2 !== pid1 && (ws1.transcript || []).map((t) => t.cls + ':' + t.text).join('|') === 'me:hello r135|claude:answer r135|tool:Read file r135' && ws1.archiveId === 'a-r135' && ws1.archiveTitle === 'Title r135'
     && (ws1.queue || []).join('|') === 'first queued r135|second queued r135' && ws1.sendNow === 'send now r135'
     && /function saveQueue\(\)/.test(html) && /x\.onclick = \(\) => \{[^\n]*saveQueue\(\)/.test(html) && /next\.el\.remove\(\); saveQueue\(\); send\(next\.message\)/.test(html) && /sendNowMessage = text;[^\n]*saveQueue\(\)/.test(html)
-    && /restoreFolder\(\); restoreWork\(\);/.test(html) && /function restoreWork\(/.test(html) && /function record\(cls, text\) \{ transcript\.push\(\{ cls, text \}\); saveCurrentSoon\(\); \}/.test(html) && /transcript = items; saveCurrentSoon\(\)/.test(html),
+    && /restoreFolder\(\); restoreWork\(\);/.test(html) && /function restoreWork\(/.test(html) && /function record\(cls, text\) \{ transcript\.push\(\{ cls, text \}\); saveCurrentSoon\(\); \}/.test(html) && /transcript = items;[^\n]*saveCurrentSoon\(\)/.test(html),
     `after restart (pid ${pid1}→${pid2}): ${JSON.stringify(ws1).slice(0, 220)}`);
 
   const pid3 = (await call('/api/status')).data.pid;
