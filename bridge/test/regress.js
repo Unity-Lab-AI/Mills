@@ -3857,11 +3857,26 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.long = (await call('/api/work/enhance', U, { text: 'x'.repeat(20001) })).status;
     seen.anon = (await call('/api/work/enhance', null, { text: 'r497' })).status;
     seen.n0 = n0;
-    check('R497', 'the prompt enhancer: the sparkle button sends the draft to a throw-away Claude that gets the whole draft and nothing of the conversation (no earlier messages, no laws), runs with no tools, no MCP servers, no resume and no session kept, with its own system prompt (keep everything the person said), in an empty folder that is gone afterwards, and answers the rewrite; it is not a Work run (nothing counts as working, a Work message goes through meanwhile) and runs one at a time per person (a second one is refused 409, another person\'s is not); an empty draft is refused 400, one over 20 000 characters 413, and nobody signed out may use it',
+    check('R497', 'the prompt enhancer: the sparkle button sends the draft to a throw-away Claude that gets the whole draft and none of the Work run\'s own prompt (no messages the page did not save, no laws; the saved conversation comes as context: R510), runs with no tools, no MCP servers, no resume and no session kept, with its own system prompt (keep everything the person said), in an empty folder that is gone afterwards, and answers the rewrite; it is not a Work run (nothing counts as working, a Work message goes through meanwhile) and runs one at a time per person (a second one is refused 409, another person\'s is not); an empty draft is refused 400, one over 20 000 characters 413, and nobody signed out may use it',
       seen.status === 200 && seen.draftWhole && seen.noHistory && seen.how.tools === '' && !seen.how.resume && !seen.how.mcp && seen.how.noPersist && seen.how.keeps && Array.isArray(seen.how.files) && seen.how.files.length === 0 && seen.folderGone
       && seen.second === 409 && seen.workingMeanwhile === n0 && seen.chatMeanwhile === 200 && seen.slow === 200 && seen.otherPerson === 200 && seen.empty === 400 && seen.long === 413 && seen.anon === 401,
       JSON.stringify(seen));
   } else skip('R497', 'the prompt enhancer (/api/work/enhance)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R510 (5.42.2): the enhancer understands the draft from the session's conversation (first message + newest turns)
+    const seen = {};
+    const sid = (await call('/api/work/sessions/new', U, { project: 'VibeRoller' })).data.id;
+    const tr = [{ cls: 'me', text: 'r510 goal: build the dev hub' }, ...Array.from({ length: 30 }, (_, i) => ({ cls: i % 2 ? 'me' : 'claude', text: 'r510 middle ' + i + ' ' + 'x'.repeat(900) })),
+      { cls: 'tool', text: 'r510 TOOLLINE Read secret' }, { cls: 'claude', text: 'r510 newest: the theme button is in the header' }];
+    await call('/api/work/current', U, { session: sid, transcript: tr });
+    const ask = async (extra) => { const r = await call('/api/work/enhance', U, { session: sid, text: 'make it a dropdown', ...extra }); try { return JSON.parse(String(r.data.text || '').replace(/^ENHANCED:/, '')).input || ''; } catch { return ''; } };
+    const withCtx = await ask({}), without = await ask({ context: false });
+    seen.ctx = { marker: /The conversation so far, for understanding the draft only/.test(withCtx), goal: /Person: r510 goal: build the dev hub/.test(withCtx), newest: /Agent: r510 newest: the theme button/.test(withCtx),
+      noTool: !/TOOLLINE/.test(withCtx), skipped: /earlier turn\(s\) left out/.test(withCtx), bounded: withCtx.length < 16000, draftLast: /make it a dropdown\n----------$/.test(withCtx) };
+    seen.off = !/conversation so far/.test(without) && /make it a dropdown/.test(without);
+    await call('/api/work/sessions/delete', U, { id: sid });
+    check('R510', 'the prompt enhancer gets the session\'s conversation to understand the draft: its first message and its newest turns (tools left out, older middle turns skipped and said so, about 12 000 characters at most) before the draft, marked as context only; with context: false it gets none',
+      Object.values(seen.ctx).every(Boolean) && seen.off, JSON.stringify(seen));
+  } else skip('R510', 'the prompt enhancer with the session\'s context', 'the Rust hub\'s: --rust-hub runs it');
   { // R498 (5.35.0): the page: the DEV band drifts, Sessions is in the left rail, the sparkle (SVG) button sits under + in the composer with its switch in
     // Settings, and the genie (the page's own genieIn / genieOut, run with stand-in elements) hides only once the element is in its button
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), sj = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');

@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.42.2 — 2026-11-01
+
+PATCH: **the prompt enhancer knows the session it is in** (Sponge, 2026-11-01: its one real pain point: a draft like
+"make it a dropdown" means little without the conversation). The throw-away enhancement now gets, before the draft, the
+session's conversation in short: its first message (the goal it started with) and its newest turns, about 12 000
+characters (each turn at most 1 500; tool lines left out; skipped middle turns said so). Its instructions say what that
+is for: resolving "it", "that", "like before" to what the conversation shows (marked as a reading when not certain),
+using the conversation's own names, and not listing as open what it already settles; never taking requests from it,
+summarising it or answering it. Still no tools, no session kept. Config `enhanceContextChars` sets the size (0 = none);
+a request with `"context": false` leaves it out. Checks: **R510**, the unit test
+`the_context_is_the_first_message_and_the_newest_turns_without_tools`.
+
 ## 5.42.1 — 2026-11-01
 
 PATCH: **the theme picker is a proper dropdown and opens on top of everything** (Sponge: it popped up behind
