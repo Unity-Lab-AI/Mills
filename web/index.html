@@ -459,10 +459,14 @@
   #convTitle { cursor: pointer; }
 
   .themeWrap { position: relative; }
-  #themeMenu { position: absolute; right: 0; top: calc(100% + .3rem); z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
+  /* 5.42.1: a real dropdown: the button shows the current theme with a caret; the list opens on top of everything (moved
+     to the body, fixed under the button: the header's own stacking no longer hides it) and works from the keyboard */
+  #themeBtn { display: inline-flex; align-items: center; gap: .45rem; } #themeBtn .thSw { width: 1.3rem; height: .8rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
+  #themeBtn .thCaret { width: .9rem; height: .9rem; opacity: .7; transition: transform .15s; } #themeBtn[aria-expanded="true"] .thCaret { transform: rotate(180deg); }
+  #themeMenu { position: fixed; z-index: 1000; box-shadow: 0 10px 30px rgba(0,0,0,.35); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
   #themeMenu button { background: transparent; color: var(--text); text-align: left; font-weight: 400; padding: .4rem .6rem; border-radius: 6px; display: flex; align-items: center; gap: .5rem; }
   #themeMenu button:hover { background: var(--line); }
-  #themeMenu button.on { outline: 1px solid var(--accent); }
+  #themeMenu button.on { outline: 1px solid var(--accent); } #themeMenu button:focus-visible { background: var(--line); outline: 2px solid var(--accent); }
   #themeMenu i { width: 1.6rem; height: .9rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
 
   /* main menu */
@@ -1312,8 +1316,8 @@
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
-    <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
-      <div id="themeMenu" hidden></div></span>
+    <span class="themeWrap"><button type="button" class="ghost" id="themeBtn" title="Change UI colours" aria-haspopup="listbox" aria-expanded="false"><i class="thSw"></i><span id="themeName">Theme</span><svg class="ic thCaret"><use href="#i-down"/></svg></button>
+      <div id="themeMenu" role="listbox" aria-label="Theme" hidden></div></span>
     <button class="ghost" id="logout">Sign out</button>
   </header>
   <main id="app">
@@ -1556,6 +1560,7 @@ function applyTheme(name) {
     s.setProperty('color-scheme', isLight(t.bg) ? 'light' : 'dark');
   }
   store.set('mills.theme', t ? name : '');
+  try { paintThemeBtn(); } catch {} // the header dropdown shows it (not ready yet at page start: painted when it is)
 }
 applyTheme(store.get('mills.theme'));
 
@@ -3475,23 +3480,48 @@ $('convTitle').onclick = () => { if (archiveId) renameConversation(archiveId, ar
 
 // ── Theme picker ── (the theme is an app setting on the account: it follows the person to every browser)
 function saveThemeChoice(name) { if (me) json('/api/prefs', { method: 'POST', body: JSON.stringify({ theme: name || '' }) }).then((d) => { me.prefs = d.prefs; }).catch(() => {}); }
+const themeLabel = (name) => (name ? name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'VibeRoller default');
+const themeSwatch = (name) => { const t = THEMES[name]; return t ? `linear-gradient(90deg, ${t.bg} 50%, ${t.accent} 50%)` : 'linear-gradient(90deg, #0f1115 50%, #7c9cff 50%)'; };
+function paintThemeBtn() { const n = store.get('mills.theme') || ''; $('themeName').textContent = themeLabel(n); $('themeBtn').querySelector('.thSw').style.background = themeSwatch(n); }
 function buildThemeMenu() {
   const menu = $('themeMenu'), current = store.get('mills.theme') || '';
   menu.innerHTML = '';
-  const add = (name, label, t) => {
+  const add = (name) => {
     const b = document.createElement('button');
-    b.type = 'button'; b.className = name === current ? 'on' : '';
-    const sw = document.createElement('i');
-    sw.style.background = t ? `linear-gradient(90deg, ${t.bg} 50%, ${t.accent} 50%)` : 'linear-gradient(90deg, #0f1115 50%, #7c9cff 50%)';
-    b.append(sw, label);
-    b.onclick = () => { applyTheme(name); menu.hidden = true; saveThemeChoice(name); };
+    b.type = 'button'; b.className = name === current ? 'on' : ''; b.setAttribute('role', 'option'); b.setAttribute('aria-selected', String(name === current)); b.tabIndex = -1;
+    const sw = document.createElement('i'); sw.style.background = themeSwatch(name);
+    b.append(sw, themeLabel(name));
+    b.onclick = () => { applyTheme(name); saveThemeChoice(name); closeThemeMenu(true); };
     menu.append(b);
   };
-  add('', 'VibeRoller default', null);
-  for (const [name, t] of Object.entries(THEMES)) add(name, name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()), t);
+  add('');
+  for (const name of Object.keys(THEMES)) add(name);
 }
-$('themeBtn').onclick = (e) => { e.stopPropagation(); const m = $('themeMenu'); if (m.hidden) buildThemeMenu(); m.hidden = !m.hidden; };
-document.addEventListener('click', (e) => { if (!e.target.closest('.themeWrap')) $('themeMenu').hidden = true; });
+function placeThemeMenu() { // under the button, kept inside the window
+  const m = $('themeMenu'), r = $('themeBtn').getBoundingClientRect(), w = Math.max(220, m.offsetWidth);
+  m.style.top = Math.min(r.bottom + 6, innerHeight - 120) + 'px';
+  m.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
+  m.style.maxHeight = Math.max(160, innerHeight - r.bottom - 20) + 'px';
+}
+let themeBefore = ''; // the theme when the list opened: Escape goes back to it (the arrows preview)
+function openThemeMenu() {
+  const m = $('themeMenu');
+  if (m.parentElement !== document.body) document.body.append(m); // out of the header: nothing can cover it
+  themeBefore = store.get('mills.theme') || ''; buildThemeMenu(); m.hidden = false; placeThemeMenu(); $('themeBtn').setAttribute('aria-expanded', 'true');
+  const on = m.querySelector('.on') || m.firstChild; on.scrollIntoView({ block: 'nearest' }); on.focus();
+}
+function closeThemeMenu(focusBtn) { const m = $('themeMenu'); if (m.hidden) return; m.hidden = true; $('themeBtn').setAttribute('aria-expanded', 'false'); paintThemeBtn(); if (focusBtn) $('themeBtn').focus(); }
+$('themeBtn').onclick = (e) => { e.stopPropagation(); if ($('themeMenu').hidden) openThemeMenu(); else closeThemeMenu(); };
+$('themeBtn').addEventListener('keydown', (e) => { if (['ArrowDown', 'ArrowUp'].includes(e.key) && $('themeMenu').hidden) { e.preventDefault(); openThemeMenu(); } });
+$('themeMenu').addEventListener('keydown', (e) => {
+  const items = [...$('themeMenu').querySelectorAll('button')], i = items.indexOf(document.activeElement);
+  const go = (j) => { e.preventDefault(); const b = items[Math.max(0, Math.min(items.length - 1, j))]; b.focus(); applyTheme(b === items[0] ? '' : Object.keys(THEMES)[items.indexOf(b) - 1]); }; // arrows preview the theme
+  if (e.key === 'ArrowDown') go(i + 1); else if (e.key === 'ArrowUp') go(i - 1); else if (e.key === 'Home') go(0); else if (e.key === 'End') go(items.length - 1);
+  else if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); applyTheme(themeBefore); closeThemeMenu(true); }
+});
+document.addEventListener('click', (e) => { if (!e.target.closest('.themeWrap') && !e.target.closest('#themeMenu')) closeThemeMenu(); });
+addEventListener('resize', () => { if (!$('themeMenu').hidden) placeThemeMenu(); });
+paintThemeBtn();
 
 // ── Chat room: end-to-end encrypted ──
 // Each account has an ECDH P-256 key pair made in the browser. The private key stays in this

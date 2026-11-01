@@ -4152,6 +4152,18 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R508', 'the Work conversation reads like a document (plans/visual-refresh.md): one centred reading column, the assistant\'s answers without a bubble, serif headings in answers, quiet tool chips, the composer as a floating card, code blocks tinted from the theme (readable on light themes too), the person\'s bubble from the theme\'s colours only, and a Warm theme in the menu [static: no browser in the suite]',
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
+  { // R509 (5.42.1): the theme picker is a real dropdown that opens on top of everything. [static] no browser in the suite
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const seen = {
+      button: /id="themeBtn"[^>]*aria-haspopup="listbox"[^>]*aria-expanded="false"[^>]*><i class="thSw"><\/i><span id="themeName">/.test(page),
+      listbox: /id="themeMenu" role="listbox"/.test(page) && /setAttribute\('role', 'option'\)/.test(page) && /setAttribute\('aria-selected'/.test(page),
+      onTop: /#themeMenu \{ position: fixed; z-index: 1000;/.test(page) && /document\.body\.append\(m\); \/\/ out of the header/.test(page),
+      keyboard: /e\.key === 'ArrowDown'\) go\(i \+ 1\)/.test(page) && /e\.key === 'Escape'[^\n]*applyTheme\(themeBefore\)/.test(page),
+      label: /try \{ paintThemeBtn\(\); \} catch \{\}/.test(page),
+    };
+    check('R509', 'the theme picker is a real dropdown: the header button shows the current theme (swatch + name + caret) and says it opens a list; the list is a listbox of options that opens on top of everything (fixed, moved out of the header), works from the keyboard (arrows preview, Escape goes back) and the button follows every theme change [static: no browser in the suite]',
+      Object.values(seen).every(Boolean), JSON.stringify(seen));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.

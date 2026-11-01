@@ -7,6 +7,15 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.42.1 — 2026-11-01
+
+PATCH: **the theme picker is a proper dropdown and opens on top of everything** (Sponge: it popped up behind
+everything, and it was a plain button). The header button now shows the current theme (swatch, name, caret) and says it
+opens a list; the list is moved to the page body and placed fixed under the button with a high z-index, so no panel or
+header stacking can cover it, and it stays inside the window. It is a listbox: arrow keys move through it and preview
+each theme, Enter / click picks, Escape (or Tab) goes back to the theme you had; a click outside closes it. The button
+follows every theme change (Settings, another browser). Check: **R509** (static). web/index.html 1.35.1.
+
 ## 5.42.0 — 2026-10-31
 
 MINOR: **visual refresh 1: the Work conversation reads like a document** (Sponge, 2026-10-31: "clean room implementing
