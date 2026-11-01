@@ -459,10 +459,14 @@
   #convTitle { cursor: pointer; }
 
   .themeWrap { position: relative; }
-  #themeMenu { position: absolute; right: 0; top: calc(100% + .3rem); z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
+  /* 5.42.1: a real dropdown: the button shows the current theme with a caret; the list opens on top of everything (moved
+     to the body, fixed under the button: the header's own stacking no longer hides it) and works from the keyboard */
+  #themeBtn { display: inline-flex; align-items: center; gap: .45rem; } #themeBtn .thSw { width: 1.3rem; height: .8rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
+  #themeBtn .thCaret { width: .9rem; height: .9rem; opacity: .7; transition: transform .15s; } #themeBtn[aria-expanded="true"] .thCaret { transform: rotate(180deg); }
+  #themeMenu { position: fixed; z-index: 1000; box-shadow: 0 10px 30px rgba(0,0,0,.35); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
   #themeMenu button { background: transparent; color: var(--text); text-align: left; font-weight: 400; padding: .4rem .6rem; border-radius: 6px; display: flex; align-items: center; gap: .5rem; }
   #themeMenu button:hover { background: var(--line); }
-  #themeMenu button.on { outline: 1px solid var(--accent); }
+  #themeMenu button.on { outline: 1px solid var(--accent); } #themeMenu button:focus-visible { background: var(--line); outline: 2px solid var(--accent); }
   #themeMenu i { width: 1.6rem; height: .9rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
 
   /* main menu */
@@ -834,6 +838,31 @@
   .modal .box { max-width: calc(100vw - 16px); }
   #msgMenu { max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; }
   img, video, audio, canvas { max-width: 100%; }
+  /* ---- Visual refresh 1 (5.42.0; team note plans/visual-refresh.md, clean room): the Work conversation reads like a
+     document in one centred column; the assistant's text has no bubble, the person's messages are soft bubbles, tool and
+     status lines stay quiet, answers' headings use a serif face, the composer is a floating card. Theme variables only,
+     so every theme gets it. ---- */
+  :root { --read-w: 46rem; --serif: "Iowan Old Style", "Charter", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif; }
+  #chat #log { padding: 1.4rem max(1rem, calc((100% - var(--read-w)) / 2)) 1rem; gap: .9rem; }
+  #chat #log .msg { line-height: 1.62; }
+  #chat #log .msg.claude { background: transparent; border: 0; box-shadow: none; padding: .1rem 0; font-size: .97rem; }
+  #chat #log .msg.me { background: color-mix(in srgb, var(--me) 82%, var(--bg)); border-radius: 1.15rem; padding: .55rem .95rem; max-width: 80%;
+    border: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+  #chat #log .msg.claude .md h1.mdh, #chat #log .msg.claude .md h2.mdh, #chat #log .msg.claude .md h3 { font-family: var(--serif); font-weight: 500; letter-spacing: .005em; border-bottom: 0; }
+  #chat #log .msg.claude .md h1.mdh { font-size: 1.45rem; } #chat #log .msg.claude .md h2.mdh { font-size: 1.22rem; }
+  #chat #log .msg pre { border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); border-radius: 10px; }
+  /* code blocks take a tint of the theme (the old fixed near-black made code unreadable on every light theme) */
+  .msg pre, .rmsg pre { background: color-mix(in srgb, var(--text) 7%, var(--bg)); color: var(--text); }
+  #chat #log .tool { border-left: 0; background: color-mix(in srgb, var(--panel) 60%, transparent); border-radius: 8px; padding: .25rem .6rem; font-size: .76rem; opacity: .85; align-self: flex-start; max-width: 100%; }
+  #chat #log .tool:hover { opacity: 1; }
+  #chat #log .sys { font-size: .74rem; opacity: .8; }
+  #chat #composer { margin: .4rem max(.75rem, calc((100% - var(--read-w)) / 2 - .5rem)) 1rem; padding: .55rem .6rem .55rem .7rem; border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+    border-radius: 1.25rem; background: var(--panel); box-shadow: 0 6px 24px rgba(0,0,0,.22); }
+  #chat #composer textarea { background: transparent; border: 0; outline: none; box-shadow: none; padding: .45rem .3rem; line-height: 1.5; height: 3.1rem; }
+  #chat #composer textarea:focus { outline: none; box-shadow: none; }
+  #chat #composer:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  #chat #composer .sendCol button { border-radius: .8rem; }
+  @media (max-width: 720px) { #chat #log { padding: 1rem .75rem; } #chat #composer { margin: .3rem .5rem .6rem; } #chat #log .msg.me { max-width: 90%; } }
 </style>
 <!-- the finish: depth, surfaces, tiles, rail, cards and badges, all built from the theme's variables (loaded last, so it wins) -->
 <link rel="stylesheet" href="polish.css">
@@ -1287,8 +1316,8 @@
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
-    <span class="themeWrap"><button class="ghost" id="themeBtn" title="Change UI colours">Theme</button>
-      <div id="themeMenu" hidden></div></span>
+    <span class="themeWrap"><button type="button" class="ghost" id="themeBtn" title="Change UI colours" aria-haspopup="listbox" aria-expanded="false"><i class="thSw"></i><span id="themeName">Theme</span><svg class="ic thCaret"><use href="#i-down"/></svg></button>
+      <div id="themeMenu" role="listbox" aria-label="Theme" hidden></div></span>
     <button class="ghost" id="logout">Sign out</button>
   </header>
   <main id="app">
@@ -1502,7 +1531,7 @@ $('username').value = (new URLSearchParams(location.search).get('user') || store
 if ($('username').value) $('password').focus();
 
 // UI colour themes — palettes taken from the shared themes collection.
-const THEMES = {"burple":{"bg":"#1E1B33","text":"#FFFFFF","panel":"#241E42","line":"#3C3272","accent":"#524696","me":"#3C3272","meText":"#FFFFFF"},"cyberpunk":{"bg":"#0D0221","text":"#FF00E2","panel":"#18033F","line":"#390978","accent":"#390978","me":"#2E0B5F","meText":"#FF00E2"},"dark":{"bg":"#121212","text":"#e0e0e0","panel":"#1e1e1e","line":"#333333","accent":"#2196f3","me":"#2c3e50","meText":"#e0e0e0"},"dracula":{"bg":"#282A36","text":"#F8F8F2","panel":"#44475A","line":"#6272A4","accent":"#6272A4","me":"#BD93F9","meText":"#282A36"},"gruvbox_dark":{"bg":"#282828","text":"#EBDBB2","panel":"#3C3836","line":"#504945","accent":"#8EC07C","me":"#8EC07C","meText":"#282828"},"gruvbox_light":{"bg":"#FBF1C7","text":"#3C3836","panel":"#F2E5BC","line":"#EBDBB2","accent":"#D5C4A1","me":"#D5C4A1","meText":"#3C3836"},"hacker":{"bg":"#000000","text":"#00ff00","panel":"#001100","line":"#005500","accent":"#005500","me":"#003300","meText":"#00ff00"},"honeycomb":{"bg":"#FFF9E3","text":"#5D4037","panel":"#FFF3E0","line":"#FFCC80","accent":"#FFD54F","me":"#FFD54F","meText":"#4E342E"},"light":{"bg":"#ffffff","text":"#333333","panel":"#f5f5f5","line":"#e0e0e0","accent":"#2196f3","me":"#e3f2fd","meText":"#333333"},"material_dark":{"bg":"#212121","text":"#ECEFF1","panel":"#2C2C2C","line":"#424242","accent":"#546E7A","me":"#546E7A","meText":"#ECEFF1"},"material_light":{"bg":"#FAFAFA","text":"#212121","panel":"#E0E0E0","line":"#BDBDBD","accent":"#90CAF9","me":"#90CAF9","meText":"#212121"},"monokai":{"bg":"#272822","text":"#F8F8F2","panel":"#3E3D32","line":"#75715E","accent":"#A6E22E","me":"#A6E22E","meText":"#272822"},"nord":{"bg":"#2E3440","text":"#D8DEE9","panel":"#3B4252","line":"#4C566A","accent":"#5E81AC","me":"#5E81AC","meText":"#ECEFF4"},"ocean_breeze":{"bg":"#006A71","text":"#CDEFF3","panel":"#00505A","line":"#00A6B2","accent":"#00A6B2","me":"#00A6B2","meText":"#00383C"},"oled":{"bg":"#000000","text":"#FFFFFF","panel":"#000000","line":"#222222","accent":"#333333","me":"#111111","meText":"#FFFFFF"},"pastel_dream":{"bg":"#EAE6FF","text":"#216869","panel":"#D6D1F2","line":"#BAADF2","accent":"#AEE6E6","me":"#AEE6E6","meText":"#2D2D34"},"pretty_pink":{"bg":"#FFC0CB","text":"#112244","panel":"#FFB1C2","line":"#EEA0B0","accent":"#FFA1B5","me":"#FFA1B5","meText":"#112244"},"rainbow_throwup":{"bg":"#FDFFB6","text":"#2C2C2C","panel":"#9BF6FF","line":"#A0C4FF","accent":"#CAFFBF","me":"#CAFFBF","meText":"#2C2C2C"},"serenity":{"bg":"#F0F8FF","text":"#2F4F4F","panel":"#E6F2F8","line":"#B0C4DE","accent":"#87CEEB","me":"#AFEEEE","meText":"#2F4F4F"},"solarized_dark":{"bg":"#002B36","text":"#EEE8D5","panel":"#073642","line":"#586E75","accent":"#268BD2","me":"#268BD2","meText":"#FDF6E3"},"solarized_light":{"bg":"#FDF6E3","text":"#657B83","panel":"#EEE8D5","line":"#D6CFBA","accent":"#B3D9A5","me":"#B3D9A5","meText":"#073642"},"subtle_light":{"bg":"#F8F6F1","text":"#2C2C2C","panel":"#F0EDE8","line":"#CCC8C0","accent":"#D7D2C7","me":"#DDDAD3","meText":"#2C2C2C"},"vintage_paper":{"bg":"#F5F1E3","text":"#5A4632","panel":"#EBE4D2","line":"#C9BEA5","accent":"#DCCBA6","me":"#DCCBA6","meText":"#4A3726"}};
+const THEMES = {"warm":{"bg":"#1b1a18","text":"#ecebe6","panel":"#23221f","line":"#36332e","accent":"#c98a5e","me":"#2e2c28","meText":"#ecebe6"},"burple":{"bg":"#1E1B33","text":"#FFFFFF","panel":"#241E42","line":"#3C3272","accent":"#524696","me":"#3C3272","meText":"#FFFFFF"},"cyberpunk":{"bg":"#0D0221","text":"#FF00E2","panel":"#18033F","line":"#390978","accent":"#390978","me":"#2E0B5F","meText":"#FF00E2"},"dark":{"bg":"#121212","text":"#e0e0e0","panel":"#1e1e1e","line":"#333333","accent":"#2196f3","me":"#2c3e50","meText":"#e0e0e0"},"dracula":{"bg":"#282A36","text":"#F8F8F2","panel":"#44475A","line":"#6272A4","accent":"#6272A4","me":"#BD93F9","meText":"#282A36"},"gruvbox_dark":{"bg":"#282828","text":"#EBDBB2","panel":"#3C3836","line":"#504945","accent":"#8EC07C","me":"#8EC07C","meText":"#282828"},"gruvbox_light":{"bg":"#FBF1C7","text":"#3C3836","panel":"#F2E5BC","line":"#EBDBB2","accent":"#D5C4A1","me":"#D5C4A1","meText":"#3C3836"},"hacker":{"bg":"#000000","text":"#00ff00","panel":"#001100","line":"#005500","accent":"#005500","me":"#003300","meText":"#00ff00"},"honeycomb":{"bg":"#FFF9E3","text":"#5D4037","panel":"#FFF3E0","line":"#FFCC80","accent":"#FFD54F","me":"#FFD54F","meText":"#4E342E"},"light":{"bg":"#ffffff","text":"#333333","panel":"#f5f5f5","line":"#e0e0e0","accent":"#2196f3","me":"#e3f2fd","meText":"#333333"},"material_dark":{"bg":"#212121","text":"#ECEFF1","panel":"#2C2C2C","line":"#424242","accent":"#546E7A","me":"#546E7A","meText":"#ECEFF1"},"material_light":{"bg":"#FAFAFA","text":"#212121","panel":"#E0E0E0","line":"#BDBDBD","accent":"#90CAF9","me":"#90CAF9","meText":"#212121"},"monokai":{"bg":"#272822","text":"#F8F8F2","panel":"#3E3D32","line":"#75715E","accent":"#A6E22E","me":"#A6E22E","meText":"#272822"},"nord":{"bg":"#2E3440","text":"#D8DEE9","panel":"#3B4252","line":"#4C566A","accent":"#5E81AC","me":"#5E81AC","meText":"#ECEFF4"},"ocean_breeze":{"bg":"#006A71","text":"#CDEFF3","panel":"#00505A","line":"#00A6B2","accent":"#00A6B2","me":"#00A6B2","meText":"#00383C"},"oled":{"bg":"#000000","text":"#FFFFFF","panel":"#000000","line":"#222222","accent":"#333333","me":"#111111","meText":"#FFFFFF"},"pastel_dream":{"bg":"#EAE6FF","text":"#216869","panel":"#D6D1F2","line":"#BAADF2","accent":"#AEE6E6","me":"#AEE6E6","meText":"#2D2D34"},"pretty_pink":{"bg":"#FFC0CB","text":"#112244","panel":"#FFB1C2","line":"#EEA0B0","accent":"#FFA1B5","me":"#FFA1B5","meText":"#112244"},"rainbow_throwup":{"bg":"#FDFFB6","text":"#2C2C2C","panel":"#9BF6FF","line":"#A0C4FF","accent":"#CAFFBF","me":"#CAFFBF","meText":"#2C2C2C"},"serenity":{"bg":"#F0F8FF","text":"#2F4F4F","panel":"#E6F2F8","line":"#B0C4DE","accent":"#87CEEB","me":"#AFEEEE","meText":"#2F4F4F"},"solarized_dark":{"bg":"#002B36","text":"#EEE8D5","panel":"#073642","line":"#586E75","accent":"#268BD2","me":"#268BD2","meText":"#FDF6E3"},"solarized_light":{"bg":"#FDF6E3","text":"#657B83","panel":"#EEE8D5","line":"#D6CFBA","accent":"#B3D9A5","me":"#B3D9A5","meText":"#073642"},"subtle_light":{"bg":"#F8F6F1","text":"#2C2C2C","panel":"#F0EDE8","line":"#CCC8C0","accent":"#D7D2C7","me":"#DDDAD3","meText":"#2C2C2C"},"vintage_paper":{"bg":"#F5F1E3","text":"#5A4632","panel":"#EBE4D2","line":"#C9BEA5","accent":"#DCCBA6","me":"#DCCBA6","meText":"#4A3726"}};
 const isLight = (hex) => {
   const h = hex.length === 4 ? hex.slice(1).split('').map((c) => c + c).join('') : hex.slice(1);
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -1531,6 +1560,7 @@ function applyTheme(name) {
     s.setProperty('color-scheme', isLight(t.bg) ? 'light' : 'dark');
   }
   store.set('mills.theme', t ? name : '');
+  try { paintThemeBtn(); } catch {} // the header dropdown shows it (not ready yet at page start: painted when it is)
 }
 applyTheme(store.get('mills.theme'));
 
@@ -3450,23 +3480,48 @@ $('convTitle').onclick = () => { if (archiveId) renameConversation(archiveId, ar
 
 // ── Theme picker ── (the theme is an app setting on the account: it follows the person to every browser)
 function saveThemeChoice(name) { if (me) json('/api/prefs', { method: 'POST', body: JSON.stringify({ theme: name || '' }) }).then((d) => { me.prefs = d.prefs; }).catch(() => {}); }
+const themeLabel = (name) => (name ? name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'VibeRoller default');
+const themeSwatch = (name) => { const t = THEMES[name]; return t ? `linear-gradient(90deg, ${t.bg} 50%, ${t.accent} 50%)` : 'linear-gradient(90deg, #0f1115 50%, #7c9cff 50%)'; };
+function paintThemeBtn() { const n = store.get('mills.theme') || ''; $('themeName').textContent = themeLabel(n); $('themeBtn').querySelector('.thSw').style.background = themeSwatch(n); }
 function buildThemeMenu() {
   const menu = $('themeMenu'), current = store.get('mills.theme') || '';
   menu.innerHTML = '';
-  const add = (name, label, t) => {
+  const add = (name) => {
     const b = document.createElement('button');
-    b.type = 'button'; b.className = name === current ? 'on' : '';
-    const sw = document.createElement('i');
-    sw.style.background = t ? `linear-gradient(90deg, ${t.bg} 50%, ${t.accent} 50%)` : 'linear-gradient(90deg, #0f1115 50%, #7c9cff 50%)';
-    b.append(sw, label);
-    b.onclick = () => { applyTheme(name); menu.hidden = true; saveThemeChoice(name); };
+    b.type = 'button'; b.className = name === current ? 'on' : ''; b.setAttribute('role', 'option'); b.setAttribute('aria-selected', String(name === current)); b.tabIndex = -1;
+    const sw = document.createElement('i'); sw.style.background = themeSwatch(name);
+    b.append(sw, themeLabel(name));
+    b.onclick = () => { applyTheme(name); saveThemeChoice(name); closeThemeMenu(true); };
     menu.append(b);
   };
-  add('', 'VibeRoller default', null);
-  for (const [name, t] of Object.entries(THEMES)) add(name, name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()), t);
+  add('');
+  for (const name of Object.keys(THEMES)) add(name);
 }
-$('themeBtn').onclick = (e) => { e.stopPropagation(); const m = $('themeMenu'); if (m.hidden) buildThemeMenu(); m.hidden = !m.hidden; };
-document.addEventListener('click', (e) => { if (!e.target.closest('.themeWrap')) $('themeMenu').hidden = true; });
+function placeThemeMenu() { // under the button, kept inside the window
+  const m = $('themeMenu'), r = $('themeBtn').getBoundingClientRect(), w = Math.max(220, m.offsetWidth);
+  m.style.top = Math.min(r.bottom + 6, innerHeight - 120) + 'px';
+  m.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
+  m.style.maxHeight = Math.max(160, innerHeight - r.bottom - 20) + 'px';
+}
+let themeBefore = ''; // the theme when the list opened: Escape goes back to it (the arrows preview)
+function openThemeMenu() {
+  const m = $('themeMenu');
+  if (m.parentElement !== document.body) document.body.append(m); // out of the header: nothing can cover it
+  themeBefore = store.get('mills.theme') || ''; buildThemeMenu(); m.hidden = false; placeThemeMenu(); $('themeBtn').setAttribute('aria-expanded', 'true');
+  const on = m.querySelector('.on') || m.firstChild; on.scrollIntoView({ block: 'nearest' }); on.focus();
+}
+function closeThemeMenu(focusBtn) { const m = $('themeMenu'); if (m.hidden) return; m.hidden = true; $('themeBtn').setAttribute('aria-expanded', 'false'); paintThemeBtn(); if (focusBtn) $('themeBtn').focus(); }
+$('themeBtn').onclick = (e) => { e.stopPropagation(); if ($('themeMenu').hidden) openThemeMenu(); else closeThemeMenu(); };
+$('themeBtn').addEventListener('keydown', (e) => { if (['ArrowDown', 'ArrowUp'].includes(e.key) && $('themeMenu').hidden) { e.preventDefault(); openThemeMenu(); } });
+$('themeMenu').addEventListener('keydown', (e) => {
+  const items = [...$('themeMenu').querySelectorAll('button')], i = items.indexOf(document.activeElement);
+  const go = (j) => { e.preventDefault(); const b = items[Math.max(0, Math.min(items.length - 1, j))]; b.focus(); applyTheme(b === items[0] ? '' : Object.keys(THEMES)[items.indexOf(b) - 1]); }; // arrows preview the theme
+  if (e.key === 'ArrowDown') go(i + 1); else if (e.key === 'ArrowUp') go(i - 1); else if (e.key === 'Home') go(0); else if (e.key === 'End') go(items.length - 1);
+  else if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); applyTheme(themeBefore); closeThemeMenu(true); }
+});
+document.addEventListener('click', (e) => { if (!e.target.closest('.themeWrap') && !e.target.closest('#themeMenu')) closeThemeMenu(); });
+addEventListener('resize', () => { if (!$('themeMenu').hidden) placeThemeMenu(); });
+paintThemeBtn();
 
 // ── Chat room: end-to-end encrypted ──
 // Each account has an ECDH P-256 key pair made in the browser. The private key stays in this
