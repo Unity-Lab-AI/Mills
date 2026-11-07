@@ -7,6 +7,38 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.47.0 — 2026-11-07
+
+MINOR: **four of Mills's page tasks at once**: the Theme menu on top, tool calls grouped in Work, one menu kit for
+right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-224, T-298). Page only; no hub change.
+
+- **The Theme menu opens on top of every panel** (T-291; Sponge: it hid under the team chat and AI chat). The list lives
+  in the page itself, not in the header, whose scrolling and blur clipped it. It sits on the menu layer: above panels,
+  floating windows and the message menu, below real dialogs. It opens under the Theme button, or upwards when there is
+  more room, and stays inside the window on wide and narrow screens. Check: **R527** (the placement runs on wide,
+  narrow, low and tiny windows).
+- **Tool calls in the Work transcript** (T-318, `web/tools.js` 1.0.0). Consecutive calls of the same kind (2 Reads,
+  3 Bash calls…) fold into one group, in the order they arrive, live and in restored conversations alike, collapsed
+  behind "show tools", with an "Always expand tool calls" choice remembered per person. Each call is one line (up to 32
+  characters whole, longer as the first 15 … the last 15). A click shows it whole, with the parts of a command coloured
+  by risk (looks safe / unknown / check it / possibly unsafe) and marked with a shape too, never colour alone. Nothing
+  is blocked. Checks: **R528**, **R529**.
+- **One menu kit for right-click and ⋯** (T-223, `web/menu.js` 1.0.0). Right-click, a long-press on touch, the
+  ContextMenu key and a ⋯ button open the same menu from one list. It stays on screen, has sub-menus that flip at the
+  edge, icons and shortcuts, and arrows / Enter / Esc with focus returned. Shift + right-click, text fields and
+  "Browser menu" still give the browser's own. **VibeRoller's menus** (T-224) cover chat messages, people, channels,
+  groups, servers, board cards, notes, files, Work messages and saved conversations. They offer only what you may do and
+  call the actions the page already had. The Work session list now shows through the kit. Checks: **R530**, **R531**.
+- **Agent threads in the page** (T-298 = T-294 · 4/6, `web/agents.js` 1.0.0). An Agents panel in Work, plus a menu
+  tile, shows every message to and from your agent as a thread per agent pair: both directions, with who, kind, time
+  and status, and the session it went into one click away. Your controls sit on top: pause your agent's inbox, "ask me
+  first" for hand-offs, questions and reviews, and mute per pair. A held message gets an Accept / Decline card
+  (accepting a hand-off makes its task yours). New messages notify like the rest of the page; Do Not Disturb mutes only
+  the notification. A hub without `/api/agents` shows nothing. Checks: **R532** (through the Rust hub's real routes),
+  **R532b** (a hub without them); **R482p** is a plain check now.
+- Modules: `web/index.html` 1.39.0, `web/sessions.js` 1.2.0, `web/guilds.js` 1.2.0, `web/board.js` 1.2.0,
+  `web/notes.js` 1.1.0, `web/library.js` 1.2.0, `web/polish.css` 1.0.3, `web/sw.js` 1.0.9 (caches the three new files).
+
 ## 5.46.3 — 2026-11-07
 
 PATCH: **one more hub-written folder ignored: `bridge/work-sessions/`** (the per-session files of the Work session
