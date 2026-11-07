@@ -7352,7 +7352,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   // R527 to R532 (T-335, plans/dev-hub.md § 9): dev borrows live's AI hosts over the bridge. Two Rust hubs of their own,
   // paired by config sync as in R491 (a = live, b = dev with instance dev), and a stand-in AI host played by the test (a 2.x
   // host: no caps, so the hub probes its logins; its "claude" relays, its "cli" runs Work on its own machine) connected to
-  // live ONLY. What a person sees on dev, driven over HTTP like people would.
+  // live ONLY. What a person sees on dev, driven over HTTP like people would. Written as spec() first (T-336); plain checks
+  // since T-337 to T-339 built it.
   async function r527Check() {
     const seen = {}; const procs = {}; const base = path.join(SCRATCH, 'r527'); const secret = crypto.randomBytes(24).toString('hex');
     const pA = await freePort(PORT + 91), pB = await freePort(pA + 1), pHr = await freePort(pB + 1);
@@ -7573,15 +7574,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     } finally { host.stop = true; try { hrSrv.close(); } catch {} await stop('a'); await stop('b'); }
     const R = seen.r527 || {}, S = seen.r528 || {}, T = seen.r529 || {}, P = seen.r530 || {}, N = seen.r531 || {}, Q = seen.r532 || {};
     const base0 = seen.startA && seen.startB && seen.signedIn && seen.hostUp && seen.scope === 200;
-    spec('R527', L527.R527, base0 && R.pickM2 === 200 && R.devU && R.devU === R.liveU && R.devM === R.liveM && R.viaPeer && JSON.stringify(R.uModels) === '["m1"]' && /not the model m2/.test(R.scopedErr || '') && /mills/i.test(R.scopedErr || ''), JSON.stringify({ base0, ...R }));
-    spec('R528', L527.R528, base0 && /^relay=200:r528 upstream through live/.test(S.relayed || '') && S.hrUp && /^relay=200:r528 upstream through live/.test(S.viaHr || '') && S.hrInfo && S.hrSaw && S.hostRelays >= 2
+    check('R527', L527.R527, base0 && R.pickM2 === 200 && R.devU && R.devU === R.liveU && R.devM === R.liveM && R.viaPeer && JSON.stringify(R.uModels) === '["m1"]' && /not the model m2/.test(R.scopedErr || '') && /mills/i.test(R.scopedErr || ''), JSON.stringify({ base0, ...R }));
+    check('R528', L527.R528, base0 && /^relay=200:r528 upstream through live/.test(S.relayed || '') && S.hrUp && /^relay=200:r528 upstream through live/.test(S.viaHr || '') && S.hrInfo && S.hrSaw && S.hostRelays >= 2
       && S.run2 && S.run2.ran && S.stop === 200 && S.cancelled && S.ticks, JSON.stringify(S));
-    spec('R529', L527.R529, base0 && T.hubUrl === `http://127.0.0.1:${pB}` && String(T.mcpBase || '').startsWith(`http://127.0.0.1:${pB}/node/job/`) && T.devTool === 200 && !!T.id && T.onDev === 'r529 made by the host run' && T.synced && T.liveTool === 403, JSON.stringify(T));
-    spec('R530', L527.R530, base0 && /r530 listing from the host/.test(P.own || '') && (P.pcs || []).length >= 1 && P.pcs[0].kid === P.hubKid && !!P.hubKid && P.pcs[0].owner === 'mills' && P.pcs[0].actor === 'mills'
+    check('R529', L527.R529, base0 && T.hubUrl === `http://127.0.0.1:${pB}` && String(T.mcpBase || '').startsWith(`http://127.0.0.1:${pB}/node/job/`) && T.devTool === 200 && !!T.id && T.onDev === 'r529 made by the host run' && T.synced && T.liveTool === 403, JSON.stringify(T));
+    check('R530', L527.R530, base0 && /r530 listing from the host/.test(P.own || '') && (P.pcs || []).length >= 1 && P.pcs[0].kid === P.hubKid && !!P.hubKid && P.pcs[0].owner === 'mills' && P.pcs[0].actor === 'mills'
       && (P.other || []).length === 1 && /^403 /.test(P.other[0]) && /someone else/.test(P.other[0]) && P.hostSawOther === 0 && !P.fallback, JSON.stringify(P));
     const plain = (x) => x && !!x.why && x.gone && /^No AI is available for Work/.test(x.err) && /\(live's AI hosts are not reachable from dev right now\)/.test(x.err) && x.chat === 200 && x.board === 200 && x.note === 200;
-    spec('R531', L527.R531, base0 && plain(N.stopped) && plain(N.bridgeOff) && plain(N.shareOff) && N.routeOff === 404 && N.logLines >= 2 && N.logLines <= 8, JSON.stringify(N));
-    spec('R532', L527.R532, base0 && Q.refused && Object.entries(Q.refused).every(([k, s]) => s === 403) && Q.users && Q.users.mills === 200 && Q.users.u === 403 && Q.users.devUp && Q.users.devMills && Q.users.devU === 0
+    check('R531', L527.R531, base0 && plain(N.stopped) && plain(N.bridgeOff) && plain(N.shareOff) && N.routeOff === 404 && N.logLines >= 2 && N.logLines <= 8, JSON.stringify(N));
+    check('R532', L527.R532, base0 && Q.refused && Object.entries(Q.refused).every(([k, s]) => s === 403) && Q.users && Q.users.mills === 200 && Q.users.u === 403 && Q.users.devUp && Q.users.devMills && Q.users.devU === 0
       && Q.audit && ['ai.peer.cancel', 'ai.peer.fetch', 'ai.peer.pc', 'ai.peer.providers', 'ai.peer.work'].every((k) => Q.audit.mills.includes(k)) && ['ai.peer.fetch', 'ai.peer.providers'].every((k) => Q.audit.u.includes(k)) && Q.audit.refusedNobody >= 5, JSON.stringify(Q));
   }
   async function r323Check() {
