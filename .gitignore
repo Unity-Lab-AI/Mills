@@ -105,6 +105,7 @@ bridge/api-keys.json
 bridge/work.json
 bridge/work-current.json
 bridge/work-sessions.json
+bridge/work-sessions/
 bridge/activity/
 # PGM Gateway (5.1.0): its products, their secrets and who each linked
 bridge/gateway/

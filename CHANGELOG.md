@@ -7,6 +7,12 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.46.3 — 2026-11-07
+
+PATCH: **one more hub-written folder ignored: `bridge/work-sessions/`** (the per-session files of the Work session
+list), the last thing that kept the live checkout "uncommitted" after 5.46.2. Both server checkouts got the same rule in
+their local `.git/info/exclude`.
+
 ## 5.46.2 — 2026-11-07
 
 PATCH: **deploys are no longer held up by three more files the hub writes itself.**
