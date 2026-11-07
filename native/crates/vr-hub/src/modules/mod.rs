@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::front::{json as jresp, Body, Hub, Req};
 
 pub mod admin;
+pub mod agents;
 pub mod audit;
 pub mod ai_hosts;
 pub mod profile;
@@ -562,6 +563,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if let Some(u) = &user {
         if let Some(acc) = a.account(u) {
             if let Some(rest) = p.strip_prefix("/api/hyperwork/") { return hyperwork::route(hub, r, &acc, rest).await; }
+            if let Some(x) = agents::route(hub, r, &acc).await { return x; } // agent to agent (T-296): the Rust hub's only
             if let Some(x) = work::route(hub, r, &acc).await { return x; }
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
             if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence

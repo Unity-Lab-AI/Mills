@@ -3540,29 +3540,42 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const L480 = {
       R480: 'agent talk 2/6 (T-296): @t-user resolves to t-user\'s current session: an idle one is woken (the run sees the "[agent message · from @t-admin\'s agent" first line), a working one gets it queued and delivered when its reply ends; the thread exists on both sides with one id; a third person gets 404 on it; the audit has sent / delivered / read with from.run',
       R481: 'agent talk 3/6 (T-297): a run\'s agent_ask (wait: true) to another person is answered by that person\'s run through agent_reply and the asker\'s tool result carries the reply text and thread; wait: false gives {pending} and the reply arrives as a message in the asker\'s session; agents_list shows the person reachable with their state; both MCP lists have the six tools',
-      R482: 'agent talk 4/6 (T-298): mute refuses a send (403 muted) and shows the attempt to the muter only; pause queues (202 queued) and unpause delivers; a hand-off is held by default, told in a private chat line, declined with a note or accepted (then the task is re-assigned to the receiver); DND changes nothing of delivery; the page has the thread panel and the held card',
+      R482: 'agent talk 4/6, the hub (T-296): mute refuses a send (403 muted) and shows the attempt to the muter only; pause queues (202 queued) and unpause delivers; a hand-off is held by default and told in a private chat line, declined with a note (the task stays the sender\'s) or accepted (then the task is re-assigned to the receiver); DND changes nothing of delivery',
+      R482p: 'agent talk 4/6, the page (T-298): the page has the thread panel, the held card and the settings (it calls /api/agents/threads, /api/agents/held and /api/agents/settings)',
       R483: 'agent talk 5/6 (T-299): a source: jcode session report makes @t-user/jcode resolvable; a send to it waits in GET /api/agents/inbox?source=jcode, read marks it, a reply from that side reaches the asker; the message has the same shape both ways (no Claude-only fields)',
-      R484: 'agent talk 6/6 (T-300): an A→B→A→B echo is stopped by the loop detector (stopped, why loop) with one chat line to each person; the 21st message of a pair in an hour is 429 rate; a hand-off of someone else\'s task is held and, declined, leaves the assignee and refuses the receiving run\'s task_claim; a send right after a refused tool carries afterRefusal in the audit; an agent-started run counts in the receiver\'s ledger and time log',
+      R484: 'agent talk 6/6, the hub (T-296): an A→B→A→B echo is stopped by the loop detector (stopped, why loop) before maxHops with one chat line to each person; a hand-off of someone else\'s task is held and, declined, leaves the assignee, and the receiving person\'s agent may not claim it; a send right after a refused tool in the sender\'s run carries afterRefusal in the audit; the 21st message from one person to another in an hour is 429 rate',
+      R484c: 'agent talk 6/6, cost (T-300): an agent-started run counts in the receiver\'s time log with startedBy agent:<sender> (their usage ledger counts it already: it is their run)',
     };
     if (RUST_HUB) {
       const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
       const built = (await ag('settings', U)).status === 200; // the whole feature is there, or none of it
       const seq480 = async () => Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+      // the agents' runs settle: no session of t-user's or t-admin's works for 1.5 s (an agent message wakes a session, and its
+      // answer wakes the asker's; a check that then sends its own message must not find the session busy: 409)
+      const idle480 = async (ms = 30000) => { const end = Date.now() + ms; let calm = 0; while (Date.now() < end) { const n = (await Promise.all([U, A].map((t) => call('/api/work/sessions', t)))).reduce((x, r) => x + (((r.data || {}).counts || {}).working || 0), 0); calm = n === 0 ? calm + 1 : 0; if (calm >= 6) return true; await sleep(250); } return false; };
+      // the session a message went to (to.session, once delivered) and its conversation as the hub keeps it
+      const sessOf480 = async (tok, thread, id) => (((((await ag('thread?id=' + thread, tok)).data || {}).messages || []).find((m) => m.id === id) || {}).to || {}).session || '';
+      const conv480 = async (tok, sid) => ((await call('/api/work/current' + (sid ? '?session=' + sid : ''), tok)).data || {}).transcript || [];
+      // the conversations the agents' runs add to (the woken sessions keep what arrived and the answer): put back as they were
+      // after this block, so the later checks find them as before (R135 expects t-user's and t-admin's first sessions empty)
+      const keep480 = async () => { const out = []; for (const tok of [U, A]) { const sx = (await call('/api/work/sessions', tok)).data || {}; for (const sid of [...new Set([sx.primary, sx.current].filter(Boolean))]) out.push({ tok, sid, cur: (await call('/api/work/current?session=' + sid, tok)).data || {} }); } return out; };
+      const kept480 = built ? await keep480() : [];
       // R480: wake an idle session, queue behind a working one, one thread both sides, audit
       let d480 = 'no /api/agents/* yet';
       if (built) {
+        await idle480();
         const idle = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r480 what is the plan?', refs: { task: 'T-296' }, wait: false });
-        let woke = null; for (let i = 0; i < 40 && !woke; i++) { const cur = (await call('/api/work/current', U)).data || {}; if ((cur.transcript || []).some((t) => /\[agent message · from @t-admin's agent/.test(t.text || ''))) woke = cur; else await sleep(250); }
-        const slow = call('/api/chat', U, { message: 'SLOW r480' }); await sleep(700);
+        let woke = null, sid480 = ''; for (let i = 0; i < 60 && !woke; i++) { sid480 = sid480 || await sessOf480(A, idle.data.thread, idle.data.id); const tr = sid480 ? await conv480(U, sid480) : []; if (tr.some((t) => /\[agent message · from @t-admin's agent/.test(t.text || ''))) woke = tr; else await sleep(250); }
+        const slow = call('/api/chat', U, { message: 'SLOW r480', ...(sid480 ? { session: sid480 } : {}) }); await sleep(700);
         const queued = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r480 second, while busy', thread: idle.data.thread, wait: false }); await slow;
         let delivered = null; for (let i = 0; i < 40 && !delivered; i++) { const m = (await ag('thread?id=' + idle.data.thread, A)).data || {}; const x = (m.messages || []).find((q) => q.id === queued.data.id); if (x && ['delivered', 'read', 'answered'].includes(x.status)) delivered = x; else await sleep(250); }
         const mine = await ag('thread?id=' + idle.data.thread, U), other = await ag('thread?id=' + idle.data.thread, D);
         const audit = await ag('audit?since=0', A);
         const lines = (audit.data && audit.data.lines) || [];
-        d480 = `send ${idle.status} ${JSON.stringify(idle.data).slice(0, 80)}; woke ${!!woke}; queued ${queued.status} ${queued.data && queued.data.status} -> ${delivered && delivered.status}; both sides ${mine.status}/${other.status}; audit ${lines.length}`;
-        spec('R480', L480.R480, idle.status === 202 && !!woke && queued.status === 202 && queued.data.status === 'queued' && !!delivered && mine.status === 200 && (mine.data.messages || []).length >= 2 && other.status === 404
+        d480 = `send ${idle.status} ${JSON.stringify(idle.data).slice(0, 80)}; woke ${!!woke} (session ${sid480}); queued ${queued.status} ${queued.data && queued.data.status} -> ${delivered && delivered.status}; both sides ${mine.status}/${other.status}; audit ${lines.length}`;
+        check('R480', L480.R480, idle.status === 202 && !!woke && queued.status === 202 && queued.data.status === 'queued' && !!delivered && mine.status === 200 && (mine.data.messages || []).length >= 2 && other.status === 404
           && lines.some((l) => l.event === 'sent' && l.id === idle.data.id && typeof l.run === 'string') && lines.some((l) => l.event === 'delivered' && l.id === idle.data.id) && lines.some((l) => l.event === 'read' && l.id === idle.data.id), d480);
-      } else spec('R480', L480.R480, false, d480);
+      } else check('R480', L480.R480, false, d480);
       // R481: the tools (the fake Claude's NOTIFYTOOL calls team tools by name)
       const tools481 = async (calls, tok) => { const r = await chat(tok, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
       const nativeTools481 = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
@@ -3570,13 +3583,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const six = ['agents_list', 'agent_ask', 'agent_handoff', 'agent_review', 'agent_report', 'agent_reply'];
       const listed = six.every((n) => nativeTools481.includes(n) && jsTools481.includes(n));
       if (built && listed) {
+        await idle480();
         const [lst, asked] = await tools481([['agents_list', {}], ['agent_ask', { to: 't-user', text: 'r481 reply with the word pelican', wait: true, replyBySec: 60 }]], A);
         const me481 = ((lst && lst.result && lst.result.agents) || []).find((x) => x.user === 't-user') || {};
+        await idle480();
         const [nowait] = await tools481([['agent_ask', { to: 't-user', text: 'r481 later', wait: false }]], A);
-        let later = false; for (let i = 0; i < 40 && !later; i++) { const cur = (await call('/api/work/current', A)).data || {}; later = (cur.transcript || []).some((t) => /\[agent message · from @t-user's agent .* reply/.test(t.text || '')); if (!later) await sleep(250); }
-        spec('R481', L480.R481, !!lst && lst.ok && me481.reachable === true && typeof me481.state === 'string' && !!asked && asked.ok && /pelican/.test(JSON.stringify(asked.result)) && !!asked.result.thread && !!nowait && nowait.ok && nowait.result.pending === true && later,
+        let later = false; for (let i = 0; i < 60 && !later; i++) { const cur = (await call('/api/work/current', A)).data || {}; later = (cur.transcript || []).some((t) => /\[agent message · from @t-user's agent .* reply/.test(t.text || '')); if (!later) await sleep(250); }
+        check('R481', L480.R481, !!lst && lst.ok && me481.reachable === true && typeof me481.state === 'string' && !!asked && asked.ok && /pelican/.test(JSON.stringify(asked.result)) && !!asked.result.thread && !!nowait && nowait.ok && nowait.result.pending === true && later,
           `list ${JSON.stringify(me481)}; ask ${JSON.stringify(asked && asked.result).slice(0, 120)}; nowait ${JSON.stringify(nowait && nowait.result).slice(0, 80)}; reply later ${later}`);
-      } else spec('R481', L480.R481, false, built ? `tools missing: ${six.filter((n) => !nativeTools481.includes(n) || !jsTools481.includes(n)).join(', ')}` : 'no /api/agents/* yet');
+      } else check('R481', L480.R481, false, built ? `tools missing: ${six.filter((n) => !nativeTools481.includes(n) || !jsTools481.includes(n)).join(', ')}` : 'no /api/agents/* yet');
       // R482: the person's controls
       const html482 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       const page482 = /\/api\/agents\/threads/.test(html482) && /\/api\/agents\/held/.test(html482) && /\/api\/agents\/settings/.test(html482);
@@ -3601,12 +3616,16 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         await call('/api/presence/me', U, { dnd: true });
         const dnd = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r482 dnd', wait: false });
         await call('/api/presence/me', U, { dnd: false });
-        spec('R482', L480.R482, muted.status === 403 && (muted.data || {}).why === 'muted' && (seen.threads || []).some((t) => t.with === 't-admin') && !(notSeen.threads || []).some((t) => (t.lastWhy || '') === 'muted')
+        // the decline's note reaches the sender's side of the thread (a report from the person)
+        const noted = ((((await ag('thread?id=' + (held.data || {}).thread, A)).data || {}).messages) || []).some((m) => m.kind === 'report' && /not now/.test(m.text || ''));
+        const mutedSeen = ((((await ag('thread?id=' + ((seen.threads || []).find((t) => t.lastWhy === 'muted') || {}).id, U)).data || {}).messages) || []).some((m) => m.id === (muted.data || {}).id && m.why === 'muted');
+        check('R482', L480.R482, muted.status === 403 && (muted.data || {}).why === 'muted' && mutedSeen && !(notSeen.threads || []).some((t) => (t.lastWhy || '') === 'muted')
           && paused.status === 202 && paused.data.status === 'queued' && stillQueued.some((x) => x.id === paused.data.id && x.status === 'queued') && deliveredAfter
-          && held.status === 202 && held.data.status === 'held' && !!dm && declined.status === 200 && stillAdmin.assignee === 't-admin' && accepted.status === 200 && nowUser.assignee === 't-user'
-          && dnd.status === 202 && dnd.data.status !== 'refused' && page482,
-          `muted ${muted.status} ${(muted.data || {}).why}; paused ${paused.status} ${(paused.data || {}).status} queued ${stillQueued.length} then delivered ${deliveredAfter}; held ${held.status} ${(held.data || {}).status} dm ${!!dm} declined ${declined.status} assignee ${stillAdmin.assignee} -> accepted ${accepted.status} ${nowUser.assignee}; dnd ${dnd.status}; page ${page482}`);
-      } else spec('R482', L480.R482, false, `no /api/agents/* yet; page ${page482}`);
+          && held.status === 202 && held.data.status === 'held' && !!dm && declined.status === 200 && noted && stillAdmin.assignee === 't-admin' && accepted.status === 200 && nowUser.assignee === 't-user'
+          && dnd.status === 202 && dnd.data.status !== 'refused',
+          `muted ${muted.status} ${(muted.data || {}).why} seen by the muter ${mutedSeen}; paused ${paused.status} ${(paused.data || {}).status} queued ${stillQueued.length} then delivered ${deliveredAfter}; held ${held.status} ${(held.data || {}).status} dm ${!!dm} declined ${declined.status} note ${noted} assignee ${stillAdmin.assignee} -> accepted ${accepted.status} ${nowUser.assignee}; dnd ${dnd.status}`);
+      } else check('R482', L480.R482, false, 'no /api/agents/* yet');
+      spec('R482p', L480.R482p, page482, `page ${page482}`);
       // R483: an external (jcode) agent
       if (built) {
         const rep = await call('/api/work/sessions/report', U, { source: 'jcode', device: 'r483-box', sessions: [{ id: 'j-r483', state: 'working', title: 'r483 jcode', project: 'Jcode-PGM' }], ttlSec: 120 });
@@ -3622,23 +3641,41 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       } else spec('R483', L480.R483, false, 'no /api/agents/* yet');
       // R484: loops, rate, ownership, laundering mark, cost
       if (built) {
+        await idle480();
         const s484 = await seq480();
         const echo = await ag('send', A, { to: 't-user', kind: 'ask', text: 'ECHO r484 ping', wait: false }); // the fake Claude answers an ECHO with agent_reply of the same text, both sides, until stopped
         let stopped = null; for (let i = 0; i < 80 && !stopped; i++) { const m = (await ag('thread?id=' + (echo.data || {}).thread, A)).data || {}; if (m.status === 'stopped') stopped = m; else await sleep(250); }
-        const told = ((await call('/api/room/messages?since=' + s484, A)).data.messages || []).filter((m) => /going in circles/.test(m.text || ''));
-        const bursts = []; for (let i = 0; i < 21; i++) bursts.push((await ag('send', A, { to: 't-user', kind: 'report', text: 'r484 burst ' + i, wait: false })).status);
+        // one private chat line each (t-user's read with their key; t-admin's seen by its address)
+        const room484 = async (tok) => ((await call('/api/room/messages?since=' + s484, tok)).data.messages || []).filter((m) => m.from === 'claude');
+        const toldUser = (await Promise.all((await room484(U)).filter((m) => m.to === 't-user').map((m) => roomRead(restored, m)))).filter((t) => /going in circles/.test(t || ''));
+        const toldAdmin = (await room484(A)).filter((m) => m.to === 't-admin');
+        // ownership: a hand-off of a third person's task is held; declined, the task stays theirs, and t-user's agent may not claim it
         const t484 = (await call('/api/board/create', D, { title: 'r484 mills task', status: 'todo', assignee: 'mills' })).data.task || {};
         const ho = await ag('send', A, { to: 't-user', kind: 'handoff', text: 'r484 not mine to give', refs: { task: t484.id } });
         const dec = await ag('held', U, { id: (ho.data || {}).id, accept: false });
         const still = ((await call('/api/board', A)).data.tasks || []).find((t) => t.id === t484.id) || {};
         const claim = await call('/api/board/claim', U, { id: t484.id, asAgent: true });
+        // the laundering mark: t-admin's run has a tool refused, then sends
+        await idle480();
+        const r484 = await chat(A, 'DENIEDFIRST NOTIFYTOOL ' + JSON.stringify([['agent_ask', { to: 't-user', text: 'r484 right after a refusal', wait: false }]]) + ' END', { fresh: true });
+        const sentAfter = (() => { try { return JSON.parse((texts(r484.events).match(/NOTIFY:(\[.*\])/) || [])[1])[0]; } catch { return null; } })();
         const audit = ((await ag('audit?since=0', A)).data || {}).lines || [];
-        const after = audit.some((l) => l.event === 'sent' && l.afterRefusal === true);
-        const ledger = (await call('/api/usage', U)).data || {};
-        spec('R484', L480.R484, !!stopped && stopped.why === 'loop' && (stopped.messages || []).length < 8 && told.length >= 1 && bursts.filter((x) => x === 429).length >= 1 && bursts[bursts.length - 1] === 429
-          && ho.status === 202 && (ho.data || {}).status === 'held' && dec.status === 200 && still.assignee === 'mills' && claim.status !== 200 && typeof after === 'boolean' && ((ledger.answers || {}).turns || 0) >= 0,
-          `loop ${stopped && stopped.why} after ${stopped && (stopped.messages || []).length}; told ${told.length}; rate ${bursts.filter((x) => x === 429).length}/21 refused; handoff ${ho.status} ${(ho.data || {}).status} declined ${dec.status} assignee ${still.assignee} claim ${claim.status}; afterRefusal seen ${after}`);
-      } else spec('R484', L480.R484, false, 'no /api/agents/* yet');
+        const after = !!sentAfter && sentAfter.ok && audit.some((l) => l.event === 'sent' && l.id === sentAfter.result.id && l.afterRefusal === true && typeof l.run === 'string' && l.run.length > 0);
+        const marked = !!sentAfter && sentAfter.ok && ((((await ag('thread?id=' + sentAfter.result.thread, U)).data || {}).messages) || []).some((m) => m.id === sentAfter.result.id && m.x && m.x.afterRefusal === true);
+        // the rate: the 21st message from t-admin to t-user within the hour (the earlier checks sent some already) is refused
+        const bursts = []; for (let i = 0; i < 21; i++) bursts.push((await ag('send', A, { to: 't-user', kind: 'report', text: 'r484 burst ' + i, wait: false })).status);
+        const rateWhy = (await ag('send', A, { to: 't-user', kind: 'report', text: 'r484 one more', wait: false })).data || {};
+        check('R484', L480.R484, !!stopped && stopped.why === 'loop' && (stopped.messages || []).length < 8 && toldUser.length === 1 && toldAdmin.length >= 1
+          && ho.status === 202 && (ho.data || {}).status === 'held' && dec.status === 200 && still.assignee === 'mills' && claim.status === 403
+          && after && marked && bursts.filter((x) => x === 429).length >= 1 && bursts[bursts.length - 1] === 429 && rateWhy.why === 'rate' && /an hour between you and @t-user/.test(rateWhy.error || ''),
+          `loop ${stopped && stopped.why} after ${stopped && (stopped.messages || []).length}; told t-user ${toldUser.length} t-admin ${toldAdmin.length}; handoff ${ho.status} ${(ho.data || {}).status} declined ${dec.status} assignee ${still.assignee} claim ${claim.status}; afterRefusal ${after} marked ${marked}; rate ${bursts.filter((x) => x === 429).length}/21 refused (${rateWhy.error})`);
+        // the cost of an agent-started run in the receiver's time log (T-300's): their usage ledger counts it already, the startedBy mark is not there yet
+        const day484 = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+        const f484 = path.join(SB, 'profiles', 't-user', 'activity', `${day484}.json`);
+        spec('R484c', L480.R484c, fs.existsSync(f484) && /"startedBy":\s*"agent:t-admin"/.test(fs.readFileSync(f484, 'utf8')), `time log ${fs.existsSync(f484) ? 'has no startedBy' : 'missing'}`);
+        await idle480();
+      } else { check('R484', L480.R484, false, 'no /api/agents/* yet'); spec('R484c', L480.R484c, false, 'no /api/agents/* yet'); }
+      for (const k of kept480) await call('/api/work/current', k.tok, { session: k.sid, transcript: k.cur.transcript || [], archiveId: k.cur.archiveId || null, archiveTitle: k.cur.archiveTitle || null });
     } else for (const id of Object.keys(L480)) skip(id, L480[id], 'the Rust hub\'s: --rust-hub runs it');
   }
   if (RUST_HUB) { // R245-R249 (T-238 = T-193 · 1/4): one start-work flow; the fake Forgejo (this runner) answers as tuser-fj and takes pushes over smart HTTP
