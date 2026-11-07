@@ -2826,7 +2826,8 @@ async function run() {
     fs.writeFileSync(path.join(host2Dir, 'ai-node.json'), JSON.stringify({ ...cfgJson, providers: [], engines: {} }));
     const host2Log = fs.openSync(path.join(SCRATCH, 'host2.log'), 'a');
     const host2 = spawn(process.execPath, [path.join(host2Dir, 'ai-node.js')], { cwd: host2Dir, stdio: ['ignore', host2Log, host2Log], windowsHide: true });
-    let h2 = null; for (let i = 0; i < 40; i++) { h2 = ((await call('/api/hosts', A)).data.mine || []).find((h) => h.id === newId); if (h2 && h2.online) break; await sleep(250); }
+    // up to 30 s: a second node process starting while the Rust suite runs its native hosts took over 10 s to say hello (T-346); the cap only bounds the wait, the host still has to come online
+    let h2 = null; for (let i = 0; i < 120; i++) { h2 = ((await call('/api/hosts', A)).data.mine || []).find((h) => h.id === newId); if (h2 && h2.online) break; await sleep(250); }
     try { if (WIN) execFileSync('taskkill', ['/pid', String(host2.pid), '/T', '/F'], { stdio: 'ignore' }); else host2.kill('SIGTERM'); } catch {}
     const host2Text = fs.readFileSync(path.join(SCRATCH, 'host2.log'), 'utf8');
     const removed = await call('/api/hosts/remove', A, { id: newId });
@@ -5350,7 +5351,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       await call('/api/work/queue', U, { queue: ['r280 first session queue'], sendNow: null });
       await call('/api/model', U, { provider: prov280(h2, 'c2'), model: 'claude-haiku-5-5' });
       const oOther = go280(U, uA[2], 'other while old'); await working280(U, h1, 1);
-      const oOld = chat(U, 'SLOW r280 older page runs the first session'); await working280(U, h2, 1);
+      const oOld = chat(U, 'SLOWER r280 older page runs the first session'); await working280(U, h2, 1); // 15 s: the seven reads below must still find it running when Stop comes (T-346)
       const cur = (await call('/api/work/current', U)).data, curOther = (await call('/api/work/current?session=' + uA[2], U)).data;
       S.oldSees = JSON.stringify(cur.transcript || []).includes('first session marker') && (cur.queue || []).join() === 'r280 first session queue' && !JSON.stringify(curOther.transcript || []).includes('first session marker');
       const att = (await call('/api/work/attach?run=&after=0', U)).data || {};
@@ -6286,6 +6287,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       `${notAdm.status} ${mk.status} ${uSees.status}/${uPw.status} self ${self.status} default ${dflt.username} ${mkD.status} admins ${leak} mode ${localMode.toString(8)} rm ${rm.status} after ${uAfter.status}`);
   }
   check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
+  { // 5.46.1: the @ picker wrote Unity's account name (@claude), which calls nobody (R36), so a picked or Tab / Enter-completed mention never reached her
+    const pickerUsesHandle = /b\.dataset\.user = h;/.test(html) && /insertMention\(h\)/.test(html) && !/insertMention\(m\.username\)/.test(html) && !/b\.dataset\.user = m\.username;/.test(html);
+    const handleFn = /const mentionHandleOf = \(m\) => m\.agent \? \(m\.display \|\| 'unity'\)\.toLowerCase\(\)\.replace\(\/\\s\+\/g, ''\) : m\.username;/.test(html);
+    const listUsesHandle = /\(m\.agent \? 'BOT · ' : 'private · '\) \+ '@' \+ mentionHandleOf\(m\)/.test(html);
+    check('R527', '[static] the @ picker writes @unity for Unity (never her account name @claude, which calls nobody): picking her, or Tab / Enter while the list is open, inserts the handle that calls her; the conversation list shows the same handle', pickerUsesHandle && handleFn && listUsesHandle, `picker ${pickerUsesHandle} handle ${handleFn} list ${listUsesHandle}`);
+  }
   check('R106', '[static] every message you send shows its status: Work (queued / working / done / stopped / failed), Unity section, @unity in Chat (waiting / answering / answered)',
     /function msgStatus\(/.test(html) && /msgStatus\(el, 'queued'/.test(html) && /msgStatus\(mine, 'working'/.test(html) && /msgStatus\(mineU, 'working'/.test(html) && /function refreshAgentWaits/.test(html) && /'Unity answered'/.test(html));
   const nImg = fakeImagePrompts.length;
