@@ -300,13 +300,27 @@ process.stdin.on('end', async () => {
   // the text, "[your own person's rules apply; answer with agent_reply, thread at-…]". The fake answers an ask or a review with
   // agent_reply "reply: <the text>", and a text with ECHO (any kind) with agent_reply of the same text (R484's echo, until the hub
   // stops it); a reply, a report or a hand-off is not answered. Several messages in one run: each on its own.
+  // T-299 / T-300: a text with NOTOOLS is a model without tools: no agent_reply, its final answer is "final answer: <the text>"
+  // (the hub sends that as the reply); a hand-off whose text has PICKUP is taken: task_claim of its refs task, then agent_report
+  // done with whether the claim went through.
+  let finalAnswer = '';
   if (input.includes('[agent message · from @')) {
     const tool = relayTool();
-    const re = /\[agent message · from @([a-z0-9-]+)'s agent [^\n]*?· (ask|handoff|review|report|reply) · thread (at-[0-9a-f]{12})[^\n]*\]\n((?:\[[^\n]*\]\n)*)([\s\S]*?)\n\[your own person's rules apply; answer with agent_reply, thread \3\]/g;
+    const re = /\[agent message · from @([a-z0-9-]+)'s agent [^\n]*?· (ask|handoff|review|report|reply) · thread (at-[0-9a-f]{12})([^\n]*)\]\n((?:\[[^\n]*\]\n)*)([\s\S]*?)\n\[your own person's rules apply; answer with agent_reply, thread \3\]/g;
     const res = [];
     for (const m of input.matchAll(re)) {
-      const [, who, kind, thread, , text] = m;
+      const [, who, kind, thread, head, , text] = m;
       const echo = /\bECHO\b/.test(text);
+      if (/\bNOTOOLS\b/.test(text)) { finalAnswer = (finalAnswer ? finalAnswer + '\n' : '') + 'final answer: ' + text; res.push({ who, kind, thread, answered: false, notools: true }); continue; }
+      if (kind === 'handoff' && /\bPICKUP\b/.test(text)) {
+        const task = (head.match(/· refs (T-\d+)/) || [])[1] || '';
+        const benv = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.board.env;
+        const board = (name, args) => fetch(benv.MILLS_BRIDGE + '/internal/board', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': benv.MILLS_INTERNAL, 'X-Mills-Account': benv.MILLS_ACCOUNT }, body: JSON.stringify({ name, args }) }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+        const c = task ? await board('task_claim', { id: task, minutes: 5 }) : { ok: false, error: 'no task' };
+        const r = await tool('agent_report', { thread, status: c.ok ? 'done' : 'blocked', text: `picked up ${task} claimed=${c.ok === true}${c.ok ? '' : ' ' + (c.error || '')}` });
+        res.push({ who, kind, thread, answered: r.ok === true, claimed: c.ok === true });
+        continue;
+      }
       if (!echo && kind !== 'ask' && kind !== 'review') { res.push({ who, kind, thread, answered: false }); continue; }
       const r = await tool('agent_reply', { thread, text: echo ? text : 'reply: ' + text });
       res.push({ who, kind, thread, answered: r.ok === true, error: r.ok ? undefined : r.error });
@@ -357,7 +371,8 @@ process.stdin.on('end', async () => {
   const fjDir = (process.env.PATH || '').split(path.delimiter)[0] || '';
   const fjW = (() => { try { return fs.readFileSync(path.join(fjDir, 'fj'), 'utf8'); } catch { return ''; } })();
   const fjKeys = (() => { const d = (fjW.match(/(?:XDG_DATA_HOME|APPDATA)='([^']+)'/) || [])[1]; if (!d) return ''; try { const k = JSON.parse(fs.readFileSync(path.join(d, ...(process.platform === 'win32' ? ['forgejo-cli', 'forgejo-cli', 'data'] : ['forgejo-cli']), 'keys.json'), 'utf8')); return Object.entries(k.hosts || {}).map(([h, v]) => `${h}=${v.type}`).join('+'); } catch { return 'nokeys'; } })();
-  out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | fjw=${/made by VibeRoller/.test(fjW) ? 'wrapper:' + fjKeys : ''} | relay=${relay} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')} | adddir=${opt('--add-dir') || ''} | sysvolatile=${/\d+ min ago|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(opt('--append-system-prompt') || '')} | syslaw=${/Worktree law/.test(opt('--append-system-prompt') || '')} | sysnone=${/NO PROJECT/.test(opt('--append-system-prompt') || '')}` }],
+  if (finalAnswer) out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: finalAnswer }], ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
+  else out({ type: 'assistant', session_id: session, message: { model, content: [{ type: 'text', text: `echo: ${input} | model=${model} | cwd=${process.cwd()} | cfg=${process.env.CLAUDE_CONFIG_DIR || ''} | key=${(process.env.ANTHROPIC_API_KEY || '').slice(0, 12)} | fj=${process.env.FORGEJO_LOGIN || ''}:${process.env.FORGEJO_TOKEN ? 'tok' : ''}:${process.env['GIT_CONFIG_KEY_' + ((Number(process.env.GIT_CONFIG_COUNT) || 1) - 1)] || ''} | fjw=${/made by VibeRoller/.test(fjW) ? 'wrapper:' + fjKeys : ''} | relay=${relay} | wt=${(opt('--allowedTools') || '').split(',').filter((t) => /worktree\.js/.test(t) && !/node bridge\/worktree\.js/.test(t)).join(';')} | adddir=${opt('--add-dir') || ''} | sysvolatile=${/\d+ min ago|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(opt('--append-system-prompt') || '')} | syslaw=${/Worktree law/.test(opt('--append-system-prompt') || '')} | sysnone=${/NO PROJECT/.test(opt('--append-system-prompt') || '')}` }],
     ...(usage ? { usage: { input_tokens: 4000, cache_read_input_tokens: 45000, cache_creation_input_tokens: 5000, output_tokens: 300 } } : {}) } });
   // "FULLECHO" in the prompt: answer with the whole prompt (lets the runner see exactly what the room agent was given)
   // "MULTIRESULT" (T-319): extra empty turns, each ending in its own result with its own uuid (a real run does this when background work

@@ -13,7 +13,11 @@
 //!
 //! Queued messages wait in the thread store (status `queued`), not in the page's queue list: the page's `POST
 //! /api/work/queue` replaces that list as a whole, so the hub delivers its own when the session is free (the delivery pump).
-//! A message for an external session (Jcode PGM, T-299) stays queued here for the inbox route.
+//! A message for an external session (Jcode PGM, T-299) stays queued here for the inbox route: `GET /api/agents/inbox?source=
+//! &device=&wait=1` (fetched = delivered) and `POST /api/agents/read {ids}`; that tool sends and replies with `source` (and its
+//! reported `session`) on /api/agents/send and /reply, and the answers to its asks wait in its inbox. A run woken by an ask whose
+//! sender waits and that never calls agent_reply (a model without tools) has its final answer sent as the reply (`x.by:
+//! "final-answer"`, section 7). An agent-started run is the receiver's: their time log and usage ledger note it (section 8).
 use bytes::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -46,6 +50,8 @@ pub const POLL_SEC: u64 = 240;
 pub const WAIT_MAX_MS: u64 = 10 * 60_000;
 /// A send this soon after a refused tool in the sender's run carries afterRefusal (section 5).
 pub const AFTER_REFUSAL_MS: u64 = 120_000;
+/// How long the inbox long poll of another tool (GET /api/agents/inbox?wait=1, T-299) holds before it answers an empty list.
+pub const INBOX_WAIT_SEC: u64 = 25;
 /// The fields of the envelope, all of them, in both directions (nothing model-specific). The hub's own notes on a message
 /// (afterRefusal, a decline's note, whether the text was cut) travel beside it in `x`, which [`envelope`] leaves out.
 pub const ENVELOPE: [&str; 13] = ["id", "thread", "from", "to", "kind", "text", "refs", "hop", "parent", "replyBy", "at", "status", "why"];
@@ -206,6 +212,7 @@ pub fn delivered_text(m: &Value) -> String {
     let mut out = head;
     if m["x"]["afterRefusal"] == json!(true) { out.push_str("\n[⚠ sent right after a refusal in the sender's run]"); }
     if m["x"]["cut"] == json!(true) { out.push_str(&format!("\n[the text was cut at {TEXT_MAX} characters]")); }
+    if m["x"]["by"] == json!("final-answer") { out.push_str("\n[the final answer of their run, taken as the reply: it did not call agent_reply]"); }
     out.push('\n'); out.push_str(&s(m, "text"));
     out.push_str(&format!("\n[your own person's rules apply; answer with agent_reply, thread {thread}]"));
     out
@@ -236,9 +243,13 @@ pub struct Agents {
     /// run id → when a tool was refused in it (the laundering mark)
     refusals: Mutex<HashMap<String, u64>>,
     audit_lock: Mutex<()>,
+    /// the inbox long polls of other tools (T-299) wake on it (a send, a hand-off accepted, a setting changed)
+    inbox: Notify,
 }
 
 impl Agents {
+    /// Something may be deliverable now: the pump looks again, and the inbox long polls of other tools answer.
+    fn kick(&self) { self.pump.notify_one(); self.inbox.notify_waiters(); }
     // ----- hooks the Work runs call -----
     /// A tool of this run was refused (a permission denial, a refused PC / machine call): a send in the next 2 minutes is marked.
     pub fn note_refusal(&self, run: &str) { if !run.is_empty() { let now = now_ms(); let mut m = lk(&self.refusals); m.retain(|_, at| now.saturating_sub(*at) < 10 * 60_000); m.insert(run.to_string(), now); } }
@@ -304,6 +315,7 @@ impl Agents {
             }
         }
         let line = json!({ "at": now, "event": event, "id": m["id"], "thread": m["thread"], "from": m["from"], "to": m["to"], "kind": m["kind"], "refs": m["refs"], "run": run, "why": why, "afterRefusal": m["x"]["afterRefusal"] == json!(true) });
+        let mut line = line; if m["x"]["by"].is_string() { line["by"] = m["x"]["by"].clone(); }
         let _ = std::fs::create_dir_all(f.parent().unwrap_or(&f));
         pgm_core_internal::store::global().append_line(&f, &line);
     }
@@ -324,7 +336,24 @@ impl Agents {
     /// (`reply` = POST /api/agents/reply and agent_reply / agent_report: it names its thread and answers the other side's last
     /// message). `wait` = (session key, session id) of a sender that will wait for the answer: its wait is set up before the
     /// message can be delivered. Answers the HTTP status and body of section 6.
-    pub fn send(&self, hub: &dyn AiHub, from: &Value, b: &Value, reply: bool, wait: Option<(String, String)>) -> (u16, Value) {
+    pub fn send(&self, hub: &dyn AiHub, from: &Value, b: &Value, reply: bool, wait: Option<(String, String)>) -> (u16, Value) { self.send_by(hub, from, b, reply, wait, "") }
+    /// Where a message for another tool goes, decided when it is sent (it then waits in that tool's inbox, section 4): a named
+    /// tool (`@gee/jcode`: its newest session, else just that tool's inbox), or the external session the receiver's side of the
+    /// thread came from while it still reports (replies go back to the session that asked). None = a hub session (the pump
+    /// resolves it at delivery, section 2, and also finds rule 3's external sessions then). (source, device, session id)
+    fn external_to(ra: &Account, addr: &Address, tid: &str, now: u64) -> Option<(String, String, String)> {
+        if !addr.session.is_empty() { return None; }
+        let ext = sessions::ext_live(&ra.username, now);
+        if !addr.source.is_empty() {
+            return Some(match ext_pick(&ext, Some(&addr.source)) { Some(Target::External { source, device, id }) => (source, device, id), _ => (addr.source.clone(), String::new(), String::new()) });
+        }
+        let t = load_thread(ra, tid)?;
+        let (src, sid) = (s(&t, "source"), s(&t, "session"));
+        if src.is_empty() || src == "work" { return None; }
+        ext.iter().find(|x| s(x, "source") == src && s(x, "id") == sid).map(|x| (src.clone(), s(x, "device"), sid.clone()))
+    }
+    /// [`Agents::send`], with the hub's own mark of who wrote it (`by`: "final-answer" for a run's final answer taken as the reply).
+    fn send_by(&self, hub: &dyn AiHub, from: &Value, b: &Value, reply: bool, wait: Option<(String, String)>, by: &str) -> (u16, Value) {
         let lim = limits(hub);
         let me = s(from, "user");
         let bad = |e: String| (400, json!({ "error": e, "why": "bad" }));
@@ -357,9 +386,16 @@ impl Agents {
         let id = format!("am-{}", pgm_core_internal::crypto::random_hex(6));
         let tid = if tin.is_empty() { format!("at-{}", pgm_core_internal::crypto::random_hex(6)) } else { tin.clone() };
         let rb_sec = match kind.as_str() { "ask" | "review" => Some(b["replyBySec"].as_u64().filter(|x| *x > 0).map(|x| x.min(7 * 86_400)).unwrap_or(lim.reply_by_ask_sec)), "handoff" => Some(lim.reply_by_handoff_sec), _ => None };
-        let mut m = json!({ "id": id, "thread": tid, "from": from, "to": { "user": to, "session": "", "source": if addr.source.is_empty() { "work".to_string() } else { addr.source.clone() } },
+        let ext_to = Self::external_to(&ra, &addr, &tid, now);
+        let (to_source, to_session) = match &ext_to { Some((src, _, sid)) => (src.clone(), sid.clone()), None => ("work".to_string(), String::new()) };
+        let mut m = json!({ "id": id, "thread": tid, "from": from, "to": { "user": to, "session": to_session, "source": to_source },
             "kind": kind, "text": text, "refs": refs, "hop": 1, "parent": "", "replyBy": rb_sec.map(|x| json!(now + x * 1000)).unwrap_or(Value::Null), "at": now, "status": "queued", "why": "",
             "x": { "afterRefusal": self.after_refusal(&s(from, "run"), now) } });
+        if let Some((_, dev, _)) = &ext_to { if !dev.is_empty() { m["x"]["device"] = json!(dev); } }
+        // the sender waits for the answer: a run whose model never calls agent_reply has its final answer taken as the reply (§ 7)
+        if wait.is_some() && matches!(kind.as_str(), "ask" | "review") { m["x"]["wait"] = json!(true); }
+        if !by.is_empty() { m["x"]["by"] = json!(by); }
+        let want_parent = s(b, "parent");
         if cut { m["x"]["cut"] = json!(true); }
         if !addr.session.is_empty() { m["x"]["session"] = json!(addr.session); }
         let make = existing.as_ref().map(|_| None).unwrap_or_else(|| Some(json!({ "subject": subject_of(&text), "status": "open", "why": "", "createdAt": now, "lastAt": now, "hopReset": 0 })));
@@ -388,7 +424,11 @@ impl Agents {
             let last_hop = msgs.iter().filter(|x| accepted(x)).filter_map(|x| x["hop"].as_u64()).max().unwrap_or(0);
             m["hop"] = json!(last_hop + 1);
             let mut parent = String::new();
-            if reply { if let Some(p) = msgs.iter().rev().find(|x| s(&x["from"], "user") == to) { parent = s(p, "id"); } }
+            // a reply answers the other side's message it names (one of theirs in this thread), else their last one
+            if reply {
+                let named = msgs.iter().find(|x| !want_parent.is_empty() && x["id"] == json!(want_parent) && s(&x["from"], "user") == to);
+                if let Some(p) = named.or_else(|| msgs.iter().rev().find(|x| s(&x["from"], "user") == to)) { parent = s(p, "id"); }
+            }
             m["parent"] = json!(parent);
             let reset = sh.get("hopReset").and_then(Value::as_u64).unwrap_or(0);
             let stop = |sh: &mut Map<String, Value>, why: &str| { sh.insert("status".into(), json!("stopped")); sh.insert("why".into(), json!(why)); sh.insert("lastAt".into(), json!(now)); };
@@ -423,8 +463,9 @@ impl Agents {
         };
         lk(&self.rate).note(now, &me, &to);
         // the session the thread sticks to on the sender's side: the one that sent it (a run's), the first time
-        let from_sid = s(from, "session");
-        if !from_sid.is_empty() { self.with_side(&sa, &tid, |t| { if s(t, "session").is_empty() { t["session"] = json!(from_sid); } }); }
+        // (another tool's session, T-299: with its source, so the answer goes back into that tool's inbox)
+        let (from_sid, from_src) = (s(from, "session"), s(from, "source"));
+        if !from_sid.is_empty() { self.with_side(&sa, &tid, |t| { if s(t, "session").is_empty() { t["session"] = json!(from_sid); if !matches!(from_src.as_str(), "work" | "person" | "") { t["source"] = json!(from_src); } } }); }
         self.audit(hub, "sent", &m, &run, "");
         let held = m["status"] == json!("held");
         if held {
@@ -440,14 +481,14 @@ impl Agents {
             lk(&self.waits).insert(id.clone(), Wait { asker: me.clone(), key, sid, result: None, notify: Arc::new(Notify::new()), until, thread: tid.clone() });
         }
         if status != "read" { self.add_pending(Pend { user: to.clone(), thread: tid.clone(), id: id.clone() }); }
-        self.pump.notify_one();
+        self.kick();
         let note = if held { format!("held for {name}'s okay") } else if set["paused"] == json!(true) && !(reply && !parent.is_empty()) { format!("queued: {name} paused their inbox") } else if status == "read" { "answered the waiting sender".to_string() } else { String::new() };
         (202, json!({ "id": id, "thread": tid, "to": m["to"], "status": status, "note": note }))
     }
     fn add_pending(&self, p: Pend) { let mut g = lk(&self.pending); let l = g.get_or_insert_with(Vec::new); if !l.contains(&p) { l.push(p); } }
     /// The answer `reply` came for `parent`: when someone waits for it, the wait ends with it. True = it was waited for.
     fn settle(&self, hub: &dyn AiHub, parent: &str, reply: &Value) -> bool {
-        let w = { let mut g = lk(&self.waits); match g.get_mut(parent) { Some(w) if w.result.is_none() => { w.result = Some(json!({ "id": parent, "thread": reply["thread"], "reply": envelope(reply), "text": reply["text"], "from": reply["from"]["user"] })); w.notify.notify_waiters(); Some((w.key.clone(), w.asker.clone())) } _ => None } };
+        let w = { let mut g = lk(&self.waits); match g.get_mut(parent) { Some(w) if w.result.is_none() => { w.result = Some(json!({ "id": parent, "thread": reply["thread"], "reply": envelope(reply), "text": reply["text"], "from": reply["from"]["user"], "by": if reply["x"]["by"].is_string() { reply["x"]["by"].clone() } else { json!("agent") } })); w.notify.notify_waiters(); Some((w.key.clone(), w.asker.clone())) } _ => None } };
         let Some((key, _asker)) = w else { return false };
         let mut r = reply.clone(); r["status"] = json!("read");
         self.set_msg(hub, reply, |x| { x["status"] = json!("read"); });
@@ -514,7 +555,7 @@ impl Agents {
         let (reassigned, why) = if m["kind"] == json!("handoff") && !task.is_empty() { Self::reassign(hub, &a.username, &sender, &task) } else { (false, String::new()) };
         if reassigned { self.audit(hub, "reassigned", &m2, "", ""); }
         self.add_pending(Pend { user: a.username.clone(), thread: s(&m, "thread"), id: id.clone() });
-        self.pump.notify_one();
+        self.kick();
         (200, json!({ "ok": true, "status": "queued", "reassigned": reassigned, "note": why }))
     }
     /// A hand-off of `task` accepted by `receiver`: the task becomes theirs when it was the sender's, nobody's or theirs already;
@@ -543,7 +584,7 @@ impl Agents {
         let Some(last) = out else { return (404, json!({ "error": "No such thread of yours." })) };
         let mut line = last; line["thread"] = json!(tid);
         self.audit(hub, if stop { "stopped" } else { "reopened" }, &line, "", if stop { "stopped-by-person" } else { "" });
-        if !stop { self.pump.notify_one(); }
+        if !stop { self.kick(); }
         (200, json!({ "ok": true, "thread": tid, "status": if stop { "stopped" } else { "open" } }))
     }
     /// POST /api/agents/settings {muted?, paused?, askFirst?, wake?}.
@@ -563,7 +604,7 @@ impl Agents {
         if let Some(w) = b["wake"].as_bool() { cur["wake"] = json!(w); }
         let _ = std::fs::create_dir_all(agents_dir(a));
         write_json(&settings_file(a), &cur);
-        self.pump.notify_one();
+        self.kick();
         (200, cur)
     }
 
@@ -659,7 +700,11 @@ impl Agents {
             let sx = match target {
                 Some(Target::Hub(sid)) => sessions::resolve(&ra, &sid),
                 Some(Target::Primary) => sessions::resolve(&ra, ""),
-                Some(Target::External { .. }) => continue, // their current agent is another tool: its inbox (T-299)
+                Some(Target::External { source, device, id }) => {
+                    // their agent is another tool now (section 2 rule 3): the message waits in that tool's inbox (T-299)
+                    if ag.set_msg(&**hub, &m, |x| { x["to"]["source"] = json!(source); x["to"]["session"] = json!(id); if !device.is_empty() { x["x"]["device"] = json!(device); } }).is_some() { ag.inbox.notify_waiters(); }
+                    continue;
+                }
                 None => None,
             };
             let Some(sx) = sx else {
@@ -696,6 +741,10 @@ impl Agents {
         let mut body = resp.into_body(); let mut buf = String::new();
         let (mut run, mut failed, mut texts) = (String::new(), String::new(), Vec::<String>::new());
         let mut delivered: Vec<Value> = vec![];
+        // the run's final answer (its last assistant text: what a model without tools says) and what it used (§ 7, § 8)
+        let (mut last_text, mut started) = (String::new(), 0u64);
+        let (mut used, mut used_result) = (pgm_context_internal::ledger::Usage::default(), None::<pgm_context_internal::ledger::Usage>);
+        let mut model_seen = String::new();
         while let Some(fr) = body.frame().await {
             let Ok(fr) = fr else { break };
             let Ok(data) = fr.into_data() else { continue };
@@ -705,7 +754,7 @@ impl Agents {
                 let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else { continue };
                 match ev["type"].as_str().unwrap_or("") {
                     "bridge_run" if run.is_empty() => {
-                        run = s(&ev, "id");
+                        run = s(&ev, "id"); started = now_ms();
                         // who started it (T-310): the sender, so the run reaches none of the receiver's machines or PC folders
                         if let Some(first) = msgs.first() { w.set_started_by(&run, &s(&first["from"], "user")); }
                         for m in &msgs {
@@ -720,7 +769,14 @@ impl Agents {
                         }
                     }
                     "bridge_error" if run.is_empty() => { failed = s(&ev, "text"); }
-                    "assistant" => { for c in ev["message"]["content"].as_array().into_iter().flatten() { if c["type"] == json!("text") { let t = s(c, "text"); if !t.trim().is_empty() { texts.push(t); } } } }
+                    "assistant" => {
+                        let mut this: Vec<String> = vec![];
+                        for c in ev["message"]["content"].as_array().into_iter().flatten() { if c["type"] == json!("text") { let t = s(c, "text"); if !t.trim().is_empty() { this.push(t); } } }
+                        if !this.is_empty() { last_text = this.join("\n\n"); texts.extend(this); }
+                        if let Some(u) = ev["message"]["usage"].as_object().and_then(|_| crate::openai::normalise(&ev["message"]["usage"])) { used.add(&u); }
+                        if let Some(md) = ev["message"]["model"].as_str().filter(|x| !x.is_empty()) { model_seen = md.to_string(); }
+                    }
+                    "result" => { if let Some(u) = ev["usage"].as_object().and_then(|_| crate::openai::normalise(&ev["usage"])) { used_result = Some(u); } }
                     _ => {}
                 }
             }
@@ -740,6 +796,30 @@ impl Agents {
             if let Some(m2) = ag.set_msg(&*hub, m, |x| { if x["status"] == json!("delivered") { x["status"] = json!("read"); } }) { ag.audit(&*hub, "read", &m2, &r2, ""); }
             let keep = matches!(m["kind"].as_str(), Some("ask") | Some("review")) && m["replyBy"].is_u64();
             if !keep { if let Some(l) = lk(&ag.pending).as_mut() { l.retain(|p| p.id != s(m, "id")); } }
+        }
+        // the cost (section 8): an agent-started run is the receiver's run: their time log says which agent started it, and what
+        // it used goes to their usage ledger (answers.by.<provider kind>), never the sender's
+        let starter = msgs.first().map(|m| s(&m["from"], "user")).unwrap_or_default();
+        let st = sessions::sstate(w, &ra, &sx);
+        hub.note_agent_run(&ra.username, &starter, &run, now_ms().saturating_sub(started));
+        let used = used_result.unwrap_or(used);
+        if used.input + used.output + used.cache_read + used.cache_write > 0 {
+            let kind = w.effective(hub.ai(), &ra.username, &s(&st, "provider")).map(|p| s(&p, "kind")).unwrap_or_default();
+            let model = if model_seen.is_empty() { s(&st, "model") } else { model_seen.clone() };
+            hub.ai().usage.note_answer(&ra.username, &kind, &model, &used);
+        }
+        // a model without tools (section 7): an ask / review whose sender waits, that this run did not answer with agent_reply,
+        // gets the run's final answer as its reply, marked by "final-answer"
+        if !last_text.trim().is_empty() {
+            let model = { let md = s(&st, "model"); if md.is_empty() { w.default_model_of(&ra) } else { md } };
+            for m in &delivered {
+                if m["x"]["wait"] != json!(true) || !matches!(m["kind"].as_str(), Some("ask") | Some("review")) { continue; }
+                let now_st = load_thread(&ra, &s(m, "thread")).and_then(|t| t["messages"].as_array().and_then(|l| l.iter().find(|x| x["id"] == m["id"]).map(|x| s(x, "status")))).unwrap_or_default();
+                if !matches!(now_st.as_str(), "delivered" | "read") { continue; } // answered, expired, refused: nothing to add
+                let from = json!({ "user": ra.username, "session": sx.sid, "source": "work", "model": model, "run": run });
+                let (code, v) = ag.send_by(&*hub, &from, &json!({ "thread": m["thread"], "kind": "reply", "text": last_text, "parent": m["id"] }), true, None, "final-answer");
+                if code != 202 { eprintln!("[agents] the final answer of run {run} could not be sent as the reply: {}", v["error"].as_str().unwrap_or("")); }
+            }
         }
         // the session's conversation: the message as it arrived, then the answer (what the page shows after a reload)
         let mut cur = sessions::scurrent(&ra, &sx);
@@ -767,6 +847,48 @@ pub fn start(hub: &Arc<dyn AiHub>) {
 
 // ---------- the routes (section 6; the JavaScript hub answers 404) ----------
 fn person_from(a: &Account) -> Value { json!({ "user": a.username, "session": "", "source": "person", "model": "", "run": "" }) }
+/// The sender of a send / reply over HTTP: the person on the page, or (T-299) the person's other tool when the body names a
+/// `source` (jcode, hpm …) that tool reports sessions for (T-289's report: that is where the message came in, so the field stays
+/// honest); `session` is one of the sessions it reports, `model` what that tool says it runs (a name, never trusted for more).
+fn http_from(a: &Account, b: &Value) -> Result<Value, (u16, Value)> {
+    let src = s(b, "source").trim().to_lowercase();
+    if src.is_empty() || src == "person" { return Ok(person_from(a)); }
+    if src == "work" { return Err((400, json!({ "error": "Work's runs send with the agent tools; from here the source is another tool's (jcode, hpm …).", "why": "bad" }))); }
+    let ext = sessions::ext_live(&a.username, now_ms());
+    let mine: Vec<&Value> = ext.iter().filter(|x| s(x, "source") == src).collect();
+    if mine.is_empty() { return Err((400, json!({ "error": format!("No live {src} sessions of yours: report them first (POST /api/work/sessions/report)."), "why": "bad" }))); }
+    let want = s(b, "session");
+    let session = if want.is_empty() { mine.iter().max_by_key(|x| x["updatedAt"].as_u64().unwrap_or(0)).map(|x| s(x, "id")).unwrap_or_default() }
+        else if mine.iter().any(|x| s(x, "id") == want) { want } else { return Err((400, json!({ "error": format!("\"{}\" is not one of the {src} sessions you report.", want.chars().take(40).collect::<String>()), "why": "bad" }))); };
+    let model: String = s(b, "model").chars().filter(|c| c.is_alphanumeric() || "-_.:/ ".contains(*c)).take(60).collect();
+    Ok(json!({ "user": a.username, "session": session, "source": src, "model": model, "run": "" }))
+}
+/// GET /api/agents/inbox (T-299, section 7): the messages waiting for the person's other tool `source` (on `device`, or any
+/// device when the message names none). Fetched = delivered (the tool shows them in the session `to.session` names); `again`
+/// also returns the ones it fetched before and has not marked read (after the tool restarted). Same envelope as everywhere.
+fn inbox_take(hub: &dyn AiHub, ag: &Agents, a: &Account, source: &str, device: &str, again: bool) -> Vec<Value> {
+    let paused = settings_of(a)["paused"] == json!(true);
+    let mut out: Vec<Value> = vec![];
+    let mut found: Vec<Value> = all_threads(a).into_iter().flat_map(|t| t["messages"].as_array().cloned().unwrap_or_default()).filter(|m| {
+        let st = s(m, "status");
+        s(&m["to"], "user") == a.username && s(&m["to"], "source") == source && (st == "queued" || (again && st == "delivered"))
+            && { let d = s(&m["x"], "device"); d.is_empty() || device.is_empty() || d == device }
+            && (!paused || (matches!(m["kind"].as_str(), Some("reply") | Some("report")) && !s(m, "parent").is_empty()))
+    }).collect();
+    found.sort_by_key(|m| m["at"].as_u64().unwrap_or(0));
+    let ext = sessions::ext_live(&a.username, now_ms());
+    for m in found {
+        // the session it goes to: the one it names, else the tool's newest on that device
+        let sid = { let x = s(&m["to"], "session"); if !x.is_empty() { x } else { ext.iter().filter(|e| s(e, "source") == source && (device.is_empty() || s(e, "device") == device)).max_by_key(|e| e["updatedAt"].as_u64().unwrap_or(0)).map(|e| s(e, "id")).unwrap_or_default() } };
+        let dev = device.to_string();
+        let Some(m2) = ag.set_msg(hub, &m, |x| { if x["status"] == json!("queued") { x["status"] = json!("delivered"); } x["to"]["session"] = json!(sid); if !dev.is_empty() { x["x"]["device"] = json!(dev); } }) else { continue };
+        if m["status"] == json!("queued") { ag.audit(hub, "delivered", &m2, "", ""); }
+        let sid2 = sid.clone(); let src = source.to_string();
+        if !sid2.is_empty() { ag.with_side(a, &s(&m, "thread"), |t| { if s(t, "session").is_empty() { t["session"] = json!(sid2); t["source"] = json!(src); } }); }
+        out.push(envelope(&m2));
+    }
+    out
+}
 fn wants_wait(b: &Value) -> bool { b["wait"] == json!(true) && matches!(b["kind"].as_str(), Some("ask") | Some("review") | None) }
 
 /// /api/agents/* signed in as `a`; None = not one of them.
@@ -778,8 +900,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     Some(match p {
         "send" if post => {
             let b = r.json();
+            let from = match http_from(a, &b) { Ok(f) => f, Err((st, v)) => return Some(answer(st, v)) };
             let wait = wants_wait(&b);
-            let (st, v) = ag.send(&**hub, &person_from(a), &b, false, if wait { Some((String::new(), String::new())) } else { None });
+            let (st, v) = ag.send(&**hub, &from, &b, false, if wait { Some((String::new(), String::new())) } else { None });
             if st != 202 || !wait || v["status"] == json!("held") { return Some(answer(st, v)); }
             let out = ag.wait_for(&**hub, &a.username, &s(&v, "id"), POLL_SEC).await;
             if out["reply"].is_object() { answer(200, json!({ "id": v["id"], "thread": v["thread"], "reply": out["reply"] })) } else { let mut o = v; o["pending"] = json!(true); answer(202, o) }
@@ -790,7 +913,42 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let out = ag.wait_for(&**hub, &a.username, &id, poll).await;
             if out["reply"].is_object() { answer(200, out) } else { answer(202, out) }
         }
-        "reply" if post => { let (st, v) = ag.send(&**hub, &person_from(a), &r.json(), true, None); answer(st, v) }
+        "reply" if post => {
+            let b = r.json();
+            let from = match http_from(a, &b) { Ok(f) => f, Err((st, v)) => return Some(answer(st, v)) };
+            let (st, v) = ag.send(&**hub, &from, &b, true, None); answer(st, v)
+        }
+        "inbox" if get => {
+            let source = r.param("source").unwrap_or_default().trim().to_lowercase();
+            if source.is_empty() || source == "work" || source.len() > 24 || !source.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') { return Some(answer(400, json!({ "error": "The inbox is another tool's: name its source (e.g. source=jcode)." }))); }
+            let device = r.param("device").unwrap_or_default();
+            let again = r.param("again").is_some_and(|x| x == "1" || x == "true");
+            let wait = r.param("wait").is_some_and(|x| x == "1" || x == "true");
+            let secs = if num("waitSec") == 0 { INBOX_WAIT_SEC } else { num("waitSec").clamp(1, INBOX_WAIT_SEC) };
+            let end = std::time::Instant::now() + Duration::from_secs(secs);
+            loop {
+                let n = ag.inbox.notified(); tokio::pin!(n); n.as_mut().enable();
+                let got = inbox_take(&**hub, ag, a, &source, &device, again);
+                let left = end.saturating_duration_since(std::time::Instant::now());
+                if !got.is_empty() || !wait || left.is_zero() { break answer(200, json!({ "messages": got })); }
+                let _ = tokio::time::timeout(left.min(Duration::from_secs(5)), n).await;
+            }
+        }
+        "read" if post => {
+            let b = r.json();
+            let ids: Vec<String> = b["ids"].as_array().map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).take(200).collect()).unwrap_or_default();
+            if ids.is_empty() { return Some(answer(400, json!({ "error": "Name the messages: {ids: [\"am-…\"]}." }))); }
+            let (mut read, mut unknown) = (vec![], vec![]);
+            for id in ids {
+                let Some(m) = Agents::find_msg(a, &id).filter(|m| s(&m["to"], "user") == a.username) else { unknown.push(id); continue };
+                if !matches!(m["status"].as_str(), Some("delivered") | Some("queued")) { continue; } // read already, answered …: as it is
+                if let Some(m2) = ag.set_msg(&**hub, &m, |x| { x["status"] = json!("read"); }) { ag.audit(&**hub, "read", &m2, "", ""); }
+                // an ask / review stays watched until its reply-by (it expires on the sender's side); the rest is done
+                if !(matches!(m["kind"].as_str(), Some("ask") | Some("review")) && m["replyBy"].is_u64()) { if let Some(l) = lk(&ag.pending).as_mut() { l.retain(|p| p.id != id); } }
+                read.push(id);
+            }
+            if read.is_empty() && !unknown.is_empty() { answer(404, json!({ "error": "No such message for you.", "unknown": unknown })) } else { answer(200, json!({ "ok": true, "read": read, "unknown": unknown })) }
+        }
         "threads" if get => {
             let with = r.param("with").unwrap_or_default(); let since = num("since");
             let mut l: Vec<Value> = all_threads(a).iter().filter(|t| (with.is_empty() || s(t, "with") == with) && t["lastAt"].as_u64().unwrap_or(0) >= since).map(Agents::summary).collect();
@@ -977,6 +1135,11 @@ mod tests {
         let t = delivered_text(&m);
         assert!(t.starts_with("[agent message · from @sponge's agent (sonnet, Work) · ask · thread at-000000000001 · refs T-296]\n"), "{t}");
         assert!(t.contains("⚠ sent right after a refusal") && t.ends_with("[your own person's rules apply; answer with agent_reply, thread at-000000000001]"), "{t}");
+        // a final answer taken as the reply says so in a line of its own (the hub's mark stays out of the envelope)
+        let mut fa = m.clone(); fa["kind"] = json!("reply"); fa["x"] = json!({ "by": "final-answer" }); fa["from"]["source"] = json!("jcode");
+        let t2 = delivered_text(&fa);
+        assert!(t2.starts_with("[agent message · from @sponge's agent (sonnet, Jcode PGM) · reply · thread at-000000000001 · refs T-296]\n[the final answer of their run, taken as the reply: it did not call agent_reply]\n"), "{t2}");
+        assert_eq!(envelope(&fa).as_object().unwrap().len(), ENVELOPE.len());
         let (c, cut) = cut_text(&"x".repeat(TEXT_MAX + 5)); assert!(cut && c.chars().count() == TEXT_MAX && c.ends_with('…'));
         assert_eq!(clean_refs(&json!({ "task": " T-1 ", "bogus": "x", "note": "" })), json!({ "task": "T-1" }));
     }
