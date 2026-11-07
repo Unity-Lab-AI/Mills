@@ -3482,6 +3482,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       // the session a message went to (to.session, once delivered) and its conversation as the hub keeps it
       const sessOf480 = async (tok, thread, id) => (((((await ag('thread?id=' + thread, tok)).data || {}).messages || []).find((m) => m.id === id) || {}).to || {}).session || '';
       const conv480 = async (tok, sid) => ((await call('/api/work/current' + (sid ? '?session=' + sid : ''), tok)).data || {}).transcript || [];
+      // the conversations the agents' runs add to (the woken sessions keep what arrived and the answer): put back as they were
+      // after this block, so the later checks find them as before (R135 expects t-user's and t-admin's first sessions empty)
+      const keep480 = async () => { const out = []; for (const tok of [U, A]) { const sx = (await call('/api/work/sessions', tok)).data || {}; for (const sid of [...new Set([sx.primary, sx.current].filter(Boolean))]) out.push({ tok, sid, cur: (await call('/api/work/current?session=' + sid, tok)).data || {} }); } return out; };
+      const kept480 = built ? await keep480() : [];
       // R480: wake an idle session, queue behind a working one, one thread both sides, audit
       let d480 = 'no /api/agents/* yet';
       if (built) {
@@ -3597,6 +3601,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         spec('R484c', L480.R484c, fs.existsSync(f484) && /"startedBy":\s*"agent:t-admin"/.test(fs.readFileSync(f484, 'utf8')), `time log ${fs.existsSync(f484) ? 'has no startedBy' : 'missing'}`);
         await idle480();
       } else { check('R484', L480.R484, false, 'no /api/agents/* yet'); spec('R484c', L480.R484c, false, 'no /api/agents/* yet'); }
+      for (const k of kept480) await call('/api/work/current', k.tok, { session: k.sid, transcript: k.cur.transcript || [], archiveId: k.cur.archiveId || null, archiveTitle: k.cur.archiveTitle || null });
     } else for (const id of Object.keys(L480)) skip(id, L480[id], 'the Rust hub\'s: --rust-hub runs it');
   }
   if (RUST_HUB) { // R245-R249 (T-238 = T-193 · 1/4): one start-work flow; the fake Forgejo (this runner) answers as tuser-fj and takes pushes over smart HTTP
