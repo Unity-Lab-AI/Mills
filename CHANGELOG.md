@@ -7,6 +7,22 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.46.1 — 2026-11-07
+
+PATCH: **the chat's @ picker calls Unity again** (Gee, 2026-11-07: "why is Unity not responding … multiple have
+addressed her with no response").
+
+### Fixed
+- Unity's chat account is `claude` and her display name "Unity"; only `@unity` calls her (R36, by design). The @ picker
+  inserted her account name, so picking "Unity" from the list, or pressing Tab / Enter while the list was open (also
+  after typing "@unity" in full), wrote `@claude `: the page then sealed no copy for her and the hub never heard the
+  call, while the mention still rendered as hers. No message had been sealed for her since 2026-10-19; her sign-in
+  greetings kept coming, so her brain looked fine. Now the picker, the Tab / Enter completion and the conversation
+  list's "BOT · @…" label all use the handle that calls her (`mentionHandleOf`), and the call test uses the same one.
+  No hub change. `web/index.html` 1.38.1.
+- Check: R527 (static; the picker's behaviour has nothing a scratch hub can observe) says the picker and the list write
+  the handle, never the account name.
+
 ## 5.46.0 — 2026-11-07
 
 MINOR: **the queue panel in Work** (T-188, VibeRoller part).

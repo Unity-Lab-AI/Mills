@@ -6286,6 +6286,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       `${notAdm.status} ${mk.status} ${uSees.status}/${uPw.status} self ${self.status} default ${dflt.username} ${mkD.status} admins ${leak} mode ${localMode.toString(8)} rm ${rm.status} after ${uAfter.status}`);
   }
   check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
+  { // 5.46.1: the @ picker wrote Unity's account name (@claude), which calls nobody (R36), so a picked or Tab / Enter-completed mention never reached her
+    const pickerUsesHandle = /b\.dataset\.user = h;/.test(html) && /insertMention\(h\)/.test(html) && !/insertMention\(m\.username\)/.test(html) && !/b\.dataset\.user = m\.username;/.test(html);
+    const handleFn = /const mentionHandleOf = \(m\) => m\.agent \? \(m\.display \|\| 'unity'\)\.toLowerCase\(\)\.replace\(\/\\s\+\/g, ''\) : m\.username;/.test(html);
+    const listUsesHandle = /\(m\.agent \? 'BOT · ' : 'private · '\) \+ '@' \+ mentionHandleOf\(m\)/.test(html);
+    check('R527', '[static] the @ picker writes @unity for Unity (never her account name @claude, which calls nobody): picking her, or Tab / Enter while the list is open, inserts the handle that calls her; the conversation list shows the same handle', pickerUsesHandle && handleFn && listUsesHandle, `picker ${pickerUsesHandle} handle ${handleFn} list ${listUsesHandle}`);
+  }
   check('R106', '[static] every message you send shows its status: Work (queued / working / done / stopped / failed), Unity section, @unity in Chat (waiting / answering / answered)',
     /function msgStatus\(/.test(html) && /msgStatus\(el, 'queued'/.test(html) && /msgStatus\(mine, 'working'/.test(html) && /msgStatus\(mineU, 'working'/.test(html) && /function refreshAgentWaits/.test(html) && /'Unity answered'/.test(html));
   const nImg = fakeImagePrompts.length;
