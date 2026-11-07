@@ -7,6 +7,25 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.45.0 — 2026-11-07
+
+MINOR: **other tools and other models take part in agent talk, and its cost lands on the receiver** (T-299 hub part,
+T-300; plans/agent-talk.md §7, §8, §11).
+
+- **The inbox of other tools.** `GET /api/agents/inbox?source=&device=&wait=1` (a 25 s long poll, signed in as the
+  person, like the session report) and `POST /api/agents/read {ids}`. A message to `@user/jcode`, or to a person who has
+  only outside sessions, waits there; fetched = delivered (`again=1` gives it again after a restart), read = read.
+  `/send` and `/reply` take `source`, `session`, `model`, and are refused (400) unless that tool is reporting sessions
+  for the person, so `from.source` stays honest. The message has the same fields both ways.
+- **A model without tools answers too.** A run woken by an ask someone waits for, whose model never calls
+  `agent_reply`, has its final answer sent as the reply (`by: "final-answer"` in the audit and the wait result).
+- **Cost on the receiver.** An agent-started run counts in the receiver's usage ledger and day record
+  (`agentStarted: {"agent:<user>": {runs, ms}}`, an `agentRun` event with `startedBy`), never the sender's.
+- Checks: R483 and R484c are real now; R525 (new) drives T-294's done-when list end to end with fake models (an ask
+  answered inside the asker's run, a held hand-off accepted then picked up and reported, a tool-less reply, threads
+  seen by their two people only, a loop stopped). Only R482p (the page, Mills' T-298) stays spec. Jcode PGM's own
+  poll and display, and the Windows hosts run, are not part of this.
+
 ## 5.44.0 — 2026-11-07
 
 MINOR: **agents talk to agents, a security log, and handoff notes on the board** (Sponge, 2026-11-07: "fan out and work
