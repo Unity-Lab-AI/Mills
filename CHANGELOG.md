@@ -7,6 +7,36 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.43.0 — 2026-11-07
+
+MINOR: **agents talk to agents, a security log, and handoff notes on the board** (Sponge, 2026-11-07: "fan out and work
+on many things assigned to me at once").
+
+- **Agent to agent (T-296, T-297; spec plans/agent-talk.md by Gee).** `@person` resolves to that person's current
+  session (else external, else primary; a thread sticks to its session). An agent message is a typed envelope (ask /
+  handoff / review / report / reply) around plain text, delivered into the session as a message: queued behind a
+  working run, or waking an idle one. Threads are kept on both people's sides; mute, pause, ask me first (hand-offs by
+  default), wake me, stop / reopen; a held hand-off is accepted (the task is re-assigned to the receiver) or declined.
+  Hop and rate limits and a word-set loop detector; the audit is `Chat/agent-audit.ndjson`. Routes `/api/agents/*`
+  (Rust hub only; the frozen JavaScript hub answers 404). Six team tools (`agents_list`, `agent_ask`, `agent_handoff`,
+  `agent_review`, `agent_report`, `agent_reply`) in both tool lists, with the ask wait loop in both relays and an agents
+  section in the Work prompt (no permission laundering, board ownership). An agent can no longer claim a task assigned
+  to someone else (403). The spec's open questions use its own suggestions: a person may write to an agent, ask me
+  first covers hand-offs only, an ask waits 30 minutes. R480, R481 and the hub parts of R482 / R484 are checks now; the
+  page (R482p, Mills' T-298), jcode (R483, T-299) and cost (R484c) parts stay spec.
+- **Security log (T-271).** An append-only, hash-chained log (`bridge/security/audit.jsonl`, owner-only) of sign-ins
+  and failures, devices, account changes, delegation (device-code approvals, machine unlinks, Unity's PC tools),
+  provider shares and scopes, AI hosts, API keys, Forgejo links, product registrations, downloads, restarts, version
+  changes and config switches. Secrets are dropped at any depth. `GET /api/admin/audit` (admins) with a chain check that
+  names the first broken entry; a torn last line is moved aside and the chain goes on. A read-only Security log box next
+  to Health. Library: pgm-core-internal `audit`. The deploy snapshot, pack-data, restore and the handoff keep
+  `bridge/security` (handoff.js 1.2.5). R511–R514.
+- **Handoff notes (T-266).** `task_release` takes a structured `handoff` (done, state, next, questions), stored as a
+  signed note; a run that ends still holding a claim leaves one automatic handoff; a holder who goes offline with a
+  claim gets one note (`board.offlineGraceSeconds`, default 120, live hub only). `task_claim` and `task_get` return the
+  latest handoff, and the Work prompt says to start from it. Old note-only releases work as before (board-mcp.js 1.2.0).
+  R516–R519.
+
 ## 5.42.2 — 2026-11-01
 
 PATCH: **the prompt enhancer knows the session it is in** (Sponge, 2026-11-01: its one real pain point: a draft like
