@@ -14,6 +14,8 @@
 //!   the glossary) and the team MCP tools `plan_parse`, `plan_existing`, `plan_roles`, `plan_owner`, `plan_glossary`
 //! - [`unity`], [`unity_brain`], [`unity_routes`]: the assistant: her tools, her brain (a local model's tool loop or
 //!   Claude), confirmations, voice / speech / pictures, her section's routes, the chat's AI member and its queue
+//! - [`agents`]: agent to agent (T-296 / T-297, plans/agent-talk.md): each person's agent address (their current session), the
+//!   envelope, threads on both sides, delivery into sessions (queued or waking them), the person's controls, limits, the audit
 //! - [`hub`]: what all of this needs from the program around it ([`hub::AiHub`])
 //! - [`host`]: the AI host program's side (the job loop, relays, Work on the host, its MCP tools, its folder + settings)
 //! - [`machine_jobs`], [`machine_transfer`]: the hub's side of linked machines' tools (T-311): the signed job queue a machine's
@@ -26,6 +28,7 @@
 //! - [`jcode`]: Jcode PGM as a Work harness (a `jcode` provider: `jcodepgm run --ndjson` in the worktree, a private
 //!   jcode home per person, its events mapped onto the page's event shape)
 
+pub mod agents;
 pub mod ai_hosts;
 pub mod enhance;
 pub mod fj;

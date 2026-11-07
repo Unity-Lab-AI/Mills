@@ -44,7 +44,9 @@ pub async fn serve(which: &str) -> i32 {
                     };
                     let mut res = once(args.clone()).await;
                     // ask_user (T-245) and plan_draft (T-279): a question may wait longer than one call is held; the hub answers {pending, id} every few minutes and we ask again
-                    if name == json!("ask_user") || name == json!("plan_draft") { while let Ok(out) = &res { if out["ok"].as_bool() == Some(true) && out["result"]["pending"] == json!(true) && out["result"]["id"].is_string() { let id = out["result"]["id"].clone(); res = once(json!({ "poll": id })).await; } else { break; } } }
+                    // agent_ask / agent_review with wait (T-297) the same way; {sent: true, pending} = nobody waits any more (the answer comes as a message)
+                    let agent_wait = name == json!("agent_ask") || name == json!("agent_review");
+                    if name == json!("ask_user") || name == json!("plan_draft") || agent_wait { while let Ok(out) = &res { if out["ok"].as_bool() == Some(true) && out["result"]["pending"] == json!(true) && out["result"]["id"].is_string() && !(agent_wait && out["result"]["sent"] == json!(true)) { let id = out["result"]["id"].clone(); res = once(json!({ "poll": id })).await; } else { break; } } }
                     let result = match res {
                         Ok(out) => { let ok = out["ok"].as_bool() == Some(true); let text = if ok { if which_is_pc(route) && out["result"].is_string() { out["result"].as_str().unwrap_or("").to_string() } else { serde_json::to_string_pretty(&out["result"]).unwrap_or_default() } } else { format!("Error: {}", out["error"].as_str().unwrap_or("failed")) }; json!({ "content": [{ "type": "text", "text": text }], "isError": !ok }) }
                         Err(e) => json!({ "content": [{ "type": "text", "text": format!("Hub unreachable: {e}") }], "isError": true }) };

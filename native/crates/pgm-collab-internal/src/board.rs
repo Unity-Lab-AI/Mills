@@ -313,6 +313,9 @@ impl Board {
             "claim" => {
                 let Some(t) = find(db, &id) else { return no(404, "No such task.") };
                 if held_by_other(t, a, now) { return no(409, format!("{} already holds {} until {}.", t["claim"]["by"].as_str().unwrap_or(""), id, time_of(t["claim"]["until"].as_i64().unwrap_or(0)))); }
+                // board ownership (plans/task-assignments.md, plans/agent-talk.md § 5): a person's AI claims only a task that is theirs
+                // or nobody's; someone else's task is theirs to re-assign (accepting a hand-off does that), never an agent's to take
+                if let Some(w) = agent_may_not_claim(t, a) { return no(403, format!("{id} is {}'s task: ask them (or their agent) to re-assign it before working on it.", name_of(&w))); }
                 let minutes = b["minutes"].as_f64().filter(|m| *m > 0.0).unwrap_or(CLAIM_DEFAULT_MIN).clamp(1.0, CLAIM_MAX_MIN);
                 let renew = claim_active(t, now) && t["claim"]["key"] == json!(a.key());
                 let t = find_mut(db, &id).unwrap();
@@ -562,6 +565,8 @@ fn find<'a>(db: &'a Value, id: &str) -> Option<&'a Value> { db["tasks"].as_array
 fn find_mut<'a>(db: &'a mut Value, id: &str) -> Option<&'a mut Value> { db["tasks"].as_array_mut()?.iter_mut().find(|t| t["id"] == json!(id) && live(t)) }
 fn claim_active(t: &Value, now: i64) -> bool { t["claim"].is_object() && t["claim"]["until"].as_i64().unwrap_or(0) > now }
 fn held_by_other(t: &Value, a: &Actor, now: i64) -> bool { claim_active(t, now) && t["claim"]["key"] != json!(a.key()) }
+/// A person's AI (an agent actor) may claim a task that is its person's or nobody's: Some(the assignee) when it is someone else's.
+pub fn agent_may_not_claim(t: &Value, a: &Actor) -> Option<String> { let w = t["assignee"].as_str().unwrap_or(""); if a.agent && !w.is_empty() && w != a.user { Some(w.to_string()) } else { None } }
 fn touch(t: &mut Value, now: i64) { t["rev"] = json!(t["rev"].as_i64().unwrap_or(0) + 1); t["updatedAt"] = json!(now); }
 fn clamp_pri(v: &Value) -> i64 { (v.as_f64().unwrap_or(0.0) as i64).clamp(0, 5) }
 fn clean_labels(v: &Value) -> Value {
@@ -620,6 +625,20 @@ mod tests {
     fn op(b: &Board, op: &str, body: Value) -> Out { b.op(op, &Actor { user: "ann".into(), agent: false, name: "Ann".into() }, &body, &|u| u == "ann", &|u| u.to_string()) }
     fn ids(v: &Value) -> Vec<String> { v["tasks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect() }
     fn made(b: &Board, body: Value) -> String { op(b, "create", body).body["task"]["id"].as_str().unwrap().to_string() }
+
+    #[test]
+    fn an_agent_claims_only_its_persons_task_or_nobodys() {
+        let (b, dir) = scratch("agentclaim");
+        let has = |u: &str| u == "ann" || u == "bob";
+        let mk = |asg: Option<&str>| b.op("create", &Actor { user: "ann".into(), agent: false, name: "Ann".into() }, &json!({ "title": "t", "assignee": asg }), &has, &|u| u.to_string()).body["task"]["id"].as_str().unwrap().to_string();
+        let claim = |id: &str, agent: bool| b.op("claim", &Actor { user: "ann".into(), agent, name: "Ann".into() }, &json!({ "id": id }), &has, &|u| u.to_string()).status;
+        let (bobs, anns, nobodys) = (mk(Some("bob")), mk(Some("ann")), mk(None));
+        assert_eq!(claim(&bobs, true), 403, "someone else's task: re-assigned first");
+        assert_eq!(claim(&anns, true), 200);
+        assert_eq!(claim(&nobodys, true), 200);
+        assert_eq!(claim(&bobs, false), 200, "the person themselves still decides");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn the_sweep_archives_done_tasks_after_48_hours_and_deletes_them_30_days_later() {
