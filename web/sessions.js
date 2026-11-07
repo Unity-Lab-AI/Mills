@@ -1,7 +1,8 @@
 // VibeRoller Work: the session list (T-287; team note plans/multi-session.md §§ 2b, 3, 4, 6). A hidable sidebar of the
 // person's ongoing and past sessions (like ChatGPT / Claude): grouped (pinned / folders / today / earlier / hidden /
 // archived), searchable, each with a state dot that has a colour AND a shape (colour-blind safe) and its meaning on hover.
-// One menu for "…" and right-click, built from one item list. The saved conversations (Past sessions) are in it too.
+// One menu for "…" and right-click, built from one item list (shown by the menu kit, web/menu.js, when it is there). The
+// saved conversations (Past sessions) are in it too.
 // Sessions that are not on screen are followed here in the background: their replies go into their own conversation on
 // the hub, and their queued messages are sent when a slot frees (a 429 keeps a message queued).
 // Loaded before the main page script; the DOM part runs only after sign-in and uses the page's helpers at call time
@@ -186,8 +187,12 @@
       h.append(el('span', '', collapsible ? (g.collapsed ? '▸ ' : '▾ ') : ''), el('span', 'grow', g.label + (collapsible && g.collapsed ? ' (' + g.items.length + ')' : '')));
       if (g.folder) {
         const f = g.folder, more = el('span', 'spAct', '…'); more.title = 'Folder menu'; more.setAttribute('role', 'button');
-        more.onclick = (e) => { e.stopPropagation(); const r = more.getBoundingClientRect(); popMenu(folderMenuItems(f), r.left, r.bottom, (id) => folderAct(f, id)); };
-        h.append(more); h.oncontextmenu = (e) => { e.preventDefault(); popMenu(folderMenuItems(f), e.clientX, e.clientY, (id) => folderAct(f, id)); };
+        h.append(more);
+        if (W.MENU) { W.MENU.button(more, () => folderMenuItems(f), (id) => folderAct(f, id)); W.MENU.attach(h, () => folderMenuItems(f), (id) => folderAct(f, id)); }
+        else {
+          more.onclick = (e) => { e.stopPropagation(); const r = more.getBoundingClientRect(); popMenu(folderMenuItems(f), r.left, r.bottom, (id) => folderAct(f, id)); };
+          h.oncontextmenu = (e) => { e.preventDefault(); popMenu(folderMenuItems(f), e.clientX, e.clientY, (id) => folderAct(f, id)); };
+        }
         h.onclick = () => folderAct(f, 'fcollapse');
       } else if (g.key === 'hidden') h.onclick = () => { P.showHidden = !P.showHidden; render(); };
       else if (g.key === 'archived') h.onclick = () => { P.showArchived = !P.showArchived; render(); };
@@ -213,19 +218,28 @@
     const x = el('button', 'spAct'); x.append(ic(s.hidden ? 'eye' : 'close')); x.type = 'button'; x.title = s.hidden ? 'Unhide' : 'Hide (it keeps running; find it under Hidden)'; x.setAttribute('aria-label', x.title);
     x.onclick = (e) => { e.stopPropagation(); act(s, 'hide'); };
     const more = el('button', 'spAct', '…'); more.type = 'button'; more.title = 'More'; more.setAttribute('aria-label', 'More actions');
-    more.onclick = (e) => { e.stopPropagation(); const b = more.getBoundingClientRect(); sessionMenu(s, b.left, b.bottom); };
     r.append(dot(s), t, x, more);
     r.onclick = () => act(s, 'open');
+    if (W.MENU) { // the one menu kit (web/menu.js): "…", right-click, long-press and the ContextMenu key, from one list
+      W.MENU.button(more, () => sessionItems(s), (id) => act(s, id));
+      W.MENU.attach(r, () => sessionItems(s), (id) => act(s, id), { links: false });
+      r.onkeydown = (e) => { if (e.key === 'Enter' && e.target === r) act(s, 'open'); };
+      return r;
+    }
+    more.onclick = (e) => { e.stopPropagation(); const b = more.getBoundingClientRect(); sessionMenu(s, b.left, b.bottom); };
     r.onkeydown = (e) => { if (e.key === 'Enter') act(s, 'open'); else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { e.preventDefault(); const b = r.getBoundingClientRect(); sessionMenu(s, b.left + 20, b.bottom); } };
     r.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s, e.clientX, e.clientY); };
     return r;
   }
-  function sessionMenu(s, x, y) { popMenu(menuItems(s, { folders: (P.data && P.data.folders) || [], shared: !!(typeof myShare !== 'undefined' && myShare) && s.id === onScreen() }), x, y, (id) => act(s, id)); }
+  const sessionItems = (s) => menuItems(s, { folders: (P.data && P.data.folders) || [], shared: !!(typeof myShare !== 'undefined' && myShare) && s.id === onScreen() });
+  function sessionMenu(s, x, y) { popMenu(sessionItems(s), x, y, (id) => act(s, id)); }
 
-  // one menu: a list of {id, label, danger?, sub?}; a "sub" opens in place (with a way back)
+  // one menu: a list of {id, label, danger?, sub?}; shown by the menu kit (web/menu.js: sub-menus beside it, keyboard,
+  // kept on screen); without it, here, a "sub" opens in place (with a way back)
   function closeMenu() { if (P.menu) { P.menu.remove(); P.menu = null; } }
   function popMenu(items, x, y, pick) {
     closeMenu();
+    if (W.MENU) { W.MENU.open(items, x, y, pick); return; }
     const m = el('div', 'spMenu'); m.setAttribute('role', 'menu'); P.menu = m;
     const fill = (list, back) => {
       m.textContent = '';
@@ -311,13 +325,17 @@
       del.onclick = async (e) => {
         e.stopPropagation();
         if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.textContent = 'Confirm'; setTimeout(() => { del.dataset.armed = ''; del.textContent = ''; del.append(ic('trash')); }, 3000); return; }
-        try { await post('/api/archive/delete', { id: it.id }); if (it.id === archiveId) setConversation(null, null, transcript); loadSaved(); } catch (err) { say(err.message, true); }
+        deleteSaved(it);
       };
       r.append(t, ren, del); r.title = 'Open it here: Claude continues that conversation in the session on screen';
       r.onclick = () => { openConversation(it.id); if (!wide()) setOpen(false); };
-      r.onkeydown = (e) => { if (e.key === 'Enter') r.click(); };
+      r.onkeydown = (e) => { if (e.key === 'Enter' && e.target === r) r.click(); };
+      if (W.MENU) W.MENU.attach(r, () => W.MENU.lists.saved(it, { open: () => r.click(), rename: () => renameConversation(it.id, it.title), del: () => deleteSaved(it) }), null, { links: false });
       box.append(r);
     }
+  }
+  async function deleteSaved(it) {
+    try { await post('/api/archive/delete', { id: it.id }); if (it.id === archiveId) setConversation(null, null, transcript); loadSaved(); } catch (err) { say(err.message, true); }
   }
   async function loadSaved() {
     const q = $('spQ').value.trim(); if (!P.showSaved && !q) return;

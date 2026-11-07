@@ -49,6 +49,7 @@ const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub nam
 const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
 const R532_LABEL = 'agent threads in the page (T-298): t-user sees every message to and from their agent as a thread per agent pair, both directions with who, kind and time, and a message that went into one of their sessions opens that session; with the page open a new message from mills notifies, muting the pair stops the notifications (mills\'s next message is refused) but keeps the messages, Do Not Disturb mutes the notification only (the message is there); "pause my inbox" and "ask me first" change the hub\'s settings; a held hand-off shows an accept / decline card and accepting it makes the hub accept it (the task is re-assigned to t-user); the hub serves agents.js and the page loads it with its button, panel and menu tile';
 const R532B_LABEL = 'agent threads in the page on a hub without /api/agents (an older hub or the JavaScript fallback hub): the panel renders nothing, its button and menu tile stay hidden, a refresh and a render throw nothing and nothing notifies';
+const R531_LABEL = 'VibeRoller\'s menus (T-224) offer only what the person may do and call the page\'s existing actions: someone else\'s chat message has Reply, Copy and their profile but no Edit or Delete, your own adds Edit and Delete (asking twice, not Edit for a voice clip), Pin shows for who may pin and says Unpin when pinned, a moderator deletes in a channel but not in a DM, a deleted message offers no actions; a person, a channel, a group and a server offer what their buttons offer (Message and Mention not for yourself, Edit channel only for who may); a board card held by someone else only opens, goes to Claude and copies its id, a free one claims, completes, moves and assigns through sub-menus (the current column and assignee ticked) and archives when done; a file offers Edit and Run for Work files and only Delete when gone; a Work message is copied and sent again, a queued one cancelled through the queue panel; the chat, Work, the board, notes, files and the session list build their right-click and click / ⋯ menus from these lists';
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -746,7 +747,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['sessions.js', 'queue.js', 'tools.js', 'agents.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['menu.js', 'sessions.js', 'queue.js', 'tools.js', 'agents.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -773,6 +774,7 @@ async function run() {
   if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
   if (process.argv.includes('--only-r491') && RUST_HUB) await r491Check(); // development: just R491 (with --stop-after R491)
   if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
+  if (process.argv.includes('--only-r530')) await r530Check(); // development: just R530 and R531 (with --stop-after R531)
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
   if (process.argv.includes('--only-r528')) await r528r529Check(); // development: just R528 / R529 (with --stop-after R529)
@@ -4028,6 +4030,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (!process.argv.includes('--only-r528')) await r528r529Check();
   if (RUST_HUB) { if (!process.argv.includes('--only-r532')) await r532Check(); } else skip('R532', R532_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   if (!process.argv.includes('--only-r532')) await r532bCheck();
+  if (!process.argv.includes('--only-r530')) await r530Check(); // T-223 / T-224: R530 and R531 (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
@@ -7426,6 +7429,170 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       if (!RUST_HUB) seen.hub404 = (await call('/api/agents/threads', U)).status === 404;
     }
     check('R532b', R532B_LABEL, !!AG && seen.unavailable && seen.nothing && (RUST_HUB || seen.hub404), JSON.stringify(seen));
+  }
+  // R530 / R531 (T-223 / T-224, parent T-189): the one menu kit (web/menu.js) and VibeRoller's lists. The hub serves the
+  // file and the page loads it before the session list; the kit itself runs here on a small element stand-in (a tree with
+  // events that bubble, focus, and sizes), driven by right-clicks, keys, a long-press and the ⋯ button like a person would.
+  async function r530Check() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/menu.js'), src = js.status === 200 ? await js.text() : '';
+    const sw = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8'), at = (f) => page.search(new RegExp(`<script src="${f.replace('.', '\\.')}(\\?[^"]*)?"></script>`)); // (the hub may add ?v=)
+    seen.served = js.status === 200 && /javascript/.test(js.headers.get('content-type') || '') && at('menu.js') >= 0 && at('menu.js') < at('sessions.js') && /'menu\.js'/.test(sw);
+    // the stand-in: elements in a tree, events bubbling up to the document, a focus, and sizes (a menu is 200 wide, 30 per row)
+    const VW = 1000, VH = 700;
+    const listen = (o) => ({ addEventListener(k, f, c) { (o.ls[k] = o.ls[k] || []).push({ f, c: !!c }); }, removeEventListener(k, f) { o.ls[k] = (o.ls[k] || []).filter((x) => x.f !== f); } });
+    const doc = { activeElement: null, ls: {} }; Object.assign(doc, listen(doc));
+    const mkEl = (tag) => {
+      const e = { tagName: String(tag).toUpperCase(), children: [], parentNode: null, text: '', className: '', style: {}, dataset: {}, attrs: {}, ls: {}, tabIndex: 0, disabled: false, type: '', rect: null,
+        append(...xs) { for (const x of xs) { const n = typeof x === 'string' ? { tagName: '#text', text: x, children: [] } : x; if (n.parentNode) n.parentNode.children.splice(n.parentNode.children.indexOf(n), 1); n.parentNode = e; e.children.push(n); } },
+        remove() { const p = e.parentNode; if (p) { p.children.splice(p.children.indexOf(e), 1); e.parentNode = null; } if (doc.activeElement && e.contains(doc.activeElement)) doc.activeElement = null; },
+        setAttribute(k, v) { e.attrs[k] = String(v); }, getAttribute(k) { return k in e.attrs ? e.attrs[k] : null; },
+        focus() { doc.activeElement = e; }, contains(n) { for (let x = n; x; x = x.parentNode) if (x === e) return true; return false; },
+        get isConnected() { for (let x = e; x; x = x.parentNode) if (x === doc.body) return true; return false; },
+        classList: { add: (c) => { if (!e.classList.contains(c)) e.className = (e.className + ' ' + c).trim(); }, remove: (c) => { e.className = e.className.split(' ').filter((x) => x && x !== c).join(' '); }, contains: (c) => e.className.split(' ').includes(c), toggle: (c, on) => (on === undefined ? !e.classList.contains(c) : on) ? e.classList.add(c) : e.classList.remove(c) },
+        getBoundingClientRect() {
+          if (e.rect) return e.rect;
+          const px = (v) => parseFloat(v) || 0;
+          if (/\bvrMenu\b/.test(e.className)) { const left = px(e.style.left), top = px(e.style.top), h = 8 + 30 * e.children.length; return { left, top, width: 200, height: h, right: left + 200, bottom: top + h }; }
+          const p = e.parentNode; if (p && /\bvrMenu\b/.test(p.className)) { const r = p.getBoundingClientRect(), top = r.top + 4 + 30 * p.children.indexOf(e); return { left: r.left, right: r.right, top, bottom: top + 30, width: 200, height: 30 }; }
+          return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+        } };
+      Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tagName === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+      Object.assign(e, listen(e));
+      return e;
+    };
+    doc.createElement = mkEl; doc.body = mkEl('body'); doc.body.parentNode = doc;
+    // an event as the browser sends it: the capture listeners from the document down, then the others from the target up
+    const fire = (target, type, o = {}) => {
+      const ev = { type, target, key: '', shiftKey: false, button: 0, clientX: 0, clientY: 0, detail: 1, pointerType: 'mouse', ...o, defaultPrevented: false, stopped: false, preventDefault() { ev.defaultPrevented = true; }, stopPropagation() { ev.stopped = true; } };
+      const route = []; for (let x = target; x; x = x.parentNode) route.push(x);
+      for (const [list, cap] of [[route.slice().reverse(), true], [route, false]]) for (const x of list) for (const l of (x.ls && x.ls[type]) || []) if (l.c === cap && !ev.stopped) l.f(ev);
+      return ev;
+    };
+    const win = { document: doc, innerWidth: VW, innerHeight: VH, setTimeout, clearTimeout, addEventListener() {}, navigator: {} };
+    let M = null; try { const ctx = { window: win }; require('vm').runInNewContext(src, ctx); M = ctx.window.MENU; } catch (e) { seen.load = e.message; }
+    if (M) {
+      // where it goes: at the pointer, and at every corner kept inside the screen; a menu bigger than the screen starts at its corner
+      const sz = { w: 200, h: 300 }, view = { w: VW, h: VH }, inside = (p, s) => p.left >= 4 && p.top >= 4 && p.left + s.w <= VW - 4 && p.top + s.h <= VH - 4;
+      const corners = [[10, 10], [990, 10], [10, 690], [990, 690]].map(([x, y]) => M.place(x, y, sz, view));
+      seen.corners = corners.map((p) => p.left + ',' + p.top).join(' ');
+      seen.onScreen = corners.every((p) => inside(p, sz)) && seen.corners === '10,10 790,10 10,390 790,390' && JSON.stringify(M.place(500, 500, { w: 1400, h: 900 }, view)) === '{"left":4,"top":4}';
+      const subR = M.subPlace({ left: 700, right: 900, top: 100 }, { w: 200, h: 150 }, view), subL = M.subPlace({ left: 100, right: 300, top: 650 }, { w: 200, h: 150 }, view);
+      seen.subFlip = subR.flipped === true && subR.left === 502 && subL.flipped === false && subL.left === 298 && subL.top === 546;
+      seen.normal = M.normalize(['-', null, { id: 'a', label: 'A' }, '-', '-', { id: 'b', label: 'B', sub: [null] }, false, { note: 'n' }, '-']).map((x) => x.sep ? '-' : x.note ? 'note:' + x.note : x.id).join('|');
+      // a list with a sub-menu, an item that asks twice, a plain one; right-click near the bottom-right corner
+      const picked = [], ran = [];
+      const items = () => [{ id: 'open', label: 'Open', icon: 'file' }, { id: 'move', label: 'Move to ▸', sub: [{ id: 'move:a', label: 'Alpha', on: true }, { id: 'move:b', label: 'Beta' }] }, '-', { id: 'del', label: 'Delete', danger: true, confirm: 'Click again to delete', run: () => ran.push('del') }];
+      const list = mkEl('div'), row = mkEl('div'), more = mkEl('button'), field = mkEl('input'), link = mkEl('a'), btn2 = mkEl('button');
+      more.className = 'more'; more.rect = { left: 300, top: 40, right: 320, bottom: 60, width: 20, height: 20 }; field.type = 'text'; link.href = 'https://example.org/x'; btn2.rect = more.rect;
+      row.append(more, field, link); list.append(row); doc.body.append(list, btn2);
+      let rowClicks = 0; row.addEventListener('click', () => rowClicks++);
+      M.attach(list, (t) => (t.tagName === 'DIV' && t !== row && t !== list ? null : items()), (id) => picked.push(id), { more: (t) => (t.className === 'more' ? t : null), longPress: 30 });
+      const menus = () => doc.body.children.filter((c) => /\bvrMenu\b/.test(c.className));
+      const labels = (m) => m.children.filter((c) => c.tagName === 'BUTTON').map((c) => c.children[1].textContent).join('|');
+      const focused = () => (doc.activeElement && doc.activeElement.dataset ? doc.activeElement.dataset.id || doc.activeElement.className : '');
+      row.focus();
+      let ev = fire(row, 'contextmenu', { button: 2, clientX: 990, clientY: 690 });
+      const m0 = menus()[0], r0 = m0 && m0.getBoundingClientRect();
+      seen.rightClick = ev.defaultPrevented && menus().length === 1 && labels(m0) === 'Open|Move to|Delete' && r0.right <= VW - 4 && r0.bottom <= VH - 4 && m0.attrs.role === 'menu';
+      const key = (k, o) => fire(doc.activeElement, 'keydown', { key: k, ...o });
+      key('ArrowDown'); const k1 = focused(); key('ArrowDown'); const k2 = focused(); key('ArrowDown'); const k3 = focused(); key('ArrowDown'); const k4 = focused(); key('ArrowUp'); const k5 = focused(); key('End'); const k6 = focused(); key('Home'); const k7 = focused();
+      seen.arrows = [k1, k2, k3, k4, k5, k6, k7].join(',');
+      key('ArrowDown'); key('ArrowRight'); const sub = menus()[1];
+      seen.sub = !!sub && /\bflipped\b/.test(sub.className) && labels(sub) === 'Alpha|Beta' && focused() === 'move:a' && sub.children[0].attrs['aria-checked'] === 'true' && sub.getBoundingClientRect().left < r0.left;
+      key('ArrowLeft'); seen.subBack = menus().length === 1 && focused() === 'move';
+      key('Escape'); seen.escape = menus().length === 0 && doc.activeElement === row;
+      // Enter picks (the menu closes, focus back first); an item that asks twice does it on the second Enter only
+      fire(row, 'contextmenu', { button: 2, clientX: 100, clientY: 100 }); key('ArrowDown'); key('Enter');
+      seen.enter = picked.join(',') === 'open' && menus().length === 0 && doc.activeElement === row;
+      fire(row, 'contextmenu', { button: 2, clientX: 100, clientY: 100 }); key('End'); key('Enter');
+      const armed = menus().length === 1 && menus()[0].children.filter((c) => c.tagName === 'BUTTON')[2].textContent === 'Click again to delete' && !ran.length;
+      key('Enter'); seen.confirm = armed && ran.join() === 'del' && picked.join(',') === 'open,del' && menus().length === 0;
+      // a click on an item picks it too; a pointer down outside closes the menu
+      fire(row, 'contextmenu', { button: 2, clientX: 100, clientY: 100 }); fire(menus()[0].children[0], 'click');
+      fire(row, 'contextmenu', { button: 2, clientX: 100, clientY: 100 }); fire(doc.body, 'pointerdown');
+      seen.clickAndOutside = picked.join(',') === 'open,del,open' && menus().length === 0;
+      // the browser's own menu: Shift + right-click, a text field, nothing to offer
+      ev = fire(row, 'contextmenu', { button: 2, shiftKey: true, clientX: 50, clientY: 50 }); seen.shift = !ev.defaultPrevented && !menus().length;
+      ev = fire(field, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); seen.field = !ev.defaultPrevented && !menus().length && M.textField(field) && !M.textField(row);
+      const plain = mkEl('div'); row.append(plain); ev = fire(plain, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); seen.nothing = !ev.defaultPrevented && !menus().length;
+      // a link: our menu with the link's own items and "Browser menu", which leaves the next right-click to the browser
+      ev = fire(link, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); const lm = menus()[0];
+      seen.link = ev.defaultPrevented && !!lm && /Copy link\|Browser menu$/.test(labels(lm));
+      if (lm) fire(lm.children.filter((c) => c.tagName === 'BUTTON').pop(), 'click');
+      ev = fire(row, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); seen.browserItem = !ev.defaultPrevented && !menus().length;
+      const hint = doc.body.children.find((c) => c.className === 'vrHint'); if (hint) hint.remove();
+      // a long-press on touch opens it at the finger, and the click that ends the press opens nothing else; a moving finger scrolls
+      fire(row, 'pointerdown', { pointerType: 'touch', clientX: 60, clientY: 80 }); await sleep(80);
+      const lp = menus()[0]; fire(row, 'click');
+      seen.longPress = !!lp && lp.style.left === '60px' && lp.style.top === '80px' && rowClicks === 0;
+      fire(doc.body, 'pointerdown');
+      fire(row, 'pointerdown', { pointerType: 'touch', clientX: 60, clientY: 80 }); fire(row, 'pointermove', { pointerType: 'touch', clientX: 60, clientY: 120 }); await sleep(80);
+      seen.scrolls = !menus().length;
+      await sleep(950); // a touch browser's own contextmenu right after a long-press is swallowed for a moment
+      // the ⋯ button and right-click on the same item: the very same list (⋯ under the button, focus on its first item from the keyboard)
+      fire(row, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); const viaRight = labels(menus()[0]); fire(doc.body, 'pointerdown');
+      fire(more, 'click', { detail: 0 }); const mm = menus()[0], viaMore = mm ? labels(mm) : '';
+      seen.more = viaMore === viaRight && mm.style.left === '300px' && mm.style.top === '60px' && focused() === 'open' && rowClicks === 0;
+      key('Escape'); seen.moreFocus = doc.activeElement === more;
+      M.button(btn2, items, (id) => picked.push('b:' + id)); fire(btn2, 'click', { detail: 1 });
+      seen.button = menus().length === 1 && labels(menus()[0]) === viaRight; M.close();
+    }
+    const ok530 = seen.served && !!M && seen.onScreen && seen.subFlip && seen.normal === 'a|-|note:n' && seen.rightClick && seen.arrows === 'open,move,del,open,del,del,open'
+      && seen.sub && seen.subBack && seen.escape && seen.enter && seen.confirm && seen.clickAndOutside && seen.shift && seen.field && seen.nothing && seen.link && seen.browserItem
+      && seen.longPress && seen.scrolls && seen.more && seen.moreFocus && seen.button;
+    check('R530', 'one menu kit for every product (web/menu.js, T-223): a right-click opens our menu at the pointer and it stays on screen at every corner (a menu bigger than the screen starts at its corner); a sub-menu opens beside its item and flips to the left near the right edge; the arrows, Home and End move, the right arrow opens a sub-menu and the left arrow goes back, Enter picks, Escape closes and focus returns to where it was; an item that deletes asks once more; a click outside closes it; Shift + right-click, a text field and a place with nothing to offer keep the browser\'s own menu, and on a link "Browser menu" leaves the next right-click to the browser; a long-press on touch opens it without also clicking, a moving finger does not; the ⋯ button and right-click on the same item give the very same list; the hub serves menu.js and the page loads it before the session list',
+      ok530, JSON.stringify(seen));
+    if (M) await r531Check(M);
+    else check('R531', R531_LABEL, false, 'web/menu.js did not load');
+  }
+  async function r531Check(M) {
+    const seen = {}, L = M.lists, calls = [];
+    const spy = (...names) => Object.fromEntries(names.map((n) => [n, (...a) => calls.push(n + (a.length ? '(' + a.map((x) => JSON.stringify(x)).join(',') + ')' : ''))]));
+    const ids = (items) => M.normalize(items).filter((x) => x.id).map((x) => x.id).join(',');
+    const pick = (items, id) => { const all = M.normalize(items).flatMap((x) => [x, ...(x.sub || [])]), it = all.find((x) => x.id === id); if (it && it.run) it.run(); return !!(it && it.run); };
+    const msgA = spy('reply', 'copy', 'edit', 'pin', 'jump', 'profile', 'del');
+    const msg = (m) => L.message({ hasText: true, profile: true, author: 'Gee', ...m }, msgA);
+    seen.others = ids(msg({})); seen.own = ids(msg({ mine: true, canPin: true, pinned: true, replyTo: 5 }));
+    seen.clip = ids(msg({ mine: true, audio: true, hasText: false })); seen.mod = ids(msg({ canModerate: true })); seen.modDm = ids(msg({ canModerate: true, private: true })); seen.deleted = ids(msg({ mine: true, deleted: true }));
+    const own = M.normalize(msg({ mine: true, canPin: true, pinned: true, info: 'seen by gee' }));
+    seen.ownLabels = own.map((x) => x.note ? 'note' : x.sep ? '-' : x.label + (x.confirm ? '?' : '')).join('|');
+    seen.noAction = ids(L.message({ mine: true, hasText: true }, { reply: () => {} }));
+    calls.length = 0; pick(msg({ mine: true, canPin: true, pinned: true }), 'pin'); pick(msg({ mine: true }), 'del'); pick(msg({}), 'reply');
+    seen.msgCalls = calls.join(' ');
+    const pA = spy('profile', 'message', 'mention', 'copy', 'member');
+    seen.person = [ids(L.person({ user: 'mills', self: true }, pA)), ids(L.person({ user: 'gee', server: true }, pA)), ids(L.person({ user: 'claude', agent: true }, pA))].join(' / ');
+    seen.places = [ids(L.channel({ canEdit: false }, spy('open', 'edit', 'server'))), ids(L.channel({ canEdit: true, current: true }, spy('open', 'edit', 'server'))), ids(L.group({}, spy('open', 'settings'))), ids(L.server({ canInvite: true, canCreate: false }, spy('open', 'settings', 'invite', 'newChannel')))].join(' / ');
+    const cA = spy('open', 'claim', 'release', 'complete', 'move', 'assign', 'delegate', 'archive', 'restore', 'claude', 'copy', 'del');
+    const ctx = { statuses: [{ id: 'todo', label: 'To do' }, { id: 'doing', label: 'Doing' }, { id: 'done', label: 'Done' }], members: [{ username: 'gee', name: 'Gee' }, { username: 'mills', name: 'Mills' }], archive: true, ai: true };
+    const t = { id: 'T-9', status: 'doing', assignee: 'mills' };
+    seen.cardHeld = ids(L.card(t, { ...ctx, held: true }, cA)); seen.cardFree = ids(L.card(t, ctx, cA)); seen.cardMineDone = ids(L.card({ ...t, status: 'done' }, { ...ctx, mineHeld: true }, cA));
+    seen.cardArchived = ids(L.card({ ...t, status: 'done', archivedAt: 1 }, { ...ctx, ai: false }, cA));
+    const free = M.normalize(L.card(t, ctx, cA));
+    seen.cardSubs = free.filter((x) => x.sub).map((x) => x.id + ':' + x.sub.map((s) => s.label + (s.on ? '*' : '')).join(',')).join(' ');
+    calls.length = 0; pick(L.card(t, ctx, cA), 'move:done'); pick(L.card(t, ctx, cA), 'assign:gee'); pick(L.card(t, ctx, cA), 'assign:'); pick(L.card(t, ctx, cA), 'claim');
+    seen.cardCalls = calls.join(' '); seen.cardDelete = !!(free.find((x) => x.id === 'del') || {}).confirm;
+    const fA = spy('open', 'download', 'edit', 'use', 'run', 'exec', 'copyIn', 'del');
+    seen.files = [ids(L.file({ kind: 'work', editable: true, exec: false }, fA)), ids(L.file({ kind: 'chat', linked: true }, fA)), ids(L.file({ kind: 'chat', linked: false }, fA)), ids(L.file({ kind: 'work', missing: true }, fA))].join(' / ');
+    const wA = spy('copy', 'resend', 'queue', 'cancel');
+    seen.work = [ids(L.work({ kind: 'me', text: 'hi' }, wA)), ids(L.work({ kind: 'claude', text: 'yes' }, wA)), ids(L.work({ kind: 'queued', text: 'later' }, wA))].join(' / ');
+    calls.length = 0; pick(L.work({ kind: 'queued', text: 'later' }, wA), 'cancel'); pick(L.work({ kind: 'me', text: 'hi' }, wA), 'resend'); seen.workCalls = calls.join(' ');
+    seen.notes = [ids(L.note({ open: true }, spy('open', 'rename', 'copy', 'del'))), ids(L.noteFolder({ collapsed: true }, spy('newNote', 'toggle', 'newFolder'))), M.normalize(L.noteFolder({ collapsed: true }, spy('newNote', 'toggle', 'newFolder')))[1].label, ids(L.saved({}, spy('open', 'rename', 'del')))].join(' / ');
+    // the page builds its menus from these lists: one list for both ways in (click / ⋯ and right-click)
+    const rd = (f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8'), html = rd('index.html');
+    const uses = { 'index.html': /MENU\.lists\.message\(/.test(html) && (html.match(/msgMenuItems\(/g) || []).length >= 3 && /MENU\.lists\.work\(/.test(html) && /MENU\.attach\(\$\('roomLog'\)/.test(html) && /MENU\.attach\(log,/.test(html),
+      'guilds.js': /MENU\.lists\.person\(/.test(rd('guilds.js')) && /MENU\.lists\.channel\(/.test(rd('guilds.js')) && /MENU\.lists\.server\(/.test(rd('guilds.js')) && /MENU\.lists\.group\(/.test(rd('guilds.js')),
+      'board.js': /MENU\.lists\.card\(/.test(rd('board.js')), 'notes.js': /MENU\.lists\.note\(/.test(rd('notes.js')) && /MENU\.lists\.noteFolder\(/.test(rd('notes.js')),
+      'library.js': /MENU\.lists\.file\(/.test(rd('library.js')), 'sessions.js': /W\.MENU\.open\(/.test(rd('sessions.js')) && /MENU\.lists\.saved\(/.test(rd('sessions.js')) && /W\.MENU\.button\(more/.test(rd('sessions.js')) };
+    seen.wired = Object.entries(uses).filter(([, v]) => !v).map(([k]) => k).join(' ') || 'all';
+    const ok = seen.others === 'reply,copy,profile' && seen.own === 'reply,copy,edit,pin,jump,profile,del' && seen.clip === 'reply,profile,del' && seen.mod === 'reply,copy,profile,del' && seen.modDm === 'reply,copy,profile' && seen.deleted === 'profile'
+      && seen.ownLabels === 'Reply|Copy text|Edit|Unpin|-|Profile of Gee|Delete?|-|note' && seen.noAction === 'reply' && seen.msgCalls === 'pin(false) del reply'
+      && seen.person === 'profile,copy / profile,message,mention,copy,member / message,mention,copy' && seen.places === 'open,server / edit,server / open,settings / open,settings,invite'
+      && seen.cardHeld === 'open,claude,copy' && seen.cardFree === 'open,claim,complete,move,assign,delegate,claude,copy,del' && seen.cardMineDone === 'open,claim,release,move,assign,delegate,archive,claude,copy,del'
+      && seen.cardArchived === 'open,claim,move,assign,delegate,restore,copy,del' && seen.cardSubs === 'move:To do,Doing*,Done assign:nobody,Gee,Mills*' && seen.cardCalls === 'move("done") assign("gee") assign(null) claim' && seen.cardDelete
+      && seen.files === 'open,download,edit,use,run,exec,del / open,download,copyIn,del / open,download,del / del' && seen.work === 'copy,resend / copy / copy,queue,cancel' && seen.workCalls === 'cancel resend'
+      && seen.notes === 'rename,copy,del / newNote,toggle,newFolder / Expand / open,rename,del' && seen.wired === 'all';
+    check('R531', R531_LABEL, ok, JSON.stringify(seen));
   }
   // R491 (T-324, plans/dev-hub.md § 2): two hubs on one machine (live and dev) keep their own full copies and a bridge keeps
   // them the same both ways. Two Rust hubs of their own (own roots, own ports), paired by config sync (one secret file each),

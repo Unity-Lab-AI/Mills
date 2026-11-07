@@ -59,6 +59,7 @@
     "web/localai.js": "1.0.0",
     "web/machines.js": "1.0.0",
     "web/md.js": "1.0.1",
+    "web/menu.js": "1.0.0",
     "web/notes.js": "1.0.3",
     "web/polish.css": "1.0.2",
     "web/presence.js": "1.0.0",
