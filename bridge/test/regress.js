@@ -3877,6 +3877,29 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R510', 'the prompt enhancer gets the session\'s conversation to understand the draft: its first message and its newest turns (tools left out, older middle turns skipped and said so, about 12 000 characters at most) before the draft, marked as context only; with context: false it gets none',
       Object.values(seen.ctx).every(Boolean) && seen.off, JSON.stringify(seen));
   } else skip('R510', 'the prompt enhancer with the session\'s context', 'the Rust hub\'s: --rust-hub runs it');
+  { // R511 (5.42.3): the desktop app stays signed in: the page approves a device sign-in for the app itself and keeps it (the app only)
+    const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), seen = {};
+    seen.page = {
+      appOnly: /function appKeep\(\) \{ if \(!IN_APP\) return null;/.test(html) && /const IN_APP = !!\(window\.__TAURI__ && window\.__TAURI__\.core\);/.test(html),
+      startUses: /let token = sessionStorage\.getItem\(TOKEN_KEY\) \|\| \(appKeep\(\) \|\| \{\}\)\.token \|\| null;/.test(html),
+      afterLogin: /keepAppSignedIn\(\)\.catch/.test(html) && /async function keepAppSignedIn\(\) \{\n  if \(!IN_APP \|\| !token\) return;/.test(html),
+      signOutForgets: /sessionStorage\.removeItem\(TOKEN_KEY\); appForget\(\);/.test(html),
+      logoutRevokes: /const k = appKeep\(\);[^\n]*\n  if \(k && k\.id\) \{ try \{ await api\('\/api\/devices\/revoke'/.test(html),
+    };
+    if (RUST_HUB) {
+      const s = await call('/api/device/start', null, { client: 'vr-desktop', device: 'VibeRoller app' });
+      const ap = await call('/api/device/approve', U, { userCode: s.data.userCode });
+      const got = await call('/api/device/poll', null, { deviceCode: s.data.deviceCode });
+      const tok = got.data.token, chk = await call('/api/check', tok);
+      const listed = (await call('/api/devices', U)).data.devices || [];
+      const rv = await call('/api/devices/revoke', tok, { id: got.data.deviceId });
+      const after = await call('/api/check', tok);
+      seen.hub = { start: s.status, approve: ap.status, poll: got.status, check: chk.status, listed: listed.some((d) => d.id === got.data.deviceId && d.client === 'vr-desktop'), revoke: rv.status, after: after.status };
+      seen.hubOk = s.status === 200 && ap.status === 200 && got.status === 200 && typeof tok === 'string' && chk.status === 200 && seen.hub.listed && rv.status === 200 && after.status === 401;
+    }
+    check('R511', 'the desktop app stays signed in across restarts: after a password sign-in in the app the page approves a device sign-in for the app and keeps its token in the app only (never a browser); a start uses it; signing out revokes it; a 401 forgets it' + (RUST_HUB ? '' : ' (page only; the hub flow runs with --rust-hub)'),
+      Object.values(seen.page).every(Boolean) && (!RUST_HUB || seen.hubOk), JSON.stringify(seen));
+  }
   { // R498 (5.35.0): the page: the DEV band drifts, Sessions is in the left rail, the sparkle (SVG) button sits under + in the composer with its switch in
     // Settings, and the genie (the page's own genieIn / genieOut, run with stand-in elements) hides only once the element is in its button
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), sj = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');

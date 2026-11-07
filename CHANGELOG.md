@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.42.3 — 2026-11-07
+
+PATCH: **the desktop app stays signed in** (2026-11-07: "auto sign in after boot and start of the app, is a go, build it").
+
+### Added
+- The VibeRoller desktop app signs itself in when it starts (after a reboot too): after one password sign-in in the app, the page approves a device sign-in for the app itself and keeps that device token in the app only (a browser never keeps one). Signing out in the app revokes it on the hub; it is listed and revocable under Settings → Connections; a refused token (401) is forgotten and the sign-in form comes back. The encrypted chat keeps working: its key stays in the app from the first sign-in. web/index.html 1.35.2.
+- Regression check R511 (page: app-only keep, start uses it, sign-out forgets and revokes; --rust-hub: start → approve → poll → /api/check → revoke → 401).
+
 ## 5.42.2 — 2026-11-01
 
 PATCH: **the prompt enhancer knows the session it is in** (Sponge, 2026-11-01: its one real pain point: a draft like
