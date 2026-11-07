@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.46.2 — 2026-11-07
+
+PATCH: **deploys are no longer held up by three more files the hub writes itself.**
+
+### Fixed
+- Both auto-deploys refused every new commit ("live checkout has uncommitted changes": live since 5.43.1 went up, dev
+  since 5.46.0) because files the hub writes into its checkout were not ignored: the per-run MCP files of Work sessions
+  (`bridge/.mcp-runtime-hub.json`, `bridge/.mcp-runtime-hub-<session>.json`), the desktop app's device tokens
+  (`bridge/device-tokens.json`, 5.43.0) and the planner's drafts (`bridge/plan-drafts.json`). All are in .gitignore now
+  (they stay on disk as they are). The checkouts on the server were unblocked the same way through their local
+  `.git/info/exclude`, since a deploy cannot carry a .gitignore fix past a dirty tree.
+
 ## 5.46.1 — 2026-11-07
 
 PATCH: **the chat's @ picker calls Unity again** (Gee, 2026-11-07: "why is Unity not responding … multiple have
