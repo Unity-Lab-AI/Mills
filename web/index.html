@@ -476,11 +476,11 @@
   #convTitle { cursor: pointer; }
 
   .themeWrap { position: relative; }
-  /* 5.42.1: a real dropdown: the button shows the current theme with a caret; the list opens on top of everything (moved
-     to the body, fixed under the button: the header's own stacking no longer hides it) and works from the keyboard */
+  /* 5.42.1: a real dropdown: the button shows the current theme with a caret; the list opens on top of everything (a child
+     of the body, not of the header: R527 places it from the button, upwards when needed) and works from the keyboard */
   #themeBtn { display: inline-flex; align-items: center; gap: .45rem; } #themeBtn .thSw { width: 1.3rem; height: .8rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
   #themeBtn .thCaret { width: .9rem; height: .9rem; opacity: .7; transition: transform .15s; } #themeBtn[aria-expanded="true"] .thCaret { transform: rotate(180deg); }
-  #themeMenu { position: fixed; z-index: 1000; box-shadow: 0 10px 30px rgba(0,0,0,.35); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
+  #themeMenu { position: fixed; z-index: 58; /* the menu layer: over panels, floating windows and #msgMenu (50), under dialogs (60+) */ box-shadow: 0 10px 30px rgba(0,0,0,.35); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
   #themeMenu button { background: transparent; color: var(--text); text-align: left; font-weight: 400; padding: .4rem .6rem; border-radius: 6px; display: flex; align-items: center; gap: .5rem; }
   #themeMenu button:hover { background: var(--line); }
   #themeMenu button.on { outline: 1px solid var(--accent); } #themeMenu button:focus-visible { background: var(--line); outline: 2px solid var(--accent); }
@@ -1334,14 +1334,15 @@
   </div>
 </div>
 
+<!-- the Theme list (R527): a child of the page, not of the header, whose scrolling and blur would clip it and keep it under the panels -->
+<div id="themeMenu" role="listbox" aria-label="Theme" hidden></div>
 <div id="shell" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
-    <span class="themeWrap"><button type="button" class="ghost" id="themeBtn" title="Change UI colours" aria-haspopup="listbox" aria-expanded="false"><i class="thSw"></i><span id="themeName">Theme</span><svg class="ic thCaret"><use href="#i-down"/></svg></button>
-      <div id="themeMenu" role="listbox" aria-label="Theme" hidden></div></span>
+    <span class="themeWrap"><button type="button" class="ghost" id="themeBtn" title="Change UI colours" aria-haspopup="listbox" aria-expanded="false"><i class="thSw"></i><span id="themeName">Theme</span><svg class="ic thCaret"><use href="#i-down"/></svg></button></span>
     <button class="ghost" id="logout">Sign out</button>
   </header>
   <main id="app">
@@ -3567,16 +3568,22 @@ function buildThemeMenu() {
   add('');
   for (const name of Object.keys(THEMES)) add(name);
 }
-function placeThemeMenu() { // under the button, kept inside the window
-  const m = $('themeMenu'), r = $('themeBtn').getBoundingClientRect(), w = Math.max(220, m.offsetWidth);
-  m.style.top = Math.min(r.bottom + 6, innerHeight - 120) + 'px';
-  m.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
-  m.style.maxHeight = Math.max(160, innerHeight - r.bottom - 20) + 'px';
+// R527: where the open list goes, from the button's rect r, the list's size w × h and the window vw × vh (pure: the suite runs it).
+// Under the button, or upwards when it does not fit below and there is more room above; inside the window, never over the button.
+function themeMenuPlace(r, w, h, vw, vh) {
+  const gap = 6, edge = 8, below = vh - r.bottom - gap - edge, above = r.top - gap - edge, up = h > below && above > below;
+  const maxHeight = Math.max(0, Math.min(h, up ? above : below)), maxWidth = vw - 2 * edge, ww = Math.min(w, maxWidth);
+  const top = up ? r.top - gap - maxHeight : r.bottom + gap;
+  return { left: Math.max(edge, Math.min(r.right - ww, vw - ww - edge)), top: Math.max(edge, top), maxHeight, maxWidth };
+}
+function placeThemeMenu() {
+  const m = $('themeMenu'); m.style.maxHeight = m.style.maxWidth = ''; // measure its own size first
+  const p = themeMenuPlace($('themeBtn').getBoundingClientRect(), m.offsetWidth, m.scrollHeight + 2, innerWidth, innerHeight);
+  for (const k of ['left', 'top', 'maxHeight', 'maxWidth']) m.style[k] = p[k] + 'px';
 }
 let themeBefore = ''; // the theme when the list opened: Escape goes back to it (the arrows preview)
 function openThemeMenu() {
   const m = $('themeMenu');
-  if (m.parentElement !== document.body) document.body.append(m); // out of the header: nothing can cover it
   themeBefore = store.get('mills.theme') || ''; buildThemeMenu(); m.hidden = false; placeThemeMenu(); $('themeBtn').setAttribute('aria-expanded', 'true');
   const on = m.querySelector('.on') || m.firstChild; on.scrollIntoView({ block: 'nearest' }); on.focus();
 }
