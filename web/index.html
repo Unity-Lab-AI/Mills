@@ -3881,7 +3881,7 @@ async function renderConvList() {
   };
   // the Direct messages view (the DM button above the servers, web/guilds.js): these one-to-one DMs, then the group DMs
   // (#grpList) and the key fingerprints (#keyList); a server's channels are drawn by web/guilds.js into #chanList
-  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'BOT · ' : 'private · ') + '@' + m.username);
+  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'BOT · ' : 'private · ') + '@' + mentionHandleOf(m));
   const det = document.createElement('details'); const sum = document.createElement('summary'); sum.textContent = 'Key fingerprints';
   det.append(sum);
   for (const m of roomMembers) {
@@ -4550,11 +4550,14 @@ window.matchMedia('(max-width: 700px)').addEventListener('change', (e) => { $('r
 // her). Then the 5 messages before it in that conversation go along inside the encryption, so she
 // reads at most the last 6 and never the rest of the chat.
 const agentMemberOf = () => roomMembers.find((m) => m.agent);
+// What "@" + name calls someone: a person's username; Unity's display name, since her chat account is "claude" and
+// only @unity calls her (R36). The picker, the conversation list and the call test all use this one.
+const mentionHandleOf = (m) => m.agent ? (m.display || 'unity').toLowerCase().replace(/\s+/g, '') : m.username;
 function callsAgent(text, to) {
   const a = agentMemberOf();
   if (!a) return false;
   if (to === a.username) return true;
-  const h = (a.display || 'unity').toLowerCase().replace(/\s+/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const h = mentionHandleOf(a).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp('@' + h + '\\b', 'i').test(text || '');
 }
 function agentCtx(conv) {
@@ -4674,9 +4677,10 @@ function updateMentionList() {
   if (q === null) { box.hidden = true; return; }
   const hits = roomMembers.filter((m) => m.username !== me.username && (m.username.startsWith(q) || (m.nick || m.display).replace(/\s+/g, '').toLowerCase().startsWith(q))).slice(0, 6);
   for (const m of hits) {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.user = m.username;
-    b.textContent = nickOf(m.username) + ' @' + m.username; b.style.color = GUILDS.colorIn(currentConv, m.username) || colorOf(m.username);
-    b.onclick = () => insertMention(m.username); box.append(b);
+    const h = mentionHandleOf(m); // Unity: @unity, never her account name (which calls nobody)
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.user = h;
+    b.textContent = nickOf(m.username) + ' @' + h; b.style.color = GUILDS.colorIn(currentConv, m.username) || colorOf(m.username);
+    b.onclick = () => insertMention(h); box.append(b);
   }
   const roleHits = GUILDS.mentionableRoles(currentConv).filter((r) => r.handle.startsWith(q)).slice(0, 4); // mentionable roles of this server
   for (const r of roleHits) {
