@@ -4019,6 +4019,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   await r526Check();
+  await r527Check(); // T-291: the Theme menu on top (both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
@@ -4474,7 +4475,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const seen = {
       button: /id="themeBtn"[^>]*aria-haspopup="listbox"[^>]*aria-expanded="false"[^>]*><i class="thSw"><\/i><span id="themeName">/.test(page),
       listbox: /id="themeMenu" role="listbox"/.test(page) && /setAttribute\('role', 'option'\)/.test(page) && /setAttribute\('aria-selected'/.test(page),
-      onTop: /#themeMenu \{ position: fixed; z-index: 1000;/.test(page) && /document\.body\.append\(m\); \/\/ out of the header/.test(page),
+      onTop: /#themeMenu \{ position: fixed; z-index: 5\d;/.test(page) && /\n<div id="themeMenu" role="listbox"[^>]*><\/div>\n<div id="shell"/.test(page), // out of the header (T-291: R527 drives where it goes)
       keyboard: /e\.key === 'ArrowDown'\) go\(i \+ 1\)/.test(page) && /e\.key === 'Escape'[^\n]*applyTheme\(themeBefore\)/.test(page),
       label: /try \{ paintThemeBtn\(\); \} catch \{\}/.test(page),
     };
@@ -7146,6 +7147,50 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.afterOne === 'second\n\n<!--vr-files [{"id":"f1","n":"a.png"}] --> / urgent / Send now,#2' && seen.armed && seen.cleared && seen.badgeAfter === '2' && seen.opened === 's-b' && seen.closed
       && seen.plain === '[attached: x.txt, y.png] | just text';
     check('R526', 'the Work queue panel (T-188) lists every message still to go in the open session, "Send now" first, then the queue in order, with the attachments named; copy one and copy all give the messages as written (a rule between them) and a refused clipboard says so; cancel one removes just that one, cancel all asks once more and then clears the queue and the "Send now" text; the badge and the summary count the other sessions\' waiting messages too (not archived ones), each a click away; a refresh with nothing changed does not redraw it; hiding it is remembered; the hub serves queue.js and the page loads it with its button and sidebar',
+      ok, JSON.stringify(seen));
+  }
+  // R527 (T-291): the Theme menu opens on top of every panel. The page's placement function (button rect + list size +
+  // window -> where the list goes) runs here in vm on wide, narrow, low and tiny windows; the served markup keeps the list
+  // out of every header (a scrolling, blurred header clips and traps whatever is inside it) on the menu layer.
+  async function r527Check() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text();
+    const src = (page.match(/\n(function themeMenuPlace\([\s\S]*?\n\})/) || [])[1] || '';
+    let place = null; try { const ctx = {}; require('vm').runInNewContext(src + '\nthis.place = themeMenuPlace;', ctx); place = ctx.place; } catch (e) { seen.load = e.message; }
+    seen.found = typeof place === 'function';
+    // inside the window (8px edge), never over the button, the list's own size when it fits
+    const fits = (r, w, h, vw, vh) => {
+      const p = place(r, w, h, vw, vh), ww = Math.min(w, p.maxWidth);
+      return p.left >= 8 && p.left + ww <= vw - 8 && p.top >= 8 && p.top + p.maxHeight <= vh - 8 && p.maxHeight > 0 && (p.top >= r.bottom || p.top + p.maxHeight <= r.top);
+    };
+    if (place) {
+      const btn = (left, top, w = 100, h = 32) => ({ left, top, right: left + w, bottom: top + h });
+      const show = (p) => [p.left, p.top, p.maxHeight, p.maxWidth].map(Math.round).join(',');
+      seen.wide = show(place(btn(1200, 8), 240, 400, 1400, 900)); // under the button, its right edge on the button's
+      seen.rightEdge = show(place(btn(1295, 8), 240, 400, 1400, 900)); // pulled in from the window's right edge
+      seen.narrow = show(place(btn(10, 8, 80), 240, 400, 360, 640)); // a phone: kept off the left edge
+      seen.low = show(place(btn(200, 560), 240, 400, 1000, 640)); // no room below (a wrapped header, the desktop app): opens upwards
+      seen.tiny = show(place(btn(10, 8), 240, 400, 360, 300)); // too short for the whole list: it scrolls inside the room below
+      seen.tooWide = show(place(btn(10, 8), 500, 200, 360, 640)); // wider than the window: narrowed to it
+      let all = 0, bad = [];
+      for (const vw of [320, 360, 768, 1024, 1920]) for (const vh of [240, 480, 800, 1200]) for (const fx of [0, 0.5, 1]) for (const fy of [0, 0.5, 0.9]) for (const [w, h] of [[200, 120], [240, 520], [400, 1400]]) {
+        const r = btn(Math.max(0, (vw - 100) * fx), Math.max(0, (vh - 32) * fy)); all++;
+        if (!fits(r, w, h, vw, vh)) bad.push([vw, vh, fx, fy, w, h].join('/'));
+      }
+      seen.sweep = all + ' places, ' + bad.length + ' off screen or over the button' + (bad.length ? ': ' + bad.slice(0, 4).join(' ') : '');
+      seen.sweepOk = bad.length === 0;
+    }
+    // the list is no header's child, it sits on the menu layer (over panels, floating windows and the message menu at 50,
+    // under the real dialogs at 60+), and opening it places it with that function
+    const at = page.indexOf('id="themeMenu"'), headers = [...page.matchAll(/<header>[\s\S]*?<\/header>/g)];
+    seen.outOfHeader = at > 0 && !headers.some((m) => at > m.index && at < m.index + m[0].length) && at < page.indexOf('<div id="shell"');
+    const z = +((page.match(/#themeMenu \{ position: fixed; z-index: (\d+);/) || [])[1] || 0);
+    seen.layer = z >= 50 && z < 60 ? z : 'z-index ' + z;
+    seen.used = /function placeThemeMenu\(\) \{[\s\S]{0,200}?themeMenuPlace\(\$\('themeBtn'\)\.getBoundingClientRect\(\)/.test(page);
+    const ok = seen.found && seen.wide === '1060,46,400,1384' && seen.rightEdge === '1152,46,400,1384' && seen.narrow === '8,46,400,344'
+      && seen.low === '60,154,400,984' && seen.tiny === '8,46,246,344' && seen.tooWide === '8,46,200,344' && seen.sweepOk
+      && seen.outOfHeader && typeof seen.layer === 'number' && seen.used;
+    check('R527', 'the Theme menu opens on top of every panel: the list lives outside every header (a scrolling, blurred header would clip it and trap it under the team chat, the AI chat and floating windows), sits on the menu layer above them and below real dialogs, and is placed from the button: under it, or upwards when there is more room there, pulled inside the window on wide and narrow screens, narrowed and scrolling when the window is too small, never over the button',
       ok, JSON.stringify(seen));
   }
   // R491 (T-324, plans/dev-hub.md § 2): two hubs on one machine (live and dev) keep their own full copies and a bridge keeps
