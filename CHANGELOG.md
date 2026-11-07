@@ -38,6 +38,14 @@ on many things assigned to me at once").
   latest handoff, and the Work prompt says to start from it. Old note-only releases work as before (board-mcp.js 1.2.0).
   R516–R519.
 
+## 5.43.1 — 2026-11-07
+
+PATCH: **deploys are no longer held up by the hub's own files.**
+
+### Fixed
+- The live server's autodeploy refused every new main ("live checkout has uncommitted changes") because two files the hub writes itself, `bridge/work-sessions.json` and `bridge/activity/`, were not ignored by git: both are in .gitignore now (they stay on disk as they are).
+- The regression runner's fake Ollama answers /api/version only for the Rust hub (5.43.0 made it answer for both, and the JavaScript hub then took it for a real Ollama: 28 brain, chat and agent checks failed in a normal run).
+
 ## 5.43.0 — 2026-11-07
 
 MINOR: **the desktop app stays signed in, and it frees the GPU** (2026-11-07: "auto sign in after boot and start of the app, is a go, build it"; "i should be able to turn off the image models and unlaod my GPU from the app"; "fuck my gpu is being held when nothing is being requested").
