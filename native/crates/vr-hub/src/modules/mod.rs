@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::front::{json as jresp, Body, Hub, Req};
 
 pub mod admin;
+pub mod audit;
 pub mod ai_hosts;
 pub mod profile;
 pub mod re;
@@ -442,6 +443,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         if let Some(t) = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")) { a.forget_session(&auth::token_key(t)); }
         return answer(200, json!({ "ok": true }));
     }
+    // the security log (T-271): admins only
+    if p == "/api/admin/audit" && r.method == hyper::Method::GET { return audit::route(hub, r, user.as_deref()); }
     // approving a device needs the person's own page session (never another device's token); the list and revoking are theirs
     if matches!(p, "/api/device/approve" | "/api/device/deny" | "/api/devices" | "/api/devices/revoke") {
         let bearer = r.header("authorization").and_then(|v| v.strip_prefix("Bearer "));
