@@ -744,7 +744,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['sessions.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['sessions.js', 'queue.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -4018,6 +4018,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  await r526Check();
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
@@ -7096,6 +7097,56 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.folder && seen.archive === 200 && seen.outOfList && seen.inArchived && seen.back && seen.served && !!S && seen.colours && seen.shapes && seen.meanings && seen.stall && seen.grouped
       && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
     check('R489', R489_LABEL, ok, JSON.stringify(seen));
+  }
+  // R526 (T-188): the queue panel. The hub serves web/queue.js and the page loads it with its button and sidebar; the
+  // panel itself runs here on a plain element stand-in, driven by clicks like a person would, against a page-side queue.
+  async function r526Check() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/queue.js'), src = js.status === 200 ? await js.text() : '';
+    seen.served = js.status === 200 && /<script src="queue\.js(\?[^"]*)?"><\/script>/.test(page) && /id="queuePanel"/.test(page) && /id="queueBtn"/.test(page);
+    const mkEl = (tag) => {
+      const e = { tag, children: [], text: '', className: '', hidden: false, title: '', dataset: {}, attrs: {}, disabled: false, onclick: null, type: '',
+        append(...xs) { for (const x of xs) this.children.push(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); },
+        setAttribute(k, v) { this.attrs[k] = v; }, classList: { toggle() {} } };
+      Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+      return e;
+    };
+    const all = (e, f, out = []) => { if (f(e)) out.push(e); for (const c of e.children || []) all(c, f, out); return out; };
+    let Q = null; try { const ctx = { window: {}, setTimeout, clearTimeout }; require('vm').runInNewContext(src, ctx); Q = ctx.window.QUEUE; } catch (e) { seen.load = e.message; }
+    if (Q) {
+      // the page's side: its queue, its "Send now" text, its other sessions (one archived), what it was asked to do
+      const st = { queue: ['first', 'second\n\n<!--vr-files [{"id":"f1","n":"a.png"}] -->'], sendNow: 'urgent', opened: '', notes: [], copied: [], kept: {}, copyFails: false };
+      const box = mkEl('aside'), button = mkEl('button'), badge = mkEl('span');
+      const P = Q.mount({ document: { createElement: mkEl }, box, button, badge, store: { get: (k) => st.kept[k] || (k === 'vr.queuePanel' ? '1' : null), set: (k, v) => { st.kept[k] = v; } },
+        queue: () => st.queue, sendNow: () => st.sendNow, current: () => 's-cur', titleOf: (s) => s.title || s.id, open: (id) => { st.opened = id; },
+        sessions: () => [{ id: 's-cur', queued: 3 }, { id: 's-b', title: 'Other one', queued: 2 }, { id: 's-c', title: 'Old', queued: 1, archived: true }],
+        cancel: (it) => { if (it.kind === 'now') st.sendNow = null; else st.queue.splice(it.at, 1); }, cancelAll: () => { st.queue = []; st.sendNow = null; },
+        copy: async (t) => { if (st.copyFails) throw new Error('denied'); st.copied.push(t); }, note: (t, bad) => st.notes.push((bad ? '!' : '') + t) });
+      const acts = (a) => all(box, (e) => e.dataset && e.dataset.act === a), click = async (b) => { await b.onclick(); await sleep(0); };
+      seen.open = !box.hidden && P.isOpen();
+      seen.places = all(box, (e) => e.className === 'qpPlace').map((e) => e.textContent).join(',');
+      seen.texts = all(box, (e) => e.className === 'qpText').map((e) => e.textContent).join('|');
+      seen.summary = all(box, (e) => e.className === 'qpSum')[0].textContent; seen.badge = badge.hidden ? '' : badge.textContent;
+      seen.others = acts('openSession').map((b) => b.dataset.id + ':' + b.textContent).join(',');
+      // the session list refreshes every few seconds: with nothing changed the panel is not redrawn (an opened message stays open)
+      const firstItem = () => all(box, (e) => /^qpItem/.test(e.className))[0], before = firstItem(); P.render(); seen.notRedrawn = firstItem() === before;
+      await click(acts('copyAll')[0]); seen.copyAll = st.copied.pop();
+      await click(acts('copy')[2]); seen.copyOne = st.copied.pop();
+      st.copyFails = true; await click(acts('copy')[0]); seen.copyFailed = /^!Could not copy/.test(st.notes.pop()); st.copyFails = false;
+      await click(acts('cancel')[1]); seen.afterOne = st.queue.join('|') + ' / ' + st.sendNow + ' / ' + all(box, (e) => e.className === 'qpPlace').map((e) => e.textContent).join(',');
+      await click(acts('cancelAll')[0]); seen.armed = st.queue.length === 1 && acts('cancelAll')[0].textContent === 'Sure? Cancel all';
+      await click(acts('cancelAll')[0]); seen.cleared = st.queue.length === 0 && st.sendNow === null && all(box, (e) => e.className === 'qpNote').length === 1 && acts('copyAll')[0].disabled === true;
+      seen.badgeAfter = badge.textContent; // the other session's 2 still count
+      await click(acts('openSession')[0]); seen.opened = st.opened;
+      await click(acts('close')[0]); seen.closed = box.hidden && st.kept['vr.queuePanel'] === '0' && button.attrs['aria-expanded'] === 'false';
+      seen.plain = Q.plain('<!--vr-files [{"n":"x.txt"},{"n":"y.png"}] -->') + ' | ' + Q.plain('just text');
+    }
+    const ok = seen.served && !!Q && seen.open && seen.places === 'Send now,#2,#3' && seen.texts === 'urgent|first|second\n[attached: a.png]' && seen.summary === '3 here · 5 in all your sessions' && seen.badge === '5'
+      && seen.others === 's-b:Other one2 queued' && seen.notRedrawn && seen.copyAll === 'urgent\n\n---\n\nfirst\n\n---\n\nsecond\n[attached: a.png]' && seen.copyOne === 'second\n[attached: a.png]' && seen.copyFailed
+      && seen.afterOne === 'second\n\n<!--vr-files [{"id":"f1","n":"a.png"}] --> / urgent / Send now,#2' && seen.armed && seen.cleared && seen.badgeAfter === '2' && seen.opened === 's-b' && seen.closed
+      && seen.plain === '[attached: x.txt, y.png] | just text';
+    check('R526', 'the Work queue panel (T-188) lists every message still to go in the open session, "Send now" first, then the queue in order, with the attachments named; copy one and copy all give the messages as written (a rule between them) and a refused clipboard says so; cancel one removes just that one, cancel all asks once more and then clears the queue and the "Send now" text; the badge and the summary count the other sessions\' waiting messages too (not archived ones), each a click away; a refresh with nothing changed does not redraw it; hiding it is remembered; the hub serves queue.js and the page loads it with its button and sidebar',
+      ok, JSON.stringify(seen));
   }
   // R491 (T-324, plans/dev-hub.md § 2): two hubs on one machine (live and dev) keep their own full copies and a bridge keeps
   // them the same both ways. Two Rust hubs of their own (own roots, own ports), paired by config sync (one secret file each),

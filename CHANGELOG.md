@@ -7,6 +7,27 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.46.0 — 2026-11-07
+
+MINOR: **the queue panel in Work** (T-188, VibeRoller part).
+
+- **Queue** in Work's bar (with a count of everything waiting) opens a sidebar right of the conversation (a slide-over
+  on narrow screens). It lists every message still to go in the open session, in the order it goes: the "Send now"
+  text first, then the queue (never one already sent), attachments named. Each one has **Copy** and **Cancel**, and the
+  panel has **Copy all** (the messages as written, a rule between them) and **Cancel all** (asks once more, then clears
+  the queue and the "Send now" text). Below them: your other sessions with messages waiting (from the session list's
+  `queued`), each a click away. Whether it is open is remembered, and the session list's refresh every few seconds
+  redraws it only when something changed (an opened message stays open, the focus stays).
+- The panel is its own file, `web/queue.js` 1.0.0 (pure helpers + `QUEUE.mount` with the page's callbacks). It changes
+  the queue only through the page, so the dashed bubbles, the hub's copy (`/api/work/queue`) and a share's watchers stay
+  the same as the panel. No hub change: both hubs already keep the queue per session (T-37, T-284). A page whose
+  queue.js is missing works as before.
+- `web/index.html` 1.38.0 (the button, the sidebar, its styles, the wiring), `web/sw.js` 1.0.8 (caches queue.js).
+- Check: R526 (new, both modes) drives the panel with clicks against a page-side queue: the order and places, copy one /
+  all and a refused clipboard, cancel one, cancel all with its second click, the other sessions' counts (not archived
+  ones) and opening one, hiding remembered; and the hub serves queue.js with the page loading it.
+- Hyper Prod Man has no queue yet (no Work screen; @Hyper takes one call at a time), so its half is a follow-up task.
+
 ## 5.45.0 — 2026-11-07
 
 MINOR: **other tools and other models take part in agent talk, and its cost lands on the receiver** (T-299 hub part,
