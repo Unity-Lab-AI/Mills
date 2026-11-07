@@ -410,7 +410,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
                 Some(a) => answer(200, hub.mods.files.work_message(&a, b["message"].as_str().unwrap_or(""), b["where"].clone())),
                 None => answer(200, json!({ "text": b["message"], "files": [], "dirs": [] })),
             },
-            p if p.starts_with("ai/") => ai_front(hub, r, &p[3..]).await,
+            p if p.starts_with("ai/") => ai_serve(hub, r, &p[3..], None).await,
             // its Unity (post, what she was sent, composing), its profiles changed
             p if p.starts_with("chat/") => answer(200, chat::front(hub, &p[5..], &b)),
             _ => answer(404, json!({ "ok": false, "error": "unknown" })),
@@ -664,11 +664,15 @@ fn stream_body(rx: tokio::sync::mpsc::Receiver<Result<bytes::Bytes, String>>) ->
     let s = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|x| (x.map(hyper::body::Frame::data).map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e)), rx)) });
     http_body_util::StreamBody::new(s).boxed()
 }
-/// The JavaScript hub's Work runs, API, chat and Unity using the AI hosts (/__front/ai/…).
-async fn ai_front(hub: &Arc<Hub>, r: &Req, what: &str) -> Routed {
+/// The AI hosts as a second hub uses them (one function for both, T-335): the frozen JavaScript hub's Work runs, API, chat
+/// and Unity (/__front/ai/…, `who` = None) and the dev hub borrowing live's hosts over the bridge (/__sync/ai/…, `who` = the
+/// account it names, already known here: sync.rs). For `who`, every call is checked as this hub checks its own people's
+/// (sharing, scope, owner), a Work run is marked as borrowed (its tools are the borrowing hub's) and its token goes back
+/// with its id, and a PC tool is picked and signed here for that account only.
+pub(crate) async fn ai_serve(hub: &Arc<Hub>, r: &Req, what: &str, who: Option<&pgm_ai_internal::ai_peer::Who>) -> Routed {
     let ai = &hub.mods.ai;
     match what {
-        "state" => { let users: Vec<String> = hub.mods.auth.accounts().into_iter().map(|a| a.username).collect(); answer(200, ai.snapshot(&users)) }
+        "state" if who.is_none() => { let users: Vec<String> = hub.mods.auth.accounts().into_iter().map(|a| a.username).collect(); answer(200, ai.snapshot(&users)) }
         // a call carried to a host: engine (Unity's), provider (a host's endpoint) or login (a host's Claude / Codex login)
         "fetch" => {
             use base64::Engine;
@@ -677,17 +681,19 @@ async fn ai_front(hub: &Arc<Hub>, r: &Req, what: &str) -> Routed {
             let headers: Vec<(String, String)> = meta["headers"].as_object().map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect()).unwrap_or_default();
             let method = if s("method").is_empty() { "GET".to_string() } else { s("method") };
             let body = r.body.to_vec();
-            let res = match s("mode").as_str() {
+            let allowed = match who { Some(w) => pgm_ai_internal::ai_peer::may_fetch(ai, w, &meta), None => Ok(()) };
+            let res = match allowed { Err(e) => Err(e), Ok(()) => match s("mode").as_str() {
                 "engine" => ai.engine_fetch(&s("engine"), &s("path"), &method, headers, body).await,
                 "provider" => ai.provider_fetch(&s("host"), &s("provider"), &s("path"), &method, headers, body).await,
                 "login" => ai.login_fetch(&s("host"), &s("provider"), &s("path"), &method, headers, body).await,
                 _ => Err(ai_hosts::HostErr { status: 400, msg: "unknown mode".into() }),
-            };
+            } };
             match res {
                 Ok(rel) => {
                     // a login's usage headers may have moved its caps: the JavaScript hub knows before the answer ends
                     if rel.headers.iter().any(|(k, _)| k.starts_with("anthropic-ratelimit-unified-")) { push_ai_state(hub).await; }
                     let mut b = hyper::Response::builder().status(rel.status).header("cache-control", "no-store");
+                    if who.is_some() { b = b.header(pgm_ai_internal::ai_peer::HOST_HEADER, "1"); } // the host's answer, whatever its status
                     for (k, v) in &rel.headers { b = b.header(k.as_str(), v.as_str()); }
                     Routed::Answer(b.body(stream_body(rel.body)).expect("response"))
                 }
@@ -699,10 +705,16 @@ async fn ai_front(hub: &Arc<Hub>, r: &Req, what: &str) -> Routed {
             let b = r.json();
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, String>>(256);
             let line = |v: Value| Ok(bytes::Bytes::from(v.to_string() + "\n"));
-            match ai.run_work(b["host"].as_str().unwrap_or(""), b["provider"].as_str().unwrap_or(""), b["payload"].clone()) {
+            let (host, prov) = (b["host"].as_str().unwrap_or("").to_string(), b["provider"].as_str().unwrap_or("").to_string());
+            let started = match who {
+                None => ai.run_work_via(&host, &prov, b["payload"].clone(), ""),
+                Some(w) => { let mut payload = b["payload"].clone(); pgm_ai_internal::ai_peer::may_work(ai, w, &host, &prov, &mut payload).and_then(|_| ai.run_work_via(&host, &prov, payload, &w.peer)) }
+            };
+            match started {
                 Err(e) => { let _ = tx.try_send(line(json!({ "error": e.msg, "status": e.status }))); }
-                Ok((id, _token, mut events)) => {
-                    let _ = tx.try_send(line(json!({ "id": id })));
+                Ok((id, token, mut events)) => {
+                    // the borrowing hub keeps the job's id and token: the host's MCP relay calls it, not us
+                    let _ = tx.try_send(line(if who.is_some() { json!({ "id": id, "token": token }) } else { json!({ "id": id }) }));
                     let ai = ai.clone();
                     tokio::spawn(async move {
                         while let Some(m) = events.recv().await {
@@ -716,12 +728,31 @@ async fn ai_front(hub: &Arc<Hub>, r: &Req, what: &str) -> Routed {
             }
             Routed::Answer(hyper::Response::builder().status(200).header("content-type", "application/x-ndjson").header("cache-control", "no-store").body(stream_body(rx)).expect("response"))
         }
-        "cancel" => { ai.cancel_work(r.json()["id"].as_str().unwrap_or("")); answer(200, json!({ "ok": true })) }
+        "cancel" => {
+            let id = r.json()["id"].as_str().unwrap_or("").to_string();
+            match who {
+                None => { ai.cancel_work(&id); answer(200, json!({ "ok": true })) }
+                // only a run that hub started, for the account it names
+                Some(w) => if ai.cancel_work_via(&id, &w.peer, &w.account) { answer(200, json!({ "ok": true })) } else { answer(404, json!({ "ok": false, "error": "No such run of that account." })) },
+            }
+        }
         "pc-tool" => {
             let b = r.json();
-            match ai.pc_tool_front(b["host"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""), &if b["args"].is_object() { b["args"].clone() } else { json!({}) }).await {
-                Ok(v) => answer(200, json!({ "result": v })),
-                Err(e) => answer(200, json!({ "error": e.msg })),
+            let args = if b["args"].is_object() { b["args"].clone() } else { json!({}) };
+            let name = b["name"].as_str().unwrap_or("").to_string();
+            let Some(w) = who else {
+                return match ai.pc_tool_front(b["host"].as_str().unwrap_or(""), &name, &args).await { Ok(v) => answer(200, json!({ "result": v })), Err(e) => answer(200, json!({ "error": e.msg })) };
+            };
+            // the account's own machine: the one it named (only its owner's: T-308), else its pc host; signed here for them
+            let named = b["machine"].as_str().unwrap_or("").to_string();
+            let host = if named.is_empty() { ai.pc_host_for(&w.account).ok_or((404, String::new())) } else { ai.machine_for(&named, &w.account) };
+            match host {
+                Err((404, _)) if named.is_empty() => answer(200, json!({ "none": true })),
+                Err((st, m)) => answer(200, json!({ "error": m, "status": st })),
+                Ok(h) => {
+                    let actor = pgm_net_internal::machine::Actor { account: w.account.clone(), session: b["session"].as_str().unwrap_or("").to_string(), run: format!("{}:{}", w.peer, b["run"].as_str().unwrap_or("")) };
+                    match ai.pc_tool(&h, &name, &args, &actor).await { Ok(v) => answer(200, json!({ "result": v })), Err(e) => answer(200, json!({ "error": e.msg, "status": e.status })) }
+                }
             }
         }
         _ => answer(404, json!({ "ok": false, "error": "unknown" })),

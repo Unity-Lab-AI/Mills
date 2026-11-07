@@ -36,7 +36,8 @@ fn herr(status: u16, m: impl Into<String>) -> HostErr { HostErr { status, msg: m
 pub enum WorkMsg { Event(Value), Done(i32), Error(String) }
 
 enum Waiting { Whole(oneshot::Sender<Result<Relayed, HostErr>>), Stream(mpsc::Sender<Result<Bytes, String>>), Work(mpsc::UnboundedSender<WorkMsg>) }
-struct Pending { kind: String, host: String, waiting: Option<Waiting>, token: String, account: String, display: String, provider: String, last: u64, picked: bool, project: String, started: u64 }
+/// `via`: the hub that borrowed the host for this job (T-335: "dev"), "" for this hub's own.
+struct Pending { kind: String, host: String, waiting: Option<Waiting>, token: String, account: String, display: String, provider: String, last: u64, picked: bool, project: String, started: u64, via: String }
 
 #[derive(Default)]
 /// `limits`: the session limits its owner just set from the page (T-286), until its next hello says them itself.
@@ -62,6 +63,9 @@ pub struct AiHosts {
     sign: Option<Arc<pgm_net_internal::machine::HubKey>>,
     /// Linked machines (T-311): the job queue their polls drain, the signed replies, big-file tickets and the transfer area.
     pub machines: Arc<crate::machine_jobs::MachineJobs>,
+    /// The dev hub's peer source (T-335, plans/dev-hub.md § 9): live, which lends its connected hosts over the bridge.
+    /// Set by [`AiHosts::borrow_from`] on the dev hub only; live (and every hub without a bridge) has none.
+    pub peer: std::sync::OnceLock<Arc<crate::ai_peer::Peer>>,
 }
 fn same_secret(a: &str, b: &str) -> bool { use subtle::ConstantTimeEq; let (x, y) = (pgm_core_internal::crypto::sha256(a.as_bytes()), pgm_core_internal::crypto::sha256(b.as_bytes())); bool::from(x.ct_eq(&y)) }
 fn clean_users(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')).take(50).collect()).unwrap_or_default() }
@@ -121,7 +125,7 @@ impl AiHosts {
         let sign: Option<Arc<pgm_net_internal::machine::HubKey>> = match pgm_net_internal::machine::HubKey::load_or_create(&root.join("hub-signing.key")) { Ok(k) => Some(Arc::new(k)), Err(e) => { eprintln!("[ai-host] no hub signing key ({e}): PC requests to hosts go unsigned until it is fixed"); None } };
         let h = Arc::new(AiHosts { root: root.to_path_buf(), cfg: cfg.clone(), db: Mutex::new(db), legacy, live: Mutex::default(), pending: Mutex::default(), was_up: Mutex::default(),
             offline_ms: cfg.get("aiNodeOfflineMs").and_then(Value::as_u64).unwrap_or(60000).max(1000), release_at: Mutex::new((now_ms(), version, commit)), preferred: Mutex::default(), usage, dirty: Notify::new(),
-            machines: Arc::new(crate::machine_jobs::MachineJobs::new(root, sign.clone(), cfg.get("machineTransferMaxMB").and_then(Value::as_u64).unwrap_or(4096))), sign });
+            machines: Arc::new(crate::machine_jobs::MachineJobs::new(root, sign.clone(), cfg.get("machineTransferMaxMB").and_then(Value::as_u64).unwrap_or(4096))), sign, peer: Default::default() });
         h.restore_sessions();
         h
     }
@@ -146,9 +150,27 @@ impl AiHosts {
         if std::fs::write(&tmp, serde_json::to_string_pretty(&Value::Object(o)).unwrap_or_default()).is_ok() { pgm_core_internal::fs::private(&tmp); let _ = std::fs::rename(&tmp, &f); }
         self.changed();
     }
-    /// Online for jobs: connected and not paused by its owner (a host paused from the hub keeps listening, so only its
-    /// status tells; the status is trusted for a minute).
-    pub fn online(&self, id: &str) -> bool { self.live.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|n| (n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms) && !Self::paused_by_hub(n)).unwrap_or(false) }
+    /// Online for jobs HERE: connected to this hub and not paused by its owner (a host paused from the hub keeps listening,
+    /// so only its status tells; the status is trusted for a minute).
+    pub fn online_here(&self, id: &str) -> bool { self.live.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|n| (n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms) && !Self::paused_by_hub(n)).unwrap_or(false) }
+    /// Online for jobs: connected here, or (the dev hub, T-335) a host live lends that is online there.
+    pub fn online(&self, id: &str) -> bool { self.online_here(id) || self.peer_host(id).map(|h| h["online"] == json!(true)).unwrap_or(false) }
+    fn peer_host(&self, id: &str) -> Option<Value> { self.peer.get()?.host(id) }
+    /// Is this a host live lends that is not connected here (the dev hub, T-335)? Its calls go over the bridge.
+    pub fn borrowed(&self, id: &str) -> bool { self.peer.get().is_some() && !self.online_here(id) && self.peer_host(id).is_some() }
+    /// The dev hub borrows live's AI hosts (T-335): `url` = live's address on this machine, `secret` = the bridge's, `name`
+    /// = this hub's sync name (live's audit says "via <name>"), `users` = this hub's accounts (what live lends each is
+    /// asked for all of them at once, every few seconds). Once only.
+    pub fn borrow_from(&self, url: &str, secret: &str, name: &str, users: Arc<dyn Fn() -> Vec<String> + Send + Sync>) {
+        let Some(p) = crate::ai_peer::Peer::new(url, secret, name) else { eprintln!("[ai-host] no HTTP client: live's AI hosts cannot be borrowed"); return };
+        let p = Arc::new(p);
+        // sessions this hub kept from an earlier start (or a copy of live's, made at the install) count as connected only
+        // once their host polls here again: until then their calls go to live, which has them
+        for n in self.live.lock().unwrap_or_else(|e| e.into_inner()).values_mut() { if n.waiters == 0 { n.seen = 0; } }
+        if self.peer.set(p.clone()).is_ok() { crate::ai_peer::start(p, users); println!("[ai-host] this dev hub borrows live's AI hosts over the bridge ({url})"); }
+    }
+    /// What an error that leaves a person without AI ends with on the dev hub while live does not lend ("" otherwise).
+    pub fn peer_note(&self) -> &'static str { self.peer.get().map(|p| p.note()).unwrap_or("") }
     fn paused_by_hub(n: &Live) -> bool { n.status["paused"] == json!(true) && n.status["pausedBy"] == json!("hub") && now_ms().saturating_sub(n.status_at) < 60_000 }
     pub fn changed(&self) { self.dirty.notify_one(); }
     /// What the JavaScript hub needs to answer without asking (its Work runs, the API, the chat ask these all the time):
@@ -170,7 +192,8 @@ impl AiHosts {
         }
         let mut providers = Map::new(); let mut mine = Map::new();
         for u in users {
-            providers.insert(u.clone(), json!(self.providers_for(u).into_iter().map(|p| p["id"].clone()).collect::<Vec<_>>()));
+            // this hub's own hosts only: the frozen JavaScript hub never borrows from live (T-335)
+            providers.insert(u.clone(), json!(self.providers_for_here(u).into_iter().map(|p| p["id"].clone()).collect::<Vec<_>>()));
             let m = self.mine(u); if !m.is_empty() { mine.insert(u.clone(), json!(m)); }
         }
         let engine = self.cfg.get("assistant").and_then(|a| a["node"].as_str()).unwrap_or("");
@@ -182,7 +205,7 @@ impl AiHosts {
         tokio::spawn(async move { loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
             for r in h.all_records() {
-                let id = r["id"].as_str().unwrap_or("").to_string(); let up = h.online(&id);
+                let id = r["id"].as_str().unwrap_or("").to_string(); let up = h.online_here(&id);
                 let prev = h.was_up.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned();
                 match prev {
                     None => { if h.live.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id) { h.was_up.lock().unwrap_or_else(|e| e.into_inner()).insert(id, (up, now_ms())); } }
@@ -222,8 +245,27 @@ impl AiHosts {
         json!({ "id": format!("h:{id}/{}", p["id"].as_str().unwrap_or("")), "kind": Self::hub_kind(p["kind"].as_str().unwrap_or("")), "remoteKind": Self::remote_kind(n, p), "label": p["label"], "owner": owner, "shared": true, "models": p["models"],
             "hostId": id, "providerId": p["id"], "nickname": r["nickname"], "online": (n.waiters > 0 || now_ms().saturating_sub(n.seen) < self.offline_ms) && !Self::paused_by_hub(n), "max5h": p["max5h"], "max7d": p["max7d"], "usage": self.usage_of(id, n, p), "capped": self.over_cap(id, n, p), "cappedUntil": self.cap_of(id, n, p).1 })
     }
-    /// The providers a person may pick from the hosts: "h:<hostId>/<providerId>".
+    /// The providers a person may pick from the hosts: "h:<hostId>/<providerId>". On the dev hub (T-335): this hub's own
+    /// connected hosts first, then what live lends this person (marked `viaPeer`, the same ids); a host connected to both
+    /// counts once, as the one that is online (here first).
     pub fn providers_for(&self, user: &str) -> Vec<Value> {
+        let mut out = self.providers_for_here(user);
+        let Some(peer) = self.peer.get() else { return out };
+        for v in peer.list(user) {
+            match out.iter().position(|x| x["id"] == v["id"]) {
+                Some(i) => { if out[i]["online"] != json!(true) && v["online"] == json!(true) { out[i] = v; } }
+                None => out.push(v),
+            }
+        }
+        out
+    }
+    /// The hosts this hub lends (live's side of T-335): every connected one, with what dev needs to know of it.
+    pub fn lent_hosts(&self) -> Map<String, Value> {
+        let ids: Vec<String> = self.live.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, n)| n.hello.is_some()).map(|(id, _)| id.clone()).collect();
+        ids.into_iter().filter_map(|id| { let r = self.record(&id)?; Some((id.clone(), json!({ "online": self.online_here(&id), "nickname": r["nickname"], "owner": self.owner_of(&r), "sessionLimits": self.session_limits(&id) }))) }).collect()
+    }
+    /// The providers a person may pick from the hosts connected HERE (what live lends dev, T-335).
+    pub fn providers_for_here(&self, user: &str) -> Vec<Value> {
         let mut out = vec![];
         let records = self.all_records();
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
@@ -263,6 +305,12 @@ impl AiHosts {
     pub fn scope_check(&self, user: &str, pid: &str, use_: &str, model: &str) -> Result<(), String> {
         let Some((hid, prov)) = pid.strip_prefix("h:").and_then(|r| r.split_once('/')) else { return Ok(()) };
         if user.is_empty() { return Ok(()); }
+        // a host live lends (T-335): the scope live gave this person with the provider, in live's words (live checks again)
+        if self.borrowed(hid) {
+            let Some(v) = self.peer.get().and_then(|p| p.list(user).into_iter().find(|x| x["id"] == json!(pid))) else { return Ok(()) };
+            if !v["scope"].is_object() { return Ok(()); }
+            return check_scope(&Scope::from_value(&v["scope"]), v["owner"].as_str().unwrap_or(""), v["label"].as_str().unwrap_or(prov), use_, model);
+        }
         let Some(r) = self.record(hid) else { return Ok(()) };
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let Some(n) = live.get(hid) else { return Ok(()) };
@@ -281,6 +329,8 @@ impl AiHosts {
     /// One provider by id "h:<hostId>/<providerId>" (user "" = whoever may use it).
     pub fn provider(&self, pid: &str, user: &str) -> Option<Value> {
         let rest = pid.strip_prefix("h:")?; let (hid, prov) = rest.split_once('/')?;
+        // a host live lends (T-335): live's view of it for this person
+        if self.borrowed(hid) { return self.peer.get()?.list(user).into_iter().find(|x| x["id"] == json!(pid)); }
         let r = self.record(hid)?; let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(hid)?; let hello = n.hello.as_ref()?;
         let p = hello["providers"].as_array()?.iter().find(|x| x["id"] == json!(prov))?.clone();
         if !user.is_empty() && !self.may_use_locked(&r, &p, user, n) { return None; }
@@ -293,14 +343,14 @@ impl AiHosts {
     /// Is one of this person's own AI hosts connected right now? (registered to them by the hub, as for PC tools: never
     /// the name a host says hello with)
     pub fn owns_online_host(&self, user: &str) -> bool {
-        !user.is_empty() && self.all_records().iter().any(|r| r["user"].as_str() == Some(user) && self.online(r["id"].as_str().unwrap_or("")))
+        !user.is_empty() && self.all_records().iter().any(|r| r["user"].as_str() == Some(user) && self.online_here(r["id"].as_str().unwrap_or("")))
     }
     pub fn pc_host_for(&self, user: &str) -> Option<String> {
         if user.is_empty() { return None; }
         for r in self.all_records() {
             let id = r["id"].as_str().unwrap_or("").to_string();
             let pc = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).and_then(|n| n.hello.as_ref().map(|h| h["pc"] == json!(true))).unwrap_or(false);
-            if pc && self.owner_of(&r) == user && self.online(&id) { return Some(id); }
+            if pc && self.owner_of(&r) == user && self.online_here(&id) { return Some(id); }
         }
         None
     }
@@ -320,13 +370,13 @@ impl AiHosts {
     /// their models first (T-293), then by id, so the order is the same on every call.
     pub fn engine_hosts(&self, engine: &str) -> Vec<String> {
         if let Some(want) = self.cfg.get("assistant").and_then(|a| a["node"].as_str()).filter(|s| !s.is_empty()) {
-            let ok = self.online(want) && self.live.lock().unwrap_or_else(|e| e.into_inner()).get(want).map(|n| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).unwrap_or(false);
+            let ok = self.online_here(want) && self.live.lock().unwrap_or_else(|e| e.into_inner()).get(want).map(|n| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).unwrap_or(false);
             return if ok { vec![want.to_string()] } else { vec![] };
         }
         let brain = self.cfg.get("assistant").and_then(|a| a["model"].as_str()).filter(|s| !s.is_empty()).unwrap_or("unity-brain").to_string();
         let mut ids: Vec<(String, bool)> = self.live.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, n)| n.hello.as_ref().map(|h| h["engines"].as_array().map(|a| a.iter().any(|e| e == engine)).unwrap_or(false)).unwrap_or(true)).map(|(id, n)| (id.clone(), n.hello.as_ref().map(|h| hello_has_model(h, &brain)).unwrap_or(false))).collect();
         ids.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        ids.into_iter().map(|(id, _)| id).filter(|id| self.online(id) && self.record(id).map(|r| r["legacy"] == json!(true) || self.owner_is_admin(&r)).unwrap_or(false)).collect()
+        ids.into_iter().map(|(id, _)| id).filter(|id| self.online_here(id) && self.record(id).map(|r| r["legacy"] == json!(true) || self.owner_is_admin(&r)).unwrap_or(false)).collect()
     }
     /// Unity found out which host's Ollama has her brain (unity.rs asks each one's /api/tags, T-293): that host is asked
     /// first for this engine while it lends it; None forgets the choice.
@@ -347,7 +397,14 @@ impl AiHosts {
         std::fs::read_to_string(f).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|c| c["admin"] == json!(true)).unwrap_or(false)
     }
     /// Why Unity's engines are away ('' while a host lends them).
-    pub fn reason(&self) -> String { if self.pick_engine_host("ollama").is_some() { String::new() } else { OFFLINE_TEXT.into() } }
+    pub fn reason(&self) -> String {
+        if self.pick_engine_host("ollama").is_some() || self.peer.get().map(|p| p.has_engine("ollama")).unwrap_or(false) { return String::new(); }
+        let note = self.peer_note();
+        if note.is_empty() { OFFLINE_TEXT.into() } else { format!("{OFFLINE_TEXT} {note}") }
+    }
+    /// An error text that leaves a person without AI, with " (live's AI hosts are not reachable …)" on the dev hub while
+    /// live does not lend (T-335).
+    pub fn with_peer_note(&self, text: &str) -> String { let n = self.peer_note(); if n.is_empty() { text.to_string() } else { format!("{text} {n}") } }
 
     // ---------- jobs ----------
     fn enqueue(self: &Arc<Self>, host: &str, job: Value, p: Pending) -> Result<(), HostErr> {
@@ -390,7 +447,7 @@ impl AiHosts {
         for (k, v) in headers { let k = k.to_lowercase(); if all_headers || k == "content-type" { h.insert(k, json!(v)); } }
         let job = json!({ "id": id, "kind": kind, "engine": engine, "path": path, "method": method, "headers": h, "body": if body.is_empty() { String::new() } else { pgm_core_internal::b64(&body) } });
         let (tx, rx) = oneshot::channel();
-        self.enqueue(host, job, Pending { kind: kind.into(), host: host.into(), waiting: Some(Waiting::Whole(tx)), token: String::new(), account: String::new(), display: String::new(), provider: String::new(), last: now_ms(), picked: false, project: String::new(), started: now_ms() })?;
+        self.enqueue(host, job, Pending { kind: kind.into(), host: host.into(), waiting: Some(Waiting::Whole(tx)), token: String::new(), account: String::new(), display: String::new(), provider: String::new(), last: now_ms(), picked: false, project: String::new(), started: now_ms(), via: String::new() })?;
         let (hh, id2) = (self.clone(), id.clone());
         tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(JOB_MS)).await; hh.finish(&id2, Some("The AI host did not answer in time.".into()), None); });
         // the caller went away before the answer came (the page or the JavaScript hub hung up): the job ends with it
@@ -402,8 +459,27 @@ impl AiHosts {
     }
     pub async fn engine_fetch(self: &Arc<Self>, engine: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
         if !ENGINES.contains(&engine) { return Err(herr(400, format!("Unknown engine {engine}"))); }
-        let id = self.pick_engine_host(engine).ok_or_else(|| herr(503, OFFLINE_TEXT))?;
+        let Some(id) = self.pick_engine_host(engine) else {
+            // the dev hub (T-335): live's engines, when it lends them
+            if let Some(p) = self.peer.get().filter(|p| p.has_engine(engine)) { return p.fetch(Self::peer_meta("engine", "", "", engine, path, method, &headers, "", "", ""), body).await; }
+            return Err(herr(503, self.with_peer_note(OFFLINE_TEXT)));
+        };
         self.relay(&id, engine, path, method, headers, body, "engine", false).await
+    }
+    /// What a borrowed fetch says to live (`/__sync/ai/fetch`'s x-vr-ai): the account it is for, the use and model live
+    /// checks the scope with, and the request's own headers without its credentials (the host adds its login).
+    #[allow(clippy::too_many_arguments)]
+    fn peer_meta(mode: &str, host: &str, pid: &str, engine: &str, path: &str, method: &str, headers: &[(String, String)], account: &str, use_: &str, model: &str) -> Value {
+        let hs: Map<String, Value> = headers.iter().filter(|(k, _)| { let k = k.to_lowercase(); !matches!(k.as_str(), "authorization" | "x-api-key" | "host" | "content-length" | "connection" | "cookie" | "transfer-encoding") && !k.starts_with("x-vr-") && !k.starts_with("x-mills-") }).map(|(k, v)| (k.to_lowercase(), json!(v))).collect();
+        json!({ "mode": mode, "host": host, "provider": pid, "engine": engine, "path": path, "method": method, "headers": hs, "account": account, "use": use_, "model": model })
+    }
+    /// A borrowed provider's call (T-335): to live for `account`, or why it cannot go.
+    async fn peer_fetch(&self, mode: &str, account: &str, use_: &str, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
+        let Some(p) = self.peer.get() else { return Err(herr(503, "That AI host is not connected here.")) };
+        if account.is_empty() { return Err(herr(403, "A call to a borrowed AI host needs the account it is for.")); }
+        // no model: as on live, a run's model calls are not checked one by one (Claude Code asks small models for its own
+        // chores); the run's model was checked when it started, and live checks the use
+        p.fetch(Self::peer_meta(mode, host, pid, "", path, method, &headers, account, use_, ""), body).await
     }
     /// The same call to one named host (one of `engine_hosts`): how Unity asks each Ollama what it has (T-293).
     pub async fn engine_fetch_on(self: &Arc<Self>, host: &str, engine: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
@@ -411,13 +487,21 @@ impl AiHosts {
         if !self.engine_hosts(engine).iter().any(|h| h == host) { return Err(herr(503, format!("{host} does not lend the {engine} engine right now."))); }
         self.relay(host, engine, path, method, headers, body, "engine", false).await
     }
-    pub async fn provider_fetch(self: &Arc<Self>, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
-        if !self.online(host) { return Err(herr(503, format!("That AI host ({}) is offline right now.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(host.into())))); }
+    pub async fn provider_fetch(self: &Arc<Self>, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> { self.provider_fetch_for("", "", host, pid, path, method, headers, body).await }
+    /// The same for `account` and that use (work / api / unity, "" = not said): a host live lends goes to live for them (T-335).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn provider_fetch_for(self: &Arc<Self>, account: &str, use_: &str, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
+        if self.borrowed(host) { return self.peer_fetch("provider", account, use_, host, pid, path, method, headers, body).await; }
+        if !self.online_here(host) { return Err(herr(503, format!("That AI host ({}) is offline right now.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(host.into())))); }
         self.relay(host, &format!("provider:{pid}"), path, method, headers, body, "provider", false).await
     }
     /// A model call of this hub's own Claude Code / Codex, carried to the host that adds its login. Usage headers feed its caps.
-    pub async fn login_fetch(self: &Arc<Self>, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
-        if !self.online(host) { return Err(herr(503, format!("That AI host ({}) is offline right now.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(host.into())))); }
+    pub async fn login_fetch(self: &Arc<Self>, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> { self.login_fetch_for("", "", host, pid, path, method, headers, body).await }
+    /// The same for `account` and that use: a login live lends goes to live for them (T-335); live counts its usage windows.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn login_fetch_for(self: &Arc<Self>, account: &str, use_: &str, host: &str, pid: &str, path: &str, method: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Relayed, HostErr> {
+        if self.borrowed(host) { return self.peer_fetch("login", account, use_, host, pid, path, method, headers, body).await; }
+        if !self.online_here(host) { return Err(herr(503, format!("That AI host ({}) is offline right now.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or(host.into())))); }
         let cap = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get(host).and_then(|n| n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned())).map(|p| self.over_cap(host, n, &p))).unwrap_or_default() };
         if !cap.is_empty() { return Err(herr(429, format!("{}: {cap}.", self.record(host).and_then(|r| r["nickname"].as_str().map(String::from)).unwrap_or_default()))); }
         let hs: Vec<(String, String)> = headers.into_iter().filter(|(k, _)| !matches!(k.to_lowercase().as_str(), "authorization" | "x-api-key" | "host" | "content-length" | "connection" | "cookie")).collect();
@@ -454,7 +538,7 @@ impl AiHosts {
         let id = r["id"].as_str().unwrap_or("").to_string();
         let nick = r["nickname"].as_str().unwrap_or(&id).to_string();
         let pc = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(&id).and_then(|n| n.hello.as_ref().map(|h| h["pc"] == json!(true))).unwrap_or(false);
-        if !self.online(&id) { return Err((503, format!("Your machine {nick} is offline right now."))); }
+        if !self.online_here(&id) { return Err((503, format!("Your machine {nick} is offline right now."))); }
         if !pc { return Err((400, format!("Your machine {nick} does not offer computer access (no pc.folder set on it)."))); }
         Ok(id)
     }
@@ -480,8 +564,33 @@ impl AiHosts {
         let owner = self.record(host).map(|r| Self::registered_owner(&r)).unwrap_or_default();
         self.pc_tool(host, name, args, &pgm_net_internal::machine::Actor { account: owner, session: String::new(), run: "js-hub".into() }).await
     }
-    /// A Work run on a host (2.x hosts and hosts that allow Work): Claude Code runs there; events come back sealed.
-    pub fn run_work(self: &Arc<Self>, host: &str, pid: &str, payload: Value) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
+    /// A PC tool on the account's own machine that is connected to LIVE (the dev hub, T-335): live picks it (the one named,
+    /// else their pc host) with the T-308 rules and signs the request for them. None = no peer, or live has none for them.
+    pub async fn peer_pc_tool(&self, named: &str, name: &str, args: &Value, actor: &pgm_net_internal::machine::Actor) -> Option<Result<Value, HostErr>> {
+        match self.peer.get()?.pc(named, name, args, actor).await {
+            crate::ai_peer::PeerPc::Done(v) => Some(Ok(v)),
+            crate::ai_peer::PeerPc::Refused(st, m) => Some(Err(herr(st, m))),
+            crate::ai_peer::PeerPc::Nothing => None,
+        }
+    }
+    /// A Work run on a host (2.x hosts and hosts that allow Work): Claude Code runs there; events come back sealed. A host
+    /// live lends (the dev hub, T-335) runs it through live; the payload's hubUrl stays this hub's, so its tools are ours.
+    pub async fn run_work(self: &Arc<Self>, host: &str, pid: &str, payload: Value) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
+        let account = payload["account"].as_str().unwrap_or("").to_string();
+        self.run_work_as(&account, host, pid, payload).await
+    }
+    /// The same, for `account` when the payload names none of theirs (a sandboxed API answer says "api").
+    pub async fn run_work_as(self: &Arc<Self>, account: &str, host: &str, pid: &str, payload: Value) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
+        if self.borrowed(host) {
+            let Some(p) = self.peer.get().cloned() else { return Err(herr(503, "That AI host has not connected yet.")) };
+            if account.is_empty() { return Err(herr(403, "A run on a borrowed AI host needs the account it is for.")); }
+            return p.work(account, host, pid, payload).await;
+        }
+        self.run_work_via(host, pid, payload, "")
+    }
+    /// A Work run on a host connected HERE; `via` = the hub that borrowed it ("dev": live's side of T-335), "" for our own.
+    /// A borrowed job's tools are never run here ([`AiHosts::job_for`]): its payload names the borrowing hub.
+    pub fn run_work_via(self: &Arc<Self>, host: &str, pid: &str, payload: Value, via: &str) -> Result<(String, String, mpsc::UnboundedReceiver<WorkMsg>), HostErr> {
         let r = self.record(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?;
         let nick = r["nickname"].as_str().unwrap_or(host).to_string();
         let (key, prov, caps) = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(host).ok_or_else(|| herr(503, "That AI host has not connected yet."))?; (n.key.clone(), n.hello.as_ref().and_then(|h| h["providers"].as_array().and_then(|a| a.iter().find(|p| p["id"] == json!(pid)).cloned())), n.hello.as_ref().map(|h| h["caps"].clone()).unwrap_or(Value::Null)) };
@@ -490,7 +599,7 @@ impl AiHosts {
         if prov.as_ref().map(|p| p["kind"] == json!("jcode")).unwrap_or(false) && !caps.as_array().map(|c| c.iter().any(|x| x == pgm_net_internal::hostlink::CAP_WORK_JCODE)).unwrap_or(false) {
             return Err(herr(400, "That AI host did not announce that it runs Work through Jcode PGM (work-jcode); update it or pick another AI."));
         }
-        if !self.online(host) { let o = self.owner_of(&r); return Err(herr(503, format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if o.is_empty() { " (AI host)".to_string() } else { format!(" ({o}'s AI host)") }))); }
+        if !self.online_here(host) { let o = self.owner_of(&r); return Err(herr(503, format!("{nick}{} is offline right now. Pick another AI in the dropdown, or wait for it.", if o.is_empty() { " (AI host)".to_string() } else { format!(" ({o}'s AI host)") }))); }
         let prov = prov.ok_or_else(|| herr(503, "That host no longer offers this provider."))?;
         let cap = { let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get(host).map(|n| self.over_cap(host, n, &prov)).unwrap_or_default() };
         if !cap.is_empty() { return Err(herr(429, format!("{nick}: {cap}. Pick another AI or wait for the window to reset."))); }
@@ -498,15 +607,31 @@ impl AiHosts {
         let mut p = payload.clone(); p["providerId"] = json!(pid); p["token"] = json!(token); p["mcpBase"] = json!(format!("{}/node/job/{id}", payload["hubUrl"].as_str().unwrap_or("")));
         let enc = key.seal(&p).map_err(|e| herr(500, e.to_string()))?;
         let (tx, rx) = mpsc::unbounded_channel();
-        self.enqueue(host, json!({ "id": id, "kind": "work", "enc": enc }), Pending { kind: "work".into(), host: host.into(), waiting: Some(Waiting::Work(tx)), token: token.clone(), account: payload["account"].as_str().unwrap_or("").into(), display: payload["display"].as_str().unwrap_or("").into(), provider: pid.into(), last: now_ms(), picked: false, project: payload["project"].as_str().unwrap_or("").chars().take(64).collect(), started: now_ms() })?;
+        self.enqueue(host, json!({ "id": id, "kind": "work", "enc": enc }), Pending { kind: "work".into(), host: host.into(), waiting: Some(Waiting::Work(tx)), token: token.clone(), account: payload["account"].as_str().unwrap_or("").into(), display: payload["display"].as_str().unwrap_or("").into(), provider: pid.into(), last: now_ms(), picked: false, project: payload["project"].as_str().unwrap_or("").chars().take(64).collect(), started: now_ms(), via: via.to_string() })?;
         // no word for ten minutes: given up
         let (h, id2) = (self.clone(), id.clone());
         tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(30)).await; let last = h.pending.lock().unwrap_or_else(|e| e.into_inner()).get(&id2).map(|p| p.last); match last { Some(l) if now_ms() - l > IDLE_MS => { h.finish(&id2, Some("No word from the AI host for ten minutes; the run was given up.".into()), None); return; } Some(_) => {} None => return } } });
         Ok((id, token, rx))
     }
-    pub fn cancel_work(&self, id: &str) { let host = self.pending.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|p| p.host.clone()); if let Some(h) = host { let n = { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get_mut(&h).map(|n| { n.cancel.insert(id.to_string()); n.notify.clone() }) }; if let Some(n) = n { n.notify_waiters(); } } }
-    /// A host's Work run calling the team tools: its account, when the token is the run's.
-    pub fn job_for(&self, id: &str, token: &str) -> Option<(String, String)> { let p = self.pending.lock().unwrap_or_else(|e| e.into_inner()); let j = p.get(id)?; if j.kind == "work" && !token.is_empty() && same_secret(token, &j.token) { Some((j.account.clone(), j.display.clone())) } else { None } }
+    pub fn cancel_work(&self, id: &str) {
+        // a borrowed run (the dev hub, T-335): live tells the host
+        if let Some(p) = self.peer.get().filter(|p| p.is_job(id)).cloned() { let id = id.to_string(); tokio::spawn(async move { p.cancel(&id).await; }); return; }
+        let host = self.pending.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|p| p.host.clone()); if let Some(h) = host { let n = { let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner()); live.get_mut(&h).map(|n| { n.cancel.insert(id.to_string()); n.notify.clone() }) }; if let Some(n) = n { n.notify_waiters(); } }
+    }
+    /// Stop asked by the hub that borrowed the host (live's side of T-335): only a job it started, for the account it names.
+    pub fn cancel_work_via(&self, id: &str, via: &str, account: &str) -> bool {
+        let ok = self.pending.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|j| j.kind == "work" && !j.via.is_empty() && j.via == via && j.account == account).unwrap_or(false);
+        if ok { self.cancel_work(id); }
+        ok
+    }
+    /// A host's Work run calling the team tools: its account, when the token is the run's. A job another hub borrowed the
+    /// host for is that hub's: its tools are never run here (T-335). On the dev hub, a borrowed run's job is known too.
+    pub fn job_for(&self, id: &str, token: &str) -> Option<(String, String)> {
+        if token.is_empty() { return None; }
+        if let Some(j) = self.pending.lock().unwrap_or_else(|e| e.into_inner()).get(id) { return if j.kind == "work" && j.via.is_empty() && same_secret(token, &j.token) { Some((j.account.clone(), j.display.clone())) } else { None }; }
+        let p = self.peer.get()?; let jobs = p.jobs.lock().unwrap_or_else(|e| e.into_inner()); let j = jobs.get(id)?;
+        if same_secret(token, &j.token) { Some((j.account.clone(), j.display.clone())) } else { None }
+    }
 
     // ---------- older hosts: can this one relay a login, or does its Claude run Work itself (2.x)? ----------
     fn probe_relays(self: &Arc<Self>, id: String) {
@@ -793,7 +918,7 @@ impl AiHosts {
     /// person and project; never what was asked).
     pub fn status_for(&self, user: &str) -> Vec<Value> {
         let recs: Vec<Value> = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].as_object().map(|m| m.values().filter(|r| r["user"] == json!(user) && !user.is_empty()).cloned().collect()).unwrap_or_default();
-        let pend: Vec<(String, Value)> = self.pending.lock().unwrap_or_else(|e| e.into_inner()).values().map(|p| (p.host.clone(), use_of(&p.kind, &p.account, &p.display, &p.project, p.started, p.picked))).collect();
+        let pend: Vec<(String, Value)> = self.pending.lock().unwrap_or_else(|e| e.into_inner()).values().map(|p| (p.host.clone(), { let mut u = use_of(&p.kind, &p.account, &p.display, &p.project, p.started, p.picked); if !p.via.is_empty() { u["via"] = json!(p.via); if u["person"].as_str().is_some_and(|x| !x.is_empty()) { u["person"] = json!(format!("{} (via {})", u["person"].as_str().unwrap_or(""), p.via)); } } u })).collect();
         let was = self.was_up.lock().unwrap_or_else(|e| e.into_inner()).clone();
         recs.iter().map(|r| {
             let id = r["id"].as_str().unwrap_or("");
@@ -813,6 +938,8 @@ impl AiHosts {
     /// The Work-session limits a host set (T-286): what its owner set from the page, else what its hello said; None = the
     /// host says nothing (an older host): the hub's defaults apply.
     pub fn session_limits(&self, id: &str) -> Option<Value> {
+        // a host live lends (the dev hub, T-335): the limits live knows for it
+        if self.borrowed(id) { return self.peer_host(id).map(|h| h["sessionLimits"].clone()).filter(Value::is_object); }
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         live.get(id).and_then(limits_of)
     }
