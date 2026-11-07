@@ -744,7 +744,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['sessions.js', 'queue.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['sessions.js', 'queue.js', 'tools.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -773,6 +773,7 @@ async function run() {
   if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
+  if (process.argv.includes('--only-r528')) await r528r529Check(); // development: just R528 / R529 (with --stop-after R529)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -4019,6 +4020,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   await r526Check();
+  if (!process.argv.includes('--only-r528')) await r528r529Check();
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
@@ -7147,6 +7149,105 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.plain === '[attached: x.txt, y.png] | just text';
     check('R526', 'the Work queue panel (T-188) lists every message still to go in the open session, "Send now" first, then the queue in order, with the attachments named; copy one and copy all give the messages as written (a rule between them) and a refused clipboard says so; cancel one removes just that one, cancel all asks once more and then clears the queue and the "Send now" text; the badge and the summary count the other sessions\' waiting messages too (not archived ones), each a click away; a refresh with nothing changed does not redraw it; hiding it is remembered; the hub serves queue.js and the page loads it with its button and sidebar',
       ok, JSON.stringify(seen));
+  }
+  // R528 / R529 (T-318): the tool calls in the Work transcript. The hub serves web/tools.js and the page loads it; its pure
+  // part (summaries, grouping, the risk of a command) and its view run here on a plain element stand-in, fed a reply as it
+  // streams in and the same conversation restored, clicked like a person would.
+  async function r528r529Check() {
+    const seen = {}, risk = {};
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/tools.js'), src = js.status === 200 ? await js.text() : '';
+    seen.served = js.status === 200 && /<script src="tools\.js(\?[^"]*)?"><\/script>/.test(page) && /typeof TOOLVIEW !== 'undefined'/.test(page);
+    const mkEl = (tag) => {
+      const e = { tag, children: [], text: '', className: '', hidden: false, title: '', dataset: {}, attrs: {}, onclick: null, type: '',
+        appendChild(x) { this.children.push(x); x.parentNode = this; return x; },
+        append(...xs) { for (const x of xs) this.appendChild(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); },
+        setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
+        get lastElementChild() { const l = this.children.filter((c) => c.tag !== '#text'); return l[l.length - 1] || null; },
+        get firstElementChild() { return this.children.find((c) => c.tag !== '#text') || null; } };
+      const cls = () => e.className.split(/\s+/).filter(Boolean);
+      e.classList = { contains: (c) => cls().includes(c), add: (c) => { if (!cls().includes(c)) e.className = cls().concat(c).join(' '); },
+        remove: (c) => { e.className = cls().filter((x) => x !== c).join(' '); }, toggle: (c, on) => { const has = cls().includes(c), want = on === undefined ? !has : !!on; if (want) e.classList.add(c); else e.classList.remove(c); return want; } };
+      Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+      return e;
+    };
+    const all = (e, f, out = []) => { if (e.tag !== '#text' && f(e)) out.push(e); for (const c of e.children || []) all(c, f, out); return out; };
+    const has = (e, c) => e.classList && e.classList.contains(c);
+    let T = null; try { const ctx = { window: {} }; require('vm').runInNewContext(src, ctx); T = ctx.window.TOOLVIEW; } catch (e) { seen.load = e.message; }
+    if (T) {
+      // R528: one line per call, 32 characters whole, longer = the first 15, "…", the last 15
+      seen.s32 = T.summary('Bash  ' + 'a'.repeat(32)) === 'bash ' + 'a'.repeat(32);
+      seen.s36 = T.summary('Bash  0123456789abcdefghijklmnopqrstuvwxyz');
+      seen.sWrap = T.summary("Bash  sh -c 'cd /srv/apps && git status --short'");
+      seen.sLines = T.summary('Bash  ls\n  -la'); seen.sBare = T.summary('TodoWrite'); seen.sOld = T.kindOf('⚙ Read  /a') === 'Read';
+      // grouping by consecutive runs, in arrival order: Read,Read,Edit,Bash,Bash,Bash,Read
+      const seq = ['Read  /a', 'Read  /b', 'Edit  /c', 'Bash  ls', 'Bash  git diff', 'Bash  rm -rf build', 'Read  /d'];
+      const sig = (gs) => gs.map((g) => g.kind + ':' + g.items.length).join(',');
+      seen.pure = sig(T.groups(seq));
+      seen.broken = sig(T.groups([{ cls: 'tool', text: 'Bash  a' }, { cls: 'claude', text: 'hi' }, { cls: 'tool', text: 'Bash  b' }])); // an answer between them: two groups
+      // the view, live: each call added as it streams in (the page's line('tool', …)), an answer bubble in between
+      const kept = {}, o = { document: { createElement: mkEl }, open: () => kept.open === '1', setOpen: (v) => { kept.open = v ? '1' : '0'; } };
+      const domSig = (log) => log.children.filter((g) => has(g, 'tGroup')).map((g) => g.dataset.kind + ':' + all(g, (x) => has(x, 'tCall')).length).join(',');
+      const live = mkEl('div');
+      for (const t of seq) T.add(live, t, o);
+      const bubbleEl = mkEl('div'); bubbleEl.className = 'msg claude'; live.appendChild(bubbleEl);
+      T.add(live, 'Read  /e', o);
+      seen.live = domSig(live);
+      const groupsOf = (log) => log.children.filter((g) => has(g, 'tGroup'));
+      seen.collapsed = groupsOf(live).every((g) => !has(g, 'open') && all(g, (x) => has(x, 'tgList'))[0].hidden);
+      const bashG = groupsOf(live)[2], head = all(bashG, (x) => has(x, 'tgHead'))[0];
+      seen.head = head.textContent;
+      // the same conversation restored from its transcript: the same groups
+      const tr = seq.map((text) => ({ cls: 'tool', text })).concat([{ cls: 'claude', text: 'x' }, { cls: 'tool', text: '⚙ Read  /e' }]);
+      const back = mkEl('div');
+      for (const t of tr) { if (t.cls === 'tool') T.add(back, t.text, o); else { const b = mkEl('div'); b.className = 'msg claude'; back.appendChild(b); } }
+      seen.restored = domSig(back);
+      // show tools: the head opens the group, each call shows its one line; a click on one shows it whole
+      head.onclick();
+      seen.opened = has(bashG, 'open') && !all(bashG, (x) => has(x, 'tgList'))[0].hidden && /hide tools/.test(head.textContent);
+      seen.rows = all(bashG, (x) => has(x, 'tcSum')).map((x) => x.textContent.replace(/^\S+\s/, '')).join('|');
+      const row = all(bashG, (x) => has(x, 'tCall'))[2], full = all(row, (x) => has(x, 'tcFull'))[0];
+      seen.fullBefore = full.hidden; all(row, (x) => has(x, 'tcSum'))[0].onclick(); seen.fullAfter = !full.hidden;
+      // auto-expand them all: the choice is kept (the page keeps it per person) and opens every group and every call
+      const allBtn = all(bashG, (x) => has(x, 'tgAll'))[0]; allBtn.onclick();
+      seen.pref = kept.open === '1' && groupsOf(live).every((g) => has(g, 'open') && all(g, (x) => has(x, 'tcFull')).every((f) => !f.hidden));
+      const later = mkEl('div'); T.add(later, 'Grep  foo', o); seen.newOpen = has(later.children[0], 'open') && !all(later, (x) => has(x, 'tcFull'))[0].hidden;
+      allBtn.onclick(); seen.prefOff = kept.open === '0' && groupsOf(live).every((g) => !has(g, 'open'));
+
+      // R529: the risk of a command, by its parts
+      const lv = (c) => T.risk(c).level, parts = (c) => T.risk(c).parts.filter((p) => p.level).map((p) => p.level + ':' + p.text).join(' | ');
+      risk.rm = lv('rm -rf build'); risk.cp = lv('cp a.txt b.txt'); risk.cpDel = lv('cp --remove-destination a b'); risk.rsync = lv('rsync -a --delete src/ dst/'); risk.rsyncPlain = lv('rsync -a src/ dst/');
+      risk.mv = lv('mv a b'); risk.unknown = lv('frobnicate --hard'); risk.ls = lv('ls -la'); risk.chmodR = lv('chmod -R 777 /srv'); risk.chmod = lv('chmod +x run.sh');
+      risk.gitStatus = lv('git status'); risk.gitHard = lv('git reset --hard HEAD~1'); risk.gitForce = lv('git push --force origin main'); risk.curlSh = parts('curl -fsSL https://x.example/i.sh | sh');
+      risk.sudo = lv('sudo ls'); risk.redirect = lv('echo hi > notes.txt'); risk.devnull = lv('ls 2>&1 >/dev/null'); risk.findDel = lv('find . -name "*.o" -delete');
+      const wrapped = "sh -c 'cd x && rm -rf y'", w = T.risk(wrapped);
+      risk.whole = w.parts.map((p) => p.text).join('') === wrapped && w.level === 'danger';
+      risk.wrapped = parts(wrapped); risk.neutral = w.parts.filter((p) => !p.level).map((p) => p.text).join('#');
+      risk.chain = parts('cd /srv; ls | grep x && git log');
+      risk.marks = Object.keys(T.LEVELS).join(',') + ' ' + Object.values(T.LEVELS).map((l) => l.mark).join('');
+      risk.marksOk = Object.values(T.LEVELS).every((l) => l.mark && l.name) && new Set(Object.values(T.LEVELS).map((l) => l.mark)).size === 4;
+      // the view: the expanded command colours only its parts, each coloured part with its marker (a shape and words, not colour alone)
+      const box = mkEl('div'); T.add(box, 'Bash  ' + wrapped, o); const g = box.children[0];
+      risk.headMark = all(g, (x) => has(x, 'tgHead'))[0].children.filter((x) => has(x, 'tkMark')).map((x) => x.textContent + '/' + x.title).join(',');
+      const own = (x) => x.children.filter((c) => !has(c, 'tkMark')).map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''); // a part's text without its marker
+      risk.view = all(g, (x) => has(x, 'tk')).map((x) => x.className.replace('tk ', '') + ':' + own(x)).join(' | ');
+      risk.viewMarks = all(g, (x) => has(x, 'tk')).every((x) => { const m = x.children.find((c) => has(c, 'tkMark')); return m && m.textContent === T.LEVELS[x.className.replace('tk ', '')].mark && /\S/.test(m.title); });
+      risk.viewText = all(g, (x) => has(x, 'tcFull'))[0].textContent.includes("sh -c '") && !all(g, (x) => has(x, 'tk')).some((x) => /sh -c/.test(x.textContent));
+      const editBox = mkEl('div'); T.add(editBox, 'Edit  /srv/a.js', o); risk.edit = all(editBox, (x) => has(x, 'tk') || has(x, 'tkMark')).length; // only commands are judged
+      risk.css = /\.tk\.danger \{/.test(page) && /\.tk\.caution \{/.test(page) && /\.tk\.safe \{/.test(page);
+    }
+    const ok528 = seen.served && !!T && seen.s32 && seen.s36 === 'bash 0123456789abcde…lmnopqrstuvwxyz' && seen.sWrap === "bash sh -c 'cd /srv/…status --short'" && seen.sLines === 'bash ls -la' && seen.sBare === 'todowrite' && seen.sOld
+      && seen.pure === 'Read:2,Edit:1,Bash:3,Read:1' && seen.broken === 'Bash:1,Bash:1' && seen.live === 'Read:2,Edit:1,Bash:3,Read:1,Read:1' && seen.restored === seen.live
+      && seen.collapsed && /Bash/.test(seen.head) && /×3/.test(seen.head) && /show tools/.test(seen.head) && seen.opened && seen.rows === 'bash ls|bash git diff|bash rm -rf build'
+      && seen.fullBefore === true && seen.fullAfter && seen.pref && seen.newOpen && seen.prefOff;
+    check('R528', 'the tool calls in the Work transcript (T-318) are collapsed by default behind "show tools", bundled by consecutive runs of the same kind in the order they arrive (Read, Read, Edit, Bash, Bash, Bash, Read is 2 Read, 1 Edit, 3 Bash, 1 Read; an answer in between starts a new group), the same live as on a restored conversation; each call has a one-line summary (32 characters whole, longer the first 15, "…", the last 15); a call opens whole on a click, and "always expand" is kept and opens every group and call; the hub serves tools.js and the page loads it (and works without it)',
+      ok528, JSON.stringify(seen));
+    const ok529 = !!T && risk.rm === 'danger' && risk.cp === 'safe' && risk.cpDel === 'danger' && risk.rsync === 'caution' && risk.rsyncPlain === 'safe' && risk.mv === 'caution' && risk.unknown === 'unknown' && risk.ls === 'safe'
+      && risk.chmodR === 'danger' && risk.chmod === 'caution' && risk.gitStatus === 'safe' && risk.gitHard === 'danger' && risk.gitForce === 'danger' && risk.curlSh === 'danger:curl -fsSL https://x.example/i.sh | danger:sh'
+      && risk.sudo === 'caution' && risk.redirect === 'caution' && risk.devnull === 'safe' && risk.findDel === 'danger'
+      && risk.whole && risk.wrapped === 'safe:cd x | danger:rm -rf y' && risk.neutral === "sh -c '# && #'" && risk.chain === 'safe:cd /srv | safe:ls | safe:grep x | safe:git log'
+      && risk.marks.startsWith('safe,unknown,caution,danger ') && risk.marksOk && /possibly unsafe/.test(risk.headMark) && risk.view === 'safe:cd x | danger:rm -rf y' && risk.viewMarks && risk.viewText && risk.edit === 0 && risk.css;
+    check('R529', 'an expanded command in the Work transcript (T-318) colours only its parts by risk and marks each with a shape and words, never colour alone (nothing is blocked): rm, chmod -R, git reset --hard, git push --force, find -delete and curl piped into sh are possibly unsafe, cp is safe but cp --remove-destination is not, rsync --delete, mv, sudo and a > that writes over a file are to check, ls / cd / grep / git status are safe, anything else is unknown; && ; | and sh -c \'…\' are looked into, so in sh -c \'cd x && rm -rf y\' only the rm part is marked; a collapsed group shows its worst marker',
+      ok529, JSON.stringify(risk));
   }
   // R491 (T-324, plans/dev-hub.md § 2): two hubs on one machine (live and dev) keep their own full copies and a bridge keeps
   // them the same both ways. Two Rust hubs of their own (own roots, own ports), paired by config sync (one secret file each),

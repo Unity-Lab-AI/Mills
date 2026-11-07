@@ -64,6 +64,7 @@
     "web/profile.js": "1.0.2",
     "web/queue.js": "1.0.0",
     "web/sessions.js": "1.1.1",
-    "web/sw.js": "1.0.8"
+    "web/sw.js": "1.0.8",
+    "web/tools.js": "1.0.0"
   }
 }

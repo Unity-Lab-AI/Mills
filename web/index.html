@@ -872,6 +872,25 @@
   .msg pre, .rmsg pre { background: color-mix(in srgb, var(--text) 7%, var(--bg)); color: var(--text); }
   #chat #log .tool { border-left: 0; background: color-mix(in srgb, var(--panel) 60%, transparent); border-radius: 8px; padding: .25rem .6rem; font-size: .76rem; opacity: .85; align-self: flex-start; max-width: 100%; }
   #chat #log .tool:hover { opacity: 1; }
+  /* ── tool calls (web/tools.js, T-318): one group per run of a kind, collapsed; a command's parts coloured by risk, each with its shape ── */
+  .tgHead, .tcSum { background: none; border: 0; box-shadow: none; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+  .tgHead { display: inline; } .tgHead > span + span { margin-left: .5em; }
+  .tgHead:hover .tgToggle, .tcSum:hover { text-decoration: underline; }
+  .tgKind { font-weight: 600; } .tgN, .tgSum { opacity: .85; } .tgToggle { opacity: .7; text-decoration: underline dotted; }
+  .tgList { margin: .3rem 0 .1rem 1.45em; display: flex; flex-direction: column; gap: .15rem; }
+  .tcSum { display: block; width: 100%; opacity: .9; }
+  .tcFull { white-space: pre-wrap; padding: .3rem .5rem; margin: .1rem 0 .3rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, var(--bg)); color: var(--text); }
+  .tcName { opacity: .6; }
+  .tk { border-radius: 4px; padding: 0 .15em; }
+  .tk.safe { background: color-mix(in srgb, #30a46c 16%, transparent); box-shadow: inset 0 -2px 0 #30a46c; }
+  .tk.caution { background: color-mix(in srgb, #e3b40b 22%, transparent); box-shadow: inset 0 -2px 0 #e3b40b; }
+  .tk.danger { background: color-mix(in srgb, #e5484d 24%, transparent); box-shadow: inset 0 -2px 0 #e5484d; }
+  .tk.unknown { box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--muted) 70%, transparent); }
+  .tkMark { margin-right: .25em; font-family: system-ui, sans-serif; font-size: .9em; }
+  .tkMark.safe { color: #30a46c; } .tkMark.caution { color: #c99a00; } .tkMark.danger { color: #e5484d; } .tkMark.unknown { color: var(--muted); }
+  .tgFoot { display: flex; flex-wrap: wrap; gap: .3rem .8rem; align-items: center; margin-top: .2rem; opacity: .85; word-break: normal; }
+  .tgFoot .tgAll { padding: .05rem .45rem; font-size: inherit; }
+  #chat #log .tGroup.open { opacity: 1; align-self: stretch; }
   #chat #log .sys { font-size: .74rem; opacity: .8; }
   #chat #composer { margin: .4rem max(.75rem, calc((100% - var(--read-w)) / 2 - .5rem)) 1rem; padding: .55rem .6rem .55rem .7rem; border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
     border-radius: 1.25rem; background: var(--panel); box-shadow: 0 6px 24px rgba(0,0,0,.22); }
@@ -1497,6 +1516,7 @@
 <script src="board.js"></script>
 <script src="sessions.js"></script>
 <script src="queue.js"></script>
+<script src="tools.js"></script>
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
 MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
@@ -2347,7 +2367,13 @@ function sys(text, bad) {
 }
 // tool lines get their gear from CSS (.tool::before); older saved sessions still carry a "⚙ " prefix in the text
 const toolText = (t) => String(t).replace(/^⚙️?\s*/, '');
-function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
+// T-318: tool calls are bundled by consecutive runs, collapsed, one line each, commands coloured by risk (web/tools.js);
+// "always expand" is kept per person in this browser. Without tools.js: the one-line chips as before.
+const toolsKey = () => 'vr.toolsOpen.' + (me ? me.username : '');
+const toolOpts = () => ({ open: () => store.get(toolsKey()) === '1', setOpen: (on) => { store.set(toolsKey(), on ? '1' : '0'); for (const l of document.querySelectorAll('#log, .wLog')) TOOLVIEW.openAll(l, on); } });
+function line(cls, text) {
+  if (cls === 'tool' && typeof TOOLVIEW !== 'undefined') return TOOLVIEW.add(log, toolText(text), toolOpts());
+  const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
 function renderText(el, text) { // full markdown + mermaid (web/md.js); host pictures and YouTube players split out first
   const att = WORK_FILES.exec(text || ''); // a Work message's attachments (the marker block at its end): shown under the text
@@ -2364,8 +2390,9 @@ function renderText(el, text) { // full markdown + mermaid (web/md.js); host pic
 function describeTool(t) {
   const i = t.input || {};
   const name = t.name.replace(/^mcp__pc__/, 'your PC › ');
-  const target = i.path ?? i.file_path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? '';
-  return name + (target !== '' ? '  ' + String(target).slice(0, 160) : '');
+  const target = i.path ?? i.file_path ?? i.command ?? i.cmd ?? i.pattern ?? i.url ?? i.query ?? '';
+  const long = target === i.command || target === i.cmd; // a command is kept longer: its risk is shown part by part (T-318, web/tools.js)
+  return name + (target !== '' ? '  ' + String(target).slice(0, long ? 1000 : 160) : '');
 }
 
 // Status line under each message you send (Work, Unity section, @unity in Chat): queued, working,
@@ -3380,9 +3407,11 @@ async function loadOlder() { // the next chunk above, drawn without moving what 
   try {
     const d = await json('/api/work/history?before=' + at + '&chars=' + HISTORY_CHARS);
     if (gen !== workGen || at !== transcriptFrom) return; // another conversation came on screen meanwhile
-    const items = d.items || [], first = $('histMore') ? $('histMore').nextSibling : log.firstChild, n0 = log.children.length, h0 = log.scrollHeight, top0 = log.scrollTop;
+    const items = d.items || [], first = $('histMore') ? $('histMore').nextSibling : log.firstChild, h0 = log.scrollHeight, top0 = log.scrollTop;
+    const cut = log.appendChild(document.createElement('div')), n0 = log.children.length; // the older calls start groups of their own, never join the newest one (T-318)
     for (const t of items) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
-    const added = [...log.children].slice(n0);
+    cut.remove();
+    const added = [...log.children].slice(n0 - 1);
     for (const el of added) log.insertBefore(el, first);
     log.scrollTop = top0 + (log.scrollHeight - h0);
     transcript = items.concat(transcript); savedLen += items.length; transcriptFrom = d.from || 0;
@@ -5563,6 +5592,7 @@ function renderWatchEvent(owner, w, e) {
   let el;
   if (e.t === 'user') { el = document.createElement('div'); el.className = 'msg me'; el.style.borderLeft = '3px solid ' + colorOf(owner); renderText(el, e.text); }
   else if (e.t === 'claude') { el = document.createElement('div'); el.className = 'msg'; renderText(el, e.text); }
+  else if (e.t === 'tool' && typeof TOOLVIEW !== 'undefined') { TOOLVIEW.add(log, toolText(e.text), toolOpts()); if (atBottom) log.scrollTop = log.scrollHeight; return; } // grouped like Work (T-318)
   else if (e.t === 'tool') { el = document.createElement('div'); el.className = 'tool'; el.textContent = toolText(e.text); }
   else { el = document.createElement('div'); el.className = 'sys'; el.textContent = e.text; }
   el.title = new Date(e.ts).toLocaleString();
