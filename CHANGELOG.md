@@ -13,6 +13,7 @@ PATCH: **deploys are no longer held up by the hub's own files.**
 
 ### Fixed
 - The live server's autodeploy refused every new main ("live checkout has uncommitted changes") because two files the hub writes itself, `bridge/work-sessions.json` and `bridge/activity/`, were not ignored by git: both are in .gitignore now (they stay on disk as they are).
+- The regression runner's fake Ollama answers /api/version only for the Rust hub (5.43.0 made it answer for both, and the JavaScript hub then took it for a real Ollama: 28 brain, chat and agent checks failed in a normal run).
 
 ## 5.43.0 — 2026-11-07
 
