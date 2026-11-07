@@ -22,6 +22,11 @@ addressed her with no response").
   No hub change. `web/index.html` 1.38.1.
 - Check: R527 (static; the picker's behaviour has nothing a scratch hub can observe) says the picker and the list write
   the handle, never the account name.
+- R284 (T-290, `--rust-hub`) raced the fake host: its older-page run answered after 4 s (`SLOW`) while the seven hub
+  calls before Stop took longer under load, so "Stop ends the run without an answer" was false now and then (T-346).
+  The run now says `SLOWER` (bridge/test/fake-claude.js: 15 s), so Stop always comes first. The check is unchanged.
+- R143 (`--rust-hub`) gave the second host program 10 s to come online; under the same load it took longer and the
+  check failed once today. It waits up to 30 s now (the host still has to connect; only the cap moved). T-346.
 
 ## 5.46.0 — 2026-11-07
 
