@@ -4079,7 +4079,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       // an older page: no session field anywhere
       const cur = await call('/api/work/current', X); seen.oldCur = cur.status === 200 && has(cur.data.transcript, 'only in r533 b') && !has(cur.data.transcript, 'only in r533 first');
       const ro = await chat(X, 'r533 older page'); seen.oldRun = ro.status === 200 && ro.events.some((e) => e.type === 'result'); seen.oldCwd = cwdOf(ro.events); seen.oldInB = same(seen.oldCwd, bTree);
-      const j = journal(); seen.journal = j.includes('r533 b says') && j.includes('r533 older page') && !j.includes('r533 first says');
+      const jOk = (j) => j.includes('r533 b says') && j.includes('r533 older page') && !j.includes('r533 first says');
+      for (let i = 0; i < 25 && !jOk(journal()); i++) await sleep(200); // the journal is written behind (pgm-core store)
+      const j = journal(); seen.journal = jOk(j); if (!seen.journal) seen.journalHead = j.slice(0, 300);
       seen.bTreeKept = !!bTree && fs.existsSync(bTree);
       const js = jsRead(); seen.js = has(js.transcript, 'only in r533 b') && !has(js.transcript, 'only in r533 first') && Array.isArray(js.queue) && 'archiveId' in js; seen.jsErr = js.error;
       seen.ownMid = own() === ownBefore;
@@ -4090,18 +4092,18 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const lastCur = await call('/api/work/current', X); seen.lastEmpty = lastCur.status === 200 && Array.isArray(lastCur.data.transcript) && lastCur.data.transcript.length === 0;
       seen.ownEnd = own() === ownBefore; seen.ownAfter = own();
       const A0 = seen.answer || {}, AC = seen.answerC || {};
-      spec('R533', L533.R533, seen.firstRun === 200 && seen.bRun === 200 && !!c && !!seen.means && seen.means.promotes === b && seen.means.fresh === false
+      check('R533', L533.R533, seen.firstRun === 200 && seen.bRun === 200 && !!c && !!seen.means && seen.means.promotes === b && seen.means.fresh === false
         && seen.del === 200 && A0.ok === true && A0.deleted === p0 && A0.primary === b && A0.promoted === b && A0.fresh === false && seen.stopped && seen.primary && seen.p0Gone && seen.bPrimary
         && seen.journal && seen.bTreeKept && seen.delB === 200 && (seen.answerB || {}).promoted === c,
-        JSON.stringify({ firstRun: seen.firstRun, bRun: seen.bRun, means: seen.means, del: seen.del, answer: A0, stopped: seen.stopped, primary: seen.primary, p0Gone: seen.p0Gone, bPrimary: seen.bPrimary, journal: seen.journal, bTreeKept: seen.bTreeKept, delB: seen.delB, answerB: seen.answerB }));
-      spec('R534', L533.R534, seen.delC === 200 && AC.ok === true && AC.deleted === c && AC.fresh === true && AC.promoted === null && seen.lastN === 1 && !!seen.lastPrimary && seen.lastPrimary === AC.primary && seen.lastPrimary !== c && seen.lastEmpty,
+        JSON.stringify({ firstRun: seen.firstRun, bRun: seen.bRun, means: seen.means, del: seen.del, answer: A0, stopped: seen.stopped, primary: seen.primary, p0Gone: seen.p0Gone, bPrimary: seen.bPrimary, journal: seen.journal, journalHead: seen.journalHead, bTreeKept: seen.bTreeKept, delB: seen.delB, answerB: seen.answerB }));
+      check('R534', L533.R534, seen.delC === 200 && AC.ok === true && AC.deleted === c && AC.fresh === true && AC.promoted === null && seen.lastN === 1 && !!seen.lastPrimary && seen.lastPrimary === AC.primary && seen.lastPrimary !== c && seen.lastEmpty,
         JSON.stringify({ delC: seen.delC, answer: AC, n: seen.lastN, primary: seen.lastPrimary, empty: seen.lastEmpty }));
-      spec('R535', L533.R535, seen.del === 200 && seen.firstInOwn && /^work\/t-r533 [0-9a-f]{40} [0-9a-f]{40} mine, never touched$/.test(ownBefore) && seen.ownMid && seen.ownEnd, `in own ${seen.firstInOwn} · before "${ownBefore}" · after "${seen.ownAfter}"`);
-      spec('R536', L533.R536, seen.del === 200 && seen.js, `js read ${seen.js}${seen.jsErr ? ' (' + seen.jsErr + ')' : ''}`);
-      spec('R537', L533.R537, seen.del === 200 && seen.oldCur && seen.oldRun && seen.oldInB, `current ${seen.oldCur} · run ${seen.oldRun} in ${seen.oldCwd} (b's own ${bTree})`);
+      check('R535', L533.R535, seen.del === 200 && seen.firstInOwn && /^work\/t-r533 [0-9a-f]{40} [0-9a-f]{40} mine, never touched$/.test(ownBefore) && seen.ownMid && seen.ownEnd, `in own ${seen.firstInOwn} · before "${ownBefore}" · after "${seen.ownAfter}"`);
+      check('R536', L533.R536, seen.del === 200 && seen.js, `js read ${seen.js}${seen.jsErr ? ' (' + seen.jsErr + ')' : ''}`);
+      check('R537', L533.R537, seen.del === 200 && seen.oldCur && seen.oldRun && seen.oldInB, `current ${seen.oldCur} · run ${seen.oldRun} in ${seen.oldCwd} (b's own ${bTree})`);
     } catch (e) {
       if (e.stopAfter) throw e;
-      for (const id of Object.keys(L533)) spec(id, L533[id], false, 'the check itself failed: ' + e.message + ' · ' + JSON.stringify(seen).slice(0, 400));
+      for (const id of Object.keys(L533)) check(id, L533[id], false, 'the check itself failed: ' + e.message + ' · ' + JSON.stringify(seen).slice(0, 400));
     }
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
