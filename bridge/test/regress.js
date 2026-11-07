@@ -48,12 +48,12 @@ function check(id, label, pass, detail = '') {
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
 const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
 const L527 = {
-  R527: 'a person on dev sees live\'s AI hosts and their own scopes: the AI hosts\' providers dev offers a person are the ones live offers that person (same ids, owners and models), each marked viaPeer; a model the owner did not allow them is cut on dev too, and a run with it is refused in live\'s words',
-  R528: 'a Work run on dev goes through live\'s host: a relayed run\'s model call (dev\'s /llm, and through Headroom on dev) reaches the host\'s login through live and its answer comes back; a 2.x host\'s run (Claude Code on the host) streams its events back to dev; Stop on dev cancels it on the host',
-  R529: 'dev\'s run keeps its team tools on dev: a 2.x host\'s run gets dev as its hub (hubUrl, mcpBase), the board write it makes through its MCP relay lands on dev\'s board first and reaches live through the bridge afterwards, and live refuses to run a tool for that job',
-  R530: 'a borrowed PC tool is the owner\'s only: the host owner\'s run on dev gets an answer from their own machine through live, signed by live for them; another person\'s run naming that machine gets 403, the host never sees the call and nothing answers instead (no browser folder, no other machine)',
-  R531: 'dev without live\'s AI says so and keeps working: with live stopped, with the bridge off on live, and with the route answering 404 (shareAi off, as an older live), dev offers no borrowed AI, a Work run says "No AI is available for Work …" plus "(live\'s AI hosts are not reachable from dev right now)", dev logs the change and not every poll, and chat, the board and notes on dev still work',
-  R532: 'live refuses an unknown account from dev and logs every peer call: a call over the bridge naming an account live does not have is refused (403) for every kind (providers, fetch, work, cancel, PC tool), sync.shareAi { users } lends only to the accounts named, and live\'s security log has the borrowing calls of each account (listing, model calls, Work, cancel, PC tool) marked via dev, and every refusal',
+  R538: 'a person on dev sees live\'s AI hosts and their own scopes: the AI hosts\' providers dev offers a person are the ones live offers that person (same ids, owners and models), each marked viaPeer; a model the owner did not allow them is cut on dev too, and a run with it is refused in live\'s words',
+  R539: 'a Work run on dev goes through live\'s host: a relayed run\'s model call (dev\'s /llm, and through Headroom on dev) reaches the host\'s login through live and its answer comes back; a 2.x host\'s run (Claude Code on the host) streams its events back to dev; Stop on dev cancels it on the host',
+  R540: 'dev\'s run keeps its team tools on dev: a 2.x host\'s run gets dev as its hub (hubUrl, mcpBase), the board write it makes through its MCP relay lands on dev\'s board first and reaches live through the bridge afterwards, and live refuses to run a tool for that job',
+  R541: 'a borrowed PC tool is the owner\'s only: the host owner\'s run on dev gets an answer from their own machine through live, signed by live for them; another person\'s run naming that machine gets 403, the host never sees the call and nothing answers instead (no browser folder, no other machine)',
+  R542: 'dev without live\'s AI says so and keeps working: with live stopped, with the bridge off on live, and with the route answering 404 (shareAi off, as an older live), dev offers no borrowed AI, a Work run says "No AI is available for Work …" plus "(live\'s AI hosts are not reachable from dev right now)", dev logs the change and not every poll, and chat, the board and notes on dev still work',
+  R543: 'live refuses an unknown account from dev and logs every peer call: a call over the bridge naming an account live does not have is refused (403) for every kind (providers, fetch, work, cancel, PC tool), sync.shareAi { users } lends only to the accounts named, and live\'s security log has the borrowing calls of each account (listing, model calls, Work, cancel, PC tool) marked via dev, and every refusal',
 };
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
@@ -782,7 +782,7 @@ async function run() {
   if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
-  if (process.argv.includes('--only-r527') && RUST_HUB) await r527Check(); // development: just R527 to R532 (with --stop-after R532)
+  if (process.argv.includes('--only-r527') && RUST_HUB) await r527Check(); // development: just R538 to R543 (with --stop-after R532)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -2836,7 +2836,8 @@ async function run() {
     fs.writeFileSync(path.join(host2Dir, 'ai-node.json'), JSON.stringify({ ...cfgJson, providers: [], engines: {} }));
     const host2Log = fs.openSync(path.join(SCRATCH, 'host2.log'), 'a');
     const host2 = spawn(process.execPath, [path.join(host2Dir, 'ai-node.js')], { cwd: host2Dir, stdio: ['ignore', host2Log, host2Log], windowsHide: true });
-    let h2 = null; for (let i = 0; i < 40; i++) { h2 = ((await call('/api/hosts', A)).data.mine || []).find((h) => h.id === newId); if (h2 && h2.online) break; await sleep(250); }
+    // up to 30 s: a second node process starting while the Rust suite runs its native hosts took over 10 s to say hello (T-346); the cap only bounds the wait, the host still has to come online
+    let h2 = null; for (let i = 0; i < 120; i++) { h2 = ((await call('/api/hosts', A)).data.mine || []).find((h) => h.id === newId); if (h2 && h2.online) break; await sleep(250); }
     try { if (WIN) execFileSync('taskkill', ['/pid', String(host2.pid), '/T', '/F'], { stdio: 'ignore' }); else host2.kill('SIGTERM'); } catch {}
     const host2Text = fs.readFileSync(path.join(SCRATCH, 'host2.log'), 'utf8');
     const removed = await call('/api/hosts/remove', A, { id: newId });
@@ -5361,7 +5362,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       await call('/api/work/queue', U, { queue: ['r280 first session queue'], sendNow: null });
       await call('/api/model', U, { provider: prov280(h2, 'c2'), model: 'claude-haiku-5-5' });
       const oOther = go280(U, uA[2], 'other while old'); await working280(U, h1, 1);
-      const oOld = chat(U, 'SLOW r280 older page runs the first session'); await working280(U, h2, 1);
+      const oOld = chat(U, 'SLOWER r280 older page runs the first session'); await working280(U, h2, 1); // 15 s: the seven reads below must still find it running when Stop comes (T-346)
       const cur = (await call('/api/work/current', U)).data, curOther = (await call('/api/work/current?session=' + uA[2], U)).data;
       S.oldSees = JSON.stringify(cur.transcript || []).includes('first session marker') && (cur.queue || []).join() === 'r280 first session queue' && !JSON.stringify(curOther.transcript || []).includes('first session marker');
       const att = (await call('/api/work/attach?run=&after=0', U)).data || {};
@@ -6297,6 +6298,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       `${notAdm.status} ${mk.status} ${uSees.status}/${uPw.status} self ${self.status} default ${dflt.username} ${mkD.status} admins ${leak} mode ${localMode.toString(8)} rm ${rm.status} after ${uAfter.status}`);
   }
   check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
+  { // 5.46.1: the @ picker wrote Unity's account name (@claude), which calls nobody (R36), so a picked or Tab / Enter-completed mention never reached her
+    const pickerUsesHandle = /b\.dataset\.user = h;/.test(html) && /insertMention\(h\)/.test(html) && !/insertMention\(m\.username\)/.test(html) && !/b\.dataset\.user = m\.username;/.test(html);
+    const handleFn = /const mentionHandleOf = \(m\) => m\.agent \? \(m\.display \|\| 'unity'\)\.toLowerCase\(\)\.replace\(\/\\s\+\/g, ''\) : m\.username;/.test(html);
+    const listUsesHandle = /\(m\.agent \? 'BOT · ' : 'private · '\) \+ '@' \+ mentionHandleOf\(m\)/.test(html);
+    check('R527', '[static] the @ picker writes @unity for Unity (never her account name @claude, which calls nobody): picking her, or Tab / Enter while the list is open, inserts the handle that calls her; the conversation list shows the same handle', pickerUsesHandle && handleFn && listUsesHandle, `picker ${pickerUsesHandle} handle ${handleFn} list ${listUsesHandle}`);
+  }
   check('R106', '[static] every message you send shows its status: Work (queued / working / done / stopped / failed), Unity section, @unity in Chat (waiting / answering / answered)',
     /function msgStatus\(/.test(html) && /msgStatus\(el, 'queued'/.test(html) && /msgStatus\(mine, 'working'/.test(html) && /msgStatus\(mineU, 'working'/.test(html) && /function refreshAgentWaits/.test(html) && /'Unity answered'/.test(html));
   const nImg = fakeImagePrompts.length;
@@ -7349,7 +7356,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.thirdRefused.every((x) => x === 403) && seen.reset === 200 && seen.reclaim === 200 && JSON.stringify(seen.afterReset) === '[200,403]' && seen.equal && seen.syncIgnored;
     check('R495', R495_LABEL, ok, JSON.stringify(seen));
   }
-  // R527 to R532 (T-335, plans/dev-hub.md § 9): dev borrows live's AI hosts over the bridge. Two Rust hubs of their own,
+  // R538 to R543 (T-335, numbered R527 to R532 until 5.46.1's R527 landed first, plans/dev-hub.md § 9): dev borrows live's AI hosts over the bridge. Two Rust hubs of their own,
   // paired by config sync as in R491 (a = live, b = dev with instance dev), and a stand-in AI host played by the test (a 2.x
   // host: no caps, so the hub probes its logins; its "claude" relays, its "cli" runs Work on its own machine) connected to
   // live ONLY. What a person sees on dev, driven over HTTP like people would. Written as spec() first (T-336); plain checks
@@ -7574,15 +7581,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     } finally { host.stop = true; try { hrSrv.close(); } catch {} await stop('a'); await stop('b'); }
     const R = seen.r527 || {}, S = seen.r528 || {}, T = seen.r529 || {}, P = seen.r530 || {}, N = seen.r531 || {}, Q = seen.r532 || {};
     const base0 = seen.startA && seen.startB && seen.signedIn && seen.hostUp && seen.scope === 200;
-    check('R527', L527.R527, base0 && R.pickM2 === 200 && R.devU && R.devU === R.liveU && R.devM === R.liveM && R.viaPeer && JSON.stringify(R.uModels) === '["m1"]' && /not the model m2/.test(R.scopedErr || '') && /mills/i.test(R.scopedErr || ''), JSON.stringify({ base0, ...R }));
-    check('R528', L527.R528, base0 && /^relay=200:r528 upstream through live/.test(S.relayed || '') && S.hrUp && /^relay=200:r528 upstream through live/.test(S.viaHr || '') && S.hrInfo && S.hrSaw && S.hostRelays >= 2
+    check('R538', L527.R538, base0 && R.pickM2 === 200 && R.devU && R.devU === R.liveU && R.devM === R.liveM && R.viaPeer && JSON.stringify(R.uModels) === '["m1"]' && /not the model m2/.test(R.scopedErr || '') && /mills/i.test(R.scopedErr || ''), JSON.stringify({ base0, ...R }));
+    check('R539', L527.R539, base0 && /^relay=200:r528 upstream through live/.test(S.relayed || '') && S.hrUp && /^relay=200:r528 upstream through live/.test(S.viaHr || '') && S.hrInfo && S.hrSaw && S.hostRelays >= 2
       && S.run2 && S.run2.ran && S.stop === 200 && S.cancelled && S.ticks, JSON.stringify(S));
-    check('R529', L527.R529, base0 && T.hubUrl === `http://127.0.0.1:${pB}` && String(T.mcpBase || '').startsWith(`http://127.0.0.1:${pB}/node/job/`) && T.devTool === 200 && !!T.id && T.onDev === 'r529 made by the host run' && T.synced && T.liveTool === 403, JSON.stringify(T));
-    check('R530', L527.R530, base0 && /r530 listing from the host/.test(P.own || '') && (P.pcs || []).length >= 1 && P.pcs[0].kid === P.hubKid && !!P.hubKid && P.pcs[0].owner === 'mills' && P.pcs[0].actor === 'mills'
+    check('R540', L527.R540, base0 && T.hubUrl === `http://127.0.0.1:${pB}` && String(T.mcpBase || '').startsWith(`http://127.0.0.1:${pB}/node/job/`) && T.devTool === 200 && !!T.id && T.onDev === 'r529 made by the host run' && T.synced && T.liveTool === 403, JSON.stringify(T));
+    check('R541', L527.R541, base0 && /r530 listing from the host/.test(P.own || '') && (P.pcs || []).length >= 1 && P.pcs[0].kid === P.hubKid && !!P.hubKid && P.pcs[0].owner === 'mills' && P.pcs[0].actor === 'mills'
       && (P.other || []).length === 1 && /^403 /.test(P.other[0]) && /someone else/.test(P.other[0]) && P.hostSawOther === 0 && !P.fallback, JSON.stringify(P));
     const plain = (x) => x && !!x.why && x.gone && /^No AI is available for Work/.test(x.err) && /\(live's AI hosts are not reachable from dev right now\)/.test(x.err) && x.chat === 200 && x.board === 200 && x.note === 200;
-    check('R531', L527.R531, base0 && plain(N.stopped) && plain(N.bridgeOff) && plain(N.shareOff) && N.routeOff === 404 && N.logLines >= 2 && N.logLines <= 8, JSON.stringify(N));
-    check('R532', L527.R532, base0 && Q.refused && Object.entries(Q.refused).every(([k, s]) => s === 403) && Q.users && Q.users.mills === 200 && Q.users.u === 403 && Q.users.devUp && Q.users.devMills && Q.users.devU === 0
+    check('R542', L527.R542, base0 && plain(N.stopped) && plain(N.bridgeOff) && plain(N.shareOff) && N.routeOff === 404 && N.logLines >= 2 && N.logLines <= 8, JSON.stringify(N));
+    check('R543', L527.R543, base0 && Q.refused && Object.entries(Q.refused).every(([k, s]) => s === 403) && Q.users && Q.users.mills === 200 && Q.users.u === 403 && Q.users.devUp && Q.users.devMills && Q.users.devU === 0
       && Q.audit && ['ai.peer.cancel', 'ai.peer.fetch', 'ai.peer.pc', 'ai.peer.providers', 'ai.peer.work'].every((k) => Q.audit.mills.includes(k)) && ['ai.peer.fetch', 'ai.peer.providers'].every((k) => Q.audit.u.includes(k)) && Q.audit.refusedNobody >= 5, JSON.stringify(Q));
   }
   async function r323Check() {

@@ -84,6 +84,14 @@ bridge/.update-backup/
 bridge/.update-staging/
 # AI hosts (UUID + secret + nickname per host; Settings → My AI hosts) and a host's per-run MCP files
 bridge/ai-hosts.json
+# a hub's per-run MCP files for its Work sessions (bridge/.mcp-runtime-hub.json, bridge/.mcp-runtime-hub-<session>.json),
+# the desktop app's device tokens (5.43.0) and the planner's drafts (T-279): data the hub writes into the checkout;
+# an untracked one stops both auto-deploys ("uncommitted changes", 2026-11-07)
+bridge/.mcp-runtime-hub*.json
+bridge/device-tokens.json
+bridge/device-tokens.json.tmp
+bridge/plan-drafts.json
+bridge/plan-drafts.json.tmp
 # the release key that signs the native binaries (bridge/native-releases.js): its secret never leaves this machine
 bridge/release-key.json
 bridge/ai-host-sessions.json
@@ -97,6 +105,7 @@ bridge/api-keys.json
 bridge/work.json
 bridge/work-current.json
 bridge/work-sessions.json
+bridge/work-sessions/
 bridge/activity/
 # PGM Gateway (5.1.0): its products, their secrets and who each linked
 bridge/gateway/

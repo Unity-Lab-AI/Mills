@@ -29,11 +29,50 @@ MINOR: **the dev hub borrows live's AI hosts over the bridge** (T-335 … T-340,
   job's id and token; live refuses tools for a borrowed job); the day ledger is dev's. PC tools are picked and signed on
   live for the machine's owner only (403 otherwise, no fallback). Hosts change nothing.
 - LAWS.md's dev-hub law: "AI hosts connect to live; dev borrows them over the bridge".
-- Checks R527–R532 (two paired scratch Rust hubs, a stand-in host on "live" only), written as spec() first: a person
+- Checks R538–R543 (numbered R527–R532 until 5.46.1 took R527; two paired scratch Rust hubs, a stand-in host on "live" only), written as spec() first: a person
   on dev sees live's hosts with their own scopes; a Work run on dev goes through live's host (the relay, a 2.x run,
   Stop); its team tools stay on dev; a borrowed PC tool is the owner's only; dev without live's AI says so and keeps
   working (live stopped, bridge off, an older live); live refuses an unknown account and logs every peer call. The
   runner's `--stop-after` also stops at a spec() check.
+
+## 5.46.3 — 2026-11-07
+
+PATCH: **one more hub-written folder ignored: `bridge/work-sessions/`** (the per-session files of the Work session
+list), the last thing that kept the live checkout "uncommitted" after 5.46.2. Both server checkouts got the same rule in
+their local `.git/info/exclude`.
+
+## 5.46.2 — 2026-11-07
+
+PATCH: **deploys are no longer held up by three more files the hub writes itself.**
+
+### Fixed
+- Both auto-deploys refused every new commit ("live checkout has uncommitted changes": live since 5.43.1 went up, dev
+  since 5.46.0) because files the hub writes into its checkout were not ignored: the per-run MCP files of Work sessions
+  (`bridge/.mcp-runtime-hub.json`, `bridge/.mcp-runtime-hub-<session>.json`), the desktop app's device tokens
+  (`bridge/device-tokens.json`, 5.43.0) and the planner's drafts (`bridge/plan-drafts.json`). All are in .gitignore now
+  (they stay on disk as they are). The checkouts on the server were unblocked the same way through their local
+  `.git/info/exclude`, since a deploy cannot carry a .gitignore fix past a dirty tree.
+
+## 5.46.1 — 2026-11-07
+
+PATCH: **the chat's @ picker calls Unity again** (Gee, 2026-11-07: "why is Unity not responding … multiple have
+addressed her with no response").
+
+### Fixed
+- Unity's chat account is `claude` and her display name "Unity"; only `@unity` calls her (R36, by design). The @ picker
+  inserted her account name, so picking "Unity" from the list, or pressing Tab / Enter while the list was open (also
+  after typing "@unity" in full), wrote `@claude `: the page then sealed no copy for her and the hub never heard the
+  call, while the mention still rendered as hers. No message had been sealed for her since 2026-10-19; her sign-in
+  greetings kept coming, so her brain looked fine. Now the picker, the Tab / Enter completion and the conversation
+  list's "BOT · @…" label all use the handle that calls her (`mentionHandleOf`), and the call test uses the same one.
+  No hub change. `web/index.html` 1.38.1.
+- Check: R527 (static; the picker's behaviour has nothing a scratch hub can observe) says the picker and the list write
+  the handle, never the account name.
+- R284 (T-290, `--rust-hub`) raced the fake host: its older-page run answered after 4 s (`SLOW`) while the seven hub
+  calls before Stop took longer under load, so "Stop ends the run without an answer" was false now and then (T-346).
+  The run now says `SLOWER` (bridge/test/fake-claude.js: 15 s), so Stop always comes first. The check is unchanged.
+- R143 (`--rust-hub`) gave the second host program 10 s to come online; under the same load it took longer and the
+  check failed once today. It waits up to 30 s now (the host still has to connect; only the cap moved). T-346.
 
 ## 5.46.0 — 2026-11-07
 
