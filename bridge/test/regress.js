@@ -47,6 +47,8 @@ function check(id, label, pass, detail = '') {
 }
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
 const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
+const R532_LABEL = 'agent threads in the page (T-298): t-user sees every message to and from their agent as a thread per agent pair, both directions with who, kind and time, and a message that went into one of their sessions opens that session; with the page open a new message from mills notifies, muting the pair stops the notifications (mills\'s next message is refused) but keeps the messages, Do Not Disturb mutes the notification only (the message is there); "pause my inbox" and "ask me first" change the hub\'s settings; a held hand-off shows an accept / decline card and accepting it makes the hub accept it (the task is re-assigned to t-user); the hub serves agents.js and the page loads it with its button, panel and menu tile';
+const R532B_LABEL = 'agent threads in the page on a hub without /api/agents (an older hub or the JavaScript fallback hub): the panel renders nothing, its button and menu tile stay hidden, a refresh and a render throw nothing and nothing notifies';
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -744,7 +746,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['sessions.js', 'queue.js', 'tools.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['sessions.js', 'queue.js', 'tools.js', 'agents.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -774,6 +776,7 @@ async function run() {
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
   if (process.argv.includes('--only-r528')) await r528r529Check(); // development: just R528 / R529 (with --stop-after R529)
+  if (process.argv.includes('--only-r532')) { if (RUST_HUB) await r532Check(); await r532bCheck(); } // development: just R532 / R532b (with --stop-after R532b)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -3595,7 +3598,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
           `list ${JSON.stringify(me481)}; ask ${JSON.stringify(asked && asked.result).slice(0, 120)}; nowait ${JSON.stringify(nowait && nowait.result).slice(0, 80)}; reply later ${later}`);
       } else check('R481', L480.R481, false, built ? `tools missing: ${six.filter((n) => !nativeTools481.includes(n) || !jsTools481.includes(n)).join(', ')}` : 'no /api/agents/* yet');
       // R482: the person's controls
-      const html482 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      // the page (T-298): index.html and the agent threads panel it loads (web/agents.js, driven by R532)
+      const html482 = ['index.html', 'agents.js'].map((f) => { try { return fs.readFileSync(path.join(MILLS, 'web', f), 'utf8'); } catch { return ''; } }).join('\n');
       const page482 = /\/api\/agents\/threads/.test(html482) && /\/api\/agents\/held/.test(html482) && /\/api\/agents\/settings/.test(html482);
       if (built) {
         await ag('settings', U, { muted: ['t-admin'] });
@@ -3627,7 +3631,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
           && dnd.status === 202 && dnd.data.status !== 'refused',
           `muted ${muted.status} ${(muted.data || {}).why} seen by the muter ${mutedSeen}; paused ${paused.status} ${(paused.data || {}).status} queued ${stillQueued.length} then delivered ${deliveredAfter}; held ${held.status} ${(held.data || {}).status} dm ${!!dm} declined ${declined.status} note ${noted} assignee ${stillAdmin.assignee} -> accepted ${accepted.status} ${nowUser.assignee}; dnd ${dnd.status}`);
       } else check('R482', L480.R482, false, 'no /api/agents/* yet');
-      spec('R482p', L480.R482p, page482, `page ${page482}`);
+      check('R482p', L480.R482p, page482, `page ${page482}`);
       // R483: an external (jcode) agent
       // (jcode is driven over HTTP the way it polls: no jcode binary needed)
       if (built) {
@@ -4022,6 +4026,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   await r526Check();
   await r527Check(); // T-291: the Theme menu on top (both modes)
   if (!process.argv.includes('--only-r528')) await r528r529Check();
+  if (RUST_HUB) { if (!process.argv.includes('--only-r532')) await r532Check(); } else skip('R532', R532_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (!process.argv.includes('--only-r532')) await r532bCheck();
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
@@ -7293,6 +7299,133 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && risk.marks.startsWith('safe,unknown,caution,danger ') && risk.marksOk && /possibly unsafe/.test(risk.headMark) && risk.view === 'safe:cd x | danger:rm -rf y' && risk.viewMarks && risk.viewText && risk.edit === 0 && risk.css;
     check('R529', 'an expanded command in the Work transcript (T-318) colours only its parts by risk and marks each with a shape and words, never colour alone (nothing is blocked): rm, chmod -R, git reset --hard, git push --force, find -delete and curl piped into sh are possibly unsafe, cp is safe but cp --remove-destination is not, rsync --delete, mv, sudo and a > that writes over a file are to check, ls / cd / grep / git status are safe, anything else is unknown; && ; | and sh -c \'…\' are looked into, so in sh -c \'cd x && rm -rf y\' only the rm part is marked; a collapsed group shows its worst marker',
       ok529, JSON.stringify(risk));
+  }
+  // R532 / R532b (T-298 = T-294 · 4/6): the agent threads in the page (web/agents.js). The panel runs here on a plain element
+  // stand-in with the page's callbacks, driven by clicks like a person would, against the scratch hub's real /api/agents/*
+  // routes (the Rust hub's) as t-user, while mills writes to t-user's agent. R532b: a hub without the routes.
+  function mkEl532(tag) {
+    const e = { tag, children: [], text: '', className: '', hidden: false, title: '', dataset: {}, attrs: {}, disabled: false, onclick: null, onchange: null, oninput: null, type: '', value: '', checked: false, placeholder: '', rows: 0,
+      append(...xs) { for (const x of xs) this.children.push(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); },
+      setAttribute(k, v) { this.attrs[k] = String(v); }, removeAttribute(k) { delete this.attrs[k]; } };
+    e.classList = { toggle(c, on) { const l = e.className.split(' ').filter(Boolean), has = l.includes(c), want = on === undefined ? !has : !!on; e.className = (want ? [...l.filter((x) => x !== c), c] : l.filter((x) => x !== c)).join(' '); return want; },
+      add(c) { this.toggle(c, true); }, remove(c) { this.toggle(c, false); }, contains(c) { return e.className.split(' ').includes(c); } };
+    Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+    return e;
+  }
+  function all532(e, f, out = []) { if (f(e)) out.push(e); for (const c of e.children || []) all532(c, f, out); return out; }
+  function load532(src) { try { const ctx = { window: {}, setTimeout, clearTimeout, Date, JSON, Math }; require('vm').runInNewContext(src, ctx); return { AG: ctx.window.AGENTS || null }; } catch (e) { return { AG: null, error: e.message }; } }
+  async function r532Check() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/agents.js'), src = js.status === 200 ? await js.text() : '';
+    const sw = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8');
+    seen.served = js.status === 200 && /<script src="agents\.js(\?[^"]*)?"><\/script>/.test(page) && /id="agentsPanel"/.test(page) && /id="agentsBtn"/.test(page) && /id="goAgents"/.test(page) && sw.includes("'agents.js'");
+    const { AG, error } = load532(src); if (error) seen.load = error;
+    const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
+    const built = (await ag('settings', U)).status === 200;
+    if (AG && built) {
+      const set0 = (await ag('settings', U)).data;
+      const sess = async () => (await call('/api/work/sessions', U)).data || {};
+      // t-user's conversations as they are now: the one delivered message below wakes a session (put back afterwards)
+      const s0 = await sess(), keep = []; for (const sid of [...new Set([s0.primary, s0.current].filter(Boolean))]) keep.push({ sid, cur: (await call('/api/work/current?session=' + sid, U)).data || {} });
+      const calm = async () => { for (let i = 0, quiet = 0; i < 160 && quiet < 6; i++) { quiet = (((await sess()).counts || {}).working || 0) === 0 ? quiet + 1 : 0; await sleep(250); } };
+      // 1. mills's agent reports to t-user's: delivered into one of t-user's sessions (a report is not answered)
+      await calm();
+      const rep = await ag('send', D, { to: 't-user', kind: 'report', text: 'r532 REPORT the build is green', wait: false });
+      let into = ''; for (let i = 0; i < 80 && !into; i++) { const m = ((((await ag('thread?id=' + (rep.data || {}).thread, U)).data || {}).messages) || []).find((x) => x.id === (rep.data || {}).id) || {}; into = ['delivered', 'read', 'answered'].includes(m.status) ? (m.to || {}).session || '' : ''; if (!into) await sleep(250); }
+      await calm();
+      // the rest goes to t-user's (and mills's) other tool "r532": it waits in that inbox, so no run is started by it
+      const t1 = await ag('send', D, { to: 't-user/r532', kind: 'ask', text: 'r532 first question from mills', wait: false });
+      const back = await ag('send', U, { to: 'mills/r532', kind: 'report', text: 'r532 answer from t-user', thread: (t1.data || {}).thread, wait: false });
+      // the page's side: t-user signed in, the session list, what it was asked to do
+      const st = { notified: [], opened: [], notes: [], kept: {}, dnd: false };
+      const sids = ((await sess()).sessions || []).map((x) => x.id);
+      const box = mkEl532('aside'), button = mkEl532('button'), badge = mkEl532('span'), tile = mkEl532('button'); button.hidden = tile.hidden = true;
+      const P = AG.mount({ document: { createElement: mkEl532 }, box, button, badge, tile, interval: 0,
+        api: (p, body) => call(p, U, body), me: () => 't-user', nameOf: (u) => (u === 'mills' ? 'Mills' : u), dnd: () => st.dnd,
+        hasSession: (sid) => sids.includes(sid), titleOf: (sid) => 'session ' + sid, open: (sid) => { st.opened.push(sid); },
+        notify: (n) => { st.notified.push(n); }, note: (t, bad) => { st.notes.push((bad ? '!' : '') + t); },
+        store: { get: (k) => (k in st.kept ? st.kept[k] : null), set: (k, v) => { st.kept[k] = v; } } });
+      const acts = (a) => all532(box, (e) => e.dataset && e.dataset.act === a), click = async (b) => { if (b && b.onclick) await b.onclick(); await sleep(0); };
+      const toggle = async (b) => { if (!b) return; b.checked = !b.checked; if (b.onchange) await b.onchange(); await sleep(0); };
+      const texts = () => all532(box, (e) => e.className === 'agText').map((e) => e.textContent);
+      const settings = async () => (await ag('settings', U)).data || {};
+      await P.refresh();
+      seen.shown = P.available() && !button.hidden && !tile.hidden;
+      seen.firstQuiet = st.notified.length === 0; // what was there before the page opened does not notify
+      P.setOpen(true);
+      seen.pairs = acts('pair').map((b) => b.dataset.user).join(',');
+      await click(acts('pair').find((b) => b.dataset.user === 'mills'));
+      const msgs = all532(box, (e) => /^agMsg\b/.test(e.className));
+      const line = (re) => msgs.find((e) => re.test(e.textContent)) || { className: '', textContent: '' };
+      const inMsg = line(/r532 first question/), outMsg = line(/r532 answer from t-user/), repMsg = line(/r532 REPORT/);
+      seen.both = /\bin\b/.test(inMsg.className) && /\bout\b/.test(outMsg.className) && /Mills/.test(inMsg.textContent) && !/You/.test(inMsg.textContent) && /Question/.test(inMsg.textContent) && /You/.test(outMsg.textContent) && /Report/.test(outMsg.textContent)
+        && /\d\d:\d\d/.test(inMsg.textContent);
+      const link = all532(repMsg, (e) => e.dataset && e.dataset.act === 'openSession')[0];
+      await click(link); seen.session = !!into && st.opened[0] === into && sids.includes(into);
+      // 2. a new message from the other agent notifies
+      const n1 = await ag('send', D, { to: 't-user/r532', kind: 'ask', text: 'r532 NOTE one', thread: (t1.data || {}).thread, wait: false });
+      await P.refresh(); seen.notified1 = st.notified.length === 1 && /Mills/.test(st.notified[0].title || '') && /r532 NOTE one/.test(st.notified[0].body || '');
+      // 3. mute the pair: the hub refuses mills's next message, nothing notifies, the messages stay
+      await click(acts('mute').find((b) => b.dataset.user === 'mills'));
+      seen.mutedHub = ((await settings()).muted || []).includes('mills');
+      const m3 = await ag('send', D, { to: 't-user/r532', kind: 'ask', text: 'r532 while muted', thread: (t1.data || {}).thread, wait: false });
+      await P.refresh();
+      seen.muted = m3.status === 403 && st.notified.length === 1 && texts().some((t) => /r532 NOTE one/.test(t)) && texts().some((t) => /r532 first question/.test(t)) && acts('mute').some((b) => b.dataset.user === 'mills' && /Unmute/.test(b.textContent));
+      await click(acts('mute').find((b) => b.dataset.user === 'mills')); seen.unmutedHub = !((await settings()).muted || []).includes('mills');
+      // 4. Do Not Disturb: the message comes in, the notification does not
+      st.dnd = true;
+      const n4 = await ag('send', D, { to: 't-user/r532', kind: 'report', text: 'r532 during dnd', thread: (t1.data || {}).thread, wait: false });
+      await P.refresh(); seen.dnd = n4.status === 202 && st.notified.length === 1 && texts().some((t) => /r532 during dnd/.test(t));
+      st.dnd = false;
+      // 5. pause my inbox and ask me first: the hub's settings change
+      await toggle(acts('pause')[0]); seen.paused = (await settings()).paused === true;
+      await toggle(acts('pause')[0]); seen.resumed = (await settings()).paused === false;
+      await toggle(acts('askFirst').find((b) => b.dataset.kind === 'ask')); seen.askOn = ((await settings()).askFirst || []).includes('ask');
+      await toggle(acts('askFirst').find((b) => b.dataset.kind === 'handoff')); seen.handoffOff = !((await settings()).askFirst || []).includes('handoff');
+      await toggle(acts('askFirst').find((b) => b.dataset.kind === 'handoff')); seen.handoffOn = ((await settings()).askFirst || []).includes('handoff');
+      await toggle(acts('askFirst').find((b) => b.dataset.kind === 'ask')); seen.askOff = !((await settings()).askFirst || []).includes('ask');
+      // 6. a held hand-off: the card, then accepting it re-assigns the task
+      const task = (await call('/api/board/create', D, { title: 'r532 handoff task', status: 'todo', assignee: 'mills' })).data.task || {};
+      const ho = await ag('send', D, { to: 't-user/r532', kind: 'handoff', text: 'r532 please take this one', refs: { task: task.id }, thread: (t1.data || {}).thread });
+      await P.refresh();
+      const card = all532(box, (e) => /\bagCard\b/.test(e.className) && e.dataset.id === (ho.data || {}).id)[0];
+      seen.card = (ho.data || {}).status === 'held' && !!card && /Mills hands you/.test(card.textContent) && new RegExp(task.id).test(card.textContent)
+        && all532(card, (e) => e.dataset.act === 'accept').length === 1 && all532(card, (e) => e.dataset.act === 'decline').length === 1;
+      seen.heldNotified = st.notified.length === 2 && st.notified[1].held === true;
+      seen.badge = !badge.hidden && Number(badge.textContent) >= 1;
+      await click(card && all532(card, (e) => e.dataset.act === 'accept')[0]);
+      const after = ((((await ag('thread?id=' + (ho.data || {}).thread, U)).data || {}).messages) || []).find((x) => x.id === (ho.data || {}).id) || {};
+      const owner = (((await call('/api/board', U)).data.tasks || []).find((x) => x.id === task.id) || {}).assignee;
+      seen.accepted = after.status !== 'held' && owner === 't-user' && !all532(box, (e) => /\bagCard\b/.test(e.className) && e.dataset.id === (ho.data || {}).id).length;
+      seen.hidePanel = (P.setOpen(false), box.hidden === true && button.attrs['aria-expanded'] === 'false');
+      seen.sends = [rep.status, t1.status, back.status, n1.status].join(',');
+      await ag('settings', U, { muted: set0.muted || [], paused: !!set0.paused, askFirst: set0.askFirst || ['handoff'], wake: set0.wake !== false });
+      await calm();
+      for (const k of keep) await call('/api/work/current', U, { session: k.sid, transcript: k.cur.transcript || [], archiveId: k.cur.archiveId || null, archiveTitle: k.cur.archiveTitle || null });
+    }
+    const ok = seen.served && !!AG && built && seen.shown && seen.firstQuiet && /mills/.test(seen.pairs || '') && seen.both && seen.session && seen.notified1 && seen.mutedHub && seen.muted && seen.unmutedHub && seen.dnd
+      && seen.paused && seen.resumed && seen.askOn && seen.handoffOff && seen.handoffOn && seen.askOff && seen.card && seen.heldNotified && seen.badge && seen.accepted && seen.hidePanel && seen.sends === '202,202,202,202';
+    check('R532', R532_LABEL, ok, (built ? '' : 'no /api/agents/* ') + JSON.stringify(seen));
+  }
+  async function r532bCheck() {
+    const seen = {};
+    const js = await fetch(H + '/agents.js'), { AG, error } = load532(js.status === 200 ? await js.text() : '');
+    if (error) seen.load = error;
+    if (AG) {
+      // the JavaScript hub answers 404 on /api/agents/*; through the Rust hub the same 404 is played by a stand-in
+      const api = RUST_HUB ? async () => ({ status: 404, data: { error: 'Unknown endpoint' } }) : (p, body) => call(p, U, body);
+      const box = mkEl532('aside'), button = mkEl532('button'), badge = mkEl532('span'), tile = mkEl532('button'); button.hidden = tile.hidden = badge.hidden = true;
+      const notified = []; let threw = '';
+      try {
+        const P = AG.mount({ document: { createElement: mkEl532 }, box, button, badge, tile, interval: 0, api, me: () => 't-user', nameOf: (u) => u, dnd: () => false, hasSession: () => false, titleOf: (s) => s, open() {}, notify: (n) => notified.push(n), note() {}, store: { get: () => null, set() {} } });
+        await P.refresh(); P.setOpen(true); P.render(); await P.refresh();
+        seen.unavailable = P.available() === false;
+      } catch (e) { threw = e.message; }
+      seen.nothing = !threw && box.children.length === 0 && box.hidden === true && button.hidden === true && tile.hidden === true && badge.hidden === true && notified.length === 0;
+      if (threw) seen.threw = threw;
+      if (!RUST_HUB) seen.hub404 = (await call('/api/agents/threads', U)).status === 404;
+    }
+    check('R532b', R532B_LABEL, !!AG && seen.unavailable && seen.nothing && (RUST_HUB || seen.hub404), JSON.stringify(seen));
   }
   // R491 (T-324, plans/dev-hub.md § 2): two hubs on one machine (live and dev) keep their own full copies and a bridge keeps
   // them the same both ways. Two Rust hubs of their own (own roots, own ports), paired by config sync (one secret file each),
