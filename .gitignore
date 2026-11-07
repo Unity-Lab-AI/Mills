@@ -94,6 +94,8 @@ bridge/device-locks.json
 bridge/api-keys.json
 bridge/work.json
 bridge/work-current.json
+bridge/work-sessions.json
+bridge/activity/
 # PGM Gateway (5.1.0): its products, their secrets and who each linked
 bridge/gateway/
 # the auto-deploy's note that it went back to the last good version (the hub posts it, then removes it)

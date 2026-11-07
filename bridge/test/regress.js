@@ -259,7 +259,7 @@ function startFakeOllama() {
       }
       if (req.url === '/api/tags') return j({ models: fakeOllamaNoBrain ? [{ name: 'nomic-embed-text:latest' }, { name: 'plain-chat:latest' }] : [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
-      if (req.url === '/api/version') return j({ version: '0.0.0-regress' }); // the Rust hub's "is Ollama up" probe: without it the fake brain looks down
+      if (RUST_HUB && req.url === '/api/version') return j({ version: '0.0.0-regress' }); // the Rust hub's "is Ollama up" probe (Rust only: the JavaScript hub takes a /api/version answer as a real Ollama there)
       if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
       const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
       const sys = (msgs[0] || {}).content || '';
