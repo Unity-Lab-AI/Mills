@@ -179,6 +179,23 @@
   @keyframes uPulse { 50% { filter: brightness(1.5); } }
   @media (max-width: 900px) { #usageBar { flex-wrap: wrap; gap: .5rem .8rem; } }
   #log { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: .6rem; }
+  /* ── the queue panel (web/queue.js, T-188): a sidebar right of the conversation; a slide-over on narrow screens ── */
+  #logRow { flex: 1; min-height: 0; display: flex; position: relative; } #logRow > #log { min-width: 0; }
+  #queuePanel { flex: none; width: 18rem; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: .5rem .6rem; font-size: .8rem; display: flex; flex-direction: column; gap: .45rem; }
+  #queuePanel[hidden] { display: none; }
+  .qBadge { margin-left: .35rem; background: var(--accent); color: var(--on-accent); border-radius: .7rem; padding: 0 .38rem; font-size: .7rem; font-weight: 600; }
+  .qBadge[hidden] { display: none; }
+  #queuePanel .qpHead { display: flex; align-items: baseline; gap: .45rem; } #queuePanel .qpSum { flex: 1; color: var(--muted); font-size: .74rem; }
+  #queuePanel .qpX { padding: 0 .3rem; } #queuePanel .qpActs { display: flex; gap: .35rem; }
+  #queuePanel button { padding: .15rem .5rem; font-size: .74rem; } #queuePanel button.danger { color: var(--bad); border-color: var(--bad); }
+  #queuePanel .qpList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+  #queuePanel .qpItem { border: 1px dashed var(--muted); border-radius: 8px; padding: .3rem .45rem; } #queuePanel .qpItem.now { border-style: solid; border-color: var(--accent); }
+  #queuePanel .qpRow { display: flex; align-items: center; gap: .3rem; } #queuePanel .qpPlace { flex: 1; color: var(--muted); font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+  #queuePanel .qpText { margin-top: .2rem; white-space: pre-wrap; word-break: break-word; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  #queuePanel .qpItem.open .qpText { display: block; }
+  #queuePanel .qpNote { color: var(--muted); } #queuePanel .qpSub { color: var(--muted); font-size: .72rem; margin-top: .3rem; border-top: 1px solid var(--line); padding-top: .4rem; }
+  #queuePanel .qpOther { display: flex; gap: .4rem; text-align: left; width: 100%; } #queuePanel .qpOT { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #queuePanel .qpON { color: var(--muted); }
+  @media (max-width: 760px) { #queuePanel { position: absolute; top: 0; right: 0; bottom: 0; width: min(20rem, 88%); z-index: 5; box-shadow: -6px 0 18px rgba(0, 0, 0, .25); } }
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
@@ -1297,6 +1314,13 @@
       <div id="healthOut"></div>
       <pre id="traceOut" hidden style="max-height:20rem;overflow:auto;font-size:.75rem"></pre>
     </div>
+    <!-- Security log (T-271): the hub's append-only, hash-chained record of sign-ins, devices, admin changes, provider
+         shares, downloads, config switches and delegation (the Rust hub's; hidden on a hub without it). Read-only. -->
+    <div class="setSection" id="auditBox" hidden><b><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg> Security log</b> — every sign-in (and failed one), new device, admin change, provider share, release download, config switch and delegation, newest first. Each line is chained to the one before by its hash, so a line changed or removed afterwards shows here as a broken chain. Separate from the activity history, which is about work.
+      <div class="row"><button class="ghost" id="auditRefresh">Refresh</button><input id="auditAction" placeholder="only one kind, e.g. signin or account" spellcheck="false" autocomplete="off" style="max-width:16rem"></div>
+      <div id="auditChain"></div>
+      <div style="max-height:22rem;overflow:auto"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Detail</th><th>From</th></tr></thead><tbody id="auditRows"></tbody></table></div>
+    </div>
     <div class="setSection" id="gwBox" hidden><b>PGM Gateway products</b> — programs of their own (PGM Prod Suit, ShaDow Chat, Hyper Prod Man) whose people sign in the first time with their VibeRoller login and, with AI on, use the AI hosts as themselves. A product's secret goes only to the file shown (for the product on this server), never to this page.
       <table><thead><tr><th>Product</th><th>Served here</th><th>People linked</th><th>Secret file</th><th>Actions</th></tr></thead><tbody id="gwRows"></tbody></table>
       <div class="row">
@@ -1373,6 +1397,7 @@
         <button type="button" class="ghost" id="shareBtn" title="Share this Work session with everyone so they can watch it (read-only): your Claude conversation, what you type, send and queue"><svg class="ic lead"><use href="#i-share"/></svg>Share with everyone</button>
         <button type="button" class="ghost" id="coviewBtn" hidden title="Co-view: everyone you pick follows what you have open (screen, board task, note, chat) live in their own page">Co-view</button>
         <button type="button" class="ghost" id="gitBtn" title="Git at a glance: what changed in your own worktree, stage, commit, update, merge">Git</button>
+        <button type="button" class="ghost" id="queueBtn" aria-expanded="false" aria-controls="queuePanel" title="Queued messages: see, copy or cancel what is still to go">Queue<span id="queueBadge" class="qBadge" hidden></span></button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
       <div id="gitBox" hidden>
         <div class="gitHead"><b id="gitBranch">…</b><span id="gitAB" class="muted"></span><span class="grow"></span>
@@ -1389,7 +1414,10 @@
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
       </div>
       <div id="useBar" hidden role="status"></div><!-- what this run uses on your computer: web/machines.js (T-314) -->
-      <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
+      <div id="logRow"><!-- the conversation, and the queue panel next to it (web/queue.js, T-188) -->
+        <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
+        <aside id="queuePanel" hidden aria-label="Queued messages"></aside>
+      </div>
       <div id="slashMenu" hidden></div>
       <div id="hwMenu" hidden></div><!-- the Hyper Workflows matching "/hyperwork <name>" (web/hyperwork.js, T-207) -->
       <div id="workTray" class="attTray" hidden></div>
@@ -1468,6 +1496,7 @@
 <script src="attach.js"></script>
 <script src="board.js"></script>
 <script src="sessions.js"></script>
+<script src="queue.js"></script>
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
 MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
@@ -2652,7 +2681,23 @@ $('composer').addEventListener('submit', async (e) => {
 });
 // The queue (and a pending "Send now") is kept on the hub (bridge/work-state.js), so a reload, closing the
 // browser or a hub restart loses nothing: every change is saved, and opening Work brings the queue back.
-function saveQueue() { json('/api/work/queue', { method: 'POST', body: JSON.stringify({ queue: queue.map((q) => q.message), sendNow: sendNowMessage }) }).catch(() => {}); }
+function saveQueue() { json('/api/work/queue', { method: 'POST', body: JSON.stringify({ queue: queue.map((q) => q.message), sendNow: sendNowMessage }) }).catch(() => {}); queuePanel.render(); }
+// The queue panel (web/queue.js, T-188): every message still to go, with cancel / copy, one or all; it changes the
+// queue only through these, so the bubbles, the hub's copy and the people watching a share stay the same as the panel.
+const queuePanel = typeof QUEUE === 'undefined' ? { render() {} } : QUEUE.mount({
+  box: $('queuePanel'), button: $('queueBtn'), badge: $('queueBadge'), store,
+  queue: () => queue.map((q) => q.message), sendNow: () => sendNowMessage,
+  sessions: () => ((SESSIONS.data() || {}).sessions) || [], current: () => SESSIONS.onScreen(), titleOf: SESSIONS.titleOf,
+  open: (id) => openWorkSession(id),
+  cancel: (it) => {
+    if (it.kind === 'now') { if (sendNowMessage === it.text) { sendNowMessage = null; updateStopButton(); } }
+    else { const q = queue[it.at]; if (!q || q.message !== it.text) return; q.el.remove(); queue.splice(it.at, 1); }
+    postLive(); saveQueue();
+  },
+  cancelAll: () => { for (const q of queue) q.el.remove(); queue.length = 0; sendNowMessage = null; updateStopButton(); postLive(); saveQueue(); sys('Queue cleared: nothing of it is sent.'); },
+  copy: (text) => navigator.clipboard.writeText(text),
+  note: (text, bad) => sys(text, bad),
+});
 function enqueue(message, restoring, first) { // first: back at the head of the queue (it was refused: over the session limit)
   const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', first ? 'Waiting for a free session slot: goes as soon as one frees' : restoring ? 'Queued (kept through the restart / reload): goes next' : 'Queued: goes after the current reply');
   const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.append(ic('close')); x.title = 'Remove from queue'; x.setAttribute('aria-label', 'Remove from queue');
@@ -2660,10 +2705,11 @@ function enqueue(message, restoring, first) { // first: back at the head of the 
   el.prepend(x);
   if (first && queue.length) { queue[0].el.before(el); queue.unshift({ message, el }); } else queue.push({ message, el });
   scroll(); postLive();
-  if (!restoring) saveQueue();
+  if (!restoring) saveQueue(); else queuePanel.render();
 }
 // the session list's every refresh (web/sessions.js): a message refused for the session limit goes when a slot frees
 function onSessionSlots(d) {
+  queuePanel.render(); // the other sessions' queued counts are in this refresh
   if (!slotWait || busy || !(queue.length || sendNowMessage)) return;
   const s = SESSIONS.byId(SESSIONS.onScreen()), h = s && (((d && d.counts) || {}).perHost || {})[s.host];
   if (h && ((h.max && h.used >= h.max) || (h.maxPerProvider && ((h.providers || {})[s.provider] || 0) >= h.maxPerProvider))) return; // still full
@@ -3418,7 +3464,7 @@ async function openWorkSession(id) {
     planSession = s.mode === 'planner' ? id : ''; try { if (planSession) sessionStorage.setItem(PLAN_KEY, planSession); else sessionStorage.removeItem(PLAN_KEY); } catch {}
     paintPlanner();
     await SESSIONS.release(id); // the list stops following it in the background (its conversation is saved first)
-    log.innerHTML = ''; queue.length = 0; sendNowMessage = null; transcript = []; transcriptFrom = 0; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
+    log.innerHTML = ''; queue.length = 0; sendNowMessage = null; queuePanel.render(); transcript = []; transcriptFrom = 0; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
     curRun = null; runEnded = false; fresh = false; slotWait = false; hideThinking(); setBusy(false);
     for (const q of openQuestions.values()) { try { q.stop(); } catch {} } openQuestions.clear(); openPlans.clear();
     $('convTitle').textContent = SESSIONS.titleOf(s);
@@ -3835,7 +3881,7 @@ async function renderConvList() {
   };
   // the Direct messages view (the DM button above the servers, web/guilds.js): these one-to-one DMs, then the group DMs
   // (#grpList) and the key fingerprints (#keyList); a server's channels are drawn by web/guilds.js into #chanList
-  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'BOT · ' : 'private · ') + '@' + m.username);
+  for (const m of roomMembers) if (m.username !== me.username) add(dmConv(m.username), nickOf(m.username), colorOf(m.username), (m.agent ? 'BOT · ' : 'private · ') + '@' + mentionHandleOf(m));
   const det = document.createElement('details'); const sum = document.createElement('summary'); sum.textContent = 'Key fingerprints';
   det.append(sum);
   for (const m of roomMembers) {
@@ -4504,11 +4550,14 @@ window.matchMedia('(max-width: 700px)').addEventListener('change', (e) => { $('r
 // her). Then the 5 messages before it in that conversation go along inside the encryption, so she
 // reads at most the last 6 and never the rest of the chat.
 const agentMemberOf = () => roomMembers.find((m) => m.agent);
+// What "@" + name calls someone: a person's username; Unity's display name, since her chat account is "claude" and
+// only @unity calls her (R36). The picker, the conversation list and the call test all use this one.
+const mentionHandleOf = (m) => m.agent ? (m.display || 'unity').toLowerCase().replace(/\s+/g, '') : m.username;
 function callsAgent(text, to) {
   const a = agentMemberOf();
   if (!a) return false;
   if (to === a.username) return true;
-  const h = (a.display || 'unity').toLowerCase().replace(/\s+/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const h = mentionHandleOf(a).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp('@' + h + '\\b', 'i').test(text || '');
 }
 function agentCtx(conv) {
@@ -4628,9 +4677,10 @@ function updateMentionList() {
   if (q === null) { box.hidden = true; return; }
   const hits = roomMembers.filter((m) => m.username !== me.username && (m.username.startsWith(q) || (m.nick || m.display).replace(/\s+/g, '').toLowerCase().startsWith(q))).slice(0, 6);
   for (const m of hits) {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.user = m.username;
-    b.textContent = nickOf(m.username) + ' @' + m.username; b.style.color = GUILDS.colorIn(currentConv, m.username) || colorOf(m.username);
-    b.onclick = () => insertMention(m.username); box.append(b);
+    const h = mentionHandleOf(m); // Unity: @unity, never her account name (which calls nobody)
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.dataset.user = h;
+    b.textContent = nickOf(m.username) + ' @' + h; b.style.color = GUILDS.colorIn(currentConv, m.username) || colorOf(m.username);
+    b.onclick = () => insertMention(h); box.append(b);
   }
   const roleHits = GUILDS.mentionableRoles(currentConv).filter((r) => r.handle.startsWith(q)).slice(0, 4); // mentionable roles of this server
   for (const r of roleHits) {
@@ -5585,8 +5635,30 @@ $('traceGo').onclick = async () => {
   try { const d = await json('/api/admin/trace?run=' + encodeURIComponent(id)); out.hidden = false; out.textContent = (d.lines || []).length ? d.lines.map((x) => `${x.at}  ${x.level}  ${x.area}  ${x.what}  ${JSON.stringify(Object.fromEntries(Object.entries(x).filter(([k]) => !['at', 'level', 'area', 'what'].includes(k))))}`).join('\n') : 'Nothing in the last two days\' log for that run.'; }
   catch (e) { out.hidden = false; out.textContent = e.message; }
 };
+// Security log (T-271): GET /api/admin/audit, newest first, with whether the hash chain still holds
+async function loadAudit() {
+  try {
+    const a = $('auditAction').value.trim();
+    const d = await json('/api/admin/audit?limit=300' + (a ? '&action=' + encodeURIComponent(a) : ''));
+    $('auditBox').hidden = false;
+    const v = d.verified || {}, ch = $('auditChain');
+    ch.textContent = v.ok ? `Chain intact: ${v.entries} entries${v.torn ? ' (the last line was cut short by a crash; it is moved aside on the next entry)' : ''}.` : `Chain broken at entry ${v.brokenAt}: ${v.why || 'a line was changed or removed after it was written'}.`;
+    ch.style.color = v.ok ? '' : 'var(--bad)';
+    const rows = $('auditRows'); rows.innerHTML = '';
+    for (const e of d.entries || []) {
+      const tr = document.createElement('tr');
+      const det = Object.entries(e.detail || {}).map(([k, x]) => k + ' ' + (typeof x === 'string' ? x : JSON.stringify(x))).join(', ');
+      for (const t of [new Date(e.at).toLocaleString(), e.actor || '-', e.action, e.target || '', det, e.ip || '']) { const c = document.createElement('td'); c.textContent = t; tr.append(c); }
+      rows.append(tr);
+    }
+    if (!(d.entries || []).length) { const tr = document.createElement('tr'), c = document.createElement('td'); c.colSpan = 6; c.textContent = 'Nothing recorded yet.'; tr.append(c); rows.append(tr); }
+  } catch { $('auditBox').hidden = true; } // a hub without it (the JavaScript one), or not an admin
+}
+$('auditRefresh').onclick = loadAudit;
+$('auditAction').onkeydown = (e) => { if (e.key === 'Enter') loadAudit(); };
 async function loadAdmin() {
   loadHealth();
+  loadAudit();
   try {
     const { accounts } = await json('/api/admin/accounts');
     const rows = $('adminRows'); rows.innerHTML = '';

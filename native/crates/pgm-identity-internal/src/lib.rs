@@ -16,6 +16,7 @@
 pub mod devices;
 use pgm_core_internal::json::{read_json, write_json_private as write_json};
 use pgm_core_internal::now_ms;
+use pgm_core_internal::audit;
 use pgm_core_internal::time::iso_now;
 use pgm_net_internal::http::Req;
 use serde_json::{json, Map, Value};
@@ -219,13 +220,18 @@ impl Auth {
         let device = b["deviceId"].as_str().map(String::from);
         let good_pw = password_ok(acct.as_ref(), b["password"].as_str().map(String::from)).await;
         let good = good_pw && acct.is_some() && device.as_ref().map(|d| d.len() >= 16).unwrap_or(false);
-        if !self.attempt_end(&fk, &gk, good) { return a(401, json!({ "error": "Wrong username or password." })); }
+        if !self.attempt_end(&fk, &gk, good) {
+            // the security log (T-271): the name only when it is an account (a password typed into the name field never goes in)
+            let who = acct.as_ref().map(|x| x.username.clone()).unwrap_or_default();
+            audit::record(&who, "signin.failed", &who, json!({ "known": acct.is_some(), "deviceId": device.as_ref().map(|d| d.len() >= 16).unwrap_or(false) }), &ip);
+            return a(401, json!({ "error": "Wrong username or password." }));
+        }
         let acct = acct.expect("checked");
         let dh = pgm_core_internal::crypto::sha256_hex(device.unwrap_or_default().as_bytes());
         {
             let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
             match locks.get_mut(&acct.username) {
-                None => { locks.insert(acct.username.clone(), json!({ "device": dh, "at": iso_now(), "changedAt": now_ms() })); drop(locks); self.save_locks(); println!("{} {}: claimed by first sign-in.", self.tag, acct.username); }
+                None => { locks.insert(acct.username.clone(), json!({ "device": dh, "at": iso_now(), "changedAt": now_ms() })); drop(locks); self.save_locks(); println!("{} {}: claimed by first sign-in.", self.tag, acct.username); audit::record(&acct.username, "device.first", &acct.username, json!({ "device": &dh[..12] }), &ip); }
                 Some(l) if lock_devices(l).contains(&dh) => {}
                 // the admin allowed one more device: this one joins (the browser and the app on one PC are two devices)
                 Some(l) if l["allowNext"] == json!(true) => {
@@ -234,8 +240,9 @@ impl Auth {
                     l.as_object_mut().unwrap().remove("allowNext");
                     l["changedAt"] = json!(now_ms());
                     drop(locks); self.save_locks(); println!("{} {}: another device joined (allowed by an admin).", self.tag, acct.username);
+                    audit::record(&acct.username, "device.added", &acct.username, json!({ "device": &dh[..12] }), &ip);
                 }
-                Some(_) => { println!("{} {}: refused a sign-in from another device.", self.tag, acct.username); return a(403, json!({ "error": "This account is locked to its own devices. Ask an admin to allow one more device (or to reset the lock)." })); }
+                Some(_) => { println!("{} {}: refused a sign-in from another device.", self.tag, acct.username); audit::record(&acct.username, "device.refused", &acct.username, json!({ "device": &dh[..12] }), &ip); return a(403, json!({ "error": "This account is locked to its own devices. Ask an admin to allow one more device (or to reset the lock)." })); }
             }
         }
         let token = pgm_core_internal::crypto::random_hex(32);
@@ -244,6 +251,8 @@ impl Auth {
         if b["client"].is_object() { rec["client"] = b["client"].clone(); }
         self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(token_key(&token), rec);
         self.save_sessions();
+        let client = |k: &str| b["client"][k].as_str().map(|x| x.chars().take(40).collect::<String>()).unwrap_or_default();
+        audit::record(&acct.username, "signin", &acct.username, json!({ "client": client("kind"), "app": client("app") }), &ip);
         Login::SignedIn { token, user: acct.username, client: b["client"].clone(), ip: self.outside_ip(r) }
     }
 
@@ -258,7 +267,9 @@ impl Auth {
         let (fk, gk) = self.attempt_begin(&uname, &ip).map_err(|e| (429, e.to_string()))?;
         let acct = if valid_username(&uname) { self.account(&uname) } else { None };
         let good = password_ok(acct.as_ref(), Some(password.to_string())).await && acct.is_some();
-        if !self.attempt_end(&fk, &gk, good) { return Err((401, "Wrong username or password.".into())); }
+        let who = acct.as_ref().map(|x| x.username.clone()).unwrap_or_default();
+        if !self.attempt_end(&fk, &gk, good) { audit::record(&who, "signin.failed", &who, json!({ "known": acct.is_some(), "via": "product" }), &ip); return Err((401, "Wrong username or password.".into())); }
+        audit::record(&who, "signin.product", &who, json!({}), &ip);
         Ok(acct.expect("checked"))
     }
     /// An attempt for that name from that address begins: its two counters' keys, or why not now.
@@ -279,8 +290,9 @@ impl Auth {
         for k in [fk, gk] { if let Some(f) = fails.get_mut(k) { f.inflight = f.inflight.saturating_sub(1); } }
         if !good {
             let t = now_ms();
-            if let Some(f) = fails.get_mut(fk) { f.at = t; f.count += 1; if f.count >= 5 { f.blocked_until = t + BLOCK_MS; f.count = 0; } }
-            if let Some(g) = fails.get_mut(gk) { g.at = t; g.count += 1; if g.count >= 20 { g.blocked_until = t + BLOCK_MS; g.count = 0; } }
+            let ip = gk.strip_prefix("ip|").unwrap_or("");
+            if let Some(f) = fails.get_mut(fk) { f.at = t; f.count += 1; if f.count >= 5 { f.blocked_until = t + BLOCK_MS; f.count = 0; audit::record("", "signin.blocked", "", json!({ "for": "name", "minutes": BLOCK_MS / 60000 }), ip); } }
+            if let Some(g) = fails.get_mut(gk) { g.at = t; g.count += 1; if g.count >= 20 { g.blocked_until = t + BLOCK_MS; g.count = 0; audit::record("", "signin.blocked", "", json!({ "for": "address", "minutes": BLOCK_MS / 60000 }), ip); } }
             return false;
         }
         fails.remove(fk);

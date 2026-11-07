@@ -7,7 +7,10 @@
 //! - **AI time** keeps adding while the person is away or offline: `aiMs` = wall-clock time with any session working,
 //!   `agentMs` = summed over sessions.
 //! - **Away time** = a device live while outside an active span (counted once the gap has passed).
-//! - **events** = the append-only log of the day: status (label) changes and how many sessions work (capped at 500 a day).
+//! - **events** = the append-only log of the day: status (label) changes and how many sessions work (capped at 500 a day),
+//!   and each run another person's agent started (`{kind: "agentRun", run, startedBy: "agent:<user>", ms}`, T-300).
+//! - **agentStarted** = of the day's agent time, what other people's agents started: `{"agent:<user>": {runs, ms}}`
+//!   (plans/agent-talk.md § 8: an agent-started run is the receiver's run, so it counts here, never on the sender's day).
 use pgm_core_internal::json::{read_json, write_json};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -22,14 +25,19 @@ const MAX_DT: u64 = 5000;
 pub fn day_of(ms: u64) -> String { chrono::DateTime::from_timestamp_millis(ms as i64).map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string()).unwrap_or_default() }
 
 #[derive(Default, Clone)]
-struct Rec { spans: Vec<[u64; 2]>, away: u64, ai: u64, agent: u64, events: Vec<Value> }
+struct Rec { spans: Vec<[u64; 2]>, away: u64, ai: u64, agent: u64, events: Vec<Value>, started: serde_json::Map<String, Value> }
 impl Rec {
     fn active(&self) -> u64 { self.spans.iter().map(|s| s[1].saturating_sub(s[0])).sum() }
     fn from_json(v: &Value) -> Rec {
         Rec { spans: v["spans"].as_array().map(|a| a.iter().filter_map(|s| Some([s[0].as_u64()?, s[1].as_u64()?])).collect()).unwrap_or_default(),
-            away: v["awayMs"].as_u64().unwrap_or(0), ai: v["aiMs"].as_u64().unwrap_or(0), agent: v["agentMs"].as_u64().unwrap_or(0), events: v["events"].as_array().cloned().unwrap_or_default() }
+            away: v["awayMs"].as_u64().unwrap_or(0), ai: v["aiMs"].as_u64().unwrap_or(0), agent: v["agentMs"].as_u64().unwrap_or(0), events: v["events"].as_array().cloned().unwrap_or_default(),
+            started: v["agentStarted"].as_object().cloned().unwrap_or_default() }
     }
-    fn to_json(&self, now: u64) -> Value { json!({ "activeMs": self.active(), "awayMs": self.away, "aiMs": self.ai, "agentMs": self.agent, "spans": self.spans, "events": self.events, "updatedAt": now }) }
+    fn to_json(&self, now: u64) -> Value {
+        let mut v = json!({ "activeMs": self.active(), "awayMs": self.away, "aiMs": self.ai, "agentMs": self.agent, "spans": self.spans, "events": self.events, "updatedAt": now });
+        if !self.started.is_empty() { v["agentStarted"] = Value::Object(self.started.clone()); }
+        v
+    }
     fn event(&mut self, e: Value) { self.events.push(e); if self.events.len() > MAX_EVENTS { let n = self.events.len() - MAX_EVENTS; self.events.drain(..n); } }
 }
 struct U { day: String, rec: Rec, dir: PathBuf, dirty: bool, saved: u64, last_tick: u64, sessions: u64, label: String }
@@ -71,6 +79,18 @@ impl Tracker {
         if sessions != e.sessions { e.rec.event(json!({ "at": now, "kind": "ai", "sessions": sessions, "was": e.sessions })); e.sessions = sessions; e.dirty = true; }
         if e.dirty && now.saturating_sub(e.saved) >= SAVE_MS { e.save(now); }
     }
+    /// A run of theirs that another person's agent started has ended (T-300, plans/agent-talk.md § 8): its time is theirs (the
+    /// tick counted it in agentMs already); the day's record says how much of it which agent started, and the log has the run.
+    /// Written at once.
+    pub fn agent_run(&mut self, u: &str, dir: &Path, now: u64, started_by: &str, run: &str, ms: u64) {
+        if started_by.is_empty() { return; }
+        let e = self.cur(u, dir, now);
+        let key = format!("agent:{started_by}");
+        let cur = e.rec.started.get(&key).cloned().unwrap_or(json!({}));
+        e.rec.started.insert(key.clone(), json!({ "runs": cur["runs"].as_u64().unwrap_or(0) + 1, "ms": cur["ms"].as_u64().unwrap_or(0) + ms }));
+        e.rec.event(json!({ "at": now, "kind": "agentRun", "run": run, "startedBy": key, "ms": ms }));
+        e.save(now);
+    }
     /// Everything not written yet goes to disk (before a read).
     pub fn flush(&mut self, now: u64) { for e in self.m.values_mut() { if e.dirty { e.save(now); } } }
 }
@@ -104,6 +124,22 @@ mod tests {
         t.tick("u", &dir, b + 6000, 1000, true, 0, "Online"); t.tick("u", &dir, b + 9000, 1000, true, 2, "Working");
         let r = &t.m["u"].rec; assert_eq!((r.ai, r.agent, r.away), (3000, 6000, 3000)); assert_eq!(r.events.len(), 2);
         t.flush(b + 9000); let v = days(&dir, &day_of(b), &day_of(b), true).unwrap(); assert_eq!(v[0]["activeMs"], json!(1300));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn a_run_another_agent_started_is_noted_on_the_receivers_day() {
+        let dir = std::env::temp_dir().join(format!("vr-act-agent-{}", pgm_core_internal::now_ms())); let _ = std::fs::create_dir_all(&dir);
+        let mut t = Tracker::default(); let b = 1_800_000_000_000u64;
+        t.agent_run("u", &dir, b, "gee", "r1", 1200); t.agent_run("u", &dir, b + 10, "gee", "r2", 300); t.agent_run("u", &dir, b + 20, "", "r3", 5);
+        let v = days(&dir, &day_of(b), &day_of(b), true).unwrap();
+        assert_eq!(v[0]["agentStarted"], json!({ "agent:gee": { "runs": 2, "ms": 1500 } }), "written at once, summed per starter; no starter = nothing");
+        assert_eq!(v[0]["events"].as_array().unwrap().iter().filter(|e| e["startedBy"] == json!("agent:gee")).count(), 2);
+        let other = days(&dir, &day_of(b), &day_of(b), false).unwrap();
+        assert!(other[0]["agentStarted"].is_object() && other[0]["events"].is_null(), "others see the sums, not the log");
+        // read back by a new tracker (a restart): the day goes on from the file
+        let mut t2 = Tracker::default(); t2.agent_run("u", &dir, b + 30, "mills", "r4", 1);
+        let again = days(&dir, &day_of(b), &day_of(b), true).unwrap();
+        assert_eq!((again[0]["agentStarted"]["agent:gee"]["runs"].clone(), again[0]["agentStarted"]["agent:mills"]["runs"].clone()), (json!(2), json!(1)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

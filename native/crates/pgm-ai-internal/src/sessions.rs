@@ -150,7 +150,7 @@ fn ext_report(a: &Account, b: &Value, now: u64) -> Resp {
     answer(200, json!({ "ok": true, "accepted": n, "ttlSec": ttl / 1000 }))
 }
 /// The live external sessions of a person (expired reports are dropped).
-fn ext_live(user: &str, now: u64) -> Vec<Value> {
+pub(crate) fn ext_live(user: &str, now: u64) -> Vec<Value> {
     let mut m = ext_store().lock().unwrap();
     m.retain(|_, (exp, _)| *exp > now);
     let mut v: Vec<Value> = m.iter().filter(|(k, _)| k.0 == user).flat_map(|(_, (_, l))| l.clone()).collect();

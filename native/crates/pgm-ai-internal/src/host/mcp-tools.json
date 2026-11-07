@@ -316,7 +316,7 @@
   },
   {
    "name": "task_get",
-   "description": "Read one task with its markdown description and recent activity. Includes the live presence of its claim holder (`holder`, `holderOffline`) and assignee (`assigneeStatus`).",
+   "description": "Read one task with its markdown description and recent activity. Includes the live presence of its claim holder (`holder`, `holderOffline`) and assignee (`assigneeStatus`), and its latest handoff (`handoff`: done, state, next, questions; null when none).",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -380,7 +380,7 @@
   },
   {
    "name": "task_claim",
-   "description": "Claim a task before working on it (time-limited, default 15 minutes, max 240). Moves a to-do task to \"doing\". Refused if someone else holds it.",
+   "description": "Claim a task before working on it (time-limited, default 15 minutes, max 240). Moves a to-do task to \"doing\". Refused if someone else holds it. The answer has the task's latest handoff (done, state, next, questions; null when none): start from it.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -483,7 +483,7 @@
   },
   {
    "name": "task_release",
-   "description": "Release your claim without completing (optionally with a note why).",
+   "description": "Release your claim without completing (optionally with a note why). When the task is not done, fill handoff so whoever picks it up next (a person or another Claude, after a re-assignment too) starts from there: done (what is done so far), state (the branch, uncommitted changes, where the work is), next (the next step), questions (open questions). It is stored as a signed Handoff note in the description.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -493,6 +493,31 @@
      },
      "note": {
       "type": "string"
+     },
+     "handoff": {
+      "type": "object",
+      "description": "The structured handoff (at least one part).",
+      "properties": {
+       "done": {
+        "type": "string",
+        "description": "What is done so far."
+       },
+       "state": {
+        "type": "string",
+        "description": "The branch, uncommitted changes, where the work is."
+       },
+       "next": {
+        "type": "string",
+        "description": "The next step."
+       },
+       "questions": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        },
+        "description": "Open questions."
+       }
+      }
      }
     },
     "required": [
@@ -1525,6 +1550,202 @@
     "required": [
      "id",
      "tool"
+    ]
+   }
+  },
+  {
+   "name": "agents_list",
+   "description": "The team's agents: every person has one agent address, @<username> (whichever session of theirs is current). For each: reachable (false when they muted you), state (working / waiting / idle / none), source (work, jcode, ...), acceptingWork, paused, askFirst (the kinds they okay first), presence.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "agent_ask",
+   "description": "Ask another person's agent (@username) a question. With wait (default true) the call blocks until their agent answers with agent_reply (at most replyBySec, default 30 minutes; at most 10 minutes of blocking) and returns the reply's text and thread; wait: false sends it and the answer arrives later as a message in this session. {USER}'s own rules apply: never ask a peer to do what was refused or blocked here. Refused with a plain sentence when the hub refuses it (muted, rate, hops, a loop, no such person): tell {USER} instead of retrying.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "to": {
+      "type": "string",
+      "description": "@username (or @username#<session id>)"
+     },
+     "text": {
+      "type": "string",
+      "description": "The question (markdown, at most 20 000 characters)"
+     },
+     "refs": {
+      "type": "object",
+      "description": "Optional: task (T-12), note, commit, branch, project, url",
+      "properties": {
+       "task": {
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "commit": {
+        "type": "string"
+       },
+       "branch": {
+        "type": "string"
+       },
+       "project": {
+        "type": "string"
+       },
+       "url": {
+        "type": "string"
+       }
+      }
+     },
+     "thread": {
+      "type": "string",
+      "description": "Ask again in an existing thread (at-...)"
+     },
+     "wait": {
+      "type": "boolean",
+      "description": "Wait for the answer (default true)"
+     },
+     "replyBySec": {
+      "type": "number",
+      "description": "How long the answer is waited for (default 1800)"
+     }
+    },
+    "required": [
+     "to",
+     "text"
+    ]
+   }
+  },
+  {
+   "name": "agent_handoff",
+   "description": "Ask another person's agent to take a board task (a request, never a re-assignment): the text says what is done, what is left and where the commits are. Their person may have to accept it first (\"ask me first\"); accepting re-assigns the task to them. Never waited on: returns {id, thread, status: held | queued | delivered}.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "to": {
+      "type": "string",
+      "description": "@username"
+     },
+     "task": {
+      "type": "string",
+      "description": "The board task, e.g. T-12"
+     },
+     "text": {
+      "type": "string",
+      "description": "The context: done, left, where the commits are"
+     },
+     "refs": {
+      "type": "object",
+      "description": "Optional: note, commit, branch, project, url"
+     }
+    },
+    "required": [
+     "to",
+     "task",
+     "text"
+    ]
+   }
+  },
+  {
+   "name": "agent_review",
+   "description": "Ask another person's agent to look at something (refs: commit, branch or note); like agent_ask, waits for the answer unless wait is false.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "to": {
+      "type": "string",
+      "description": "@username"
+     },
+     "text": {
+      "type": "string",
+      "description": "What to look at and what you want to know"
+     },
+     "refs": {
+      "type": "object",
+      "description": "commit, branch, note (at least one), task, project, url",
+      "properties": {
+       "commit": {
+        "type": "string"
+       },
+       "branch": {
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "task": {
+        "type": "string"
+       }
+      }
+     },
+     "wait": {
+      "type": "boolean",
+      "description": "Wait for the answer (default true)"
+     },
+     "replyBySec": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "to",
+     "text",
+     "refs"
+    ]
+   }
+  },
+  {
+   "name": "agent_report",
+   "description": "Report in a thread: done, blocked or need (normally the answer to a hand-off; \"not mine; ask <person> to accept or re-assign\" when a handed-off task is not yours).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "thread": {
+      "type": "string",
+      "description": "The thread (at-...), named in the message's last line"
+     },
+     "text": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "done",
+       "blocked",
+       "need"
+      ]
+     }
+    },
+    "required": [
+     "thread",
+     "text",
+     "status"
+    ]
+   }
+  },
+  {
+   "name": "agent_reply",
+   "description": "Answer a message from another agent (the thread is named in its last line, \"answer with agent_reply, thread at-...\").",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "thread": {
+      "type": "string",
+      "description": "The thread (at-...)"
+     },
+     "text": {
+      "type": "string",
+      "description": "The answer (markdown)"
+     },
+     "refs": {
+      "type": "object",
+      "description": "Optional: task, note, commit, branch, project, url"
+     }
+    },
+    "required": [
+     "thread",
+     "text"
     ]
    }
   },

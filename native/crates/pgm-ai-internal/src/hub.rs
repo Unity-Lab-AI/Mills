@@ -45,6 +45,9 @@ pub trait AiHub: Send + Sync {
     fn work_message(&self, a: &Account, message: &str, where_: Value) -> Value;
     /// A board tool (`op`) for this account as an agent: `{ ok, result }` / `{ ok: false, error }`.
     fn board_tool(&self, op: &str, account: &str, args: &Value) -> Value;
+    /// A Work run ended still holding board tasks it claimed (T-266): `{ account, run, session, project, branch, dir, tasks,
+    /// reply, code }`. The program adds an automatic handoff to each it still holds (once per run and task). Default: nothing.
+    fn run_left_claims(&self, _end: Value) {}
     /// A notes tool, saved as `actor`.
     fn notes_tool(&self, name: &str, args: &Value, actor: &str) -> Value;
     /// A team (chat) tool for this account.
@@ -63,6 +66,9 @@ pub trait AiHub: Send + Sync {
     fn agent_blocks(&self, target: &str, conv: &str) -> String;
     /// Posts as her (or `as_`, with `via` = whose run): the message number.
     fn agent_say(&self, text: &str, to: &str, as_: &str, via: &str, conv: &str) -> i64;
+    /// A run of `user`'s that `started_by`'s agent started has ended after `ms` (T-300, plans/agent-talk.md § 8): their time log
+    /// notes it (`agentStarted`, an `agentRun` event with `startedBy: "agent:<user>"`). A program without a time log notes nothing.
+    fn note_agent_run(&self, _user: &str, _started_by: &str, _run: &str, _ms: u64) {}
     // ---- the program behind this one (if any)
     /// A word to a backend program (its internal API): (status, body), or None.
     fn internal<'a>(&'a self, path: &'a str, body: String) -> Fut<'a, Option<(u16, Bytes)>>;

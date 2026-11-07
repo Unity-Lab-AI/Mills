@@ -7,6 +7,110 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.46.2 — 2026-11-07
+
+PATCH: **deploys are no longer held up by three more files the hub writes itself.**
+
+### Fixed
+- Both auto-deploys refused every new commit ("live checkout has uncommitted changes": live since 5.43.1 went up, dev
+  since 5.46.0) because files the hub writes into its checkout were not ignored: the per-run MCP files of Work sessions
+  (`bridge/.mcp-runtime-hub.json`, `bridge/.mcp-runtime-hub-<session>.json`), the desktop app's device tokens
+  (`bridge/device-tokens.json`, 5.43.0) and the planner's drafts (`bridge/plan-drafts.json`). All are in .gitignore now
+  (they stay on disk as they are). The checkouts on the server were unblocked the same way through their local
+  `.git/info/exclude`, since a deploy cannot carry a .gitignore fix past a dirty tree.
+
+## 5.46.1 — 2026-11-07
+
+PATCH: **the chat's @ picker calls Unity again** (Gee, 2026-11-07: "why is Unity not responding … multiple have
+addressed her with no response").
+
+### Fixed
+- Unity's chat account is `claude` and her display name "Unity"; only `@unity` calls her (R36, by design). The @ picker
+  inserted her account name, so picking "Unity" from the list, or pressing Tab / Enter while the list was open (also
+  after typing "@unity" in full), wrote `@claude `: the page then sealed no copy for her and the hub never heard the
+  call, while the mention still rendered as hers. No message had been sealed for her since 2026-10-19; her sign-in
+  greetings kept coming, so her brain looked fine. Now the picker, the Tab / Enter completion and the conversation
+  list's "BOT · @…" label all use the handle that calls her (`mentionHandleOf`), and the call test uses the same one.
+  No hub change. `web/index.html` 1.38.1.
+- Check: R527 (static; the picker's behaviour has nothing a scratch hub can observe) says the picker and the list write
+  the handle, never the account name.
+- R284 (T-290, `--rust-hub`) raced the fake host: its older-page run answered after 4 s (`SLOW`) while the seven hub
+  calls before Stop took longer under load, so "Stop ends the run without an answer" was false now and then (T-346).
+  The run now says `SLOWER` (bridge/test/fake-claude.js: 15 s), so Stop always comes first. The check is unchanged.
+- R143 (`--rust-hub`) gave the second host program 10 s to come online; under the same load it took longer and the
+  check failed once today. It waits up to 30 s now (the host still has to connect; only the cap moved). T-346.
+
+## 5.46.0 — 2026-11-07
+
+MINOR: **the queue panel in Work** (T-188, VibeRoller part).
+
+- **Queue** in Work's bar (with a count of everything waiting) opens a sidebar right of the conversation (a slide-over
+  on narrow screens). It lists every message still to go in the open session, in the order it goes: the "Send now"
+  text first, then the queue (never one already sent), attachments named. Each one has **Copy** and **Cancel**, and the
+  panel has **Copy all** (the messages as written, a rule between them) and **Cancel all** (asks once more, then clears
+  the queue and the "Send now" text). Below them: your other sessions with messages waiting (from the session list's
+  `queued`), each a click away. Whether it is open is remembered, and the session list's refresh every few seconds
+  redraws it only when something changed (an opened message stays open, the focus stays).
+- The panel is its own file, `web/queue.js` 1.0.0 (pure helpers + `QUEUE.mount` with the page's callbacks). It changes
+  the queue only through the page, so the dashed bubbles, the hub's copy (`/api/work/queue`) and a share's watchers stay
+  the same as the panel. No hub change: both hubs already keep the queue per session (T-37, T-284). A page whose
+  queue.js is missing works as before.
+- `web/index.html` 1.38.0 (the button, the sidebar, its styles, the wiring), `web/sw.js` 1.0.8 (caches queue.js).
+- Check: R526 (new, both modes) drives the panel with clicks against a page-side queue: the order and places, copy one /
+  all and a refused clipboard, cancel one, cancel all with its second click, the other sessions' counts (not archived
+  ones) and opening one, hiding remembered; and the hub serves queue.js with the page loading it.
+- Hyper Prod Man has no queue yet (no Work screen; @Hyper takes one call at a time), so its half is a follow-up task.
+
+## 5.45.0 — 2026-11-07
+
+MINOR: **other tools and other models take part in agent talk, and its cost lands on the receiver** (T-299 hub part,
+T-300; plans/agent-talk.md §7, §8, §11).
+
+- **The inbox of other tools.** `GET /api/agents/inbox?source=&device=&wait=1` (a 25 s long poll, signed in as the
+  person, like the session report) and `POST /api/agents/read {ids}`. A message to `@user/jcode`, or to a person who has
+  only outside sessions, waits there; fetched = delivered (`again=1` gives it again after a restart), read = read.
+  `/send` and `/reply` take `source`, `session`, `model`, and are refused (400) unless that tool is reporting sessions
+  for the person, so `from.source` stays honest. The message has the same fields both ways.
+- **A model without tools answers too.** A run woken by an ask someone waits for, whose model never calls
+  `agent_reply`, has its final answer sent as the reply (`by: "final-answer"` in the audit and the wait result).
+- **Cost on the receiver.** An agent-started run counts in the receiver's usage ledger and day record
+  (`agentStarted: {"agent:<user>": {runs, ms}}`, an `agentRun` event with `startedBy`), never the sender's.
+- Checks: R483 and R484c are real now; R525 (new) drives T-294's done-when list end to end with fake models (an ask
+  answered inside the asker's run, a held hand-off accepted then picked up and reported, a tool-less reply, threads
+  seen by their two people only, a loop stopped). Only R482p (the page, Mills' T-298) stays spec. Jcode PGM's own
+  poll and display, and the Windows hosts run, are not part of this.
+
+## 5.44.0 — 2026-11-07
+
+MINOR: **agents talk to agents, a security log, and handoff notes on the board** (Sponge, 2026-11-07: "fan out and work
+on many things assigned to me at once").
+
+- **Agent to agent (T-296, T-297; spec plans/agent-talk.md by Gee).** `@person` resolves to that person's current
+  session (else external, else primary; a thread sticks to its session). An agent message is a typed envelope (ask /
+  handoff / review / report / reply) around plain text, delivered into the session as a message: queued behind a
+  working run, or waking an idle one. Threads are kept on both people's sides; mute, pause, ask me first (hand-offs by
+  default), wake me, stop / reopen; a held hand-off is accepted (the task is re-assigned to the receiver) or declined.
+  Hop and rate limits and a word-set loop detector; the audit is `Chat/agent-audit.ndjson`. Routes `/api/agents/*`
+  (Rust hub only; the frozen JavaScript hub answers 404). Six team tools (`agents_list`, `agent_ask`, `agent_handoff`,
+  `agent_review`, `agent_report`, `agent_reply`) in both tool lists, with the ask wait loop in both relays and an agents
+  section in the Work prompt (no permission laundering, board ownership). An agent can no longer claim a task assigned
+  to someone else (403). The spec's open questions use its own suggestions: a person may write to an agent, ask me
+  first covers hand-offs only, an ask waits 30 minutes. R480, R481 and the hub parts of R482 / R484 are checks now; the
+  page (R482p, Mills' T-298), jcode (R483, T-299) and cost (R484c) parts stay spec.
+- **Security log (T-271).** An append-only, hash-chained log (`bridge/security/audit.jsonl`, owner-only) of sign-ins
+  and failures, devices, account changes, delegation (device-code approvals, machine unlinks, Unity's PC tools),
+  provider shares and scopes, AI hosts, API keys, Forgejo links, product registrations, downloads, restarts, version
+  changes and config switches. Secrets are dropped at any depth. `GET /api/admin/audit` (admins) with a chain check that
+  names the first broken entry; a torn last line is moved aside and the chain goes on. A read-only Security log box next
+    to Health (web/index.html 1.37.0). Library: pgm-core-internal `audit`. The deploy snapshot, pack-data, restore and
+  the handoff keep `bridge/security` (handoff.js 1.2.5). R521–R524 (written as R511–R514, renumbered when 5.43.0's
+  R511 / R512 landed first).
+- **Handoff notes (T-266).** `task_release` takes a structured `handoff` (done, state, next, questions), stored as a
+  signed note; a run that ends still holding a claim leaves one automatic handoff; a holder who goes offline with a
+  claim gets one note (`board.offlineGraceSeconds`, default 120, live hub only). `task_claim` and `task_get` return the
+  latest handoff, and the Work prompt says to start from it. Old note-only releases work as before (board-mcp.js 1.2.0).
+  R516–R519.
+
 ## 5.43.1 — 2026-11-07
 
 PATCH: **deploys are no longer held up by the hub's own files.**
