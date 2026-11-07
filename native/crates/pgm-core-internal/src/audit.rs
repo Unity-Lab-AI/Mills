@@ -18,7 +18,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// The `prev` of the first line.
-pub const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub const GENESIS: &str = concat!("00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000");
 const TAIL: u64 = 64 * 1024;
 const HASH_SUFFIX: usize = 9 + 64 + 2; // ,"hash":"<64 hex>"}
 
