@@ -316,7 +316,7 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/security/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
@@ -3951,6 +3951,82 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R510', 'the prompt enhancer gets the session\'s conversation to understand the draft: its first message and its newest turns (tools left out, older middle turns skipped and said so, about 12 000 characters at most) before the draft, marked as context only; with context: false it gets none',
       Object.values(seen.ctx).every(Boolean) && seen.off, JSON.stringify(seen));
   } else skip('R510', 'the prompt enhancer with the session\'s context', 'the Rust hub\'s: --rust-hub runs it');
+  // T-271: the security log (bridge/security/audit.jsonl, pgm-core-internal audit.rs): append-only, hash-chained, admins read it
+  const AUDIT_FILE = path.join(SB, 'security', 'audit.jsonl');
+  const loginFrom = (ip, body) => fetch(H + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  const R511_LABEL = 'the security log records sign-ins: a failed and then a successful sign-in of an account appear in the admin\'s GET /api/admin/audit in that order, with who and from which address; a failed one for a name that is no account names nobody; a non-admin gets 403 (and that refusal is noted), a visitor 401; no password, token or mistyped name is ever in the file, which only its owner may read';
+  if (RUST_HUB) { // R511
+    const seen = {};
+    const bad = await loginFrom('198.51.100.71', { username: 't-user', password: 'r511-WRONG-pass', deviceId: devB });
+    const good = await loginFrom('198.51.100.71', { username: 't-user', password: 'pw-t-user-0001', deviceId: devB });
+    const typo = await loginFrom('198.51.100.72', { username: 'r511-typed-secret', password: 'r511-other-pw', deviceId: devB });
+    seen.statuses = [bad.status, good.status, typo.status];
+    const au = await call('/api/admin/audit?action=signin&limit=100', A), es = au.data.entries || [];
+    const failed = es.find((e) => e.action === 'signin.failed' && e.actor === 't-user' && e.ip === '198.51.100.71'), ok = es.find((e) => e.action === 'signin' && e.actor === 't-user' && e.ip === '198.51.100.71');
+    seen.failed = !!failed; seen.ok = !!ok; seen.inOrder = !!failed && !!ok && failed.seq < ok.seq && es.indexOf(ok) < es.indexOf(failed); // newest first
+    seen.nobody = es.some((e) => e.action === 'signin.failed' && e.ip === '198.51.100.72' && e.actor === '' && e.target === '' && e.detail && e.detail.known === false);
+    seen.verified = au.status === 200 && au.data.verified && au.data.verified.ok === true;
+    seen.user = (await call('/api/admin/audit', U)).status; seen.anon = (await call('/api/admin/audit')).status;
+    seen.refusedNoted = ((await call('/api/admin/audit?action=admin.refused', A)).data.entries || []).some((e) => e.actor === 't-user' && e.target === '/api/admin/audit');
+    const file = fs.existsSync(AUDIT_FILE) ? fs.readFileSync(AUDIT_FILE, 'utf8') : '';
+    seen.noSecrets = !!file && !['r511-WRONG-pass', 'pw-t-user-0001', 'r511-typed-secret', 'r511-other-pw', String(good.data.token || 'no-token'), A].some((s) => file.includes(s));
+    seen.private = WIN || (fs.existsSync(AUDIT_FILE) && (fs.statSync(AUDIT_FILE).mode & 0o077) === 0);
+    check('R511', R511_LABEL, seen.statuses.join() === '401,200,401' && seen.failed && seen.ok && seen.inOrder && seen.nobody && seen.verified && seen.user === 403 && seen.anon === 401 && seen.refusedNoted && seen.noSecrets && seen.private, JSON.stringify(seen));
+  } else skip('R511', R511_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  const R512_LABEL = 'the security log records what an admin changes and what a start changes: making an account, its first device, making it an admin and not, a new password (never the password itself), letting it add a device, resetting its lock, its sign-out and deleting it each appear once with the admin (or the account) and the target, and the hub\'s start with its version; the chain verifies';
+  if (RUST_HUB) { // R512
+    const seen = {};
+    const mk = await call('/api/admin/create', A, { username: 'r512-temp', display: 'R512' });
+    const t = await loginFrom('198.51.100.73', { username: 'r512-temp', password: mk.data.password, deviceId: 'device-r512-0000000000' });
+    await call('/api/admin/set-admin', A, { username: 'r512-temp', admin: true }); await call('/api/admin/set-admin', A, { username: 'r512-temp', admin: false });
+    const pw = await call('/api/admin/password', A, { username: 'r512-temp', keepMachines: true });
+    const t2 = await loginFrom('198.51.100.73', { username: 'r512-temp', password: pw.data.password, deviceId: 'device-r512-0000000000' });
+    seen.allow = (await call('/api/admin/allow-device', A, { username: 'r512-temp' })).status;
+    seen.unlock = (await call('/api/admin/unlock', A, { username: 'r512-temp' })).status;
+    seen.logout = (await call('/api/logout', t2.data.token, {})).status;
+    seen.del = (await call('/api/admin/delete', A, { username: 'r512-temp' })).status;
+    seen.statuses = [mk.status, t.status, pw.status, t2.status];
+    const au = await call('/api/admin/audit?limit=1000', A), es = (au.data.entries || []).filter((e) => e.target === 'r512-temp');
+    const one = (action, actor) => es.filter((e) => e.action === action && e.actor === actor).length === 1;
+    seen.got = { create: one('account.create', 't-admin'), first: one('device.first', 'r512-temp'), role: es.filter((e) => e.action === 'account.role' && e.actor === 't-admin').map((e) => e.detail.admin).reverse().join() === 'true,false',
+      password: one('account.password', 't-admin') && es.find((e) => e.action === 'account.password').detail.keepMachines === true, allow: one('device.allow', 't-admin'), reset: one('device.reset', 't-admin'),
+      signout: one('signout', 'r512-temp'), del: one('account.delete', 't-admin') };
+    seen.start = (au.data.entries || []).some((e) => e.action === 'hub.start' && typeof e.detail.version === 'string' && e.detail.version.length > 0 && typeof e.detail.alone === 'boolean');
+    seen.verified = au.data.verified || {};
+    const file = fs.existsSync(AUDIT_FILE) ? fs.readFileSync(AUDIT_FILE, 'utf8') : '';
+    seen.noPw = !!mk.data.password && !!pw.data.password && !file.includes(mk.data.password) && !file.includes(pw.data.password) && !file.includes(String(t2.data.token || 'no-token'));
+    check('R512', R512_LABEL, seen.statuses.join() === '200,200,200,200' && seen.allow === 200 && seen.unlock === 200 && seen.logout === 200 && seen.del === 200 && Object.values(seen.got).every(Boolean) && seen.start && seen.verified.ok === true && seen.noPw, JSON.stringify(seen));
+  } else skip('R512', R512_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  const R513_LABEL = 'the security log\'s chain shows tampering: a line changed in the file afterwards makes verified.ok false with brokenAt its seq (put back, it verifies again); a line a crash cut short is reported as torn without breaking the chain, and the next entry moves it aside, notes audit.torn and chains on';
+  if (RUST_HUB) { // R513
+    const seen = {};
+    const orig = fs.readFileSync(AUDIT_FILE, 'utf8'), lines = orig.split('\n').filter(Boolean);
+    const i = lines.findIndex((l) => l.includes('"action":"account.create"') && l.includes('"target":"r512-temp"')), target = i >= 0 ? JSON.parse(lines[i]) : {};
+    if (i >= 0) { const forged = lines.slice(); forged[i] = forged[i].replace('"target":"r512-temp"', '"target":"r513-forged"'); fs.writeFileSync(AUDIT_FILE, forged.join('\n') + '\n'); }
+    seen.tampered = ((await call('/api/admin/audit?limit=1', A)).data || {}).verified || {};
+    fs.writeFileSync(AUDIT_FILE, orig);
+    seen.restored = ((await call('/api/admin/audit?limit=1', A)).data || {}).verified || {};
+    fs.appendFileSync(AUDIT_FILE, '{"seq":' + (lines.length + 1) + ',"at":"2026-');
+    seen.torn = ((await call('/api/admin/audit?limit=1', A)).data || {}).verified || {};
+    const again = await loginFrom('198.51.100.74', { username: 't-user', password: 'pw-t-user-0001', deviceId: devB });
+    const after = (await call('/api/admin/audit?limit=5', A)).data || {};
+    seen.after = after.verified || {}; seen.again = again.status;
+    seen.noted = (after.entries || []).some((e) => e.action === 'audit.torn' && e.detail.bytes > 0) && (after.entries || []).some((e) => e.action === 'signin' && e.ip === '198.51.100.74');
+    seen.aside = fs.readdirSync(path.dirname(AUDIT_FILE)).some((f) => /^audit\.torn-\d+$/.test(f));
+    check('R513', R513_LABEL, i >= 0 && seen.tampered.ok === false && seen.tampered.brokenAt === target.seq && seen.restored.ok === true && seen.torn.ok === true && seen.torn.torn === true
+      && seen.again === 200 && seen.after.ok === true && seen.after.torn === false && seen.noted && seen.aside, JSON.stringify({ ...seen, seq: target.seq }));
+  } else skip('R513', R513_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  { // R514: the page's read-only Security log for admins, next to Health [static]; the JavaScript hub has none (it keeps booting)
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const seen = {
+      box: /<div class="setSection" id="healthBox" hidden>[\s\S]{0,1500}<div class="setSection" id="auditBox" hidden><b><svg class="ic" aria-hidden="true"><use href="#i-shield"\/><\/svg> Security log<\/b>/.test(page),
+      reads: /json\('\/api\/admin\/audit\?limit=300'/.test(page) && /Chain broken at entry \$\{v\.brokenAt\}/.test(page) && /loadHealth\(\);\n  loadAudit\(\);/.test(page),
+      ignored: /^bridge\/security\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
+    };
+    if (!RUST_HUB) seen.jsHub = (await call('/api/admin/audit', A)).status !== 200 && (await call('/api/status')).status === 200;
+    check('R514', 'admins see a read-only Security log next to Health (shield icon, newest first, whether the chain is intact or where it broke), loaded with the admin screen; the log\'s folder is gitignored data; the JavaScript hub has no such route and keeps answering [static: no browser in the suite]',
+      Object.values(seen).every(Boolean), JSON.stringify(seen));
+  }
   { // R498 (5.35.0): the page: the DEV band drifts, Sessions is in the left rail, the sparkle (SVG) button sits under + in the composer with its switch in
     // Settings, and the genie (the page's own genieIn / genieOut, run with stand-in elements) hides only once the element is in its button
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), sj = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');

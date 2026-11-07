@@ -1,6 +1,7 @@
 //! **pgm-core-internal** = PGM_Core_Internal (PsyGraphMediaCoreInternal): the basics every PsyGraphMedia library and
 //! program shares. Nothing here knows about any one product (VibeRoller is just its first user).
 //! - [`Error`] / [`Result`]: an error meant for a person, with an HTTP-like status where one applies
+//! - [`audit`]: the security log, append-only and hash-chained (T-271)
 //! - [`config`]: config.json overlaid with the machine's own config.local.json
 //! - [`b64`] / [`unb64`], [`now_ms`]
 //! - [`crypto`]: random bytes / ids, SHA-256, HMAC-SHA256 (constant-time check), AES-256-GCM, HKDF-SHA256
@@ -11,6 +12,7 @@
 //! - [`notices`]: what a library has to tell the people running the program (a data file moved aside), drained by it
 #![forbid(unsafe_code)]
 
+pub mod audit;
 pub mod config;
 pub mod crypto;
 pub mod fs;

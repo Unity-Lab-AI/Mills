@@ -1,6 +1,6 @@
 [package]
 name = "pgm-core-internal"
-description = "PGM_Core_Internal (PsyGraphMediaCoreInternal): the basics every PsyGraphMedia library and program uses: errors, base64, time, hashing / HMAC / AES-GCM / ids, JSON files (atomic, private), file protection, text helpers"
+description = "PGM_Core_Internal (PsyGraphMediaCoreInternal): the basics every PsyGraphMedia library and program uses: errors, base64, time, hashing / HMAC / AES-GCM / ids, JSON files (atomic, private), file protection, text helpers, the security log (append-only, hash-chained)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
