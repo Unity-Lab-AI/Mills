@@ -2,6 +2,7 @@
 // Stand-in for `claude -p --output-format stream-json` used ONLY by the regression runner's
 // throwaway hub. Speaks the same NDJSON events the web app reads, costs nothing, touches nothing.
 //   message contains "SLOW"   → waits 4 s before answering (busy / 409 / stop / deferred restart)
+//   message contains "SLOWER" → waits 15 s (a run that several hub calls must still find running, R284)
 //   message contains "ASSISTTOOL" → adds a task through the Unity section's tool relay
 //   message contains "PCTOOL" → calls the pc "list" tool through the hub, like the real MCP relay
 //   message contains "CLAUDETOOL" → runs one fake tool (Bash) before answering
@@ -26,7 +27,7 @@ let input = '';
 process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', async () => {
   out({ type: 'system', subtype: 'init', session_id: session, model });
-  if (input.includes('SLOW')) await sleep(4000);
+  if (input.includes('SLOWER')) await sleep(15000); else if (input.includes('SLOW')) await sleep(4000);
   // "DENIEDFIRST" (R484): a turn that ends with a refused tool first (a result with permission_denials, as a real run sends after each
   // turn), then the rest of the run goes on: what this run sends next comes right after a refusal
   if (input.includes('DENIEDFIRST')) { out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, num_turns: 1, session_id: session, uuid: crypto.randomUUID(), result: '', permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_denied_first', tool_input: { command: 'rm -rf build' } }] }); await sleep(400); }

@@ -7,6 +7,45 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.46.3 — 2026-11-07
+
+PATCH: **one more hub-written folder ignored: `bridge/work-sessions/`** (the per-session files of the Work session
+list), the last thing that kept the live checkout "uncommitted" after 5.46.2. Both server checkouts got the same rule in
+their local `.git/info/exclude`.
+
+## 5.46.2 — 2026-11-07
+
+PATCH: **deploys are no longer held up by three more files the hub writes itself.**
+
+### Fixed
+- Both auto-deploys refused every new commit ("live checkout has uncommitted changes": live since 5.43.1 went up, dev
+  since 5.46.0) because files the hub writes into its checkout were not ignored: the per-run MCP files of Work sessions
+  (`bridge/.mcp-runtime-hub.json`, `bridge/.mcp-runtime-hub-<session>.json`), the desktop app's device tokens
+  (`bridge/device-tokens.json`, 5.43.0) and the planner's drafts (`bridge/plan-drafts.json`). All are in .gitignore now
+  (they stay on disk as they are). The checkouts on the server were unblocked the same way through their local
+  `.git/info/exclude`, since a deploy cannot carry a .gitignore fix past a dirty tree.
+
+## 5.46.1 — 2026-11-07
+
+PATCH: **the chat's @ picker calls Unity again** (Gee, 2026-11-07: "why is Unity not responding … multiple have
+addressed her with no response").
+
+### Fixed
+- Unity's chat account is `claude` and her display name "Unity"; only `@unity` calls her (R36, by design). The @ picker
+  inserted her account name, so picking "Unity" from the list, or pressing Tab / Enter while the list was open (also
+  after typing "@unity" in full), wrote `@claude `: the page then sealed no copy for her and the hub never heard the
+  call, while the mention still rendered as hers. No message had been sealed for her since 2026-10-19; her sign-in
+  greetings kept coming, so her brain looked fine. Now the picker, the Tab / Enter completion and the conversation
+  list's "BOT · @…" label all use the handle that calls her (`mentionHandleOf`), and the call test uses the same one.
+  No hub change. `web/index.html` 1.38.1.
+- Check: R527 (static; the picker's behaviour has nothing a scratch hub can observe) says the picker and the list write
+  the handle, never the account name.
+- R284 (T-290, `--rust-hub`) raced the fake host: its older-page run answered after 4 s (`SLOW`) while the seven hub
+  calls before Stop took longer under load, so "Stop ends the run without an answer" was false now and then (T-346).
+  The run now says `SLOWER` (bridge/test/fake-claude.js: 15 s), so Stop always comes first. The check is unchanged.
+- R143 (`--rust-hub`) gave the second host program 10 s to come online; under the same load it took longer and the
+  check failed once today. It waits up to 30 s now (the host still has to connect; only the cap moved). T-346.
+
 ## 5.46.0 — 2026-11-07
 
 MINOR: **the queue panel in Work** (T-188, VibeRoller part).
