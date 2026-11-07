@@ -259,6 +259,7 @@ function startFakeOllama() {
       }
       if (req.url === '/api/tags') return j({ models: fakeOllamaNoBrain ? [{ name: 'nomic-embed-text:latest' }, { name: 'plain-chat:latest' }] : [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
+      if (req.url === '/api/version') return j({ version: '0.0.0-regress' }); // the Rust hub's "is Ollama up" probe: without it the fake brain looks down
       if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
       const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
       const sys = (msgs[0] || {}).content || '';
@@ -3877,7 +3878,21 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R510', 'the prompt enhancer gets the session\'s conversation to understand the draft: its first message and its newest turns (tools left out, older middle turns skipped and said so, about 12 000 characters at most) before the draft, marked as context only; with context: false it gets none',
       Object.values(seen.ctx).every(Boolean) && seen.off, JSON.stringify(seen));
   } else skip('R510', 'the prompt enhancer with the session\'s context', 'the Rust hub\'s: --rust-hub runs it');
-  { // R511 (5.42.3): the desktop app stays signed in: the page approves a device sign-in for the app itself and keeps it (the app only)
+  { // R512 (5.43.0): the GPU is not held: the brain's keep_alive is short by default (both hubs), the app's tray frees it
+    const rd = (p) => { try { return fs.readFileSync(path.join(MILLS, p), 'utf8'); } catch { return ''; } };
+    const asJs = rd('bridge/assistant.js'), ub = rd('native/crates/pgm-ai-internal/src/unity_brain.rs'), gpu = rd('native/crates/vr-desktop/src/gpu.rs'), dm = rd('native/crates/vr-desktop/src/main.rs');
+    const seen = {
+      js: /keep_alive: brainKeepAlive\(A\.brainKeepAlive\)/.test(asJs) && !/keep_alive: '30m'/.test(asJs) && /: '2m'\);/.test(asJs),
+      rust: /"keep_alive": keep_alive,/.test(ub) && !/"keep_alive": "30m"/.test(ub) && /json!\("2m"\)/.test(ub),
+      free: /\/unload/.test(gpu) && /"keep_alive": 0/.test(gpu) && /\/api\/ps/.test(gpu),
+      onOff: /\/shutdown/.test(gpu) && /engines-start\.json/.test(gpu),
+      tray: /"gpu-free"/.test(dm) && /"image-on"/.test(dm) && /"image-off"/.test(dm) && /--gpu/.test(dm),
+      hostDir: /aihost::standard_dir\(\)/.test(dm),
+    };
+    check('R512', 'the GPU is not held when nothing asks: Unity\'s local brain asks Ollama for a short keep_alive (assistant.brainKeepAlive, default 2 minutes, both hubs); the desktop app\'s tray frees the GPU (image engine /unload + every Ollama model keep_alive 0) and turns the image engine off (/shutdown) / on (engines-start.json), also as vr-desktop --gpu; its AI host switches find the installed host',
+      Object.values(seen).every(Boolean), JSON.stringify(seen));
+  }
+  { // R511 (5.43.0): the desktop app stays signed in: the page approves a device sign-in for the app itself and keeps it (the app only)
     const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), seen = {};
     seen.page = {
       appOnly: /function appKeep\(\) \{ if \(!IN_APP\) return null;/.test(html) && /const IN_APP = !!\(window\.__TAURI__ && window\.__TAURI__\.core\);/.test(html),

@@ -7,13 +7,21 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
-## 5.42.3 — 2026-11-07
+## 5.43.0 — 2026-11-07
 
-PATCH: **the desktop app stays signed in** (2026-11-07: "auto sign in after boot and start of the app, is a go, build it").
+MINOR: **the desktop app stays signed in, and it frees the GPU** (2026-11-07: "auto sign in after boot and start of the app, is a go, build it"; "i should be able to turn off the image models and unlaod my GPU from the app"; "fuck my gpu is being held when nothing is being requested").
 
 ### Added
-- The VibeRoller desktop app signs itself in when it starts (after a reboot too): after one password sign-in in the app, the page approves a device sign-in for the app itself and keeps that device token in the app only (a browser never keeps one). Signing out in the app revokes it on the hub; it is listed and revocable under Settings → Connections; a refused token (401) is forgotten and the sign-in form comes back. The encrypted chat keeps working: its key stays in the app from the first sign-in. web/index.html 1.35.2.
+- The VibeRoller desktop app signs itself in when it starts (after a reboot too): after one password sign-in in the app, the page approves a device sign-in for the app itself and keeps that device token in the app only (a browser never keeps one). Signing out in the app revokes it on the hub; it is listed and revocable under Settings → Connections; a refused token (401) is forgotten and the sign-in form comes back. The encrypted chat keeps working: its key stays in the app from the first sign-in. web/index.html 1.36.0.
+- The desktop app's tray has the GPU switches: **Free the GPU** (the image engine drops its model, Ollama unloads every model it holds, at once), **Image engine: off** / **on** (on starts it with the command in the AI host folder's engines-start.json). Also from a terminal: `vr-desktop --gpu status | free | image-on | image-off`. Windows and Linux.
 - Regression check R511 (page: app-only keep, start uses it, sign-out forgets and revokes; --rust-hub: start → approve → poll → /api/check → revoke → 401).
+
+### Changed
+- Unity's local brain no longer holds the AI host's GPU for 30 minutes after every answer: Ollama keeps it 2 minutes by default, set with `assistant.brainKeepAlive` ("0" frees it right after an answer; seconds or "90s" / "5m" / "1h"). Both hubs. bridge/assistant.js 1.1.3.
+
+### Fixed
+- The desktop app's AI host switches (tray and Tools) act on the installed AI host (%LOCALAPPDATA%VibeRollerAIHost, ~/.local/share/viberoller/ai-host) when no folder is set; they looked in the app's own data folder, where no host is.
+- The regression runner's fake Ollama answers /api/version (the Rust hub's "is Ollama up" probe).
 
 ## 5.42.2 — 2026-11-01
 
