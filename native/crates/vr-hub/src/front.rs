@@ -28,6 +28,8 @@ impl Hub {
     pub fn new(root: PathBuf, cfg: Config, back: Option<SocketAddr>) -> Result<Arc<Hub>, String> {
         // T-331 § 4: the hub's structured log (bridge/logs/hub-YYYY-MM-DD.jsonl, 14 days) and its metrics
         pgm_core_internal::obs::init(&root.join("logs"), "hub");
+        // T-271: the security log (bridge/security/audit.jsonl), and what changed since the last start
+        modules::audit::started(&root, &cfg, back.is_none());
         let mods = modules::Modules::new(&root, &cfg)?;
         let backend = back.map(|b| Backend::new(b, "x-vr-front-secret", mods.front_secret.as_str()));
         Ok(Arc::new_cyclic(|me| Hub { root, cfg, backend, mods, me: me.clone() }))
@@ -39,6 +41,8 @@ impl Hub {
     /// Is this the dev hub (config `"instance": "dev"`)?
     pub fn is_dev(&self) -> bool { self.mods.instance.is_dev() }
     pub fn me(&self) -> Option<Arc<dyn pgm_ai_internal::hub::AiHub>> { self.me.upgrade().map(|h| h as Arc<dyn pgm_ai_internal::hub::AiHub>) }
+    /// This hub itself, shared (for work it hands to a task of its own).
+    pub fn me_hub(&self) -> Option<Arc<Hub>> { self.me.upgrade() }
 }
 
 pub async fn serve(hub: Arc<Hub>, addr: SocketAddr) -> i32 {
@@ -118,8 +122,11 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
     }
     // a native module answers, or lets the request through (possibly with headers of its own, e.g. who is signed in)
     let mut extra: Vec<(String, String)> = vec![];
+    // T-271: who asks, looked up before the request runs (a sign-out or a password change may end the session)
+    let audit_who = modules::audit::watched(&r).then(|| modules::audit::actor(&hub, &r));
     match modules::route(&hub, &r).await {
         modules::Routed::Answer(mut resp) => {
+            if let Some(w) = &audit_who { modules::audit::note(&hub, &r, w, resp.status().as_u16()); }
             if let Some(o) = &cors { kit::add_cors(&mut resp, o); }
             resp.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust")); // who answered (FR6's meter: R179)
             // signed-in pages notice a new build on their next call (and every 5 minutes) and update themselves. Not on an
@@ -148,6 +155,7 @@ async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Resp
     };
     // who is signed in is the front's word only: a caller's own x-vr-user / x-vr-front-* never reach the JavaScript hub
     let mut resp = backend.proxy(&parts, r.body.clone(), |k| !k.starts_with("x-vr-front-") && k != "x-vr-user", &extra).await;
+    if let Some(w) = &audit_who { modules::audit::note(&hub, &r, w, resp.status().as_u16()); }
     resp.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("node")); // the JavaScript hub answered (what FR6 still has to move: R179)
     // One build per hub: the page compares X-VR-Version with the build /api/check named (this hub's), so an answer of
     // the JavaScript hub behind it must name the same one. Its own (read when IT started) could differ when the two

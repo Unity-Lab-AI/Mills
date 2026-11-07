@@ -1297,6 +1297,13 @@
       <div id="healthOut"></div>
       <pre id="traceOut" hidden style="max-height:20rem;overflow:auto;font-size:.75rem"></pre>
     </div>
+    <!-- Security log (T-271): the hub's append-only, hash-chained record of sign-ins, devices, admin changes, provider
+         shares, downloads, config switches and delegation (the Rust hub's; hidden on a hub without it). Read-only. -->
+    <div class="setSection" id="auditBox" hidden><b><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg> Security log</b> — every sign-in (and failed one), new device, admin change, provider share, release download, config switch and delegation, newest first. Each line is chained to the one before by its hash, so a line changed or removed afterwards shows here as a broken chain. Separate from the activity history, which is about work.
+      <div class="row"><button class="ghost" id="auditRefresh">Refresh</button><input id="auditAction" placeholder="only one kind, e.g. signin or account" spellcheck="false" autocomplete="off" style="max-width:16rem"></div>
+      <div id="auditChain"></div>
+      <div style="max-height:22rem;overflow:auto"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Detail</th><th>From</th></tr></thead><tbody id="auditRows"></tbody></table></div>
+    </div>
     <div class="setSection" id="gwBox" hidden><b>PGM Gateway products</b> — programs of their own (PGM Prod Suit, ShaDow Chat, Hyper Prod Man) whose people sign in the first time with their VibeRoller login and, with AI on, use the AI hosts as themselves. A product's secret goes only to the file shown (for the product on this server), never to this page.
       <table><thead><tr><th>Product</th><th>Served here</th><th>People linked</th><th>Secret file</th><th>Actions</th></tr></thead><tbody id="gwRows"></tbody></table>
       <div class="row">
@@ -5585,8 +5592,30 @@ $('traceGo').onclick = async () => {
   try { const d = await json('/api/admin/trace?run=' + encodeURIComponent(id)); out.hidden = false; out.textContent = (d.lines || []).length ? d.lines.map((x) => `${x.at}  ${x.level}  ${x.area}  ${x.what}  ${JSON.stringify(Object.fromEntries(Object.entries(x).filter(([k]) => !['at', 'level', 'area', 'what'].includes(k))))}`).join('\n') : 'Nothing in the last two days\' log for that run.'; }
   catch (e) { out.hidden = false; out.textContent = e.message; }
 };
+// Security log (T-271): GET /api/admin/audit, newest first, with whether the hash chain still holds
+async function loadAudit() {
+  try {
+    const a = $('auditAction').value.trim();
+    const d = await json('/api/admin/audit?limit=300' + (a ? '&action=' + encodeURIComponent(a) : ''));
+    $('auditBox').hidden = false;
+    const v = d.verified || {}, ch = $('auditChain');
+    ch.textContent = v.ok ? `Chain intact: ${v.entries} entries${v.torn ? ' (the last line was cut short by a crash; it is moved aside on the next entry)' : ''}.` : `Chain broken at entry ${v.brokenAt}: ${v.why || 'a line was changed or removed after it was written'}.`;
+    ch.style.color = v.ok ? '' : 'var(--bad)';
+    const rows = $('auditRows'); rows.innerHTML = '';
+    for (const e of d.entries || []) {
+      const tr = document.createElement('tr');
+      const det = Object.entries(e.detail || {}).map(([k, x]) => k + ' ' + (typeof x === 'string' ? x : JSON.stringify(x))).join(', ');
+      for (const t of [new Date(e.at).toLocaleString(), e.actor || '-', e.action, e.target || '', det, e.ip || '']) { const c = document.createElement('td'); c.textContent = t; tr.append(c); }
+      rows.append(tr);
+    }
+    if (!(d.entries || []).length) { const tr = document.createElement('tr'), c = document.createElement('td'); c.colSpan = 6; c.textContent = 'Nothing recorded yet.'; tr.append(c); rows.append(tr); }
+  } catch { $('auditBox').hidden = true; } // a hub without it (the JavaScript one), or not an admin
+}
+$('auditRefresh').onclick = loadAudit;
+$('auditAction').onkeydown = (e) => { if (e.key === 'Enter') loadAudit(); };
 async function loadAdmin() {
   loadHealth();
+  loadAudit();
   try {
     const { accounts } = await json('/api/admin/accounts');
     const rows = $('adminRows'); rows.innerHTML = '';

@@ -317,12 +317,12 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/security/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -1993,6 +1993,80 @@ async function run() {
     && agentBlocks.status === 409 && /progress from the agent r70/.test(agentDetail.body || '') && bDel.status === 409 && bDel2.status === 200 && bGone && onDiskB.deleted === true
     && /board-mcp\.js/.test(mcpRt) && /mcp__board/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8')),
     `create ${bt.status}, claim ${bClaim.status}, blocked ${bBlockedU.status}/${bClaimU.status}, stale ${bStale.status}, due ${d1.getMonth() + 1}/${d1.getDate()} → ${d2.getMonth() + 1}/${d2.getDate()} (leap ${leap}), agent ${JSON.stringify(agentOut)}, agent-held edit ${agentBlocks.status}`);
+  // ---- T-266 handoffs (R516 to R519): what the next holder of a task starts from. The Rust hub's (the live hub is Rust alone).
+  if (RUST_HUB) {
+    const task266 = async (id) => (await call('/api/board/task?id=' + id, U)).data;
+    const heads266 = (body, kind) => (String(body || '').match(new RegExp('\\*\\*Handoff\\*\\* · [^\\n]+ · ' + kind, 'g')) || []).length;
+    const until266 = async (id, ok, ms = 8000) => { const end = Date.now() + ms; let t; while (Date.now() < end) { t = await task266(id); if (ok(t)) return t; await sleep(200); } return t; };
+    const hold = (text) => JSON.parse((texts(text.events).match(/HOLD:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+    { // R516: a release with a handoff stores it as a signed note in four parts; the next holder (another person's Claude) gets it from task_claim
+      const id = (await call('/api/board/create', U, { title: 'r516 handoff task', assignee: 't-user' })).data.task.id;
+      await call('/api/board/claim', U, { id });
+      const rel = await call('/api/board/release', U, { id, note: 'r516 stopping', handoff: { done: 'r516 the first half', state: 'branch work/r516; 2 uncommitted files', next: 'r516 the second half', questions: ['r516 which port?', 'r516 who reviews?'] } });
+      const stored = await task266(id);
+      await call('/api/board/update', U, { id, assignee: 't-admin' }); // re-assigned: whoever picks it up starts from the handoff
+      const pick = hold(await chat(A, 'BOARDPICK=' + id + ' r516', { fresh: true }));
+      const after = await task266(id);
+      const seen = { rel: rel.status, relHandoff: rel.data.handoff, released: rel.data.task && rel.data.task.claim === null,
+        note: /\*\*Handoff\*\* · [^\n]+ · \d{4}-\d\d-\d\d \d\d:\d\d · released\n\n\*\*Done so far:\*\* r516 the first half\n\n\*\*State:\*\* branch work\/r516; 2 uncommitted files\n\n\*\*Next step:\*\* r516 the second half\n\n\*\*Open questions:\*\* - r516 which port\?\n- r516 who reviews\?/.test(stored.task.body),
+        getHandoff: stored.handoff && stored.handoff.next, pick, afterKind: after.handoff && after.handoff.kind, afterBy: after.handoff && after.handoff.by, afterDone: after.handoff && after.handoff.done, both: heads266(after.task.body, 'released') };
+      check('R516', 'a release with a handoff stores it in the task\'s description as a signed "Handoff" note with its four parts (done so far, state, next step, open questions), task_get answers it parsed, and whoever claims the task next (here another person\'s Claude, after a re-assignment) gets it in task_claim\'s answer; that Claude\'s own release with a handoff then is the latest one, signed "· Claude"',
+        seen.rel === 200 && seen.released && seen.relHandoff && seen.relHandoff.done === 'r516 the first half' && seen.note && seen.getHandoff === 'r516 the second half'
+        && pick.claimed === true && pick.handoff && pick.handoff.done === 'r516 the first half' && pick.handoff.state === 'branch work/r516; 2 uncommitted files' && pick.handoff.questions === '- r516 which port?\n- r516 who reviews?'
+        && pick.released === true && seen.afterKind === 'released' && / · Claude$/.test(seen.afterBy || '') && seen.afterDone === 'r516 the agent did the second half' && seen.both === 2,
+        JSON.stringify(seen));
+    }
+    { // R517: a Work run that ends holding a claim leaves one automatic handoff (from its last reply), not two; a run that let go leaves none
+      const held = hold(await chat(A, 'BOARDHOLD r517', { fresh: true }));
+      const t1 = await until266(held.id, (t) => heads266(t.task && t.task.body, 'run ended') > 0);
+      await chat(A, 'plain run r517 after it'); await sleep(1500);
+      const t2 = await task266(held.id);
+      const let_ = hold(await chat(A, 'BOARDHOLD RELEASE r517', { fresh: true })); await sleep(1500);
+      const t3 = await task266(let_.id);
+      const h = t1.handoff || {};
+      const seen = { held, once: heads266(t1.task.body, 'run ended'), still: heads266(t2.task.body, 'run ended'), kind: h.kind, done: /^From the run's last reply:\n\n> echo: /.test(h.done || ''), state: /session [^,]+, run [0-9a-f]+\.$/.test(h.state || ''),
+        next: /lapses by itself/.test(h.next || ''), claimKept: !!(t2.task.claim && t2.task.claim.agent), letGo: let_.released === true && heads266(t3.task.body, '') === 0 && t3.handoff === null };
+      check('R517', 'a Work run that ends still holding a task it claimed leaves one automatic handoff on it ("run ended (automatic)": done so far from its last reply, its session and run in the state, the next step), the claim left as it is; a later run of the same person adds no second one, and a run that released its task leaves none',
+        held.claimed === true && seen.once === 1 && seen.still === 1 && seen.kind === 'run ended (automatic)' && seen.done && seen.state && seen.next && seen.claimKept && seen.letGo,
+        JSON.stringify(seen));
+    }
+    { // R518: presence: a person who goes offline holding a claim gets one short automatic note per claim (board.offlineGraceSeconds: 1 here)
+      const keep = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+      const online = async (dev) => { const stop = keep(D, dev); await sleep(400); await call('/api/presence', D, { device: dev, idle: false }); await sleep(1500); return stop; };
+      const offline = async (stop, dev) => { stop(); await call('/api/presence', D, { device: dev, gone: true }); };
+      const id = (await call('/api/board/create', D, { title: 'r518 held while going offline' })).data.task.id;
+      const other = (await call('/api/board/create', D, { title: 'r518 released before' })).data.task.id;
+      let stop = await online('r518a');
+      await call('/api/board/claim', D, { id, minutes: 30 }); await call('/api/board/claim', D, { id: other }); await call('/api/board/release', D, { id: other });
+      const before = heads266((await task266(id)).task.body, '');
+      await offline(stop, 'r518a');
+      const t1 = await until266(id, (t) => heads266(t.task && t.task.body, 'went offline') > 0);
+      stop = await online('r518b'); await offline(stop, 'r518b'); await sleep(3500);
+      const t2 = await task266(id), o = await task266(other);
+      const h = t1.handoff || {};
+      const seen = { before, once: heads266(t1.task.body, 'went offline'), again: heads266(t2.task.body, 'went offline'), kind: h.kind, done: /went offline while holding this/.test(h.done || ''), state: /^Held since .+ UTC by .+; last activity .+ UTC\.$/.test(h.state || ''),
+        claimKept: !!t2.task.claim, otherNone: heads266(o.task.body, '') === 0 };
+      await call('/api/board/release', D, { id });
+      check('R518', 'presence notices a holder going offline: once they have been offline for the grace time, each claim they hold gets one short automatic note ("went offline (automatic)": went offline while holding this, held since, last activity), the claim left as it is; going offline again with the same claim adds no second one, and a task they released before gets none',
+        seen.before === 0 && seen.once === 1 && seen.again === 1 && seen.kind === 'went offline (automatic)' && seen.done && seen.state && seen.claimKept && seen.otherNone,
+        JSON.stringify(seen));
+    }
+    { // R519: how it fails: an older-style release (a note only) works as before; a handoff that is not an object, or says nothing, is refused 400 and releases nothing; another's claim 409
+      const id = (await call('/api/board/create', U, { title: 'r519 older release' })).data.task.id;
+      await call('/api/board/claim', U, { id });
+      const bad = await call('/api/board/release', U, { id, handoff: 'r519 not an object' }), empty = await call('/api/board/release', U, { id, handoff: { done: ' ', questions: [] } });
+      const stillHeld = !!(await task266(id)).task.claim;
+      const other = await call('/api/board/release', A, { id, handoff: { done: 'r519 not mine' } });
+      const old = await call('/api/board/release', U, { id, note: 'r519 plain note' });
+      const t = await task266(id);
+      const seen = { bad: bad.status, badWhy: bad.data.error, empty: empty.status, stillHeld, other: other.status, old: old.status, released: t.task.claim === null, noNote: heads266(t.task.body, '') === 0 && t.handoff === null,
+        logged: (t.activity || []).some((e) => e.what === 'released' && e.detail === 'r519 plain note'), claimNull: ((await call('/api/board/claim', U, { id })).data || {}).handoff === null };
+      await call('/api/board/release', U, { id });
+      check('R519', 'how a handoff fails: an older-style release with only a note works as before (released, the note in the activity, no Handoff note, task_claim answers handoff: null); a handoff that is not an object or says nothing is refused 400 and the claim stays; a handoff on a task someone else holds is refused 409',
+        seen.bad === 400 && /handoff must be an object/.test(seen.badWhy || '') && seen.empty === 400 && seen.stillHeld && seen.other === 409 && seen.old === 200 && seen.released && seen.noNote && seen.logged && seen.claimNull,
+        JSON.stringify(seen));
+    }
+  } else for (const [n, what] of [['R516', 'a release with a handoff, picked up by the next holder'], ['R517', 'the automatic handoff when a run ends holding a claim'], ['R518', 'the automatic note when a holder goes offline'], ['R519', 'how a handoff fails']]) skip(n, what, 'the Rust hub\'s: --rust-hub runs it');
   // Claude plans with the board + calendar (task_create / task_update with text due dates, board_calendar, task_move, task_delete, board_new) and reaches the wider hub (channels / groups it makes, hub_status, sessions_search, my_providers).
   await call('/api/archive/save', A, { title: 'Needle session', transcript: [{ cls: 'me', text: 'remember needle-r116' }] });
   const planRun = await chat(A, 'BOARDPLAN please', { fresh: true });
@@ -3467,29 +3541,42 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const L480 = {
       R480: 'agent talk 2/6 (T-296): @t-user resolves to t-user\'s current session: an idle one is woken (the run sees the "[agent message · from @t-admin\'s agent" first line), a working one gets it queued and delivered when its reply ends; the thread exists on both sides with one id; a third person gets 404 on it; the audit has sent / delivered / read with from.run',
       R481: 'agent talk 3/6 (T-297): a run\'s agent_ask (wait: true) to another person is answered by that person\'s run through agent_reply and the asker\'s tool result carries the reply text and thread; wait: false gives {pending} and the reply arrives as a message in the asker\'s session; agents_list shows the person reachable with their state; both MCP lists have the six tools',
-      R482: 'agent talk 4/6 (T-298): mute refuses a send (403 muted) and shows the attempt to the muter only; pause queues (202 queued) and unpause delivers; a hand-off is held by default, told in a private chat line, declined with a note or accepted (then the task is re-assigned to the receiver); DND changes nothing of delivery; the page has the thread panel and the held card',
+      R482: 'agent talk 4/6, the hub (T-296): mute refuses a send (403 muted) and shows the attempt to the muter only; pause queues (202 queued) and unpause delivers; a hand-off is held by default and told in a private chat line, declined with a note (the task stays the sender\'s) or accepted (then the task is re-assigned to the receiver); DND changes nothing of delivery',
+      R482p: 'agent talk 4/6, the page (T-298): the page has the thread panel, the held card and the settings (it calls /api/agents/threads, /api/agents/held and /api/agents/settings)',
       R483: 'agent talk 5/6 (T-299): a source: jcode session report makes @t-user/jcode resolvable; a send to it waits in GET /api/agents/inbox?source=jcode, read marks it, a reply from that side reaches the asker; the message has the same shape both ways (no Claude-only fields)',
-      R484: 'agent talk 6/6 (T-300): an A→B→A→B echo is stopped by the loop detector (stopped, why loop) with one chat line to each person; the 21st message of a pair in an hour is 429 rate; a hand-off of someone else\'s task is held and, declined, leaves the assignee and refuses the receiving run\'s task_claim; a send right after a refused tool carries afterRefusal in the audit; an agent-started run counts in the receiver\'s ledger and time log',
+      R484: 'agent talk 6/6, the hub (T-296): an A→B→A→B echo is stopped by the loop detector (stopped, why loop) before maxHops with one chat line to each person; a hand-off of someone else\'s task is held and, declined, leaves the assignee, and the receiving person\'s agent may not claim it; a send right after a refused tool in the sender\'s run carries afterRefusal in the audit; the 21st message from one person to another in an hour is 429 rate',
+      R484c: 'agent talk 6/6, cost (T-300): an agent-started run counts in the receiver\'s time log with startedBy agent:<sender> (their usage ledger counts it already: it is their run)',
     };
     if (RUST_HUB) {
       const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
       const built = (await ag('settings', U)).status === 200; // the whole feature is there, or none of it
       const seq480 = async () => Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));
+      // the agents' runs settle: no session of t-user's or t-admin's works for 1.5 s (an agent message wakes a session, and its
+      // answer wakes the asker's; a check that then sends its own message must not find the session busy: 409)
+      const idle480 = async (ms = 30000) => { const end = Date.now() + ms; let calm = 0; while (Date.now() < end) { const n = (await Promise.all([U, A].map((t) => call('/api/work/sessions', t)))).reduce((x, r) => x + (((r.data || {}).counts || {}).working || 0), 0); calm = n === 0 ? calm + 1 : 0; if (calm >= 6) return true; await sleep(250); } return false; };
+      // the session a message went to (to.session, once delivered) and its conversation as the hub keeps it
+      const sessOf480 = async (tok, thread, id) => (((((await ag('thread?id=' + thread, tok)).data || {}).messages || []).find((m) => m.id === id) || {}).to || {}).session || '';
+      const conv480 = async (tok, sid) => ((await call('/api/work/current' + (sid ? '?session=' + sid : ''), tok)).data || {}).transcript || [];
+      // the conversations the agents' runs add to (the woken sessions keep what arrived and the answer): put back as they were
+      // after this block, so the later checks find them as before (R135 expects t-user's and t-admin's first sessions empty)
+      const keep480 = async () => { const out = []; for (const tok of [U, A]) { const sx = (await call('/api/work/sessions', tok)).data || {}; for (const sid of [...new Set([sx.primary, sx.current].filter(Boolean))]) out.push({ tok, sid, cur: (await call('/api/work/current?session=' + sid, tok)).data || {} }); } return out; };
+      const kept480 = built ? await keep480() : [];
       // R480: wake an idle session, queue behind a working one, one thread both sides, audit
       let d480 = 'no /api/agents/* yet';
       if (built) {
+        await idle480();
         const idle = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r480 what is the plan?', refs: { task: 'T-296' }, wait: false });
-        let woke = null; for (let i = 0; i < 40 && !woke; i++) { const cur = (await call('/api/work/current', U)).data || {}; if ((cur.transcript || []).some((t) => /\[agent message · from @t-admin's agent/.test(t.text || ''))) woke = cur; else await sleep(250); }
-        const slow = call('/api/chat', U, { message: 'SLOW r480' }); await sleep(700);
+        let woke = null, sid480 = ''; for (let i = 0; i < 60 && !woke; i++) { sid480 = sid480 || await sessOf480(A, idle.data.thread, idle.data.id); const tr = sid480 ? await conv480(U, sid480) : []; if (tr.some((t) => /\[agent message · from @t-admin's agent/.test(t.text || ''))) woke = tr; else await sleep(250); }
+        const slow = call('/api/chat', U, { message: 'SLOW r480', ...(sid480 ? { session: sid480 } : {}) }); await sleep(700);
         const queued = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r480 second, while busy', thread: idle.data.thread, wait: false }); await slow;
         let delivered = null; for (let i = 0; i < 40 && !delivered; i++) { const m = (await ag('thread?id=' + idle.data.thread, A)).data || {}; const x = (m.messages || []).find((q) => q.id === queued.data.id); if (x && ['delivered', 'read', 'answered'].includes(x.status)) delivered = x; else await sleep(250); }
         const mine = await ag('thread?id=' + idle.data.thread, U), other = await ag('thread?id=' + idle.data.thread, D);
         const audit = await ag('audit?since=0', A);
         const lines = (audit.data && audit.data.lines) || [];
-        d480 = `send ${idle.status} ${JSON.stringify(idle.data).slice(0, 80)}; woke ${!!woke}; queued ${queued.status} ${queued.data && queued.data.status} -> ${delivered && delivered.status}; both sides ${mine.status}/${other.status}; audit ${lines.length}`;
-        spec('R480', L480.R480, idle.status === 202 && !!woke && queued.status === 202 && queued.data.status === 'queued' && !!delivered && mine.status === 200 && (mine.data.messages || []).length >= 2 && other.status === 404
+        d480 = `send ${idle.status} ${JSON.stringify(idle.data).slice(0, 80)}; woke ${!!woke} (session ${sid480}); queued ${queued.status} ${queued.data && queued.data.status} -> ${delivered && delivered.status}; both sides ${mine.status}/${other.status}; audit ${lines.length}`;
+        check('R480', L480.R480, idle.status === 202 && !!woke && queued.status === 202 && queued.data.status === 'queued' && !!delivered && mine.status === 200 && (mine.data.messages || []).length >= 2 && other.status === 404
           && lines.some((l) => l.event === 'sent' && l.id === idle.data.id && typeof l.run === 'string') && lines.some((l) => l.event === 'delivered' && l.id === idle.data.id) && lines.some((l) => l.event === 'read' && l.id === idle.data.id), d480);
-      } else spec('R480', L480.R480, false, d480);
+      } else check('R480', L480.R480, false, d480);
       // R481: the tools (the fake Claude's NOTIFYTOOL calls team tools by name)
       const tools481 = async (calls, tok) => { const r = await chat(tok, 'NOTIFYTOOL ' + JSON.stringify(calls) + ' END', { fresh: true }); try { return JSON.parse((texts(r.events).match(/NOTIFY:(\[.*\])/) || [])[1]); } catch { return []; } };
       const nativeTools481 = JSON.parse(fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'mcp-tools.json'), 'utf8')).team.map((t) => t.name);
@@ -3497,13 +3584,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const six = ['agents_list', 'agent_ask', 'agent_handoff', 'agent_review', 'agent_report', 'agent_reply'];
       const listed = six.every((n) => nativeTools481.includes(n) && jsTools481.includes(n));
       if (built && listed) {
+        await idle480();
         const [lst, asked] = await tools481([['agents_list', {}], ['agent_ask', { to: 't-user', text: 'r481 reply with the word pelican', wait: true, replyBySec: 60 }]], A);
         const me481 = ((lst && lst.result && lst.result.agents) || []).find((x) => x.user === 't-user') || {};
+        await idle480();
         const [nowait] = await tools481([['agent_ask', { to: 't-user', text: 'r481 later', wait: false }]], A);
-        let later = false; for (let i = 0; i < 40 && !later; i++) { const cur = (await call('/api/work/current', A)).data || {}; later = (cur.transcript || []).some((t) => /\[agent message · from @t-user's agent .* reply/.test(t.text || '')); if (!later) await sleep(250); }
-        spec('R481', L480.R481, !!lst && lst.ok && me481.reachable === true && typeof me481.state === 'string' && !!asked && asked.ok && /pelican/.test(JSON.stringify(asked.result)) && !!asked.result.thread && !!nowait && nowait.ok && nowait.result.pending === true && later,
+        let later = false; for (let i = 0; i < 60 && !later; i++) { const cur = (await call('/api/work/current', A)).data || {}; later = (cur.transcript || []).some((t) => /\[agent message · from @t-user's agent .* reply/.test(t.text || '')); if (!later) await sleep(250); }
+        check('R481', L480.R481, !!lst && lst.ok && me481.reachable === true && typeof me481.state === 'string' && !!asked && asked.ok && /pelican/.test(JSON.stringify(asked.result)) && !!asked.result.thread && !!nowait && nowait.ok && nowait.result.pending === true && later,
           `list ${JSON.stringify(me481)}; ask ${JSON.stringify(asked && asked.result).slice(0, 120)}; nowait ${JSON.stringify(nowait && nowait.result).slice(0, 80)}; reply later ${later}`);
-      } else spec('R481', L480.R481, false, built ? `tools missing: ${six.filter((n) => !nativeTools481.includes(n) || !jsTools481.includes(n)).join(', ')}` : 'no /api/agents/* yet');
+      } else check('R481', L480.R481, false, built ? `tools missing: ${six.filter((n) => !nativeTools481.includes(n) || !jsTools481.includes(n)).join(', ')}` : 'no /api/agents/* yet');
       // R482: the person's controls
       const html482 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       const page482 = /\/api\/agents\/threads/.test(html482) && /\/api\/agents\/held/.test(html482) && /\/api\/agents\/settings/.test(html482);
@@ -3528,12 +3617,16 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         await call('/api/presence/me', U, { dnd: true });
         const dnd = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r482 dnd', wait: false });
         await call('/api/presence/me', U, { dnd: false });
-        spec('R482', L480.R482, muted.status === 403 && (muted.data || {}).why === 'muted' && (seen.threads || []).some((t) => t.with === 't-admin') && !(notSeen.threads || []).some((t) => (t.lastWhy || '') === 'muted')
+        // the decline's note reaches the sender's side of the thread (a report from the person)
+        const noted = ((((await ag('thread?id=' + (held.data || {}).thread, A)).data || {}).messages) || []).some((m) => m.kind === 'report' && /not now/.test(m.text || ''));
+        const mutedSeen = ((((await ag('thread?id=' + ((seen.threads || []).find((t) => t.lastWhy === 'muted') || {}).id, U)).data || {}).messages) || []).some((m) => m.id === (muted.data || {}).id && m.why === 'muted');
+        check('R482', L480.R482, muted.status === 403 && (muted.data || {}).why === 'muted' && mutedSeen && !(notSeen.threads || []).some((t) => (t.lastWhy || '') === 'muted')
           && paused.status === 202 && paused.data.status === 'queued' && stillQueued.some((x) => x.id === paused.data.id && x.status === 'queued') && deliveredAfter
-          && held.status === 202 && held.data.status === 'held' && !!dm && declined.status === 200 && stillAdmin.assignee === 't-admin' && accepted.status === 200 && nowUser.assignee === 't-user'
-          && dnd.status === 202 && dnd.data.status !== 'refused' && page482,
-          `muted ${muted.status} ${(muted.data || {}).why}; paused ${paused.status} ${(paused.data || {}).status} queued ${stillQueued.length} then delivered ${deliveredAfter}; held ${held.status} ${(held.data || {}).status} dm ${!!dm} declined ${declined.status} assignee ${stillAdmin.assignee} -> accepted ${accepted.status} ${nowUser.assignee}; dnd ${dnd.status}; page ${page482}`);
-      } else spec('R482', L480.R482, false, `no /api/agents/* yet; page ${page482}`);
+          && held.status === 202 && held.data.status === 'held' && !!dm && declined.status === 200 && noted && stillAdmin.assignee === 't-admin' && accepted.status === 200 && nowUser.assignee === 't-user'
+          && dnd.status === 202 && dnd.data.status !== 'refused',
+          `muted ${muted.status} ${(muted.data || {}).why} seen by the muter ${mutedSeen}; paused ${paused.status} ${(paused.data || {}).status} queued ${stillQueued.length} then delivered ${deliveredAfter}; held ${held.status} ${(held.data || {}).status} dm ${!!dm} declined ${declined.status} note ${noted} assignee ${stillAdmin.assignee} -> accepted ${accepted.status} ${nowUser.assignee}; dnd ${dnd.status}`);
+      } else check('R482', L480.R482, false, 'no /api/agents/* yet');
+      spec('R482p', L480.R482p, page482, `page ${page482}`);
       // R483: an external (jcode) agent
       if (built) {
         const rep = await call('/api/work/sessions/report', U, { source: 'jcode', device: 'r483-box', sessions: [{ id: 'j-r483', state: 'working', title: 'r483 jcode', project: 'Jcode-PGM' }], ttlSec: 120 });
@@ -3549,23 +3642,41 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       } else spec('R483', L480.R483, false, 'no /api/agents/* yet');
       // R484: loops, rate, ownership, laundering mark, cost
       if (built) {
+        await idle480();
         const s484 = await seq480();
         const echo = await ag('send', A, { to: 't-user', kind: 'ask', text: 'ECHO r484 ping', wait: false }); // the fake Claude answers an ECHO with agent_reply of the same text, both sides, until stopped
         let stopped = null; for (let i = 0; i < 80 && !stopped; i++) { const m = (await ag('thread?id=' + (echo.data || {}).thread, A)).data || {}; if (m.status === 'stopped') stopped = m; else await sleep(250); }
-        const told = ((await call('/api/room/messages?since=' + s484, A)).data.messages || []).filter((m) => /going in circles/.test(m.text || ''));
-        const bursts = []; for (let i = 0; i < 21; i++) bursts.push((await ag('send', A, { to: 't-user', kind: 'report', text: 'r484 burst ' + i, wait: false })).status);
+        // one private chat line each (t-user's read with their key; t-admin's seen by its address)
+        const room484 = async (tok) => ((await call('/api/room/messages?since=' + s484, tok)).data.messages || []).filter((m) => m.from === 'claude');
+        const toldUser = (await Promise.all((await room484(U)).filter((m) => m.to === 't-user').map((m) => roomRead(restored, m)))).filter((t) => /going in circles/.test(t || ''));
+        const toldAdmin = (await room484(A)).filter((m) => m.to === 't-admin');
+        // ownership: a hand-off of a third person's task is held; declined, the task stays theirs, and t-user's agent may not claim it
         const t484 = (await call('/api/board/create', D, { title: 'r484 mills task', status: 'todo', assignee: 'mills' })).data.task || {};
         const ho = await ag('send', A, { to: 't-user', kind: 'handoff', text: 'r484 not mine to give', refs: { task: t484.id } });
         const dec = await ag('held', U, { id: (ho.data || {}).id, accept: false });
         const still = ((await call('/api/board', A)).data.tasks || []).find((t) => t.id === t484.id) || {};
         const claim = await call('/api/board/claim', U, { id: t484.id, asAgent: true });
+        // the laundering mark: t-admin's run has a tool refused, then sends
+        await idle480();
+        const r484 = await chat(A, 'DENIEDFIRST NOTIFYTOOL ' + JSON.stringify([['agent_ask', { to: 't-user', text: 'r484 right after a refusal', wait: false }]]) + ' END', { fresh: true });
+        const sentAfter = (() => { try { return JSON.parse((texts(r484.events).match(/NOTIFY:(\[.*\])/) || [])[1])[0]; } catch { return null; } })();
         const audit = ((await ag('audit?since=0', A)).data || {}).lines || [];
-        const after = audit.some((l) => l.event === 'sent' && l.afterRefusal === true);
-        const ledger = (await call('/api/usage', U)).data || {};
-        spec('R484', L480.R484, !!stopped && stopped.why === 'loop' && (stopped.messages || []).length < 8 && told.length >= 1 && bursts.filter((x) => x === 429).length >= 1 && bursts[bursts.length - 1] === 429
-          && ho.status === 202 && (ho.data || {}).status === 'held' && dec.status === 200 && still.assignee === 'mills' && claim.status !== 200 && typeof after === 'boolean' && ((ledger.answers || {}).turns || 0) >= 0,
-          `loop ${stopped && stopped.why} after ${stopped && (stopped.messages || []).length}; told ${told.length}; rate ${bursts.filter((x) => x === 429).length}/21 refused; handoff ${ho.status} ${(ho.data || {}).status} declined ${dec.status} assignee ${still.assignee} claim ${claim.status}; afterRefusal seen ${after}`);
-      } else spec('R484', L480.R484, false, 'no /api/agents/* yet');
+        const after = !!sentAfter && sentAfter.ok && audit.some((l) => l.event === 'sent' && l.id === sentAfter.result.id && l.afterRefusal === true && typeof l.run === 'string' && l.run.length > 0);
+        const marked = !!sentAfter && sentAfter.ok && ((((await ag('thread?id=' + sentAfter.result.thread, U)).data || {}).messages) || []).some((m) => m.id === sentAfter.result.id && m.x && m.x.afterRefusal === true);
+        // the rate: the 21st message from t-admin to t-user within the hour (the earlier checks sent some already) is refused
+        const bursts = []; for (let i = 0; i < 21; i++) bursts.push((await ag('send', A, { to: 't-user', kind: 'report', text: 'r484 burst ' + i, wait: false })).status);
+        const rateWhy = (await ag('send', A, { to: 't-user', kind: 'report', text: 'r484 one more', wait: false })).data || {};
+        check('R484', L480.R484, !!stopped && stopped.why === 'loop' && (stopped.messages || []).length < 8 && toldUser.length === 1 && toldAdmin.length >= 1
+          && ho.status === 202 && (ho.data || {}).status === 'held' && dec.status === 200 && still.assignee === 'mills' && claim.status === 403
+          && after && marked && bursts.filter((x) => x === 429).length >= 1 && bursts[bursts.length - 1] === 429 && rateWhy.why === 'rate' && /an hour between you and @t-user/.test(rateWhy.error || ''),
+          `loop ${stopped && stopped.why} after ${stopped && (stopped.messages || []).length}; told t-user ${toldUser.length} t-admin ${toldAdmin.length}; handoff ${ho.status} ${(ho.data || {}).status} declined ${dec.status} assignee ${still.assignee} claim ${claim.status}; afterRefusal ${after} marked ${marked}; rate ${bursts.filter((x) => x === 429).length}/21 refused (${rateWhy.error})`);
+        // the cost of an agent-started run in the receiver's time log (T-300's): their usage ledger counts it already, the startedBy mark is not there yet
+        const day484 = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+        const f484 = path.join(SB, 'profiles', 't-user', 'activity', `${day484}.json`);
+        spec('R484c', L480.R484c, fs.existsSync(f484) && /"startedBy":\s*"agent:t-admin"/.test(fs.readFileSync(f484, 'utf8')), `time log ${fs.existsSync(f484) ? 'has no startedBy' : 'missing'}`);
+        await idle480();
+      } else { check('R484', L480.R484, false, 'no /api/agents/* yet'); spec('R484c', L480.R484c, false, 'no /api/agents/* yet'); }
+      for (const k of kept480) await call('/api/work/current', k.tok, { session: k.sid, transcript: k.cur.transcript || [], archiveId: k.cur.archiveId || null, archiveTitle: k.cur.archiveTitle || null });
     } else for (const id of Object.keys(L480)) skip(id, L480[id], 'the Rust hub\'s: --rust-hub runs it');
   }
   if (RUST_HUB) { // R245-R249 (T-238 = T-193 · 1/4): one start-work flow; the fake Forgejo (this runner) answers as tuser-fj and takes pushes over smart HTTP
@@ -3878,6 +3989,82 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R510', 'the prompt enhancer gets the session\'s conversation to understand the draft: its first message and its newest turns (tools left out, older middle turns skipped and said so, about 12 000 characters at most) before the draft, marked as context only; with context: false it gets none',
       Object.values(seen.ctx).every(Boolean) && seen.off, JSON.stringify(seen));
   } else skip('R510', 'the prompt enhancer with the session\'s context', 'the Rust hub\'s: --rust-hub runs it');
+  // T-271: the security log (bridge/security/audit.jsonl, pgm-core-internal audit.rs): append-only, hash-chained, admins read it
+  const AUDIT_FILE = path.join(SB, 'security', 'audit.jsonl');
+  const loginFrom = (ip, body) => fetch(H + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  const R521_LABEL = 'the security log records sign-ins: a failed and then a successful sign-in of an account appear in the admin\'s GET /api/admin/audit in that order, with who and from which address; a failed one for a name that is no account names nobody; a non-admin gets 403 (and that refusal is noted), a visitor 401; no password, token or mistyped name is ever in the file, which only its owner may read';
+  if (RUST_HUB) { // R521
+    const seen = {};
+    const bad = await loginFrom('198.51.100.71', { username: 't-user', password: 'r521-WRONG-pass', deviceId: devB });
+    const good = await loginFrom('198.51.100.71', { username: 't-user', password: 'pw-t-user-0001', deviceId: devB });
+    const typo = await loginFrom('198.51.100.72', { username: 'r521-typed-secret', password: 'r521-other-pw', deviceId: devB });
+    seen.statuses = [bad.status, good.status, typo.status];
+    const au = await call('/api/admin/audit?action=signin&limit=100', A), es = au.data.entries || [];
+    const failed = es.find((e) => e.action === 'signin.failed' && e.actor === 't-user' && e.ip === '198.51.100.71'), ok = es.find((e) => e.action === 'signin' && e.actor === 't-user' && e.ip === '198.51.100.71');
+    seen.failed = !!failed; seen.ok = !!ok; seen.inOrder = !!failed && !!ok && failed.seq < ok.seq && es.indexOf(ok) < es.indexOf(failed); // newest first
+    seen.nobody = es.some((e) => e.action === 'signin.failed' && e.ip === '198.51.100.72' && e.actor === '' && e.target === '' && e.detail && e.detail.known === false);
+    seen.verified = au.status === 200 && au.data.verified && au.data.verified.ok === true;
+    seen.user = (await call('/api/admin/audit', U)).status; seen.anon = (await call('/api/admin/audit')).status;
+    seen.refusedNoted = ((await call('/api/admin/audit?action=admin.refused', A)).data.entries || []).some((e) => e.actor === 't-user' && e.target === '/api/admin/audit');
+    const file = fs.existsSync(AUDIT_FILE) ? fs.readFileSync(AUDIT_FILE, 'utf8') : '';
+    seen.noSecrets = !!file && !['r521-WRONG-pass', 'pw-t-user-0001', 'r521-typed-secret', 'r521-other-pw', String(good.data.token || 'no-token'), A].some((s) => file.includes(s));
+    seen.private = WIN || (fs.existsSync(AUDIT_FILE) && (fs.statSync(AUDIT_FILE).mode & 0o077) === 0);
+    check('R521', R521_LABEL, seen.statuses.join() === '401,200,401' && seen.failed && seen.ok && seen.inOrder && seen.nobody && seen.verified && seen.user === 403 && seen.anon === 401 && seen.refusedNoted && seen.noSecrets && seen.private, JSON.stringify(seen));
+  } else skip('R521', R521_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  const R522_LABEL = 'the security log records what an admin changes and what a start changes: making an account, its first device, making it an admin and not, a new password (never the password itself), letting it add a device, resetting its lock, its sign-out and deleting it each appear once with the admin (or the account) and the target, and the hub\'s start with its version; the chain verifies';
+  if (RUST_HUB) { // R522
+    const seen = {};
+    const mk = await call('/api/admin/create', A, { username: 'r522-temp', display: 'R522' });
+    const t = await loginFrom('198.51.100.73', { username: 'r522-temp', password: mk.data.password, deviceId: 'device-r522-0000000000' });
+    await call('/api/admin/set-admin', A, { username: 'r522-temp', admin: true }); await call('/api/admin/set-admin', A, { username: 'r522-temp', admin: false });
+    const pw = await call('/api/admin/password', A, { username: 'r522-temp', keepMachines: true });
+    const t2 = await loginFrom('198.51.100.73', { username: 'r522-temp', password: pw.data.password, deviceId: 'device-r522-0000000000' });
+    seen.allow = (await call('/api/admin/allow-device', A, { username: 'r522-temp' })).status;
+    seen.unlock = (await call('/api/admin/unlock', A, { username: 'r522-temp' })).status;
+    seen.logout = (await call('/api/logout', t2.data.token, {})).status;
+    seen.del = (await call('/api/admin/delete', A, { username: 'r522-temp' })).status;
+    seen.statuses = [mk.status, t.status, pw.status, t2.status];
+    const au = await call('/api/admin/audit?limit=1000', A), es = (au.data.entries || []).filter((e) => e.target === 'r522-temp');
+    const one = (action, actor) => es.filter((e) => e.action === action && e.actor === actor).length === 1;
+    seen.got = { create: one('account.create', 't-admin'), first: one('device.first', 'r522-temp'), role: es.filter((e) => e.action === 'account.role' && e.actor === 't-admin').map((e) => e.detail.admin).reverse().join() === 'true,false',
+      password: one('account.password', 't-admin') && es.find((e) => e.action === 'account.password').detail.keepMachines === true, allow: one('device.allow', 't-admin'), reset: one('device.reset', 't-admin'),
+      signout: one('signout', 'r522-temp'), del: one('account.delete', 't-admin') };
+    seen.start = (au.data.entries || []).some((e) => e.action === 'hub.start' && typeof e.detail.version === 'string' && e.detail.version.length > 0 && typeof e.detail.alone === 'boolean');
+    seen.verified = au.data.verified || {};
+    const file = fs.existsSync(AUDIT_FILE) ? fs.readFileSync(AUDIT_FILE, 'utf8') : '';
+    seen.noPw = !!mk.data.password && !!pw.data.password && !file.includes(mk.data.password) && !file.includes(pw.data.password) && !file.includes(String(t2.data.token || 'no-token'));
+    check('R522', R522_LABEL, seen.statuses.join() === '200,200,200,200' && seen.allow === 200 && seen.unlock === 200 && seen.logout === 200 && seen.del === 200 && Object.values(seen.got).every(Boolean) && seen.start && seen.verified.ok === true && seen.noPw, JSON.stringify(seen));
+  } else skip('R522', R522_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  const R523_LABEL = 'the security log\'s chain shows tampering: a line changed in the file afterwards makes verified.ok false with brokenAt its seq (put back, it verifies again); a line a crash cut short is reported as torn without breaking the chain, and the next entry moves it aside, notes audit.torn and chains on';
+  if (RUST_HUB) { // R523
+    const seen = {};
+    const orig = fs.readFileSync(AUDIT_FILE, 'utf8'), lines = orig.split('\n').filter(Boolean);
+    const i = lines.findIndex((l) => l.includes('"action":"account.create"') && l.includes('"target":"r522-temp"')), target = i >= 0 ? JSON.parse(lines[i]) : {};
+    if (i >= 0) { const forged = lines.slice(); forged[i] = forged[i].replace('"target":"r522-temp"', '"target":"r523-forged"'); fs.writeFileSync(AUDIT_FILE, forged.join('\n') + '\n'); }
+    seen.tampered = ((await call('/api/admin/audit?limit=1', A)).data || {}).verified || {};
+    fs.writeFileSync(AUDIT_FILE, orig);
+    seen.restored = ((await call('/api/admin/audit?limit=1', A)).data || {}).verified || {};
+    fs.appendFileSync(AUDIT_FILE, '{"seq":' + (lines.length + 1) + ',"at":"2026-');
+    seen.torn = ((await call('/api/admin/audit?limit=1', A)).data || {}).verified || {};
+    const again = await loginFrom('198.51.100.74', { username: 't-user', password: 'pw-t-user-0001', deviceId: devB });
+    const after = (await call('/api/admin/audit?limit=5', A)).data || {};
+    seen.after = after.verified || {}; seen.again = again.status;
+    seen.noted = (after.entries || []).some((e) => e.action === 'audit.torn' && e.detail.bytes > 0) && (after.entries || []).some((e) => e.action === 'signin' && e.ip === '198.51.100.74');
+    seen.aside = fs.readdirSync(path.dirname(AUDIT_FILE)).some((f) => /^audit\.torn-\d+$/.test(f));
+    check('R523', R523_LABEL, i >= 0 && seen.tampered.ok === false && seen.tampered.brokenAt === target.seq && seen.restored.ok === true && seen.torn.ok === true && seen.torn.torn === true
+      && seen.again === 200 && seen.after.ok === true && seen.after.torn === false && seen.noted && seen.aside, JSON.stringify({ ...seen, seq: target.seq }));
+  } else skip('R523', R523_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  { // R524: the page's read-only Security log for admins, next to Health [static]; the JavaScript hub has none (it keeps booting)
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const seen = {
+      box: /<div class="setSection" id="healthBox" hidden>[\s\S]{0,1500}<div class="setSection" id="auditBox" hidden><b><svg class="ic" aria-hidden="true"><use href="#i-shield"\/><\/svg> Security log<\/b>/.test(page),
+      reads: /json\('\/api\/admin\/audit\?limit=300'/.test(page) && /Chain broken at entry \$\{v\.brokenAt\}/.test(page) && /loadHealth\(\);\n  loadAudit\(\);/.test(page),
+      ignored: /^bridge\/security\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
+    };
+    if (!RUST_HUB) seen.jsHub = (await call('/api/admin/audit', A)).status !== 200 && (await call('/api/status')).status === 200;
+    check('R524', 'admins see a read-only Security log next to Health (shield icon, newest first, whether the chain is intact or where it broke), loaded with the admin screen; the log\'s folder is gitignored data; the JavaScript hub has no such route and keeps answering [static: no browser in the suite]',
+      Object.values(seen).every(Boolean), JSON.stringify(seen));
+  }
   { // R512 (5.43.0): the GPU is not held: the brain's keep_alive is short by default (both hubs), the app's tray frees it
     const rd = (p) => { try { return fs.readFileSync(path.join(MILLS, p), 'utf8'); } catch { return ''; } };
     const asJs = rd('bridge/assistant.js'), ub = rd('native/crates/pgm-ai-internal/src/unity_brain.rs'), gpu = rd('native/crates/vr-desktop/src/gpu.rs'), dm = rd('native/crates/vr-desktop/src/main.rs');

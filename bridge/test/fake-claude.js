@@ -6,6 +6,7 @@
 //   message contains "PCTOOL" → calls the pc "list" tool through the hub, like the real MCP relay
 //   message contains "CLAUDETOOL" → runs one fake tool (Bash) before answering
 //   message contains "DENIED" → the result says a tool was refused for want of permission (permission_denials)
+//   message is an agent message ("[agent message · from @…") → answers an ask / review (or an ECHO) with agent_reply
 //   message contains "USAGE"  → reports token usage (54,000 of a 200,000 context window) and a
 //                               5-hour rate-limit event (42% used, resets in 2 h), like the real stream
 // The answer echoes the model and the working folder (cwd) so the runner can check both.
@@ -26,6 +27,9 @@ process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', async () => {
   out({ type: 'system', subtype: 'init', session_id: session, model });
   if (input.includes('SLOW')) await sleep(4000);
+  // "DENIEDFIRST" (R484): a turn that ends with a refused tool first (a result with permission_denials, as a real run sends after each
+  // turn), then the rest of the run goes on: what this run sends next comes right after a refusal
+  if (input.includes('DENIEDFIRST')) { out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, num_turns: 1, session_id: session, uuid: crypto.randomUUID(), result: '', permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_denied_first', tool_input: { command: 'rm -rf build' } }] }); await sleep(400); }
   // the prompt enhancer (5.35.0, R497): its own system prompt; it answers with what it was given and how it was started
   if (argv.includes('--system-prompt')) {
     const sys = opt('--system-prompt');
@@ -134,6 +138,29 @@ process.stdin.on('end', async () => {
     const back = await tool('task_restore', { id, status: 'todo' });
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'ARCH:' + JSON.stringify({ id, early: early.ok ? 'archived' : early.error, archivedAt: arch.ok ? arch.result.task.archivedAt : arch.error,
       onBoard: listed.ok ? listed.result.tasks.some((t) => t.id === id) : listed.error, found: found.ok ? found.result.tasks.map((t) => t.id) : found.error, restored: back.ok ? back.result.task.status : back.error }) }] } });
+  }
+  // "BOARDHOLD" (T-266): create a task and claim it, then end the run still holding it ("BOARDHOLD RELEASE": release it first).
+  // "BOARDPICK=T-n": claim that task (printing the handoff the claim answers), then release it with a handoff of its own.
+  if (input.includes('BOARDHOLD') || /BOARDPICK=T-\d+/.test(input)) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.board.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/board', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const rep = {};
+    if (input.includes('BOARDHOLD')) {
+      const made = await tool('task_create', { title: 'agent holds r517' });
+      rep.id = made.ok ? made.result.task.id : '';
+      rep.claimed = (await tool('task_claim', { id: rep.id, minutes: 30 })).ok;
+      if (input.includes('BOARDHOLD RELEASE')) rep.released = (await tool('task_release', { id: rep.id })).ok;
+    } else {
+      rep.id = input.match(/BOARDPICK=(T-\d+)/)[1];
+      const c = await tool('task_claim', { id: rep.id, minutes: 10 });
+      rep.claimed = c.ok; rep.handoff = c.ok ? c.result.handoff : c.error;
+      const r = await tool('task_release', { id: rep.id, handoff: { done: 'r516 the agent did the second half', state: 'branch agents/r516; clean', next: 'r516 review it', questions: ['r516 ship it?'] } });
+      rep.released = r.ok; rep.after = r.ok ? r.result.handoff : r.error;
+    }
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'HOLD:' + JSON.stringify(rep) }] } });
   }
   // "PLANASSESS": re-assess the board through the team relay (T-280): the proposals, as the planner gets them.
   if (input.includes('PLANASSESS')) {
@@ -268,6 +295,23 @@ process.stdin.on('end', async () => {
     const res = [];
     for (const [name, args] of calls) res.push(await tool(name, args));
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'NOTIFY:' + JSON.stringify(res) }] } });
+  }
+  // An agent message (T-296 / T-297; plans/agent-talk.md § 3): "[agent message · from @<person>'s agent (…) · <kind> · thread at-…]",
+  // the text, "[your own person's rules apply; answer with agent_reply, thread at-…]". The fake answers an ask or a review with
+  // agent_reply "reply: <the text>", and a text with ECHO (any kind) with agent_reply of the same text (R484's echo, until the hub
+  // stops it); a reply, a report or a hand-off is not answered. Several messages in one run: each on its own.
+  if (input.includes('[agent message · from @')) {
+    const tool = relayTool();
+    const re = /\[agent message · from @([a-z0-9-]+)'s agent [^\n]*?· (ask|handoff|review|report|reply) · thread (at-[0-9a-f]{12})[^\n]*\]\n((?:\[[^\n]*\]\n)*)([\s\S]*?)\n\[your own person's rules apply; answer with agent_reply, thread \3\]/g;
+    const res = [];
+    for (const m of input.matchAll(re)) {
+      const [, who, kind, thread, , text] = m;
+      const echo = /\bECHO\b/.test(text);
+      if (!echo && kind !== 'ask' && kind !== 'review') { res.push({ who, kind, thread, answered: false }); continue; }
+      const r = await tool('agent_reply', { thread, text: echo ? text : 'reply: ' + text });
+      res.push({ who, kind, thread, answered: r.ok === true, error: r.ok ? undefined : r.error });
+    }
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'AGENTREPLY:' + JSON.stringify(res) }] } });
   }
   // "LIMITPARTIAL": a 5h event with only a status (no utilization, no reset time), then a 7d event
   // reporting utilization as a percentage (55) — the hub must keep the 5h numbers and read 55 as 55 %.

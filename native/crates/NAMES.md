@@ -5,7 +5,7 @@ vr-host, vr-desktop) are built on them. Plan and rules: the team note plans/pgm-
 
 | Short name | Full name | Crate (`use` name) | Holds |
 |---|---|---|---|
-| PGM_Core_Internal | PsyGraphMediaCoreInternal | `pgm-core-internal` (`pgm_core_internal`) | errors, base64, time, hashing / HMAC / AES-GCM / HKDF / ids, JSON files (atomic, private), file protection, text helpers |
+| PGM_Core_Internal | PsyGraphMediaCoreInternal | `pgm-core-internal` (`pgm_core_internal`) | errors, base64, time, hashing / HMAC / AES-GCM / HKDF / ids, JSON files (atomic, private), file protection, text helpers, the security log (append-only, hash-chained) |
 | PGM_Platform_Internal | PsyGraphMediaPlatformInternal | `pgm-platform-internal` (`pgm_platform_internal`) | processes, standard folders, installing a program in place, Windows service, systemd units, start at boot |
 | PGM_Net_Internal | PsyGraphMediaNetworkInternal | `pgm-net-internal` (`pgm_net_internal`) | HTTP server kit, reverse proxy, long polls, HTTP clients, the encrypted host link, relays, sync, rate limits |
 | PGM_Identity_Internal | PsyGraphMediaIdentityInternal | `pgm-identity-internal` (`pgm_identity_internal`) | accounts, passwords, sessions, device locks, sign-in limits, admins, per-account keys |
