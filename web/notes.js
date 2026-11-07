@@ -23,13 +23,14 @@ const NOTES = (() => {
           row.append(ic(closed ? 'folder' : 'folder', 'lead'), el('span', 'ntName', it.name), el('small', '', closed ? '…' : ''));
           row.onclick = () => { if (closed) N.collapsed.delete(it.path); else N.collapsed.add(it.path); renderTree(); };
           const add = el('button', 'ghost tiny'); add.type = 'button'; add.title = 'New note in ' + it.name; add.append(ic('plus')); add.onclick = (e) => { e.stopPropagation(); newNote(it.path); }; row.append(add);
+          row.dataset.folder = it.path;
           box.append(row);
           if (!closed) walk(it.children, depth + 1);
         } else {
           const row = el('div', 'ntRow' + (N.open === it.path ? ' on' : '')); row.style.paddingLeft = (depth * 0.9 + 0.3) + 'rem';
           row.append(ic('file', 'lead'), el('span', 'ntName', it.name));
           const s = el('small', '', (it.by ? it.by + ' · ' : '') + ago(it.at)); row.append(s);
-          row.onclick = () => open(it.path);
+          row.onclick = () => open(it.path); row.dataset.path = it.path;
           box.append(row);
         }
       }
@@ -44,7 +45,7 @@ const NOTES = (() => {
     for (const it of items) {
       const row = el('div', 'ntRow' + (N.open === it.path ? ' on' : '')); row.append(ic('file', 'lead'), el('span', 'ntName', it.path.replace(/\.md$/i, '')));
       if (it.snippet) row.append(el('div', 'ntSnip', it.snippet));
-      row.onclick = () => open(it.path); box.append(row);
+      row.onclick = () => open(it.path); row.dataset.path = it.path; box.append(row);
     }
     if (!items.length) box.append(el('div', 'bdNone', 'Nothing matches.'));
   }
@@ -83,9 +84,9 @@ const NOTES = (() => {
     const to = window.prompt('New path (folders with /):', N.open.replace(/\.md$/i, '')); if (!to || !to.trim()) return;
     try { const r = await json('/api/notes/move', { method: 'POST', body: JSON.stringify({ from: N.open, to: to.trim().replace(/\.md$/i, '') + '.md' }) }); N.open = r.to; await refresh(); open(r.to); } catch (e) { msg(e.message, true); }
   }
-  async function remove() {
+  async function remove(sure) { // sure: asked already (the menu's "Click again to delete")
     if (!N.open) return;
-    const b = $('ntDelete'); if (b.dataset.armed !== '1') { b.dataset.armed = '1'; label(b, 'trash', 'Click again to delete'); setTimeout(() => { b.dataset.armed = ''; label(b, 'trash', 'Delete'); }, 3000); return; }
+    const b = $('ntDelete'); if (sure !== true && b.dataset.armed !== '1') { b.dataset.armed = '1'; label(b, 'trash', 'Click again to delete'); setTimeout(() => { b.dataset.armed = ''; label(b, 'trash', 'Delete'); }, 3000); return; }
     try { await json('/api/notes/delete', { method: 'POST', body: JSON.stringify({ path: N.open }) }); N.open = null; N.dirty = false; $('ntDoc').hidden = true; $('ntEmpty').hidden = false; refresh(); } catch (e) { msg(e.message, true); }
   }
   function togglePreview() {
@@ -99,6 +100,14 @@ const NOTES = (() => {
     $('ntNew').onclick = () => newNote('');
     $('ntNewFolder').onclick = newFolder;
     $('ntSave').onclick = save; $('ntRename').onclick = rename; $('ntDelete').onclick = remove; $('ntToggle').onclick = togglePreview;
+    if (typeof MENU !== 'undefined') MENU.attach($('ntTree'), (t) => { // a note's or a folder's menu: the buttons above, on that one
+      const f = t.closest('[data-folder]'), n = t.closest('[data-path]');
+      if (f) { const p = f.dataset.folder; return MENU.lists.noteFolder({ collapsed: N.collapsed.has(p) }, { newNote: () => newNote(p), toggle: () => f.click(), newFolder }); }
+      if (!n) return null;
+      const p = n.dataset.path, onIt = async (fn) => { if (N.open !== p) await open(p); if (N.open === p) fn(); }; // it opens first (an unsaved note asks)
+      return MENU.lists.note({ open: N.open === p }, { open: () => open(p), rename: () => onIt(rename), del: () => onIt(() => remove(true)),
+        copy: () => MENU.copy(p).then(() => msg('Copied ' + p), () => msg('Could not copy to the clipboard', true)) });
+    });
     $('ntSearch').oninput = () => { N.q = $('ntSearch').value; renderTree(); };
     $('ntEditor').addEventListener('input', () => { N.dirty = true; });
     $('ntEditor').addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });

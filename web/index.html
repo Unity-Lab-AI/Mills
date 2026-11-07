@@ -433,6 +433,18 @@
   .spMenu button { background: transparent; border: 0; color: var(--text); text-align: left; padding: .4rem .65rem; border-radius: 5px; font-weight: 400; font-size: .85rem; }
   .spMenu button:hover, .spMenu button:focus { background: color-mix(in srgb, var(--text) 10%, transparent); outline: none; }
   .spMenu button.danger { color: #e5484d; } .spMenu hr { border: 0; border-top: 1px solid var(--line); margin: .2rem 0; width: 100%; }
+  /* ── the one menu kit (web/menu.js, T-223): right-click, long-press and ⋯; the page's colours, so every theme fits ── */
+  .vrMenu { position: fixed; z-index: 70; min-width: 12rem; max-width: min(22rem, calc(100vw - 8px)); max-height: calc(100vh - 8px); overflow: auto; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: .25rem; display: flex; flex-direction: column; outline: none; }
+  .vrMenu .vrMi { display: flex; align-items: center; gap: .55rem; background: transparent; border: 0; color: inherit; text-align: left; padding: .4rem .6rem; border-radius: 5px; font: inherit; font-size: .85rem; font-weight: 400; min-height: 0; cursor: default; box-shadow: none; }
+  .vrMenu .vrMi:hover, .vrMenu .vrMi:focus, .vrMenu .vrMi.open { background: color-mix(in srgb, var(--text) 10%, transparent); outline: none; }
+  .vrMenu .vrMi:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+  .vrMenu .vrMi[disabled] { opacity: .45; } .vrMenu .vrMi.danger { color: var(--bad); } .vrMenu .vrMi.armed { background: color-mix(in srgb, var(--bad) 18%, transparent); }
+  .vrMenu .vrIc { width: 1rem; flex: none; display: inline-flex; justify-content: center; opacity: .85; } .vrMenu .vrIc .ic { margin: 0; }
+  .vrMenu .vrLb { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vrMenu .vrSc, .vrMenu .vrAr { flex: none; color: var(--muted); font-size: .72rem; margin-left: 1rem; }
+  .vrMenu .vrSep { border-top: 1px solid var(--line); margin: .2rem .3rem; }
+  .vrMenu .vrNote { color: var(--muted); font-size: .72rem; padding: .3rem .6rem; max-width: 20rem; }
+  .vrHint { position: fixed; z-index: 70; left: 50%; bottom: 1.2rem; transform: translateX(-50%); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .8rem; font-size: .8rem; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
   #sessToggle .count { background: #9b5cff; } /* in the rail (5.35.0): its badge, purple = working now */
   @media (max-width: 900px) {
     #sessPanel, #cmdPanel { position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); z-index: 46; box-shadow: 4px 0 24px rgba(0,0,0,.45); }
@@ -768,7 +780,7 @@
   }
   @media (pointer: coarse) {
     button { min-height: 2.5rem; }
-    .bar button, .roomTop button, .callCtl button, .tpActs button, .bdActs button, .conv button, #msgMenu button, .md .mdbtn { min-height: 2.2rem; }
+    .bar button, .roomTop button, .callCtl button, .tpActs button, .bdActs button, .conv button, #msgMenu button, .md .mdbtn, .vrMenu .vrMi { min-height: 2.2rem; }
     .cv { padding: .55rem .5rem; }
     .bdCard { padding: .6rem .65rem; }
   }
@@ -1495,6 +1507,7 @@
 <script src="hyperwork.js"></script>
 <script src="attach.js"></script>
 <script src="board.js"></script>
+<script src="menu.js"></script>
 <script src="sessions.js"></script>
 <script src="queue.js"></script>
 <script>
@@ -2350,6 +2363,7 @@ const toolText = (t) => String(t).replace(/^⚙️?\s*/, '');
 function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
 function renderText(el, text) { // full markdown + mermaid (web/md.js); host pictures and YouTube players split out first
+  el.vrText = text; // as written: what the message's menu copies and sends again
   const att = WORK_FILES.exec(text || ''); // a Work message's attachments (the marker block at its end): shown under the text
   if (att) {
     text = text.slice(0, att.index); let list = []; try { list = JSON.parse(att[1]); } catch {}
@@ -2684,19 +2698,33 @@ $('composer').addEventListener('submit', async (e) => {
 function saveQueue() { json('/api/work/queue', { method: 'POST', body: JSON.stringify({ queue: queue.map((q) => q.message), sendNow: sendNowMessage }) }).catch(() => {}); queuePanel.render(); }
 // The queue panel (web/queue.js, T-188): every message still to go, with cancel / copy, one or all; it changes the
 // queue only through these, so the bubbles, the hub's copy and the people watching a share stay the same as the panel.
-const queuePanel = typeof QUEUE === 'undefined' ? { render() {} } : QUEUE.mount({
+function cancelQueued(it) { // the queue panel's cancel, and the menu of a queued bubble
+  if (it.kind === 'now') { if (sendNowMessage === it.text) { sendNowMessage = null; updateStopButton(); } }
+  else { const q = queue[it.at]; if (!q || q.message !== it.text) return; q.el.remove(); queue.splice(it.at, 1); }
+  postLive(); saveQueue();
+}
+const queuePanel = typeof QUEUE === 'undefined' ? { render() {}, setOpen() {} } : QUEUE.mount({
   box: $('queuePanel'), button: $('queueBtn'), badge: $('queueBadge'), store,
   queue: () => queue.map((q) => q.message), sendNow: () => sendNowMessage,
   sessions: () => ((SESSIONS.data() || {}).sessions) || [], current: () => SESSIONS.onScreen(), titleOf: SESSIONS.titleOf,
   open: (id) => openWorkSession(id),
-  cancel: (it) => {
-    if (it.kind === 'now') { if (sendNowMessage === it.text) { sendNowMessage = null; updateStopButton(); } }
-    else { const q = queue[it.at]; if (!q || q.message !== it.text) return; q.el.remove(); queue.splice(it.at, 1); }
-    postLive(); saveQueue();
-  },
+  cancel: cancelQueued,
   cancelAll: () => { for (const q of queue) q.el.remove(); queue.length = 0; sendNowMessage = null; updateStopButton(); postLive(); saveQueue(); sys('Queue cleared: nothing of it is sent.'); },
   copy: (text) => navigator.clipboard.writeText(text),
   note: (text, bad) => sys(text, bad),
+});
+// A Work message's menu (right-click / long-press, web/menu.js): copy it; yours goes again the way Send sends it; a queued
+// one is cancelled through the queue panel's own cancel
+if (typeof MENU !== 'undefined') MENU.attach(log, (t) => {
+  const b = t.closest('.msg, .tool'); if (!b || b.classList.contains('thinking')) return null;
+  const qi = queue.findIndex((q) => q.el === b), kind = qi >= 0 ? 'queued' : b.classList.contains('me') ? 'me' : b.classList.contains('tool') ? 'tool' : 'claude';
+  const text = qi >= 0 ? queue[qi].message : b.vrText != null ? b.vrText : b.textContent;
+  return MENU.lists.work({ kind, text: kind === 'tool' ? b.textContent : text }, {
+    copy: () => MENU.copy(typeof QUEUE !== 'undefined' ? QUEUE.plain(text) : text).then(() => sys('Copied.'), () => sys('Could not copy to the clipboard: select the text instead.', true)),
+    resend: () => { if (busy || slotWait) enqueue(text); else send(text); },
+    queue: () => queuePanel.setOpen(true),
+    cancel: () => { const i = queue.findIndex((q) => q.el === b); if (i >= 0) cancelQueued({ kind: 'queued', at: i, text: queue[i].message }); },
+  });
 });
 function enqueue(message, restoring, first) { // first: back at the head of the queue (it was refused: over the session limit)
   const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', first ? 'Waiting for a free session slot: goes as soon as one frees' : restoring ? 'Queued (kept through the restart / reload): goes next' : 'Queued: goes after the current reply');
@@ -4497,11 +4525,25 @@ function startRoomPolling() {
 }
 function stopRoomPolling() { roomGen++; roomVer = 0; roomKeysVer = 0; }
 
-// Message menu: reply to anyone; edit / delete your own; receipts.
+// Message menu: reply to anyone; edit / delete your own; receipts. One list (MENU.lists.message, web/menu.js) for a click
+// on the message and for right-click / long-press on it; without menu.js the click opens the older #msgMenu below.
 function closeMsgMenu() { const m = $('msgMenu'); if (m) m.remove(); }
+function msgMenuItems(rec) {
+  const m = rec.m, mine = m.from === me.username, conv = convOfMsg(m), author = m.via || m.from;
+  return MENU.lists.message({ mine, deleted: !!m.deleted, locked: !!rec.locked, audio: !!rec.audio, hasText: !!String(rec.text || '').trim(), private: !!m.to,
+    pinned: GUILDS.pinned(conv, m.seq), canPin: GUILDS.canPin(conv), canModerate: GUILDS.canModerate(conv), replyTo: rec.r || null,
+    profile: !(memberOf(m.from) || {}).agent || !!m.via, author: nickOf(author), info: new Date(m.ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' }) + ' — ' + seenText(rec) }, {
+    reply: () => startReply(rec), edit: () => startEdit(rec), jump: () => jumpTo(rec.r), profile: () => PROFILE.show(author),
+    copy: () => MENU.copy(rec.text).then(() => {}, () => sysRoom('Could not copy to the clipboard: select the text instead.')),
+    pin: (on) => GUILDS.pin(conv, m.seq, on),
+    del: () => json('/api/room/delete', { method: 'POST', body: JSON.stringify({ seq: m.seq }) }).then(pollRoom).catch((err) => sysRoom('Could not delete: ' + err.message)),
+  });
+}
+if (typeof MENU !== 'undefined') MENU.attach($('roomLog'), (t) => { const el = t.closest('.rmsg'), rec = el && msgs.get(Number(el.dataset.seq)); return rec ? msgMenuItems(rec) : null; });
 function openMsgMenu(rec, e) {
   if (e.target.closest('.quote') || window.getSelection().toString()) return;
   closeMsgMenu();
+  if (typeof MENU !== 'undefined') { MENU.open(msgMenuItems(rec), e.clientX, e.clientY, null, { focusFirst: e.detail === 0 }); return; }
   const menu = document.createElement('div'); menu.id = 'msgMenu';
   const add = (icon, text, fn) => { const b = label(document.createElement('button'), icon, text); b.type = 'button'; b.onclick = (ev) => { ev.stopPropagation(); fn(b); }; menu.append(b); return b; };
   const mine = rec.m.from === me.username;

@@ -128,11 +128,11 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .swatches button.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
 
 /* ── menus, pop-overs, toasts: glass panels ── */
-#msgMenu, .pinsPop, #themeMenu {
+#msgMenu, .pinsPop, #themeMenu, .vrMenu {
   background: color-mix(in srgb, var(--panel) 88%, transparent); -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2);
   border-color: var(--hairline); border-radius: var(--r-m); box-shadow: var(--sh-3); animation: boxIn .14s var(--ease);
 }
-#msgMenu button:hover { background: var(--accent-soft); }
+#msgMenu button:hover, .vrMenu .vrMi:hover, .vrMenu .vrMi:focus, .vrMenu .vrMi.open { background: var(--accent-soft); }
 .toast { background: color-mix(in srgb, var(--panel) 90%, transparent); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-radius: var(--r-m); box-shadow: var(--sh-2); }
 
 /* ── chat: side bar, channels, messages ── */
