@@ -196,6 +196,33 @@
   #queuePanel .qpNote { color: var(--muted); } #queuePanel .qpSub { color: var(--muted); font-size: .72rem; margin-top: .3rem; border-top: 1px solid var(--line); padding-top: .4rem; }
   #queuePanel .qpOther { display: flex; gap: .4rem; text-align: left; width: 100%; } #queuePanel .qpOT { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #queuePanel .qpON { color: var(--muted); }
   @media (max-width: 760px) { #queuePanel { position: absolute; top: 0; right: 0; bottom: 0; width: min(20rem, 88%); z-index: 5; box-shadow: -6px 0 18px rgba(0, 0, 0, .25); } }
+  /* ── the agent threads (web/agents.js, T-298): a sidebar like the queue's; per agent pair, both directions, the held card ── */
+  #agentsPanel { flex: none; width: 23rem; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: .5rem .6rem; font-size: .8rem; display: flex; flex-direction: column; gap: .45rem; }
+  #agentsPanel[hidden], #agentsBtn[hidden], #goAgents[hidden] { display: none; }
+  #agentsPanel .agHead { display: flex; align-items: baseline; gap: .45rem; } #agentsPanel .agSum { flex: 1; color: var(--muted); font-size: .74rem; } #agentsPanel .agX { padding: 0 .3rem; }
+  #agentsPanel button { padding: .15rem .5rem; font-size: .74rem; }
+  #agentsPanel .agCtl { display: flex; flex-direction: column; gap: .3rem; padding: .35rem .45rem; border: 1px solid var(--line); border-radius: 8px; }
+  #agentsPanel .agTog { display: inline-flex; align-items: center; gap: .3rem; cursor: pointer; white-space: nowrap; } #agentsPanel .agTog input { width: auto; margin: 0; }
+  #agentsPanel .agAsk { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .6rem; } #agentsPanel .agAskL { color: var(--muted); width: 100%; font-size: .72rem; }
+  #agentsPanel .agNote { color: var(--muted); } #agentsPanel .agSub { color: var(--muted); font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin-top: .2rem; }
+  #agentsPanel .agCard { width: auto; margin: 0; padding: .55rem .6rem; gap: .35rem; box-shadow: none; font-size: .8rem; } #agentsPanel .agCard .qown { font-size: .78rem; } #agentsPanel .agCSub { font-weight: 600; }
+  #agentsPanel .agPair { border-top: 1px solid var(--line); padding-top: .35rem; display: flex; flex-direction: column; gap: .35rem; }
+  #agentsPanel .agPRow { display: flex; align-items: center; gap: .3rem; } #agentsPanel .agPH { flex: 1; display: flex; gap: .4rem; align-items: baseline; text-align: left; min-width: 0; }
+  #agentsPanel .agPN { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #agentsPanel .agPM { flex: 1; color: var(--muted); font-size: .72rem; text-align: right; white-space: nowrap; }
+  #agentsPanel .agPair.muted .agPN { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+  #agentsPanel .agThread { border: 1px solid var(--line); border-radius: 8px; padding: .3rem .45rem; display: flex; flex-direction: column; gap: .3rem; } #agentsPanel .agThread.stopped { border-style: dashed; }
+  #agentsPanel .agTHead { display: flex; align-items: baseline; gap: .4rem; } #agentsPanel .agSubj { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #agentsPanel .agTSt { color: var(--bad); font-size: .7rem; }
+  #agentsPanel .agMsgs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
+  #agentsPanel .agMsg { border-radius: 8px; padding: .25rem .4rem; background: var(--bg); width: 92%; } #agentsPanel .agMsg.out { align-self: flex-end; background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+  #agentsPanel .agMsg.held { outline: 1px solid var(--accent); } #agentsPanel .agMsg.refused { opacity: .65; }
+  #agentsPanel .agLine { display: flex; align-items: baseline; gap: .35rem; flex-wrap: wrap; } #agentsPanel .agDir { color: var(--muted); } #agentsPanel .agFrom { font-weight: 600; }
+  #agentsPanel .agKind, #agentsPanel .agRef { font-size: .66rem; text-transform: uppercase; letter-spacing: .03em; border: 1px solid var(--line); border-radius: 999px; padding: 0 .35rem; color: var(--muted); } #agentsPanel .agRef { color: var(--accent); border-color: var(--accent); text-transform: none; }
+  #agentsPanel .agAt { margin-left: auto; color: var(--muted); font-size: .7rem; }
+  #agentsPanel .agText { margin-top: .15rem; white-space: pre-wrap; word-break: break-word; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  #agentsPanel .agMsg.openText .agText, #agentsPanel .agText.open { display: block; cursor: auto; }
+  #agentsPanel .agFoot { display: flex; align-items: center; gap: .4rem; margin-top: .15rem; } #agentsPanel .agSt, #agentsPanel .agSrc { color: var(--muted); font-size: .7rem; } #agentsPanel .agSt { flex: 1; }
+  #agentsPanel .agLink { padding: 0 .4rem; font-size: .7rem; }
+  @media (max-width: 760px) { #agentsPanel { position: absolute; top: 0; right: 0; bottom: 0; width: min(23rem, 92%); z-index: 6; box-shadow: -6px 0 18px rgba(0, 0, 0, .25); } }
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
@@ -977,6 +1004,7 @@
     <button id="goChat" class="tile"><svg class="ic lead"><use href="#i-chat"/></svg>Chat<small>Servers, channels, groups and calls, end-to-end encrypted</small><span class="badge" id="chatBadge" hidden></span></button>
     <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
     <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
+    <button id="goAgents" class="tile" hidden><svg class="ic lead"><use href="#i-bot"/></svg>Agents<small>What your agent and the others' say to each other, and your say in it</small><span class="badge" id="agentsTileBadge" hidden></span></button>
     <button id="goWorkflows" class="tile"><svg class="ic lead"><use href="#i-flow"/></svg>Workflows<small>Design and test Hyper Workflows: boxes and wires, with an AI beside you</small></button>
     <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
     <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
@@ -1398,6 +1426,7 @@
         <button type="button" class="ghost" id="coviewBtn" hidden title="Co-view: everyone you pick follows what you have open (screen, board task, note, chat) live in their own page">Co-view</button>
         <button type="button" class="ghost" id="gitBtn" title="Git at a glance: what changed in your own worktree, stage, commit, update, merge">Git</button>
         <button type="button" class="ghost" id="queueBtn" aria-expanded="false" aria-controls="queuePanel" title="Queued messages: see, copy or cancel what is still to go">Queue<span id="queueBadge" class="qBadge" hidden></span></button>
+        <button type="button" class="ghost" id="agentsBtn" hidden aria-expanded="false" aria-controls="agentsPanel" title="Agent threads: what your agent and the others' say to each other, and your say in it">Agents<span id="agentsBadge" class="qBadge" hidden></span></button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
       <div id="gitBox" hidden>
         <div class="gitHead"><b id="gitBranch">…</b><span id="gitAB" class="muted"></span><span class="grow"></span>
@@ -1417,6 +1446,7 @@
       <div id="logRow"><!-- the conversation, and the queue panel next to it (web/queue.js, T-188) -->
         <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
         <aside id="queuePanel" hidden aria-label="Queued messages"></aside>
+        <aside id="agentsPanel" hidden aria-label="Agent threads"></aside><!-- web/agents.js (T-298) -->
       </div>
       <div id="slashMenu" hidden></div>
       <div id="hwMenu" hidden></div><!-- the Hyper Workflows matching "/hyperwork <name>" (web/hyperwork.js, T-207) -->
@@ -1497,6 +1527,7 @@
 <script src="board.js"></script>
 <script src="sessions.js"></script>
 <script src="queue.js"></script>
+<script src="agents.js"></script>
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
 MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
@@ -2107,6 +2138,7 @@ async function enter() {
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
   if (typeof COVIEW !== 'undefined') COVIEW.start(); // web/coview.js (T-244)
   if (typeof PRESENCE !== 'undefined') PRESENCE.start(); // web/presence.js (T-261): GET /api/presence once; a hub without it shows nothing
+  agentsPanel.start(); // web/agents.js (T-298): the agent threads, every 15 s; a hub without /api/agents shows nothing
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
   restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
@@ -2148,7 +2180,7 @@ function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); appForget(); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
-  BOARD.stop(); NOTES.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
+  BOARD.stop(); NOTES.stop(); agentsPanel.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
@@ -2698,6 +2730,39 @@ const queuePanel = typeof QUEUE === 'undefined' ? { render() {} } : QUEUE.mount(
   copy: (text) => navigator.clipboard.writeText(text),
   note: (text, bad) => sys(text, bad),
 });
+// The agent threads (web/agents.js, T-298): every message to and from your agent, per agent pair, with your controls
+// (mute a pair, pause your inbox, ask me first) and the accept / decline card of a held message. /api/agents/threads,
+// /api/agents/thread, /api/agents/settings and /api/agents/held are the Rust hub's: an older hub answers 404 and it all stays hidden.
+const agentsPanel = typeof AGENTS === 'undefined' ? { start() {}, stop() {}, render() {}, openPair() {}, setOpen() {} } : AGENTS.mount({
+  box: $('agentsPanel'), button: $('agentsBtn'), badge: $('agentsBadge'), tile: PRODUCT ? null : $('goAgents'), tileBadge: PRODUCT ? null : $('agentsTileBadge'), store, interval: 15000,
+  api: async (p, body) => { const r = await api(p, body !== undefined ? { method: 'POST', body: JSON.stringify(body) } : {}); return { status: r.status, data: await r.json().catch(() => ({})) }; },
+  me: () => (me && me.username) || '', nameOf: (u) => nickOf(u), dnd: () => dndOn(),
+  hasSession: (id) => !!(id && SESSIONS.byId(id)), titleOf: (id) => { const s = SESSIONS.byId(id); return s ? SESSIONS.titleOf(s) : id; },
+  open: (id) => { showScreen('shell'); openWorkSession(id); },
+  notify: (n) => agentNotify(n),
+  note: (text, bad) => sys(text, bad),
+});
+// a new agent message: the page's own ways of telling (a sound, a toast in Work, the desktop app's notification when the
+// window is in the background); Do Not Disturb mutes all of them (the message is in the thread all the same)
+function agentNotify(n) {
+  if (dndOn()) return;
+  const P = prefs();
+  if (P.sound && P.sound.on) playTone(n.held ? 'ask' : 'mention', n.held ? P.sound.ask : P.sound.mention);
+  const away = document.visibilityState !== 'visible' || !document.hasFocus();
+  if (P.toasts && !$('shell').hidden) {
+    const t = document.createElement('div'); t.className = 'toast mention';
+    const b = document.createElement('b'); b.textContent = n.title + ': ';
+    t.append(b, n.body || ''); t.title = 'Open the agent threads';
+    t.onclick = () => { agentsPanel.openPair(n.with); t.remove(); };
+    t.addEventListener('animationend', () => t.remove());
+    $('toasts').append(t);
+  }
+  if (away) {
+    if (NATIVE) NATIVE.call('notify', { title: n.title, body: n.body || '' }).catch(() => {});
+    else { try { if (window.Notification && Notification.permission === 'granted') new Notification(n.title, { body: n.body || '' }); } catch {} }
+  }
+}
+$('goAgents').onclick = () => { showScreen('shell'); agentsPanel.setOpen(true); };
 function enqueue(message, restoring, first) { // first: back at the head of the queue (it was refused: over the session limit)
   const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', first ? 'Waiting for a free session slot: goes as soon as one frees' : restoring ? 'Queued (kept through the restart / reload): goes next' : 'Queued: goes after the current reply');
   const x = document.createElement('button'); x.type = 'button'; x.className = 'unqueue'; x.append(ic('close')); x.title = 'Remove from queue'; x.setAttribute('aria-label', 'Remove from queue');
