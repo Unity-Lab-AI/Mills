@@ -459,6 +459,11 @@ fn typing_for(hub: &dyn ChatHost, user: &str, us: &[(String, String, bool)]) -> 
 fn gap_ms(hub: &dyn ChatHost) -> u64 { hub.cfg().get("presence").and_then(|p| p["workGapMs"].as_u64()).filter(|x| *x >= 100).unwrap_or(crate::activity::DEFAULT_GAP_MS) }
 /// They did something: input on a device (active: true) or a message.
 fn note_active(hub: &dyn ChatHost, a: &Account) { hub.chat().acct.lock().unwrap_or_else(|e| e.into_inner()).touch(&a.username, &a.dir, now_ms(), gap_ms(hub)); }
+/// A run of `user`'s that `started_by`'s agent started has ended after `ms` (T-300): noted on the receiver's day.
+pub fn note_agent_run(hub: &dyn ChatHost, user: &str, started_by: &str, run: &str, ms: u64) {
+    let Some(a) = hub.account(user) else { return };
+    hub.chat().acct.lock().unwrap_or_else(|e| e.into_inner()).agent_run(&a.username, &a.dir, now_ms(), started_by, run, ms);
+}
 /// Once a second: AI time, away time and the log of status changes, for every account.
 fn account_tick(hub: &dyn ChatHost) {
     let now = now_ms(); let gap = gap_ms(hub); let c = hub.chat();

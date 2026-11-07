@@ -3543,9 +3543,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       R481: 'agent talk 3/6 (T-297): a run\'s agent_ask (wait: true) to another person is answered by that person\'s run through agent_reply and the asker\'s tool result carries the reply text and thread; wait: false gives {pending} and the reply arrives as a message in the asker\'s session; agents_list shows the person reachable with their state; both MCP lists have the six tools',
       R482: 'agent talk 4/6, the hub (T-296): mute refuses a send (403 muted) and shows the attempt to the muter only; pause queues (202 queued) and unpause delivers; a hand-off is held by default and told in a private chat line, declined with a note (the task stays the sender\'s) or accepted (then the task is re-assigned to the receiver); DND changes nothing of delivery',
       R482p: 'agent talk 4/6, the page (T-298): the page has the thread panel, the held card and the settings (it calls /api/agents/threads, /api/agents/held and /api/agents/settings)',
-      R483: 'agent talk 5/6 (T-299): a source: jcode session report makes @t-user/jcode resolvable; a send to it waits in GET /api/agents/inbox?source=jcode, read marks it, a reply from that side reaches the asker; the message has the same shape both ways (no Claude-only fields)',
+      R483: 'agent talk 5/6 (T-299): a source: jcode session report makes @t-user/jcode resolvable; a send to it answers the inbox long poll (GET /api/agents/inbox?source=jcode&wait=1) that was already waiting, fetched is delivered (the next poll has it no more, again=1 has it until read), POST /api/agents/read marks it read; a reply sent as jcode (source, session) reaches the asker\'s session and says it came from jcode; an answer of a hub run to jcode\'s own ask waits in that inbox; the message has the same shape both ways (no Claude-only fields); sending as a tool that reports no sessions, or an inbox without a source, is 400',
       R484: 'agent talk 6/6, the hub (T-296): an A→B→A→B echo is stopped by the loop detector (stopped, why loop) before maxHops with one chat line to each person; a hand-off of someone else\'s task is held and, declined, leaves the assignee, and the receiving person\'s agent may not claim it; a send right after a refused tool in the sender\'s run carries afterRefusal in the audit; the 21st message from one person to another in an hour is 429 rate',
-      R484c: 'agent talk 6/6, cost (T-300): an agent-started run counts in the receiver\'s time log with startedBy agent:<sender> (their usage ledger counts it already: it is their run)',
+      R484c: 'agent talk 6/6, cost (T-300): a run t-admin\'s agent started in t-user\'s session counts as t-user\'s: their usage ledger (answers turns) grows and t-admin\'s does not, and t-user\'s time log for the day has it under agentStarted agent:t-admin with an agentRun event of that run, which t-admin\'s day does not have',
     };
     if (RUST_HUB) {
       const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
@@ -3559,7 +3559,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const conv480 = async (tok, sid) => ((await call('/api/work/current' + (sid ? '?session=' + sid : ''), tok)).data || {}).transcript || [];
       // the conversations the agents' runs add to (the woken sessions keep what arrived and the answer): put back as they were
       // after this block, so the later checks find them as before (R135 expects t-user's and t-admin's first sessions empty)
-      const keep480 = async () => { const out = []; for (const tok of [U, A]) { const sx = (await call('/api/work/sessions', tok)).data || {}; for (const sid of [...new Set([sx.primary, sx.current].filter(Boolean))]) out.push({ tok, sid, cur: (await call('/api/work/current?session=' + sid, tok)).data || {} }); } return out; };
+      const keep480 = async () => { const out = []; for (const tok of [U, A, D]) { const sx = (await call('/api/work/sessions', tok)).data || {}; for (const sid of [...new Set([sx.primary, sx.current].filter(Boolean))]) out.push({ tok, sid, cur: (await call('/api/work/current?session=' + sid, tok)).data || {} }); } return out; };
       const kept480 = built ? await keep480() : [];
       // R480: wake an idle session, queue behind a working one, one thread both sides, audit
       let d480 = 'no /api/agents/* yet';
@@ -3628,18 +3628,98 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       } else check('R482', L480.R482, false, 'no /api/agents/* yet');
       spec('R482p', L480.R482p, page482, `page ${page482}`);
       // R483: an external (jcode) agent
+      // (jcode is driven over HTTP the way it polls: no jcode binary needed)
       if (built) {
+        await idle480();
         const rep = await call('/api/work/sessions/report', U, { source: 'jcode', device: 'r483-box', sessions: [{ id: 'j-r483', state: 'working', title: 'r483 jcode', project: 'Jcode-PGM' }], ttlSec: 120 });
+        const inboxQ = 'inbox?source=jcode&device=r483-box';
+        // the long poll waits before anything is sent, and the send answers it (jcode holds it 25 s at a time)
+        const t483 = Date.now();
+        const polled = ag(inboxQ + '&wait=1', U); await sleep(500);
         const sent = await ag('send', A, { to: 't-user/jcode', kind: 'ask', text: 'r483 jcode, are you there?', wait: false });
-        const inbox = await ag('inbox?source=jcode&device=r483-box', U);
+        const inbox = await polled; const waited = Date.now() - t483;
         const got = ((inbox.data || {}).messages || []).find((m) => m.id === (sent.data || {}).id);
+        // fetched = delivered: the next poll has it no more, unless the tool asks again (it restarted) before it marked it read
+        const next = ((await ag(inboxQ, U)).data || {}).messages || [];
+        const again = ((await ag(inboxQ + '&again=1', U)).data || {}).messages || [];
+        const sentSide = async () => (((((await ag('thread?id=' + (sent.data || {}).thread, A)).data || {}).messages) || []).find((m) => m.id === (sent.data || {}).id) || {}).status;
+        const stDelivered = await sentSide();
         const read = got ? await ag('read', U, { ids: [got.id] }) : { status: 0 };
-        const rep2 = await ag('reply', U, { thread: (sent.data || {}).thread, text: 'r483 yes, from jcode' });
+        const stRead = await sentSide();
+        const rep2 = await ag('reply', U, { thread: (sent.data || {}).thread, text: 'r483 yes, from jcode', source: 'jcode', session: 'j-r483' });
         let back = false; for (let i = 0; i < 40 && !back; i++) { const cur = (await call('/api/work/current', A)).data || {}; back = (cur.transcript || []).some((t) => /r483 yes, from jcode/.test(t.text || '')); if (!back) await sleep(250); }
-        const keys = got ? Object.keys(got).sort().join(',') : '';
-        spec('R483', L480.R483, rep.status === 200 && sent.status === 202 && (sent.data || {}).to && sent.data.to.source === 'jcode' && sent.data.to.session === 'j-r483' && !!got && read.status === 200 && rep2.status === 202 && back && /^at,from,hop,id,kind,parent,refs,replyBy,status,text,thread,to,why$/.test(keys),
-          `report ${rep.status}; send ${sent.status} to ${JSON.stringify((sent.data || {}).to)}; inbox ${inbox.status} got ${!!got}; read ${read.status}; reply ${rep2.status} back ${back}; keys ${keys}`);
-      } else spec('R483', L480.R483, false, 'no /api/agents/* yet');
+        const replyMsg = (((((await ag('thread?id=' + (sent.data || {}).thread, A)).data || {}).messages) || []).find((m) => /r483 yes, from jcode/.test(m.text || ''))) || {};
+        // the other way: jcode asks t-admin's agent; the answer of t-admin's run (agent_reply) waits in t-user's jcode inbox
+        await idle480();
+        const jAsk = await ag('send', U, { to: 't-admin', kind: 'ask', text: 'r483 from jcode: say hi', source: 'jcode', session: 'j-r483', wait: false });
+        let answer483 = null; for (let i = 0; i < 6 && !answer483; i++) answer483 = (((await ag(inboxQ + '&wait=1&waitSec=10', U)).data || {}).messages || []).find((m) => m.parent === (jAsk.data || {}).id) || null;
+        if (answer483) await ag('read', U, { ids: [answer483.id] });
+        // the person's other tool must report its sessions before it sends as that tool; an inbox names its tool
+        const noTool = await ag('send', U, { to: 't-admin', kind: 'report', text: 'r483 as hpm', source: 'hpm' });
+        const noSource = await ag('inbox', U);
+        const keys = got ? Object.keys(got).sort().join(',') : '', keysBack = answer483 ? Object.keys(answer483).sort().join(',') : '';
+        const shape = /^at,from,hop,id,kind,parent,refs,replyBy,status,text,thread,to,why$/;
+        check('R483', L480.R483, rep.status === 200 && sent.status === 202 && (sent.data || {}).to && sent.data.to.source === 'jcode' && sent.data.to.session === 'j-r483' && !!got && got.status === 'delivered' && waited < 20000
+          && !next.some((m) => m.id === got.id) && again.some((m) => m.id === got.id) && stDelivered === 'delivered' && read.status === 200 && stRead === 'read'
+          && rep2.status === 202 && back && (replyMsg.from || {}).source === 'jcode' && (replyMsg.from || {}).session === 'j-r483'
+          && jAsk.status === 202 && !!answer483 && /reply: r483 from jcode/.test(answer483.text || '') && (answer483.from || {}).source === 'work' && (answer483.to || {}).source === 'jcode' && (answer483.to || {}).session === 'j-r483'
+          && shape.test(keys) && keys === keysBack && noTool.status === 400 && noSource.status === 400,
+          `report ${rep.status}; send ${sent.status} to ${JSON.stringify((sent.data || {}).to)}; long poll ${inbox.status} after ${waited} ms got ${!!got} (${got && got.status}); next ${next.length} again ${again.length}; sender sees ${stDelivered} -> read ${read.status} ${stRead}; reply ${rep2.status} back ${back} from ${JSON.stringify(replyMsg.from)}; jcode's ask ${jAsk.status} answered in the inbox ${!!answer483} ${answer483 && JSON.stringify(answer483.to)}; keys ${keys} / ${keysBack}; unreported tool ${noTool.status}, no source ${noSource.status}`);
+      } else check('R483', L480.R483, false, 'no /api/agents/* yet');
+      // R484c and R525 (T-300): the cost of an agent-started run, and T-294's done-when list end to end (before R484, whose
+      // burst uses up the hour's messages from t-admin to t-user)
+      const L525 = 'agent talk end to end (T-300, T-294\'s done-when list, fake models on the scratch hub): t-admin\'s agent asks t-user\'s agent from its own run and gets the answer in that run; t-user\'s agent hands a task to mills\'s agent, which is held (the sender is told so, mills\'s sessions are not touched) until mills accepts, then mills\'s run picks it up (its claim goes through) and reports back into t-user\'s thread; an ask to a model without tools gets that run\'s final answer as the reply (marked by final-answer in the audit); each of the three people sees their own threads and gets 404 on a pair they are not in; an echo between t-user\'s and mills\'s agents is stopped by the loop detector';
+      if (built && listed) {
+        const idle525 = async (ms = 40000) => { const end = Date.now() + ms; let calm = 0; while (Date.now() < end) { const n = (await Promise.all([U, A, D].map((t) => call('/api/work/sessions', t)))).reduce((x, r) => x + (((r.data || {}).counts || {}).working || 0), 0); calm = n === 0 ? calm + 1 : 0; if (calm >= 6) return true; await sleep(250); } return false; };
+        const turns525 = async (tok) => ((((await call('/api/usage', tok)).data || {}).answers) || {}).turns || 0;
+        const day525 = async (tok, user) => (((await call('/api/presence/time?user=' + user, tok)).data || {}).days || [])[0] || {};
+        const threadsOf = async (tok) => ((((await ag('threads', tok)).data || {}).threads) || []).map((t) => t.id);
+        await idle525();
+        // 1. t-admin's agent asks from its own run (wait) and gets t-user's answer there; the run it started is t-user's (cost)
+        const [uT0, aT0] = [await turns525(U), await turns525(A)];
+        const [asked] = await tools481([['agent_ask', { to: 't-user', text: 'r525 USAGE what is the plan?', wait: true, replyBySec: 120 }]], A);
+        await idle525();
+        const [uT1, aT1] = [await turns525(U), await turns525(A)];
+        const uDay = await day525(U, 't-user'), aDay = await day525(A, 't-admin');
+        const uRuns = (uDay.events || []).filter((e) => e.kind === 'agentRun' && e.startedBy === 'agent:t-admin').map((e) => e.run);
+        const cost = uT1 > uT0 && aT1 === aT0 && ((uDay.agentStarted || {})['agent:t-admin'] || {}).runs >= 1 && uRuns.length >= 1
+          && !(aDay.events || []).some((e) => e.kind === 'agentRun' && uRuns.includes(e.run)) && !(aDay.agentStarted || {})['agent:t-admin'];
+        check('R484c', L480.R484c, cost, `ledger turns t-user ${uT0} -> ${uT1}, t-admin ${aT0} -> ${aT1}; t-user's day ${JSON.stringify(uDay.agentStarted)} runs ${uRuns.length}; t-admin's day ${JSON.stringify(aDay.agentStarted)}`);
+        const askOk = !!asked && asked.ok && /reply: r525 USAGE what is the plan\?/.test((asked.result || {}).text || '') && !!(asked.result || {}).thread && asked.result.by === 'agent';
+        // 2. a hand-off from t-user's agent to mills's agent: held (mills is told) until mills accepts, then picked up and reported back
+        const t525 = (await call('/api/board/create', U, { title: 'r525 handoff task', status: 'todo', assignee: 't-user' })).data.task || {};
+        const s525 = Math.max(0, ...((await call('/api/room/messages?since=0', D)).data.messages || []).map((m) => m.seq));
+        const [ho] = await tools481([['agent_handoff', { to: 'mills', task: t525.id, text: 'r525 PICKUP take this one, the rest is in the notes' }]], U);
+        const hoId = ((ho || {}).result || {}).id, hoThread = ((ho || {}).result || {}).thread;
+        await sleep(800);
+        const heldSide = (((((await ag('thread?id=' + hoThread, D)).data || {}).messages) || []).find((m) => m.id === hoId) || {}).status;
+        const dIdle = (((await call('/api/work/sessions', D)).data || {}).counts || {}).working || 0;
+        const toldMills = ((await call('/api/room/messages?since=' + s525, D)).data.messages || []).filter((m) => m.to === 'mills');
+        const acc = await ag('held', D, { id: hoId, accept: true });
+        let reported = null; for (let i = 0; i < 80 && !reported; i++) { reported = (((((await ag('thread?id=' + hoThread, U)).data || {}).messages) || []).find((m) => m.kind === 'report' && /picked up/.test(m.text || ''))) || null; if (!reported) await sleep(250); }
+        const task525 = ((await call('/api/board', U)).data.tasks || []).find((t) => t.id === t525.id) || {};
+        // (the private chat line of a held message is R482's: mills has no chat key in the scratch hub, so is told on the page's card only)
+        const handOk = !!ho && ho.ok && ho.result.status === 'held' && /held for/.test(ho.result.note || '') && heldSide === 'held' && dIdle === 0 && acc.status === 200 && acc.data.reassigned === true
+          && !!reported && /claimed=true/.test(reported.text || '') && /^\[done\]/.test(reported.text || '') && (reported.from || {}).user === 'mills' && (reported.from || {}).source === 'work' && task525.assignee === 'mills';
+        await idle525();
+        // 3. a model without tools: its final answer is the reply (the page's send with wait gets it)
+        const fa = await ag('send', A, { to: 't-user', kind: 'ask', text: 'r525 NOTOOLS what is two and two?', wait: true, replyBySec: 120 });
+        const faLine = (((await ag('audit?since=0', A)).data || {}).lines || []).find((l) => l.event === 'replied' && l.id === (((fa.data || {}).reply) || {}).id);
+        const finalOk = fa.status === 200 && /^final answer: r525 NOTOOLS/.test((((fa.data || {}).reply) || {}).text || '') && !!faLine && faLine.by === 'final-answer' && !('x' in ((fa.data || {}).reply || {}));
+        await idle525();
+        // 4. who sees what: the three people their own threads; a pair they are not in is 404
+        const [thA, thU, thD] = [await threadsOf(A), await threadsOf(U), await threadsOf(D)];
+        const askThread = (asked && asked.result && asked.result.thread) || '';
+        const notMills = await ag('thread?id=' + askThread, D), notAdmin = await ag('thread?id=' + hoThread, A);
+        const seeOk = thA.includes(askThread) && thA.includes((fa.data || {}).thread) && thU.includes(askThread) && thU.includes(hoThread) && thD.includes(hoThread) && !thD.includes(askThread) && !thA.includes(hoThread)
+          && notMills.status === 404 && notAdmin.status === 404;
+        // 5. limits: an echo between t-user's and mills's agents is stopped
+        const echo = await ag('send', U, { to: 'mills', kind: 'ask', text: 'ECHO r525 ping', wait: false });
+        let looped = null; for (let i = 0; i < 80 && !looped; i++) { const m = (await ag('thread?id=' + (echo.data || {}).thread, D)).data || {}; if (m.thread && m.thread.status === 'stopped') looped = m.thread; else await sleep(250); }
+        await idle525();
+        check('R525', L525, askOk && handOk && finalOk && seeOk && !!looped && looped.why === 'loop',
+          `ask ${askOk} ${JSON.stringify(asked && asked.result).slice(0, 100)}; handoff ${handOk}: ${ho && JSON.stringify(ho.result).slice(0, 80)} side ${heldSide} mills working ${dIdle} told ${toldMills.length} accepted ${acc.status} ${JSON.stringify(acc.data)} report ${reported && reported.text} assignee ${task525.assignee}; final answer ${finalOk}: ${fa.status} ${JSON.stringify(fa.data).slice(0, 120)} audit by ${faLine && faLine.by}; threads ${seeOk} (A ${thA.length} U ${thU.length} D ${thD.length}, 404s ${notMills.status}/${notAdmin.status}); loop ${looped && looped.why}`);
+      } else { check('R484c', L480.R484c, false, built ? 'the six tools are not listed' : 'no /api/agents/* yet'); check('R525', L525, false, built ? 'the six tools are not listed' : 'no /api/agents/* yet'); }
       // R484: loops, rate, ownership, laundering mark, cost
       if (built) {
         await idle480();
@@ -3670,14 +3750,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
           && ho.status === 202 && (ho.data || {}).status === 'held' && dec.status === 200 && still.assignee === 'mills' && claim.status === 403
           && after && marked && bursts.filter((x) => x === 429).length >= 1 && bursts[bursts.length - 1] === 429 && rateWhy.why === 'rate' && /an hour between you and @t-user/.test(rateWhy.error || ''),
           `loop ${stopped && stopped.why} after ${stopped && (stopped.messages || []).length}; told t-user ${toldUser.length} t-admin ${toldAdmin.length}; handoff ${ho.status} ${(ho.data || {}).status} declined ${dec.status} assignee ${still.assignee} claim ${claim.status}; afterRefusal ${after} marked ${marked}; rate ${bursts.filter((x) => x === 429).length}/21 refused (${rateWhy.error})`);
-        // the cost of an agent-started run in the receiver's time log (T-300's): their usage ledger counts it already, the startedBy mark is not there yet
-        const day484 = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-        const f484 = path.join(SB, 'profiles', 't-user', 'activity', `${day484}.json`);
-        spec('R484c', L480.R484c, fs.existsSync(f484) && /"startedBy":\s*"agent:t-admin"/.test(fs.readFileSync(f484, 'utf8')), `time log ${fs.existsSync(f484) ? 'has no startedBy' : 'missing'}`);
         await idle480();
-      } else { check('R484', L480.R484, false, 'no /api/agents/* yet'); spec('R484c', L480.R484c, false, 'no /api/agents/* yet'); }
+      } else check('R484', L480.R484, false, 'no /api/agents/* yet');
       for (const k of kept480) await call('/api/work/current', k.tok, { session: k.sid, transcript: k.cur.transcript || [], archiveId: k.cur.archiveId || null, archiveTitle: k.cur.archiveTitle || null });
-    } else for (const id of Object.keys(L480)) skip(id, L480[id], 'the Rust hub\'s: --rust-hub runs it');
+    } else { for (const id of Object.keys(L480)) skip(id, L480[id], 'the Rust hub\'s: --rust-hub runs it'); skip('R525', 'agent talk end to end (T-300, T-294\'s done-when list)', 'the Rust hub\'s: --rust-hub runs it'); }
   }
   if (RUST_HUB) { // R245-R249 (T-238 = T-193 · 1/4): one start-work flow; the fake Forgejo (this runner) answers as tuser-fj and takes pushes over smart HTTP
     const PR238 = path.join(SCRATCH, 'projects'), FR = (fakeForgejo.repos = fakeForgejo.repos || new Map()), gitq238 = (dir, ...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });

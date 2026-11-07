@@ -62,6 +62,7 @@ impl AiHub for Hub {
     fn set_agent_busy(&self, v: Option<(String, String)>) { self.mods.chat.set_agent_busy(v) }
     fn agent_blocks(&self, target: &str, conv: &str) -> String { pgm_hcom_internal::chat::agent_blocks(self, target, conv) }
     fn agent_say(&self, text: &str, to: &str, as_: &str, via: &str, conv: &str) -> i64 { pgm_hcom_internal::chat::agent_say(self, text, to, as_, via, conv) }
+    fn note_agent_run(&self, user: &str, started_by: &str, run: &str, ms: u64) { pgm_hcom_internal::chat::note_agent_run(self, user, started_by, run, ms) }
     fn internal<'a>(&'a self, path: &'a str, body: String) -> Fut<'a, Option<(u16, Bytes)>> { Box::pin(crate::front::internal(self, path, body)) }
     fn push_ai_state(&self) -> Fut<'_, ()> { Box::pin(super::push_ai_state(self)) }
 }
