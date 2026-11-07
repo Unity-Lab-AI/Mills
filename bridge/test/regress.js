@@ -47,6 +47,14 @@ function check(id, label, pass, detail = '') {
 }
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
 const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
+const L527 = {
+  R538: 'a person on dev sees live\'s AI hosts and their own scopes: the AI hosts\' providers dev offers a person are the ones live offers that person (same ids, owners and models), each marked viaPeer; a model the owner did not allow them is cut on dev too, and a run with it is refused in live\'s words',
+  R539: 'a Work run on dev goes through live\'s host: a relayed run\'s model call (dev\'s /llm, and through Headroom on dev) reaches the host\'s login through live and its answer comes back; a 2.x host\'s run (Claude Code on the host) streams its events back to dev; Stop on dev cancels it on the host',
+  R540: 'dev\'s run keeps its team tools on dev: a 2.x host\'s run gets dev as its hub (hubUrl, mcpBase), the board write it makes through its MCP relay lands on dev\'s board first and reaches live through the bridge afterwards, and live refuses to run a tool for that job',
+  R541: 'a borrowed PC tool is the owner\'s only: the host owner\'s run on dev gets an answer from their own machine through live, signed by live for them; another person\'s run naming that machine gets 403, the host never sees the call and nothing answers instead (no browser folder, no other machine)',
+  R542: 'dev without live\'s AI says so and keeps working: with live stopped, with the bridge off on live, and with the route answering 404 (shareAi off, as an older live), dev offers no borrowed AI, a Work run says "No AI is available for Work …" plus "(live\'s AI hosts are not reachable from dev right now)", dev logs the change and not every poll, and chat, the board and notes on dev still work',
+  R543: 'live refuses an unknown account from dev and logs every peer call: a call over the bridge naming an account live does not have is refused (403) for every kind (providers, fetch, work, cancel, PC tool), sync.shareAi { users } lends only to the accounts named, and live\'s security log has the borrowing calls of each account (listing, model calls, Work, cancel, PC tool) marked via dev, and every refusal',
+};
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -59,6 +67,7 @@ function spec(id, label, pass, detail = '') {
   if (pass) return check(id, label, true, detail);
   results.push({ id, label, status: SPEC_STRICT ? 'FAIL' : 'SPEC', detail });
   console.log(`${SPEC_STRICT ? 'FAIL' : 'SPEC'} ${id.padEnd(4)} ${label}  — not built yet${detail ? ': ' + detail : ''}`);
+  if (STOP_AFTER && id === STOP_AFTER) { const e = new Error('stopped after ' + id); e.stopAfter = true; throw e; } // --stop-after stops at a spec check too
 }
 
 // ---------- production snapshot (read-only) ----------
@@ -773,6 +782,7 @@ async function run() {
   if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
+  if (process.argv.includes('--only-r527') && RUST_HUB) await r527Check(); // development: just R538 to R543 (with --stop-after R532)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -4483,6 +4493,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r527')) await r527Check(); } else for (const id of Object.keys(L527)) skip(id, L527[id], 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own and a stand-in AI host)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
     const page496 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
@@ -7344,6 +7355,242 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.allowReachedDev && seen.newOnDevAfterAllow === 200 && seen.joinedBack && seen.joinedOnLive === 200 && seen.allowUsedOnDev.devices === 2 && !seen.allowUsedOnDev.allowNext
       && seen.thirdRefused.every((x) => x === 403) && seen.reset === 200 && seen.reclaim === 200 && JSON.stringify(seen.afterReset) === '[200,403]' && seen.equal && seen.syncIgnored;
     check('R495', R495_LABEL, ok, JSON.stringify(seen));
+  }
+  // R538 to R543 (T-335, numbered R527 to R532 until 5.46.1's R527 landed first, plans/dev-hub.md § 9): dev borrows live's AI hosts over the bridge. Two Rust hubs of their own,
+  // paired by config sync as in R491 (a = live, b = dev with instance dev), and a stand-in AI host played by the test (a 2.x
+  // host: no caps, so the hub probes its logins; its "claude" relays, its "cli" runs Work on its own machine) connected to
+  // live ONLY. What a person sees on dev, driven over HTTP like people would. Written as spec() first (T-336); plain checks
+  // since T-337 to T-339 built it.
+  async function r527Check() {
+    const seen = {}; const procs = {}; const base = path.join(SCRATCH, 'r527'); const secret = crypto.randomBytes(24).toString('hex');
+    const pA = await freePort(PORT + 91), pB = await freePort(pA + 1), pHr = await freePort(pB + 1);
+    const { hashPassword } = require(path.join(SB, 'common.js'));
+    const rootOf = (n) => path.join(base, n, 'bridge');
+    const syncOf = (n, peer, extra = {}) => ({ sync: { peer: `http://127.0.0.1:${peer}`, secretFile: 'sync.secret', name: n === 'a' ? 'live' : 'dev', ...extra } });
+    const cfgA = (extra) => ({ port: pA, defaultUsername: 'mills', admin: true, roomAgent: false, hubClaude: false, aiNodeOfflineMs: 4000, ...(extra === null ? {} : syncOf('a', pB, extra || {})) });
+    const cfgB = { port: pB, defaultUsername: 'mills', admin: true, roomAgent: false, hubClaude: false, instance: 'dev', aiNodeOfflineMs: 4000, ...syncOf('b', pA),
+      claudeCommand: process.execPath, claudeArgs: [path.join(__dirname, 'fake-claude.js')], projectsRoot: path.join(base, 'projects'), worktreeRoot: path.join(base, 'worktrees'), headroom: { url: `http://127.0.0.1:${pHr}` } };
+    for (const n of ['a', 'b']) {
+      fs.mkdirSync(path.join(rootOf(n), 'profiles', 'r527-u'), { recursive: true });
+      fs.writeFileSync(path.join(rootOf(n), 'config.json'), JSON.stringify(n === 'a' ? cfgA() : cfgB));
+      fs.writeFileSync(path.join(rootOf(n), 'sync.secret'), secret + '\n');
+      fs.writeFileSync(path.join(rootOf(n), 'auth.json'), JSON.stringify(hashPassword('pw-r527-mills-01')));
+      fs.writeFileSync(path.join(rootOf(n), 'profiles', 'r527-u', 'auth.json'), JSON.stringify(hashPassword('pw-r527-user-001')));
+    }
+    // a project on dev (a 2.x host's run needs one: a session with no project works in a folder on the hub)
+    const repo = path.join(base, 'projects', 'r527p', '_repo'); fs.mkdirSync(repo, { recursive: true });
+    for (const a of [['init', '-q', '-b', 'develop'], ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'start']]) spawnSync('git', a, { cwd: repo });
+    const http = (port) => async (p, token, body, headers = {}) => {
+      try { const r = await fetch(`http://127.0.0.1:${port}${p}`, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers }, body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined, signal: AbortSignal.timeout(60000) }); return { status: r.status, data: await r.json().catch(() => ({})) }; } catch (e) { return { status: 0, data: { error: e.message } }; }
+    };
+    const A = http(pA), B = http(pB);
+    const SEC = { 'x-vr-sync-secret': secret };
+    const start = async (n) => {
+      const port = n === 'a' ? pA : pB; const log = fs.openSync(path.join(base, n + '.log'), 'a');
+      procs[n] = spawn(RUST_HUB, ['--alone', '--root', rootOf(n), '--port', String(port)], { cwd: rootOf(n), stdio: ['ignore', log, log], windowsHide: true });
+      for (let i = 0; i < 80; i++) { if ((await http(port)('/api/status')).status === 200) return true; await sleep(100); }
+      return false;
+    };
+    const stop = async (n) => { const p = procs[n]; if (!p) return; const gone = new Promise((r) => p.once('exit', r)); try { p.kill('SIGTERM'); } catch {} await Promise.race([gone, sleep(5000)]); procs[n] = null; };
+    const until = async (f, ms = 15000) => { const t0 = Date.now(); for (;;) { const v = await f(); if (v || Date.now() - t0 > ms) return v; await sleep(150); } };
+    const signin = async (H2, user, pw, dev) => (await H2('/api/login', null, { username: user, password: pw, deviceId: dev })).data.token || '';
+    // a Work run on a hub, its events as the page reads them (a PC call the browser would answer is answered "browser-fallback")
+    const chatOn = async (port, token, message, extra = {}) => {
+      try {
+        const r = await fetch(`http://127.0.0.1:${port}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: true, ...extra }), signal: AbortSignal.timeout(90000) });
+        if (r.status !== 200) return { status: r.status, events: [], error: (await r.json().catch(() => ({}))).error || '' };
+        const events = []; let buf = '';
+        for await (const c of r.body) { buf += Buffer.from(c).toString('utf8'); let i; while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (!l.trim()) continue; const ev = JSON.parse(l); events.push(ev); if (ev.type === 'pc_tool') http(port)('/api/pc-result', token, { id: ev.id, ok: true, result: 'browser-fallback r530' }); } }
+        return { status: 200, events };
+      } catch (e) { return { status: 0, events: [], error: e.message }; }
+    };
+    const all = (r) => (r.events || []).map((e) => (e.type === 'assistant' ? (e.message.content || []).map((c) => c.text).join(' ') : e.text || '')).join('\n');
+    const errOf = (r) => ((r.events || []).find((e) => e.type === 'bridge_error') || {}).text || r.error || '';
+    // ---- the stand-in AI host (a 2.x host, as R152 plays one): hello, poll, replies, sealed Work events ----
+    const host = { stop: false, key: null, relays: [], probes: [], pcs: [], works: [], cancelled: [], toolLive: [], toolDev: [], hubKid: '' };
+    const derive = (s, hn, sn) => Buffer.from(crypto.hkdfSync('sha256', Buffer.from(String(s), 'utf8'), Buffer.from(hn + sn, 'hex'), 'viberoller-ai-host-v1', 32));
+    const seal = (obj) => { const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', host.key, iv); const ct = Buffer.concat([c.update(JSON.stringify(obj), 'utf8'), c.final(), c.getAuthTag()]); return { iv: iv.toString('base64'), ct: ct.toString('base64') }; };
+    const open = (enc) => { const iv = Buffer.from(enc.iv, 'base64'), ct = Buffer.from(enc.ct, 'base64'); const d = crypto.createDecipheriv('aes-256-gcm', host.key, iv); d.setAuthTag(ct.subarray(ct.length - 16)); return JSON.parse(Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]).toString('utf8')); };
+    const hostRun = (id, token) => {
+      const hh = { 'X-VR-Host': id, 'X-VR-Host-Token': token, 'Content-Type': 'application/json' };
+      const H0 = `http://127.0.0.1:${pA}`;
+      const post = (p, b) => fetch(H0 + p, { method: 'POST', headers: hh, body: JSON.stringify(b), signal: AbortSignal.timeout(20000) }).then((r) => r.json().catch(() => ({}))).catch(() => ({}));
+      const reply = (job, status, headers, body) => post('/node/reply', { id: job.id, status, headers, body: Buffer.from(body).toString('base64') });
+      const events = (job, b) => post('/node/events', { job: job.id, enc: seal(b) });
+      const work = async (job) => {
+        const p = open(job.enc); host.works.push({ id: job.id, account: p.account, hubUrl: p.hubUrl, mcpBase: p.mcpBase, message: String(p.message || '').slice(0, 80) });
+        const msg = String(p.message || '');
+        await events(job, { events: [{ type: 'system', subtype: 'init', session_id: 'r528-host-session', model: p.model }] });
+        if (msg.includes('BOARD529')) { // the run's board MCP relay, as board-mcp.js calls it: payload.mcpBase with the job's token
+          const tool = (url) => fetch(url + '/internal/board', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': p.token, 'X-Mills-Account': p.account }, body: JSON.stringify({ name: 'task_create', args: { title: 'r529 made by the host run' } }) }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) })).catch((e) => ({ status: 0, body: { error: e.message } }));
+          host.toolDev.push(await tool(p.mcpBase));
+          host.toolLive.push(await tool(`${H0}/node/job/${job.id}`)); // the same call sent to live: refused (the job's tools are dev's)
+        }
+        if (msg.includes('SLOW')) {
+          for (let i = 0; i < 60; i++) {
+            const a = await events(job, { events: [{ type: 'assistant', session_id: 'r528-host-session', message: { content: [{ type: 'text', text: 'host tick ' + i }] } }] });
+            if (a.cancel || host.cancelled.includes(job.id)) { if (!host.cancelled.includes(job.id)) host.cancelled.push(job.id); await events(job, { events: [], done: true, code: 130 }); return; }
+            await sleep(250);
+          }
+        }
+        await events(job, { events: [{ type: 'assistant', session_id: 'r528-host-session', message: { content: [{ type: 'text', text: 'host ran: ' + msg.slice(0, 60) }] } }, { type: 'result', subtype: 'success', is_error: false, session_id: 'r528-host-session', result: 'host ran it' }], done: true, code: 0 });
+      };
+      const handle = async (job) => {
+        if (job.kind === 'work') return work(job);
+        const body = Buffer.from(job.body || '', 'base64').toString('utf8');
+        if (job.engine === 'pc') { const sig = (job.headers || {})['x-vr-machine-sig'] || ''; let env = {}; try { env = JSON.parse(JSON.parse(sig).payload); } catch {} host.pcs.push({ path: job.path, kid: (() => { try { return JSON.parse(sig).kid; } catch { return ''; } })(), owner: env.owner, actor: env.actor && env.actor.account }); return reply(job, 200, { 'content-type': 'application/json' }, JSON.stringify({ ok: true, result: 'r530 listing from the host' })); }
+        if (String(job.engine).startsWith('relay:')) {
+          if (job.path === '/v1/__viberoller_probe') { host.probes.push(job.engine); return job.engine === 'relay:cli' ? reply(job, 404, { 'content-type': 'application/json' }, '{"error":"This host does not lend the relay:cli engine."}') : reply(job, 200, { 'content-type': 'application/json' }, '{}'); }
+          host.relays.push({ engine: job.engine, path: job.path, model: (() => { try { return JSON.parse(body).model; } catch { return ''; } })() });
+          return reply(job, 200, { 'content-type': 'application/json', 'anthropic-ratelimit-unified-5h-utilization': '0.12', 'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + 3600) }, JSON.stringify({ id: 'msg_r528', type: 'message', role: 'assistant', model: 'm1', content: [{ type: 'text', text: 'r528 upstream through live' }], usage: { input_tokens: 5, output_tokens: 3 } }));
+        }
+        return reply(job, 404, { 'content-type': 'application/json' }, '{"error":"nothing here"}');
+      };
+      (async () => {
+        while (!host.stop) {
+          try {
+            if (!host.key) {
+              const nonce = crypto.randomBytes(16).toString('hex');
+              const r = await fetch(H0 + '/node/hello', { method: 'POST', headers: hh, body: JSON.stringify({ nonce, user: 'mills', version: '2.0.0', engines: [], pc: true, providers: [
+                { id: 'claude', kind: 'claude-relay', label: 'Mills R527 Claude', models: ['m1', 'm2'], allowedUsers: ['r527-u'] },
+                { id: 'cli', kind: 'claude-cli', label: 'Mills R527 Claude on the host', models: ['m1'], allowedUsers: [] }] }), signal: AbortSignal.timeout(10000) });
+              if (r.status !== 200) { await sleep(300); continue; }
+              const j = await r.json(); host.key = derive(token, nonce, j.serverNonce); host.hubKid = j.hubKid || '';
+            }
+            const r = await fetch(H0 + '/node/poll', { headers: hh, signal: AbortSignal.timeout(40000) });
+            if (r.status === 428 || r.status === 401) { host.key = null; continue; }
+            const j = await r.json().catch(() => ({}));
+            for (const c of j.cancel || []) if (!host.cancelled.includes(c)) host.cancelled.push(c);
+            for (const job of j.jobs || []) handle(job).catch(() => {});
+          } catch { host.key = null; await sleep(300); }
+        }
+      })();
+    };
+    // ---- the stand-in Headroom on dev (§ 8): forwards to dev's /llm-relay, as R499's does
+    const hrSeen = [];
+    const hrSrv = require('http').createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/health') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('{"status":"healthy"}'); }
+      const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', async () => {
+        hrSeen.push({ path: req.url, relayHeader: !!req.headers['x-vr-relay'] });
+        const headers = { ...req.headers }; delete headers.host; delete headers['content-length'];
+        try { const up = await fetch(`http://127.0.0.1:${pB}/llm-relay${req.url}`, { method: req.method, headers, body: Buffer.concat(chunks) }); res.writeHead(up.status, { 'content-type': up.headers.get('content-type') || 'application/json' }); res.end(Buffer.from(await up.arrayBuffer())); }
+        catch (e) { res.writeHead(502); res.end(String(e.message)); }
+      });
+    });
+    try {
+      seen.startA = await start('a'); seen.startB = await start('b');
+      const tA = await signin(A, 'mills', 'pw-r527-mills-01', 'device-r527-aaaaaaaaaa'), tAu = await signin(A, 'r527-u', 'pw-r527-user-001', 'device-r527-bbbbbbbbbb');
+      // mills registers the host on live (Settings → My AI hosts) and allows r527-u only the model m1 of its Claude
+      const made = (await A('/api/hosts/new', tA, {})).data.host || {}; const conf = (await A('/api/hosts/config', tA, { id: made.id })).data.config || {};
+      hostRun(made.id, conf.token);
+      const pid = (p) => `h:${made.id}/${p}`;
+      seen.hostUp = !!(await until(async () => { const ps = (((await A('/api/check', tA)).data.providers) || []); const cli = ps.find((p) => p.id === pid('cli')); return cli && cli.online && cli.remoteKind === 'claude-cli-work'; }, 20000));
+      const tB = await signin(B, 'mills', 'pw-r527-mills-01', 'device-r527-aaaaaaaaaa'), tBu = await signin(B, 'r527-u', 'pw-r527-user-001', 'device-r527-bbbbbbbbbb');
+      seen.signedIn = !!(tA && tAu && tB && tBu);
+      // ---- R527: what dev offers each person = what live offers them, marked viaPeer; the scope holds on dev
+      const hostProvs = async (H2, tok) => ((((await H2('/api/check', tok)).data.providers) || []).filter((p) => String(p.id).startsWith('h:')));
+      const view = (ps) => JSON.stringify(ps.map((p) => [p.id, p.owner, (p.models || []).join(',')]).sort());
+      const modelsOf = (ps, id) => JSON.stringify((ps.find((p) => p.id === id) || {}).models || null);
+      // r527-u picks m2 on dev while it is still allowed; then the owner allows them m1 only (on live)
+      await until(async () => modelsOf(await hostProvs(B, tBu), pid('claude')) === '["m1","m2"]', 15000);
+      await B('/api/workspace', tBu, { none: true });
+      seen.pickM2 = (await B('/api/model', tBu, { provider: pid('claude'), model: 'm2' })).status;
+      seen.scope = (await A('/api/hosts/scope', tA, { id: made.id, provider: 'claude', user: 'r527-u', models: ['m1'] })).status;
+      const devU = await until(async () => { const ps = await hostProvs(B, tBu); return modelsOf(ps, pid('claude')) === '["m1"]' ? ps : null; }, 15000) || [];
+      const liveU = await hostProvs(A, tAu), devM = await until(async () => { const ps = await hostProvs(B, tB); return ps.length >= 2 ? ps : null; }, 15000) || [], liveM = await hostProvs(A, tA);
+      seen.r527 = { pickM2: seen.pickM2, devU: view(devU), liveU: view(liveU), devM: view(devM), liveM: view(liveM), viaPeer: [...devU, ...devM].every((p) => p.viaPeer === true), uModels: (devU.find((p) => p.id === pid('claude')) || {}).models };
+      const scoped = await chatOn(pB, tBu, 'r527 the model the owner did not allow');
+      seen.r527.scopedErr = errOf(scoped).slice(0, 200);
+      // ---- R528: a relayed run on dev (straight, then through Headroom), a 2.x run, Stop
+      await B('/api/model', tBu, { provider: pid('claude'), model: 'm1' });
+      const relayed = await chatOn(pB, tBu, 'r528 relayed through live');
+      const hrUp = await new Promise((r) => { hrSrv.once('error', () => r(false)); hrSrv.listen(pHr, '127.0.0.1', () => r(true)); });
+      const viaHr = await chatOn(pB, tBu, 'r528 through headroom on dev');
+      await new Promise((r) => hrSrv.close(r));
+      seen.r528 = { relayed: (all(relayed).match(/relay=[^|]*/) || [errOf(relayed)])[0].trim(), hrUp, viaHr: (all(viaHr).match(/relay=[^|]*/) || [errOf(viaHr)])[0].trim(), hrInfo: /through Headroom/.test(all(viaHr)), hrSaw: hrSeen.some((x) => /^\/v1\/messages/.test(x.path) && x.relayHeader), hostRelays: host.relays.length };
+      await B('/api/workspace', tB, { project: 'r527p' });
+      await B('/api/model', tB, { provider: pid('cli'), model: 'm1' });
+      const run2 = await chatOn(pB, tB, 'r528 BOARD529 a run on the host');
+      seen.r528.run2 = { status: run2.status, ran: /host ran: r528 BOARD529/.test(all(run2)), done: (run2.events || []).some((e) => e.type === 'bridge_done' || e.type === 'result'), err: errOf(run2).slice(0, 160) };
+      const slow = chatOn(pB, tB, 'r528 SLOW stop me');
+      const ticking = await until(() => host.works.some((w) => /SLOW stop me/.test(w.message)), 15000);
+      await sleep(800);
+      const stopAt = Date.now(); seen.r528.stop = (await B('/api/stop', tB, {})).status;
+      const slowR = await slow; const slowJob = (host.works.find((w) => /SLOW stop me/.test(w.message)) || {}).id;
+      seen.r528.cancelled = !!ticking && host.cancelled.includes(slowJob); seen.r528.stopMs = Date.now() - stopAt; seen.r528.ticks = /host tick 1/.test(all(slowR));
+      // ---- R529: the run's tools stay on dev
+      const w529 = host.works.find((w) => /BOARD529/.test(w.message)) || {};
+      const made529 = (host.toolDev[0] || {}).body || {};
+      const id529 = made529.ok && made529.result && made529.result.task ? made529.result.task.id : '';
+      const onDev = id529 ? ((await B('/api/board/task?id=' + id529, tB)).data.task || {}) : {};
+      const onLive = id529 ? await until(async () => ((await A('/api/board/task?id=' + id529, tA)).data.task || null), 15000) : null;
+      seen.r529 = { hubUrl: w529.hubUrl, mcpBase: w529.mcpBase, devTool: (host.toolDev[0] || {}).status, id: id529, onDev: onDev.title, synced: !!(onLive && onLive.title === 'r529 made by the host run'), liveTool: (host.toolLive[0] || {}).status };
+      // ---- R530: a borrowed PC tool: the owner's own machine, signed by live; another person's run gets 403 and nothing else
+      await B('/api/workspace', tB, { none: true }); await B('/api/model', tB, { provider: pid('claude'), model: 'm1' });
+      const pcOwn = await chatOn(pB, tB, 'r530 PCTOOL from my run on dev');
+      const pcsBefore = host.pcs.length;
+      const probe = 'MACHTOOL=' + Buffer.from(JSON.stringify([{ route: 'pc-tool', body: { name: 'list', args: { path: '' }, machine: made.nickname } }])).toString('hex');
+      const pcOther = await chatOn(pB, tBu, 'r530 ' + probe);
+      const mach = (() => { const l = all(pcOther).split('\n').find((x) => x.includes('MACH:')); try { return JSON.parse(l.slice(l.indexOf('MACH:') + 5)); } catch { return []; } })();
+      seen.r530 = { own: ((all(pcOwn).match(/PC:.*/) || [errOf(pcOwn)])[0]).slice(0, 160), pcs: host.pcs.slice(0, 2), hubKid: host.hubKid, other: mach.map((x) => x.status + ' ' + JSON.stringify(x.body).slice(0, 100)), hostSawOther: host.pcs.length - pcsBefore, fallback: /browser-fallback/.test(all(pcOther)) };
+      // ---- R532: live refuses an account it does not have, for every kind of call; shareAi { users } lends only to them; the audit
+      const ref = {};
+      ref.providers = (await A('/__sync/ai/providers?user=r527-nobody', null, undefined, SEC)).status;
+      ref.fetch = (await A('/__sync/ai/fetch', null, '{}', { ...SEC, 'x-vr-ai': Buffer.from(JSON.stringify({ mode: 'login', host: made.id, provider: 'claude', path: '/v1/messages', method: 'POST', account: 'r527-nobody', use: 'work' })).toString('base64') })).status;
+      ref.work = (await A('/__sync/ai/work', null, { host: made.id, provider: 'cli', account: 'r527-nobody', payload: { account: 'r527-nobody', message: 'x', hubUrl: '' } }, SEC)).status;
+      ref.cancel = (await A('/__sync/ai/cancel', null, { id: 'x', account: 'r527-nobody' }, SEC)).status;
+      ref.pc = (await A('/__sync/ai/pc-tool', null, { account: 'r527-nobody', name: 'list', args: {} }, SEC)).status;
+      ref.noSecret = (await A('/__sync/ai/providers?user=mills')).status;
+      seen.r532 = { refused: ref };
+      const audit = ((await A('/api/admin/audit?action=ai.peer&limit=1000', tA)).data.entries) || [];
+      const kinds = (actor) => [...new Set(audit.filter((e) => e.actor === actor && (e.detail || {}).via === 'dev').map((e) => e.action))].sort();
+      seen.r532.audit = { mills: kinds('mills'), u: kinds('r527-u'), refusedNobody: audit.filter((e) => /refused/.test(e.action) && e.target === 'r527-nobody').length };
+      // ---- R531: dev without live's AI (live stopped, then live without the bridge, then live with shareAi off as an older live)
+      //      and the users list (shareAi { users: ["mills"] })
+      // (the host stays connected to live throughout: live has AI, dev just cannot borrow it)
+      const jwk = { kty: 'EC', crv: 'P-256', x: crypto.randomBytes(32).toString('base64url'), y: crypto.randomBytes(32).toString('base64url') };
+      seen.key531 = (await B('/api/room/mykey', tBu, { pub: jwk, backup: { salt: crypto.randomBytes(16).toString('base64'), iv: crypto.randomBytes(12).toString('base64'), ct: crypto.randomBytes(80).toString('base64') } })).status;
+      // dev's own word on it (its /api/status aiPeer, this machine only): asked live after the phase began, and why it is not lending
+      const peerOf = async () => ((await B('/api/status')).data || {}).aiPeer || {};
+      const askedSince = (t0, pred) => until(async () => { const p = await peerOf(); return p.checkedAt > t0 + 3500 && pred(p) ? p : null; }, 20000);
+      const noAi = async (what, why) => {
+        const p = await askedSince(Date.now(), (x) => !x.up && why.test(x.why || ''));
+        const gone = await until(async () => (await hostProvs(B, tBu)).length === 0, 20000);
+        const r = await chatOn(pB, tBu, 'r531 ' + what);
+        const chatOk = (await B('/api/room/send', tBu, { v: 3, mid: crypto.randomBytes(16).toString('base64url').slice(0, 22), iv: crypto.randomBytes(12).toString('base64'), ct: crypto.randomBytes(32).toString('base64'), keys: { 'r527-u': { iv: crypto.randomBytes(12).toString('base64'), wk: crypto.randomBytes(48).toString('base64') } } })).status;
+        const boardOk = (await B('/api/board/create', tBu, { title: 'r531 board on dev ' + what })).status;
+        const noteOk = (await B('/api/notes/write', tBu, { path: 'r531/' + what + '.md', text: 'still here' })).status;
+        return { why: p ? p.why : null, gone: !!gone, err: errOf(r).slice(0, 40) + ' … ' + errOf(r).slice(-80), chat: chatOk, board: boardOk, note: noteOk };
+      };
+      await stop('a');
+      seen.r531 = { stopped: await noAi('live-stopped', /not answering/) };
+      fs.writeFileSync(path.join(rootOf('a'), 'config.json'), JSON.stringify(cfgA(null))); await start('a');
+      seen.r531.bridgeOff = await noAi('bridge-off', /does not lend/);
+      await stop('a'); fs.writeFileSync(path.join(rootOf('a'), 'config.json'), JSON.stringify(cfgA({ shareAi: false }))); await start('a');
+      seen.r531.shareOff = await noAi('share-off', /does not lend/);
+      seen.r531.routeOff = (await A('/__sync/ai/providers?user=mills', null, undefined, SEC)).status;
+      await stop('a'); fs.writeFileSync(path.join(rootOf('a'), 'config.json'), JSON.stringify(cfgA({ shareAi: { users: ['mills'] } }))); await start('a');
+      seen.r532.users = { mills: (await A('/__sync/ai/providers?user=mills', null, undefined, SEC)).status, u: (await A('/__sync/ai/providers?user=r527-u', null, undefined, SEC)).status };
+      // ... and dev, lending again: mills gets the host back, r527-u nothing
+      seen.r532.users.devUp = !!(await askedSince(Date.now(), (x) => x.up));
+      seen.r532.users.devMills = !!(await until(async () => (await hostProvs(B, tB)).length >= 2, 20000));
+      seen.r532.users.devU = (await hostProvs(B, tBu)).length;
+      const devLog = (() => { try { return fs.readFileSync(path.join(base, 'b.log'), 'utf8'); } catch { return ''; } })();
+      // one line per change (live went away, came back without the route, …: about one a phase), never one per 3-second poll
+      seen.r531.logLines = (devLog.match(/live's AI hosts are not reachable from dev right now: /g) || []).length;
+    } finally { host.stop = true; try { hrSrv.close(); } catch {} await stop('a'); await stop('b'); }
+    const R = seen.r527 || {}, S = seen.r528 || {}, T = seen.r529 || {}, P = seen.r530 || {}, N = seen.r531 || {}, Q = seen.r532 || {};
+    const base0 = seen.startA && seen.startB && seen.signedIn && seen.hostUp && seen.scope === 200;
+    check('R538', L527.R538, base0 && R.pickM2 === 200 && R.devU && R.devU === R.liveU && R.devM === R.liveM && R.viaPeer && JSON.stringify(R.uModels) === '["m1"]' && /not the model m2/.test(R.scopedErr || '') && /mills/i.test(R.scopedErr || ''), JSON.stringify({ base0, ...R }));
+    check('R539', L527.R539, base0 && /^relay=200:r528 upstream through live/.test(S.relayed || '') && S.hrUp && /^relay=200:r528 upstream through live/.test(S.viaHr || '') && S.hrInfo && S.hrSaw && S.hostRelays >= 2
+      && S.run2 && S.run2.ran && S.stop === 200 && S.cancelled && S.ticks, JSON.stringify(S));
+    check('R540', L527.R540, base0 && T.hubUrl === `http://127.0.0.1:${pB}` && String(T.mcpBase || '').startsWith(`http://127.0.0.1:${pB}/node/job/`) && T.devTool === 200 && !!T.id && T.onDev === 'r529 made by the host run' && T.synced && T.liveTool === 403, JSON.stringify(T));
+    check('R541', L527.R541, base0 && /r530 listing from the host/.test(P.own || '') && (P.pcs || []).length >= 1 && P.pcs[0].kid === P.hubKid && !!P.hubKid && P.pcs[0].owner === 'mills' && P.pcs[0].actor === 'mills'
+      && (P.other || []).length === 1 && /^403 /.test(P.other[0]) && /someone else/.test(P.other[0]) && P.hostSawOther === 0 && !P.fallback, JSON.stringify(P));
+    const plain = (x) => x && !!x.why && x.gone && /^No AI is available for Work/.test(x.err) && /\(live's AI hosts are not reachable from dev right now\)/.test(x.err) && x.chat === 200 && x.board === 200 && x.note === 200;
+    check('R542', L527.R542, base0 && plain(N.stopped) && plain(N.bridgeOff) && plain(N.shareOff) && N.routeOff === 404 && N.logLines >= 2 && N.logLines <= 8, JSON.stringify(N));
+    check('R543', L527.R543, base0 && Q.refused && Object.entries(Q.refused).every(([k, s]) => s === 403) && Q.users && Q.users.mills === 200 && Q.users.u === 403 && Q.users.devUp && Q.users.devMills && Q.users.devU === 0
+      && Q.audit && ['ai.peer.cancel', 'ai.peer.fetch', 'ai.peer.pc', 'ai.peer.providers', 'ai.peer.work'].every((k) => Q.audit.mills.includes(k)) && ['ai.peer.fetch', 'ai.peer.providers'].every((k) => Q.audit.u.includes(k)) && Q.audit.refusedNobody >= 5, JSON.stringify(Q));
   }
   async function r323Check() {
     const hostHdr = (id, tok) => ({ 'Content-Type': 'application/json', 'X-VR-Host': id, 'X-VR-Host-Token': tok });

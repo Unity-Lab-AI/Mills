@@ -208,6 +208,8 @@ to deploy live to actually test anything."* Spec: team note plans/dev-hub.md.
   on dev may be lost when it ships.
 - **One-hub jobs run on live only:** the Forgejo mirror, workflow triggers, the chat agents, product registrations and
   AI-host updates are off on dev unless a test turns one on (plans/dev-hub.md § 2b), so nothing happens twice.
+- **AI hosts connect to live; dev borrows them over the bridge** (plans/dev-hub.md § 9): a person on dev gets the AI
+  live gives them (same scopes, caps and owners, counted once on live), and a run's tools stay on dev.
 
 ## Clean build law: every build starts clean
 

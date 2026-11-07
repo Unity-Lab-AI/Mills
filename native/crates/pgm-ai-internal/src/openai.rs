@@ -243,7 +243,7 @@ pub async fn answer_for(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
 }
 async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, system: &str, messages: &[(String, String)], on_token: Tok, cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<Answer, ApiErr> {
     let w = hub.work(); let ai = hub.ai();
-    let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, NO_AI))?;
+    let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, ai.with_peer_note(NO_AI)))?;
     let kind = s(&p, "kind");
     if kind == "host-jcode" { return Err(err(400, "That AI is a Jcode PGM host: it runs Work, not API answers. Pick a Claude, API or local-model provider for answers.")); }
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return Err(err(503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
@@ -264,7 +264,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
                 let r = rb.send().await.map_err(|e| err(502, e.to_string()))?;
                 (r.status().as_u16(), r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string(), Src::Http(r))
             } else {
-                let r = ai.provider_fetch(&host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
+                let r = ai.provider_fetch_for(user, "", &host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
                 (r.status, r.headers.iter().find(|(k, _)| k == "content-type").map(|x| x.1.clone()).unwrap_or_default(), Src::Host(r.body))
             };
             let who = if kind == "openai" { "The endpoint".to_string() } else { format!("{nick}'s endpoint") };
@@ -293,7 +293,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
                 // a subscription login answers only when the system prompt opens as Claude Code
                 let mut sys = vec![json!({ "type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude." })]; if !system.is_empty() { sys.push(json!({ "type": "text", "text": system })); }
                 body["system"] = json!(sys);
-                let r = ai.login_fetch(&host, &pid, "/v1/messages", "POST", vec![("content-type".into(), "application/json".into()), ("anthropic-version".into(), "2023-06-01".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
+                let r = ai.login_fetch_for(user, "", &host, &pid, "/v1/messages", "POST", vec![("content-type".into(), "application/json".into()), ("anthropic-version".into(), "2023-06-01".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
                 (r.status, Src::Host(r.body))
             };
             if !(200..300).contains(&status) { return Err(if kind == "anthropic" { err(502, format!("Anthropic answered {status}: {}", String::from_utf8_lossy(&src.all().await).chars().take(300).collect::<String>())) } else { fail_text(format!("{nick}'s Claude"), status, src.all().await, true) }); }
@@ -318,7 +318,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
         "host-codex" => {
             let input: Vec<Value> = messages.iter().filter(|x| x.0 != "system").map(|x| { let asst = x.0 == "assistant"; json!({ "role": if asst { "assistant" } else { "user" }, "content": [{ "type": if asst { "output_text" } else { "input_text" }, "text": x.1 }] }) }).collect();
             let body = json!({ "model": if m.is_empty() { p["models"][0].clone() } else { json!(m) }, "instructions": if system.is_empty() { "You are a helpful assistant." } else { system }, "input": input, "stream": true, "store": false });
-            let r = ai.login_fetch(&host, &pid, "/responses", "POST", vec![("content-type".into(), "application/json".into()), ("accept".into(), "text/event-stream".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
+            let r = ai.login_fetch_for(user, "", &host, &pid, "/responses", "POST", vec![("content-type".into(), "application/json".into()), ("accept".into(), "text/event-stream".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
             if !(200..300).contains(&r.status) { let st = r.status; return Err(fail_text(format!("{nick}'s Codex"), st, Src::Host(r.body).all().await, true)); }
             let (mut text, mut used, mut usage, mut sse, mut src) = (String::new(), s(&body, "model"), Value::Null, Sse::default(), Src::Host(r.body));
             let mut native = Value::Null;
@@ -332,7 +332,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
             Ok(Answer { text, model: used, usage, native })
         }
         "host-claude" => { // legacy: a host that allows work runs a sandboxed `claude -p` there
-            let (id, _t, mut rx) = ai.run_work(&host, &pid, json!({ "sandbox": true, "account": "api", "display": "API", "message": flatten(messages), "systemPrompt": system, "model": m, "hubUrl": "" })).map_err(|e| err(503, e.msg))?;
+            let (id, _t, mut rx) = ai.run_work_as(user, &host, &pid, json!({ "sandbox": true, "account": "api", "display": "API", "message": flatten(messages), "systemPrompt": system, "model": m, "hubUrl": "" })).await.map_err(|e| err(503, e.msg))?;
             let (mut text, mut used, mut usage, mut er) = (String::new(), m.clone(), Value::Null, String::new());
             loop {
                 tokio::select! {
@@ -361,7 +361,7 @@ async fn read_all(mut src: Src, cancel: &Cancel) -> Result<Vec<u8>, ApiErr> { le
 /// to text. Never streamed from the provider: the answer is whole when it is sent on.
 async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, b: &Value, cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<ToolAnswer, ApiErr> {
     let w = hub.work(); let ai = hub.ai();
-    let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, NO_AI))?;
+    let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, ai.with_peer_note(NO_AI)))?;
     let kind = s(&p, "kind");
     if (kind == "host" || kind == "claude-cli" || kind == "host-claude") && hub.root().join("ai-host.off").exists() { return Err(err(503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     let m = pick_model(&p, model);
@@ -379,7 +379,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
                 let r = rb.send().await.map_err(|e| err(502, e.to_string()))?;
                 (r.status().as_u16(), Src::Http(r))
             } else {
-                let r = ai.provider_fetch(&host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
+                let r = ai.provider_fetch_for(user, "", &host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
                 (r.status, Src::Host(r.body))
             };
             let raw = read_all(src, &cancel).await?;
@@ -403,7 +403,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
             } else {
                 let mut sys = vec![json!({ "type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude." })]; if !system.is_empty() { sys.push(json!({ "type": "text", "text": system })); }
                 body["system"] = json!(sys);
-                let r = ai.login_fetch(&host, &pid, "/v1/messages", "POST", vec![("content-type".into(), "application/json".into()), ("anthropic-version".into(), "2023-06-01".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
+                let r = ai.login_fetch_for(user, "", &host, &pid, "/v1/messages", "POST", vec![("content-type".into(), "application/json".into()), ("anthropic-version".into(), "2023-06-01".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
                 (r.status, Src::Host(r.body))
             };
             let raw = read_all(src, &cancel).await?;

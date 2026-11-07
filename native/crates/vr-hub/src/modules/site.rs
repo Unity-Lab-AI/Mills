@@ -40,6 +40,8 @@ pub fn status(hub: &Hub, r: &crate::front::Req) -> Value {
     if inst.is_dev() { v["devOff"] = json!(inst.off()); }
     // the data bridge to the other hub (T-324), when there is one: peer up?, last exchanges, what waits (add-only)
     if let Some(b) = hub.mods.sync.get() { v["sync"] = b.summary(); }
+    // the dev hub borrowing live's AI hosts (T-335, add-only): lending or not, why not, when it last asked, how many hosts
+    if let Some(p) = hub.mods.ai.peer.get() { v["aiPeer"] = p.summary(); }
     v
 }
 /// The DEV band (T-327): on the dev hub every page says so at its top (in the page's flow, so it covers no control) and
