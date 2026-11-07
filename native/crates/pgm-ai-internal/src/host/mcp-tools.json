@@ -316,7 +316,7 @@
   },
   {
    "name": "task_get",
-   "description": "Read one task with its markdown description and recent activity. Includes the live presence of its claim holder (`holder`, `holderOffline`) and assignee (`assigneeStatus`).",
+   "description": "Read one task with its markdown description and recent activity. Includes the live presence of its claim holder (`holder`, `holderOffline`) and assignee (`assigneeStatus`), and its latest handoff (`handoff`: done, state, next, questions; null when none).",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -380,7 +380,7 @@
   },
   {
    "name": "task_claim",
-   "description": "Claim a task before working on it (time-limited, default 15 minutes, max 240). Moves a to-do task to \"doing\". Refused if someone else holds it.",
+   "description": "Claim a task before working on it (time-limited, default 15 minutes, max 240). Moves a to-do task to \"doing\". Refused if someone else holds it. The answer has the task's latest handoff (done, state, next, questions; null when none): start from it.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -483,7 +483,7 @@
   },
   {
    "name": "task_release",
-   "description": "Release your claim without completing (optionally with a note why).",
+   "description": "Release your claim without completing (optionally with a note why). When the task is not done, fill handoff so whoever picks it up next (a person or another Claude, after a re-assignment too) starts from there: done (what is done so far), state (the branch, uncommitted changes, where the work is), next (the next step), questions (open questions). It is stored as a signed Handoff note in the description.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -493,6 +493,31 @@
      },
      "note": {
       "type": "string"
+     },
+     "handoff": {
+      "type": "object",
+      "description": "The structured handoff (at least one part).",
+      "properties": {
+       "done": {
+        "type": "string",
+        "description": "What is done so far."
+       },
+       "state": {
+        "type": "string",
+        "description": "The branch, uncommitted changes, where the work is."
+       },
+       "next": {
+        "type": "string",
+        "description": "The next step."
+       },
+       "questions": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        },
+        "description": "Open questions."
+       }
+      }
      }
     },
     "required": [

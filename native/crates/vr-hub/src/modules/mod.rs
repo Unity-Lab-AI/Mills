@@ -192,6 +192,61 @@ pub fn board_op_presence(hub: &Hub, op: &str, a: &board::Actor, b: &Value) -> bo
     if out.status == 200 { board_presence(hub, &a.user, &mut out.body); }
     out
 }
+// ---------- automatic handoffs (T-266): the same for everyone, so whoever picks a task up starts from where it stood ----------
+/// How many uncommitted changes a worktree has (`git status --porcelain`), or None when it is no git checkout.
+fn uncommitted(dir: &str) -> Option<usize> {
+    let o = std::process::Command::new("git").args(["-C", dir, "status", "--porcelain"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    if !o.status.success() { return None; }
+    Some(String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.trim().is_empty()).count())
+}
+/// A Work run ended still holding tasks it claimed (`AiHub::run_left_claims`): each one its person's Claude still holds
+/// gets one automatic handoff (done so far = the run's last reply; state = branch, uncommitted changes, session, run;
+/// next = go on from there). The claim is left as it is: it lapses by itself. Once per run and task.
+pub fn run_left_claims(hub: &Hub, end: Value) {
+    let Some(h) = hub.me_hub() else { return };
+    tokio::spawn(async move {
+        let s = |k: &str| end[k].as_str().unwrap_or("").to_string();
+        let dir = s("dir");
+        let changes = if dir.is_empty() { None } else { tokio::task::spawn_blocking(move || uncommitted(&dir)).await.ok().flatten() };
+        let (account, run, reply) = (s("account"), s("run"), s("reply"));
+        let key = format!("{account}#agent"); let marker = format!("run {run}");
+        let code = end["code"].clone();
+        let mut state: Vec<String> = vec![];
+        if s("project").is_empty() { state.push("No project (the session's scratch folder)".into()); } else if s("branch").is_empty() { state.push(format!("Project {}", s("project"))); } else { state.push(format!("Branch `{}` of {}", s("branch"), s("project"))); }
+        match changes { Some(0) => state.push("no uncommitted changes in the session's worktree".into()), Some(n) => state.push(format!("{n} uncommitted change{} in the session's worktree (git status)", if n == 1 { "" } else { "s" })), None => {} }
+        state.push(format!("session {}, run {run}", if s("session").is_empty() { "(first)".to_string() } else { s("session") }));
+        let state = state.join("; ") + ".";
+        let done = if reply.trim().is_empty() { "Not said: the run ended without a final reply.".to_string() } else { format!("From the run's last reply:\n\n{}", reply.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n")) };
+        let questions = if code == json!(0) { String::new() } else { format!("The run did not end cleanly (code {}: stopped or failed): check that its last step finished.", if code.is_null() { "none".to_string() } else { code.to_string() }) };
+        for id in end["tasks"].as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
+            let make = |t: &Value| board::Handoff { done: done.clone(), state: state.clone(),
+                next: format!("Read the last reply and the notes above, and go on from there. The claim was left as it was: it lapses by itself at {} UTC unless it is renewed; then claim it.", board::iso_minute(t["claim"]["until"].as_i64().unwrap_or(0))),
+                questions: questions.clone() };
+            h.mods.board.auto_handoff(id, &key, "run ended (automatic)", &marker, &make);
+        }
+    });
+}
+/// A person went offline (and is not working): every claim they (or their Claude) hold gets one short automatic handoff,
+/// unless a handoff was left since that claim began. How many were added.
+pub fn offline_handoffs(hub: &Hub, user: &str) -> usize {
+    let now = pgm_core_internal::now_ms();
+    let st = chat::status_of(hub, user, "", now);
+    if st["presence"] != json!("offline") || st["working"] == json!(true) { return 0; }
+    let name = hub.mods.name_of(user);
+    let seen = st["seen"].as_i64().unwrap_or(0);
+    let mut n = 0;
+    for (id, key) in hub.mods.board.claims_of(user) {
+        let make = |t: &Value| {
+            let at = t["claim"]["at"].as_i64().unwrap_or(0); let last = seen.max(t["updatedAt"].as_i64().unwrap_or(0)).max(at);
+            board::Handoff { done: format!("Not said: {name} went offline while holding this, without a handoff."),
+                state: format!("Held since {} UTC by {}; last activity {} UTC.", board::iso_minute(at), t["claim"]["by"].as_str().unwrap_or(&name), board::iso_minute(last)),
+                next: format!("Ask {name} what is left, or wait until the claim lapses ({} UTC), then claim it and go on from the notes above.", board::iso_minute(t["claim"]["until"].as_i64().unwrap_or(0))),
+                questions: String::new() }
+        };
+        if hub.mods.board.auto_handoff(&id, &key, "went offline (automatic)", "", &make) { n += 1; }
+    }
+    n
+}
 /// A background loop that outlives a panic inside it (FR1): started again after 5 s, with a log line, never silently
 /// gone. A loop that ends by itself is done.
 pub fn forever<F, Fut>(name: &'static str, f: F)
@@ -250,6 +305,24 @@ pub fn start_background(hub: &Arc<Hub>) {
             let (a, d) = h.mods.board.sweep(pgm_core_internal::now_ms() as i64);
             if !a.is_empty() || !d.is_empty() { eprintln!("[vr-hub] board archive: {} archived, {} deleted", a.len(), d.len()); }
             tokio::time::sleep(every).await;
+        }
+    } }); }
+    // went offline holding a claim (T-266): once they have been offline (and not working) for board.offlineGraceSeconds
+    // (120), each claim they hold gets one automatic handoff. Live only (on dev, presence is dev's own: it would be wrong)
+    let grace = std::time::Duration::from_millis((bc["offlineGraceSeconds"].as_f64().unwrap_or(120.0).max(0.0) * 1000.0) as u64);
+    let h = hub.clone();
+    if hub.mods.instance.allows("sweep") { forever("board offline handoffs", move || { let h = h.clone(); async move {
+        let mut rx = h.mods.chat.subscribe_status();
+        let off = |p: &Value, w: &Value| *p == json!("offline") && *w != json!(true);
+        loop {
+            match rx.recv().await {
+                Ok(ev) => if off(&ev["presence"], &ev["working"]) && !off(&ev["from"]["presence"], &ev["from"]["working"]) {
+                    let (h2, u) = (h.clone(), ev["user"].as_str().unwrap_or("").to_string());
+                    tokio::spawn(async move { tokio::time::sleep(grace).await; let n = offline_handoffs(&h2, &u); if n > 0 { eprintln!("[vr-hub] board: {n} automatic handoff(s): {u} went offline holding them"); } });
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => return,
+            }
         }
     } }); }
     let h = hub.clone();

@@ -45,6 +45,9 @@ pub trait AiHub: Send + Sync {
     fn work_message(&self, a: &Account, message: &str, where_: Value) -> Value;
     /// A board tool (`op`) for this account as an agent: `{ ok, result }` / `{ ok: false, error }`.
     fn board_tool(&self, op: &str, account: &str, args: &Value) -> Value;
+    /// A Work run ended still holding board tasks it claimed (T-266): `{ account, run, session, project, branch, dir, tasks,
+    /// reply, code }`. The program adds an automatic handoff to each it still holds (once per run and task). Default: nothing.
+    fn run_left_claims(&self, _end: Value) {}
     /// A notes tool, saved as `actor`.
     fn notes_tool(&self, name: &str, args: &Value, actor: &str) -> Value;
     /// A team (chat) tool for this account.

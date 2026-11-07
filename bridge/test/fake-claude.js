@@ -135,6 +135,29 @@ process.stdin.on('end', async () => {
     out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'ARCH:' + JSON.stringify({ id, early: early.ok ? 'archived' : early.error, archivedAt: arch.ok ? arch.result.task.archivedAt : arch.error,
       onBoard: listed.ok ? listed.result.tasks.some((t) => t.id === id) : listed.error, found: found.ok ? found.result.tasks.map((t) => t.id) : found.error, restored: back.ok ? back.result.task.status : back.error }) }] } });
   }
+  // "BOARDHOLD" (T-266): create a task and claim it, then end the run still holding it ("BOARDHOLD RELEASE": release it first).
+  // "BOARDPICK=T-n": claim that task (printing the handoff the claim answers), then release it with a handoff of its own.
+  if (input.includes('BOARDHOLD') || /BOARDPICK=T-\d+/.test(input)) {
+    const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.board.env;
+    const tool = (name, args) => fetch(env.MILLS_BRIDGE + '/internal/board', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mills-Internal': env.MILLS_INTERNAL, 'X-Mills-Account': env.MILLS_ACCOUNT },
+      body: JSON.stringify({ name, args }),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+    const rep = {};
+    if (input.includes('BOARDHOLD')) {
+      const made = await tool('task_create', { title: 'agent holds r517' });
+      rep.id = made.ok ? made.result.task.id : '';
+      rep.claimed = (await tool('task_claim', { id: rep.id, minutes: 30 })).ok;
+      if (input.includes('BOARDHOLD RELEASE')) rep.released = (await tool('task_release', { id: rep.id })).ok;
+    } else {
+      rep.id = input.match(/BOARDPICK=(T-\d+)/)[1];
+      const c = await tool('task_claim', { id: rep.id, minutes: 10 });
+      rep.claimed = c.ok; rep.handoff = c.ok ? c.result.handoff : c.error;
+      const r = await tool('task_release', { id: rep.id, handoff: { done: 'r516 the agent did the second half', state: 'branch agents/r516; clean', next: 'r516 review it', questions: ['r516 ship it?'] } });
+      rep.released = r.ok; rep.after = r.ok ? r.result.handoff : r.error;
+    }
+    out({ type: 'assistant', session_id: session, message: { content: [{ type: 'text', text: 'HOLD:' + JSON.stringify(rep) }] } });
+  }
   // "PLANASSESS": re-assess the board through the team relay (T-280): the proposals, as the planner gets them.
   if (input.includes('PLANASSESS')) {
     const env = JSON.parse(fs.readFileSync(opt('--mcp-config'), 'utf8')).mcpServers.team.env;

@@ -50,6 +50,7 @@ impl AiHub for Hub {
         let out = super::board_op_presence(self, op, &self.mods.actor(account, true), args);
         if out.status == 200 { json!({ "ok": true, "result": out.body }) } else { json!({ "ok": false, "error": out.body["error"] }) }
     }
+    fn run_left_claims(&self, end: Value) { super::run_left_claims(self, end) }
     fn notes_tool(&self, name: &str, args: &Value, actor: &str) -> Value { self.mods.notes.tool(name, args, actor) }
     fn team_tool(&self, name: &str, args: &Value, a: &Account) -> Value { pgm_hcom_internal::chat::team_tool(self, name, args, a) }
     fn re_tool<'a>(&'a self, name: &'a str, args: &'a Value, a: &'a Account) -> Fut<'a, Value> { Box::pin(async move { self.mods.re.tool(name, args, a).await }) }

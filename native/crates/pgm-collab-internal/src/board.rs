@@ -97,7 +97,7 @@ pub fn parse_due(v: &Value) -> Result<Option<i64>, String> {
 }
 pub fn day_key(ms: i64) -> String { let d = local(ms); format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day()) }
 fn time_of(ms: i64) -> String { local(ms).format("%H:%M:%S").to_string() }
-fn iso_minute(ms: i64) -> String { chrono::Utc.timestamp_millis_opt(ms).single().map(|d| d.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default() }
+pub fn iso_minute(ms: i64) -> String { chrono::Utc.timestamp_millis_opt(ms).single().map(|d| d.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default() }
 
 /// Who acts: a person, or their Claude (agent).
 #[derive(Clone, Debug)]
@@ -172,6 +172,33 @@ impl Board {
         db["tasks"].as_array()?.iter().filter(|t| live(t) && claim_active(t, now) && t["claim"]["user"] == json!(user)).max_by_key(|t| at(t))
             .map(|t| (t["id"].as_str().unwrap_or("").to_string(), t["title"].as_str().unwrap_or("").to_string(), at(t).max(0) as u64))
     }
+    /// The live claims a person (or their Claude) holds: (task id, claim key).
+    pub fn claims_of(&self, user: &str) -> Vec<(String, String)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms() as i64;
+        db["tasks"].as_array().into_iter().flatten().filter(|t| shown(t) && claim_active(t, now) && t["claim"]["user"] == json!(user))
+            .map(|t| (t["id"].as_str().unwrap_or("").to_string(), t["claim"]["key"].as_str().unwrap_or("").to_string())).collect()
+    }
+    /// An automatic handoff note (T-266: a run ended holding the task, its holder went offline): added only while `claim_key`
+    /// still holds the task (the claim is left as it is: it lapses by itself), and only once: not when a handoff was left
+    /// since the claim began whose activity detail has `marker` in it (`marker` "" = any handoff since then). `make` builds it
+    /// from the task as stored. Signed with the holder's name; the activity says "Board". Whether it was added.
+    pub fn auto_handoff(&self, id: &str, claim_key: &str, kind: &str, marker: &str, make: &dyn Fn(&Value) -> Handoff) -> bool {
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms() as i64;
+        let Some(t) = find(&db, id) else { return false };
+        if !shown(t) || !claim_active(t, now) || t["claim"]["key"] != json!(claim_key) || t["status"] == json!("done") { return false; }
+        let since = t["claim"]["at"].as_i64().unwrap_or(0);
+        if db["activity"].as_array().into_iter().flatten().any(|e| e["task"] == json!(id) && e["what"] == json!("handoff") && e["at"].as_i64().unwrap_or(0) >= since && (marker.is_empty() || e["detail"].as_str().unwrap_or("").contains(marker))) { return false; }
+        let h = make(t);
+        if h.parts().iter().all(|p| p.is_empty()) { return false; }
+        let who = t["claim"]["by"].as_str().unwrap_or("").to_string();
+        let t = find_mut(&mut db, id).unwrap();
+        append_note(t, &h.note(&who, now, kind));
+        touch(t, now);
+        let tc = t.clone();
+        log(&mut db, Some(&tc), &Actor { user: "board".into(), agent: false, name: "Board".into() }, "handoff", Some(if marker.is_empty() { kind.to_string() } else { format!("{kind} ({marker})") }));
+        self.save(&mut db);
+        true
+    }
     pub fn seen(&self, user: &str) { self.viewers.lock().unwrap_or_else(|e| e.into_inner()).insert(user.to_string(), now_ms() as i64); }
     /// A board with that id exists after this (made with `name` if it did not; an existing one is renamed to `name`):
     /// a program whose boards stand for something else (a chat's servers) keeps them in step this way.
@@ -240,8 +267,9 @@ impl Board {
             "get" => {
                 let Some(t) = find(db, &id) else { return no(404, "No such task.") };
                 let mut task = card(t, now); task["body"] = json!(t["body"].as_str().unwrap_or(""));
+                let handoff = latest_handoff(t["body"].as_str().unwrap_or(""));
                 let act: Vec<Value> = db["activity"].as_array().map(|ac| ac.iter().filter(|x| x["task"] == json!(id)).cloned().collect::<Vec<_>>()).map(|v| v.into_iter().rev().take(40).collect()).unwrap_or_default();
-                ok(json!({ "task": task, "activity": act }))
+                ok(json!({ "task": task, "activity": act, "handoff": handoff }))
             }
             "update" => {
                 let rev = b.get("rev").filter(|v| !v.is_null()).cloned();
@@ -254,7 +282,7 @@ impl Board {
                     if let Some(v) = b.get("body").filter(|v| !v.is_null()) { let v: String = v.as_str().map(String::from).unwrap_or_else(|| v.to_string()).chars().take(50000).collect(); if v != t["body"].as_str().unwrap_or("") { t["body"] = json!(v); changed.push("description".into()); } }
                     if let Some(n) = b["appendNote"].as_str().filter(|s| !s.is_empty()) {
                         let note: String = n.chars().take(8000).collect();
-                        t["body"] = json!(format!("{}\n\n---\n**{}** · {}\n\n{}", t["body"].as_str().unwrap_or(""), a.label(), iso_minute(now), note).trim().to_string());
+                        append_note(t, &format!("**{}** · {}\n\n{}", a.label(), iso_minute(now), note));
                         changed.push("note".into());
                     }
                     if b.get("labels").is_some() { t["labels"] = clean_labels(&b["labels"]); changed.push("labels".into()); }
@@ -323,17 +351,25 @@ impl Board {
                 let tc = t.clone();
                 if !renew { log(db, Some(&tc), a, "claimed", Some(format!("{} min", minutes))); }
                 self.save(db);
-                ok(json!({ "task": card(&tc, now), "until": until }))
+                // the latest handoff (T-266): the next holder starts from it
+                ok(json!({ "task": card(&tc, now), "until": until, "handoff": latest_handoff(tc["body"].as_str().unwrap_or("")) }))
             }
             "release" => {
                 let Some(t) = find(db, &id) else { return no(404, "No such task.") };
                 if held_by_other(t, a, now) { return no(409, format!("{} holds {}; only they can release it (or wait for it to lapse).", t["claim"]["by"].as_str().unwrap_or(""), id)); }
+                // the structured handoff (T-266): stored as a signed note in the description, whoever picks the task up starts from it
+                let handoff = match b.get("handoff").filter(|v| !v.is_null()) { Some(v) => match Handoff::from_value(v) { Ok(h) => Some(h), Err(e) => return no(400, e) }, None => None };
                 let t = find_mut(db, &id).unwrap();
-                if !t["claim"].is_null() {
-                    t["claim"] = Value::Null; touch(t, now);
+                let held = !t["claim"].is_null();
+                if held || handoff.is_some() {
+                    if held { t["claim"] = Value::Null; }
+                    if let Some(h) = &handoff { append_note(t, &h.note(&a.label(), now, "released")); }
+                    touch(t, now);
                     let tc = t.clone();
-                    log(db, Some(&tc), a, "released", b["note"].as_str().map(String::from)); self.save(db);
-                    return ok(json!({ "task": card(&tc, now) }));
+                    if held { log(db, Some(&tc), a, "released", b["note"].as_str().map(String::from)); }
+                    if handoff.is_some() { log(db, Some(&tc), a, "handoff", Some("released".into())); }
+                    self.save(db);
+                    return ok(json!({ "task": card(&tc, now), "handoff": latest_handoff(tc["body"].as_str().unwrap_or("")) }));
                 }
                 ok(json!({ "task": card(t, now) }))
             }
@@ -546,6 +582,65 @@ pub fn sync_conflict_entry(id: &str, winner: Option<&Value>, loser: Option<&Valu
         "detail": format!("{winner_from} and {loser_from} changed it at the same time: {winner_from}'s change stays; {loser_from}'s is kept here in full"), "lost": Value::Object(lost) }))
 }
 
+// ---------- the handoff (T-266): what the next holder of a task starts from ----------
+/// The four parts of a handoff, as (field in the tool / route, the label in the note).
+pub const HANDOFF_PARTS: [(&str, &str); 4] = [("done", "Done so far"), ("state", "State"), ("next", "Next step"), ("questions", "Open questions")];
+/// The heading a handoff note starts with: `**Handoff** · <who> · <YYYY-MM-DD HH:MM> · <kind>` (UTC, as every note).
+pub const HANDOFF_HEAD: &str = "**Handoff** · ";
+const NOT_SAID: &str = "(not said)";
+const HANDOFF_PART_MAX: usize = 4000;
+/// A structured handoff: done so far; the uncommitted state and branch; the next step; open questions.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Handoff { pub done: String, pub state: String, pub next: String, pub questions: String }
+impl Handoff {
+    fn parts(&self) -> [&String; 4] { [&self.done, &self.state, &self.next, &self.questions] }
+    fn part_mut(&mut self, i: usize) -> &mut String { match i { 0 => &mut self.done, 1 => &mut self.state, 2 => &mut self.next, _ => &mut self.questions } }
+    /// From the tool / route argument: an object with any of done, state, next, questions (text, or a list of lines);
+    /// at least one must say something. Each part is kept to 4000 characters.
+    pub fn from_value(v: &Value) -> Result<Handoff, String> {
+        let o = v.as_object().ok_or("handoff must be an object: { done, state, next, questions } (text each; questions may be a list).")?;
+        let mut h = Handoff::default();
+        for (i, (k, _)) in HANDOFF_PARTS.iter().enumerate() {
+            let text = match o.get(*k) {
+                None | Some(Value::Null) => String::new(),
+                Some(Value::String(t)) => t.clone(),
+                Some(Value::Array(a)) => a.iter().map(|x| x.as_str().map(String::from).unwrap_or_else(|| x.to_string())).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n"),
+                Some(other) => other.to_string(),
+            };
+            // a rule inside a part would end the note early for the parser: it is kept, but no longer a rule
+            *h.part_mut(i) = text.trim().replace("\n---\n", "\n- - -\n").chars().take(HANDOFF_PART_MAX).collect();
+        }
+        if h.parts().iter().all(|p| p.is_empty()) { return Err("A handoff needs at least one of done, state, next, questions.".into()); }
+        Ok(h)
+    }
+    /// The note as it goes in the description (plain markdown: an older page shows it as it is).
+    pub fn note(&self, who: &str, at_ms: i64, kind: &str) -> String {
+        let mut t = format!("{HANDOFF_HEAD}{who} · {} · {kind}", iso_minute(at_ms));
+        for (i, (_, label)) in HANDOFF_PARTS.iter().enumerate() { let p = self.parts()[i]; t.push_str(&format!("\n\n**{label}:** {}", if p.is_empty() { NOT_SAID } else { p })); }
+        t
+    }
+}
+/// A note at the end of a task's description, after a rule (as every note since the board began).
+fn append_note(t: &mut Value, note: &str) { t["body"] = json!(format!("{}\n\n---\n{}", t["body"].as_str().unwrap_or(""), note).trim().to_string()); }
+/// The latest handoff note in a description, parsed: `{ by, at, kind, done, state, next, questions }` (null when none).
+pub fn latest_handoff(body: &str) -> Value {
+    let start = match body.rfind(&format!("\n{HANDOFF_HEAD}")) { Some(i) => i + 1, None if body.starts_with(HANDOFF_HEAD) => 0, None => return Value::Null };
+    let seg = &body[start..];
+    let seg = &seg[..seg.find("\n---\n").unwrap_or(seg.len())];
+    let (head, rest) = seg.split_once('\n').unwrap_or((seg, ""));
+    let bits: Vec<&str> = head[HANDOFF_HEAD.len()..].split(" · ").collect();
+    let (by, at, kind) = if bits.len() >= 3 { (bits[..bits.len() - 2].join(" · "), bits[bits.len() - 2].to_string(), bits[bits.len() - 1].trim().to_string()) } else { (bits.join(" · "), String::new(), String::new()) };
+    let mut out = json!({ "by": by, "at": at, "kind": kind });
+    let marks: Vec<(usize, usize, &str)> = HANDOFF_PARTS.iter().filter_map(|(k, label)| { let m = format!("**{label}:**"); rest.find(&m).map(|i| (i, i + m.len(), *k)) }).collect();
+    for (k, _) in HANDOFF_PARTS.iter() { out[*k] = json!(""); }
+    for &(_, from, k) in &marks {
+        let to = marks.iter().filter(|m| m.0 >= from).map(|m| m.0).min().unwrap_or(rest.len());
+        let v = rest[from..to].trim();
+        out[k] = json!(if v == NOT_SAID { "" } else { v });
+    }
+    out
+}
+
 fn live(t: &Value) -> bool { t["deleted"].as_bool() != Some(true) }
 fn is_archived(t: &Value) -> bool { t["archivedAt"].as_i64().is_some() }
 /// On the board (and the calendar): live and not archived.
@@ -716,6 +811,46 @@ mod tests {
         assert!(sync_conflict_entry("T-5", Some(&w), Some(&l2), "dev", "live").is_none());
         b.sync_add_activity(&e); b.sync_add_activity(&e);
         assert_eq!(b.sync_activity().iter().filter(|x| **x == e).count(), 1, "kept once");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn a_handoff_is_written_as_a_signed_markdown_note_and_read_back_in_its_four_parts() {
+        let h = Handoff::from_value(&json!({ "done": "the parser", "state": "branch agents/x; 2 uncommitted files", "questions": ["which port?", " ", "who reviews?"] })).unwrap();
+        let note = h.note("Ann · Claude", 0, "released");
+        assert!(note.starts_with("**Handoff** · Ann · Claude · 1970-01-01 00:00 · released\n\n**Done so far:** the parser"), "{note}");
+        assert!(note.contains("**Next step:** (not said)"), "an empty part says so");
+        let body = format!("The task.\n\n---\n**Bob** · 2026-01-01 10:00\n\nan older note\n\n---\n{}\n\n---\n**Bob** · 2026-01-02 10:00\n\na later plain note", Handoff { done: "old".into(), ..Default::default() }.note("Bob", 0, "released"));
+        let body = format!("{body}\n\n---\n{note}\n\n---\n**Cy** · 2026-01-03 10:00\n\nprogress after it");
+        let p = latest_handoff(&body);
+        assert_eq!((p["by"].as_str(), p["at"].as_str(), p["kind"].as_str()), (Some("Ann · Claude"), Some("1970-01-01 00:00"), Some("released")), "the latest one, a name with ' · ' in it kept whole");
+        assert_eq!((p["done"].as_str(), p["state"].as_str(), p["next"].as_str(), p["questions"].as_str()), (Some("the parser"), Some("branch agents/x; 2 uncommitted files"), Some(""), Some("- which port?\n- who reviews?")));
+        assert_eq!(latest_handoff("just a description\n\n---\n**Ann** · 2026-01-01 10:00\n\na note"), Value::Null, "no handoff: null");
+        assert_eq!(latest_handoff(&Handoff { next: "go".into(), ..Default::default() }.note("Ann", 0, "run ended (automatic)"))["next"], json!("go"), "a description that is only a handoff");
+        // how it fails
+        assert!(Handoff::from_value(&json!("done it")).is_err(), "not an object");
+        assert!(Handoff::from_value(&json!({ "done": " ", "next": null })).is_err(), "nothing said");
+        let long = Handoff::from_value(&json!({ "done": "x".repeat(9000), "next": "a\n---\nb" })).unwrap();
+        assert_eq!(long.done.chars().count(), 4000, "a part is kept to 4000 characters");
+        assert_eq!(latest_handoff(&long.note("Ann", 0, "released"))["next"], json!("a\n- - -\nb"), "a rule inside a part does not end the note");
+    }
+    #[test]
+    fn release_with_a_handoff_stores_it_claim_returns_it_and_an_automatic_one_is_added_once_per_claim() {
+        let (b, dir) = scratch("handoff");
+        let id = made(&b, json!({ "title": "handoff" }));
+        assert_eq!(op(&b, "claim", json!({ "id": id })).body["handoff"], Value::Null);
+        assert_eq!(op(&b, "release", json!({ "id": id, "handoff": "a string" })).status, 400);
+        assert!(op(&b, "get", json!({ "id": id })).body["task"]["claim"].is_object(), "a refused handoff releases nothing");
+        let r = op(&b, "release", json!({ "id": id, "note": "why", "handoff": { "done": "half", "next": "the rest" } }));
+        assert_eq!((r.status, r.body["handoff"]["done"].clone(), r.body["task"]["claim"].clone()), (200, json!("half"), Value::Null));
+        let c = op(&b, "claim", json!({ "id": id }));
+        assert_eq!((c.body["handoff"]["by"].clone(), c.body["handoff"]["next"].clone()), (json!("Ann"), json!("the rest")), "the next holder gets it");
+        let key = c.body["task"]["claim"]["key"].as_str().unwrap().to_string();
+        let mk = |_: &Value| Handoff { done: "auto".into(), ..Default::default() };
+        assert!(b.auto_handoff(&id, &key, "run ended (automatic)", "run r1", &mk));
+        assert!(!b.auto_handoff(&id, &key, "run ended (automatic)", "run r1", &mk), "the same run: once");
+        assert!(!b.auto_handoff(&id, &key, "went offline (automatic)", "", &mk), "a handoff since the claim began: no offline note on top");
+        assert!(!b.auto_handoff(&id, "bob#agent", "went offline (automatic)", "", &mk), "only while that holder holds it");
+        assert_eq!(op(&b, "get", json!({ "id": id })).body["handoff"]["kind"], json!("run ended (automatic)"));
         let _ = std::fs::remove_dir_all(dir);
     }
     #[test]

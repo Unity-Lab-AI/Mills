@@ -321,7 +321,7 @@ async function setup() {
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -1992,6 +1992,80 @@ async function run() {
     && agentBlocks.status === 409 && /progress from the agent r70/.test(agentDetail.body || '') && bDel.status === 409 && bDel2.status === 200 && bGone && onDiskB.deleted === true
     && /board-mcp\.js/.test(mcpRt) && /mcp__board/.test(fs.readFileSync(path.join(SB, 'config.json'), 'utf8')),
     `create ${bt.status}, claim ${bClaim.status}, blocked ${bBlockedU.status}/${bClaimU.status}, stale ${bStale.status}, due ${d1.getMonth() + 1}/${d1.getDate()} → ${d2.getMonth() + 1}/${d2.getDate()} (leap ${leap}), agent ${JSON.stringify(agentOut)}, agent-held edit ${agentBlocks.status}`);
+  // ---- T-266 handoffs (R516 to R519): what the next holder of a task starts from. The Rust hub's (the live hub is Rust alone).
+  if (RUST_HUB) {
+    const task266 = async (id) => (await call('/api/board/task?id=' + id, U)).data;
+    const heads266 = (body, kind) => (String(body || '').match(new RegExp('\\*\\*Handoff\\*\\* · [^\\n]+ · ' + kind, 'g')) || []).length;
+    const until266 = async (id, ok, ms = 8000) => { const end = Date.now() + ms; let t; while (Date.now() < end) { t = await task266(id); if (ok(t)) return t; await sleep(200); } return t; };
+    const hold = (text) => JSON.parse((texts(text.events).match(/HOLD:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+    { // R516: a release with a handoff stores it as a signed note in four parts; the next holder (another person's Claude) gets it from task_claim
+      const id = (await call('/api/board/create', U, { title: 'r516 handoff task', assignee: 't-user' })).data.task.id;
+      await call('/api/board/claim', U, { id });
+      const rel = await call('/api/board/release', U, { id, note: 'r516 stopping', handoff: { done: 'r516 the first half', state: 'branch work/r516; 2 uncommitted files', next: 'r516 the second half', questions: ['r516 which port?', 'r516 who reviews?'] } });
+      const stored = await task266(id);
+      await call('/api/board/update', U, { id, assignee: 't-admin' }); // re-assigned: whoever picks it up starts from the handoff
+      const pick = hold(await chat(A, 'BOARDPICK=' + id + ' r516', { fresh: true }));
+      const after = await task266(id);
+      const seen = { rel: rel.status, relHandoff: rel.data.handoff, released: rel.data.task && rel.data.task.claim === null,
+        note: /\*\*Handoff\*\* · [^\n]+ · \d{4}-\d\d-\d\d \d\d:\d\d · released\n\n\*\*Done so far:\*\* r516 the first half\n\n\*\*State:\*\* branch work\/r516; 2 uncommitted files\n\n\*\*Next step:\*\* r516 the second half\n\n\*\*Open questions:\*\* - r516 which port\?\n- r516 who reviews\?/.test(stored.task.body),
+        getHandoff: stored.handoff && stored.handoff.next, pick, afterKind: after.handoff && after.handoff.kind, afterBy: after.handoff && after.handoff.by, afterDone: after.handoff && after.handoff.done, both: heads266(after.task.body, 'released') };
+      check('R516', 'a release with a handoff stores it in the task\'s description as a signed "Handoff" note with its four parts (done so far, state, next step, open questions), task_get answers it parsed, and whoever claims the task next (here another person\'s Claude, after a re-assignment) gets it in task_claim\'s answer; that Claude\'s own release with a handoff then is the latest one, signed "· Claude"',
+        seen.rel === 200 && seen.released && seen.relHandoff && seen.relHandoff.done === 'r516 the first half' && seen.note && seen.getHandoff === 'r516 the second half'
+        && pick.claimed === true && pick.handoff && pick.handoff.done === 'r516 the first half' && pick.handoff.state === 'branch work/r516; 2 uncommitted files' && pick.handoff.questions === '- r516 which port?\n- r516 who reviews?'
+        && pick.released === true && seen.afterKind === 'released' && / · Claude$/.test(seen.afterBy || '') && seen.afterDone === 'r516 the agent did the second half' && seen.both === 2,
+        JSON.stringify(seen));
+    }
+    { // R517: a Work run that ends holding a claim leaves one automatic handoff (from its last reply), not two; a run that let go leaves none
+      const held = hold(await chat(A, 'BOARDHOLD r517', { fresh: true }));
+      const t1 = await until266(held.id, (t) => heads266(t.task && t.task.body, 'run ended') > 0);
+      await chat(A, 'plain run r517 after it'); await sleep(1500);
+      const t2 = await task266(held.id);
+      const let_ = hold(await chat(A, 'BOARDHOLD RELEASE r517', { fresh: true })); await sleep(1500);
+      const t3 = await task266(let_.id);
+      const h = t1.handoff || {};
+      const seen = { held, once: heads266(t1.task.body, 'run ended'), still: heads266(t2.task.body, 'run ended'), kind: h.kind, done: /^From the run's last reply:\n\n> echo: /.test(h.done || ''), state: /session [^,]+, run [0-9a-f]+\.$/.test(h.state || ''),
+        next: /lapses by itself/.test(h.next || ''), claimKept: !!(t2.task.claim && t2.task.claim.agent), letGo: let_.released === true && heads266(t3.task.body, '') === 0 && t3.handoff === null };
+      check('R517', 'a Work run that ends still holding a task it claimed leaves one automatic handoff on it ("run ended (automatic)": done so far from its last reply, its session and run in the state, the next step), the claim left as it is; a later run of the same person adds no second one, and a run that released its task leaves none',
+        held.claimed === true && seen.once === 1 && seen.still === 1 && seen.kind === 'run ended (automatic)' && seen.done && seen.state && seen.next && seen.claimKept && seen.letGo,
+        JSON.stringify(seen));
+    }
+    { // R518: presence: a person who goes offline holding a claim gets one short automatic note per claim (board.offlineGraceSeconds: 1 here)
+      const keep = (tok, dev) => { let on = true; (async () => { let ver = -1; while (on) { const r = await call(`/api/room/messages?rev=0&wait=1&ver=${ver}&device=${dev}`, tok); if (r.status === 200 && r.data.ver !== undefined) ver = r.data.ver; else await sleep(300); } })(); return () => { on = false; }; };
+      const online = async (dev) => { const stop = keep(D, dev); await sleep(400); await call('/api/presence', D, { device: dev, idle: false }); await sleep(1500); return stop; };
+      const offline = async (stop, dev) => { stop(); await call('/api/presence', D, { device: dev, gone: true }); };
+      const id = (await call('/api/board/create', D, { title: 'r518 held while going offline' })).data.task.id;
+      const other = (await call('/api/board/create', D, { title: 'r518 released before' })).data.task.id;
+      let stop = await online('r518a');
+      await call('/api/board/claim', D, { id, minutes: 30 }); await call('/api/board/claim', D, { id: other }); await call('/api/board/release', D, { id: other });
+      const before = heads266((await task266(id)).task.body, '');
+      await offline(stop, 'r518a');
+      const t1 = await until266(id, (t) => heads266(t.task && t.task.body, 'went offline') > 0);
+      stop = await online('r518b'); await offline(stop, 'r518b'); await sleep(3500);
+      const t2 = await task266(id), o = await task266(other);
+      const h = t1.handoff || {};
+      const seen = { before, once: heads266(t1.task.body, 'went offline'), again: heads266(t2.task.body, 'went offline'), kind: h.kind, done: /went offline while holding this/.test(h.done || ''), state: /^Held since .+ UTC by .+; last activity .+ UTC\.$/.test(h.state || ''),
+        claimKept: !!t2.task.claim, otherNone: heads266(o.task.body, '') === 0 };
+      await call('/api/board/release', D, { id });
+      check('R518', 'presence notices a holder going offline: once they have been offline for the grace time, each claim they hold gets one short automatic note ("went offline (automatic)": went offline while holding this, held since, last activity), the claim left as it is; going offline again with the same claim adds no second one, and a task they released before gets none',
+        seen.before === 0 && seen.once === 1 && seen.again === 1 && seen.kind === 'went offline (automatic)' && seen.done && seen.state && seen.claimKept && seen.otherNone,
+        JSON.stringify(seen));
+    }
+    { // R519: how it fails: an older-style release (a note only) works as before; a handoff that is not an object, or says nothing, is refused 400 and releases nothing; another's claim 409
+      const id = (await call('/api/board/create', U, { title: 'r519 older release' })).data.task.id;
+      await call('/api/board/claim', U, { id });
+      const bad = await call('/api/board/release', U, { id, handoff: 'r519 not an object' }), empty = await call('/api/board/release', U, { id, handoff: { done: ' ', questions: [] } });
+      const stillHeld = !!(await task266(id)).task.claim;
+      const other = await call('/api/board/release', A, { id, handoff: { done: 'r519 not mine' } });
+      const old = await call('/api/board/release', U, { id, note: 'r519 plain note' });
+      const t = await task266(id);
+      const seen = { bad: bad.status, badWhy: bad.data.error, empty: empty.status, stillHeld, other: other.status, old: old.status, released: t.task.claim === null, noNote: heads266(t.task.body, '') === 0 && t.handoff === null,
+        logged: (t.activity || []).some((e) => e.what === 'released' && e.detail === 'r519 plain note'), claimNull: ((await call('/api/board/claim', U, { id })).data || {}).handoff === null };
+      await call('/api/board/release', U, { id });
+      check('R519', 'how a handoff fails: an older-style release with only a note works as before (released, the note in the activity, no Handoff note, task_claim answers handoff: null); a handoff that is not an object or says nothing is refused 400 and the claim stays; a handoff on a task someone else holds is refused 409',
+        seen.bad === 400 && /handoff must be an object/.test(seen.badWhy || '') && seen.empty === 400 && seen.stillHeld && seen.other === 409 && seen.old === 200 && seen.released && seen.noNote && seen.logged && seen.claimNull,
+        JSON.stringify(seen));
+    }
+  } else for (const [n, what] of [['R516', 'a release with a handoff, picked up by the next holder'], ['R517', 'the automatic handoff when a run ends holding a claim'], ['R518', 'the automatic note when a holder goes offline'], ['R519', 'how a handoff fails']]) skip(n, what, 'the Rust hub\'s: --rust-hub runs it');
   // Claude plans with the board + calendar (task_create / task_update with text due dates, board_calendar, task_move, task_delete, board_new) and reaches the wider hub (channels / groups it makes, hub_status, sessions_search, my_providers).
   await call('/api/archive/save', A, { title: 'Needle session', transcript: [{ cls: 'me', text: 'remember needle-r116' }] });
   const planRun = await chat(A, 'BOARDPLAN please', { fresh: true });

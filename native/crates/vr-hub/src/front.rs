@@ -39,6 +39,8 @@ impl Hub {
     /// Is this the dev hub (config `"instance": "dev"`)?
     pub fn is_dev(&self) -> bool { self.mods.instance.is_dev() }
     pub fn me(&self) -> Option<Arc<dyn pgm_ai_internal::hub::AiHub>> { self.me.upgrade().map(|h| h as Arc<dyn pgm_ai_internal::hub::AiHub>) }
+    /// This hub itself, shared (for work it hands to a task of its own).
+    pub fn me_hub(&self) -> Option<Arc<Hub>> { self.me.upgrade() }
 }
 
 pub async fn serve(hub: Arc<Hub>, addr: SocketAddr) -> i32 {

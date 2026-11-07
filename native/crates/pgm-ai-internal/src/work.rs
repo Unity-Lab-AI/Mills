@@ -42,7 +42,10 @@ struct Run { /** the session's journal (T-331): every event also goes there */ j
     /// on that person's behalf (a workflow someone else defined or scheduled, an agent-to-agent task). The machine rule needs both to be the owner.
     started_by: String,
     /// The linked machines this run has used (T-314: {id, name, scope, since}); the Work bar and the owner's card say so until the run ends.
-    machines: Vec<Value> }
+    machines: Vec<Value>,
+    /// The session's worktree (T-266: an automatic handoff counts its uncommitted changes) and the board tasks this run
+    /// claimed and has not completed or released yet (what it still holds when it ends).
+    dir: String, tasks: Vec<String> }
 /// Who a tool call is, as the hub's own records say (never a header the caller typed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
@@ -80,6 +83,17 @@ fn from_journal(j: &Path, run: &str, after: usize) -> Option<Value> {
     let next = mine.iter().filter_map(|l| l["n"].as_u64()).max().map(|n| n as usize + 1).unwrap_or(0);
     let evs: Vec<Value> = mine.iter().filter(|l| l["n"].as_u64().is_some_and(|n| n as usize >= after)).map(|l| l["ev"].clone()).collect();
     Some(json!({ "run": run, "busy": false, "from": after, "next": next, "events": evs, "journal": true }))
+}
+/// The run's last reply (T-266, for an automatic handoff): its final result's text, else its last assistant text; the
+/// last 1500 characters of it.
+fn last_reply(events: &[Value]) -> String {
+    let result = events.iter().rev().filter(|e| e["type"] == json!("result")).find_map(|e| e["result"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(String::from));
+    let text = result.or_else(|| events.iter().rev().filter(|e| e["type"] == json!("assistant")).find_map(|e| {
+        let t: Vec<String> = e["message"]["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str().map(String::from)).collect();
+        Some(t.join("\n").trim().to_string()).filter(|t| !t.is_empty())
+    })).unwrap_or_default();
+    let n = text.chars().count();
+    if n <= 1500 { text } else { format!("…{}", text.chars().skip(n - 1500).collect::<String>()) }
 }
 impl RunLog {
     fn push(&mut self, ev: Value) { self.events.push(ev); if self.events.len() > RUN_LOG_MAX { let k = self.events.len() - RUN_LOG_MAX; self.events.drain(0..k); self.base += k; } self.woke.notify_waiters(); }
@@ -447,6 +461,7 @@ impl Work {
             format!("The PC tools (and a linked machine of {name}'s) act only for {name}, in a run {name} started. If {name} is away, do not stop and do not wait: carry on with the best recommended defaults for the task, and finish with a short report of what you did, why you chose it over the other options, and what {name} can change (name the options)."),
             format!("The VibeRoller team board (shared with everyone and with other Claude runs) is available through the mcp__board__* tools, where you act as \"{name} · Claude\"."),
             "When you work a board task: task_claim it first, task_renew while working longer than the claim, add progress with task_update appendNote, and task_complete or task_release it when you stop. Never edit a task someone else holds.".into(),
+            "Handoffs (the same for everyone): task_claim and task_get answer the task's latest handoff (handoff: done so far, state, next step, open questions); when there is one, read it and start from it (go on from its next step, check the branch and uncommitted work its state names, answer or ask its open questions) rather than starting over. When you stop before a task is done, release it with task_release and a handoff { done, state (branch, uncommitted changes), next, questions }, so whoever picks it up (another person or Claude, after a re-assignment too) starts from there. A run that ends still holding a claim gets an automatic handoff from its last reply, which says less than yours would.".into(),
             "You may plan with the board and calendar when asked: board_calendar shows tasks by due day, task_create / task_update take due as text (today, tomorrow, +3d, next friday, YYYY-MM-DD, none), task_move puts a task in a column, task_delete removes one (only when asked), board_new makes a board. A task with a due date IS the calendar entry. Done tasks go to the archive by themselves after about 48 hours and are deleted 30 days later: board_archived lists them, task_restore brings one back, task_archive / board_archive_done clean up by hand (only when asked).".into(),
             format!("Beyond chat: hub_status (who is here, calls, shared Work sessions, the host's usage windows), sessions_search ({name}'s past Claude sessions), code_find (look a name or words up in this session's worktree, by an index), my_providers (the AIs available), team_channel_create / team_group_create."),
         ]);
@@ -532,9 +547,14 @@ impl Work {
         if self.shares_session(&a.username, &sx.sid) { self.share_event(&a.username, &ev); } // only the session that is shared (plans/multi-session.md § 7)
         self.emit(&sx.key, ev);
     }
-    fn finish(&self, a: &Account, sx: &Sx, run_id: &str, code: Value) {
+    fn finish(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, run_id: &str, code: Value) {
         let run = { let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.get(&sx.key).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&sx.key) } else { None } };
         let Some(mut r) = run else { return };
+        // it ends still holding board tasks (T-266): each gets one automatic handoff from what the hub knows of the run
+        if !r.tasks.is_empty() {
+            let reply = last_reply(&r.ev.events);
+            hub.run_left_claims(json!({ "account": a.username, "run": r.id, "session": sx.sid, "project": r.project, "branch": r.branch, "dir": r.dir, "tasks": r.tasks, "reply": reply, "code": code }));
+        }
         for (_, p) in r.pending { let _ = p.send(json!({ "ok": false, "error": "Run ended" })); }
         self.ask_end(a, sx); // its open questions end with it (the session is no longer waiting on them)
         self.plan_end(a, sx); // so does an open plan draft (T-279)
@@ -900,7 +920,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let jf = sessions::journal_file(a, &sx);
     if std::fs::metadata(&jf).map(|m| m.len() > sessions::JOURNAL_MAX).unwrap_or(false) { pgm_core_internal::store::global().flush(); let _ = std::fs::rename(&jf, jf.with_extension("old.jsonl")); pgm_core_internal::store::forget_hot(&jf); }
     pgm_core_internal::store::global().append_line(&jf, &json!({ "run": run_id, "at": now_ms(), "user": message, "fresh": fresh }));
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { journal: Some(jf), id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()), machines: Vec::new() });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { journal: Some(jf), id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()), machines: Vec::new(), dir: wd.dir.display().to_string(), tasks: Vec::new() });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     pgm_core_internal::obs::count("vr_runs_started", &[("harness", harness), ("kind", &kind)]);
@@ -948,11 +968,11 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
                     while let Some(m) = events.recv().await {
                         match m {
                             crate::ai_hosts::WorkMsg::Event(ev) => w.on_event(&*h, &a2, &sx2, ev, &source),
-                            crate::ai_hosts::WorkMsg::Done(c) => { w.finish(&a2, &sx2, &id, json!(c)); return; }
-                            crate::ai_hosts::WorkMsg::Error(t) => { w.emit(&sx2.key, json!({ "type": "bridge_error", "text": t })); w.finish(&a2, &sx2, &id, json!(1)); return; }
+                            crate::ai_hosts::WorkMsg::Done(c) => { w.finish(&*h, &a2, &sx2, &id, json!(c)); return; }
+                            crate::ai_hosts::WorkMsg::Error(t) => { w.emit(&sx2.key, json!({ "type": "bridge_error", "text": t })); w.finish(&*h, &a2, &sx2, &id, json!(1)); return; }
                         }
                     }
-                    w.finish(&a2, &sx2, &id, json!(1));
+                    w.finish(&*h, &a2, &sx2, &id, json!(1));
                 });
                 drop(tx);
                 return ndjson(rx);
@@ -987,7 +1007,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         let w = h.work();
         let mut child = match cmd.spawn() {
             Ok(c) => c,
-            Err(e) => { w.emit(&sx2.key, json!({ "type": "bridge_error", "text": format!("Could not start {command}: {e}") })); w.finish(&a2, &sx2, &id, json!(-2)); return; }
+            Err(e) => { w.emit(&sx2.key, json!({ "type": "bridge_error", "text": format!("Could not start {command}: {e}") })); w.finish(&*h, &a2, &sx2, &id, json!(-2)); return; }
         };
         if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx2.key) { r.pid = child.id(); }
         if let Some(mut stdin) = child.stdin.take() { let inp = input.clone(); tokio::spawn(async move { let _ = stdin.write_all(inp.as_bytes()).await; let _ = stdin.shutdown().await; }); }
@@ -1002,7 +1022,7 @@ async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         }
         let code = child.wait().await.ok().and_then(|s| s.code()).map(|c| json!(c)).unwrap_or(Value::Null);
         if let Some(t) = err_task { let _ = t.await; }
-        w.finish(&a2, &sx2, &id, code);
+        w.finish(&*h, &a2, &sx2, &id, code);
     });
     ndjson(rx)
 }
@@ -1031,7 +1051,16 @@ async fn tool_inner(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Valu
     if which == "board" {
         let Some(op) = pgm_collab_internal::board::tool_op(&name) else { return json!({ "ok": false, "error": format!("Unknown board tool: {name}") }) };
         if hub.account(account).is_none() { return json!({ "ok": false, "error": "Unknown account." }); }
-        return hub.board_tool(op, account, &args);
+        let out = hub.board_tool(op, account, &args);
+        // what this run holds (T-266): a claim it made and has not completed or released gets an automatic handoff when the run ends
+        if out["ok"] == json!(true) && !caller.run.is_empty() && matches!(op, "claim" | "release" | "complete" | "remove") {
+            let id = s(&args, "id");
+            if let Some(r) = hub.work().runs.lock().unwrap_or_else(|e| e.into_inner()).values_mut().find(|r| r.id == caller.run) {
+                r.tasks.retain(|t| *t != id);
+                if op == "claim" { r.tasks.push(id); }
+            }
+        }
+        return out;
     }
     let Some(a) = hub.account(account) else { return json!({ "ok": false, "error": "Unknown account." }) };
     let w = hub.work();
@@ -1689,7 +1718,7 @@ mod tests {
     fn put_run(w: &Work, key: &str, account: &str, sid: &str, sess_env: &str, secret: &str, id: &str, remote: &str) {
         let (tx, _rx) = mpsc::unbounded_channel();
         w.runs.lock().unwrap().insert(key.into(), Run { journal: None, id: id.into(), tx, pid: None, remote: remote.into(), pending: HashMap::new(), ev: RunLog::default(), last: 0, answered: false, prov: String::new(), project: String::new(), branch: String::new(), started: 0,
-            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into(), machines: Vec::new() });
+            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into(), machines: Vec::new(), dir: String::new(), tasks: Vec::new() });
     }
     /// T-308: the per-run secret names the run; the account and session come from the run record; a header that disagrees is refused;
     /// the deprecated shared secret still works (and says so); nothing else is ours.
