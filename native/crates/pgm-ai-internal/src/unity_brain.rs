@@ -167,10 +167,13 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
     let schemas: Vec<Value> = tools.iter().map(|t| json!({ "type": "function", "function": { "name": t["name"], "description": t["description"], "parameters": { "type": "object", "properties": t["params"], "required": t["required"] } } })).collect();
     let (mut said, mut seen, mut fin) = (vec![], std::collections::HashSet::new(), String::new());
     let num_ctx = u.a["numCtx"].as_u64().unwrap_or(16384);
+    // how long Ollama keeps the brain in the GPU after an answer (assistant.brainKeepAlive, e.g. "2m", "0" frees it at once):
+    // short by default, so the host's GPU is free again soon after nobody asks (it was 30 minutes)
+    let keep_alive = brain_keep_alive(&u.a["brainKeepAlive"]);
     let (mut used, mut counted) = (pgm_context_internal::ledger::Usage::default(), false);
     for round in 0..MAX_ROUNDS {
         if cancel.is() { return Err("cancelled".into()); }
-        let mut body = json!({ "model": model, "messages": messages, "stream": true, "think": false, "keep_alive": "30m", "options": { "num_ctx": num_ctx } });
+        let mut body = json!({ "model": model, "messages": messages, "stream": true, "think": false, "keep_alive": keep_alive, "options": { "num_ctx": num_ctx } });
         if native { body["tools"] = json!(schemas); }
         let (status, mut src) = u.engine(hub, &format!("{}/api/chat", u.ollama), "POST", body.to_string().into_bytes(), 600_000).await?;
         if !(200..300).contains(&status) { return Err(format!("Local brain error: {}", String::from_utf8_lossy(&src.all().await).chars().take(200).collect::<String>())); }
@@ -323,5 +326,28 @@ mod usage_tests {
         assert_eq!(a["by"]["claude-cli"]["cached"], json!(900)); assert_eq!(a["by"]["claude-cli"]["written"], json!(90));
         assert_eq!(a["turns"], json!(2));
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+/// `assistant.brainKeepAlive`: a number of seconds or a duration like "90s", "2m", "1h" ("0": unload right after); anything
+/// else, or nothing, is the default "2m".
+pub fn brain_keep_alive(v: &Value) -> Value {
+    if let Some(n) = v.as_u64() { return json!(n.min(86_400)); }
+    let s = v.as_str().unwrap_or("").trim();
+    let ok = !s.is_empty() && s.len() <= 8 && s.trim_end_matches(['s', 'm', 'h']).chars().all(|c| c.is_ascii_digit()) && s.chars().next().is_some_and(|c| c.is_ascii_digit());
+    if ok { json!(s) } else { json!("2m") }
+}
+
+#[cfg(test)]
+mod keep_alive_tests {
+    use super::*;
+    #[test]
+    fn brain_keep_alive_defaults_short_and_takes_valid_values() {
+        assert_eq!(brain_keep_alive(&Value::Null), json!("2m"));
+        assert_eq!(brain_keep_alive(&json!("0")), json!("0"));
+        assert_eq!(brain_keep_alive(&json!("90s")), json!("90s"));
+        assert_eq!(brain_keep_alive(&json!(30)), json!(30));
+        assert_eq!(brain_keep_alive(&json!("-1")), json!("2m"));
+        assert_eq!(brain_keep_alive(&json!("forever")), json!("2m"));
     }
 }

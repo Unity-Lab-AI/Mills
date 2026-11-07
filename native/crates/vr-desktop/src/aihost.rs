@@ -9,6 +9,12 @@ pub fn host_exe() -> PathBuf {
     let me = std::env::current_exe().unwrap_or_default();
     me.with_file_name(if cfg!(windows) { "vr-host.exe" } else { "vr-host" })
 }
+/// Where vr-host installs itself (vr-host install::standard): Windows %LOCALAPPDATA%VibeRollerAIHost, Linux ~/.local/share/viberoller/ai-host.
+pub fn standard_dir() -> PathBuf {
+    let home = || std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default();
+    if cfg!(windows) { std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|| home().join("AppData").join("Local")).join("VibeRoller").join("AIHost") }
+    else { home().join(".local").join("share").join("viberoller").join("ai-host") }
+}
 pub fn config(dir: &str) -> PathBuf { PathBuf::from(dir).join("ai-node.json") }
 fn vrhost(dir: &str, args: &[&str]) -> Result<(i32, String), String> {
     let exe = host_exe();

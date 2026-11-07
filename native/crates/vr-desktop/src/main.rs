@@ -11,7 +11,7 @@
 //!   the app's updates, and this computer as a linked machine (machine.rs: link it, serve the hub's tool calls while the app is
 //!   open, or install the persistent service). So even a page on the hub that someone managed to inject script into cannot
 //!   touch this computer, and cannot link it, widen its scope or start its runner: those commands are the Tools window's only.
-//! A tray icon (show, Tools, the AI host on / off, updates, quit), native notifications, one instance at a time, close to
+//! A tray icon (show, Tools, the AI host on / off, free the GPU, the image engine on / off, updates, quit), native notifications, one instance at a time, close to
 //! the tray, and updates signed with VibeRoller's release key (update.rs).
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -20,6 +20,7 @@ mod capture;
 mod install;
 mod local;
 mod machine;
+mod gpu;
 mod proxy;
 mod settings;
 mod update;
@@ -88,6 +89,13 @@ async fn ollama_local() -> Value {
 fn host_status(st: S) -> Value { aihost::status(&st.host_dir) }
 #[tauri::command]
 fn host_act(st: S, what: String) -> R<String> { aihost::act(&st.host_dir, &what) }
+// the GPU switches (gpu.rs): what holds it, free it, the image engine on / off
+#[tauri::command]
+async fn gpu_status(st: S<'_>) -> R<Value> { Ok(gpu::status(&st.host_dir).await) }
+#[tauri::command]
+async fn gpu_act(st: S<'_>, what: String) -> R<String> {
+    match what.as_str() { "free" => gpu::free(&st.host_dir).await, "image-on" => gpu::image(&st.host_dir, true).await, "image-off" => gpu::image(&st.host_dir, false).await, _ => Err("unknown GPU action".into()) }
+}
 #[tauri::command]
 fn host_setup(st: S, config: Value) -> R<String> {
     // only a host of this app's own hub
@@ -185,6 +193,14 @@ fn show_tools(app: &AppHandle) -> tauri::Result<()> {
 fn main() {
     // `<app> machine run --state <dir>`: the persistent mode (the service starts it), no window
     if let Some(code) = machine::cli(&std::env::args().collect::<Vec<_>>()) { std::process::exit(code); }
+    // vr-desktop --gpu status | free | image-on | image-off: the tray's GPU switches from a terminal or a script
+    { let args: Vec<String> = std::env::args().collect();
+      if let Some(what) = args.iter().position(|a| a == "--gpu").map(|i| args.get(i + 1).cloned().unwrap_or_else(|| "status".into())) {
+        let dir = aihost::standard_dir().display().to_string();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio");
+        let r = rt.block_on(async { match what.as_str() { "status" => Ok(gpu::status(&dir).await.to_string()), "free" => gpu::free(&dir).await, "image-on" => gpu::image(&dir, true).await, "image-off" => gpu::image(&dir, false).await, _ => Err("vr-desktop --gpu status | free | image-on | image-off".into()) } });
+        match r { Ok(s) => { println!("{s}"); std::process::exit(0) } Err(e) => { eprintln!("{e}"); std::process::exit(1) } }
+      } }
     if std::env::args().any(|a| a == "--selftest") { println!("vr-desktop {} ({}) loads", update::VERSION, update::TARGET); return; }
     if std::env::args().any(|a| a == "--install") { match install::install() { Ok(m) => { println!("{m}"); return; } Err(e) => { eprintln!("{e}"); std::process::exit(1); } } }
     let smoke = std::env::args().any(|a| a == "--smoke");
@@ -194,7 +210,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, host_setup, settings_get, settings_set, pick_folder,
+        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
             fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here, machine_status, machine_link, machine_act, machine_service])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
@@ -202,7 +218,9 @@ fn main() {
             // --hub <address>: this run only (the build check points it at a test hub)
             if let Some(h) = std::env::args().skip_while(|a| a != "--hub").nth(1) { store.s.lock().unwrap_or_else(|e| e.into_inner()).hub = h; SMOKE_MAIN.store(SMOKE.load(std::sync::atomic::Ordering::SeqCst), std::sync::atomic::Ordering::SeqCst); }
             let s = store.get();
-            let host_dir = if s.host_dir.is_empty() { app.path().app_data_dir().unwrap_or(dir).join("ai-host").display().to_string() } else { s.host_dir.clone() };
+            // the AI host's folder: the setting, else the standard install of vr-host when it holds a host (Windows
+            // %LOCALAPPDATA%VibeRollerAIHost, Linux ~/.local/share/viberoller/ai-host), else this app's own folder
+            let host_dir = if !s.host_dir.is_empty() { s.host_dir.clone() } else if aihost::config(&aihost::standard_dir().display().to_string()).exists() { aihost::standard_dir().display().to_string() } else { app.path().app_data_dir().unwrap_or(dir).join("ai-host").display().to_string() };
             let machine_dir = machine::state_dir(&app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller")));
             app.manage(App { store, terms: Arc::default(), runs: Arc::default(), proxy: proxy::Proxy::default(), host_dir, machine: Arc::default(), machine_dir: machine_dir.clone() });
             // the while-open runner comes back by itself when this computer is linked and the person has not paused it
@@ -228,9 +246,12 @@ fn main() {
             let tools = MenuItem::with_id(h, "tools", "Tools (files, terminal, builds, git)", true, None::<&str>)?;
             let host_on = MenuItem::with_id(h, "host-resume", "AI host: share this PC's AI", true, None::<&str>)?;
             let host_off = MenuItem::with_id(h, "host-pause", "AI host: pause", true, None::<&str>)?;
+            let gpu_free = MenuItem::with_id(h, "gpu-free", "Free the GPU (unload the AI models)", true, None::<&str>)?;
+            let img_on = MenuItem::with_id(h, "image-on", "Image engine: on", true, None::<&str>)?;
+            let img_off = MenuItem::with_id(h, "image-off", "Image engine: off", true, None::<&str>)?;
             let upd = MenuItem::with_id(h, "update", "Check for updates", true, None::<&str>)?;
             let quit = MenuItem::with_id(h, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(h, &[&show, &tools, &PredefinedMenuItem::separator(h)?, &host_on, &host_off, &PredefinedMenuItem::separator(h)?, &upd, &quit])?;
+            let menu = Menu::with_items(h, &[&show, &tools, &PredefinedMenuItem::separator(h)?, &host_on, &host_off, &PredefinedMenuItem::separator(h)?, &gpu_free, &img_on, &img_off, &PredefinedMenuItem::separator(h)?, &upd, &quit])?;
             TrayIconBuilder::with_id("main").icon(app.default_window_icon().cloned().ok_or("no icon")?).tooltip(APP_NAME).menu(&menu).show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| {
                     let st = app.state::<App>();
@@ -239,6 +260,13 @@ fn main() {
                         "tools" => { let _ = show_tools(app); }
                         "host-resume" => { let d = st.host_dir.clone(); let _ = aihost::act(&d, if aihost::status(&d)["running"].as_bool() == Some(true) { "resume" } else { "start" }); }
                         "host-pause" => { let _ = aihost::act(&st.host_dir, "pause"); }
+                        "gpu-free" | "image-on" | "image-off" => {
+                            let (d, what, a) = (st.host_dir.clone(), ev.id.as_ref().to_string(), app.clone());
+                            tauri::async_runtime::spawn(async move {
+                                let r = match what.as_str() { "gpu-free" => gpu::free(&d).await, "image-on" => gpu::image(&d, true).await, _ => gpu::image(&d, false).await };
+                                let _ = notify(a, APP_NAME.to_string(), r.unwrap_or_else(|e| e));
+                            });
+                        }
                         "update" => { let _ = show_tools(app); }
                         "quit" => app.exit(0),
                         _ => {}

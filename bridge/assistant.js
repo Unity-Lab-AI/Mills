@@ -24,6 +24,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   // behind the Rust hub with its unity module, Unity is its own (native/crates/vr-hub/src/modules/unity*.rs): this one
   // starts no engines and fires no reminders (assistant.json is the Rust hub's then)
   const MOVED = !!process.env.VR_BACK_PORT && String(process.env.VR_FRONT_MODULES || '').split(',').includes('unity');
+  // how long Ollama keeps the brain in the GPU after an answer (assistant.brainKeepAlive; was 30 minutes): short by default
+  const brainKeepAlive = (v) => (Number.isInteger(v) && v >= 0 ? Math.min(v, 86400) : typeof v === 'string' && /^\d{1,7}[smh]?$/.test(v.trim()) ? v.trim() : '2m');
   const OLLAMA = (A.ollamaUrl || 'http://127.0.0.1:11434').replace(/\/$/, '');
   const LOCAL_MODEL = A.model || 'unity-brain';
   const FALLBACK_MODEL = A.fallbackModel || '';
@@ -564,7 +566,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     const said = [], seen = new Set();
     let final = '';
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal, body: JSON.stringify({ model, messages, stream: true, think: false, keep_alive: '30m', tools: native ? tools.map(schema) : undefined, options: { num_ctx: A.numCtx || 16384 } }) });
+      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal, body: JSON.stringify({ model, messages, stream: true, think: false, keep_alive: brainKeepAlive(A.brainKeepAlive), tools: native ? tools.map(schema) : undefined, options: { num_ctx: A.numCtx || 16384 } }) });
       if (!r.ok) throw new Error('Local brain error: ' + (await r.text()).slice(0, 200));
       let content = '', calls = [], buf = '';
       const dec = new TextDecoder();

@@ -259,6 +259,7 @@ function startFakeOllama() {
       }
       if (req.url === '/api/tags') return j({ models: fakeOllamaNoBrain ? [{ name: 'nomic-embed-text:latest' }, { name: 'plain-chat:latest' }] : [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
+      if (req.url === '/api/version') return j({ version: '0.0.0-regress' }); // the Rust hub's "is Ollama up" probe: without it the fake brain looks down
       if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
       const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
       const sys = (msgs[0] || {}).content || '';
@@ -3857,11 +3858,63 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.long = (await call('/api/work/enhance', U, { text: 'x'.repeat(20001) })).status;
     seen.anon = (await call('/api/work/enhance', null, { text: 'r497' })).status;
     seen.n0 = n0;
-    check('R497', 'the prompt enhancer: the sparkle button sends the draft to a throw-away Claude that gets the whole draft and nothing of the conversation (no earlier messages, no laws), runs with no tools, no MCP servers, no resume and no session kept, with its own system prompt (keep everything the person said), in an empty folder that is gone afterwards, and answers the rewrite; it is not a Work run (nothing counts as working, a Work message goes through meanwhile) and runs one at a time per person (a second one is refused 409, another person\'s is not); an empty draft is refused 400, one over 20 000 characters 413, and nobody signed out may use it',
+    check('R497', 'the prompt enhancer: the sparkle button sends the draft to a throw-away Claude that gets the whole draft and none of the Work run\'s own prompt (no messages the page did not save, no laws; the saved conversation comes as context: R510), runs with no tools, no MCP servers, no resume and no session kept, with its own system prompt (keep everything the person said), in an empty folder that is gone afterwards, and answers the rewrite; it is not a Work run (nothing counts as working, a Work message goes through meanwhile) and runs one at a time per person (a second one is refused 409, another person\'s is not); an empty draft is refused 400, one over 20 000 characters 413, and nobody signed out may use it',
       seen.status === 200 && seen.draftWhole && seen.noHistory && seen.how.tools === '' && !seen.how.resume && !seen.how.mcp && seen.how.noPersist && seen.how.keeps && Array.isArray(seen.how.files) && seen.how.files.length === 0 && seen.folderGone
       && seen.second === 409 && seen.workingMeanwhile === n0 && seen.chatMeanwhile === 200 && seen.slow === 200 && seen.otherPerson === 200 && seen.empty === 400 && seen.long === 413 && seen.anon === 401,
       JSON.stringify(seen));
   } else skip('R497', 'the prompt enhancer (/api/work/enhance)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { // R510 (5.42.2): the enhancer understands the draft from the session's conversation (first message + newest turns)
+    const seen = {};
+    const sid = (await call('/api/work/sessions/new', U, { project: 'VibeRoller' })).data.id;
+    const tr = [{ cls: 'me', text: 'r510 goal: build the dev hub' }, ...Array.from({ length: 30 }, (_, i) => ({ cls: i % 2 ? 'me' : 'claude', text: 'r510 middle ' + i + ' ' + 'x'.repeat(900) })),
+      { cls: 'tool', text: 'r510 TOOLLINE Read secret' }, { cls: 'claude', text: 'r510 newest: the theme button is in the header' }];
+    await call('/api/work/current', U, { session: sid, transcript: tr });
+    const ask = async (extra) => { const r = await call('/api/work/enhance', U, { session: sid, text: 'make it a dropdown', ...extra }); try { return JSON.parse(String(r.data.text || '').replace(/^ENHANCED:/, '')).input || ''; } catch { return ''; } };
+    const withCtx = await ask({}), without = await ask({ context: false });
+    seen.ctx = { marker: /The conversation so far, for understanding the draft only/.test(withCtx), goal: /Person: r510 goal: build the dev hub/.test(withCtx), newest: /Agent: r510 newest: the theme button/.test(withCtx),
+      noTool: !/TOOLLINE/.test(withCtx), skipped: /earlier turn\(s\) left out/.test(withCtx), bounded: withCtx.length < 16000, draftLast: /make it a dropdown\n----------$/.test(withCtx) };
+    seen.off = !/conversation so far/.test(without) && /make it a dropdown/.test(without);
+    await call('/api/work/sessions/delete', U, { id: sid });
+    check('R510', 'the prompt enhancer gets the session\'s conversation to understand the draft: its first message and its newest turns (tools left out, older middle turns skipped and said so, about 12 000 characters at most) before the draft, marked as context only; with context: false it gets none',
+      Object.values(seen.ctx).every(Boolean) && seen.off, JSON.stringify(seen));
+  } else skip('R510', 'the prompt enhancer with the session\'s context', 'the Rust hub\'s: --rust-hub runs it');
+  { // R512 (5.43.0): the GPU is not held: the brain's keep_alive is short by default (both hubs), the app's tray frees it
+    const rd = (p) => { try { return fs.readFileSync(path.join(MILLS, p), 'utf8'); } catch { return ''; } };
+    const asJs = rd('bridge/assistant.js'), ub = rd('native/crates/pgm-ai-internal/src/unity_brain.rs'), gpu = rd('native/crates/vr-desktop/src/gpu.rs'), dm = rd('native/crates/vr-desktop/src/main.rs');
+    const seen = {
+      js: /keep_alive: brainKeepAlive\(A\.brainKeepAlive\)/.test(asJs) && !/keep_alive: '30m'/.test(asJs) && /: '2m'\);/.test(asJs),
+      rust: /"keep_alive": keep_alive,/.test(ub) && !/"keep_alive": "30m"/.test(ub) && /json!\("2m"\)/.test(ub),
+      free: /\/unload/.test(gpu) && /"keep_alive": 0/.test(gpu) && /\/api\/ps/.test(gpu),
+      onOff: /\/shutdown/.test(gpu) && /engines-start\.json/.test(gpu),
+      tray: /"gpu-free"/.test(dm) && /"image-on"/.test(dm) && /"image-off"/.test(dm) && /--gpu/.test(dm),
+      hostDir: /aihost::standard_dir\(\)/.test(dm),
+    };
+    check('R512', 'the GPU is not held when nothing asks: Unity\'s local brain asks Ollama for a short keep_alive (assistant.brainKeepAlive, default 2 minutes, both hubs); the desktop app\'s tray frees the GPU (image engine /unload + every Ollama model keep_alive 0) and turns the image engine off (/shutdown) / on (engines-start.json), also as vr-desktop --gpu; its AI host switches find the installed host',
+      Object.values(seen).every(Boolean), JSON.stringify(seen));
+  }
+  { // R511 (5.43.0): the desktop app stays signed in: the page approves a device sign-in for the app itself and keeps it (the app only)
+    const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), seen = {};
+    seen.page = {
+      appOnly: /function appKeep\(\) \{ if \(!IN_APP\) return null;/.test(html) && /const IN_APP = !!\(window\.__TAURI__ && window\.__TAURI__\.core\);/.test(html),
+      startUses: /let token = sessionStorage\.getItem\(TOKEN_KEY\) \|\| \(appKeep\(\) \|\| \{\}\)\.token \|\| null;/.test(html),
+      afterLogin: /keepAppSignedIn\(\)\.catch/.test(html) && /async function keepAppSignedIn\(\) \{\n  if \(!IN_APP \|\| !token\) return;/.test(html),
+      signOutForgets: /sessionStorage\.removeItem\(TOKEN_KEY\); appForget\(\);/.test(html),
+      logoutRevokes: /const k = appKeep\(\);[^\n]*\n  if \(k && k\.id\) \{ try \{ await api\('\/api\/devices\/revoke'/.test(html),
+    };
+    if (RUST_HUB) {
+      const s = await call('/api/device/start', null, { client: 'vr-desktop', device: 'VibeRoller app' });
+      const ap = await call('/api/device/approve', U, { userCode: s.data.userCode });
+      const got = await call('/api/device/poll', null, { deviceCode: s.data.deviceCode });
+      const tok = got.data.token, chk = await call('/api/check', tok);
+      const listed = (await call('/api/devices', U)).data.devices || [];
+      const rv = await call('/api/devices/revoke', tok, { id: got.data.deviceId });
+      const after = await call('/api/check', tok);
+      seen.hub = { start: s.status, approve: ap.status, poll: got.status, check: chk.status, listed: listed.some((d) => d.id === got.data.deviceId && d.client === 'vr-desktop'), revoke: rv.status, after: after.status };
+      seen.hubOk = s.status === 200 && ap.status === 200 && got.status === 200 && typeof tok === 'string' && chk.status === 200 && seen.hub.listed && rv.status === 200 && after.status === 401;
+    }
+    check('R511', 'the desktop app stays signed in across restarts: after a password sign-in in the app the page approves a device sign-in for the app and keeps its token in the app only (never a browser); a start uses it; signing out revokes it; a 401 forgets it' + (RUST_HUB ? '' : ' (page only; the hub flow runs with --rust-hub)'),
+      Object.values(seen.page).every(Boolean) && (!RUST_HUB || seen.hubOk), JSON.stringify(seen));
+  }
   { // R498 (5.35.0): the page: the DEV band drifts, Sessions is in the left rail, the sparkle (SVG) button sits under + in the composer with its switch in
     // Settings, and the genie (the page's own genieIn / genieOut, run with stand-in elements) hides only once the element is in its button
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), sj = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');
