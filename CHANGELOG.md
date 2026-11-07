@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.43.1 — 2026-11-07
+
+PATCH: **deploys are no longer held up by the hub's own files.**
+
+### Fixed
+- The live server's autodeploy refused every new main ("live checkout has uncommitted changes") because two files the hub writes itself, `bridge/work-sessions.json` and `bridge/activity/`, were not ignored by git: both are in .gitignore now (they stay on disk as they are).
+
 ## 5.43.0 — 2026-11-07
 
 MINOR: **the desktop app stays signed in, and it frees the GPU** (2026-11-07: "auto sign in after boot and start of the app, is a go, build it"; "i should be able to turn off the image models and unlaod my GPU from the app"; "fuck my gpu is being held when nothing is being requested").
