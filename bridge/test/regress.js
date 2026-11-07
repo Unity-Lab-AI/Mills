@@ -259,6 +259,7 @@ function startFakeOllama() {
       }
       if (req.url === '/api/tags') return j({ models: fakeOllamaNoBrain ? [{ name: 'nomic-embed-text:latest' }, { name: 'plain-chat:latest' }] : [{ name: 'unity-brain:latest' }] });
       if (req.url === '/api/show') return j({ capabilities: ['completion', 'tools'] });
+      if (req.url === '/api/version') return j({ version: '0.0.0-regress' }); // the Rust hub's "is Ollama up" probe: without it the fake brain looks down
       if (req.url !== '/api/chat') { res.writeHead(404); return res.end(); }
       const b = JSON.parse(body || '{}'), msgs = b.messages || [], last = msgs[msgs.length - 1] || {};
       const sys = (msgs[0] || {}).content || '';
@@ -3991,12 +3992,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   // T-271: the security log (bridge/security/audit.jsonl, pgm-core-internal audit.rs): append-only, hash-chained, admins read it
   const AUDIT_FILE = path.join(SB, 'security', 'audit.jsonl');
   const loginFrom = (ip, body) => fetch(H + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
-  const R511_LABEL = 'the security log records sign-ins: a failed and then a successful sign-in of an account appear in the admin\'s GET /api/admin/audit in that order, with who and from which address; a failed one for a name that is no account names nobody; a non-admin gets 403 (and that refusal is noted), a visitor 401; no password, token or mistyped name is ever in the file, which only its owner may read';
-  if (RUST_HUB) { // R511
+  const R521_LABEL = 'the security log records sign-ins: a failed and then a successful sign-in of an account appear in the admin\'s GET /api/admin/audit in that order, with who and from which address; a failed one for a name that is no account names nobody; a non-admin gets 403 (and that refusal is noted), a visitor 401; no password, token or mistyped name is ever in the file, which only its owner may read';
+  if (RUST_HUB) { // R521
     const seen = {};
-    const bad = await loginFrom('198.51.100.71', { username: 't-user', password: 'r511-WRONG-pass', deviceId: devB });
+    const bad = await loginFrom('198.51.100.71', { username: 't-user', password: 'r521-WRONG-pass', deviceId: devB });
     const good = await loginFrom('198.51.100.71', { username: 't-user', password: 'pw-t-user-0001', deviceId: devB });
-    const typo = await loginFrom('198.51.100.72', { username: 'r511-typed-secret', password: 'r511-other-pw', deviceId: devB });
+    const typo = await loginFrom('198.51.100.72', { username: 'r521-typed-secret', password: 'r521-other-pw', deviceId: devB });
     seen.statuses = [bad.status, good.status, typo.status];
     const au = await call('/api/admin/audit?action=signin&limit=100', A), es = au.data.entries || [];
     const failed = es.find((e) => e.action === 'signin.failed' && e.actor === 't-user' && e.ip === '198.51.100.71'), ok = es.find((e) => e.action === 'signin' && e.actor === 't-user' && e.ip === '198.51.100.71');
@@ -4006,40 +4007,40 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.user = (await call('/api/admin/audit', U)).status; seen.anon = (await call('/api/admin/audit')).status;
     seen.refusedNoted = ((await call('/api/admin/audit?action=admin.refused', A)).data.entries || []).some((e) => e.actor === 't-user' && e.target === '/api/admin/audit');
     const file = fs.existsSync(AUDIT_FILE) ? fs.readFileSync(AUDIT_FILE, 'utf8') : '';
-    seen.noSecrets = !!file && !['r511-WRONG-pass', 'pw-t-user-0001', 'r511-typed-secret', 'r511-other-pw', String(good.data.token || 'no-token'), A].some((s) => file.includes(s));
+    seen.noSecrets = !!file && !['r521-WRONG-pass', 'pw-t-user-0001', 'r521-typed-secret', 'r521-other-pw', String(good.data.token || 'no-token'), A].some((s) => file.includes(s));
     seen.private = WIN || (fs.existsSync(AUDIT_FILE) && (fs.statSync(AUDIT_FILE).mode & 0o077) === 0);
-    check('R511', R511_LABEL, seen.statuses.join() === '401,200,401' && seen.failed && seen.ok && seen.inOrder && seen.nobody && seen.verified && seen.user === 403 && seen.anon === 401 && seen.refusedNoted && seen.noSecrets && seen.private, JSON.stringify(seen));
-  } else skip('R511', R511_LABEL, 'the Rust hub\'s: --rust-hub runs it');
-  const R512_LABEL = 'the security log records what an admin changes and what a start changes: making an account, its first device, making it an admin and not, a new password (never the password itself), letting it add a device, resetting its lock, its sign-out and deleting it each appear once with the admin (or the account) and the target, and the hub\'s start with its version; the chain verifies';
-  if (RUST_HUB) { // R512
+    check('R521', R521_LABEL, seen.statuses.join() === '401,200,401' && seen.failed && seen.ok && seen.inOrder && seen.nobody && seen.verified && seen.user === 403 && seen.anon === 401 && seen.refusedNoted && seen.noSecrets && seen.private, JSON.stringify(seen));
+  } else skip('R521', R521_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  const R522_LABEL = 'the security log records what an admin changes and what a start changes: making an account, its first device, making it an admin and not, a new password (never the password itself), letting it add a device, resetting its lock, its sign-out and deleting it each appear once with the admin (or the account) and the target, and the hub\'s start with its version; the chain verifies';
+  if (RUST_HUB) { // R522
     const seen = {};
-    const mk = await call('/api/admin/create', A, { username: 'r512-temp', display: 'R512' });
-    const t = await loginFrom('198.51.100.73', { username: 'r512-temp', password: mk.data.password, deviceId: 'device-r512-0000000000' });
-    await call('/api/admin/set-admin', A, { username: 'r512-temp', admin: true }); await call('/api/admin/set-admin', A, { username: 'r512-temp', admin: false });
-    const pw = await call('/api/admin/password', A, { username: 'r512-temp', keepMachines: true });
-    const t2 = await loginFrom('198.51.100.73', { username: 'r512-temp', password: pw.data.password, deviceId: 'device-r512-0000000000' });
-    seen.allow = (await call('/api/admin/allow-device', A, { username: 'r512-temp' })).status;
-    seen.unlock = (await call('/api/admin/unlock', A, { username: 'r512-temp' })).status;
+    const mk = await call('/api/admin/create', A, { username: 'r522-temp', display: 'R522' });
+    const t = await loginFrom('198.51.100.73', { username: 'r522-temp', password: mk.data.password, deviceId: 'device-r522-0000000000' });
+    await call('/api/admin/set-admin', A, { username: 'r522-temp', admin: true }); await call('/api/admin/set-admin', A, { username: 'r522-temp', admin: false });
+    const pw = await call('/api/admin/password', A, { username: 'r522-temp', keepMachines: true });
+    const t2 = await loginFrom('198.51.100.73', { username: 'r522-temp', password: pw.data.password, deviceId: 'device-r522-0000000000' });
+    seen.allow = (await call('/api/admin/allow-device', A, { username: 'r522-temp' })).status;
+    seen.unlock = (await call('/api/admin/unlock', A, { username: 'r522-temp' })).status;
     seen.logout = (await call('/api/logout', t2.data.token, {})).status;
-    seen.del = (await call('/api/admin/delete', A, { username: 'r512-temp' })).status;
+    seen.del = (await call('/api/admin/delete', A, { username: 'r522-temp' })).status;
     seen.statuses = [mk.status, t.status, pw.status, t2.status];
-    const au = await call('/api/admin/audit?limit=1000', A), es = (au.data.entries || []).filter((e) => e.target === 'r512-temp');
+    const au = await call('/api/admin/audit?limit=1000', A), es = (au.data.entries || []).filter((e) => e.target === 'r522-temp');
     const one = (action, actor) => es.filter((e) => e.action === action && e.actor === actor).length === 1;
-    seen.got = { create: one('account.create', 't-admin'), first: one('device.first', 'r512-temp'), role: es.filter((e) => e.action === 'account.role' && e.actor === 't-admin').map((e) => e.detail.admin).reverse().join() === 'true,false',
+    seen.got = { create: one('account.create', 't-admin'), first: one('device.first', 'r522-temp'), role: es.filter((e) => e.action === 'account.role' && e.actor === 't-admin').map((e) => e.detail.admin).reverse().join() === 'true,false',
       password: one('account.password', 't-admin') && es.find((e) => e.action === 'account.password').detail.keepMachines === true, allow: one('device.allow', 't-admin'), reset: one('device.reset', 't-admin'),
-      signout: one('signout', 'r512-temp'), del: one('account.delete', 't-admin') };
+      signout: one('signout', 'r522-temp'), del: one('account.delete', 't-admin') };
     seen.start = (au.data.entries || []).some((e) => e.action === 'hub.start' && typeof e.detail.version === 'string' && e.detail.version.length > 0 && typeof e.detail.alone === 'boolean');
     seen.verified = au.data.verified || {};
     const file = fs.existsSync(AUDIT_FILE) ? fs.readFileSync(AUDIT_FILE, 'utf8') : '';
     seen.noPw = !!mk.data.password && !!pw.data.password && !file.includes(mk.data.password) && !file.includes(pw.data.password) && !file.includes(String(t2.data.token || 'no-token'));
-    check('R512', R512_LABEL, seen.statuses.join() === '200,200,200,200' && seen.allow === 200 && seen.unlock === 200 && seen.logout === 200 && seen.del === 200 && Object.values(seen.got).every(Boolean) && seen.start && seen.verified.ok === true && seen.noPw, JSON.stringify(seen));
-  } else skip('R512', R512_LABEL, 'the Rust hub\'s: --rust-hub runs it');
-  const R513_LABEL = 'the security log\'s chain shows tampering: a line changed in the file afterwards makes verified.ok false with brokenAt its seq (put back, it verifies again); a line a crash cut short is reported as torn without breaking the chain, and the next entry moves it aside, notes audit.torn and chains on';
-  if (RUST_HUB) { // R513
+    check('R522', R522_LABEL, seen.statuses.join() === '200,200,200,200' && seen.allow === 200 && seen.unlock === 200 && seen.logout === 200 && seen.del === 200 && Object.values(seen.got).every(Boolean) && seen.start && seen.verified.ok === true && seen.noPw, JSON.stringify(seen));
+  } else skip('R522', R522_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  const R523_LABEL = 'the security log\'s chain shows tampering: a line changed in the file afterwards makes verified.ok false with brokenAt its seq (put back, it verifies again); a line a crash cut short is reported as torn without breaking the chain, and the next entry moves it aside, notes audit.torn and chains on';
+  if (RUST_HUB) { // R523
     const seen = {};
     const orig = fs.readFileSync(AUDIT_FILE, 'utf8'), lines = orig.split('\n').filter(Boolean);
-    const i = lines.findIndex((l) => l.includes('"action":"account.create"') && l.includes('"target":"r512-temp"')), target = i >= 0 ? JSON.parse(lines[i]) : {};
-    if (i >= 0) { const forged = lines.slice(); forged[i] = forged[i].replace('"target":"r512-temp"', '"target":"r513-forged"'); fs.writeFileSync(AUDIT_FILE, forged.join('\n') + '\n'); }
+    const i = lines.findIndex((l) => l.includes('"action":"account.create"') && l.includes('"target":"r522-temp"')), target = i >= 0 ? JSON.parse(lines[i]) : {};
+    if (i >= 0) { const forged = lines.slice(); forged[i] = forged[i].replace('"target":"r522-temp"', '"target":"r523-forged"'); fs.writeFileSync(AUDIT_FILE, forged.join('\n') + '\n'); }
     seen.tampered = ((await call('/api/admin/audit?limit=1', A)).data || {}).verified || {};
     fs.writeFileSync(AUDIT_FILE, orig);
     seen.restored = ((await call('/api/admin/audit?limit=1', A)).data || {}).verified || {};
@@ -4050,10 +4051,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.after = after.verified || {}; seen.again = again.status;
     seen.noted = (after.entries || []).some((e) => e.action === 'audit.torn' && e.detail.bytes > 0) && (after.entries || []).some((e) => e.action === 'signin' && e.ip === '198.51.100.74');
     seen.aside = fs.readdirSync(path.dirname(AUDIT_FILE)).some((f) => /^audit\.torn-\d+$/.test(f));
-    check('R513', R513_LABEL, i >= 0 && seen.tampered.ok === false && seen.tampered.brokenAt === target.seq && seen.restored.ok === true && seen.torn.ok === true && seen.torn.torn === true
+    check('R523', R523_LABEL, i >= 0 && seen.tampered.ok === false && seen.tampered.brokenAt === target.seq && seen.restored.ok === true && seen.torn.ok === true && seen.torn.torn === true
       && seen.again === 200 && seen.after.ok === true && seen.after.torn === false && seen.noted && seen.aside, JSON.stringify({ ...seen, seq: target.seq }));
-  } else skip('R513', R513_LABEL, 'the Rust hub\'s: --rust-hub runs it');
-  { // R514: the page's read-only Security log for admins, next to Health [static]; the JavaScript hub has none (it keeps booting)
+  } else skip('R523', R523_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  { // R524: the page's read-only Security log for admins, next to Health [static]; the JavaScript hub has none (it keeps booting)
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
     const seen = {
       box: /<div class="setSection" id="healthBox" hidden>[\s\S]{0,1500}<div class="setSection" id="auditBox" hidden><b><svg class="ic" aria-hidden="true"><use href="#i-shield"\/><\/svg> Security log<\/b>/.test(page),
@@ -4061,8 +4062,45 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       ignored: /^bridge\/security\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     };
     if (!RUST_HUB) seen.jsHub = (await call('/api/admin/audit', A)).status !== 200 && (await call('/api/status')).status === 200;
-    check('R514', 'admins see a read-only Security log next to Health (shield icon, newest first, whether the chain is intact or where it broke), loaded with the admin screen; the log\'s folder is gitignored data; the JavaScript hub has no such route and keeps answering [static: no browser in the suite]',
+    check('R524', 'admins see a read-only Security log next to Health (shield icon, newest first, whether the chain is intact or where it broke), loaded with the admin screen; the log\'s folder is gitignored data; the JavaScript hub has no such route and keeps answering [static: no browser in the suite]',
       Object.values(seen).every(Boolean), JSON.stringify(seen));
+  }
+  { // R512 (5.43.0): the GPU is not held: the brain's keep_alive is short by default (both hubs), the app's tray frees it
+    const rd = (p) => { try { return fs.readFileSync(path.join(MILLS, p), 'utf8'); } catch { return ''; } };
+    const asJs = rd('bridge/assistant.js'), ub = rd('native/crates/pgm-ai-internal/src/unity_brain.rs'), gpu = rd('native/crates/vr-desktop/src/gpu.rs'), dm = rd('native/crates/vr-desktop/src/main.rs');
+    const seen = {
+      js: /keep_alive: brainKeepAlive\(A\.brainKeepAlive\)/.test(asJs) && !/keep_alive: '30m'/.test(asJs) && /: '2m'\);/.test(asJs),
+      rust: /"keep_alive": keep_alive,/.test(ub) && !/"keep_alive": "30m"/.test(ub) && /json!\("2m"\)/.test(ub),
+      free: /\/unload/.test(gpu) && /"keep_alive": 0/.test(gpu) && /\/api\/ps/.test(gpu),
+      onOff: /\/shutdown/.test(gpu) && /engines-start\.json/.test(gpu),
+      tray: /"gpu-free"/.test(dm) && /"image-on"/.test(dm) && /"image-off"/.test(dm) && /--gpu/.test(dm),
+      hostDir: /aihost::standard_dir\(\)/.test(dm),
+    };
+    check('R512', 'the GPU is not held when nothing asks: Unity\'s local brain asks Ollama for a short keep_alive (assistant.brainKeepAlive, default 2 minutes, both hubs); the desktop app\'s tray frees the GPU (image engine /unload + every Ollama model keep_alive 0) and turns the image engine off (/shutdown) / on (engines-start.json), also as vr-desktop --gpu; its AI host switches find the installed host',
+      Object.values(seen).every(Boolean), JSON.stringify(seen));
+  }
+  { // R511 (5.43.0): the desktop app stays signed in: the page approves a device sign-in for the app itself and keeps it (the app only)
+    const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), seen = {};
+    seen.page = {
+      appOnly: /function appKeep\(\) \{ if \(!IN_APP\) return null;/.test(html) && /const IN_APP = !!\(window\.__TAURI__ && window\.__TAURI__\.core\);/.test(html),
+      startUses: /let token = sessionStorage\.getItem\(TOKEN_KEY\) \|\| \(appKeep\(\) \|\| \{\}\)\.token \|\| null;/.test(html),
+      afterLogin: /keepAppSignedIn\(\)\.catch/.test(html) && /async function keepAppSignedIn\(\) \{\n  if \(!IN_APP \|\| !token\) return;/.test(html),
+      signOutForgets: /sessionStorage\.removeItem\(TOKEN_KEY\); appForget\(\);/.test(html),
+      logoutRevokes: /const k = appKeep\(\);[^\n]*\n  if \(k && k\.id\) \{ try \{ await api\('\/api\/devices\/revoke'/.test(html),
+    };
+    if (RUST_HUB) {
+      const s = await call('/api/device/start', null, { client: 'vr-desktop', device: 'VibeRoller app' });
+      const ap = await call('/api/device/approve', U, { userCode: s.data.userCode });
+      const got = await call('/api/device/poll', null, { deviceCode: s.data.deviceCode });
+      const tok = got.data.token, chk = await call('/api/check', tok);
+      const listed = (await call('/api/devices', U)).data.devices || [];
+      const rv = await call('/api/devices/revoke', tok, { id: got.data.deviceId });
+      const after = await call('/api/check', tok);
+      seen.hub = { start: s.status, approve: ap.status, poll: got.status, check: chk.status, listed: listed.some((d) => d.id === got.data.deviceId && d.client === 'vr-desktop'), revoke: rv.status, after: after.status };
+      seen.hubOk = s.status === 200 && ap.status === 200 && got.status === 200 && typeof tok === 'string' && chk.status === 200 && seen.hub.listed && rv.status === 200 && after.status === 401;
+    }
+    check('R511', 'the desktop app stays signed in across restarts: after a password sign-in in the app the page approves a device sign-in for the app and keeps its token in the app only (never a browser); a start uses it; signing out revokes it; a 401 forgets it' + (RUST_HUB ? '' : ' (page only; the hub flow runs with --rust-hub)'),
+      Object.values(seen.page).every(Boolean) && (!RUST_HUB || seen.hubOk), JSON.stringify(seen));
   }
   { // R498 (5.35.0): the page: the DEV band drifts, Sessions is in the left rail, the sparkle (SVG) button sits under + in the composer with its switch in
     // Settings, and the genie (the page's own genieIn / genieOut, run with stand-in elements) hides only once the element is in its button

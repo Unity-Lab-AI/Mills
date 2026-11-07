@@ -1584,7 +1584,15 @@ function deviceIdFor(loc, doc, st) {
   return id;
 }
 let deviceId = deviceIdFor(location, document, store);
-let token = sessionStorage.getItem(TOKEN_KEY);
+// The desktop app stays signed in across restarts and reboots: after a password sign-in in the app, the page approves a
+// device sign-in for the app itself (the hub's device-code sign-in) and keeps that revocable device token in the app's
+// own storage (APP_KEEP_KEY, the app only: a browser never keeps one). A page session lasts 12 hours, a device token
+// until it is signed out here or revoked under Settings → Connections; a 401 forgets it.
+const IN_APP = !!(window.__TAURI__ && window.__TAURI__.core);
+const APP_KEEP_KEY = NS + 'mills.appKeep';
+function appKeep() { if (!IN_APP) return null; try { const k = JSON.parse(localStorage.getItem(APP_KEEP_KEY) || 'null'); return k && typeof k.token === 'string' && k.token.length >= 32 ? k : null; } catch { return null; } }
+function appForget() { try { localStorage.removeItem(APP_KEEP_KEY); } catch {} }
+let token = sessionStorage.getItem(TOKEN_KEY) || (appKeep() || {}).token || null;
 let base = null;
 
 // ---------- find the bridge (its tunnel address changes each time the hub starts) ----------
@@ -2037,8 +2045,20 @@ $('login').addEventListener('submit', async (e) => {
     $('password').value = '';
     await enter();
     ensureChatKey(password).catch((e) => console.warn('chat key', e)); // unlock/create the E2E key while we have the password
+    keepAppSignedIn().catch((e) => console.warn('app sign-in kept', e));
   } catch (err) { $('loginErr').textContent = err.message; }
 });
+// (the app only) a device sign-in for this app, approved with the session just made, so the next start signs in by itself
+async function keepAppSignedIn() {
+  if (!IN_APP || !token) return;
+  const old = appKeep();
+  const s = await json('/api/device/start', { method: 'POST', body: JSON.stringify({ client: 'vr-desktop', device: 'VibeRoller app' }) });
+  await json('/api/device/approve', { method: 'POST', body: JSON.stringify({ userCode: s.userCode }) });
+  const got = await json('/api/device/poll', { method: 'POST', body: JSON.stringify({ deviceCode: s.deviceCode }) });
+  if (!got || typeof got.token !== 'string') return;
+  localStorage.setItem(APP_KEEP_KEY, JSON.stringify({ token: got.token, id: got.deviceId, user: got.username }));
+  if (old && old.id && old.id !== got.deviceId) api('/api/devices/revoke', { method: 'POST', body: JSON.stringify({ id: old.id }) }).catch(() => {}); // one kept sign-in per app
+}
 async function enter() {
   me = await json('/api/check');
   showEnhance();
@@ -2103,7 +2123,7 @@ $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
   if (NATIVE && token) NATIVE.call('set_session', { token: '' }).catch(() => {});
-  token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); sentIdle = null; sentScreen = ''; presenceMap = {};
+  token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); appForget(); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
   BOARD.stop(); NOTES.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
@@ -2113,7 +2133,11 @@ function signOut() {
   closeMsgMenu();
   $('login').hidden = false;
 }
-async function logoutClick() { try { await api('/api/logout', { method: 'POST' }); } catch {} signOut(); }
+async function logoutClick() {
+  const k = appKeep(); // signing out in the app ends its kept sign-in on the hub too
+  if (k && k.id) { try { await api('/api/devices/revoke', { method: 'POST', body: JSON.stringify({ id: k.id }) }); } catch {} }
+  try { await api('/api/logout', { method: 'POST' }); } catch {} signOut();
+}
 $('logout').onclick = logoutClick;
 $('menuLogout').onclick = logoutClick;
 
