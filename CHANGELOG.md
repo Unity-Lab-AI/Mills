@@ -22,7 +22,9 @@ right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-
   behind "show tools", with an "Always expand tool calls" choice remembered per person. Each call is one line (up to 32
   characters whole, longer as the first 15 … the last 15). A click shows it whole, with the parts of a command coloured
   by risk (looks safe / unknown / check it / possibly unsafe) and marked with a shape too, never colour alone. Nothing
-  is blocked. Checks: **R528**, **R529**.
+  is blocked. The risk markers are custom SVG icons from the page's sprite (Mills's choice): a check in a circle (looks
+  safe), a question mark in a circle (unknown), an exclamation mark in a triangle (check it) and a solid stop-sign
+  octagon (possibly unsafe), each with its words for screen readers. Checks: **R528**, **R529**.
 - **One menu kit for right-click and ⋯** (T-223, `web/menu.js` 1.0.0). Right-click, a long-press on touch, the
   ContextMenu key and a ⋯ button open the same menu from one list. It stays on screen, has sub-menus that flip at the
   edge, icons and shortcuts, and arrows / Enter / Esc with focus returned. Shift + right-click, text fields and
