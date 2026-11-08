@@ -48,7 +48,8 @@ function check(id, label, pass, detail = '') {
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
 const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
 const R532_LABEL = 'agent threads in the page (T-298): t-user sees every message to and from their agent as a thread per agent pair, both directions with who, kind and time, and a message that went into one of their sessions opens that session; with the page open a new message from mills notifies, muting the pair stops the notifications (mills\'s next message is refused) but keeps the messages, Do Not Disturb mutes the notification only (the message is there); "pause my inbox" and "ask me first" change the hub\'s settings; a held hand-off shows an accept / decline card and accepting it makes the hub accept it (the task is re-assigned to t-user); the hub serves agents.js and the page loads it with its button, panel and menu tile';
-const R532B_LABEL = 'agent threads in the page on a hub without /api/agents (an older hub or the JavaScript fallback hub): the panel renders nothing, its button and menu tile stay hidden, a refresh and a render throw nothing and nothing notifies';
+const R533_LABEL = 'agent threads in the page, the person\'s own say (T-298): t-user stops a thread from its header and the hub\'s thread is stopped (by a person) while the panel shows it stopped, dashed, with Reopen and no reply; Reopen makes it open again in the hub and the panel; "wake me" off and on changes the hub\'s setting; a question written in the panel\'s composer to Mills with a task ref arrives in Mills\'s thread as a question with that ref, written by t-user as a person, and the panel says it waits because Mills paused their inbox; a hand-off needs its task before it goes, and with one it waits for Mills\'s okay; a reply written in that thread goes into the same thread as a reply; when Mills has muted t-user the composer shows the hub\'s refusal as plain words and the person list says so; rate and hop limits, a stopped thread and an unknown person read as sentences; a hub without stop, reopen, the team list or send shows the controls it can and throws nothing';
+const R532B_LABEL ='agent threads in the page on a hub without /api/agents (an older hub or the JavaScript fallback hub): the panel renders nothing, its button and menu tile stay hidden, a refresh and a render throw nothing and nothing notifies';
 const R531_LABEL = 'VibeRoller\'s menus (T-224) offer only what the person may do and call the page\'s existing actions: someone else\'s chat message has Reply, Copy and their profile but no Edit or Delete, your own adds Edit and Delete (asking twice, not Edit for a voice clip), Pin shows for who may pin and says Unpin when pinned, a moderator deletes in a channel but not in a DM, a deleted message offers no actions; a person, a channel, a group and a server offer what their buttons offer (Message and Mention not for yourself, Edit channel only for who may); a board card held by someone else only opens, goes to Claude and copies its id, a free one claims, completes, moves and assigns through sub-menus (the current column and assignee ticked) and archives when done; a file offers Edit and Run for Work files and only Delete when gone; a Work message is copied and sent again, a queued one cancelled through the queue panel; the chat, Work, the board, notes, files and the session list build their right-click and click / ⋯ menus from these lists';
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
@@ -778,7 +779,7 @@ async function run() {
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
   if (process.argv.includes('--only-r528')) await r528r529Check(); // development: just R528 / R529 (with --stop-after R529)
-  if (process.argv.includes('--only-r532')) { if (RUST_HUB) await r532Check(); await r532bCheck(); } // development: just R532 / R532b (with --stop-after R532b)
+  if (process.argv.includes('--only-r532')) { if (RUST_HUB) { await r532Check(); await r533Check(); } await r532bCheck(); } // development: just R532 / R533 / R532b (with --stop-after R532b)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -4029,7 +4030,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   await r526Check();
   await r527Check(); // T-291: the Theme menu on top (both modes)
   if (!process.argv.includes('--only-r528')) await r528r529Check();
-  if (RUST_HUB) { if (!process.argv.includes('--only-r532')) await r532Check(); } else skip('R532', R532_LABEL, 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r532')) { await r532Check(); await r533Check(); } } else { skip('R532', R532_LABEL, 'the Rust hub\'s: --rust-hub runs it'); skip('R533', R533_LABEL, 'the Rust hub\'s: --rust-hub runs it'); }
   if (!process.argv.includes('--only-r532')) await r532bCheck();
   if (!process.argv.includes('--only-r530')) await r530Check(); // T-223 / T-224: R530 and R531 (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
@@ -7416,6 +7417,120 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const ok = seen.served && !!AG && built && seen.shown && seen.firstQuiet && /mills/.test(seen.pairs || '') && seen.both && seen.session && seen.notified1 && seen.mutedHub && seen.muted && seen.unmutedHub && seen.dnd
       && seen.paused && seen.resumed && seen.askOn && seen.handoffOff && seen.handoffOn && seen.askOff && seen.card && seen.heldNotified && seen.badge && seen.accepted && seen.hidePanel && seen.sends === '202,202,202,202';
     check('R532', R532_LABEL, ok, (built ? '' : 'no /api/agents/* ') + JSON.stringify(seen));
+  }
+  // R533 (T-298): what the person does in the panel themselves: stop / reopen a thread, wake me, and writing to another
+  // person's agent (a new thread from the composer, a reply in a thread), with the hub's refusals as words. t-user's panel
+  // against the real routes; Mills's inbox is paused meanwhile (nothing wakes their sessions), everything is put back.
+  async function r533Check() {
+    const seen = {};
+    const js = await fetch(H + '/agents.js'), { AG, error } = load532(js.status === 200 ? await js.text() : '');
+    if (error) seen.load = error;
+    const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
+    const built = (await ag('settings', U)).status === 200;
+    if (AG && built) {
+      const setU = (await ag('settings', U)).data, setD = (await ag('settings', D)).data;
+      const sessOf = async (tok) => (await call('/api/work/sessions', tok)).data || {};
+      const keep = [];
+      for (const tok of [U, D]) { const s0 = await sessOf(tok); for (const sid of [...new Set([s0.primary, s0.current].filter(Boolean))]) keep.push({ tok, sid, cur: (await call('/api/work/current?session=' + sid, tok)).data || {} }); }
+      const calm = async () => { for (let i = 0, quiet = 0; i < 160 && quiet < 6; i++) { const w = (((await sessOf(U)).counts || {}).working || 0) + (((await sessOf(D)).counts || {}).working || 0); quiet = w === 0 ? quiet + 1 : 0; await sleep(250); } };
+      await ag('settings', D, { paused: true, askFirst: ['handoff'], muted: (setD.muted || []).filter((u) => u !== 't-user') });
+      const st = { notes: [], kept: {} };
+      const box = mkEl532('aside'), button = mkEl532('button'), badge = mkEl532('span'), tile = mkEl532('button');
+      const mount = (api) => AG.mount({ document: { createElement: mkEl532 }, box, button, badge, tile, interval: 0, api,
+        me: () => 't-user', nameOf: (u) => (u === 'mills' ? 'Mills' : u), dnd: () => false, hasSession: () => false, titleOf: (s) => s, open() {},
+        notify() {}, note: (t, bad) => { st.notes.push((bad ? '!' : '') + t); }, store: { get: (k) => (k in st.kept ? st.kept[k] : null), set: (k, v) => { st.kept[k] = v; } } });
+      const P = mount((p, body) => call(p, U, body));
+      const acts = (a, root = box) => all532(root, (e) => e.dataset && e.dataset.act === a), click = async (b) => { if (b && b.onclick) await b.onclick(); await sleep(0); };
+      const toggle = async (b) => { if (!b) return; b.checked = !b.checked; if (b.onchange) await b.onchange(); await sleep(0); };
+      const settings = async (tok = U) => (await ag('settings', tok)).data || {};
+      const msgLine = () => (all532(box, (e) => /\bagCMsg\b/.test(e.className))[0] || { textContent: '' }).textContent;
+      const threadEl = (id) => all532(box, (e) => /\bagThread\b/.test(e.className) && e.dataset.thread === id)[0];
+      try { // (whatever happens, the settings and the conversations are put back below)
+      await P.refresh(); P.setOpen(true);
+      // 1. wake me: off, then on again
+      await toggle(acts('wake')[0]); seen.wakeOff = (await settings()).wake === false;
+      await toggle(acts('wake')[0]); seen.wakeOn = (await settings()).wake === true;
+      // 2. the composer: the team to pick from, a question with a task ref
+      const task = (await call('/api/board/create', U, { title: 'r533 composer task', status: 'todo', assignee: 't-user' })).data.task || {};
+      await click(acts('compose')[0]);
+      const fill = async (to, kind, ref, text) => {
+        const c = all532(box, (e) => /\bagCompose\b/.test(e.className))[0]; if (!c) return null;
+        const f = (x) => acts(x, c)[0] || {};
+        f('to').value = to; const k = f('kind'); k.value = kind; if (k.onchange) k.onchange();
+        f('task').value = ref; f('text').value = text; for (const x of ['to', 'task', 'text']) { const e = f(x); if (e.oninput) e.oninput(); }
+        await click(acts('send', c)[0]); return c;
+      };
+      const people = all532(box, (e) => e.dataset && e.dataset.act === 'to').flatMap((s) => s.children.map((o) => o.value));
+      seen.people = people.includes('mills') && !people.includes('t-user');
+      seen.kinds = (acts('kind')[0] || { children: [] }).children.map((o) => o.value).join(',');
+      await fill('mills', 'ask', task.id, 'r533 composed question for Mills');
+      const dThreads = async () => { const out = []; for (const t of ((await ag('threads', D)).data || {}).threads || []) out.push(((await ag('thread?id=' + t.id, D)).data || {})); return out; };
+      let th = (await dThreads()).find((t) => (t.messages || []).some((m) => /r533 composed question/.test(m.text || ''))) || { messages: [] };
+      const q = th.messages.find((m) => /r533 composed question/.test(m.text || '')) || {};
+      const tid = (th.thread || {}).id || '';
+      seen.composed = q.kind === 'ask' && (q.refs || {}).task === task.id && (q.from || {}).user === 't-user' && (q.from || {}).source === 'person' && (q.to || {}).user === 'mills';
+      seen.sentNote = /paused/i.test(msgLine()) || st.notes.some((n) => /paused/i.test(n));
+      // 3. a hand-off without its task is not sent; with it, it waits for Mills's okay
+      const nT = (await dThreads()).length;
+      await fill('mills', 'handoff', '', 'r533 take this one');
+      seen.needsTask = /task/i.test(msgLine()) && (await dThreads()).length === nT;
+      await fill('mills', 'handoff', task.id, 'r533 take this one');
+      const ho = (await dThreads()).flatMap((t) => t.messages || []).find((m) => /r533 take this one/.test(m.text || '')) || {};
+      seen.handoff = ho.kind === 'handoff' && ho.status === 'held' && (ho.refs || {}).task === task.id && /okay/i.test(msgLine());
+      // 4. a reply inside the composed thread
+      await P.refresh();
+      await click(acts('pair').find((b) => b.dataset.user === 'mills' && b.attrs['aria-expanded'] !== 'true'));
+      const tEl = threadEl(tid);
+      await click(tEl && acts('reply', tEl)[0]);
+      const tEl2 = threadEl(tid);
+      if (tEl2) { const tx = acts('replyText', tEl2)[0]; if (tx) { tx.value = 'r533 a reply in the same thread'; if (tx.oninput) tx.oninput(); } await click(acts('replySend', tEl2)[0]); }
+      th = ((await ag('thread?id=' + tid, D)).data || {});
+      const rp = (th.messages || []).find((m) => /r533 a reply in the same thread/.test(m.text || '')) || {};
+      seen.reply = !!tid && rp.kind === 'reply' && rp.thread === tid && (rp.from || {}).source === 'person';
+      // 5. stop the thread from its header, then reopen it
+      await click(acts('stop', threadEl(tid) || box).find((b) => b.dataset.thread === tid));
+      const hubT = async () => (((await ag('thread?id=' + tid, U)).data || {}).thread || {});
+      const s5 = await hubT(), e5 = threadEl(tid) || { className: '', textContent: '', children: [] };
+      seen.stopped = s5.status === 'stopped' && s5.why === 'stopped-by-person' && /\bstopped\b/.test(e5.className) && /stopped/i.test(e5.textContent)
+        && acts('reopen', e5).length === 1 && acts('stop', e5).length === 0 && acts('reply', e5).length === 0;
+      await click(acts('reopen', e5)[0]);
+      const s6 = await hubT(), e6 = threadEl(tid) || { className: 'stopped', children: [] };
+      seen.reopened = s6.status === 'open' && !/\bstopped\b/.test(e6.className) && acts('stop', e6).length === 1 && acts('reply', e6).length === 1;
+      // 6. Mills mutes t-user: the composer shows the hub's refusal as words, the person list says it
+      await ag('settings', D, { muted: [...(setD.muted || []).filter((u) => u !== 't-user'), 't-user'] });
+      const cb6 = acts('compose')[0]; await click(cb6 && cb6.attrs['aria-expanded'] === 'true' ? null : cb6);
+      await fill('mills', 'ask', '', 'r533 while Mills muted me');
+      seen.refused = /not taking messages/i.test(msgLine()) && (await dThreads()).flatMap((t) => t.messages || []).filter((m) => /while Mills muted me/.test(m.text || '')).every((m) => m.status === 'refused' && m.why === 'muted'); // (the attempt is the muter's to see)
+      seen.listSays = (acts('to')[0] || { children: [] }).children.some((o) => o.value === 'mills' && /muted you/i.test(o.textContent));
+      await ag('settings', D, { muted: setD.muted || [] });
+      // 7. the other refusals in words (the hub's whys)
+      const R = (status, why, error) => AG.refusalText({ status, data: { why, error } }, 'Mills');
+      seen.words = /too many/i.test(R(429, 'rate', 'slow down: 20 messages an hour between you and @mills')) && /limit/i.test(R(429, 'hops', 'Stopped: the thread reached its limit of 8 hops.'))
+        && /reopen/i.test(R(409, 'stopped', 'This thread is stopped (stopped-by-person); either person can reopen it.')) && /No account called "nobody"/.test(R(400, 'bad', 'No account called "nobody" (agents_list names the team).'))
+        && /hub/i.test(R(0, '', 'fetch failed')) && /support/i.test(R(404, '', 'Unknown endpoint'));
+      // 8. a hub without stop / reopen / list / send (and no "wake" in its settings): no such control, nothing throws
+      let threw = '';
+      try {
+        const old = async (p, body) => { if (/^\/api\/agents\/(stop|reopen|list|send|reply)\b/.test(p)) return { status: 404, data: { error: 'Unknown endpoint' } }; const r = await call(p, U, body); if (/settings/.test(p) && r.data) delete r.data.wake; return r; };
+        P.stop(); box.children = []; const O = mount(old); await O.refresh(); O.setOpen(true);
+        await click(acts('pair').find((b) => b.dataset.user === 'mills' && b.attrs['aria-expanded'] !== 'true'));
+        seen.oldWake = acts('wake').length === 0;
+        await click(acts('stop').find((b) => b.dataset.thread === tid));
+        seen.oldStop = (((await ag('thread?id=' + tid, U)).data || {}).thread || {}).status === 'open' && st.notes.some((n) => /support/i.test(n));
+        await click(acts('compose')[0]);
+        seen.oldCompose = !acts('compose').length || /support/i.test(msgLine());
+        O.stop();
+      } catch (e) { threw = e.message; }
+      seen.oldOk = !threw; if (threw) seen.threw = threw;
+      } catch (e) { seen.error = e.message; }
+      await ag('settings', U, { muted: setU.muted || [], paused: !!setU.paused, askFirst: setU.askFirst || ['handoff'], wake: setU.wake !== false });
+      await ag('settings', D, { muted: setD.muted || [], paused: !!setD.paused, askFirst: setD.askFirst || ['handoff'], wake: setD.wake !== false });
+      await sleep(500); await calm();
+      for (const k of keep) await call('/api/work/current', k.tok, { session: k.sid, transcript: k.cur.transcript || [], archiveId: k.cur.archiveId || null, archiveTitle: k.cur.archiveTitle || null });
+    }
+    const ok = !!AG && built && seen.wakeOff && seen.wakeOn && seen.people && seen.kinds === 'ask,handoff,review,report' && seen.composed && seen.sentNote && seen.needsTask && seen.handoff
+      && seen.reply && seen.stopped && seen.reopened && seen.refused && seen.listSays && seen.words && seen.oldWake && seen.oldStop && seen.oldCompose && seen.oldOk;
+    check('R533', R533_LABEL, ok, (built ? '' : 'no /api/agents/* ') + JSON.stringify(seen));
   }
   async function r532bCheck() {
     const seen = {};
