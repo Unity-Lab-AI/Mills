@@ -40,12 +40,14 @@
   const isCommand = (kind) => /(^|[\s_])(bash|shell_run|job_start|re_run|re_exec|powershell)$/i.test(String(kind));
 
   // ── the risk of a command ──
-  // Levels, each with a shape and words so colour is never the only sign.
+  // Levels, each with a shape and words so colour is never the only sign. The shape is an SVG marker of the page's icon
+  // sprite (web/index.html, symbols i-risk-*): a check in a circle, a question mark in a circle, an exclamation mark in a
+  // triangle, a cross in an octagon (a stop sign); they are drawn in currentColor, so the .tkMark.<level> colours apply.
   const LEVELS = {
-    safe: { rank: 0, mark: '●', name: 'looks safe' },
-    unknown: { rank: 1, mark: '?', name: 'unknown' },
-    caution: { rank: 2, mark: '▲', name: 'check it' },
-    danger: { rank: 3, mark: '◆', name: 'possibly unsafe' },
+    safe: { rank: 0, icon: 'risk-safe', name: 'looks safe' },
+    unknown: { rank: 1, icon: 'risk-unknown', name: 'unknown' },
+    caution: { rank: 2, icon: 'risk-caution', name: 'check it' },
+    danger: { rank: 3, icon: 'risk-danger', name: 'possibly unsafe' },
   };
   // The rule table (kept small on purpose; anything not in it is "unknown"):
   //   possibly unsafe  rm rmdir unlink shred wipefs dd mkfs* fdisk sfdisk parted truncate reboot shutdown poweroff halt,
@@ -216,11 +218,25 @@
   }
 
   // ── the view: groups in a log (o.document: a stand-in in the suite) ──
+  // a level's marker: an svg using its sprite symbol, hidden from screen readers (the words are on the element around it)
+  const SVG = 'http://www.w3.org/2000/svg';
+  function icon(doc, level) {
+    const s = doc.createElementNS(SVG, 'svg'), u = doc.createElementNS(SVG, 'use');
+    s.setAttribute('class', 'ic'); s.setAttribute('aria-hidden', 'true'); s.setAttribute('focusable', 'false');
+    u.setAttribute('href', '#i-' + LEVELS[level].icon); s.appendChild(u);
+    return s;
+  }
+  // the marker alone (the words in its label and tooltip), or with its words shown after it
+  function marker(doc, level, title, words) {
+    const m = doc.createElement('span'); m.className = 'tkMark ' + level; m.title = title; m.appendChild(icon(doc, level));
+    if (words) { const w = doc.createElement('span'); w.textContent = words; m.appendChild(w); } else { m.setAttribute('role', 'img'); m.setAttribute('aria-label', title); }
+    return m;
+  }
   // o: { document, open(): the person's "always expand", setOpen(on): keep it }
   function add(log, text, o) {
     const doc = o.document || W.document, t = clean(text), kind = kindOf(t);
     const el = (tag, cls, txt) => { const e = doc.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
-    const mark = (level, why) => { const L = LEVELS[level], m = el('span', 'tkMark ' + level, L.mark); m.title = L.name + (why ? ': ' + why : ''); m.setAttribute('aria-label', m.title); return m; };
+    const mark = (level, why) => marker(doc, level, LEVELS[level].name + (why ? ': ' + why : ''));
     const on = !!(o.open && o.open());
     const last = log.lastElementChild;
     let g = last && last.classList && last.classList.contains('tGroup') && last.dataset.kind === kind ? last : null;
@@ -271,7 +287,7 @@
     h.append(el('span', 'tgKind', g.dataset.kind));
     if (rows.length > 1) h.append(el('span', 'tgN', '×' + rows.length));
     if (newest.target.trim()) h.append(el('span', 'tgSum', short(newest.target)));
-    if (worst === 'caution' || worst === 'danger') { const m = el('span', 'tkMark ' + worst, LEVELS[worst].mark + ' ' + LEVELS[worst].name); m.title = 'The riskiest call in this group: ' + LEVELS[worst].name + ' (nothing is blocked)'; h.append(m); }
+    if (worst === 'caution' || worst === 'danger') h.append(marker(doc, worst, 'The riskiest call in this group: ' + LEVELS[worst].name + ' (nothing is blocked)', LEVELS[worst].name));
     h.append(el('span', 'tgToggle', g.classList.contains('open') ? 'hide tools' : 'show tools'));
     h.title = rows.length + ' ' + g.dataset.kind + ' call' + (rows.length === 1 ? '' : 's') + ' in a row';
     const list = g.children[1];
@@ -281,7 +297,12 @@
       const all = el('button', 'tgAll ghost'); all.type = 'button';
       all.onclick = () => { const v = !(o.open && o.open()); if (o.setOpen) o.setOpen(v); openAll(g.parentNode, v); };
       foot.append(all);
-      if (isCommand(g.dataset.kind)) foot.append(el('span', 'tgLegend', Object.values(LEVELS).map((L) => L.mark + ' ' + L.name).join('  ·  ') + '  ·  nothing is blocked'));
+      if (isCommand(g.dataset.kind)) { // the legend: each marker with its words (the marker itself is only a picture here)
+        const leg = el('span', 'tgLegend');
+        for (const k of Object.keys(LEVELS)) { const it = el('span', 'tlItem'), m = el('span', 'tkMark ' + k); m.appendChild(icon(doc, k)); it.append(m, LEVELS[k].name); leg.appendChild(it); }
+        leg.appendChild(el('span', 'tlNote', 'nothing is blocked'));
+        foot.append(leg);
+      }
     }
     list.appendChild(foot); // stays last
     foot.children[0].textContent = o.open && o.open() ? 'Collapse tool calls by default' : 'Always expand tool calls';
