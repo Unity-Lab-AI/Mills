@@ -779,6 +779,7 @@ async function run() {
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
   if (process.argv.includes('--only-r528')) await r528r529Check(); // development: just R528 / R529 (with --stop-after R529)
   if (process.argv.includes('--only-r532')) { if (RUST_HUB) await r532Check(); await r532bCheck(); } // development: just R532 / R532b (with --stop-after R532b)
+  if (process.argv.includes('--only-r534')) await r534Check(); // development: just R534 (with --stop-after R534)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -4027,6 +4028,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   await r526Check();
+  if (!process.argv.includes('--only-r534')) await r534Check(); // T-318: Settings in groups, Find a setting, the ways back (both modes)
   await r527Check(); // T-291: the Theme menu on top (both modes)
   if (!process.argv.includes('--only-r528')) await r528r529Check();
   if (RUST_HUB) { if (!process.argv.includes('--only-r532')) await r532Check(); } else skip('R532', R532_LABEL, 'the Rust hub\'s: --rust-hub runs it');
@@ -7116,6 +7118,69 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.folder && seen.archive === 200 && seen.outOfList && seen.inArchived && seen.back && seen.served && !!S && seen.colours && seen.shapes && seen.meanings && seen.stall && seen.grouped
       && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
     check('R489', R489_LABEL, ok, JSON.stringify(seen));
+  }
+  // R534 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control
+  // it had (each id once, inside the Settings box) and every group has a heading and a one-line hint; the page's own Save
+  // app settings body (taken from the served page, run in vm on a stand-in form) goes to /api/prefs as t-user and the hub
+  // keeps what it sent; profile.js's settingsMatch runs in vm on made-up groups and on the served App / Connections groups;
+  // every screen has a title and a ← Menu, and Settings closes one way from Close, a click beside it and Escape.
+  async function r534Check() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text(), pjs = await fetch(H + '/profile.js'), src = pjs.status === 200 ? await pjs.text() : '';
+    const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
+    const ids = ['setNick', 'setColors', 'setSound', 'volMessage', 'volMention', 'volReply', 'volCall', 'volBoard', 'volAsk', 'soundSet', 'setAskAuto', 'setAskMin', 'setAskActivity', 'setAskTts',
+      'setToasts', 'setReopen', 'setEnhance', 'setAutoScroll', 'setTtsAll', 'setTtsUnity', 'setTts', 'ttsVolume', 'ttsTest', 'ttsRate', 'ttsRateVal', 'ttsVoice', 'ttsScope', 'audNoise', 'audEcho', 'audAgc',
+      'callVolume', 'callQuality', 'clipVolume', 'clipAuto', 'ttsStop', 'setAutosave', 'setTheme', 'saveSettings', 'setMsg', 'aboutVibeRoller', 'aboutModules', 'apiBox', 'devBox', 'machBox', 'srcBox',
+      'hostBox', 'provBox', 'fjBox', 'projBox', 'dlVersion', 'dlBody', 'appBox', 'profilePreview', 'profileBox', 'closeSettings', 'setTabs'];
+    seen.missing = ids.filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !box.includes('id="' + id + '"'));
+    const groups = [...box.matchAll(/<section class="setGroup"[^>]*>([\s\S]*?)<\/section>/g)].map((m) => m[1]);
+    seen.groups = groups.length; seen.headless = groups.filter((g) => !/^\s*<h3>[^<]+<\/h3><p class="setHint">[\s\S]+?<\/p>/.test(g)).length;
+    const pane = (n) => (box.match(new RegExp('<div data-setpane="' + n + '"[^>]*>([\\s\\S]*?)\\n     </div>')) || [])[1] || '';
+    const strip = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
+    const served = (n) => [...pane(n).matchAll(/<section class="setGroup"[^>]*>\s*<h3>([^<]+)<\/h3><p class="setHint">([\s\S]*?)<\/p>([\s\S]*?)<\/section>/g)].map((m) => ({ title: m[1], text: m[1] + ' ' + strip(m[2]), rows: [strip(m[3])] }));
+    const app = served('app'), conn = served('connections');
+    seen.appGroups = app.map((g) => g.title).join(','); seen.connGroups = conn.length;
+    // the page's own Save app settings body, on a stand-in form
+    const bodySrc = (page.match(/\$\('saveSettings'\)\.onclick = async \(\) => \{\s*try \{\s*const d = await json\('\/api\/prefs', \{ method: 'POST', body: JSON\.stringify\((\{[\s\S]*?\n    \})\) \}\);/) || [])[1] || '';
+    seen.saveIds = [...bodySrc.matchAll(/\$\('(\w+)'\)/g)].map((m) => m[1]).filter((id) => !box.includes('id="' + id + '"'));
+    const form = { volMessage: '42', soundSet: 'classic', ttsRate: '130', ttsScope: 'mine', setAutoScroll: true, setAutosave: '15', setAskMin: '7', callQuality: 'high', setTheme: 'nord', setTtsAll: true, clipAuto: true };
+    let body = null;
+    try { body = require('vm').runInNewContext('(' + bodySrc + ')', { $: (id) => ({ value: typeof form[id] === 'string' ? form[id] : '50', checked: form[id] === true }), pickedColor: null, Number, Math }); } catch (e) { seen.body = e.message; }
+    // as an account of its own (removed afterwards), so no other check finds settings it did not make
+    const created = (await call('/api/admin/create', A, { username: 't-r534', display: 'R534' })).data || {};
+    const X = created.password ? (await login('t-r534', created.password, 'device-r534-xxxxxxxxxx')).data.token : '';
+    try {
+      if (body && X) {
+        body.nick = 'R534';
+        const r = await call('/api/prefs', X, body), got = ((await call('/api/prefs', X)).data.prefs) || {};
+        seen.saved = r.status; seen.kept = [got.sound && got.sound.message, got.sound && got.sound.set, got.tts && got.tts.rate, got.tts && got.tts.scope, got.autoScroll, got.autosave, got.ask && got.ask.minutes, got.call && got.call.quality, got.theme, got.clips && got.clips.autoplay].join(',');
+      } else seen.account = created.error || 'not made';
+    } finally { if (created.password) await call('/api/admin/delete', A, { username: 't-r534' }); }
+    // Find a setting: the pure filter
+    const fsrc = (src.match(/\n(function settingsMatch\([\s\S]*?\n\})/) || [])[1] || '';
+    let M = null; try { const ctx = {}; require('vm').runInNewContext(fsrc + '\nthis.M = settingsMatch;', ctx); M = ctx.M; } catch (e) { seen.load = e.message; }
+    if (M) {
+      const G = [{ text: 'Sounds A short sound for each kind of news', rows: ['Sound when a chat message arrives', 'Message', 'Sound style Patterns: a distinct motif per kind'] },
+        { text: 'Read aloud Everything VibeRoller says out loud: Unity\'s voice', rows: ['Text to speech: the master switch', 'Voice System default'] },
+        { text: 'Calls and voice clips', rows: ['Echo cancellation', 'Call volume'] }];
+      const shape = (r) => r.groups.map((g) => (g.show ? g.rows.map((x) => (x ? 1 : 0)).join('') : '-')).join(' ') + (r.any ? '' : ' none');
+      seen.empty = shape(M('', G)); seen.echo = shape(M('  ECHO ', G)); seen.voice = shape(M('voice', G)); seen.style = shape(M('style sound', G)); seen.nothing = shape(M('zzz', G));
+      const titles = (q, gs) => { const r = M(q, gs); return gs.filter((g, i) => r.groups[i].show).map((g) => g.title).join(','); };
+      seen.realEcho = titles('echo', app); seen.realTheme = titles('theme', app); seen.realForgejo = titles('forgejo token', conn);
+    }
+    seen.wired = /id="setFind" type="search"/.test(box) && /id="setNone"/.test(box) && /findBox\.addEventListener\('input', \(\) => find\(findBox\.value\)\)/.test(src) && /settingsMatch\(q, groups\.map/.test(src);
+    // every screen: a title and ← Menu, which goes to the menu; Settings: Close, beside it and Escape are one way out
+    const screens = [...page.matchAll(/<div id="(\w+)" class="screen"[^>]*>\s*<header>([\s\S]*?)<\/header>/g), ...page.matchAll(/<div id="(shell)" hidden>\s*<header>([\s\S]*?)<\/header>/g)];
+    seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
+    seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
+    seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
+    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Sounds,When the AI asks,Chat and Work,Read aloud,Calls and voice clips,Appearance' && seen.connGroups === 8
+      && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
+      && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
+      && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.wired
+      && seen.screens >= 9 &&!seen.noWayBack.length && seen.back && seen.close;
+    check('R534', 'Settings keeps every setting it had (each control once, with its id, inside a group that has a heading and a one-line explanation) and the page\'s own Save app settings still saves through /api/prefs, where the hub keeps what it sent; Find a setting shows only the groups and rows that have every word typed (any case; a heading match shows the whole group; nothing matching says so); every screen has a title and a way back to the menu, and Settings closes the same way from Close, a click beside it and Escape',
+      ok, JSON.stringify(seen));
   }
   // R526 (T-188): the queue panel. The hub serves web/queue.js and the page loads it with its button and sidebar; the
   // panel itself runs here on a plain element stand-in, driven by clicks like a person would, against a page-side queue.

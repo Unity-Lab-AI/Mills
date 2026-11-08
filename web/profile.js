@@ -8,6 +8,25 @@
 // A profile card opens when you click a name (in messages and the member column): banner in the person's accent
 // (by default their own colour), name in their colour (inside a server: their highest coloured role), nickname
 // there, pronouns, status, bio, location, links, their local time, their roles in this server, and Message.
+//
+// T-318: every tab is made of groups (.setGroup: h3, a one-line .setHint, the controls). "Find a setting" filters all
+// tabs at once with settingsMatch below (pure, so the suite runs it in vm: R534); a tab with three or more groups gets a
+// sticky list of them on wide screens.
+
+// Which groups and rows of Settings show for a query: every word must be in the text (any case, any order). A group
+// whose heading or hint matches shows whole; otherwise only its matching rows show, and the group only with one.
+// groups: [{ text, rows: [text] }] -> { any, groups: [{ show, rows: [bool] }] }. An empty query shows everything.
+function settingsMatch(query, groups) {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (t) => { const s = String(t || '').toLowerCase().replace(/\s+/g, ' '); return words.every((w) => s.includes(w)); };
+  const out = (groups || []).map((g) => {
+    if (!words.length || hit(g.text)) return { show: true, rows: (g.rows || []).map(() => true) };
+    const rows = (g.rows || []).map(hit);
+    return { show: rows.some(Boolean), rows };
+  });
+  return { any: out.some((g) => g.show), groups: out };
+}
+
 const PROFILE = (() => {
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const memberOf = (u) => roomMembers.find((m) => m.username === u) || null;
@@ -66,11 +85,59 @@ const PROFILE = (() => {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
 
   // ── Settings tabs ──
+  let current = 'profile';
   function tab(name) {
-    for (const b of document.querySelectorAll('[data-settab]')) b.classList.toggle('on', b.dataset.settab === name);
+    current = name;
+    const f = document.getElementById('setFind'); if (f && f.value) { f.value = ''; find(''); } // a tab click ends a search
+    for (const b of document.querySelectorAll('[data-settab]')) { b.classList.toggle('on', b.dataset.settab === name); b.setAttribute('aria-selected', String(b.dataset.settab === name)); }
     for (const p of document.querySelectorAll('[data-setpane]')) p.hidden = p.dataset.setpane !== name;
+    const body = document.querySelector('#settings .setBody'); if (body) body.scrollTop = 0;
+    markNav();
   }
-  for (const b of document.querySelectorAll('[data-settab]')) b.onclick = () => tab(b.dataset.settab);
+  for (const b of document.querySelectorAll('[data-settab]')) { b.setAttribute('role', 'tab'); b.onclick = () => tab(b.dataset.settab); }
+
+  // ── Find a setting: every tab's groups, filtered by settingsMatch ──
+  const groupsOf = () => [...document.querySelectorAll('#settings [data-setpane] .setGroup, #settings [data-setpane] .setSection')].filter((g) => !g.parentElement.closest('.setGroup, .setSection'));
+  const headOf = (g) => g.classList.contains('setGroup') ? [...g.children].filter((c) => c.tagName === 'H3' || c.classList.contains('setHint')) : [];
+  const rowsOf = (g) => g.classList.contains('setGroup') ? [...g.children].filter((c) => c.tagName !== 'H3' && !c.classList.contains('setHint')) : [];
+  function find(q) {
+    const groups = groupsOf(), searching = !!String(q).trim();
+    const res = settingsMatch(q, groups.map((g) => ({ text: g.classList.contains('setGroup') ? headOf(g).map((h) => h.textContent).join(' ') : g.textContent, rows: rowsOf(g).map((r) => r.textContent) })));
+    groups.forEach((g, i) => { g.classList.toggle('sfOut', !res.groups[i].show); rowsOf(g).forEach((r, j) => r.classList.toggle('sfOut', !res.groups[i].rows[j])); });
+    const box = document.querySelector('#settings .setBox'); if (box) box.classList.toggle('searching', searching);
+    if (searching) for (const p of document.querySelectorAll('[data-setpane]')) p.hidden = !groups.some((g, i) => res.groups[i].show && p.contains(g));
+    else for (const p of document.querySelectorAll('[data-setpane]')) p.hidden = p.dataset.setpane !== current;
+    const none = document.getElementById('setNone'); if (none) none.hidden = !searching || res.any;
+    return res;
+  }
+  const findBox = document.getElementById('setFind');
+  if (findBox) {
+    findBox.addEventListener('input', () => find(findBox.value));
+    findBox.addEventListener('keydown', (e) => { if (e.key === 'Escape' && findBox.value) { e.preventDefault(); e.stopPropagation(); findBox.value = ''; find(''); } }); // Escape clears first, then closes
+  }
+
+  // ── a tab with three or more groups: a sticky list of them on wide screens (the CSS hides it on narrow ones) ──
+  function buildNav() {
+    for (const p of document.querySelectorAll('[data-setpane]')) {
+      if (p.querySelector(':scope > .setNav')) continue;
+      const gs = [...p.querySelectorAll(':scope > .setGroup')]; if (gs.length < 3) continue;
+      const nav = el('nav', 'setNav'); nav.setAttribute('aria-label', 'Sections');
+      const main = el('div', 'setMain'); main.append(...p.childNodes);
+      for (const g of gs) { const b = el('button', 'ghost', g.querySelector('h3').textContent); b.type = 'button'; b.onclick = () => g.scrollIntoView({ block: 'start', behavior: 'smooth' }); b._group = g; nav.append(b); }
+      p.classList.add('hasNav'); p.append(nav, main);
+    }
+  }
+  function markNav() { // the group at the top of the box is marked in its list
+    const body = document.querySelector('#settings .setBody'); if (!body) return;
+    const top = body.getBoundingClientRect().top + 24;
+    for (const nav of document.querySelectorAll('#settings .setNav')) {
+      const bs = [...nav.children]; let on = bs[0];
+      for (const b of bs) if (b._group.getBoundingClientRect().top <= top) on = b;
+      bs.forEach((b) => b.classList.toggle('on', b === on));
+    }
+  }
+  buildNav();
+  const setBody = document.querySelector('#settings .setBody'); if (setBody) setBody.addEventListener('scroll', markNav, { passive: true });
 
   // ── the Profile tab: editor + live preview ──
   let draft = {}, picture = '';
@@ -88,8 +155,8 @@ const PROFILE = (() => {
     return url;
   }
   function pictureEditor(box) {
-    const wrap = el('div', 'setSection'); wrap.append(el('b', '', 'Profile picture'));
-    wrap.append(el('small', '', 'Shown on your card, in the member list and next to your messages. It is cropped to a square and shrunk to 256 px in this browser before upload, so the original never leaves your PC. Without one, your initials show in your colour.'));
+    const wrap = el('section', 'setGroup'); wrap.append(el('h3', '', 'Profile picture'));
+    wrap.append(el('p', 'setHint', 'Shown on your card, in the member list and next to your messages. It is cropped to a square and shrunk to 256 px in this browser before upload, so the original never leaves your PC. Without one, your initials show in your colour.'));
     const file = el('input'); file.type = 'file'; file.accept = 'image/png,image/jpeg,image/webp,image/gif'; file.hidden = true;
     const up = el('button', '', picture ? 'Change picture' : 'Upload picture'); up.type = 'button'; up.onclick = () => file.click();
     const rm = el('button', 'ghost', 'Remove picture'); rm.type = 'button'; rm.hidden = !picture;
@@ -124,7 +191,9 @@ const PROFILE = (() => {
     picture = cur.profile.avatar || ''; draft = { ...cur.profile }; delete draft.avatar; // the picture has its own buttons
     box.textContent = '';
     pictureEditor(box);
-    const field = (label, node) => { const l = el('label', '', label); l.append(node); box.append(l); return node; };
+    const about = el('section', 'setGroup'); about.append(el('h3', '', 'About you'), el('p', 'setHint', 'The rest of your profile card, as the preview at the top shows it. Everything here is optional.'));
+    box.append(about);
+    const field = (label, node) => { const l = el('label', '', label); l.append(node); about.append(l); return node; };
     const inp = (v, max, ph) => { const i = el('input'); i.value = v || ''; i.maxLength = max; if (ph) i.placeholder = ph; return i; };
     const status = field('Status (a short line under your name)', inp(draft.status, 80, 'e.g. heads down until 5'));
     const pron = field('Pronouns', inp(draft.pronouns, 40, 'e.g. they/them'));
@@ -142,7 +211,7 @@ const PROFILE = (() => {
     PALETTE.forEach((pair, i) => { const b = el('button'); b.type = 'button'; b.dataset.idx = i; b.style.background = pair[lightTheme ? 1 : 0]; b.title = 'Colour ' + (i + 1); sw.append(b); });
     const mark = () => sw.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(accent ?? '') === b.dataset.idx));
     sw.querySelectorAll('button').forEach((b) => { b.onclick = () => { accent = b.dataset.idx === '' ? null : Number(b.dataset.idx); mark(); sync(); }; });
-    mark(); const sl = el('div', '', 'Profile banner colour'); sl.append(sw); box.append(sl);
+    mark(); const sl = el('div', 'setField', 'Profile banner colour'); sl.append(sw); about.append(sl);
     const msg = el('span', 'status');
     const save = el('button', '', 'Save profile'); save.type = 'button';
     const sync = () => { draft = { status: status.value, pronouns: pron.value, bio: bio.value, location: loc.value, links: links.map((l) => l.value.trim()).filter(Boolean), timezone: tz.value.trim(), accent }; preview(); };
@@ -156,7 +225,7 @@ const PROFILE = (() => {
         await refreshMembers(); selectConv(currentConv);
       } catch (e) { msg.textContent = e.message; msg.className = 'status'; }
     };
-    const r = el('div', 'row'); r.append(save, msg); box.append(r);
+    const r = el('div', 'row setSave'); r.append(save, msg); box.append(r); // in reach at the bottom of the box, like Save app settings
     sync();
   }
   return { open, show, hide, tab, cardFor, avatarOf };
