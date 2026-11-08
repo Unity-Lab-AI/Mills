@@ -55,6 +55,13 @@ const L527 = {
   R542: 'dev without live\'s AI says so and keeps working: with live stopped, with the bridge off on live, and with the route answering 404 (shareAi off, as an older live), dev offers no borrowed AI, a Work run says "No AI is available for Work …" plus "(live\'s AI hosts are not reachable from dev right now)", dev logs the change and not every poll, and chat, the board and notes on dev still work',
   R543: 'live refuses an unknown account from dev and logs every peer call: a call over the bridge naming an account live does not have is refused (403) for every kind (providers, fetch, work, cancel, PC tool), sync.shareAi { users } lends only to the accounts named, and live\'s security log has the borrowing calls of each account (listing, model calls, Work, cancel, PC tool) marked via dev, and every refusal',
 };
+const L533 = { // T-341 / T-342 (plans/multi-session.md § 4a): every Work session, the first one too, can be deleted
+  R533: 'you can delete your first session and the next one becomes your first: the list says beforehand which session takes over (deleteMeans), a running first session is stopped first, the delete answers what happened (deleted, primary, promoted), and the promoted session keeps its conversation, its journal and its own worktree',
+  R534: 'deleting your only session leaves a fresh empty one: the answer says fresh (nothing promoted), and the list has one session, the first, with an empty conversation',
+  R535: 'deleting your first session never touches work/<username>: the person\'s own worktree keeps its branch, its HEAD and its files, whatever is deleted',
+  R536: 'the JS hub still reads your first session after a delete: the frozen JavaScript hub\'s own reader (bridge/work-state.js) finds the promoted session\'s conversation in work-current.json, in the shape it always had',
+  R537: 'an older page (no session field) still works against the new hub after a delete: /api/work/current and /api/chat without a session mean the new first session, and its run works in that session\'s own worktree',
+};
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -783,6 +790,7 @@ async function run() {
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
   if (process.argv.includes('--only-r527') && RUST_HUB) await r527Check(); // development: just R538 to R543 (with --stop-after R532)
+  if (process.argv.includes('--only-r533') && RUST_HUB) await r533Check(); // development: just R533 to R537 (with --stop-after R537)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -4028,6 +4036,76 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R198', 'session limits (plans/multi-session.md § 6): with the defaults (5 per person per host, 3 per provider) a 4th working session on the same provider answers 429 (idle sessions cost nothing: the 4th exists, only its run is refused) with {error "… 3 of 3", limit {host, used, max, provider}}; /api/work/sessions counts what each host has running',
       ok198, has198 ? `4th run ${seen.status} "${seen.error}" limit ${JSON.stringify(seen.limit)} · perHost ${JSON.stringify(seen.perHost)}` : 'GET /api/work/sessions does not exist yet');
   } else skip('R198', 'session limits (plans/multi-session.md § 6)', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r533')) await r533Check(); } else for (const id of Object.keys(L533)) skip(id, L533[id], 'the Rust hub\'s: --rust-hub runs it');
+  // R533 to R537 (T-341 / T-342, plans/multi-session.md § 4a): every session, the first one too, can be deleted. An account of
+  // its own (t-r533), so t-user's first session, which many checks use, stays as it is.
+  async function r533Check() {
+    const seen = {};
+    const created = (await call('/api/admin/create', A, { username: 't-r533', display: 'R533' })).data || {};
+    const X = created.password ? (await login('t-r533', created.password, 'device-r533-xxxxxxxxxx')).data.token : '';
+    const ss = async () => (await call('/api/work/sessions?archived=1', X)).data || {};
+    const one = async (id) => ((await ss()).sessions || []).find((s) => s.id === id) || {};
+    const dir = path.join(SB, 'profiles', 't-r533'), wt = path.join(SCRATCH, 'worktrees', 't-r533');
+    const git = (cwd, ...a) => { try { return execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
+    const own = () => `${git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')} ${git(wt, 'rev-parse', 'HEAD')} ${git(SCRATCH, 'rev-parse', '--verify', '--quiet', 'refs/heads/work/t-r533')} ${fs.existsSync(path.join(wt, 'r533-mine.txt')) ? fs.readFileSync(path.join(wt, 'r533-mine.txt'), 'utf8') : 'no file'}`;
+    const cwdOf = (events) => ((texts(events).match(/cwd=(.+?)(?: \||$)/m) || [])[1] || '').trim();
+    const same = (a, b) => !!a && !!b && path.resolve(a) === path.resolve(b);
+    const jsRead = () => { try { const W = require(path.join(SB, 'work-state.js'))({ send() {}, readBody: async () => ({}) }); return W.load({ username: 't-r533', files: { STATE_FILE: path.join(dir, 'state.json') } }); } catch (e) { return { error: e.message, transcript: [] }; } };
+    const journal = () => { try { return fs.readFileSync(path.join(dir, 'work-journal.jsonl'), 'utf8'); } catch { return ''; } };
+    const has = (v, t) => JSON.stringify(v || '').includes(t);
+    try {
+      if (!X) throw new Error('could not make the account t-r533: ' + JSON.stringify(created).slice(0, 120));
+      const p0 = (await ss()).primary;
+      // the first session works in the person's own worktree (work/t-r533); a file of theirs is there, uncommitted
+      const r1 = await chat(X, 'r533 first says'); seen.firstRun = r1.status;
+      seen.firstInOwn = same(cwdOf(r1.events), wt);
+      if (fs.existsSync(wt)) fs.writeFileSync(path.join(wt, 'r533-mine.txt'), 'mine, never touched');
+      const ownBefore = own();
+      await call('/api/work/current', X, { transcript: [{ cls: 'me', text: 'only in r533 first' }] });
+      // b: a session with its own worktree and conversation; c: newer, never run
+      const b = (await call('/api/work/sessions/new', X, { title: 'r533 b', background: true })).data.id;
+      const rb = await chat(X, 'r533 b says', { session: b }); seen.bRun = rb.status;
+      await call('/api/work/current', X, { session: b, transcript: [{ cls: 'me', text: 'only in r533 b' }] });
+      const bTree = ((await one(b)).worktree || {}).path || ''; seen.bTree = bTree;
+      const c = (await call('/api/work/sessions/new', X, { title: 'r533 c', background: true })).data.id;
+      // the list says beforehand what deleting the first session does
+      seen.means = (await one(p0)).deleteMeans;
+      // a running first session is stopped first
+      const slow = chat(X, 'SLOW r533 first'); await sleep(900);
+      const del = await call('/api/work/sessions/delete', X, { id: p0 }); const ev = await slow;
+      seen.del = del.status; seen.answer = del.data;
+      seen.stopped = !ev.events.some((e) => e.type === 'result');
+      const after = await ss(); seen.primary = after.primary === b; seen.p0Gone = !(after.sessions || []).some((s) => s.id === p0); seen.bPrimary = (await one(b)).primary === true;
+      // an older page: no session field anywhere
+      const cur = await call('/api/work/current', X); seen.oldCur = cur.status === 200 && has(cur.data.transcript, 'only in r533 b') && !has(cur.data.transcript, 'only in r533 first');
+      const ro = await chat(X, 'r533 older page'); seen.oldRun = ro.status === 200 && ro.events.some((e) => e.type === 'result'); seen.oldCwd = cwdOf(ro.events); seen.oldInB = same(seen.oldCwd, bTree);
+      const jOk = (j) => j.includes('r533 b says') && j.includes('r533 older page') && !j.includes('r533 first says');
+      for (let i = 0; i < 25 && !jOk(journal()); i++) await sleep(200); // the journal is written behind (pgm-core store)
+      const j = journal(); seen.journal = jOk(j); if (!seen.journal) seen.journalHead = j.slice(0, 300);
+      seen.bTreeKept = !!bTree && fs.existsSync(bTree);
+      const js = jsRead(); seen.js = has(js.transcript, 'only in r533 b') && !has(js.transcript, 'only in r533 first') && Array.isArray(js.queue) && 'archiveId' in js; seen.jsErr = js.error;
+      seen.ownMid = own() === ownBefore;
+      // again: b goes, c (the only other) takes over; then c goes, the only one: a fresh empty first session
+      const delB = await call('/api/work/sessions/delete', X, { id: b }); seen.delB = delB.status; seen.answerB = delB.data;
+      const delC = await call('/api/work/sessions/delete', X, { id: c }); seen.delC = delC.status; seen.answerC = delC.data;
+      const last = await ss(); seen.lastN = (last.sessions || []).length; seen.lastPrimary = last.primary;
+      const lastCur = await call('/api/work/current', X); seen.lastEmpty = lastCur.status === 200 && Array.isArray(lastCur.data.transcript) && lastCur.data.transcript.length === 0;
+      seen.ownEnd = own() === ownBefore; seen.ownAfter = own();
+      const A0 = seen.answer || {}, AC = seen.answerC || {};
+      check('R533', L533.R533, seen.firstRun === 200 && seen.bRun === 200 && !!c && !!seen.means && seen.means.promotes === b && seen.means.fresh === false
+        && seen.del === 200 && A0.ok === true && A0.deleted === p0 && A0.primary === b && A0.promoted === b && A0.fresh === false && seen.stopped && seen.primary && seen.p0Gone && seen.bPrimary
+        && seen.journal && seen.bTreeKept && seen.delB === 200 && (seen.answerB || {}).promoted === c,
+        JSON.stringify({ firstRun: seen.firstRun, bRun: seen.bRun, means: seen.means, del: seen.del, answer: A0, stopped: seen.stopped, primary: seen.primary, p0Gone: seen.p0Gone, bPrimary: seen.bPrimary, journal: seen.journal, journalHead: seen.journalHead, bTreeKept: seen.bTreeKept, delB: seen.delB, answerB: seen.answerB }));
+      check('R534', L533.R534, seen.delC === 200 && AC.ok === true && AC.deleted === c && AC.fresh === true && AC.promoted === null && seen.lastN === 1 && !!seen.lastPrimary && seen.lastPrimary === AC.primary && seen.lastPrimary !== c && seen.lastEmpty,
+        JSON.stringify({ delC: seen.delC, answer: AC, n: seen.lastN, primary: seen.lastPrimary, empty: seen.lastEmpty }));
+      check('R535', L533.R535, seen.del === 200 && seen.firstInOwn && /^work\/t-r533 [0-9a-f]{40} [0-9a-f]{40} mine, never touched$/.test(ownBefore) && seen.ownMid && seen.ownEnd, `in own ${seen.firstInOwn} · before "${ownBefore}" · after "${seen.ownAfter}"`);
+      check('R536', L533.R536, seen.del === 200 && seen.js, `js read ${seen.js}${seen.jsErr ? ' (' + seen.jsErr + ')' : ''}`);
+      check('R537', L533.R537, seen.del === 200 && seen.oldCur && seen.oldRun && seen.oldInB, `current ${seen.oldCur} · run ${seen.oldRun} in ${seen.oldCwd} (b's own ${bTree})`);
+    } catch (e) {
+      if (e.stopAfter) throw e;
+      for (const id of Object.keys(L533)) check(id, L533[id], false, 'the check itself failed: ' + e.message + ' · ' + JSON.stringify(seen).slice(0, 400));
+    }
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   await r526Check();
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
