@@ -98,6 +98,7 @@ header b { font-weight: 750; letter-spacing: .01em; }
   text-align: left; padding: 1rem 1.1rem; font-size: 1.08rem; font-weight: 700; color: var(--text);
   background: linear-gradient(160deg, color-mix(in srgb, var(--panel) 96%, var(--accent) 4%), var(--panel));
   border: 1px solid var(--hairline); border-radius: var(--r-m); box-shadow: var(--sh-1);
+  aspect-ratio: auto; overflow: visible; align-content: center; /* T-318: not a call tile (.tile is 16:9): the name sits on its line */
 }
 #menu .choices button.tile .ic { grid-row: 1 / span 2; width: 2.4rem; height: 2.4rem; padding: .5rem; border-radius: 11px; color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
 #menu .choices button.tile small { grid-column: 2; font-size: .78rem; font-weight: 450; color: var(--muted); line-height: 1.3; }
@@ -124,15 +125,29 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .setTabs, .gsetTabs { gap: .3rem; }
 .setTabs button, .gsetTabs button { border-radius: 999px; padding: .32rem .85rem; font-size: .82rem; }
 .setTabs button.on, .gsetTabs button.on { background: var(--grad-accent); color: var(--on-accent); border-color: transparent; box-shadow: 0 4px 14px var(--accent-glow); }
+/* Settings groups (T-318): the same card as .setSection, a hairline under the heading, a quiet sticky section list, the
+   Save bar on the box's own surface */
+.setGroup { background: color-mix(in srgb, var(--surface-sunk) 55%, transparent); border: 1px solid var(--hairline); border-radius: var(--r-m); padding: .85rem .95rem .95rem; }
+.setGroup > h3 { padding-bottom: .5rem; border-bottom: 1px solid var(--hairline); letter-spacing: .01em; }
+.setGroup > .setHint { margin-top: -.15rem; }
+.setGroup .apiBox, .setGroup .provBox { background: var(--surface-sunk); border-color: var(--hairline); border-radius: var(--r-s); }
+.setNav button { color: var(--muted); border-radius: var(--r-s); }
+.setNav button.on { color: var(--text); background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.setSave { background: color-mix(in srgb, var(--panel) 88%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-top-color: var(--hairline); }
+#setFind { background-color: var(--surface-sunk); }
+/* the cards the page builds itself (Downloads) look like the groups around them */
+#settings .setSection { padding: .85rem .95rem .95rem; }
+#dlBody { display: flex; flex-direction: column; gap: .9rem; } #dlBody .setSection + .setSection { margin-top: 0; }
+#dlBody .setSection > b:first-child { font-size: .95rem; padding-bottom: .5rem; border-bottom: 1px solid var(--hairline); }
 .swatches button { border-radius: 50%; box-shadow: var(--sh-1); }
 .swatches button.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
 
 /* ── menus, pop-overs, toasts: glass panels ── */
-#msgMenu, .pinsPop, #themeMenu {
+#msgMenu, .pinsPop, #themeMenu, .vrMenu {
   background: color-mix(in srgb, var(--panel) 88%, transparent); -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2);
   border-color: var(--hairline); border-radius: var(--r-m); box-shadow: var(--sh-3); animation: boxIn .14s var(--ease);
 }
-#msgMenu button:hover { background: var(--accent-soft); }
+#msgMenu button:hover, .vrMenu .vrMi:hover, .vrMenu .vrMi:focus, .vrMenu .vrMi.open { background: var(--accent-soft); }
 .toast { background: color-mix(in srgb, var(--panel) 90%, transparent); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-radius: var(--r-m); box-shadow: var(--sh-2); }
 
 /* ── chat: side bar, channels, messages ── */

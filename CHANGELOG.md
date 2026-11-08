@@ -7,6 +7,58 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.49.0 — 2026-11-08
+
+MINOR: **Mills's page tasks at once**: the Theme menu on top, tool calls grouped in Work, Settings cleaned up, one menu
+kit for right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-224, T-298). Page only; no hub
+change. (Built as 5.47.0, then 5.48.0; both numbers went to Sponge's releases first, and so did check ids R527 and
+R533–R535: Mills's checks are R526, R528–R532b and R544–R546.)
+
+- **The Theme menu opens on top of every panel** (T-291; Sponge: it hid under the team chat and AI chat). The list lives
+  in the page itself, not in the header, whose scrolling and blur clipped it. It sits on the menu layer: above panels,
+  floating windows and the message menu, below real dialogs. It opens under the Theme button, or upwards when there is
+  more room, and stays inside the window on wide and narrow screens. Check: **R544** (the placement runs on wide,
+  narrow, low and tiny windows).
+- **Tool calls in the Work transcript** (T-318, `web/tools.js` 1.0.0). Consecutive calls of the same kind (2 Reads,
+  3 Bash calls…) fold into one group, in the order they arrive, live and in restored conversations alike, collapsed
+  behind "show tools", with an "Always expand tool calls" choice remembered per person. Each call is one line (up to 32
+  characters whole, longer as the first 15 … the last 15). A click shows it whole, with the parts of a command coloured
+  by risk (looks safe / unknown / check it / possibly unsafe) and marked with a shape too, never colour alone. Nothing
+  is blocked. The risk markers are custom SVG icons from the page's sprite (Mills's choice): a check in a circle (looks
+  safe), a question mark in a circle (unknown), an exclamation mark in a triangle (check it) and a solid stop-sign
+  octagon (possibly unsafe), each with its words for screen readers. Checks: **R528**, **R529**.
+- **One menu kit for right-click and ⋯** (T-223, `web/menu.js` 1.0.0). Right-click, a long-press on touch, the
+  ContextMenu key and a ⋯ button open the same menu from one list. It stays on screen, has sub-menus that flip at the
+  edge, icons and shortcuts, and arrows / Enter / Esc with focus returned. Shift + right-click, text fields and
+  "Browser menu" still give the browser's own. **VibeRoller's menus** (T-224) cover chat messages, people, channels,
+  groups, servers, board cards, notes, files, Work messages and saved conversations. They offer only what you may do and
+  call the actions the page already had. The Work session list now shows through the kit. Checks: **R530**, **R531**.
+- **Agent threads in the page** (T-298 = T-294 · 4/6, `web/agents.js` 1.0.0). An Agents panel in Work, plus a menu
+  tile, shows every message to and from your agent as a thread per agent pair: both directions, with who, kind, time
+  and status, and the session it went into one click away. Your controls sit on top: pause your agent's inbox, "ask me
+  first" for hand-offs, questions and reviews, and mute per pair. A held message gets an Accept / Decline card
+  (accepting a hand-off makes its task yours). New messages notify like the rest of the page; Do Not Disturb mutes only
+  the notification. A hub without `/api/agents` shows nothing. Checks: **R532** (through the Rust hub's real routes),
+  **R532b** (a hub without them); **R482p** is a plain check now.
+- **Your say in agent threads** (T-298, `web/agents.js`). Each thread has Stop / Reopen in its head (a stopped thread
+  shows dashed, with why). "Wake me" sits next to pause: off, a message waits for your next run instead of starting
+  your idle session. "Write to an agent…" sends a question, a hand-off of a board task, a review or a report to another
+  person's agent (with an optional task ref), and Reply answers inside a thread. The hub's refusals (muted, rate, hop
+  limit, stopped, unknown person) show as plain words; an older hub shows what it can. Check: **R545**.
+- **Settings, cleaned up** (T-318 part 1). Every tab is made of named groups with a one-line explanation (App settings:
+  Sounds, When the AI asks, Chat and Work, Read aloud, Calls and voice clips, Appearance). Labels sit left and controls
+  right, stacked on a phone. "Find a setting" searches all tabs at once, a section list stays in view on wide screens,
+  and Save is always in reach. Escape or a click beside the box closes Settings like Close, and the main menu tiles are
+  compact again on phones. Nothing a setting does or how it is saved has changed. Check: **R546**.
+- **A check that depended on timing, fixed** (R169, a Work reply survives a reload). The fake Claude echoes only a
+  message's last 200 characters. Once the hub's background worktree check has run for the account, the hub appends its
+  "[Worktree: latest background check …]" note to the message, and the test's own word fell out of the echo. With more
+  checks in front of it, the suite now reaches R169 after that check, so it failed every time. The message asks the
+  fake for its full echo (`FULLECHO`), and the detail line names the answer. No hub change.
+- Modules: `web/index.html` 1.40.0, `web/sessions.js` 1.2.0, `web/guilds.js` 1.2.0, `web/board.js` 1.2.0,
+  `web/notes.js` 1.1.0, `web/library.js` 1.2.0, `web/profile.js` 1.1.0, `web/polish.css` 1.0.3, `web/sw.js` 1.0.9
+  (caches the three new files).
+
 ## 5.48.0 — 2026-11-08
 
 MINOR: **every Work session, the first one too, can be deleted** (T-341 hub part: T-342, T-343, T-345; Mills: "every

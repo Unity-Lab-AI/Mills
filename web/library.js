@@ -55,34 +55,51 @@ const LIBRARY = (() => {
       meta.append(el('span', '', 'Uploaded ' + when(it.at)), el('span', '', whereOf(it)), el('span', '', 'Last used ' + when(it.lastAccess || (it.uses && it.uses.length ? it.uses[it.uses.length - 1].at : 0))));
       if (it.folder) meta.append(el('span', 'libPath', it.folder));
       if (it.missing) meta.append(el('span', 'bad', 'the file itself is gone'));
-      const acts = el('div', 'libActs');
+      const acts = el('div', 'libActs'), A = fileActs(it);
       const btn = (label, icon, fn, cls = 'ghost') => { const b = el('button', cls); b.type = 'button'; b.append(ic(icon, 'lead'), label); b.onclick = fn; acts.append(b); return b; };
       if (!it.missing && !it.locked) {
-        btn('Open', 'file', () => ATTACH.open(it, () => bytesOf(it)));
-        const d = btn('Download', 'download', () => ATTACH.download(it, () => bytesOf(it), d));
+        btn('Open', 'file', A.open);
+        const d = btn('Download', 'download', () => A.download(d));
         if (it.kind === 'work') {
-          if (k === 'text' && (it.s || it.size || 0) <= 2 * 1048576) btn('Edit', 'file', () => edit(it));
-          btn('Use in Work', 'plus', () => toWork(it, ''));
-          btn('Run in Work', 'play', () => toWork(it, `Run the attached file ${it.n}${it.exec ? '' : ' (make it executable first if it needs to be)'} and tell me what it did. Ask me first if it would change anything outside its own folder.`));
-          const x = btn(it.exec ? 'Executable' : 'Not executable', it.exec ? 'check' : 'warn', async () => {
-            x.disabled = true;
-            try { const r = await json('/api/library/exec', { method: 'POST', body: JSON.stringify({ id: it.id, on: !it.exec }) }); it.exec = r.exec; draw(); } catch (err) { x.disabled = false; alert(err.message); }
-          });
+          if (editable(it, k)) btn('Edit', 'file', A.edit);
+          btn('Use in Work', 'plus', A.use);
+          btn('Run in Work', 'play', A.run);
+          const x = btn(it.exec ? 'Executable' : 'Not executable', it.exec ? 'check' : 'warn', () => A.exec(x));
           x.title = it.exec ? 'Can be run as a program. Click to take that away.' : 'Click to let it run as a program (chmod +x).';
         }
-        if (it.kind === 'chat' && L.linux && L.linux.linked) btn('Copy to my uploaded_files', 'plus', async (e) => {
-          const b = e.currentTarget; b.disabled = true;
-          try { const bytes = await bytesOf(it); const r = await api('/api/work/file', { method: 'POST', headers: { 'Content-Type': it.m, 'X-File-Name': encodeURIComponent(it.n) }, body: bytes }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); await load(); }
-          catch (err) { b.disabled = false; alert('Not copied: ' + err.message); }
-        });
+        if (it.kind === 'chat' && L.linux && L.linux.linked) btn('Copy to my uploaded_files', 'plus', (e) => A.copyIn(e.currentTarget));
       }
-      const del = btn('Delete', 'trash', async () => {
+      const del = btn('Delete', 'trash', () => {
         if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.lastChild.textContent = 'Delete for good?'; setTimeout(() => { del.dataset.armed = ''; del.lastChild.textContent = 'Delete'; }, 3000); return; }
-        try { await json('/api/library/delete', { method: 'POST', body: JSON.stringify({ id: it.id }) }); L.items = L.items.filter((x) => x.id !== it.id); draw(); } catch (err) { alert(err.message); }
+        A.del();
       }, 'ghost danger');
       del.lastChild.textContent = 'Delete';
+      row.dataset.id = it.id;
       row.append(name, meta, acts); box.append(row);
     }
+  }
+  const editable = (it, k) => (k || ATTACH.kind(it)) === 'text' && (it.s || it.size || 0) <= 2 * 1048576;
+  // what a file's buttons do; its right-click menu (web/menu.js) offers the same (b: the button, disabled while it runs)
+  function fileActs(it) {
+    const busy = (b, on) => { if (b) b.disabled = on; };
+    return {
+      open: () => ATTACH.open(it, () => bytesOf(it)),
+      download: (b) => ATTACH.download(it, () => bytesOf(it), b || {}),
+      edit: () => edit(it), use: () => toWork(it, ''),
+      run: () => toWork(it, `Run the attached file ${it.n}${it.exec ? '' : ' (make it executable first if it needs to be)'} and tell me what it did. Ask me first if it would change anything outside its own folder.`),
+      exec: async (b) => {
+        busy(b, true);
+        try { const r = await json('/api/library/exec', { method: 'POST', body: JSON.stringify({ id: it.id, on: !it.exec }) }); it.exec = r.exec; draw(); } catch (err) { busy(b, false); alert(err.message); }
+      },
+      copyIn: async (b) => {
+        busy(b, true);
+        try { const bytes = await bytesOf(it); const r = await api('/api/work/file', { method: 'POST', headers: { 'Content-Type': it.m, 'X-File-Name': encodeURIComponent(it.n) }, body: bytes }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); await load(); }
+        catch (err) { busy(b, false); alert('Not copied: ' + err.message); }
+      },
+      del: async () => {
+        try { await json('/api/library/delete', { method: 'POST', body: JSON.stringify({ id: it.id }) }); L.items = L.items.filter((x) => x.id !== it.id); draw(); } catch (err) { alert(err.message); }
+      },
+    };
   }
   // the file goes with the next Work message as it is (no new upload); Work opens with the message box ready
   function toWork(it, text) {
@@ -120,6 +137,12 @@ const LIBRARY = (() => {
     $('libSearch').oninput = () => { L.q = $('libSearch').value; draw(); };
     $('libKind').onchange = () => { L.kind = $('libKind').value; draw(); };
     $('libRefresh').onclick = load;
+    if (typeof MENU !== 'undefined') MENU.attach($('libList'), (t) => {
+      const r = t.closest('.libRow'), it = r && L.items.find((x) => x.id === r.dataset.id); if (!it) return null;
+      const A = fileActs(it), k = it.locked ? 'binary' : ATTACH.kind(it);
+      return MENU.lists.file({ kind: it.kind, missing: !!it.missing, locked: !!it.locked, editable: editable(it, k), exec: !!it.exec, linked: !!(L.linux && L.linux.linked) },
+        { open: A.open, download: () => A.download(), edit: A.edit, use: A.use, run: A.run, exec: () => A.exec(), copyIn: () => A.copyIn(), del: A.del });
+    });
   }
   let wired = false;
   return { show() { if (!wired) { wired = true; wire(); } load(); }, state: L };
