@@ -7,6 +7,28 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.48.0 — 2026-11-08
+
+MINOR: **every Work session, the first one too, can be deleted** (T-341 hub part: T-342, T-343, T-345; Mills: "every
+session, regardless of first session, should be deletable, hideable, archivable"). Deleting the first session was
+refused before and works now, so an older page against this hub sees it succeed: that is the deliberate change.
+Design: plans/multi-session.md § 4a.
+
+- Deleting the first session stops its run, removes only its data (conversation, journal, state, list entry) and
+  promotes the next session in the list (older first, else the nearest newer; a running or planner session is skipped;
+  not-archived before archived): its files move into the first session's places (`work.json`, `work-current.json`,
+  `work-journal.jsonl`), so older pages and the frozen JavaScript hub read it. With none left, a fresh empty first
+  session is made (same provider, model and project). The person's own worktree `work/<username>` is never deleted,
+  reset or checked out; a promoted session keeps its own worktree as it is (`ownTree: true`, added to
+  `work-sessions.json`; worktree choice, freshness and the git panel follow it).
+- The delete answer says what happened: `{ok, deleted, primary, promoted, fresh, worktree}`; `GET /api/work/sessions`
+  gives every session `deleteMeans: {promotes, fresh}` (who takes over the first) and `ownTree`, for the menu's confirm
+  (Mills' T-344).
+- Checks R533–R537 (written as spec() first): you can delete your first session and the next one becomes your first
+  (stopped first, its journal moved); deleting your only session leaves a fresh empty one; deleting your first session
+  never touches work/<username> (HEAD, branch and an uncommitted file unchanged); the JavaScript hub still reads your
+  first session after a delete; an older page still works after one. Three sessions.rs unit tests.
+
 ## 5.47.0 — 2026-11-07
 
 MINOR: **the dev hub borrows live's AI hosts over the bridge** (T-335 … T-340, scoped by Mills: Work on dev.portal said
