@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::hub::{answer, AiHub, Resp};
-use crate::sessions::{self, Sx};
+use crate::sessions;
 use pgm_core_internal::json::{read_json, s, write_json};
 use pgm_core_internal::now_ms;
 use pgm_identity_internal::Account;
@@ -33,9 +33,9 @@ pub fn used(a: &Account, project: &str) { edit(a, project, |m| { m.insert("usedA
 /// The projects their Work sessions are in, with when each was last active.
 fn session_use(w: &crate::work::Work, a: &Account) -> std::collections::HashMap<String, u64> {
     let mut out = std::collections::HashMap::new();
-    let v = sessions::index(a); let primary = s(&v, "primary");
+    let v = sessions::index(a);
     for (sid, m) in v["sessions"].as_object().cloned().unwrap_or_default() {
-        let sx = Sx { key: if sid == primary { a.username.clone() } else { format!("{}#{sid}", a.username) }, primary: sid == primary, sid };
+        let sx = sessions::sx_in(a, &v, &sid);
         let p = s(&sessions::sstate(w, a, &sx), "project");
         let p = if p.is_empty() { pgm_collab_internal::worktree::HUB_PROJECT.to_string() } else { p };
         let at = m["lastActivityAt"].as_u64().unwrap_or(0);
