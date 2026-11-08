@@ -15,7 +15,7 @@ right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-
 - **The Theme menu opens on top of every panel** (T-291; Sponge: it hid under the team chat and AI chat). The list lives
   in the page itself, not in the header, whose scrolling and blur clipped it. It sits on the menu layer: above panels,
   floating windows and the message menu, below real dialogs. It opens under the Theme button, or upwards when there is
-  more room, and stays inside the window on wide and narrow screens. Check: **R535** (the placement runs on wide,
+  more room, and stays inside the window on wide and narrow screens. Check: **R544** (the placement runs on wide,
   narrow, low and tiny windows).
 - **Tool calls in the Work transcript** (T-318, `web/tools.js` 1.0.0). Consecutive calls of the same kind (2 Reads,
   3 Bash calls…) fold into one group, in the order they arrive, live and in restored conversations alike, collapsed

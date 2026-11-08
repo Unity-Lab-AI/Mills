@@ -9,7 +9,7 @@
 // held, stop, reopen, list, send, reply. A hub without them (an older hub, the JavaScript fallback hub) answers 404: then
 // the panel stays empty and hidden, a control whose route is missing says so, and nothing throws.
 // Loaded before the main page script. The pure helpers at the top (no DOM) and mount() with a plain element API are what
-// the suite runs in node (R532, R533, R532b).
+// the suite runs in node (R532, R545, R532b).
 (function () {
   'use strict';
   const W = typeof window !== 'undefined' ? window : globalThis;

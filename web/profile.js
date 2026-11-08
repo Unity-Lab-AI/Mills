@@ -10,7 +10,7 @@
 // there, pronouns, status, bio, location, links, their local time, their roles in this server, and Message.
 //
 // T-318: every tab is made of groups (.setGroup: h3, a one-line .setHint, the controls). "Find a setting" filters all
-// tabs at once with settingsMatch below (pure, so the suite runs it in vm: R534); a tab with three or more groups gets a
+// tabs at once with settingsMatch below (pure, so the suite runs it in vm: R546); a tab with three or more groups gets a
 // sticky list of them on wide screens.
 
 // Which groups and rows of Settings show for a query: every word must be in the text (any case, any order). A group

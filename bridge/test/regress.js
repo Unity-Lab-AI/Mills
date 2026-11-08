@@ -48,7 +48,7 @@ function check(id, label, pass, detail = '') {
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
 const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
 const R532_LABEL = 'agent threads in the page (T-298): t-user sees every message to and from their agent as a thread per agent pair, both directions with who, kind and time, and a message that went into one of their sessions opens that session; with the page open a new message from mills notifies, muting the pair stops the notifications (mills\'s next message is refused) but keeps the messages, Do Not Disturb mutes the notification only (the message is there); "pause my inbox" and "ask me first" change the hub\'s settings; a held hand-off shows an accept / decline card and accepting it makes the hub accept it (the task is re-assigned to t-user); the hub serves agents.js and the page loads it with its button, panel and menu tile';
-const R533_LABEL = 'agent threads in the page, the person\'s own say (T-298): t-user stops a thread from its header and the hub\'s thread is stopped (by a person) while the panel shows it stopped, dashed, with Reopen and no reply; Reopen makes it open again in the hub and the panel; "wake me" off and on changes the hub\'s setting; a question written in the panel\'s composer to Mills with a task ref arrives in Mills\'s thread as a question with that ref, written by t-user as a person, and the panel says it waits because Mills paused their inbox; a hand-off needs its task before it goes, and with one it waits for Mills\'s okay; a reply written in that thread goes into the same thread as a reply; when Mills has muted t-user the composer shows the hub\'s refusal as plain words and the person list says so; rate and hop limits, a stopped thread and an unknown person read as sentences; a hub without stop, reopen, the team list or send shows the controls it can and throws nothing';
+const R545_LABEL = 'agent threads in the page, the person\'s own say (T-298): t-user stops a thread from its header and the hub\'s thread is stopped (by a person) while the panel shows it stopped, dashed, with Reopen and no reply; Reopen makes it open again in the hub and the panel; "wake me" off and on changes the hub\'s setting; a question written in the panel\'s composer to Mills with a task ref arrives in Mills\'s thread as a question with that ref, written by t-user as a person, and the panel says it waits because Mills paused their inbox; a hand-off needs its task before it goes, and with one it waits for Mills\'s okay; a reply written in that thread goes into the same thread as a reply; when Mills has muted t-user the composer shows the hub\'s refusal as plain words and the person list says so; rate and hop limits, a stopped thread and an unknown person read as sentences; a hub without stop, reopen, the team list or send shows the controls it can and throws nothing';
 const R532B_LABEL ='agent threads in the page on a hub without /api/agents (an older hub or the JavaScript fallback hub): the panel renders nothing, its button and menu tile stay hidden, a refresh and a render throw nothing and nothing notifies';
 const R531_LABEL = 'VibeRoller\'s menus (T-224) offer only what the person may do and call the page\'s existing actions: someone else\'s chat message has Reply, Copy and their profile but no Edit or Delete, your own adds Edit and Delete (asking twice, not Edit for a voice clip), Pin shows for who may pin and says Unpin when pinned, a moderator deletes in a channel but not in a DM, a deleted message offers no actions; a person, a channel, a group and a server offer what their buttons offer (Message and Mention not for yourself, Edit channel only for who may); a board card held by someone else only opens, goes to Claude and copies its id, a free one claims, completes, moves and assigns through sub-menus (the current column and assignee ticked) and archives when done; a file offers Edit and Run for Work files and only Delete when gone; a Work message is copied and sent again, a queued one cancelled through the queue panel; the chat, Work, the board, notes, files and the session list build their right-click and click / ⋯ menus from these lists';
 const L527 = {
@@ -788,9 +788,9 @@ async function run() {
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
   if (process.argv.includes('--only-r528')) await r528r529Check(); // development: just R528 / R529 (with --stop-after R529)
-  if (process.argv.includes('--only-r532')) { if (RUST_HUB) { await r532Check(); await r533Check(); } await r532bCheck(); } // development: just R532 / R533 / R532b (with --stop-after R532b)
+  if (process.argv.includes('--only-r532')) { if (RUST_HUB) { await r532Check(); await r545Check(); } await r532bCheck(); } // development: just R532 / R545 / R532b (with --stop-after R532b)
   if (process.argv.includes('--only-r527') && RUST_HUB) await r527Check(); // development: just R538 to R543 (with --stop-after R532)
-  if (process.argv.includes('--only-r534')) await r534Check(); // development: just R534 (with --stop-after R534)
+  if (process.argv.includes('--only-r546')) await r546Check(); // development: just R546 (with --stop-after R546)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
   const w1 = await login('t-user', 'wrong-password-1', devB), w2 = await login('ghost', 'wrong-password-1', devB);
@@ -4040,9 +4040,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   await r526Check();
   await r527ThemeCheck(); // T-291: the Theme menu on top (both modes)
-  if (!process.argv.includes('--only-r534')) await r534Check(); // T-318: Settings in groups, Find a setting, the ways back (both modes)
+  if (!process.argv.includes('--only-r546')) await r546Check(); // T-318: Settings in groups, Find a setting, the ways back (both modes)
   if (!process.argv.includes('--only-r528')) await r528r529Check();
-  if (RUST_HUB) { if (!process.argv.includes('--only-r532')) { await r532Check(); await r533Check(); } } else { skip('R532', R532_LABEL, 'the Rust hub\'s: --rust-hub runs it'); skip('R533', R533_LABEL, 'the Rust hub\'s: --rust-hub runs it'); }
+  if (RUST_HUB) { if (!process.argv.includes('--only-r532')) { await r532Check(); await r545Check(); } } else { skip('R532', R532_LABEL, 'the Rust hub\'s: --rust-hub runs it'); skip('R545', R545_LABEL, 'the Rust hub\'s: --rust-hub runs it'); }
   if (!process.argv.includes('--only-r532')) await r532bCheck();
   if (!process.argv.includes('--only-r530')) await r530Check(); // T-223 / T-224: R530 and R531 (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
@@ -7131,12 +7131,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
     check('R489', R489_LABEL, ok, JSON.stringify(seen));
   }
-  // R534 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control
+  // R546 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control
   // it had (each id once, inside the Settings box) and every group has a heading and a one-line hint; the page's own Save
   // app settings body (taken from the served page, run in vm on a stand-in form) goes to /api/prefs as t-user and the hub
   // keeps what it sent; profile.js's settingsMatch runs in vm on made-up groups and on the served App / Connections groups;
   // every screen has a title and a ← Menu, and Settings closes one way from Close, a click beside it and Escape.
-  async function r534Check() {
+  async function r546Check() {
     const seen = {};
     const page = await (await fetch(H + '/')).text(), pjs = await fetch(H + '/profile.js'), src = pjs.status === 200 ? await pjs.text() : '';
     const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
@@ -7159,11 +7159,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     let body = null;
     try { body = require('vm').runInNewContext('(' + bodySrc + ')', { $: (id) => ({ value: typeof form[id] === 'string' ? form[id] : '50', checked: form[id] === true }), pickedColor: null, Number, Math }); } catch (e) { seen.body = e.message; }
     // as an account of its own (removed afterwards), so no other check finds settings it did not make
-    const created = (await call('/api/admin/create', A, { username: 't-r534', display: 'R534' })).data || {};
+    const created = (await call('/api/admin/create', A, { username: 't-r534', display: 'R546' })).data || {};
     const X = created.password ? (await login('t-r534', created.password, 'device-r534-xxxxxxxxxx')).data.token : '';
     try {
       if (body && X) {
-        body.nick = 'R534';
+        body.nick = 'R546';
         const r = await call('/api/prefs', X, body), got = ((await call('/api/prefs', X)).data.prefs) || {};
         seen.saved = r.status; seen.kept = [got.sound && got.sound.message, got.sound && got.sound.set, got.tts && got.tts.rate, got.tts && got.tts.scope, got.autoScroll, got.autosave, got.ask && got.ask.minutes, got.call && got.call.quality, got.theme, got.clips && got.clips.autoplay].join(',');
       } else seen.account = created.error || 'not made';
@@ -7191,7 +7191,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
       && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.wired
       && seen.screens >= 9 &&!seen.noWayBack.length && seen.back && seen.close;
-    check('R534', 'Settings keeps every setting it had (each control once, with its id, inside a group that has a heading and a one-line explanation) and the page\'s own Save app settings still saves through /api/prefs, where the hub keeps what it sent; Find a setting shows only the groups and rows that have every word typed (any case; a heading match shows the whole group; nothing matching says so); every screen has a title and a way back to the menu, and Settings closes the same way from Close, a click beside it and Escape',
+    check('R546', 'Settings keeps every setting it had (each control once, with its id, inside a group that has a heading and a one-line explanation) and the page\'s own Save app settings still saves through /api/prefs, where the hub keeps what it sent; Find a setting shows only the groups and rows that have every word typed (any case; a heading match shows the whole group; nothing matching says so); every screen has a title and a way back to the menu, and Settings closes the same way from Close, a click beside it and Escape',
       ok, JSON.stringify(seen));
   }
   // R526 (T-188): the queue panel. The hub serves web/queue.js and the page loads it with its button and sidebar; the
@@ -7244,7 +7244,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R526', 'the Work queue panel (T-188) lists every message still to go in the open session, "Send now" first, then the queue in order, with the attachments named; copy one and copy all give the messages as written (a rule between them) and a refused clipboard says so; cancel one removes just that one, cancel all asks once more and then clears the queue and the "Send now" text; the badge and the summary count the other sessions\' waiting messages too (not archived ones), each a click away; a refresh with nothing changed does not redraw it; hiding it is remembered; the hub serves queue.js and the page loads it with its button and sidebar',
       ok, JSON.stringify(seen));
   }
-  // R535 (T-291, R527 until 5.46.1 took it): the Theme menu opens on top of every panel. The page's placement function (button rect + list size +
+  // R544 (T-291; R527, then R535, until 5.46.1 and 5.48.0 took them): the Theme menu opens on top of every panel. The page's placement function (button rect + list size +
   // window -> where the list goes) runs here in vm on wide, narrow, low and tiny windows; the served markup keeps the list
   // out of every header (a scrolling, blurred header clips and traps whatever is inside it) on the menu layer.
   async function r527ThemeCheck() {
@@ -7285,7 +7285,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const ok = seen.found && seen.wide === '1060,46,400,1384' && seen.rightEdge === '1152,46,400,1384' && seen.narrow === '8,46,400,344'
       && seen.low === '60,154,400,984' && seen.tiny === '8,46,246,344' && seen.tooWide === '8,46,200,344' && seen.sweepOk
       && seen.outOfHeader && typeof seen.layer === 'number' && seen.used;
-    check('R535', 'the Theme menu opens on top of every panel: the list lives outside every header (a scrolling, blurred header would clip it and trap it under the team chat, the AI chat and floating windows), sits on the menu layer above them and below real dialogs, and is placed from the button: under it, or upwards when there is more room there, pulled inside the window on wide and narrow screens, narrowed and scrolling when the window is too small, never over the button',
+    check('R544', 'the Theme menu opens on top of every panel: the list lives outside every header (a scrolling, blurred header would clip it and trap it under the team chat, the AI chat and floating windows), sits on the menu layer above them and below real dialogs, and is placed from the button: under it, or upwards when there is more room there, pulled inside the window on wide and narrow screens, narrowed and scrolling when the window is too small, never over the button',
       ok, JSON.stringify(seen));
   }
   // R528 / R529 (T-318): the tool calls in the Work transcript. The hub serves web/tools.js and the page loads it; its pure
@@ -7525,10 +7525,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.paused && seen.resumed && seen.askOn && seen.handoffOff && seen.handoffOn && seen.askOff && seen.card && seen.heldNotified && seen.badge && seen.accepted && seen.hidePanel && seen.sends === '202,202,202,202';
     check('R532', R532_LABEL, ok, (built ? '' : 'no /api/agents/* ') + JSON.stringify(seen));
   }
-  // R533 (T-298): what the person does in the panel themselves: stop / reopen a thread, wake me, and writing to another
+  // R545 (T-298): what the person does in the panel themselves: stop / reopen a thread, wake me, and writing to another
   // person's agent (a new thread from the composer, a reply in a thread), with the hub's refusals as words. t-user's panel
   // against the real routes; Mills's inbox is paused meanwhile (nothing wakes their sessions), everything is put back.
-  async function r533Check() {
+  async function r545Check() {
     const seen = {};
     const js = await fetch(H + '/agents.js'), { AG, error } = load532(js.status === 200 ? await js.text() : '');
     if (error) seen.load = error;
@@ -7637,7 +7637,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     }
     const ok = !!AG && built && seen.wakeOff && seen.wakeOn && seen.people && seen.kinds === 'ask,handoff,review,report' && seen.composed && seen.sentNote && seen.needsTask && seen.handoff
       && seen.reply && seen.stopped && seen.reopened && seen.refused && seen.listSays && seen.words && seen.oldWake && seen.oldStop && seen.oldCompose && seen.oldOk;
-    check('R533', R533_LABEL, ok, (built ? '' : 'no /api/agents/* ') + JSON.stringify(seen));
+    check('R545', R545_LABEL, ok, (built ? '' : 'no /api/agents/* ') + JSON.stringify(seen));
   }
   async function r532bCheck() {
     const seen = {};
