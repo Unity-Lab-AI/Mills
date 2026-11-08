@@ -7,6 +7,62 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.48.0 — 2026-11-08
+
+MINOR: **every Work session, the first one too, can be deleted** (T-341 hub part: T-342, T-343, T-345; Mills: "every
+session, regardless of first session, should be deletable, hideable, archivable"). Deleting the first session was
+refused before and works now, so an older page against this hub sees it succeed: that is the deliberate change.
+Design: plans/multi-session.md § 4a.
+
+- Deleting the first session stops its run, removes only its data (conversation, journal, state, list entry) and
+  promotes the next session in the list (older first, else the nearest newer; a running or planner session is skipped;
+  not-archived before archived): its files move into the first session's places (`work.json`, `work-current.json`,
+  `work-journal.jsonl`), so older pages and the frozen JavaScript hub read it. With none left, a fresh empty first
+  session is made (same provider, model and project). The person's own worktree `work/<username>` is never deleted,
+  reset or checked out; a promoted session keeps its own worktree as it is (`ownTree: true`, added to
+  `work-sessions.json`; worktree choice, freshness and the git panel follow it).
+- The delete answer says what happened: `{ok, deleted, primary, promoted, fresh, worktree}`; `GET /api/work/sessions`
+  gives every session `deleteMeans: {promotes, fresh}` (who takes over the first) and `ownTree`, for the menu's confirm
+  (Mills' T-344).
+- Checks R533–R537 (written as spec() first): you can delete your first session and the next one becomes your first
+  (stopped first, its journal moved); deleting your only session leaves a fresh empty one; deleting your first session
+  never touches work/<username> (HEAD, branch and an uncommitted file unchanged); the JavaScript hub still reads your
+  first session after a delete; an older page still works after one. Three sessions.rs unit tests.
+
+## 5.47.0 — 2026-11-07
+
+MINOR: **the dev hub borrows live's AI hosts over the bridge** (T-335 … T-340, scoped by Mills: Work on dev.portal said
+"No AI is available for Work", since every AI host polls live and dev had none). Design: plans/dev-hub.md § 9.
+
+- **Live lends** (`/__sync/ai/{providers, fetch, work, cancel, pc-tool}` in vr-hub `sync.rs`, behind the bridge gate):
+  every call names the account it is for; an account live does not have, or that `sync.shareAi` does not lend to, is
+  refused (403) and written to the security log. `sync.shareAi` is on by default when the bridge is set up; `false`
+  turns it off (404, as an older live); `{ "users": [...] }` lends to those accounts only. The JavaScript hub's
+  `/__front/ai/*` and the new route are one function (`ai_serve`), so live applies the same sharing, scopes, caps and
+  owner checks to a person on dev as to its own. Calls are audited as `ai.peer.*` with `via: "dev"` (runs, cancels, PC
+  tools and refusals every time; listings and model calls once per account and kind per 10 minutes).
+- **Dev borrows** (pgm-ai-internal `ai_peer.rs`, used from `ai_hosts.rs`): live's providers, hosts and engines for all
+  of dev's accounts, refreshed every 3 s in memory only; `providers_for` = dev's own hosts first, then live's, marked
+  `viaPeer`, with the same ids. A call for a host not connected to dev (the `/llm` relay and the Headroom path, a 2.x
+  host's `run_work` and Stop, Unity's engines, PC tools) goes over the bridge and streams back. A failure ends with
+  "(live's AI hosts are not reachable from dev right now)"; dev's `/api/status` has `aiPeer` (from this machine only).
+- **What stays where:** model calls and the host job run on live, and the host's usage windows and caps are counted
+  once there; the run's `hubUrl` / `mcpBase` stay dev's, so its board, notes and chat tools write to dev (dev keeps the
+  job's id and token; live refuses tools for a borrowed job); the day ledger is dev's. PC tools are picked and signed on
+  live for the machine's owner only (403 otherwise, no fallback). Hosts change nothing.
+- LAWS.md's dev-hub law: "AI hosts connect to live; dev borrows them over the bridge".
+- Checks R538–R543 (numbered R527–R532 until 5.46.1 took R527; two paired scratch Rust hubs, a stand-in host on "live" only), written as spec() first: a person
+  on dev sees live's hosts with their own scopes; a Work run on dev goes through live's host (the relay, a 2.x run,
+  Stop); its team tools stay on dev; a borrowed PC tool is the owner's only; dev without live's AI says so and keeps
+  working (live stopped, bridge off, an older live); live refuses an unknown account and logs every peer call. The
+  runner's `--stop-after` also stops at a spec() check.
+
+## 5.46.3 — 2026-11-07
+
+PATCH: **one more hub-written folder ignored: `bridge/work-sessions/`** (the per-session files of the Work session
+list), the last thing that kept the live checkout "uncommitted" after 5.46.2. Both server checkouts got the same rule in
+their local `.git/info/exclude`.
+
 ## 5.46.2 — 2026-11-07
 
 PATCH: **deploys are no longer held up by three more files the hub writes itself.**

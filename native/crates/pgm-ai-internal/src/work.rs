@@ -165,6 +165,8 @@ impl Work {
         v
     }
     pub(crate) fn update_state(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) -> Value { self.update(a, f) }
+    /// The run that just ended under this run key is forgotten (its session was deleted or moved to another key, T-341).
+    pub(crate) fn forget_ended(&self, key: &str) { self.ended.lock().unwrap_or_else(|e| e.into_inner()).remove(key); }
     fn update(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) -> Value {
         let mut v = self.state(a); if !v.is_object() { v = json!({}); }
         f(v.as_object_mut().unwrap());
@@ -303,11 +305,11 @@ impl Work {
     /// Is this a session with no project (T-238: the AI only, in the person's scratch folder)?
     pub fn is_none(&self, a: &Account, sx: &Sx) -> bool { sessions::sstate(self, a, sx)["noProject"] == json!(true) }
     /// Where a session's run happens: the person's worktree of its project (the first session's own, the others' their
-    /// own <user>.<id>), or the scratch folder of a session with no project.
+    /// own <user>.<id>, a promoted first session too: T-341), or the scratch folder of a session with no project.
     pub fn session_wt(&self, a: &Account, sx: &Sx) -> Result<Wt, String> {
         if self.is_none(a, sx) { return self.wt.scratch(&a.username); }
         let pj = self.project_in(a, sx);
-        if sx.primary { self.wt.ensure(&a.username, &pj) } else { self.wt.ensure_session(&a.username, sx.hex(), &pj) }
+        if !sx.own { self.wt.ensure(&a.username, &pj) } else { self.wt.ensure_session(&a.username, sx.hex(), &pj) }
     }
     pub fn project_of(&self, a: &Account) -> String { let st = self.state(a); if st["noProject"] == json!(true) { return NO_PROJECT.into(); } let p = s(&st, "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
     pub fn project_list(&self) -> Value {
@@ -871,7 +873,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
     // a new message answers whatever the session waited for (T-288)
     { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); m.remove("waiting"); }); }
-    if none { } else if sx.primary { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
+    if none { } else if !sx.own { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
     let run_secret = pgm_core_internal::crypto::random_hex(24); // this run's own secret for its MCP relays (T-308)
@@ -886,7 +888,8 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let permission_mode: String = if planner { "default".into() } else { permission_mode };
     let model = { let m = s(&st, "model"); if m.is_empty() { w.default_model_of(a) } else { m } };
     let ai = hub.ai();
-    let Some(prov) = w.effective(ai, &a.username, &s(&st, "provider")) else { return one_line(json!({ "type": "bridge_error", "text": "No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings." })) };
+    // (on the dev hub while live does not lend its hosts, T-335: "… (live's AI hosts are not reachable from dev right now)")
+    let Some(prov) = w.effective(ai, &a.username, &s(&st, "provider")) else { return one_line(json!({ "type": "bridge_error", "text": ai.with_peer_note("No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings.") })) };
     let Some(harness) = Work::harness_of(&prov) else { return one_line(json!({ "type": "bridge_error", "text": "Your chosen AI provider can run neither Claude Code nor Jcode PGM, so it cannot run Work. Pick a Claude or a Jcode PGM model in the dropdown." })) };
     let prov_env = Work::claude_env(&prov).unwrap_or_default();
     let kind = s(&prov, "kind");
@@ -974,7 +977,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         let mut payload = json!({ "account": a.username, "display": a.display, "project": wd.project, "hub": wd.hub, "branch": wd.branch, "repoUrl": w.repo_url_for(&wd), "message": input, "systemPrompt": system_prompt, "model": model,
             "resume": if resume { s(&st, "claudeSessionId") } else { String::new() }, "permissionMode": if planner { json!("default") } else { hub.cfg().get("permissionMode").cloned().unwrap_or(Value::Null) }, "allowedTools": if planner { json!(tools) } else { hub.cfg().get("allowedTools").cloned().unwrap_or(Value::Null) }, "hubUrl": hub.public_url(), "env": Value::Object(w.work_env(&a.username).into_iter().map(|(k, v)| (k, json!(v))).collect()) });
         if hjcode { payload["harness"] = json!(harness); payload["stateModel"] = json!(s(&st, "model")); }
-        match ai.run_work(&host_id, &prov_id, payload) {
+        match ai.run_work(&host_id, &prov_id, payload).await {
             Err(e) => { w.runs.lock().unwrap_or_else(|e| e.into_inner()).remove(&sx.key); w.busy_changed.notify_one(); let _ = tx.send(line(json!({ "type": "bridge_error", "text": e.msg }))); let _ = tx.send(line(json!({ "type": "bridge_done", "code": 1 }))); drop(tx); return ndjson(rx); }
             Ok((job, _token, mut events)) => {
                 if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx.key) { r.remote = job; }
@@ -1141,12 +1144,27 @@ async fn tool_inner(hub: &Arc<dyn AiHub>, which: &str, caller: &Caller, b: &Valu
         crate::machine_jobs::Routed::Done(v) => return v,
         crate::machine_jobs::Routed::Pass => {}
     }
+    let refused = |st: u16, m: &str| { eprintln!("[work] refused: {account}'s run (session {}) named the machine \"{}\": {st} {m}", if caller.sid.is_empty() { "-" } else { &caller.sid }, named.chars().take(40).collect::<String>()); json!({ "ok": false, "error": m, "_status": st }) };
+    let mut here: Result<(), (u16, String)> = Ok(());
     let host = if named.is_empty() { ai.pc_host_for(account) } else {
         match ai.machine_for(&named, account) {
             Ok(h) => Some(h),
-            Err((st, m)) => { eprintln!("[work] refused: {account}'s run (session {}) named the machine \"{}\": {st} {m}", if caller.sid.is_empty() { "-" } else { &caller.sid }, named.chars().take(40).collect::<String>()); return json!({ "ok": false, "error": m, "_status": st }); }
+            // not connected here (no such machine here, or offline here): on the dev hub, live may have it (below)
+            Err((st, m)) if (st == 404 || st == 503) && ai.peer.get().is_some() => { here = Err((st, m)); None }
+            Err((st, m)) => return refused(st, &m),
         }
     };
+    // the dev hub (T-335): the person's own machine connected to live, signed by live for them; another person's machine
+    // is refused there with 403, and nothing else answers instead
+    if host.is_none() {
+        match ai.peer_pc_tool(&named, &name, &args, &caller.actor()).await {
+            Some(Ok(v)) => return v,
+            Some(Err(e)) if e.status == 403 => { w.agents.note_refusal(&caller.run); return refused(403, &e.msg); }
+            Some(Err(e)) if !named.is_empty() => return refused(e.status, &e.msg),
+            Some(Err(e)) => if !w.busy(account) { return json!({ "ok": false, "error": format!("{}'s computer did not answer: {}", a.display, e.msg) }) },
+            None => if let Err((st, m)) = here { return refused(st, &m); },
+        }
+    }
     if let Some(h) = host {
         match ai.pc_tool(&h, &name, &args, &caller.actor()).await {
             Ok(v) => return v,
@@ -1399,7 +1417,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let pj = match w.wt.project(&want) { Ok(p) => p, Err(e) => return Some(answer(400, json!({ "error": e }))) };
             let Some(sx) = sess(&b) else { return Some(no_session()) };
             if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
-            let wd = match if sx.primary { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.hex(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
+            let wd = match if !sx.own { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.hex(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
             let switched = w.project_in(a, &sx) != pj.name;
             sessions::supdate(w, a, &sx, |m| { m.remove("noProject"); if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
             w.check_fresh(a);
@@ -1608,13 +1626,14 @@ async fn llm_via(hub: &Arc<dyn AiHub>, r: &Req, tok: &str, sub: &str) -> Resp {
     let behind = hub.cfg().get("behindProxy") == Some(&json!(true));
     let outside = r.header("cf-connecting-ip").is_some() || (behind && (r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some()));
     let ent = if tok.len() == 48 && tok.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) && !sub.is_empty() { hub.work().llm.lock().unwrap_or_else(|e| e.into_inner()).get(tok).cloned() } else { None };
-    let Some((_, host, prov, exp)) = ent.filter(|e| e.3 > now_ms() && r.peer.ip().is_loopback() && !outside) else { return answer(401, json!({ "type": "error", "error": { "type": "authentication_error", "message": "Unknown relay." } })) };
+    let Some((account, host, prov, exp)) = ent.filter(|e| e.3 > now_ms() && r.peer.ip().is_loopback() && !outside) else { return answer(401, json!({ "type": "error", "error": { "type": "authentication_error", "message": "Unknown relay." } })) };
     let _ = exp;
     let path = if r.query.is_empty() { sub.to_string() } else { format!("{sub}?{}", r.query) };
     let headers: Vec<(String, String)> = r.headers.iter().filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string()))).collect();
     let t0 = std::time::Instant::now();
     let via = if r.header(RELAY_HEADER).is_some() { "headroom" } else { "direct" };
-    let out = hub.ai().login_fetch(&host, &prov, &path, r.method.as_str(), headers, r.body.to_vec()).await;
+    // a host live lends (the dev hub, T-335) is reached through live, for the run's own account
+    let out = hub.ai().login_fetch_for(&account, "work", &host, &prov, &path, r.method.as_str(), headers, r.body.to_vec()).await;
     let st = match &out { Ok(rel) => rel.status, Err(e) => if e.status == 0 { 503 } else { e.status } };
     pgm_core_internal::obs::count("vr_relay_calls", &[("status", &st.to_string()), ("via", via)]);
     pgm_core_internal::obs::observe_ms("vr_relay", &[("via", via)], t0.elapsed().as_secs_f64() * 1000.0);
@@ -1640,7 +1659,7 @@ pub fn start(hub: &Arc<dyn AiHub>) {
             // and the worktrees of their sessions used that day
             let Some(ix) = sessions::index_if_any(&a) else { continue };
             for (sid, m) in ix["sessions"].as_object().cloned().unwrap_or_default() {
-                if sid == s(&ix, "primary") || !m["worktree"].is_object() || now_ms().saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > 86_400_000 { continue; }
+                if (sid == s(&ix, "primary") && m["ownTree"] != json!(true)) || !m["worktree"].is_object() || now_ms().saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > 86_400_000 { continue; }
                 h.work().check_fresh_in(&a, &s(&m["worktree"], "project"), Some(sid.trim_start_matches("s-")));
             }
         }
