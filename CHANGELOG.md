@@ -7,10 +7,12 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
-## 5.48.0 — 2026-11-08
+## 5.49.0 — 2026-11-08
 
-MINOR: **four of Mills's page tasks at once**: the Theme menu on top, tool calls grouped in Work, one menu kit for
-right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-224, T-298). Page only; no hub change.
+MINOR: **Mills's page tasks at once**: the Theme menu on top, tool calls grouped in Work, Settings cleaned up, one menu
+kit for right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-224, T-298). Page only; no hub
+change. (Built as 5.47.0, then 5.48.0; both numbers went to Sponge's releases first, and so did check ids R527 and
+R533–R535: Mills's checks are R526, R528–R532b and R544–R546.)
 
 - **The Theme menu opens on top of every panel** (T-291; Sponge: it hid under the team chat and AI chat). The list lives
   in the page itself, not in the header, whose scrolling and blur clipped it. It sits on the menu layer: above panels,
@@ -38,8 +40,41 @@ right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-
   (accepting a hand-off makes its task yours). New messages notify like the rest of the page; Do Not Disturb mutes only
   the notification. A hub without `/api/agents` shows nothing. Checks: **R532** (through the Rust hub's real routes),
   **R532b** (a hub without them); **R482p** is a plain check now.
-- Modules: `web/index.html` 1.39.0, `web/sessions.js` 1.2.0, `web/guilds.js` 1.2.0, `web/board.js` 1.2.0,
-  `web/notes.js` 1.1.0, `web/library.js` 1.2.0, `web/polish.css` 1.0.3, `web/sw.js` 1.0.9 (caches the three new files).
+- **Your say in agent threads** (T-298, `web/agents.js`). Each thread has Stop / Reopen in its head (a stopped thread
+  shows dashed, with why). "Wake me" sits next to pause: off, a message waits for your next run instead of starting
+  your idle session. "Write to an agent…" sends a question, a hand-off of a board task, a review or a report to another
+  person's agent (with an optional task ref), and Reply answers inside a thread. The hub's refusals (muted, rate, hop
+  limit, stopped, unknown person) show as plain words; an older hub shows what it can. Check: **R545**.
+- **Settings, cleaned up** (T-318 part 1). Every tab is made of named groups with a one-line explanation (App settings:
+  Sounds, When the AI asks, Chat and Work, Read aloud, Calls and voice clips, Appearance). Labels sit left and controls
+  right, stacked on a phone. "Find a setting" searches all tabs at once, a section list stays in view on wide screens,
+  and Save is always in reach. Escape or a click beside the box closes Settings like Close, and the main menu tiles are
+  compact again on phones. Nothing a setting does or how it is saved has changed. Check: **R546**.
+- Modules: `web/index.html` 1.40.0, `web/sessions.js` 1.2.0, `web/guilds.js` 1.2.0, `web/board.js` 1.2.0,
+  `web/notes.js` 1.1.0, `web/library.js` 1.2.0, `web/profile.js` 1.1.0, `web/polish.css` 1.0.3, `web/sw.js` 1.0.9
+  (caches the three new files).
+
+## 5.48.0 — 2026-11-08
+
+MINOR: **every Work session, the first one too, can be deleted** (T-341 hub part: T-342, T-343, T-345; Mills: "every
+session, regardless of first session, should be deletable, hideable, archivable"). Deleting the first session was
+refused before and works now, so an older page against this hub sees it succeed: that is the deliberate change.
+Design: plans/multi-session.md § 4a.
+
+- Deleting the first session stops its run, removes only its data (conversation, journal, state, list entry) and
+  promotes the next session in the list (older first, else the nearest newer; a running or planner session is skipped;
+  not-archived before archived): its files move into the first session's places (`work.json`, `work-current.json`,
+  `work-journal.jsonl`), so older pages and the frozen JavaScript hub read it. With none left, a fresh empty first
+  session is made (same provider, model and project). The person's own worktree `work/<username>` is never deleted,
+  reset or checked out; a promoted session keeps its own worktree as it is (`ownTree: true`, added to
+  `work-sessions.json`; worktree choice, freshness and the git panel follow it).
+- The delete answer says what happened: `{ok, deleted, primary, promoted, fresh, worktree}`; `GET /api/work/sessions`
+  gives every session `deleteMeans: {promotes, fresh}` (who takes over the first) and `ownTree`, for the menu's confirm
+  (Mills' T-344).
+- Checks R533–R537 (written as spec() first): you can delete your first session and the next one becomes your first
+  (stopped first, its journal moved); deleting your only session leaves a fresh empty one; deleting your first session
+  never touches work/<username> (HEAD, branch and an uncommitted file unchanged); the JavaScript hub still reads your
+  first session after a delete; an older page still works after one. Three sessions.rs unit tests.
 
 ## 5.47.0 — 2026-11-07
 

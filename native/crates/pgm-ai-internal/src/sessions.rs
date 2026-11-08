@@ -11,6 +11,9 @@
 //! - The list's summaries carry `queued` (messages still to go) when there are any: the session list (web/sessions.js) sends
 //!   them for a session that is not on screen.
 //! - A session's run is keyed by the person for the primary session (as before) and "<user>#<id>" for the others.
+//! - Every session can be deleted, the first one too (T-341, plans/multi-session.md § 4a): the next one is promoted into the
+//!   first session's files (work.json, work-current.json, work-journal.jsonl), or a fresh empty one is made; the person's
+//!   own worktree (work/<user>) is never touched. A promoted session keeps its own worktree (meta `ownTree`).
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -28,14 +31,26 @@ static LOCK: Mutex<()> = Mutex::new(());
 const IDLE_MS: u64 = 5 * 60_000;
 const MAX_SESSIONS: usize = 200;
 
-/// One session as a run sees it: its id, its run key, whether it is the primary one.
+/// One session as a run sees it: its id, its run key, whether it is the primary one, and whether it works in its own
+/// <user>.<id> worktree (`own`: every session but a first one without one; a promoted first session keeps its own, T-341).
 #[derive(Clone, Debug)]
-pub struct Sx { pub sid: String, pub key: String, pub primary: bool }
+pub struct Sx { pub sid: String, pub key: String, pub primary: bool, pub own: bool }
 impl Sx {
     /// The session's id without "s-" (its worktree / branch name: <user>.<hex>).
     pub fn hex(&self) -> &str { self.sid.trim_start_matches("s-") }
 }
 
+/// The session `sid` of the list `v`, as a run sees it.
+pub(crate) fn sx_in(a: &Account, v: &Value, sid: &str) -> Sx {
+    let primary = sid == s(v, "primary");
+    Sx { key: if primary { a.username.clone() } else { format!("{}#{sid}", a.username) }, sid: sid.to_string(), primary, own: !primary || v["sessions"][sid]["ownTree"] == json!(true) }
+}
+/// The list's ids in their order (newest first), then any the order lost.
+fn ids_of(v: &Value) -> Vec<String> {
+    let mut ids: Vec<String> = v["order"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(String::from)).filter(|x| v["sessions"].get(x).is_some()).collect();
+    for k in v["sessions"].as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() { if !ids.contains(&k) { ids.push(k); } }
+    ids
+}
 fn index_file(a: &Account) -> PathBuf { a.dir.join("work-sessions.json") }
 fn folders_file(a: &Account) -> PathBuf { a.dir.join("work-folders.json") }
 fn session_file(a: &Account, sid: &str) -> PathBuf { a.dir.join("work-sessions").join(format!("{sid}.json")) }
@@ -83,8 +98,7 @@ pub fn resolve(a: &Account, want: &str) -> Option<Sx> {
     let v = index(a); let primary = s(&v, "primary");
     let sid = if want.is_empty() { primary.clone() } else { want.to_string() };
     if v["sessions"].get(&sid).is_none() { return None; }
-    let is_primary = sid == primary;
-    Some(Sx { key: if is_primary { a.username.clone() } else { format!("{}#{}", a.username, sid) }, sid, primary: is_primary })
+    Some(sx_in(a, &v, &sid))
 }
 /// The session a request names: the body's "session", else ?session=.
 pub fn wanted(r: &Req, b: &Value) -> String { b["session"].as_str().map(String::from).or_else(|| r.param("session")).unwrap_or_default() }
@@ -161,7 +175,7 @@ pub fn host_of(provider: &str) -> String { provider.strip_prefix("h:").and_then(
 
 fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
     let m = &v["sessions"][sid];
-    let sx = Sx { sid: sid.to_string(), key: if sid == s(v, "primary") { a.username.clone() } else { format!("{}#{sid}", a.username) }, primary: sid == s(v, "primary") };
+    let sx = sx_in(a, v, sid);
     let st = sstate(w, a, &sx);
     let running = w.busy_key(&sx.key);
     let provider = if s(&st, "provider").is_empty() { "host".to_string() } else { s(&st, "provider") };
@@ -169,7 +183,7 @@ fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
     let project = { let p = s(&st, "project"); if none { NO_PROJECT.to_string() } else if p.is_empty() { pgm_collab_internal::worktree::HUB_PROJECT.to_string() } else { p } };
     let mut out = json!({ "noProject": none, "id": sid, "title": m["title"], "state": state_of(m, running, now), "running": running, "primary": sx.primary, "host": host_of(&provider), "provider": provider, "model": s(&st, "model"), "project": project,
         "harness": if s(&st, "sessionHarness").is_empty() { "claude".to_string() } else { s(&st, "sessionHarness") }, "folder": m["folder"], "pinned": m["pinned"] == json!(true), "hidden": m["hidden"] == json!(true), "archived": m["archived"] == json!(true),
-        "updatedAt": m["updatedAt"], "lastActivityAt": m["lastActivityAt"], "hasDraft": !s(m, "draft").is_empty(), "worktree": m["worktree"], "mode": mode_of_meta(m) });
+        "updatedAt": m["updatedAt"], "lastActivityAt": m["lastActivityAt"], "hasDraft": !s(m, "draft").is_empty(), "worktree": m["worktree"], "mode": mode_of_meta(m), "ownTree": sx.own });
     // messages waiting to go (its queue + a "send now"): the page sends them when the session is free (T-287: a 429 keeps them here)
     let c = scurrent(a, &sx); let queued = c["queue"].as_array().map(|q| q.len()).unwrap_or(0) + usize::from(c["sendNow"].is_string());
     if queued > 0 { out["queued"] = json!(queued); }
@@ -180,9 +194,12 @@ fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
 /// GET /api/work/sessions: the list, the folders, what is running.
 fn list(w: &Work, ai: &crate::ai_hosts::AiHosts, a: &Account, archived: bool) -> Value {
     let v = index(a); let now = now_ms();
-    let mut ids: Vec<String> = v["order"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(String::from)).filter(|x| v["sessions"].get(x).is_some()).collect();
-    for k in v["sessions"].as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() { if !ids.contains(&k) { ids.push(k); } }
-    let all: Vec<Value> = ids.iter().map(|sid| summary(w, a, &v, sid, now)).collect();
+    let ids = ids_of(&v);
+    let mut all: Vec<Value> = ids.iter().map(|sid| summary(w, a, &v, sid, now)).collect();
+    // what deleting each would do (T-341): the first one names the session that takes over (none = a fresh empty one)
+    let busy: Vec<String> = all.iter().filter(|x| x["running"] == json!(true)).map(|x| s(x, "id")).collect();
+    let next = successor(&v, &s(&v, "primary"), |x| busy.iter().any(|b| b == x));
+    for x in all.iter_mut() { x["deleteMeans"] = if x["primary"] == json!(true) { json!({ "promotes": next, "fresh": next.is_none() }) } else { json!({ "promotes": Value::Null, "fresh": false }) }; }
     let working = all.iter().filter(|x| x["state"] == json!("working")).count(); let waiting = all.iter().filter(|x| x["state"] == json!("waiting")).count();
     let mut per_host: Map<String, Value> = Map::new();
     for x in all.iter().filter(|x| x["running"] == json!(true)) {
@@ -199,6 +216,77 @@ fn list(w: &Work, ai: &crate::ai_hosts::AiHosts, a: &Account, archived: bool) ->
 fn folders(a: &Account) -> Value { read_json(&folders_file(a)).map(|v| v["folders"].clone()).filter(Value::is_array).unwrap_or(json!([])) }
 fn save_folders(a: &Account, f: &Value) { write_json(&folders_file(a), &json!({ "folders": f })); }
 fn one_line(v: &Value, max: usize) -> String { v.as_str().unwrap_or("").chars().filter(|c| !c.is_control()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect() }
+
+/// The session that takes over when the first session `gone` is deleted (plans/multi-session.md § 4a): the one after it in
+/// `order` (older), else the nearest before it (newer); never one with a run going (`busy`) or a planner session;
+/// not-archived ones first. None = nobody: a fresh empty first session is made.
+fn successor(v: &Value, gone: &str, busy: impl Fn(&str) -> bool) -> Option<String> {
+    let order = ids_of(v);
+    let i = order.iter().position(|x| x == gone).unwrap_or(order.len());
+    let seq: Vec<&String> = order.iter().skip(i + 1).chain(order[..i].iter().rev()).collect();
+    for archived_too in [false, true] {
+        let ok = |x: &&&String| { let m = &v["sessions"][x.as_str()]; x.as_str() != gone && !busy(x.as_str()) && mode_of_meta(m) != "planner" && (archived_too || m["archived"] != json!(true)) };
+        if let Some(x) = seq.iter().find(ok) { return Some((*x).clone()); }
+    }
+    None
+}
+/// The list after its first session `gone` was deleted: `next` takes its place (marked `ownTree` when it has a worktree of
+/// its own, which it keeps), or with None the new empty session `fresh`. Returns the first session's id now.
+fn first_replaced(v: &mut Value, gone: &str, next: Option<&str>, fresh: &str, own_tree: bool) -> String {
+    if let Some(o) = v["sessions"].as_object_mut() { o.remove(gone); }
+    let mut order: Vec<Value> = v["order"].as_array().cloned().unwrap_or_default().into_iter().filter(|x| x != &json!(gone)).collect();
+    let first = match next {
+        Some(n) => { if own_tree { v["sessions"][n]["ownTree"] = json!(true); } n.to_string() }
+        None => { v["sessions"][fresh] = meta_new(""); order.insert(0, json!(fresh)); fresh.to_string() }
+    };
+    v["order"] = json!(order); v["primary"] = json!(first);
+    let cur = s(v, "current");
+    if cur == gone || v["sessions"].get(&cur).is_none() { v["current"] = json!(first); }
+    first
+}
+/// A file moved to where another one was (that one goes); nothing to move = the other one goes too.
+fn move_over(from: &std::path::Path, to: &std::path::Path) {
+    pgm_core_internal::store::forget_hot(from); pgm_core_internal::store::forget_hot(to);
+    if from.exists() { if std::fs::rename(from, to).is_err() { let _ = std::fs::copy(from, to); let _ = std::fs::remove_file(from); } } else { let _ = std::fs::remove_file(to); }
+}
+/// Session `sid`'s own files into the first session's places (§ 4a): its conversation becomes work-current.json, its journal
+/// work-journal.jsonl (and its .old.jsonl); its own file goes. Returns its state (work.json's keys). The caller holds LOCK.
+fn take_over_files(a: &Account, sid: &str) -> Value {
+    let f = file_of(a, sid);
+    let mut cur = crate::work::current_of(&f["current"]);
+    crate::work::save_work_current(a, &mut cur);
+    let from = journal_file(a, &Sx { sid: sid.to_string(), key: String::new(), primary: false, own: true });
+    let to = a.dir.join("work-journal.jsonl");
+    move_over(&from, &to); move_over(&from.with_extension("old.jsonl"), &to.with_extension("old.jsonl"));
+    let _ = std::fs::remove_file(session_file(a, sid));
+    if f["state"].is_object() { f["state"].clone() } else { json!({}) }
+}
+/// A fresh first session's state: the deleted one's settings (provider, model, project), never its harness session.
+fn fresh_state(old: &Value) -> Value {
+    let mut m = Map::new();
+    for k in ["provider", "model", "project", "noProject"] { if !old[k].is_null() { m.insert(k.into(), old[k].clone()); } }
+    Value::Object(m)
+}
+/// Deletes the first session's data (its run stopped and its journal gone already) and puts the next one in its place, or
+/// a fresh empty one (§ 4a). The person's own worktree is not touched. Returns (the first session now, the promoted one).
+fn delete_first(w: &Work, a: &Account, sx: &Sx) -> (String, Option<String>) {
+    let old = sstate(w, a, sx);
+    let busy: Vec<String> = ids_of(&index(a)).into_iter().filter(|x| x != &sx.sid && w.busy_key(&format!("{}#{x}", a.username))).collect();
+    w.forget_ended(&sx.key);
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut v = index_unlocked(a);
+    let next = successor(&v, &sx.sid, |x| busy.iter().any(|b| b == x));
+    let state = match &next {
+        Some(n) => take_over_files(a, n),
+        None => { let mut c = crate::work::current_of(&json!({})); crate::work::save_work_current(a, &mut c); fresh_state(&old) }
+    };
+    let own_tree = next.as_ref().map(|n| v["sessions"][n]["worktree"]["branch"] == json!(format!("work/{}.{}", a.username, n.trim_start_matches("s-")))).unwrap_or(false);
+    let first = first_replaced(&mut v, &sx.sid, next.as_deref(), &new_sid(), own_tree);
+    w.update_state(a, |m| { m.clear(); if let Some(o) = state.as_object() { m.extend(o.clone()); } });
+    write_json(&index_file(a), &v);
+    if let Some(n) = &next { w.forget_ended(&format!("{}#{n}", a.username)); }
+    (first, next)
+}
 
 /// The session routes (signed in as `a`); None = not one of them.
 pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
@@ -279,22 +367,27 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         "/api/work/sessions/delete" if post => {
             let Some(sx) = resolve(a, &id).filter(|_| !id.is_empty()) else { return Some(answer(404, json!({ "error": "No such session." }))) };
-            if sx.primary { return Some(answer(400, json!({ "error": "Your first session can be hidden or archived, not deleted (older pages and the fallback hub use it)." }))); }
-            // its running agents are stopped first (plans/multi-session.md § 4)
+            // its running agents are stopped first (plans/multi-session.md § 4), the first session's too (§ 4a)
             if w.busy_key(&sx.key) { w.stop(&**hub, &sx.key); for _ in 0..100 { if !w.busy_key(&sx.key) { break; } tokio::time::sleep(std::time::Duration::from_millis(100)).await; } }
             let none = w.is_none(a, &sx);
             let project = { let p = s(&sstate(w, a, &sx), "project"); if p.is_empty() { pgm_collab_internal::worktree::HUB_PROJECT.to_string() } else { p } };
             let wt = &w.wt; let (u, hex) = (a.username.clone(), sx.hex().to_string());
-            let tree = if none { String::new() } else { tokio::task::block_in_place(|| wt.remove_session(&u, &hex, &project)) };
-            let _ = std::fs::remove_file(session_file(a, &sx.sid));
+            // its own worktree goes as in § 2a; a first session without one of its own works in work/<user>, which is never touched
+            let tree = if none || !sx.own { String::new() } else { tokio::task::block_in_place(|| wt.remove_session(&u, &hex, &project)) };
             let j = journal_file(a, &sx); pgm_core_internal::store::global().flush(); let _ = std::fs::remove_file(&j); pgm_core_internal::store::forget_hot(&j); let _ = std::fs::remove_file(j.with_extension("old.jsonl"));
-            with_index(a, |v| { if let Some(o) = v["sessions"].as_object_mut() { o.remove(&sx.sid); } let order: Vec<Value> = v["order"].as_array().cloned().unwrap_or_default().into_iter().filter(|x| x != &json!(sx.sid)).collect(); v["order"] = json!(order); if v["current"] == json!(sx.sid) { v["current"] = v["primary"].clone(); } });
-            answer(200, json!({ "ok": true, "worktree": tree }))
+            if !sx.primary {
+                let _ = std::fs::remove_file(session_file(a, &sx.sid));
+                let first = with_index(a, |v| { if let Some(o) = v["sessions"].as_object_mut() { o.remove(&sx.sid); } let order: Vec<Value> = v["order"].as_array().cloned().unwrap_or_default().into_iter().filter(|x| x != &json!(sx.sid)).collect(); v["order"] = json!(order); if v["current"] == json!(sx.sid) { v["current"] = v["primary"].clone(); } v["primary"].clone() });
+                return Some(answer(200, json!({ "ok": true, "deleted": sx.sid, "primary": first, "promoted": Value::Null, "fresh": false, "worktree": tree })));
+            }
+            // the first session (§ 4a): its data goes, the next one takes its place (or a fresh empty one)
+            let (first, next) = delete_first(w, a, &sx);
+            answer(200, json!({ "ok": true, "deleted": sx.sid, "primary": first, "promoted": next, "fresh": next.is_none(), "worktree": tree }))
         }
         // "Merge into my work" (plans/multi-session.md § 2a): the session's commits into work/<user> (worktree.js home)
         "/api/work/sessions/home" if post => {
             let Some(sx) = resolve(a, &id).filter(|_| !id.is_empty()) else { return Some(answer(404, json!({ "error": "No such session." }))) };
-            if sx.primary { return Some(answer(400, json!({ "error": "Your first session works in your own worktree already." }))); }
+            if !sx.own { return Some(answer(400, json!({ "error": "Your first session works in your own worktree already." }))); }
             if w.is_none(a, &sx) { return Some(answer(400, json!({ "error": "This session has no project, so there is no worktree to merge." }))); }
             let project = { let p = s(&sstate(w, a, &sx), "project"); if p.is_empty() { pgm_collab_internal::worktree::HUB_PROJECT.to_string() } else { p } };
             let mut env = w.work_env(&a.username); env.push(("GIT_TERMINAL_PROMPT".into(), "0".into()));
@@ -344,4 +437,88 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         _ => answer(404, json!({ "error": "Unknown endpoint" })),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn list_of(order: &[&str], primary: &str) -> Value {
+        let mut ss = Map::new(); for x in order { ss.insert(x.to_string(), meta_new(x)); }
+        json!({ "primary": primary, "current": primary, "order": order, "sessions": ss })
+    }
+    #[test]
+    fn the_next_session_takes_over_the_first_one() {
+        // the usual first session is the oldest (last in order): the oldest of the others takes over
+        let v = list_of(&["s-c", "s-b", "s-a"], "s-a");
+        assert_eq!(successor(&v, "s-a", |_| false).as_deref(), Some("s-b"));
+        // one after it (older) first, then the nearest newer one
+        let v = list_of(&["s-c", "s-a", "s-b"], "s-a");
+        assert_eq!(successor(&v, "s-a", |_| false).as_deref(), Some("s-b"));
+        assert_eq!(successor(&v, "s-a", |x| x == "s-b").as_deref(), Some("s-c"), "a session with a run going is never moved");
+        // a planner session is skipped; archived ones only when nothing else is left
+        let mut v = list_of(&["s-d", "s-c", "s-b", "s-a"], "s-a");
+        v["sessions"]["s-b"]["mode"] = json!("planner"); v["sessions"]["s-c"]["archived"] = json!(true);
+        assert_eq!(successor(&v, "s-a", |_| false).as_deref(), Some("s-d"));
+        assert_eq!(successor(&v, "s-a", |x| x == "s-d").as_deref(), Some("s-c"));
+        assert_eq!(successor(&v, "s-a", |x| x != "s-b").as_deref(), None, "only a planner left: nobody, a fresh one is made");
+        assert_eq!(successor(&list_of(&["s-a"], "s-a"), "s-a", |_| false), None);
+        // an id the order lost still counts
+        let mut v = list_of(&["s-a"], "s-a"); v["sessions"]["s-z"] = meta_new("z");
+        assert_eq!(successor(&v, "s-a", |_| false).as_deref(), Some("s-z"));
+    }
+    #[test]
+    fn the_list_after_the_first_session_is_deleted() {
+        let mut v = list_of(&["s-c", "s-b", "s-a"], "s-a");
+        assert_eq!(first_replaced(&mut v, "s-a", Some("s-b"), "s-new", true), "s-b");
+        assert_eq!(v["primary"], json!("s-b")); assert_eq!(v["current"], json!("s-b"));
+        assert_eq!(v["order"], json!(["s-c", "s-b"])); assert!(v["sessions"].get("s-a").is_none());
+        assert_eq!(v["sessions"]["s-b"]["ownTree"], json!(true)); assert!(v["sessions"].get("s-new").is_none());
+        // the session open elsewhere stays open
+        let mut v = list_of(&["s-c", "s-b", "s-a"], "s-a"); v["current"] = json!("s-c");
+        first_replaced(&mut v, "s-a", Some("s-b"), "s-new", false);
+        assert_eq!(v["current"], json!("s-c")); assert!(v["sessions"]["s-b"].get("ownTree").is_none());
+        // the only one: a fresh empty first session
+        let mut v = list_of(&["s-a"], "s-a");
+        assert_eq!(first_replaced(&mut v, "s-a", None, "s-new", false), "s-new");
+        assert_eq!(v["primary"], json!("s-new")); assert_eq!(v["current"], json!("s-new")); assert_eq!(v["order"], json!(["s-new"]));
+        assert_eq!(v["sessions"]["s-new"]["title"], json!("")); assert_eq!(v["sessions"].as_object().unwrap().len(), 1);
+        // the sx of a promoted first session with its own worktree works there; a plain first one does not
+        let a = Account { username: "sponge".into(), dir: std::env::temp_dir(), admin: false, display: "Sponge".into() };
+        let mut v = list_of(&["s-b", "s-a"], "s-a");
+        let (p, o) = (sx_in(&a, &v, "s-a"), sx_in(&a, &v, "s-b")); assert!(p.primary && !p.own && p.key == "sponge"); assert!(!o.primary && o.own && o.key == "sponge#s-b");
+        first_replaced(&mut v, "s-a", Some("s-b"), "s-new", true);
+        let b = sx_in(&a, &v, "s-b"); assert!(b.primary && b.own && b.key == "sponge");
+    }
+    #[test]
+    fn the_promoted_session_s_files_move_into_the_first_session_s_places() {
+        let tmp = std::env::temp_dir().join(format!("vr-sess-promote-{}", std::process::id())); let _ = std::fs::remove_dir_all(&tmp); std::fs::create_dir_all(tmp.join("work-sessions")).unwrap();
+        let a = Account { username: "sponge".into(), dir: tmp.clone(), admin: false, display: "Sponge".into() };
+        let sid = "s-0123456789ab";
+        write_json(&session_file(&a, sid), &json!({ "state": { "provider": "host", "claudeSessionId": "cs-b" }, "current": { "transcript": [{ "cls": "me", "text": "only in b" }], "queue": ["next"] } }));
+        std::fs::write(tmp.join("work-sessions").join(format!("{sid}.jsonl")), "{\"run\":\"r-b\",\"user\":\"b says\"}\n").unwrap();
+        std::fs::write(tmp.join("work-sessions").join(format!("{sid}.old.jsonl")), "old b\n").unwrap();
+        std::fs::write(tmp.join("work-journal.jsonl"), "{\"run\":\"r-a\",\"user\":\"a says\"}\n").unwrap();
+        std::fs::write(tmp.join("work-journal.old.jsonl"), "old a\n").unwrap();
+        write_json(&tmp.join("work-current.json"), &json!({ "transcript": [{ "cls": "me", "text": "only in a" }] }));
+        let st = take_over_files(&a, sid);
+        assert_eq!(st, json!({ "provider": "host", "claudeSessionId": "cs-b" }));
+        let cur = crate::work::work_current(&a);
+        assert_eq!(cur["transcript"], json!([{ "cls": "me", "text": "only in b" }])); assert_eq!(cur["queue"], json!(["next"]));
+        // the shape the frozen JS hub reads: the same keys as ever
+        let raw = read_json(&tmp.join("work-current.json")).unwrap();
+        let mut keys: Vec<&String> = raw.as_object().unwrap().keys().collect(); keys.sort();
+        assert_eq!(keys, ["archiveId", "archiveTitle", "queue", "run", "sendNow", "transcript", "updatedAt"]);
+        assert_eq!(std::fs::read_to_string(tmp.join("work-journal.jsonl")).unwrap(), "{\"run\":\"r-b\",\"user\":\"b says\"}\n");
+        assert_eq!(std::fs::read_to_string(tmp.join("work-journal.old.jsonl")).unwrap(), "old b\n");
+        assert!(!session_file(&a, sid).exists() && !tmp.join("work-sessions").join(format!("{sid}.jsonl")).exists());
+        // a session without a journal of its own: the first session's old one goes (never another session's lines)
+        let sid2 = "s-ba9876543210";
+        write_json(&session_file(&a, sid2), &json!({ "state": {}, "current": {} }));
+        assert_eq!(take_over_files(&a, sid2), json!({}));
+        assert!(!tmp.join("work-journal.jsonl").exists() && !tmp.join("work-journal.old.jsonl").exists());
+        assert_eq!(crate::work::work_current(&a)["transcript"], json!([]));
+        // a fresh first session keeps the settings, never the harness session
+        assert_eq!(fresh_state(&json!({ "provider": "h:x/claude", "model": "m", "project": "P", "claudeSessionId": "cs", "claudeSessionWhere": "hub", "sessionHarness": "jcode", "ctx": 5, "lastRunAt": 1 })), json!({ "provider": "h:x/claude", "model": "m", "project": "P" }));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
