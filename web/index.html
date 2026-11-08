@@ -664,6 +664,49 @@
   /* Settings tabs + profiles (web/profile.js) */
   .setTabs { display: flex; gap: .25rem; padding: 0 1rem .5rem; border-bottom: 1px solid var(--line); }
   .setTabs button.on { background: var(--accent); color: var(--on-accent); }
+  /* T-318: Settings layout. The box is wider; the tabs stay on one line (they scroll sideways on a phone); each tab is a
+     column of groups (.setGroup: heading, one-line hint, controls); rows are label left / control right, stacked on narrow
+     screens; the Save bar sticks to the bottom of the box; a tab with many groups lists them in a sticky column. */
+  #settings .setBox { width: min(800px, 96vw); height: min(86vh, 900px); }
+  #settings .bar { gap: .6rem; }
+  #settings .bar > span { flex: none; font-size: .95rem; }
+  #setFind { flex: 1; min-width: 0; max-width: 20rem; margin-left: auto; padding: .35rem .65rem; font-size: .85rem; }
+  .setTabs { overflow-x: auto; scrollbar-width: none; padding-top: .5rem; }
+  .setTabs button { flex: none; white-space: nowrap; display: inline-flex; align-items: center; }
+  #settings .setBody { flex: 1; min-height: 0; padding: 1rem 1.1rem 0; display: block; }
+  #settings [data-setpane] { display: flex; flex-direction: column; gap: .9rem; padding-bottom: 1rem; }
+  #settings [data-setpane].hasNav { flex-direction: row; align-items: flex-start; gap: 1rem; }
+  .setMain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .9rem; }
+  .setNav { order: -1; flex: none; width: 10.5rem; position: sticky; top: 0; display: flex; flex-direction: column; gap: .15rem; }
+  .setNav button { text-align: left; border: 0; padding: .35rem .6rem; font-size: .82rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .setGroup { display: flex; flex-direction: column; gap: .65rem; scroll-margin-top: .5rem; }
+  .setGroup > h3 { margin: 0; font-size: .95rem; font-weight: 700; }
+  .setHint { margin: -.4rem 0 .1rem; font-size: .8rem; line-height: 1.45; color: var(--muted); }
+  #setNone { margin: 1rem 0; }
+  #settings .setBody small { display: block; color: var(--muted); font-size: .78rem; line-height: 1.4; font-weight: 400; }
+  #settings .setBody label > small, #settings .setField > small { margin-top: -.15rem; }
+  .setField { display: flex; flex-direction: column; gap: .3rem; }
+  #settings .setBody label.chk { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .6rem; line-height: 1.35; cursor: pointer; }
+  #settings .setBody label.chk > input { margin: .1rem 0 0; }
+  #settings .setBody label.chk small .ic { width: 1em; height: 1em; }
+  #settings .setBody label.setRow { display: grid; grid-template-columns: 1fr minmax(11rem, 20rem); align-items: center; gap: .4rem 1rem; }
+  #settings .setBody label.setRow > select, #settings .setBody label.setRow > input { width: 100%; }
+  #settings .setBody label.setRow > input[type="number"] { width: 7rem; justify-self: end; }
+  #settings .slider { grid-template-columns: minmax(8rem, 13rem) 1fr 2.4rem; }
+  #settings .slider > span:last-child { text-align: right; font-size: .8rem; color: var(--muted); }
+  .setSave { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: .6rem; margin: 0 -1.1rem; padding: .65rem 1.1rem; border-top: 1px solid var(--line); background: var(--panel); }
+  @media (min-width: 861px) { .setBox:not(.searching) .hasNav .setSave { margin-left: -12.6rem; padding-left: 12.6rem; } } /* under the section list too: the bar spans the box */
+  .sfOut { display: none !important; }
+  .setBox.searching #profilePreview, .setBox.searching .setNav { display: none; }
+  .setBox.searching .setTabs button.on { background: transparent; color: var(--muted); box-shadow: none; }
+  @media (max-width: 860px) { .setNav { display: none; } #settings [data-setpane].hasNav { display: flex; flex-direction: column; } }
+  @media (max-width: 700px) { #settings .setBox { width: 100vw; height: 100dvh; max-height: 100dvh; } #settings .setBody { padding: .8rem .8rem 0; } .setSave { margin: 0 -.8rem; padding: .6rem .8rem calc(.6rem + env(safe-area-inset-bottom)); } }
+  @media (max-width: 560px) {
+    #settings .setBody label.setRow { grid-template-columns: 1fr; }
+    #settings .setBody label.setRow > input[type="number"] { justify-self: start; }
+    #settings .slider { grid-template-columns: 1fr 2.4rem; } #settings .slider > span:first-child { grid-column: 1 / -1; margin-bottom: -.4rem; }
+    #settings .bar > span { display: none; } #setFind { max-width: none; margin-left: 0; }
+  }
   #profileCard { position: fixed; z-index: 46; }
   .pCard { width: 300px; max-width: 94vw; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 34px rgba(0,0,0,.45); position: relative; }
   .pBanner { height: 64px; }
@@ -1156,88 +1199,103 @@
 <div id="toasts"></div>
 
 <div id="settings" class="modal" hidden>
-  <div class="box">
-    <div class="bar"><span>Settings</span><button class="ghost" id="closeSettings">Close</button></div>
+  <div class="box setBox">
+    <!-- T-318: the title, a filter over every tab's settings (web/profile.js SETFIND) and Close (Escape too) -->
+    <div class="bar"><span>Settings</span><input id="setFind" type="search" placeholder="Find a setting…" aria-label="Find a setting" spellcheck="false" autocomplete="off"><button class="ghost" id="closeSettings"><svg class="ic lead"><use href="#i-close"/></svg>Close</button></div>
     <!-- four tabs (web/profile.js): Profile = what others see (user settings); App = how VibeRoller behaves for you
          (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons;
          Downloads = the native applications (Vibe Roller Desktop, Vibe Roller AI Host) for Windows and Linux, and how
-         each one stays up to date -->
+         each one stays up to date. Each tab is made of groups (.setGroup: a heading, one line on what is inside, the
+         controls); a tab with three or more groups gets a sticky list of them on wide screens (web/profile.js). -->
     <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App settings</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button><button type="button" class="ghost" data-settab="downloads"><svg class="ic lead"><use href="#i-download"/></svg>Downloads</button></div>
     <div class="setBody">
+     <div id="setNone" class="setHint" hidden>No setting matches that. Try another word, or clear the box to see every tab.</div>
      <div data-setpane="profile">
       <div id="profilePreview"></div>
-      <label>Nickname (shown with your messages; others can @ you by it)
+      <section class="setGroup"><h3>Name and colour</h3><p class="setHint">How your name looks to everyone, in every theme.</p>
+       <label>Nickname<small>Shown with your messages; others can @ you by it.</small>
         <input id="setNick" maxlength="32" placeholder="leave empty to use your account name"></label>
-      <div>Your colour (same for everyone, adjusts to each theme; your name and, by default, your profile follow it)<div class="swatches" id="setColors"></div></div>
+       <div class="setField">Your colour<small>The same for everyone and adjusted to each theme; your name and, by default, your profile banner follow it.</small><div class="swatches" id="setColors"></div></div>
+      </section>
       <div id="profileBox"></div>
      </div>
      <div data-setpane="app" hidden>
-      <label class="chk"><input type="checkbox" id="setSound"> Sound when a chat message arrives</label>
-      <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <label class="row">Sound style <select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
-      <details class="setSection" open><summary>When the AI asks</summary>
-        <label class="chk"><input type="checkbox" id="setAskAuto"> If I do not respond, use the recommended answers (marked "chosen by default")</label>
-        <label class="row">…after this many minutes <input type="number" id="setAskMin" min="1" max="1440" step="1" style="width:6rem"></label>
-        <label class="chk"><input type="checkbox" id="setAskActivity"> Any activity on the page while a question is open (a click, a key, coming back to the window) makes it wait for me again</label>
-        <label class="chk"><input type="checkbox" id="setAskTts"> Say "User action required" and the question aloud (needs the text to speech master switch below; Do not disturb mutes it)</label>
-        <div class="status">Off: the AI waits for you as long as it takes. The alert sound has its own volume above.</div>
-      </details>
-      <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
-      <label class="chk"><input type="checkbox" id="setReopen"> Reopen what I had open after a reload (the previous Work conversation and the chat you were in; off: a reload starts fresh on the menu, nothing is deleted)</label>
-      <label class="chk"><input type="checkbox" id="setEnhance"> Show the prompt enhancer (the sparkle button <svg class="ic"><use href="#i-sparkle"/></svg> under + in Work: a throw-away Claude rewrites your prompt clearer and task by task, keeping everything you said; you read it before sending)</label>
-      <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
-      <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
-      <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
-      <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
-      <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
-      <label>Voice<select id="ttsVoice"></select></label>
-      <label>Read<select id="ttsScope"><option value="all">every message from others</option><option value="mine">only @mentions, private messages and replies to me</option></select></label>
-      <label class="chk"><input type="checkbox" id="audNoise"> Noise suppression for my microphone (voice clips and calls)</label>
-      <label class="chk"><input type="checkbox" id="audEcho"> Echo cancellation</label>
-      <label class="chk"><input type="checkbox" id="audAgc"> Automatic microphone level</label>
-      <div class="slider"><span>Call volume</span><input type="range" id="callVolume" min="0" max="100"><span></span></div>
-      <label>Video quality (camera in calls)<select id="callQuality"><option value="low">Low — 320×180, saves bandwidth</option><option value="medium">Medium — 640×360</option><option value="high">High — 1280×720</option></select></label>
-      <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
-      <label class="chk"><input type="checkbox" id="clipAuto"> Auto-play incoming voice clips (queued together with read-aloud)</label>
-      <div><button type="button" class="ghost" id="ttsStop"><svg class="ic lead"><use href="#i-stop"/></svg>Stop reading / playing and clear the queue</button></div>
-      <label>Auto-save Claude sessions to Past sessions<select id="setAutosave">
+      <section class="setGroup" id="sgSounds"><h3>Sounds</h3><p class="setHint">A short sound for each kind of news, each with its own volume; ▷ plays it in the style picked below.</p>
+       <label class="chk"><input type="checkbox" id="setSound"><span>Sound when a chat message arrives</span></label>
+       <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <label class="setRow"><span>Sound style</span><select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
+      </section>
+      <section class="setGroup" id="sgAsk"><h3>When the AI asks</h3><p class="setHint">Off: the AI waits for you as long as it takes. The alert sound has its own volume under Sounds.</p>
+       <label class="chk"><input type="checkbox" id="setAskAuto"><span>If I do not respond, use the recommended answers<small>The ones marked "chosen by default".</small></span></label>
+       <label class="setRow"><span>…after this many minutes</span><input type="number" id="setAskMin" min="1" max="1440" step="1"></label>
+       <label class="chk"><input type="checkbox" id="setAskActivity"><span>Any activity on the page makes it wait for me again<small>While a question is open: a click, a key, coming back to the window.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setAskTts"><span>Say "User action required" and the question aloud<small>Needs the text to speech master switch under Read aloud; Do not disturb mutes it.</small></span></label>
+      </section>
+      <section class="setGroup" id="sgWork"><h3>Chat and Work</h3><p class="setHint">How conversations behave on your screen.</p>
+       <label class="chk"><input type="checkbox" id="setToasts"><span>Floating pop-ups for new chat messages while in Work</span></label>
+       <label class="chk"><input type="checkbox" id="setReopen"><span>Reopen what I had open after a reload<small>The previous Work conversation and the chat you were in. Off: a reload starts fresh on the menu; nothing is deleted.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setEnhance"><span>Show the prompt enhancer<small>The sparkle button <svg class="ic"><use href="#i-sparkle"/></svg> under + in Work: a throw-away Claude rewrites your prompt clearer and task by task, keeping everything you said; you read it before sending.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setAutoScroll"><span>Auto-scroll to the newest message, even when scrolled up<small>Off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself.</small></span></label>
+       <label class="setRow"><span>Auto-save Claude sessions to Past sessions</span><select id="setAutosave">
         <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
-      <label>Theme (follows you to every browser you sign in on)<select id="setTheme"></select></label>
-      <div><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
+      </section>
+      <section class="setGroup" id="sgSpeech"><h3>Read aloud</h3><p class="setHint">Everything VibeRoller says out loud: chat read-aloud and Unity's voice.</p>
+       <label class="chk"><input type="checkbox" id="setTtsAll"><span><b>Text to speech</b>: the master switch<small>Off = silence, whatever the switches below say.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setTtsUnity"><span>Unity speaks her replies in her own voice<small>The Unity screen's Voice button toggles this too.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setTts"><span>Read new chat messages aloud<small>Queued, one after another.</small></span></label>
+       <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
+       <label class="setRow"><span>Voice</span><select id="ttsVoice"></select></label>
+       <label class="setRow"><span>Read</span><select id="ttsScope"><option value="all">every message from others</option><option value="mine">only @mentions, private messages and replies to me</option></select></label>
+       <div><button type="button" class="ghost" id="ttsStop"><svg class="ic lead"><use href="#i-stop"/></svg>Stop reading / playing and clear the queue</button></div>
+      </section>
+      <section class="setGroup" id="sgCalls"><h3>Calls and voice clips</h3><p class="setHint">Your microphone, what you hear in calls and how voice clips play.</p>
+       <label class="chk"><input type="checkbox" id="audNoise"><span>Noise suppression for my microphone<small>Voice clips and calls.</small></span></label>
+       <label class="chk"><input type="checkbox" id="audEcho"><span>Echo cancellation</span></label>
+       <label class="chk"><input type="checkbox" id="audAgc"><span>Automatic microphone level</span></label>
+       <div class="slider"><span>Call volume</span><input type="range" id="callVolume" min="0" max="100"><span></span></div>
+       <label class="setRow"><span>Video quality (camera in calls)</span><select id="callQuality"><option value="low">Low — 320×180, saves bandwidth</option><option value="medium">Medium — 640×360</option><option value="high">High — 1280×720</option></select></label>
+       <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
+       <label class="chk"><input type="checkbox" id="clipAuto"><span>Auto-play incoming voice clips<small>Queued together with read-aloud.</small></span></label>
+      </section>
+      <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
+       <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
+      </section>
+      <!-- one Save for the whole tab, always in reach at the bottom of the box -->
+      <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
       <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
       <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
      </div>
      <div data-setpane="connections" hidden>
-      <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
-        <div id="apiBox" class="apiBox"></div></div>
-      <div class="setSection"><b>Signed-in devices</b> — tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.
-        <div id="devBox" class="apiBox"></div></div>
-      <div class="setSection"><b>My machines</b> — your own computers linked to your account (the VibeRoller app or <code>vr-host machine</code>), so your Work runs can use them within the scope you chose ON that machine. Only you see them and only your runs can use them. Pause or unlink one here; its scope and kill switch are set on the machine.
-        <div id="machBox" class="apiBox"></div></div>
-      <div class="setSection"><b>AI source</b> — whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).
-        <div id="srcBox" class="apiBox"></div></div>
-      <div class="setSection"><b>My AI hosts</b> — your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.
-        <div id="hostBox" class="apiBox"></div></div>
-      <div class="setSection"><b>My AIs</b> — hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.
-        <div id="provBox" class="provBox"></div></div>
-      <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
-        <div id="fjBox" class="apiBox"></div></div>
-      <div class="setSection"><b>My projects</b> — the projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.
-        <div id="projBox" class="apiBox"></div></div>
+      <section class="setGroup"><h3>AI source</h3><p class="setHint">Whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).</p>
+        <div id="srcBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
+        <div id="provBox" class="provBox"></div></section>
+      <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
+        <div id="hostBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>API access</h3><p class="setHint">Your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.</p>
+        <div id="apiBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>Signed-in devices</h3><p class="setHint">Tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.</p>
+        <div id="devBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My machines</h3><p class="setHint">Your own computers linked to your account (the VibeRoller app or <code>vr-host machine</code>), so your Work runs can use them within the scope you chose ON that machine. Only you see them and only your runs can use them. Pause or unlink one here; its scope and kill switch are set on the machine.</p>
+        <div id="machBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My Forgejo</h3><p class="setHint">Your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.</p>
+        <div id="fjBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My projects</h3><p class="setHint">The projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.</p>
+        <div id="projBox" class="apiBox"></div></section>
      </div>
      <!-- the native programs, pre-built, handed out by the Rust hub to people with an account (vr-hub downloads.rs) -->
      <div data-setpane="downloads" hidden>
-      <div class="setSection"><b>Staying up to date</b> — this page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</div>
+      <section class="setGroup"><h3>Staying up to date</h3><p class="setHint">This page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</p></section>
       <div id="dlBody"></div>
-      <div class="setSection"><b>VibeRoller Chat app from the browser</b> — the chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).
-        <div id="appBox" class="apiBox"></div></div>
+      <section class="setGroup"><h3>VibeRoller Chat app from the browser</h3><p class="setHint">The chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).</p>
+        <div id="appBox" class="apiBox"></div></section>
      </div>
     </div>
   </div>
@@ -5505,7 +5563,13 @@ $('saveSettings').onclick = async () => {
   } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }
 };
 $('closeSettings').onclick = () => { const from = settingsFrom; settingsFrom = null; genieIn($('settings').querySelector('.box'), from, () => { $('settings').hidden = true; }); };
-$('settings').onclick = (e) => { if (e.target.id === 'settings') $('settings').hidden = true; };
+// T-318: every way out of Settings is the same one (Close, a click beside the box, Escape): it goes back into its button.
+// Escape first clears "Find a setting" (web/profile.js) and leaves a menu or a profile card open over it to close first.
+$('settings').onclick = (e) => { if (e.target.id === 'settings') $('closeSettings').click(); };
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented || $('settings').hidden || !$('profileCard').hidden || document.querySelector('.vrMenu')) return;
+  $('closeSettings').click();
+});
 let settingsFrom = null; // the button Settings came out of (it goes back into it)
 document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = () => { settingsFrom = b; openSettings(); genieOut($('settings').querySelector('.box'), b); }; });
 // ── Downloads (Settings → Downloads): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by the
