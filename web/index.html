@@ -516,7 +516,7 @@
 
   .themeWrap { position: relative; }
   /* 5.42.1: a real dropdown: the button shows the current theme with a caret; the list opens on top of everything (a child
-     of the body, not of the header: R527 places it from the button, upwards when needed) and works from the keyboard */
+     of the body, not of the header: R535 places it from the button, upwards when needed) and works from the keyboard */
   #themeBtn { display: inline-flex; align-items: center; gap: .45rem; } #themeBtn .thSw { width: 1.3rem; height: .8rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
   #themeBtn .thCaret { width: .9rem; height: .9rem; opacity: .7; transition: transform .15s; } #themeBtn[aria-expanded="true"] .thCaret { transform: rotate(180deg); }
   #themeMenu { position: fixed; z-index: 58; /* the menu layer: over panels, floating windows and #msgMenu (50), under dialogs (60+) */ box-shadow: 0 10px 30px rgba(0,0,0,.35); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
@@ -1393,7 +1393,7 @@
   </div>
 </div>
 
-<!-- the Theme list (R527): a child of the page, not of the header, whose scrolling and blur would clip it and keep it under the panels -->
+<!-- the Theme list (R535): a child of the page, not of the header, whose scrolling and blur would clip it and keep it under the panels -->
 <div id="themeMenu" role="listbox" aria-label="Theme" hidden></div>
 <div id="shell" hidden>
   <header>
@@ -3690,7 +3690,7 @@ function buildThemeMenu() {
   add('');
   for (const name of Object.keys(THEMES)) add(name);
 }
-// R527: where the open list goes, from the button's rect r, the list's size w × h and the window vw × vh (pure: the suite runs it).
+// R535: where the open list goes, from the button's rect r, the list's size w × h and the window vw × vh (pure: the suite runs it).
 // Under the button, or upwards when it does not fit below and there is more room above; inside the window, never over the button.
 function themeMenuPlace(r, w, h, vw, vh) {
   const gap = 6, edge = 8, below = vh - r.bottom - gap - edge, above = r.top - gap - edge, up = h > below && above > below;

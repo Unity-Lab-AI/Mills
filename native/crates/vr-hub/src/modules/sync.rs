@@ -55,6 +55,12 @@ pub fn start(hub: &Arc<Hub>) {
     println!("{tag} on: this hub is \"{name}\" ({}), its peer {peer}", engine.id());
     let b = Arc::new(Bridge { engine: engine.clone(), secret: secret.clone(), peer: peer.clone() });
     if hub.mods.sync.set(b).is_err() { return; }
+    // the dev hub borrows live's AI hosts over the bridge (T-335, plans/dev-hub.md § 9): live's lists for all of this hub's
+    // accounts, every few seconds, in memory only
+    if hub.mods.instance.is_dev() {
+        let w2 = Arc::downgrade(hub);
+        hub.mods.ai.borrow_from(&peer, &secret, &name, Arc::new(move || w2.upgrade().map(|h| h.mods.auth.accounts().into_iter().map(|a| a.username).collect()).unwrap_or_default()));
+    }
     let e = engine.clone();
     super::forever("sync scan", move || wire::scan_loop(e.clone()));
     super::forever("sync send", move || wire::send_loop(engine.clone(), peer.clone(), secret.clone()));
@@ -67,10 +73,82 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, rest: &str) -> Routed {
         eprintln!("[vr-hub] sync: refused {} /__sync/{rest} from {}: {why}", r.method, r.peer.ip());
         return Routed::Answer(jresp(st, &json!({ "error": why })));
     }
+    if let Some(what) = rest.strip_prefix("ai/") { return ai_route(hub, r, what).await; }
     let (m, rest, q, body) = (r.method.to_string(), rest.to_string(), r.param("hub").unwrap_or_default(), r.body.clone());
     let e = b.engine.clone();
     let (st, v) = tokio::task::spawn_blocking(move || wire::answer(&e, &m, &rest, &q, &body)).await.unwrap_or((500, json!({ "error": "the sync failed inside the hub" })));
     Routed::Answer(jresp(st, &v))
+}
+
+/// Whom this hub lends its AI hosts to over the bridge (config `sync.shareAi`, T-335): on by default when the bridge is
+/// set up (both hubs are ours, on this machine, behind the gate and the shared secret); `false` = nobody (the route answers
+/// 404, as an older hub does); `{ "users": [...] }` = those accounts only.
+enum Share { Off, All, Only(Vec<String>) }
+fn share_of(hub: &Hub) -> Share {
+    let v = hub.cfg.get("sync").map(|s| s["shareAi"].clone()).unwrap_or(Value::Null);
+    match v {
+        Value::Bool(false) => Share::Off,
+        Value::Object(o) if o.get("users").is_some_and(Value::is_array) => Share::Only(o["users"].as_array().map(|a| a.iter().filter_map(|u| u.as_str().map(|u| u.trim().to_lowercase())).collect()).unwrap_or_default()),
+        _ => Share::All,
+    }
+}
+/// One borrowing call into the security log (actor = the account it is for, detail.via = the hub that asked). Work runs,
+/// cancels, PC tools and refusals every time; listings and model calls once per account and kind per 10 minutes (a run
+/// makes hundreds of model calls, and the listing is asked for every 3 s).
+fn audit_peer(account: &str, action: &str, target: &str, detail: Value, every: bool) {
+    static SEEN: std::sync::OnceLock<Mutex<std::collections::HashMap<String, u64>>> = std::sync::OnceLock::new();
+    if !every {
+        let now = pgm_core_internal::now_ms(); let key = format!("{account}|{action}|{target}");
+        let mut m = SEEN.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        if m.get(&key).is_some_and(|t| now.saturating_sub(*t) < 600_000) { return; }
+        m.insert(key, now);
+    }
+    println!("[vr-hub] sync: ai {action} for {} ({target}, via {})", if account.is_empty() { "the hub" } else { account }, detail["via"].as_str().unwrap_or(""));
+    pgm_core_internal::audit::record(account, action, target, detail, "");
+}
+/// /__sync/ai/<what> (T-335, plans/dev-hub.md § 9): the dev hub borrowing this hub's AI hosts, already through the gate.
+/// Every call names the account it is for: one this hub does not have (or that sync.shareAi does not lend to) is refused
+/// (403, and logged); the rest is `ai_serve`, as the JavaScript hub's calls are, with that account's checks.
+async fn ai_route(hub: &Arc<Hub>, r: &Req, what: &str) -> Routed {
+    use pgm_ai_internal::ai_peer;
+    let share = share_of(hub);
+    if matches!(share, Share::Off) { return Routed::Answer(jresp(404, &json!({ "error": "This hub does not lend its AI hosts (sync.shareAi is off)." }))); }
+    let via: String = r.header(ai_peer::PEER_HEADER).unwrap_or("dev").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(20).collect();
+    let via = if via.is_empty() { "dev".to_string() } else { via };
+    let known = |u: &str| super::auth::valid_username(u) && hub.mods.has(u) && match &share { Share::Only(l) => l.iter().any(|x| x == u), _ => true };
+    let refuse = |account: &str, why: &str| {
+        audit_peer("", "ai.peer.refused", account, json!({ "via": via, "call": what, "why": why }), true);
+        Routed::Answer(jresp(403, &json!({ "error": why })))
+    };
+    let deny = |u: &str| if hub.mods.has(u) { format!("This hub does not lend its AI hosts to {u} (sync.shareAi).") } else { format!("Live does not know the account {u}.") };
+    match what {
+        "providers" if r.method == hyper::Method::GET => {
+            let one = r.param("user").unwrap_or_default();
+            let users: Vec<String> = if !one.is_empty() { vec![one.trim().to_lowercase()] } else { r.param("users").unwrap_or_default().split(',').map(|u| u.trim().to_lowercase()).filter(|u| !u.is_empty()).take(500).collect() };
+            if !one.is_empty() && !known(&users[0]) { return refuse(&users[0], &deny(&users[0])); }
+            for u in users.iter().filter(|u| known(u)) { audit_peer(u, "ai.peer.providers", "", json!({ "via": via }), false); }
+            Routed::Answer(jresp(200, &ai_peer::providers_answer(&hub.mods.ai, &users, &known)))
+        }
+        "fetch" | "work" | "cancel" | "pc-tool" if r.method == hyper::Method::POST => {
+            let (account, detail) = if what == "fetch" {
+                use base64::Engine;
+                let meta: Value = r.header(ai_peer::META_HEADER).and_then(|h| base64::engine::general_purpose::STANDARD.decode(h).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(json!({}));
+                let mode = meta["mode"].as_str().unwrap_or("").to_string();
+                (meta["account"].as_str().unwrap_or("").to_string(), json!({ "via": via, "mode": mode, "host": meta["host"], "provider": meta["provider"], "engine": meta["engine"], "use": meta["use"] }))
+            } else {
+                let b = r.json();
+                (b["account"].as_str().unwrap_or("").to_string(), json!({ "via": via, "host": b["host"], "provider": b["provider"], "machine": b["machine"], "tool": b["name"], "id": b["id"], "project": b["payload"]["project"] }))
+            };
+            // Unity's engines are lent to the hub, not to a person: an engine call may name nobody (the hub itself)
+            let engine = what == "fetch" && detail["mode"] == json!("engine");
+            if !(engine && account.is_empty()) && !known(&account) { return refuse(&account, &deny(&account)); }
+            let action = match what { "fetch" => "ai.peer.fetch", "work" => "ai.peer.work", "cancel" => "ai.peer.cancel", _ => "ai.peer.pc" };
+            let target = if what == "fetch" { format!("{}{}", detail["mode"].as_str().unwrap_or(""), detail["host"].as_str().map(|h| format!(" {h}")).unwrap_or_default()) } else { detail["host"].as_str().or(detail["machine"].as_str()).unwrap_or("").to_string() };
+            audit_peer(&account, action, &target, detail, what != "fetch");
+            super::ai_serve(hub, r, what, Some(&ai_peer::Who { account, peer: via.clone() })).await
+        }
+        _ => Routed::Answer(jresp(404, &json!({ "error": "Not found" }))),
+    }
 }
 
 /// The losing side of a conflict on a kind with no history of its own (accounts, keys, boards, pictures): kept in

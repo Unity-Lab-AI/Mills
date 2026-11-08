@@ -7,7 +7,7 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
-## 5.47.0 — 2026-11-07
+## 5.48.0 — 2026-11-08
 
 MINOR: **four of Mills's page tasks at once**: the Theme menu on top, tool calls grouped in Work, one menu kit for
 right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-224, T-298). Page only; no hub change.
@@ -15,7 +15,7 @@ right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-
 - **The Theme menu opens on top of every panel** (T-291; Sponge: it hid under the team chat and AI chat). The list lives
   in the page itself, not in the header, whose scrolling and blur clipped it. It sits on the menu layer: above panels,
   floating windows and the message menu, below real dialogs. It opens under the Theme button, or upwards when there is
-  more room, and stays inside the window on wide and narrow screens. Check: **R527** (the placement runs on wide,
+  more room, and stays inside the window on wide and narrow screens. Check: **R535** (the placement runs on wide,
   narrow, low and tiny windows).
 - **Tool calls in the Work transcript** (T-318, `web/tools.js` 1.0.0). Consecutive calls of the same kind (2 Reads,
   3 Bash calls…) fold into one group, in the order they arrive, live and in restored conversations alike, collapsed
@@ -38,6 +38,34 @@ right-click and ⋯, and the agent threads in the page (T-291, T-318, T-223 / T-
   **R532b** (a hub without them); **R482p** is a plain check now.
 - Modules: `web/index.html` 1.39.0, `web/sessions.js` 1.2.0, `web/guilds.js` 1.2.0, `web/board.js` 1.2.0,
   `web/notes.js` 1.1.0, `web/library.js` 1.2.0, `web/polish.css` 1.0.3, `web/sw.js` 1.0.9 (caches the three new files).
+
+## 5.47.0 — 2026-11-07
+
+MINOR: **the dev hub borrows live's AI hosts over the bridge** (T-335 … T-340, scoped by Mills: Work on dev.portal said
+"No AI is available for Work", since every AI host polls live and dev had none). Design: plans/dev-hub.md § 9.
+
+- **Live lends** (`/__sync/ai/{providers, fetch, work, cancel, pc-tool}` in vr-hub `sync.rs`, behind the bridge gate):
+  every call names the account it is for; an account live does not have, or that `sync.shareAi` does not lend to, is
+  refused (403) and written to the security log. `sync.shareAi` is on by default when the bridge is set up; `false`
+  turns it off (404, as an older live); `{ "users": [...] }` lends to those accounts only. The JavaScript hub's
+  `/__front/ai/*` and the new route are one function (`ai_serve`), so live applies the same sharing, scopes, caps and
+  owner checks to a person on dev as to its own. Calls are audited as `ai.peer.*` with `via: "dev"` (runs, cancels, PC
+  tools and refusals every time; listings and model calls once per account and kind per 10 minutes).
+- **Dev borrows** (pgm-ai-internal `ai_peer.rs`, used from `ai_hosts.rs`): live's providers, hosts and engines for all
+  of dev's accounts, refreshed every 3 s in memory only; `providers_for` = dev's own hosts first, then live's, marked
+  `viaPeer`, with the same ids. A call for a host not connected to dev (the `/llm` relay and the Headroom path, a 2.x
+  host's `run_work` and Stop, Unity's engines, PC tools) goes over the bridge and streams back. A failure ends with
+  "(live's AI hosts are not reachable from dev right now)"; dev's `/api/status` has `aiPeer` (from this machine only).
+- **What stays where:** model calls and the host job run on live, and the host's usage windows and caps are counted
+  once there; the run's `hubUrl` / `mcpBase` stay dev's, so its board, notes and chat tools write to dev (dev keeps the
+  job's id and token; live refuses tools for a borrowed job); the day ledger is dev's. PC tools are picked and signed on
+  live for the machine's owner only (403 otherwise, no fallback). Hosts change nothing.
+- LAWS.md's dev-hub law: "AI hosts connect to live; dev borrows them over the bridge".
+- Checks R538–R543 (numbered R527–R532 until 5.46.1 took R527; two paired scratch Rust hubs, a stand-in host on "live" only), written as spec() first: a person
+  on dev sees live's hosts with their own scopes; a Work run on dev goes through live's host (the relay, a 2.x run,
+  Stop); its team tools stay on dev; a borrowed PC tool is the owner's only; dev without live's AI says so and keeps
+  working (live stopped, bridge off, an older live); live refuses an unknown account and logs every peer call. The
+  runner's `--stop-after` also stops at a spec() check.
 
 ## 5.46.3 — 2026-11-07
 

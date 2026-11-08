@@ -2,6 +2,8 @@
 //! - [`ai_hosts`]: machines that lend their AI to a hub (their Claude / ChatGPT login, local models, an assistant's
 //!   engines) by connecting out: the registry, the hub side of the host link (hello, jobs, replies, streams, events,
 //!   updates), sharing with allowed users, engines, the PC host, caps
+//! - [`ai_peer`]: the dev hub borrows live's AI hosts over the data bridge (T-335): live's side of the route (what it lends
+//!   an account, its checks) and dev's peer source (live's lists in memory, borrowed calls streamed over the bridge)
 //! - [`usage`]: usage windows (5 hours, 7 days) per source, from the events and the rate-limit headers
 //! - [`unity_time`]: the assistant's clock and calculator: time zones, "in 2 minutes" / dates, a safe calculator
 //! - [`unity_web`]: the assistant's web tools: search, news, weather, YouTube, reading a page (the address it checked,
@@ -30,6 +32,7 @@
 
 pub mod agents;
 pub mod ai_hosts;
+pub mod ai_peer;
 pub mod enhance;
 pub mod fj;
 pub mod gitpanel;
