@@ -7257,7 +7257,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.pure = sig(T.groups(seq));
       seen.broken = sig(T.groups([{ cls: 'tool', text: 'Bash  a' }, { cls: 'claude', text: 'hi' }, { cls: 'tool', text: 'Bash  b' }])); // an answer between them: two groups
       // the view, live: each call added as it streams in (the page's line('tool', …)), an answer bubble in between
-      const kept = {}, o = { document: { createElement: mkEl }, open: () => kept.open === '1', setOpen: (v) => { kept.open = v ? '1' : '0'; } };
+      const kept = {}, o = { document: { createElement: mkEl, createElementNS: (ns, tag) => Object.assign(mkEl(tag), { ns }) }, open: () => kept.open === '1', setOpen: (v) => { kept.open = v ? '1' : '0'; } };
       const domSig = (log) => log.children.filter((g) => has(g, 'tGroup')).map((g) => g.dataset.kind + ':' + all(g, (x) => has(x, 'tCall')).length).join(',');
       const live = mkEl('div');
       for (const t of seq) T.add(live, t, o);
@@ -7276,7 +7276,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       // show tools: the head opens the group, each call shows its one line; a click on one shows it whole
       head.onclick();
       seen.opened = has(bashG, 'open') && !all(bashG, (x) => has(x, 'tgList'))[0].hidden && /hide tools/.test(head.textContent);
-      seen.rows = all(bashG, (x) => has(x, 'tcSum')).map((x) => x.textContent.replace(/^\S+\s/, '')).join('|');
+      seen.rows = all(bashG, (x) => has(x, 'tcSum')).map((x) => x.textContent.trim()).join('|'); // the marker is a picture: no text of its own
       const row = all(bashG, (x) => has(x, 'tCall'))[2], full = all(row, (x) => has(x, 'tcFull'))[0];
       seen.fullBefore = full.hidden; all(row, (x) => has(x, 'tcSum'))[0].onclick(); seen.fullAfter = !full.hidden;
       // auto-expand them all: the choice is kept (the page keeps it per person) and opens every group and every call
@@ -7295,14 +7295,44 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       risk.whole = w.parts.map((p) => p.text).join('') === wrapped && w.level === 'danger';
       risk.wrapped = parts(wrapped); risk.neutral = w.parts.filter((p) => !p.level).map((p) => p.text).join('#');
       risk.chain = parts('cd /srv; ls | grep x && git log');
-      risk.marks = Object.keys(T.LEVELS).join(',') + ' ' + Object.values(T.LEVELS).map((l) => l.mark).join('');
-      risk.marksOk = Object.values(T.LEVELS).every((l) => l.mark && l.name) && new Set(Object.values(T.LEVELS).map((l) => l.mark)).size === 4;
+      // the markers: one SVG symbol of the page's sprite per level, each a different shape in currentColor (no text glyph any more)
+      risk.marks = Object.keys(T.LEVELS).join(',') + ' ' + Object.values(T.LEVELS).map((l) => l.icon).join(',');
+      const sym = (id) => (new RegExp('<symbol id="i-' + id + '" viewBox="0 0 24 24">(.*?)</symbol>').exec(page) || [])[1] || '';
+      risk.marksOk = Object.values(T.LEVELS).every((l) => l.icon && l.name && !('mark' in l) && /<(path|circle)\b/.test(sym(l.icon)) && /currentColor/.test(sym(l.icon)) && !/<text\b/.test(sym(l.icon)))
+        && new Set(Object.values(T.LEVELS).map((l) => l.icon)).size === 4 && new Set(Object.values(T.LEVELS).map((l) => sym(l.icon))).size === 4
+        && !/[■-◿☀-➿]/.test(src); // geometric shapes and symbols (the old round, triangle and diamond glyphs, stars, ticks, warning signs): none left in tools.js
+      const SVGNS = 'http://www.w3.org/2000/svg';
+      const iconOf = (m) => { const s = (m.children || []).find((c) => c.tag === 'svg'), u = s && s.children.find((c) => c.tag === 'use');
+        return s && s.ns === SVGNS && u && u.ns === SVGNS && s.attrs['aria-hidden'] === 'true' ? u.attrs.href || '' : ''; };
+      const markOk = (m, level) => !!m && has(m, level) && iconOf(m) === '#i-' + T.LEVELS[level].icon; // the level's own shape, coloured by its class
+      const pictureOk = (m, level) => markOk(m, level) && m.textContent === '' && m.attrs.role === 'img' && (m.attrs['aria-label'] || '').startsWith(T.LEVELS[level].name) && m.title === m.attrs['aria-label'];
       // the view: the expanded command colours only its parts, each coloured part with its marker (a shape and words, not colour alone)
       const box = mkEl('div'); T.add(box, 'Bash  ' + wrapped, o); const g = box.children[0];
-      risk.headMark = all(g, (x) => has(x, 'tgHead'))[0].children.filter((x) => has(x, 'tkMark')).map((x) => x.textContent + '/' + x.title).join(',');
+      const headMarks = (gr) => all(gr, (x) => has(x, 'tgHead'))[0].children.filter((x) => has(x, 'tkMark'));
+      risk.headMark = headMarks(g).map((x) => iconOf(x) + '/' + x.textContent + '/' + x.title).join(',');
       const own = (x) => x.children.filter((c) => !has(c, 'tkMark')).map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''); // a part's text without its marker
       risk.view = all(g, (x) => has(x, 'tk')).map((x) => x.className.replace('tk ', '') + ':' + own(x)).join(' | ');
-      risk.viewMarks = all(g, (x) => has(x, 'tk')).every((x) => { const m = x.children.find((c) => has(c, 'tkMark')); return m && m.textContent === T.LEVELS[x.className.replace('tk ', '')].mark && /\S/.test(m.title); });
+      risk.viewMarks = all(g, (x) => has(x, 'tk')).every((x) => { const lv0 = x.className.replace('tk ', ''); return pictureOk(x.children.find((c) => has(c, 'tkMark')), lv0) && /\S/.test(x.title); });
+      // every level, expanded and in its row: its own distinct marker, the words in the label (screen readers) and the tooltip
+      const four = { safe: 'ls -la', unknown: 'frobnicate', caution: 'mv a b', danger: 'rm -rf x' }, seenIcons = new Set();
+      risk.levels = Object.entries(four).every(([level, c]) => {
+        const b = mkEl('div'); T.add(b, 'Bash  ' + c, o);
+        const tk = all(b, (x) => has(x, 'tk'))[0], m = tk && tk.children.find((x) => has(x, 'tkMark')), row = all(b, (x) => has(x, 'tcSum'))[0].children.find((x) => has(x, 'tkMark'));
+        seenIcons.add(iconOf(m));
+        return has(tk, level) && pictureOk(m, level) && pictureOk(row, level);
+      }) && seenIcons.size === 4;
+      // a collapsed group shows its worst marker, with its words: danger over caution over safe; nothing worth a look, no marker
+      const groupOf = (cmds) => { const b = mkEl('div'); for (const c of cmds) T.add(b, 'Bash  ' + c, o); return b.children[0]; };
+      const gD = groupOf(['ls', 'mv a b', 'rm -rf x', 'git status']), gC = groupOf(['ls', 'mv a b', 'git status']), gS = groupOf(['ls', 'frobnicate']);
+      const hd = headMarks(gD), hc = headMarks(gC);
+      risk.worst = !has(gD, 'open') && hd.length === 1 && markOk(hd[0], 'danger') && hd[0].textContent === 'possibly unsafe' && /riskiest/.test(hd[0].title)
+        && hc.length === 1 && markOk(hc[0], 'caution') && hc[0].textContent === 'check it' && headMarks(gS).length === 0;
+      // the legend under a command group: each level's marker with its words
+      const leg = all(gD, (x) => has(x, 'tgLegend'))[0], items = leg ? leg.children.filter((x) => has(x, 'tlItem')) : [];
+      risk.legend = leg ? leg.textContent : '';
+      risk.legendOk = items.length === 4 && Object.keys(T.LEVELS).every((k, i) => markOk(items[i].children.find((x) => has(x, 'tkMark')), k) && items[i].textContent === T.LEVELS[k].name) && /nothing is blocked/.test(risk.legend);
+      // no text glyph anywhere in the view: every marker's own text is its words or nothing
+      risk.noGlyph = [g, gD, gC, gS].every((gr) => all(gr, (x) => has(x, 'tkMark')).every((m) => m.text === '' && m.children.every((c) => c.tag === 'svg' || (c.tag === 'span' && /^[a-z ]+$/.test(c.textContent)))));
       risk.viewText = all(g, (x) => has(x, 'tcFull'))[0].textContent.includes("sh -c '") && !all(g, (x) => has(x, 'tk')).some((x) => /sh -c/.test(x.textContent));
       const editBox = mkEl('div'); T.add(editBox, 'Edit  /srv/a.js', o); risk.edit = all(editBox, (x) => has(x, 'tk') || has(x, 'tkMark')).length; // only commands are judged
       risk.css = /\.tk\.danger \{/.test(page) && /\.tk\.caution \{/.test(page) && /\.tk\.safe \{/.test(page);
@@ -7317,8 +7347,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && risk.chmodR === 'danger' && risk.chmod === 'caution' && risk.gitStatus === 'safe' && risk.gitHard === 'danger' && risk.gitForce === 'danger' && risk.curlSh === 'danger:curl -fsSL https://x.example/i.sh | danger:sh'
       && risk.sudo === 'caution' && risk.redirect === 'caution' && risk.devnull === 'safe' && risk.findDel === 'danger'
       && risk.whole && risk.wrapped === 'safe:cd x | danger:rm -rf y' && risk.neutral === "sh -c '# && #'" && risk.chain === 'safe:cd /srv | safe:ls | safe:grep x | safe:git log'
-      && risk.marks.startsWith('safe,unknown,caution,danger ') && risk.marksOk && /possibly unsafe/.test(risk.headMark) && risk.view === 'safe:cd x | danger:rm -rf y' && risk.viewMarks && risk.viewText && risk.edit === 0 && risk.css;
-    check('R529', 'an expanded command in the Work transcript (T-318) colours only its parts by risk and marks each with a shape and words, never colour alone (nothing is blocked): rm, chmod -R, git reset --hard, git push --force, find -delete and curl piped into sh are possibly unsafe, cp is safe but cp --remove-destination is not, rsync --delete, mv, sudo and a > that writes over a file are to check, ls / cd / grep / git status are safe, anything else is unknown; && ; | and sh -c \'…\' are looked into, so in sh -c \'cd x && rm -rf y\' only the rm part is marked; a collapsed group shows its worst marker',
+      && risk.marks === 'safe,unknown,caution,danger risk-safe,risk-unknown,risk-caution,risk-danger' && risk.marksOk && /^#i-risk-danger\/possibly unsafe\//.test(risk.headMark)
+      && risk.levels && risk.worst && risk.legendOk && risk.noGlyph && risk.view === 'safe:cd x | danger:rm -rf y' && risk.viewMarks && risk.viewText && risk.edit === 0 && risk.css;
+    check('R529', 'an expanded command in the Work transcript (T-318) colours only its parts by risk and marks each with a shape and words, never colour alone (nothing is blocked): each level has its own SVG marker from the page\'s icon sprite (a check in a circle, a question mark in a circle, an exclamation mark in a triangle, a cross in an octagon; no text glyph), hidden from screen readers with the level\'s words in its label and tooltip, also in the row, the legend and a collapsed group\'s head; rm, chmod -R, git reset --hard, git push --force, find -delete and curl piped into sh are possibly unsafe, cp is safe but cp --remove-destination is not, rsync --delete, mv, sudo and a > that writes over a file are to check, ls / cd / grep / git status are safe, anything else is unknown; && ; | and sh -c \'…\' are looked into, so in sh -c \'cd x && rm -rf y\' only the rm part is marked; a collapsed group shows its worst marker',
       ok529, JSON.stringify(risk));
   }
   // R532 / R532b (T-298 = T-294 · 4/6): the agent threads in the page (web/agents.js). The panel runs here on a plain element
