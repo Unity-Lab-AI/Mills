@@ -6444,7 +6444,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && /if \(document\.visibilityState === 'visible'\) \{ updateBar\(pageUpdate\.build\); return; \}/.test(page169) && /function bootTrouble\(msg\)/.test(page169) && /location\.replace\(HUB_HOST \+ '\/'\)/.test(page169);
     if (RUST_HUB) {
       const ctl = new AbortController();
-      fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ message: 'SLOW attach-r169' }), signal: ctl.signal }).then((r) => r.body && r.body.getReader().read()).catch(() => {});
+      fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ message: 'SLOW FULLECHO attach-r169' }), signal: ctl.signal }) // FULLECHO: the hub may append its worktree note, past the plain echo's last 200 characters.then((r) => r.body && r.body.getReader().read()).catch(() => {});
       await sleep(1000); ctl.abort(); // the page goes away mid-reply (a reload): the reply goes on in the hub
       const mid = (await call('/api/work/attach?run=&after=0', U)).data || {};
       let d = mid, all = [...(d.events || [])];
@@ -6457,7 +6457,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       check('R169', 'a Work reply survives a reload: the page that went away mid-reply joins the run again (everything so far, then each event to its end: its id first, the answer, the end), afterwards there is nothing more and no run, and the transcript keeps how far into the run it goes; [static] the page follows a run after a reload or a broken stream, offers an update while you look at it (it takes it in the background), never stays black, and sends the retired GitHub Pages copy to the hub',
         mid.busy === true && /^[0-9a-f]+$/.test(mid.run || '') && (all[0] || {}).type === 'bridge_run' && all.some((e) => e.type === 'result' && /attach-r169/.test(e.result || '')) && all.some((e) => e.type === 'bridge_done') && d.busy === false
         && (again.events || []).length === 0 && again.busy === false && none.run === '' && cur && stat,
-        `mid busy ${mid.busy} run ${mid.run}; events ${all.map((e) => e.type).join(',')}; end busy ${d.busy}; again ${(again.events || []).length}/${again.busy}; none "${none.run}"; current keeps run ${cur}; static ${stat}`);
+        `mid busy ${mid.busy} run ${mid.run}; events ${all.map((e) => e.type).join(',')}; answer "${String((all.find((e) => e.type === 'result') || {}).result || '').slice(0, 120)}"; end busy ${d.busy}; again ${(again.events || []).length}/${again.busy}; none "${none.run}"; current keeps run ${cur}; static ${stat}`);
     } else check('R169', 'the page follows a Work run after a reload, offers updates instead of reloading in front of you, never stays black, sends the GitHub Pages copy to the hub [static; joining a run is the Rust hub\'s: --rust-hub runs it]', stat, `static ${stat}`);
   }
   { // R347 to R349 (T-319): "Done in 0s" four times in a row after Send now

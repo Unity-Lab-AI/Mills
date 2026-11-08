@@ -50,6 +50,11 @@ R533–R535: Mills's checks are R526, R528–R532b and R544–R546.)
   right, stacked on a phone. "Find a setting" searches all tabs at once, a section list stays in view on wide screens,
   and Save is always in reach. Escape or a click beside the box closes Settings like Close, and the main menu tiles are
   compact again on phones. Nothing a setting does or how it is saved has changed. Check: **R546**.
+- **A check that depended on timing, fixed** (R169, a Work reply survives a reload). The fake Claude echoes only a
+  message's last 200 characters. Once the hub's background worktree check has run for the account, the hub appends its
+  "[Worktree: latest background check …]" note to the message, and the test's own word fell out of the echo. With more
+  checks in front of it, the suite now reaches R169 after that check, so it failed every time. The message asks the
+  fake for its full echo (`FULLECHO`), and the detail line names the answer. No hub change.
 - Modules: `web/index.html` 1.40.0, `web/sessions.js` 1.2.0, `web/guilds.js` 1.2.0, `web/board.js` 1.2.0,
   `web/notes.js` 1.1.0, `web/library.js` 1.2.0, `web/profile.js` 1.1.0, `web/polish.css` 1.0.3, `web/sw.js` 1.0.9
   (caches the three new files).
