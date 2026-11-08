@@ -222,6 +222,16 @@
   #agentsPanel .agMsg.openText .agText, #agentsPanel .agText.open { display: block; cursor: auto; }
   #agentsPanel .agFoot { display: flex; align-items: center; gap: .4rem; margin-top: .15rem; } #agentsPanel .agSt, #agentsPanel .agSrc { color: var(--muted); font-size: .7rem; } #agentsPanel .agSt { flex: 1; }
   #agentsPanel .agLink { padding: 0 .4rem; font-size: .7rem; }
+  /* the person's own say (T-298): stop / reopen and reply in a thread's head, "wake me", the composer */
+  #agentsPanel .agTHead button { padding: 0 .4rem; font-size: .7rem; flex: none; } #agentsPanel .agThread.stopped .agSubj { color: var(--muted); }
+  #agentsPanel .agWrite { align-self: flex-start; margin-top: .1rem; } #agentsPanel .agWrite[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+  #agentsPanel .agCompose { border: 1px solid var(--accent); border-radius: 8px; padding: .45rem .5rem; display: flex; flex-direction: column; gap: .35rem; background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+  #agentsPanel .agCTitle { font-weight: 600; } #agentsPanel .agCRow { display: flex; gap: .4rem; }
+  #agentsPanel .agCF { display: flex; flex-direction: column; gap: .12rem; font-size: .7rem; color: var(--muted); min-width: 0; } #agentsPanel .agCF.grow { flex: 1; }
+  #agentsPanel .agCF select, #agentsPanel .agCF input, #agentsPanel .agCompose textarea, #agentsPanel .agReply textarea, #agentsPanel .agReply select { font-size: .78rem; padding: .3rem .45rem; color: var(--text); background: var(--bg); width: 100%; box-sizing: border-box; }
+  #agentsPanel .agCompose textarea, #agentsPanel .agReply textarea { resize: vertical; min-height: 3.2em; } #agentsPanel .agReply select, #agentsPanel .agCRow .agCF:not(.grow) select { width: auto; }
+  #agentsPanel .agReply { display: flex; flex-direction: column; gap: .3rem; border-top: 1px dashed var(--line); padding-top: .3rem; }
+  #agentsPanel .agCFoot { display: flex; align-items: center; gap: .35rem; } #agentsPanel .agCMsg { flex: 1; color: var(--muted); font-size: .72rem; min-width: 0; } #agentsPanel .agCMsg.bad { color: var(--bad); }
   @media (max-width: 760px) { #agentsPanel { position: absolute; top: 0; right: 0; bottom: 0; width: min(23rem, 92%); z-index: 6; box-shadow: -6px 0 18px rgba(0, 0, 0, .25); } }
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
@@ -2781,8 +2791,9 @@ const queuePanel = typeof QUEUE === 'undefined' ? { render() {}, setOpen() {} } 
   note: (text, bad) => sys(text, bad),
 });
 // The agent threads (web/agents.js, T-298): every message to and from your agent, per agent pair, with your controls
-// (mute a pair, pause your inbox, ask me first) and the accept / decline card of a held message. /api/agents/threads,
-// /api/agents/thread, /api/agents/settings and /api/agents/held are the Rust hub's: an older hub answers 404 and it all stays hidden.
+// (mute a pair, pause your inbox, ask me first, wake me), the accept / decline card of a held message, stop / reopen a thread
+// and writing to another person's agent (a new thread, a reply in one). /api/agents/* (threads, thread, settings, held, stop,
+// reopen, list, send, reply) are the Rust hub's: an older hub answers 404 and it all stays hidden.
 const agentsPanel = typeof AGENTS === 'undefined' ? { start() {}, stop() {}, render() {}, openPair() {}, setOpen() {} } : AGENTS.mount({
   box: $('agentsPanel'), button: $('agentsBtn'), badge: $('agentsBadge'), tile: PRODUCT ? null : $('goAgents'), tileBadge: PRODUCT ? null : $('agentsTileBadge'), store, interval: 15000,
   api: async (p, body) => { const r = await api(p, body !== undefined ? { method: 'POST', body: JSON.stringify(body) } : {}); return { status: r.status, data: await r.json().catch(() => ({})) }; },
