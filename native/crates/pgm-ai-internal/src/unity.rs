@@ -287,6 +287,8 @@ impl Unity {
         let shape = { let x = s(a, "shape"); if x.is_empty() { s(a, "orientation") } else { x } }.to_lowercase();
         let (w, h) = if ["portrait", "tall", "vertical"].iter().any(|k| shape.contains(k)) { (576, 1024) } else if ["landscape", "wide", "horizontal"].iter().any(|k| shape.contains(k)) { (1024, 576) } else { (768, 768) };
         let scene: String = s(a, "prompt").chars().take(1000).collect::<String>().trim().to_string();
+        // slang the picture engine does not know, in the words it does ("tits out" drew her dressed)
+        let mut scene = scene; for (w, p) in [("tits out","topless, bare breasts"), ("titties out","topless, bare breasts"), ("boobs out","topless, bare breasts"), ("tits","breasts"), ("titties","breasts"), ("boobs","breasts"), ("naked","nude"), ("butt naked","fully nude"), ("ass out","bare buttocks"), ("booty","buttocks"), ("nudes","nude photo")] { scene = regex::Regex::new(&format!(r"(?i)\b{}\b", regex::escape(w))).unwrap().replace_all(&scene, p).to_string(); }
         let prompt = if truthy(&a["selfie"]) { format!("{scene}, she is a {}, candid photo", self.selfie_look) } else { scene };
         self.render(hub, ci, "/txt2img", json!({ "prompt": prompt, "width": w, "height": h })).await
     }

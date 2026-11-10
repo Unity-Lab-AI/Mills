@@ -199,6 +199,7 @@ async fn companion(app: AppHandle, action: String, amount: Option<f64>, look: Op
         return companion_do(&app, what);
     }
     if action == "show" { set_companion_on(&app, true); }
+    if action == "show" || action == "idle" { freshen(&app); }
     if !companion_on(&app) { clog(&format!("off: {action} dropped")); return Ok(false); }
     if action == "hide" { if let Some(w) = app.get_webview_window("companion") { w.hide().map_err(|e| e.to_string())?; } return Ok(true); }
     let w = match app.get_webview_window("companion") {
@@ -344,6 +345,11 @@ fn companion_do(app: &AppHandle, what: String) -> R<bool> {
     });
     Ok(true)
 }
+/// Never the same her twice: the first time she shows in a run of the app, a fresh one of her is drawn and filmed
+/// (she shows her last one meanwhile).
+static FRESHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const SELF_LOOK: &str = "the same 22 year old American college girl with an emo style, black hair with hot pink streaks, side bangs, eyeliner, natural skin tone, light freckles, in a casual emo outfit she picked today";
+fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
 static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 #[tauri::command]
 fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }
