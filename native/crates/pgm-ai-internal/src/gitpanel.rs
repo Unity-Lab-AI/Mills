@@ -15,7 +15,7 @@ use pgm_net_internal::http::Req;
 
 /// One git call, output not trimmed (porcelain status starts with a space). (ok, stdout, stderr).
 fn run(dir: &Path, args: &[String]) -> (bool, String, String) {
-    match std::process::Command::new("git").args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output() {
+    match { #[allow(unused_mut)] let mut c = std::process::Command::new("git"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output() {
         Ok(o) => (o.status.success(), String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string()),
         Err(e) => (false, String::new(), e.to_string()),
     }

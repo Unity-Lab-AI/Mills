@@ -7,7 +7,7 @@ use std::sync::Mutex;
 /// (version from `<checkout>/versions.json` "project", else "0.0.0"; the full commit of HEAD, else "").
 pub fn release_of(checkout: &Path) -> (String, String) {
     let version = std::fs::read_to_string(checkout.join("versions.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["project"].as_str().map(String::from)).unwrap_or_else(|| "0.0.0".into());
-    let commit = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(checkout).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output().ok()
+    let commit = { #[allow(unused_mut)] let mut c = std::process::Command::new("git"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["rev-parse", "HEAD"]).current_dir(checkout).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output().ok()
         .filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
     (version, commit)
 }

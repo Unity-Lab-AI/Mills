@@ -17,7 +17,7 @@ pub struct Wt { pub dir: PathBuf, pub branch: String, pub project: String, pub r
 
 pub struct Worktrees { pub repo: PathBuf, pub wt_root: PathBuf, pub projects_root: PathBuf, pub node: String, pub script: PathBuf }
 pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let o = std::process::Command::new("git").args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+    let o = { #[allow(unused_mut)] let mut c = std::process::Command::new("git"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { Err(String::from_utf8_lossy(&o.stderr).trim().to_string()) }
 }
 fn valid_user(u: &str) -> bool { !u.is_empty() && u.len() <= 32 && u.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') }
@@ -187,7 +187,7 @@ impl Worktrees {
     }
     /// worktree.js itself, for what stays there (new / clone a project; the background freshness check).
     pub fn tool(&self, args: &[&str], env: &[(String, String)]) -> (bool, String, String) {
-        let mut c = std::process::Command::new(&self.node);
+        let mut c = { #[allow(unused_mut)] let mut c = std::process::Command::new(&self.node); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c };
         c.arg(&self.script).args(args).current_dir(self.script.parent().and_then(Path::parent).unwrap_or(Path::new("."))).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
         for (k, v) in env { c.env(k, v); }
         match c.output() { Ok(o) => (o.status.success(), String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string()), Err(e) => (false, String::new(), e.to_string()) }

@@ -361,7 +361,7 @@ fn kill_one(pid: u32) {
     #[cfg(unix)]
     unsafe { libc::kill(pid as i32, libc::SIGTERM); }
     #[cfg(windows)]
-    { let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status(); }
+    { let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("taskkill"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/PID", &pid.to_string(), "/F"]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status(); }
 }
 
 fn list_processes() -> Vec<(u32, String)> {
@@ -379,7 +379,7 @@ fn list_processes() -> Vec<(u32, String)> {
     }
     #[cfg(windows)]
     {
-        let out = std::process::Command::new("tasklist").args(["/FO", "CSV", "/NH"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        let out = { #[allow(unused_mut)] let mut c = std::process::Command::new("tasklist"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/FO", "CSV", "/NH"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
         out.lines().filter_map(|l| { let p: Vec<&str> = l.trim().trim_matches('"').split("\",\"").collect(); Some((p.get(1)?.parse::<u32>().ok()?, short(p.first()?, 80))) }).collect()
     }
     #[cfg(not(any(target_os = "linux", windows)))]

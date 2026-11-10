@@ -15,7 +15,7 @@ const EXT: &[&str] = &["rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "go",
 
 /// The files of a worktree that are worth indexing (paths relative to it, `/`-separated).
 pub fn files(dir: &Path) -> Vec<String> {
-    let out = std::process::Command::new("git").args(["-C", &dir.display().to_string(), "ls-files", "-z", "--cached", "--others", "--exclude-standard"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output();
+    let out = { #[allow(unused_mut)] let mut c = std::process::Command::new("git"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["-C", &dir.display().to_string(), "ls-files", "-z", "--cached", "--others", "--exclude-standard"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output();
     let names: Vec<String> = match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).split('\0').filter(|s| !s.is_empty()).map(String::from).collect(),
         _ => { let mut v = vec![]; walk(dir, dir, &mut v); v } // not a git folder: everything but the usual build / dependency folders

@@ -36,7 +36,7 @@ pub fn is_elevated() -> bool {
     #[cfg(windows)]
     {
         // The high mandatory level SID in the token's groups: present only in an elevated process.
-        std::process::Command::new("whoami").arg("/groups").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("S-1-16-12288")).unwrap_or(false)
+        { #[allow(unused_mut)] let mut c = std::process::Command::new("whoami"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.arg("/groups").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("S-1-16-12288")).unwrap_or(false)
     }
     #[cfg(not(any(unix, windows)))]
     {

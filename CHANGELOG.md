@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.49.2 — 2026-11-10
+
+PATCH: the native AI host reads the right weekly number too, and no more black console windows.
+
+### Fixed
+- **The native AI host (vr-host) and the hub's Rust usage read only the all-models 5-hour and weekly windows**, like 5.49.1 did for the JavaScript side: Claude Code's other weekly limits (seven_day_overage_included, seven_day_opus, seven_day_sonnet) no longer push a host at 43 % over its 90 % weekly cap (`pgm-ai-internal` host/work.rs, usage.rs; cargo test only_the_all_models_windows_count_for_the_caps).
+- **No black CMD / PowerShell windows popping up on Windows**: every program the native apps start (git, taskkill, tasklist, schtasks, whoami, icacls, ollama, the update self-test, vr-run's node, Claude for Unity) now starts with no window of its own, like the rest already did. Linux is unchanged. Windows and Linux apps: vr-host, vr-hostw, vr-desktop, vr-run rebuilt.
+
 ## 5.49.1 — 2026-11-10
 
 PATCH: the weekly usage cap reads the right number.

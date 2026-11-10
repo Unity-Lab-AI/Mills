@@ -238,9 +238,9 @@ echo \"{display} no longer starts by itself.\"
         if cfg!(windows) {
             if !run_system { return Ok(lines); }
             let xml = scripts_dir.join(format!("{}.task.xml", self.name));
-            let r = std::process::Command::new("schtasks").args(["/Create", "/TN", &self.display, "/XML", &xml.display().to_string(), "/F"]).output().map_err(|e| format!("schtasks did not start: {e}"))?;
+            let r = { #[allow(unused_mut)] let mut c = std::process::Command::new("schtasks"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/Create", "/TN", &self.display, "/XML", &xml.display().to_string(), "/F"]).output().map_err(|e| format!("schtasks did not start: {e}"))?;
             if !r.status.success() { return Err(format!("could not create the task: {}", String::from_utf8_lossy(&r.stdout).trim().to_string() + String::from_utf8_lossy(&r.stderr).trim())); }
-            let _ = std::process::Command::new("schtasks").args(["/Run", "/TN", &self.display]).output();
+            let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("schtasks"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/Run", "/TN", &self.display]).output();
             lines.push(format!("{} is a per-user Scheduled Task for {} now: it starts at every sign-in (no administrator)", self.display, self.windows_account()));
         } else {
             // files only (`run_system` false, no folder named): nothing outside `scripts_dir` is touched
@@ -252,7 +252,7 @@ echo \"{display} no longer starts by itself.\"
             }
             if run_system {
                 for a in [vec!["--user", "daemon-reload"], vec!["--user", "enable", "--now", &format!("{}.service", self.name)]] {
-                    let r = std::process::Command::new("systemctl").args(&a).output().map_err(|e| format!("systemctl did not start: {e}"))?;
+                    let r = { #[allow(unused_mut)] let mut c = std::process::Command::new("systemctl"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(&a).output().map_err(|e| format!("systemctl did not start: {e}"))?;
                     if !r.status.success() { return Err(format!("systemctl {} failed: {}", a.join(" "), String::from_utf8_lossy(&r.stderr).trim())); }
                 }
                 lines.push(format!("{} runs as your user service now. To keep it running after you sign out: loginctl enable-linger {}", self.name, self.user));
@@ -263,7 +263,7 @@ echo \"{display} no longer starts by itself.\"
 
     /// Is the unit / task there now? (Linux: the unit file; Windows: `schtasks /Query`.)
     pub fn installed(&self) -> bool {
-        if cfg!(windows) { std::process::Command::new("schtasks").args(["/Query", "/TN", &self.display]).output().map(|o| o.status.success()).unwrap_or(false) }
+        if cfg!(windows) { { #[allow(unused_mut)] let mut c = std::process::Command::new("schtasks"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/Query", "/TN", &self.display]).output().map(|o| o.status.success()).unwrap_or(false) }
         else { user_unit_dir().join(self.unit_file_name()).exists() }
     }
 
@@ -271,13 +271,13 @@ echo \"{display} no longer starts by itself.\"
     pub fn uninstall(&self, unit_dir: Option<&Path>, run_system: bool) -> Vec<String> {
         let mut lines = vec![];
         if cfg!(windows) {
-            if run_system { let _ = std::process::Command::new("schtasks").args(["/End", "/TN", &self.display]).output(); let _ = std::process::Command::new("schtasks").args(["/Delete", "/TN", &self.display, "/F"]).output(); }
+            if run_system { let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("schtasks"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/End", "/TN", &self.display]).output(); let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("schtasks"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/Delete", "/TN", &self.display, "/F"]).output(); }
             lines.push(format!("{} no longer starts at sign-in", self.display));
         } else {
             let ud = unit_dir.map(Path::to_path_buf).unwrap_or_else(user_unit_dir);
-            if run_system { let _ = std::process::Command::new("systemctl").args(["--user", "disable", "--now", &format!("{}.service", self.name)]).output(); }
+            if run_system { let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("systemctl"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["--user", "disable", "--now", &format!("{}.service", self.name)]).output(); }
             let _ = std::fs::remove_file(ud.join(self.unit_file_name()));
-            if run_system { let _ = std::process::Command::new("systemctl").args(["--user", "daemon-reload"]).output(); }
+            if run_system { let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("systemctl"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["--user", "daemon-reload"]).output(); }
             lines.push(format!("{} no longer starts by itself", self.name));
         }
         lines.push(format!("the state folder {} stays (delete it to forget the link; unlink the machine on the web too)", self.state_dir.display()));
@@ -346,7 +346,7 @@ mod tests {
         { use std::os::unix::fs::PermissionsExt; assert_eq!(std::fs::metadata(d.join("install.sh")).unwrap().permissions().mode() & 0o111, 0o111); }
         // the shell script parses
         #[cfg(unix)]
-        for f in ["install.sh", "uninstall.sh"] { let r = std::process::Command::new("sh").arg("-n").arg(d.join(f)).output().unwrap(); assert!(r.status.success(), "{f}: {}", String::from_utf8_lossy(&r.stderr)); }
+        for f in ["install.sh", "uninstall.sh"] { let r = { #[allow(unused_mut)] let mut c = std::process::Command::new("sh"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.arg("-n").arg(d.join(f)).output().unwrap(); assert!(r.status.success(), "{f}: {}", String::from_utf8_lossy(&r.stderr)); }
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -379,7 +379,7 @@ mod tests {
         pgm_core_internal::fs::private_dir(&d).unwrap();
         assert!(check_state_dir(&d).is_ok(), "{:?}", check_state_dir(&d));
         // BUILTIN\Users (by its well-known id), read and execute, inherited
-        let o = std::process::Command::new("icacls").arg(&d).args(["/grant", "*S-1-5-32-545:(OI)(CI)RX"]).output().unwrap();
+        let o = { #[allow(unused_mut)] let mut c = std::process::Command::new("icacls"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.arg(&d).args(["/grant", "*S-1-5-32-545:(OI)(CI)RX"]).output().unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
         let e = check_state_dir(&d).unwrap_err();
         assert!(e.contains("will not start") && e.contains("icacls"), "{e}");
