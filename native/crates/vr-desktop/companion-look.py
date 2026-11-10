@@ -94,9 +94,9 @@ png, ty = post(a.image + "/txt2img", {
     "width": 512, "height": 1024, "seed": int(time.time()) % 100000,
     # Agent Gen's way: a person and their body, then the look; clothes only if the look names them
     "steps": 30, "guidance": 7,
-    "prompt": "full body photo head to toe, feet visible, %s, " + ("fully nude, " if BARE else "") + "standing facing the camera, plain light grey studio background, photorealistic, detailed face, natural light, sharp focus" % (
+    "prompt": ("full body photo head to toe, feet visible, %s, " + ("fully nude, completely naked, no underwear, nothing on, " if BARE else "") + "standing facing the camera, plain light grey studio background, photorealistic, detailed face, natural light, sharp focus") % (
         LOOK if not LOOK.lower().startswith("herself") and not LOOK.startswith("emo hairstyle") else "photo of a 22 year old American woman, " + LOOK.split(":", 1)[-1]),
-    "negative": "child, teen, underage, childlike, young girl, phone, extra fingers, mutated hands, black sclera, plastic skin, heavy makeup, white face paint, tight close up, cropped, cut off feet, cut off head, several people",
+    "negative": "child, teen, underage, childlike, young girl, phone, extra fingers, mutated hands, black sclera, plastic skin, heavy makeup, white face paint, tight close up, cropped, cut off feet, cut off head, cut off legs, knees cut off, several people" + (", panties, underwear, thong, bikini, briefs, shorts" if BARE else ""),
 }, 300)
 if "image" not in ty:
     raise SystemExit("the image engine said: %s" % png[:200])

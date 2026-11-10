@@ -313,8 +313,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     // her: Agent Gen's way (the likeness and body, then the moment; clothes only if the moment names them)
     // no clothes named: fully nude (top and bottom); any clothes named: those, and nothing else is added
     const bare = !/\b(wear|wearing|wears|dressed|dress|outfit|clothes|clothing|shirt|t-shirt|tee|top|blouse|hoodie|sweater|jacket|coat|skirt|jeans|pants|shorts|leggings|bikini|swimsuit|lingerie|bra|panties|thong|underwear|stockings|socks|boots|shoes|heels|uniform|suit|costume|robe|towel|apron|corset|bodysuit|onesie|pajamas|covered)\b/i.test(scene);
-    const prompt = args.selfie ? `photo of a 22 year old American woman, ${SELFIE_LOOK}, ${bare ? 'fully nude, ' : ''}${scene}, photorealistic, detailed face, natural light, sharp focus` : scene;
-    return render(ci, '/txt2img', { prompt, width, height, steps: 30, guidance: 7, negative: 'child, teen, underage, childlike, young girl, phone, extra fingers, mutated hands, black sclera, plastic skin, heavy makeup, white face paint, tight close up' });
+    const prompt = args.selfie ? `photo of a 22 year old American woman, ${SELFIE_LOOK}, ${bare ? 'fully nude, completely naked, no underwear, nothing on, ' : ''}${scene}, photorealistic, detailed face, natural light, sharp focus` : scene;
+    return render(ci, '/txt2img', { prompt, width, height, steps: 30, guidance: 7, negative: 'child, teen, underage, childlike, young girl, phone, extra fingers, mutated hands, black sclera, plastic skin, heavy makeup, white face paint, tight close up' + (bare && args.selfie ? ', panties, underwear, thong, bikini, briefs, shorts' : '') });
   }
   async function render(ci, route, body) {
     const r = await fetch(IMAGE_URL + route, { method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(300000) });
