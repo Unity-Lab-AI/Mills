@@ -177,6 +177,22 @@ impl Unity {
     pub async fn ensure_image(&self, hub: &Arc<dyn AiHub>) -> bool { let a = vec![self.root.join("image-engine.py").display().to_string(), "--port".into(), Self::port_of(&self.image_url, "5124"), "--checkpoint".into(), self.image_ckpt.display().to_string()]; self.ensure_service(hub, &self.image_url, a, self.root.clone()).await }
     pub async fn ensure_voice(&self, hub: &Arc<dyn AiHub>) -> bool { let d = self.a["voiceDir"].as_str().map(PathBuf::from).unwrap_or_else(|| self.mills.join("..").join("Backrooms").join("models").join("unity-voice-v2")); let a = vec![d.join("serve.py").display().to_string(), "--port".into(), Self::port_of(&self.voice_url, "5123")]; self.ensure_service(hub, &self.voice_url, a, d).await }
     pub async fn ensure_ears(&self, hub: &Arc<dyn AiHub>) -> bool { let w = self.a["whisperModel"].as_str().map(PathBuf::from).unwrap_or_else(|| self.mills.join("..").join("Unity 3D Equational Model").join("Unity 18+").join("models").join("whisper-small")); let a = vec![self.root.join("speech-engine.py").display().to_string(), "--port".into(), Self::port_of(&self.ears_url, "5125"), "--model".into(), w.display().to_string()]; self.ensure_service(hub, &self.ears_url, a, self.root.clone()).await }
+/// What a picture shows, in words, from a model that can see (assistant.visionModel, else llava:7b, else qwen3-vl:4b):
+    /// for a brain that cannot see (her uncensored one), so she still reacts to photos and picks GIFs by what they show.
+    pub async fn describe_images(&self, hub: &Arc<dyn AiHub>, images: &[String], ask: &str) -> Vec<String> {
+        let mut models: Vec<String> = self.a["visionModel"].as_str().map(|m| vec![m.to_string()]).unwrap_or_default();
+        models.extend(["llava:7b".to_string(), "qwen3-vl:4b".to_string()]);
+        let mut out = vec![];
+        for b in images {
+            let mut said = String::new();
+            for m in &models {
+                let body = json!({ "model": m, "stream": false, "think": false, "messages": [{ "role": "user", "content": ask, "images": [b] }], "options": { "num_predict": 160 } });
+                if let Ok((st, v)) = self.engine_json(hub, &format!("{}/api/chat", self.ollama), "POST", body, 120_000).await { if (200..300).contains(&st) { said = s(&v["message"], "content").trim().to_string(); if !said.is_empty() { break; } } }
+            }
+            out.push(if said.is_empty() { "(could not see it)".into() } else { said.chars().take(600).collect() });
+        }
+        out
+    }
     /// Can this model see pictures? (Ollama's capabilities; asked only when there is something to look at.)
     pub async fn vision(&self, hub: &Arc<dyn AiHub>, model: &str) -> bool {
         match self.engine_json(hub, &format!("{}/api/show", self.ollama), "POST", json!({ "model": model }), 15000).await { Ok((_, v)) => v["capabilities"].as_array().map(|c| c.contains(&json!("vision"))).unwrap_or(false), Err(_) => false }
@@ -302,7 +318,7 @@ impl Unity {
         for (i, g) in got.iter().enumerate() { let t = s(g, "thumb"); if t.is_empty() { continue; } if let Ok(b) = self.web.fetch_bytes(&t, 400_000).await { ci.look.push((start + i + 1, pgm_core_internal::b64(&b))); } }
         let what = if gif { "post_gif" } else { "post_image" };
         json!({ "ok": true, "query": q, "candidates": got.iter().enumerate().map(|(i, g)| json!({ "n": start + i + 1, "title": g["title"] })).collect::<Vec<_>>(),
-            "next": format!("{}Post the one that fits with {what}(n); if none fits, call it again with the same query and more true for the next ones, or other words.", if ci.look.is_empty() { "" } else { "Their thumbnails are shown to you next, numbered in this order: look at them. " }) })
+            "next": format!("{}Post the one that fits with {what}(n); if none fits, call it again with the same query and more true for the next ones, or other words.", if ci.look.is_empty() { "" } else { "What the candidates show comes next, numbered in this order. " }) })
     }
     async fn post_found(&self, ci: &mut Ci, a: &Value) -> Value {
         let n = a["n"].as_u64().or_else(|| s(a, "n").parse().ok()).unwrap_or(0) as usize;

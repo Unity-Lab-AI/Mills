@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.54.0 — 2026-11-10
+
+MINOR: Unity sees again, and talking to her comes before filming.
+
+### Added
+- **She sees with an uncensored brain** (asked: "She can't see images anymore. The uncensored brain has no vision, so she can't look at photos you send her or at GIF thumbnails."): when her brain cannot see, a vision model on the AI host (assistant.visionModel, else llava:7b, else qwen3-vl:4b) says what a photo or a GIF / picture candidate shows, and she gets that in words: she reacts to what you send and picks GIFs by what they show. Native pgm-ai-internal (unity, unity_brain).
+
+### Changed
+- **Her answer comes first** (asked: "Thinking and filming fight over the graphics card. While a desktop clip is rendering, her chat replies are slow."): when her brain is asked, the AI host stops a Desktop Unity clip being filmed and frees the card; the clip is filmed again once she is done (companion-do.py / companion-look.py wait and retry). Native AI host (host/runner); Windows and Linux app: vr-desktop rebuilt.
+
+### Fixed
+- The 5.53.1 entry lost three names when it was written: its second item is about `bridge/assistant.js` 1.4.1, and its last one means `unity-brain` is rebuilt on qwen3-abliterated and the old one kept as `unity-brain-qwen35`.
+
 ## 5.53.1 — 2026-11-10
 
 PATCH: what Unity is told in the team chat reaches her desktop self, and her pictures follow the look.

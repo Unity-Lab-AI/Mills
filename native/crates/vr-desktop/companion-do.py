@@ -33,6 +33,25 @@ def up(url):
         return False
 
 
+def i2v_retry(body, tries=8):
+    """Film a clip; when her brain took the card meanwhile (the AI host stops the video engine for her answer), wait
+    until she is done and film it again."""
+    last = None
+    for n in range(tries):
+        try:
+            ensure_video()
+            req = urllib.request.Request(a.video + "/i2v", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=900) as r:
+                j = json.loads(r.read())
+            if j.get("path"):
+                return j
+            last = j
+        except Exception as e:
+            last = e
+        time.sleep(25)
+    raise SystemExit("the video engine kept stopping (%s)" % (last,))
+
+
 def ensure_video():
     if up(a.video):
         return
@@ -61,14 +80,8 @@ try:   # the GPU for the video engine
     urllib.request.urlopen(urllib.request.Request(a.image + "/unload", data=b"{}", method="POST"), timeout=20).read()
 except Exception:
     pass
-ensure_video()
 prompt = "realistic video of the same character%s, full body head to toe, plain light grey studio background, %s, static camera" % ((", " + look[:120]) if look else "", WHAT)
-req = urllib.request.Request(a.video + "/i2v", data=json.dumps({"image_b64": base64.b64encode(open(still, "rb").read()).decode(), "prompt": prompt,
-                             "engine": "wan", "width": 480, "height": 960, "seed": int(time.time()) % 100000}).encode(), headers={"Content-Type": "application/json"})
-with urllib.request.urlopen(req, timeout=900) as r:
-    j = json.loads(r.read())
-if not j.get("path"):
-    raise SystemExit("the video engine said: %s" % j)
+j = i2v_retry({"image_b64": base64.b64encode(open(still, "rb").read()).decode(), "prompt": prompt, "engine": "wan", "width": 480, "height": 960, "seed": int(time.time()) % 100000})
 subprocess.run([sys.executable, os.path.join(HERE, "companion-clips.py"), j["path"], a.name, "--out", a.out, "--once"], check=True,
                creationflags=0x08000000 if os.name == "nt" else 0)
 print("done", a.name)
