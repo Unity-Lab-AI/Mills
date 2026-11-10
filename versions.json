@@ -1,5 +1,5 @@
 {
-  "project": "5.53.1",
+  "project": "5.54.0",
   "modules": {
     "bridge/ai-node.js": "3.4.1",
     "bridge/ai-nodes-front.js": "1.0.0",
