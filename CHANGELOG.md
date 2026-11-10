@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.54.4 — 2026-11-10
+
+PATCH: her first look is the new her, and nude means nude.
+
+### Fixed
+- **Her first look on the desktop** (asked: "okay we need to fix her first load image becasue its still a plae egoth chick in leather"): the clips built into the app are re-filmed from the new likeness (no makeup, natural skin, emo hair, no clothes), so she never starts as the pale goth in leather. Windows and Linux app: vr-desktop rebuilt.
+- **Bottomless too**: with no clothes named, her pictures and looks also say no underwear, and underwear is in the negatives, so she is not drawn in panties; desktop looks keep her whole legs in the frame. A new look failed at once before (a wrong prompt line in companion-look.py). Both hubs, `bridge/assistant.js` 1.4.5.
+
 ## 5.54.3 — 2026-11-10
 
 PATCH: Unity drawn the way Agent Gen draws her.
