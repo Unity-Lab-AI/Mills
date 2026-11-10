@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.54.3 — 2026-11-10
+
+PATCH: Unity drawn the way Agent Gen draws her.
+
+### Fixed
+- **Her likeness, like Agent Gen** (asked: "she still a pale ugly boitch not a proper amrican chick next dor emo amrican white girl no make up naturally breautiful; and noraml skin color and she is never doing nudes, are u sure you are doing it like agent gen. as she keeps appearing in leather, we cant prompt and clothing the model does that sdo we only lsit out her bodies features and description from bust size to ass to hips to skin collor and closthing is only added when told what to wear"; "not goth, emo!"; "goth always makes ugley gothics"): her pictures and her desktop self are written as Agent Gen writes them: "photo of a 22 year old American woman", her emo hair (black with hot pink streaks, side-swept bangs), her face with no makeup and natural fair skin with freckles, and her body (bust, waist, hips, butt, legs), then the moment; clothes only when asked for; Agent Gen's steps, guidance and negatives (no one underage, no heavy makeup, no face paint). Her picture tool no longer asks the brain what she wears, and "goth" is gone from her looks and her room voice. With no clothes named she is fully nude, top and bottom (asked: "and bottom less"); any clothes named are what she wears. Both hubs (`bridge/assistant.js` 1.4.4, `bridge/server.js` 4.3.5, native pgm-ai-internal); Windows and Linux app: vr-desktop rebuilt.
+
 ## 5.54.2 — 2026-11-10
 
 PATCH: pictures as asked, her desktop self named in her reply, and never the same look twice.
