@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.52.1 — 2026-11-10
+
+PATCH: Desktop Unity's settings are in the app's Settings.
+
+### Fixed
+- **Desktop Unity in Settings** (asked: "i still dont see any settings for Unity"): Settings → App has a Desktop Unity section inside the desktop app (on / off, how she looks + Change her look, her moves, what she is doing), next to the tray menu and the Tools tab. `web/index.html` 1.41.1; Windows and Linux app: vr-desktop rebuilt (the page may switch her on / off and read her state).
+
 ## 5.52.0 — 2026-11-10
 
 MINOR: Desktop Unity gets her switch, her settings and any look you ask for.

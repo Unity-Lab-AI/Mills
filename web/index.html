@@ -1267,6 +1267,11 @@
       <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
        <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
       </section>
+      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. Tell her what to do here, or in her section / the team chat ("walk left", "sit", "be a gorilla in a suit"). A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
+       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <span id="duState" class="status"></span></span></div>
+       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="e.g. the same goth girl in a red dress / a gorilla in a business suit"><button type="button" id="duApply">Change her look</button></span></div>
+       <div class="setRow"><span>Moves</span><span id="duMoves"></span></div>
+      </section>
       <!-- one Save for the whole tab, always in reach at the bottom of the box -->
       <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
       <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
@@ -4268,6 +4273,20 @@ function companionFrom(m, rec) {
     NATIVE.call('companion', { action: x[1], amount: Number(x[2]) || null, look: x[4] ? decodeURIComponent(x[4]) : null }).catch(() => {});
   }
 }
+// Desktop Unity's settings (Settings → App): on / off, her look, her moves; only inside the desktop app
+function deskUnitySetup() {
+  const box = document.getElementById('sgDeskUnity'); if (!box || !NATIVE || box.dataset.ready) return;
+  box.dataset.ready = '1'; box.hidden = false;
+  const state = document.getElementById('duState');
+  const refresh = () => NATIVE.call('companion_status').then((s) => { const st = s.status || {}; state.textContent = (s.on ? 'on' : 'off') + (st.look ? ' · ' + st.look : ' · the built-in look') + (s.dressing ? ' · changing: ' + (st.step || 'starting') : ''); if (s.dressing) setTimeout(refresh, 5000); }).catch((e) => { state.textContent = String(e); });
+  document.getElementById('duOn').onclick = () => NATIVE.call('companion_set', { on: true }).then(refresh, refresh);
+  document.getElementById('duOff').onclick = () => NATIVE.call('companion_set', { on: false }).then(refresh, refresh);
+  document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; NATIVE.call('companion', { action: 'outfit', look }).then(() => setTimeout(refresh, 1500), (e) => { state.textContent = String(e); }); };
+  const moves = document.getElementById('duMoves');
+  for (const m of ['walk_left', 'walk_right', 'up', 'down', 'come_here', 'sit', 'wave', 'dance', 'turn', 'stop']) { const b = document.createElement('button'); b.type = 'button'; b.textContent = m.replace('_', ' '); b.onclick = () => NATIVE.call('companion', { action: m }).catch(() => {}); moves.append(b, ' '); }
+  refresh();
+}
+document.addEventListener('DOMContentLoaded', deskUnitySetup); setTimeout(deskUnitySetup, 0);
 // YouTube links in a team-chat message (watch?v=, youtu.be/, shorts/, embed/, live/) → the video ids, in order, no duplicates
 function ytIds(text) {
   const out = [];

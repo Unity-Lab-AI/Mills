@@ -343,7 +343,7 @@ fn main() {
             // the hub's page: only the harmless commands (see the top of this file)
             app.add_capability(tauri::ipc::CapabilityBuilder::new("hub").remote(format!("{hub}/*")).window("main")
                 .permission("core:event:default").permission("allow-app-info").permission("allow-notify").permission("allow-set-badge").permission("allow-set-session").permission("allow-open-tools")
-                .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup").permission("allow-companion"))?;
+                .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup").permission("allow-companion").permission("allow-companion-set").permission("allow-companion-status"))?;
             let url: tauri::Url = hub.parse().map_err(|e| format!("bad hub address {hub}: {e}"))?;
             let host = url.host_str().unwrap_or("").to_string();
             let hub_for_perm = hub.clone();
