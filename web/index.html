@@ -2045,6 +2045,7 @@ $('assistForm').addEventListener('submit', async (e) => {
         else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
         else if (ev.type === 'pc_tool' || ev.type === 'run_code') answerBrowserCall(ev);
+        else if (ev.type === 'companion') { if (NATIVE) NATIVE.call('companion', { action: String(ev.action || ''), amount: Number(ev.amount) || null, look: ev.look ? String(ev.look) : null }).catch(() => {}); }
         else if (ev.type === 'final') { outcome = ['done', 'Done in ' + elapsed(t0u)]; if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
 [[image:${r}]]`).join('') + (ev.media || []).map((v) => `
 [[youtube:${v}]]`).join(''));
@@ -4254,6 +4255,19 @@ function ytPlayer(id, autoplay = true) { // a YouTube video, played right here (
   f.addEventListener('click', (e) => e.stopPropagation());
   return f;
 }
+// Unity's moves for someone's desktop Unity ([[companion:move:amount:user]] in her chat reply): the chat never shows them;
+// inside the desktop app, a fresh one for this person moves their little Unity (once per message).
+const COMPANION_MARK = /\[\[companion:([a-z_]+):([\d.]+):([a-z0-9-]+)(?::([^\]]*))?\]\]/g;
+const companionDone = new Set();
+function companionFrom(m, rec) {
+  if (!NATIVE || !me || !rec || !rec.text || Date.now() - new Date(m.ts).getTime() > 120000) return;
+  for (const x of String(rec.text).matchAll(COMPANION_MARK)) {
+    const key = (m.id || m.ts) + x[0];
+    if (x[3] !== me.username || companionDone.has(key)) continue;
+    companionDone.add(key);
+    NATIVE.call('companion', { action: x[1], amount: Number(x[2]) || null, look: x[4] ? decodeURIComponent(x[4]) : null }).catch(() => {});
+  }
+}
 // YouTube links in a team-chat message (watch?v=, youtu.be/, shorts/, embed/, live/) → the video ids, in order, no duplicates
 function ytIds(text) {
   const out = [];
@@ -4265,6 +4279,7 @@ function withImages(el, text, render) { // split out [[image:ref]] markers, rend
   parts.forEach((part, i) => { if (i % 2) el.append(part.startsWith('youtube:') ? ytPlayer(part.slice(8)) : hostImage(part.slice(6))); else if (part.trim()) { const span = document.createElement('div'); render(span, part.replace(/\n+$/, '')); el.append(span); } });
 }
 function renderRich(el, text) { // markdown + @mentions, with host pictures / YouTube players split out
+  text = String(text).replace(COMPANION_MARK, '');
   if (/\[\[(image|youtube):/.test(text)) return withImages(el, text, renderRichText);
   renderRichText(el, text);
 }
@@ -4309,6 +4324,7 @@ function renderMsg(rec, bulk) {
   if (m.deleted) body.textContent = 'message deleted';
   else if (rec.locked) body.append(ic('lock', 'lead'), rec.text); // could not be opened: say why, never render it
   else {
+    companionFrom(m, rec);
     renderRich(body, rec.text);
     for (const vid of ytIds(rec.text)) body.append(ytPlayer(vid, false)); // a YouTube link posted to the team plays right here (no autoplay)
   }

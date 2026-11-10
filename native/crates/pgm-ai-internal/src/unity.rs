@@ -22,7 +22,9 @@ pub const ACTS: [&str; 7] = ["statement", "yes_no_question", "wh_question", "exc
 pub const MAX_ROUNDS: usize = 6; pub const MAX_RESULT: usize = 3000; pub const HISTORY_KEEP: usize = 40;
 
 /// One run's view of the person: their clock and place, where pictures go, the open stream to their page.
-pub struct Ci { pub place: Place, pub tz: String, pub scope: String, pub user: String, pub out: Option<mpsc::UnboundedSender<Value>>, pub images: Vec<String>, pub media: Vec<String> }
+pub struct Ci { pub place: Place, pub tz: String, pub scope: String, pub user: String, pub out: Option<mpsc::UnboundedSender<Value>>, pub images: Vec<String>, pub media: Vec<String>,
+    /// find_gif / find_image: the query, its kind (gif or not), the pages seen and the numbered candidates; `look` = thumbnails to show the brain next
+    pub found_q: String, pub found_gif: bool, pub found_page: usize, pub found: Vec<Value>, pub look: Vec<(usize, String)> }
 impl Ci { pub fn send(&self, v: Value) { if let Some(o) = &self.out { let _ = o.send(v); } } }
 /// Ollama as last seen: answering, the brain (`model`) loaded, and when not, the stand-in model Unity answers on
 /// meanwhile ("" = none: the brain's error is shown). T-293.
@@ -175,6 +177,10 @@ impl Unity {
     pub async fn ensure_image(&self, hub: &Arc<dyn AiHub>) -> bool { let a = vec![self.root.join("image-engine.py").display().to_string(), "--port".into(), Self::port_of(&self.image_url, "5124"), "--checkpoint".into(), self.image_ckpt.display().to_string()]; self.ensure_service(hub, &self.image_url, a, self.root.clone()).await }
     pub async fn ensure_voice(&self, hub: &Arc<dyn AiHub>) -> bool { let d = self.a["voiceDir"].as_str().map(PathBuf::from).unwrap_or_else(|| self.mills.join("..").join("Backrooms").join("models").join("unity-voice-v2")); let a = vec![d.join("serve.py").display().to_string(), "--port".into(), Self::port_of(&self.voice_url, "5123")]; self.ensure_service(hub, &self.voice_url, a, d).await }
     pub async fn ensure_ears(&self, hub: &Arc<dyn AiHub>) -> bool { let w = self.a["whisperModel"].as_str().map(PathBuf::from).unwrap_or_else(|| self.mills.join("..").join("Unity 3D Equational Model").join("Unity 18+").join("models").join("whisper-small")); let a = vec![self.root.join("speech-engine.py").display().to_string(), "--port".into(), Self::port_of(&self.ears_url, "5125"), "--model".into(), w.display().to_string()]; self.ensure_service(hub, &self.ears_url, a, self.root.clone()).await }
+    /// Can this model see pictures? (Ollama's capabilities; asked only when there is something to look at.)
+    pub async fn vision(&self, hub: &Arc<dyn AiHub>, model: &str) -> bool {
+        match self.engine_json(hub, &format!("{}/api/show", self.ollama), "POST", json!({ "model": model }), 15000).await { Ok((_, v)) => v["capabilities"].as_array().map(|c| c.contains(&json!("vision"))).unwrap_or(false), Err(_) => false }
+    }
     pub async fn native_tools(&self, hub: &Arc<dyn AiHub>, model: &str) -> bool {
         if let Some((m, t)) = self.caps.lock().unwrap_or_else(|e| e.into_inner()).clone() { if m == model { return t; } }
         let t = match self.engine_json(hub, &format!("{}/api/show", self.ollama), "POST", json!({ "model": model }), 15000).await { Ok((_, v)) => v["capabilities"].as_array().map(|c| c.contains(&json!("tools"))).unwrap_or(false), Err(_) => false };
@@ -215,7 +221,7 @@ impl Unity {
         let tz = c["tz"].as_str().and_then(ut::tz_ok).or_else(|| k["tz"].as_str().map(String::from)).unwrap_or_else(|| "UTC".into());
         let locale = c["locale"].as_str().filter(|l| l.len() < 20).map(String::from).or_else(|| k["locale"].as_str().map(String::from)).unwrap_or_else(|| "en-US".into());
         let place = Place { lat: if browser { num(&c["lat"]) } else { num(&k["lat"]) }, lon: if browser { num(&c["lon"]) } else { num(&k["lon"]) }, place: if browser { String::new() } else { s(&k, "place") }, country: if browser { String::new() } else { s(&k, "country") }, locale };
-        Ci { place, tz, scope: a.username.clone(), user: a.username.clone(), out: None, images: vec![], media: vec![] }
+        Ci { place, tz, scope: a.username.clone(), user: a.username.clone(), out: None, images: vec![], media: vec![], found_q: String::new(), found_gif: false, found_page: 0, found: vec![], look: vec![] }
     }
     /// What the hub knows about where someone is: their browser (time zone, locale, location if shared) and, coming from
     /// outside, the rough place of their address. In memory only.
@@ -282,6 +288,48 @@ impl Unity {
         self.render(hub, ci, route, body).await
     }
 
+    // ---------- GIFs and pictures from the web (keyless: Bing Images; she looks at the candidates and picks) ----------
+    async fn find_found(&self, ci: &mut Ci, a: &Value, gif: bool) -> Value {
+        let q: String = s(a, "query").trim().chars().take(200).collect();
+        if q.is_empty() { return json!({ "ok": false, "error": "What should it show? Give a query." }); }
+        let more = a["more"] == json!(true) || a["more"] == json!("true");
+        if !(more && ci.found_q == q && ci.found_gif == gif) { ci.found_q = q.clone(); ci.found_gif = gif; ci.found_page = 0; ci.found.clear(); } else { ci.found_page += 1; }
+        let got = match self.web.image_search(&q, gif, ci.found_page).await { Ok(v) => v, Err(e) => return json!({ "ok": false, "error": e }) };
+        if got.is_empty() { return json!({ "ok": false, "error": format!("Nothing found for \"{q}\"; try other words.") }); }
+        let start = ci.found.len();
+        ci.found.extend(got.iter().cloned());
+        ci.look.clear();
+        for (i, g) in got.iter().enumerate() { let t = s(g, "thumb"); if t.is_empty() { continue; } if let Ok(b) = self.web.fetch_bytes(&t, 400_000).await { ci.look.push((start + i + 1, pgm_core_internal::b64(&b))); } }
+        let what = if gif { "post_gif" } else { "post_image" };
+        json!({ "ok": true, "query": q, "candidates": got.iter().enumerate().map(|(i, g)| json!({ "n": start + i + 1, "title": g["title"] })).collect::<Vec<_>>(),
+            "next": format!("{}Post the one that fits with {what}(n); if none fits, call it again with the same query and more true for the next ones, or other words.", if ci.look.is_empty() { "" } else { "Their thumbnails are shown to you next, numbered in this order: look at them. " }) })
+    }
+    async fn post_found(&self, ci: &mut Ci, a: &Value) -> Value {
+        let n = a["n"].as_u64().or_else(|| s(a, "n").parse().ok()).unwrap_or(0) as usize;
+        let Some(pick) = (n >= 1).then(|| ci.found.get(n - 1)).flatten().cloned() else { return json!({ "ok": false, "error": "Search first (find_gif / find_image), then post one of its numbers." }) };
+        let bytes = match self.web.fetch_bytes(&s(&pick, "url"), 8_000_000).await { Ok(b) => b, Err(e) => return json!({ "ok": false, "error": format!("That one would not download ({e}); pick another number.") }) };
+        let kind = if bytes.starts_with(b"GIF8") { "gif" } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) || bytes.starts_with(&[0xFF, 0xD8, 0xFF]) || (bytes.len() > 12 && &bytes[8..12] == b"WEBP") { "image" } else { "" };
+        if kind.is_empty() || (ci.found_gif && kind != "gif") { return json!({ "ok": false, "error": "That one is not really a picture of the right kind; pick another number." }); }
+        let r = self.save_picture(&ci.scope, &bytes);
+        ci.images.push(r.clone());
+        if kind == "image" { self.last.lock().unwrap_or_else(|e| e.into_inner()).entry(ci.user.clone()).or_default().0 = r.clone(); }
+        json!({ "ok": true, "image": r, "title": pick["title"], "shown": "It is attached to your reply automatically." })
+    }
+    /// Words or drawings on a picture: on her (a body part or a piece of clothing, sized to fit there) or a caption.
+    async fn write_on_image(&self, hub: &Arc<dyn AiHub>, ci: &mut Ci, a: &Value) -> Value {
+        if !self.ensure_image(hub).await { return json!({ "ok": false, "error": "The camera app on the host is not starting (image engine down)." }); }
+        let Some(src) = self.read_picture(&ci.user, &s(a, "image")) else { return json!({ "ok": false, "error": "No picture to write on: make one, or they send one first." }) };
+        let (text, shape, part) = (s(a, "text").chars().take(120).collect::<String>(), s(a, "shape"), s(a, "part").to_lowercase());
+        if text.is_empty() && shape.is_empty() { return json!({ "ok": false, "error": "Give text to write or a shape (heart, star, arrow, x, smiley, tally)." }); }
+        if !text.is_empty() && (part.is_empty() || ["top", "center", "middle", "bottom", "caption"].contains(&part.as_str())) {
+            let at = if part.is_empty() || part == "caption" { "bottom".to_string() } else { part };
+            return self.render(hub, ci, "/caption", json!({ "image": src, "text": text, "where": at, "color": s(a, "color") })).await;
+        }
+        let mut item = json!({ "part": if part.is_empty() { "stomach".to_string() } else { part }, "color": s(a, "color"), "tool": s(a, "tool") });
+        if text.is_empty() { item["shape"] = json!(shape); } else { item["text"] = json!(text.chars().take(24).collect::<String>()); }
+        self.render(hub, ci, "/mark", json!({ "image": src, "items": [item] })).await
+    }
+
     // ---------- tools ----------
     /// Every tool: (name, description, params, required, group, confirm).
     pub fn tools() -> Vec<Value> { serde_json::from_str(include_str!("unity-tools.json")).expect("unity-tools.json") }
@@ -322,6 +370,18 @@ impl Unity {
             }
             "generate_image" => { let mut a2 = args.clone(); a2["selfie"] = json!(args["selfie"] == json!(true) || args["selfie"] == json!("true")); Ok(self.make_image(hub, ci, &a2).await) }
             "edit_image" => Ok(self.edit_image(hub, ci, args, "/img2img").await),
+            "find_gif" | "find_image" => Ok(self.find_found(ci, args, name == "find_gif").await),
+            "post_gif" | "post_image" => Ok(self.post_found(ci, args).await),
+            "write_on_image" => Ok(self.write_on_image(hub, ci, args).await),
+            "companion" => {
+                const OK: [&str; 17] = ["outfit", "walk_left", "walk_right", "up", "down", "come_here", "go_left_edge", "go_right_edge", "sit", "wave", "dance", "turn", "stop", "stand", "show", "hide", "idle"];
+                let act = s(args, "action").to_lowercase().replace([' ', '-'], "_");
+                let amount = args["amount"].as_f64().or_else(|| s(args, "amount").parse().ok()).unwrap_or(0.0).clamp(0.0, 4000.0);
+                let look: String = s(args, "look").chars().filter(|c| !c.is_control()).take(200).collect();
+                Ok(if act == "outfit" && look.trim().is_empty() { json!({ "ok": false, "error": "outfit needs look: what she should wear." }) } else if !OK.contains(&act.as_str()) { json!({ "ok": false, "error": format!("Unknown move {act}; one of: {}.", OK.join(", ")) }) }
+                   else if ci.out.is_none() { ci.media.push(format!("companion:{act}:{amount}:{}:{}", ci.user, pgm_core_internal::text::urlencode(&look))); json!({ "ok": true, "did": act, "note": "It happens on their desktop when your reply arrives." }) }
+                   else { ci.send(json!({ "type": "companion", "action": act, "amount": amount, "look": look })); json!({ "ok": true, "did": act }) })
+            }
             "inpaint_image" => Ok(self.edit_image(hub, ci, args, "/inpaint").await),
             "calculate" => Ok(match ut::calculate(&s(args, "expression")) { Ok(v) => json!({ "ok": true, "result": ut::num(v) }), Err(e) => json!({ "ok": false, "error": e }) }),
             "list_capabilities" => Ok(json!({ "ok": true, "tools": Self::tools().iter().filter(|t| t["name"] != json!("say")).map(|t| format!("{}: {}", s(t, "name"), s(t, "description"))).collect::<Vec<_>>() })),

@@ -59,7 +59,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                         u.with_store(&acc, |st| {
                             let h = st["history"].as_array_mut().unwrap();
                             h.push(json!({ "role": "user", "content": format!("{text}{}", if photo.is_empty() { String::new() } else { format!("\n[[image:{photo}]]") }) }));
-                            h.push(json!({ "role": "assistant", "content": format!("{}{}{}", if reply.is_empty() { "(did it)" } else { &reply }, ci.images.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), ci.media.iter().map(|v| format!("\n[[youtube:{v}]]")).collect::<String>()) }));
+                            h.push(json!({ "role": "assistant", "content": format!("{}{}{}", if reply.is_empty() { "(did it)" } else { &reply }, ci.images.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), ci.media.iter().map(|v| match v.strip_prefix("companion:") { Some(c) => format!("\n[[companion:{c}]]"), None => format!("\n[[youtube:{v}]]") }).collect::<String>()) }));
                             if h.len() > HISTORY_KEEP * 2 { let k = h.len() - HISTORY_KEEP * 2; h.drain(0..k); }
                         });
                         let _ = tx.send(json!({ "type": "final", "text": reply, "brain": br, "images": ci.images, "media": ci.media, "pending": u.pending.lock().unwrap_or_else(|e| e.into_inner()).get(&acc.username).cloned().unwrap_or(Value::Null) }));
@@ -112,7 +112,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         "/api/assistant/client" if post => { let k = u.learn_client(a, &r.json()["client"], &client_ip(&**hub, r)).await; answer(200, json!({ "ok": true, "tz": k["tz"], "place": s(&k, "place") })) }
         "/api/assistant/image" if get => match u.picture_file(un, &r.param("ref").unwrap_or_default()).and_then(|f| std::fs::read(f).ok()) {
-            Some(buf) => hyper::Response::builder().status(200).header("content-type", "image/png").header("cache-control", "private, max-age=86400").body(pgm_net_internal::http::full(buf)).expect("response"),
+            Some(buf) => hyper::Response::builder().status(200).header("content-type", if buf.starts_with(b"GIF8") { "image/gif" } else if buf.starts_with(&[0xFF, 0xD8, 0xFF]) { "image/jpeg" } else if buf.len() > 12 && &buf[8..12] == b"WEBP" { "image/webp" } else { "image/png" }).header("cache-control", "private, max-age=86400").body(pgm_net_internal::http::full(buf)).expect("response"),
             None => answer(404, json!({ "error": "No such picture." })),
         },
         "/api/assistant/pc-result" if post => {
@@ -129,7 +129,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         "/api/assistant/say" if post => {
             let b = r.json();
-            let line: String = regex::Regex::new(r"\[\[image:[^\]]*\]\]").unwrap().replace_all(&s(&b, "text"), "").chars().filter(|c| !"*_`#>".contains(*c)).collect::<String>().trim().chars().take(600).collect();
+            let line: String = regex::Regex::new(r"\[\[image:[^\]]*\]\]").unwrap().replace_all(&s(&b, "text"), "").chars().filter(|c| !("‍️".contains(*c) || ('🀀'..='🫿').contains(c) || ('☀'..='➿').contains(c))).filter(|c| !"*_`#>".contains(*c)).collect::<String>().trim().chars().take(600).collect();
             if line.is_empty() { return Some(answer(400, json!({ "error": "Nothing to say." }))); }
             if !u.ensure_voice(hub).await { return Some(answer(503, json!({ "error": "Her voice is not running on the host." }))); }
             let emo = if EMOTIONS.contains(&s(&b, "emotion").as_str()) { s(&b, "emotion") } else { "neutral".into() };

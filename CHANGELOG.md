@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.51.0 — 2026-11-10
+
+MINOR: Unity on your desktop, writing on pictures, real web photos, and a picture engine that never stays off.
+
+### Added
+- **Unity on the desktop** (asked: "a little stand in fully figured model of Unity head to toe to walkaround the bottom of the application and take commands via talking to Unity so she does what u say ... photorealistic just like agent gen ... not in a windoe so evertyhting is transparent but her over top of the applicaiton"). In the desktop app she stands on the bottom of the app window, head to toe and photorealistic, in a see-through window that lets every click through and follows the app window. Tell Unity (typed or spoken, in her section) to walk left / right / up / down, come here, sit, wave, dance, turn around, stop or hide, and she does it; left alone she strolls a little. Her moves are clips rendered with Agent Gen's video engine and cut out (native/crates/vr-desktop/companion-clips.py rebuilds them). `vr-desktop --companion <move>` works from a terminal. Windows and Linux app: vr-desktop rebuilt. Check: **R553**.
+- **Writing and drawing on pictures** (asked: "how does unity send us images when we tell her to web search or genreate them or edit them and write on them and all of that"): write_on_image puts a caption on any picture, or words / a heart / a star in marker, lipstick or paint on a named part of her (or whoever is in it), sized to fit there, like Agent Gen. Image engine: /caption and /mark. Check: **R551**.
+- **Real photos from the web**: find_image / post_image (she looks at the candidates, posts the one she picks). GIFs (find_gif / post_gif) now work on the live Rust hub too. `bridge/assistant.js` 1.3.0, `web/index.html` 1.41.0, native pgm-ai-internal. Check: **R551**.
+
+### Fixed
+- **The picture engine starts itself** when a picture is asked for and it is not running (it was off, so every picture failed and Unity covered with refusals). Native AI host. Check: **R552**.
+
 ## 5.50.2 — 2026-11-10
 
 PATCH: Unity in the team chat does what she is asked.

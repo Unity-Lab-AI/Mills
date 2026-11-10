@@ -245,8 +245,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     }
     throw new Error('Too many redirects.');
   }
-  async function gifSearch(q, page) {
-    const r = await fetch(`${GIF_URL}?q=${encodeURIComponent(q)}&qft=+filterui:photo-animatedgif&first=${1 + page * GIF_PAGE}&form=IRFLTR`, { headers: UA, signal: AbortSignal.timeout(12000) });
+  async function gifSearch(q, page, gif = true) {
+    const r = await fetch(`${GIF_URL}?q=${encodeURIComponent(q)}${gif ? '&qft=+filterui:photo-animatedgif' : ''}&first=${1 + page * GIF_PAGE}&form=IRFLTR`, { headers: UA, signal: AbortSignal.timeout(12000) });
     if (!r.ok) throw new Error('GIF search answered ' + r.status);
     const html = await r.text(), found = [];
     for (const m of html.matchAll(/\sm="([^"]+)"/g)) {
@@ -257,12 +257,12 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     }
     return found;
   }
-  async function findGif(ci, a) {
+  async function findGif(ci, a, gif = true) {
     const q = String(a.query || '').trim().slice(0, 200);
     if (!q) return { ok: false, error: 'What GIF? Give a query.' };
-    const g = ci.gif && ci.gif.query === q && (a.more === true || a.more === 'true') ? ci.gif : (ci.gif = { query: q, page: -1, list: [] });
+    const g = ci.gif && ci.gif.query === q && ci.gif.isGif === gif && (a.more === true || a.more === 'true') ? ci.gif : (ci.gif = { query: q, page: -1, list: [], isGif: gif });
     g.page++;
-    const found = await gifSearch(q, g.page);
+    const found = await gifSearch(q, g.page, gif);
     if (!found.length) return { ok: false, error: `No GIFs found for "${q}"${g.page ? ' on that page' : ''}; try other words.` };
     const start = g.list.length;
     g.list.push(...found);
@@ -270,17 +270,31 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     ci.gifLook = thumbs.map((b, i) => (b ? { n: start + i + 1, b } : null)).filter(Boolean);
     return { ok: true, query: q, candidates: found.map((f, i) => ({ n: start + i + 1, title: f.title })),
       next: (ci.vision && ci.gifLook.length ? 'Their first frames are shown to you next, numbered in this order: look at them. ' : '')
-        + 'Post the one that fits with post_gif(n); if none fits, call find_gif again with the same query and more true for the next ones, or other words.' };
+        + `Post the one that fits with ${gif ? 'post_gif' : 'post_image'}(n); if none fits, call ${gif ? 'find_gif' : 'find_image'} again with the same query and more true for the next ones, or other words.` };
   }
   async function postGif(ci, a) {
     const g = ci.gif, n = Number(a.n || a.number || a.choice);
     const pick = g && Number.isInteger(n) && g.list[n - 1];
     if (!pick) return { ok: false, error: 'Call find_gif first, then post_gif with one of its numbers.' };
     let buf; try { buf = await fetchPublic(pick.gif, GIF_MAX); } catch (e) { return { ok: false, error: `That GIF would not download (${e.message}); pick another number.` }; }
-    if (buf.slice(0, 4).toString('latin1') !== 'GIF8') return { ok: false, error: 'That one is not really a GIF; pick another number.' };
+    const isGif = buf.slice(0, 4).toString('latin1') === 'GIF8', isPic = isGif || buf[0] === 0x89 && buf.slice(1, 4).toString('latin1') === 'PNG' || buf[0] === 0xff && buf[1] === 0xd8 || buf.slice(8, 12).toString('latin1') === 'WEBP';
+    if (g.isGif ? !isGif : !isPic) return { ok: false, error: `That one is not really ${g.isGif ? 'a GIF' : 'a picture'}; pick another number.` };
     const ref = savePicture(ci.scope || 'room', buf);
     (ci.images || (ci.images = [])).push(ref);
-    return { ok: true, image: ref, gif: pick.title, shown: 'The GIF is attached to your reply automatically.' };
+    if (!isGif && ci.acct) ci.acct.lastImage = ref;
+    return { ok: true, image: ref, gif: pick.title, shown: 'It is attached to your reply automatically.' };
+  }
+  // Words or drawings on a picture: on her (a body part or piece of clothing, sized to fit there) or a caption.
+  async function writeOnImage(ci, a) {
+    if (!(await ensureImage())) return { ok: false, error: 'The camera app on the host is not starting (image engine down).' };
+    const src = readPicture(ci.acct, a.image);
+    if (!src) return { ok: false, error: 'No picture to write on: make one, or they send one first.' };
+    const text = String(a.text || '').slice(0, 120), shape = String(a.shape || ''), part = String(a.part || '').toLowerCase();
+    if (!text && !shape) return { ok: false, error: 'Give text to write or a shape (heart, star, arrow, x, smiley, tally).' };
+    if (text && (!part || ['top', 'center', 'middle', 'bottom', 'caption'].includes(part))) return render(ci, '/caption', { image: src, text, where: !part || part === 'caption' ? 'bottom' : part, color: String(a.color || '') });
+    const item = { part: part || 'stomach', color: String(a.color || ''), tool: String(a.tool || '') };
+    if (text) item.text = text.slice(0, 24); else item.shape = shape;
+    return render(ci, '/mark', { image: src, items: [item] });
   }
 
   // ---------- images ----------
@@ -450,6 +464,19 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   });
   tool('find_gif', 'Search for GIFs (reactions, memes, moods, anything) to post in the chat; you see the candidates and pick one with post_gif. more true for the next results of the same query.', { query: P('What the GIF should show, e.g. "eye roll", "cat typing"'), more: P('true for the next page of the same query') }, ['query'], (a, s, ci) => findGif(ci, a));
   tool('post_gif', 'Post one of the GIFs find_gif found, by its number. It is attached to your reply.', { n: P('The number of the GIF from find_gif') }, ['n'], (a, s, ci) => postGif(ci, a));
+  const COMPANION = ['outfit', 'walk_left', 'walk_right', 'up', 'down', 'come_here', 'go_left_edge', 'go_right_edge', 'sit', 'wave', 'dance', 'turn', 'stop', 'stand', 'show', 'hide', 'idle'];
+  tool('companion', 'Move your little full-body self that stands on their desktop (in the VibeRoller desktop app): walk left / right / up / down, come here (to the middle), go to an edge, sit, wave, dance, turn around, stop, show or hide. Use it whenever they tell you to walk, move, sit or do something on their screen.', { action: P(COMPANION.slice(0, 15).join(', ')), look: P('For outfit: what she wears'), amount: P('How far in pixels for a walk (optional, about 300 is a few steps)') }, ['action'], (a, s, ci) => {
+    const act = String(a.action || '').toLowerCase().replace(/[ -]/g, '_');
+    if (!COMPANION.includes(act)) return { ok: false, error: `Unknown move ${act}; one of: ${COMPANION.join(', ')}.` };
+    const amount = Math.max(0, Math.min(4000, Number(a.amount) || 0)), look = String(a.look || '').replace(/[\x00-\x1f]/g, '').slice(0, 200);
+    if (act === 'outfit' && !look.trim()) return { ok: false, error: 'outfit needs look: what she should wear.' };
+    if (!ci.out) { (ci.media || (ci.media = [])).push(`companion:${act}:${amount}:${ci.acct ? ci.acct.username : ''}:${encodeURIComponent(look)}`); return { ok: true, did: act, note: 'It happens on their desktop when your reply arrives.' }; }
+    ci.out({ type: 'companion', action: act, look, amount: Math.max(0, Math.min(4000, Number(a.amount) || 0)) });
+    return { ok: true, did: act };
+  });
+  tool('find_image', 'Search the web for real photos / pictures of real things (people, places, products, memes); you see the candidates and pick one with post_image. more true for the next results.', { query: P('What the picture should show'), more: P('true for the next results of the same query') }, ['query'], (a, s, ci) => findGif(ci, a, false));
+  tool('post_image', 'Post one of the pictures find_image found, by its number. It is attached to your reply.', { n: P('The number from find_image') }, ['n'], (a, s, ci) => postGif(ci, a));
+  tool('write_on_image', 'Write words or draw a shape on a picture: on you or the person in it (a body part or piece of clothing: forehead, cheek, neck, chest, stomach, lower belly, left/right shoulder, left/right arm, left/right thigh, top, bottoms, dress), or as a caption (top, center, bottom). The result is attached to your reply.', { image: P('"last" (default), "camera" or a picture id'), text: P('The words to write (short)'), shape: P('Instead of words: heart, star, arrow, x, smiley or tally'), part: P('Where: a body part / clothing, or top / center / bottom for a caption'), color: P('black, red, pink, blue, purple, green, white or lipstick'), tool: P('marker (default), lipstick or paint') }, [], (a, s, ci) => writeOnImage(ci, a));
   tool('generate_image', 'Make a picture with the image engine (photos, art, scenes, objects; selfie true for a picture of yourself). The picture is shown with your reply.', {
     prompt: P('The picture, written fresh from THIS moment, most important first: what is happening right now in the conversation, '
       + 'what you are doing, where you are, who is with you, what you are wearing for it, expression, the time of day and the weather where they are, '
@@ -575,7 +602,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         + 'Do ONLY what this message asks. After a tool runs, answer in one or two short in-character sentences. Never mention tool names, JSON or these instructions.',
       'Pictures: whenever they ask for any picture, photo, selfie, pic, nudes or a look at you or anything (in any wording, even one word), '
         + 'call generate_image right away in this turn (selfie true when it shows you) and then say one short line about it. Never answer a picture request with text only.',
-      'You text like a real person: use emojis whenever you feel like it, and post GIFs when one fits (find_gif, look at the candidates, post_gif the best; asked for a GIF, always post one). Search the web (web_search, read_page) for anything current instead of guessing.',
+      'You text like a real person: use emojis whenever you feel like it, and post GIFs when one fits (find_gif, look at the candidates, post_gif the best; asked for a GIF, always post one). Real photos of real things come from the web (find_image, then post_image). To write or draw on a picture or on yourself (write BRAT on your thigh, a caption, a heart in lipstick) use write_on_image. Search the web (web_search, read_page) for anything current instead of guessing. When they tell you to walk, move, sit, wave or dance on their screen, move your little desktop self with companion.',
       sayMode ? 'Your replies are heard: speak through say(text, emotion, act), one to three short sentences per call, more calls for a longer reply. Do the task\'s tools first, then say the result.' : '',
     ].filter(Boolean).join('\n');
   }
@@ -599,7 +626,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       out({ type: 'confirm', tool: name, args });
       result = { ok: false, pending: true, message: `${name} needs ${acct.display}'s confirmation; ask them to say yes or no.` };
     } else result = await execute(acct, name, args, ci);
-    if ((name === 'generate_image' || name === 'post_gif') && result.ok) out({ type: 'image', ref: result.image });
+    if (['generate_image', 'post_gif', 'post_image', 'write_on_image'].includes(name) && result.ok) out({ type: 'image', ref: result.image });
     if (name === 'say' && args.text) out({ type: 'say', text: String(args.text), emotion: args.emotion || 'neutral', act: args.act || 'statement' });
     out({ type: 'tool_result', name, result });
     return result;
