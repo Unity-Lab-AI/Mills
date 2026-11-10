@@ -139,6 +139,7 @@ const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] 
 const fakeOaiTools = []; // R346: the bodies the fake OpenAI endpoint got that carried tools or tool messages
 const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
+const fakeGifQueries = [];
 let fakeOllamaNoBrain = false; // R473: the brain is gone from /api/tags (a chat model and an embedder stay); "MODEL?" answers with the model asked for
 // Fake Ollama for the Unity section's local brain: scripted tool calls, no GPU, no model.
 //   user text "TASK <title>"  → add_task, then a say() line     "DELETE <id>" → delete_task (needs a yes)
@@ -207,6 +208,11 @@ function startFakeOllama() {
       // fake image engine on the same port: a 1x1 PNG for any prompt; the prompt is kept for checks
       if (req.url === '/health') return j({ ok: true, loaded: true });
       // fake web search (Bing-shaped) and YouTube results page
+      if (req.url.startsWith('/images/search?')) { // fake Bing Images (animated GIF filter): two results, their GIFs on this private address
+        const q = new URL('http://x' + req.url).searchParams, mk = (t, n) => ' m="' + JSON.stringify({ t, murl: `http://127.0.0.1:${OLLAMA_PORT}/fake${n}.gif`, turl: `http://127.0.0.1:${OLLAMA_PORT}/th${n}.jpg` }).replace(/"/g, '&quot;') + '"';
+        fakeGifQueries.push({ q: q.get('q'), qft: q.get('qft'), first: q.get('first') });
+        res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end('<div class="iusc"' + mk('Eye &amp; roll', 1) + '></div><div class="iusc"' + mk('Big eye roll', 2) + '></div>');
+      }
       if (req.url.startsWith('/search?')) { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end('<ol><li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&amp;u=a1' + Buffer.from('https://example.org/regress').toString('base64url') + '&amp;ntb=1">Regress <b>result</b></a></h2><p>snippet &amp; more</p></li></ol>'); }
       if (req.url.startsWith('/results?')) { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end('var x = {"videoRenderer":{"videoId":"abcdefghijk","thumbnail":{},"title":{"runs":[{"text":"Regress Song"}]}}}'); }
       // fake voice + speech engines on the same port too
@@ -295,6 +301,7 @@ function startFakeOllama() {
         else if (/RUNPY/.test(u)) call('run_code', { language: 'python', code: 'print(6*7)' });
         else if (/DELME/.test(u)) call('pc_delete', { path: 'old.txt' });
         else if (/SEARCHME/.test(u)) call('web_search', { query: 'regress query' });
+        else if (/GIFME/.test(u)) call('find_gif', { query: 'eye roll' });
         else if (/PLAYME/.test(u)) call('play_youtube', { query: 'regress song' });
         else if (/README/.test(u)) call('read_page', { url: 'http://127.0.0.1/secret' });
         else if (/EDITME/.test(u)) call('edit_image', { image: 'camera', prompt: 'regress edit scene', keep_face: true });
@@ -306,6 +313,8 @@ function startFakeOllama() {
         else if (/REMIND/.test(u)) call('set_reminder', { text: 'regress reminder', when: 'in 1 second' });
         else if (/MODEL\?/.test(u)) line({ content: 'model is ' + b.model });
         else line({ content: 'plain answer for ' + u.slice(-3000) });
+      } else if (last.role === 'tool' && last.tool_name === 'find_gif') {
+        call('post_gif', { n: 2 });
       } else if (last.role === 'tool' && last.tool_name !== 'say') {
         call('say', { text: 'done: ' + last.content.slice(0, 160), emotion: 'happy', act: 'statement' });
       } else {
@@ -342,7 +351,7 @@ async function setup() {
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -6334,6 +6343,14 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   const toolRes = (ev, name) => (ev.events.find((e) => e.type === 'tool_result' && e.name === name) || {}).result || {};
   const ws = toolRes(await uchat(U, 'SEARCHME'), 'web_search');
   check('R80', 'web_search: results with the real address unwrapped, title and snippet as text', (ws.results || [])[0] && ws.results[0].url === 'https://example.org/regress' && ws.results[0].title === 'Regress result' && ws.results[0].snippet === 'snippet & more', JSON.stringify(ws).slice(0, 150));
+  const gf = await uchat(U, 'GIFME send me a gif'), gfFind = toolRes(gf, 'find_gif'), gfPost = toolRes(gf, 'post_gif'), gfFinal = gf.events.find((e) => e.type === 'final') || {};
+  const gq = fakeGifQueries[0] || {}, asrc = fs.readFileSync(path.join(BRIDGE, 'assistant.js'), 'utf8');
+  check('R548', 'GIFs and emojis: find_gif searches Bing Images with the animated-GIF filter (keyless) and lists the candidates by number (titles unescaped); post_gif downloads only from public addresses (a private one is refused, nothing attached) and must really be a GIF; a vision brain sees the first frames of the candidates; "send me a gif" never falls back to a selfie; her prompt invites emojis and GIFs; her voice skips emojis; GIFs are served as image/gif',
+    gfFind.ok === true && (gfFind.candidates || []).length === 2 && gfFind.candidates[0].title === 'Eye & roll' && gfFind.candidates[1].n === 2 && gq.q === 'eye roll' && /animatedgif/.test(gq.qft || '') && gq.first === '1'
+      && gfPost.ok === false && /private network|port is not allowed/.test(gfPost.error || '') && !(gfFinal.images || []).length
+      && ["images: look.map((x) => x.b)", "vision: (r.capabilities || []).includes('vision')", '!/gif/i.test(text)', 'use emojis whenever you feel like it, and post GIFs',
+        'Extended_Pictographic', "=== 'GIF8' ? 'image/gif'", "!== 'GIF8') return { ok: false"].every((s) => asrc.includes(s)),
+    `find ${JSON.stringify(gfFind).slice(0, 200)}; post ${JSON.stringify(gfPost)}; q ${JSON.stringify(gq)}; images ${JSON.stringify(gfFinal.images)}`);
   const pl = await uchat(U, 'PLAYME');
   const plr = toolRes(pl, 'play_youtube'), plf = pl.events.find((e) => e.type === 'final') || {};
   check('R81', 'play_youtube: finds the video and attaches the player to the reply', plr.video === 'abcdefghijk' && plr.playing === 'Regress Song' && (plf.media || []).includes('abcdefghijk'));
