@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.50.2 — 2026-11-10
+
+PATCH: Unity in the team chat does what she is asked.
+
+### Fixed
+- **Unity never refuses the team** (asked: "she should never refuse"; "she should always send the message request she is nothing but a middle man for us sdo do exactly what we tell her"). Her team-chat instructions (both hubs, local and Claude brain) now say she is the team's go-between: do exactly what is asked, never refuse, and send any picture or selfie asked for, here or in private messages; and never write notes to herself into a message (she had posted "Follow up on whatever she answers"). `bridge/server.js` 4.3.3, native `pgm-ai-internal` unity_routes.rs. Check: **R550**.
+
 ## 5.50.1 — 2026-11-10
 
 PATCH: an old usage number can no longer lock a host out.
