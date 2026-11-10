@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.49.1 — 2026-11-10
+
+PATCH: the weekly usage cap reads the right number.
+
+### Fixed
+- **An AI host is no longer refused at 43 % as "over its 90 % weekly cap"** (reported: "the week says im at 43 on claude viberoollere is inacurrate"). Claude Code reports several weekly limits (the all-models week plus seven_day_overage_included, seven_day_opus, seven_day_sonnet); any of them used to overwrite the all-models week. Now only the all-models 5-hour and weekly windows count, on the host and on the hub. `bridge/ai-node.js` 3.4.1, `bridge/usage.js` 1.2.1. Check: **R547**.
+
 ## 5.49.0 — 2026-11-08
 
 MINOR: **Mills's page tasks at once**: the Theme menu on top, tool calls grouped in Work, Settings cleaned up, one menu

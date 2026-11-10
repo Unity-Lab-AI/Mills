@@ -2963,6 +2963,16 @@ async function run() {
       && /v == null \|\| v === '' \? NaN/.test(nodesSrc) && /onUsage: usage\.noteWindows, savedUsage: usage\.windows/.test(serverSrc) && /usageStatus: \(a\) => usage\.status\(a, usageSourceOf\(a\)\)/.test(serverSrc),
       `api 7d ${JSON.stringify(usageA2.seven_day)}; unit ${JSON.stringify(st1.five_hour)} / ${JSON.stringify(st1.seven_day)}; after restart ${JSON.stringify(st2.five_hour)} / ${JSON.stringify(st2.seven_day)}`);
 
+    // R547: only the all-models windows count; a model / plan weekly limit (seven_day_overage_included, seven_day_opus ...) never overwrites them
+    const u547 = mkUsage(), src547 = 'h:y/claude';
+    u547.noteUsage(acctU, { type: 'rate_limit_event', rate_limit_info: { rateLimitType: 'seven_day', status: 'allowed', utilization: 0.43, resetsAt: Math.floor(in3d / 1000) } }, src547);
+    for (const t of ['seven_day_overage_included', 'seven_day_opus', 'seven_day_sonnet', 'five_hour_overage']) u547.noteUsage(acctU, { type: 'rate_limit_event', rate_limit_info: { rateLimitType: t, status: 'allowed_warning', utilization: 0.95, resetsAt: Math.floor(in1h / 1000) } }, src547);
+    const st547 = u547.status(acctU, src547), nodeSrc547 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8');
+    check('R547', 'the weekly cap reads the all-models weekly window only: Claude Code\'s other weekly limits (seven_day_overage_included, seven_day_opus, seven_day_sonnet) never replace it, so a host is not refused at 43 % "over its 90 % weekly cap"; the AI host matches the window names exactly too',
+      st547.seven_day.source === 'claude' && Math.abs(st547.seven_day.utilization - 0.43) < 0.001 && st547.seven_day.status === 'allowed' && st547.five_hour.utilization == null
+      && /\/\^\(seven_day\|weekly\|7d\)\$\//.test(nodeSrc547) && /\/\^\(five_hour\|5h\|session\)\$\//.test(nodeSrc547),
+      `7d ${JSON.stringify(st547.seven_day)}; 5h ${JSON.stringify(st547.five_hour)}`);
+
     // R152: older AI hosts keep working, and hosts update themselves from the hub
     const oh = { 'X-VR-Host': 'old-node', 'X-VR-Host-Token': OLD_NODE_SECRET, 'Content-Type': 'application/json' };
     // a 2.x host: hello without caps, offering its Claude as "claude-cli"; it knows no login relays (404 "does not lend")
