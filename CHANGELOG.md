@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.54.1 — 2026-11-10
+
+PATCH: Unity looks like herself in her selfies.
+
+### Fixed
+- **No more pale ghost** (asked: "she is still appearing as a ghostly pale freak not a noraml random american colledge firl with a emo like appearance"): her selfie look is a 22 year old American college girl with an emo style (black hair with hot pink streaks, side bangs, eyeliner, natural skin tone, light freckles); "goth" made the picture model paint her chalk white. Both hubs; `bridge/assistant.js` 1.4.2, native pgm-ai-internal.
+
 ## 5.54.0 — 2026-11-10
 
 MINOR: Unity sees again, and talking to her comes before filming.

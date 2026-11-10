@@ -84,7 +84,7 @@ impl Unity {
             modelfile: p("modelfile", mills.join("..").join("Backrooms").join("models").join("unity-brain").join("Modelfile")), persona_file: root.join("assistant-persona.txt"),
             image_url: clean_url(&a["imageUrl"], "http://127.0.0.1:5124"), voice_url: clean_url(&a["voiceUrl"], "http://127.0.0.1:5123"), ears_url: clean_url(&a["speechUrl"], "http://127.0.0.1:5125"), via_node: a["via"] == json!("node"),
             image_ckpt: p("imageCheckpoint", mills.join("..").join("Unity 3D Equational Model").join("Unity 18+").join("models").join("realistic-vision-v51.safetensors")), images_dir: mills.join("Images"),
-            selfie_look: a["selfieLook"].as_str().unwrap_or("25 year old emo goth woman, black hair with hot pink streaks, natural warm skin tone, realistic skin texture, dark eye makeup").into(), web: Web::new(&a), root: root.to_path_buf(), mills,
+            selfie_look: a["selfieLook"].as_str().unwrap_or("22 year old American college girl with an emo style, black hair with hot pink streaks, side bangs, eyeliner, natural skin tone, healthy glow, light freckles").into(), web: Web::new(&a), root: root.to_path_buf(), mills,
             ollama_state: Mutex::default(), ollama_lock: tokio::sync::Mutex::new(()), services: tokio::sync::Mutex::new(()), brain_probe: Mutex::default(), stores: Mutex::default(), states: Mutex::default(), clients: Mutex::default(), pending: Mutex::default(), last: Mutex::default(), notices: Mutex::default(),
             runs: Mutex::default(), waiting: Mutex::default(), claude_out: Mutex::default(), caps: Mutex::new(None), secret: pgm_core_internal::crypto::random_hex(24), http: reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().expect("http"), a }
     }

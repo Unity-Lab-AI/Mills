@@ -47,7 +47,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const IMAGES_DIR = path.join(MILLS_DIR, 'Images'); // Images/<username>/<id>.png (private) and Images/room/<id>.png (team chat); gitignored
   // Her look in pictures, added after the scene she writes so the moment leads (the engine encodes
   // long prompts in pieces, so neither the scene nor her look is cut).
-  const SELFIE_LOOK = A.selfieLook || '25 year old emo goth woman, black hair with hot pink streaks, natural warm skin tone, realistic skin texture, dark eye makeup';
+  const SELFIE_LOOK = A.selfieLook || '22 year old American college girl with an emo style, black hair with hot pink streaks, side bangs, eyeliner, natural skin tone, healthy glow, light freckles';
   const MAX_ROUNDS = 6, MAX_RESULT = 3000, HISTORY_KEEP = 40;
 
   // ---------- host services: Ollama + the local model (started on demand, survives hub restarts) ----------
