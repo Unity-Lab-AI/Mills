@@ -216,6 +216,8 @@ impl AiHosts {
             h.changed();
         } });
     }
+    /// How old a usage reading may be and still refuse a run (30 minutes).
+    const CAP_FRESH_MS: f64 = 30.0 * 60_000.0;
     // ---------- what hosts offer ----------
     fn owner_of(&self, r: &Value) -> String { let u = r["user"].as_str().unwrap_or(""); if !u.is_empty() { return u.into(); } self.live.lock().unwrap_or_else(|e| e.into_inner()).get(r["id"].as_str().unwrap_or("")).and_then(|n| n.hello.as_ref().and_then(|h| h["user"].as_str().map(String::from))).unwrap_or_default() }
     fn allowed(r: &Value, p: &Value) -> Value { if r["share"][p["id"].as_str().unwrap_or("")].is_array() { r["share"][p["id"].as_str().unwrap_or("")].clone() } else { p["allowedUsers"].clone() } }
@@ -223,14 +225,17 @@ impl AiHosts {
         let pid = p["id"].as_str().unwrap_or("");
         let seen = n.usage.get(pid).cloned().unwrap_or(json!({}));
         let kept = self.usage.windows(&format!("h:{id}/{pid}"));
-        let pick = |k: &str| if !seen[k]["utilization"].is_null() { seen[k].clone() } else if !kept[k].is_null() { kept[k].clone() } else if !seen[k].is_null() { seen[k].clone() } else { Value::Null };
+        let stamp = |mut w: Value| { if w.is_object() && w["at"].is_null() { w["at"] = seen["at"].clone(); } w };
+        let pick = |k: &str| if !seen[k]["utilization"].is_null() { stamp(seen[k].clone()) } else if !kept[k].is_null() { kept[k].clone() } else if !seen[k].is_null() { seen[k].clone() } else { Value::Null };
         json!({ "five_hour": pick("five_hour"), "seven_day": pick("seven_day") })
     }
     fn over_cap(&self, id: &str, n: &Live, p: &Value) -> String { self.cap_of(id, n, p).0 }
     /// Why the provider is capped ("" = it is not), and until when (the capping window's reset; 0 = not known).
     fn cap_of(&self, id: &str, n: &Live, p: &Value) -> (String, u64) {
         let u = self.usage_of(id, n, p); let now = now_ms() as f64;
-        let pc = |w: &Value| -> f64 { match w["utilization"].as_f64() { Some(x) if w["resetsAt"].as_f64().map(|r| r > now).unwrap_or(true) => x * 100.0, _ => 0.0 } };
+        // only a fresh reading (CAP_FRESH_MS) refuses a run: an old one would otherwise block the very run whose answer replaces it
+        let fresh = |w: &Value| w["at"].as_f64().map(|a| now - a < Self::CAP_FRESH_MS).unwrap_or(false);
+        let pc = |w: &Value| -> f64 { match w["utilization"].as_f64() { Some(x) if fresh(w) && w["resetsAt"].as_f64().map(|r| r > now).unwrap_or(true) => x * 100.0, _ => 0.0 } };
         let until = |w: &Value| w["resetsAt"].as_f64().unwrap_or(0.0) as u64;
         let (m5, m7) = (p["max5h"].as_f64().unwrap_or(90.0), p["max7d"].as_f64().unwrap_or(90.0));
         if pc(&u["five_hour"]) >= m5 { (format!("its 5-hour usage is at the {m5}% cap its host set"), until(&u["five_hour"])) }

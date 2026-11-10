@@ -1,9 +1,9 @@
 {
-  "project": "5.50.0",
+  "project": "5.50.1",
   "modules": {
     "bridge/ai-node.js": "3.4.1",
     "bridge/ai-nodes-front.js": "1.0.0",
-    "bridge/ai-nodes.js": "2.7.0",
+    "bridge/ai-nodes.js": "2.7.1",
     "bridge/archive.js": "1.0.0",
     "bridge/assistant-tools-mcp.js": "1.0.0",
     "bridge/assistant.js": "1.2.0",
@@ -33,7 +33,7 @@
     "bridge/shares.js": "1.0.0",
     "bridge/team-mcp.js": "1.7.0",
     "bridge/team.js": "1.1.4",
-    "bridge/usage.js": "1.2.1",
+    "bridge/usage.js": "1.2.2",
     "bridge/user-profile.js": "1.0.0",
     "bridge/vendor.js": "1.0.0",
     "bridge/vr-host.js": "1.0.0",

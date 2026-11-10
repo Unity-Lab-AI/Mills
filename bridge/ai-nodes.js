@@ -137,13 +137,14 @@ module.exports = function createAiNodes({ ROOT, config, send, readBody, readJson
   const ownerOf = (r) => r.user || (live.get(r.id) && live.get(r.id).hello ? live.get(r.id).hello.user : '') || '';
   // "@group" in a host's list = the hub's team group (config hostGroup), however it changes; names one by one besides
   const mayUse = (r, prov, user) => { if (!user) return false; if (user === ownerOf(r)) return true; const a = allowed(r, prov) || []; return a.includes(user) || (a.includes('@group') && cleanUsers(config.hostGroup || []).includes(user)); };
+  const CAP_FRESH_MS = 30 * 60e3; // how old a usage reading may be and still refuse a run
   const usageOf = (n, prov) => { // what this hub saw since it started, else the windows kept on disk (a restart forgets nothing)
     const seen = n.usage[prov.id] || {}, kept = savedUsage(`h:${hostIdOf(n)}/${prov.id}`) || {};
-    const pick = (k) => (seen[k] && seen[k].utilization != null ? seen[k] : kept[k] || seen[k] || null);
+    const pick = (k) => (seen[k] && seen[k].utilization != null ? { ...seen[k], at: seen[k].at || seen.at } : kept[k] || seen[k] || null);
     return { five_hour: pick('five_hour'), seven_day: pick('seven_day') };
   };
   const hostIdOf = (n) => { for (const [id, x] of live) if (x === n) return id; return ''; };
-  const overCap = (n, prov) => { const u = usageOf(n, prov); const pc = (w) => (w && Number.isFinite(w.utilization) && (!w.resetsAt || w.resetsAt > Date.now()) ? w.utilization * 100 : 0); return pc(u.five_hour) >= prov.max5h ? `its 5-hour usage is at the ${prov.max5h}% cap its host set` : pc(u.seven_day) >= prov.max7d ? `its weekly usage is at the ${prov.max7d}% cap its host set` : ''; };
+  const overCap = (n, prov) => { const u = usageOf(n, prov); const pc = (w) => (w && Number.isFinite(w.utilization) && Date.now() - (w.at || 0) < CAP_FRESH_MS && (!w.resetsAt || w.resetsAt > Date.now()) ? w.utilization * 100 : 0); return pc(u.five_hour) >= prov.max5h ? `its 5-hour usage is at the ${prov.max5h}% cap its host set` : pc(u.seven_day) >= prov.max7d ? `its weekly usage is at the ${prov.max7d}% cap its host set` : ''; };
   // hub-side kind: a host's Claude (login relay) runs Work on THIS hub with the host's login; Codex and endpoints answer the API
   const hubKind = (k) => (k === 'openai' ? 'host-openai' : k === 'codex-relay' ? 'host-codex' : 'host-claude');
   // the providers people can pick: id "h:<hostId>/<providerId>"; offline hosts stay listed (greyed), so a choice survives
