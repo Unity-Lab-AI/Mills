@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.53.0 — 2026-11-10
+
+MINOR: Desktop Unity does anything she is told, not a list of moves.
+
+### Changed
+- **Anything, in your words** (asked: "i dont want buttons i want her to be dynamic and accept anything not just random predefined commands"; "when i @Unity i can tell here how to appear right.. its not just a fucking setting"): tell Unity (@Unity in the team chat, or her section) what her desktop self should do or look like, in any words. Walking and simple moves happen at once; anything else is filmed for it from her current look (a minute or two, then played; the same words again replay it). Settings and Tools have a "Tell her" box and a "How she looks" box, no move buttons and no ready-made examples. `web/index.html` 1.42.0, `bridge/assistant.js` 1.4.0, native pgm-ai-internal; Windows and Linux app: vr-desktop rebuilt (companion-do.py).
+
 ## 5.52.1 — 2026-11-10
 
 PATCH: Desktop Unity's settings are in the app's Settings.

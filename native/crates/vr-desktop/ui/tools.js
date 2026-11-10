@@ -178,4 +178,5 @@ async function unityRefresh() {
 $('uOn').onclick = () => call('companion_set', { on: true }).then(unityRefresh, fail);
 $('uOff').onclick = () => call('companion_set', { on: false }).then(unityRefresh, fail);
 $('uApply').onclick = () => { const look = $('uLook').value.trim(); if (!look) return toast('Say how she should look.', true); call('companion', { action: 'outfit', look }).then(() => { toast('She is changing: a few minutes.'); setTimeout(unityRefresh, 1500); }, fail); };
-for (const b of document.querySelectorAll('[data-move]')) b.onclick = () => call('companion', { action: b.dataset.move }).catch(fail);
+const uDo = () => { const t = $('uDo').value.trim(); if (!t) return; call('companion', { action: 'do', look: t }).then(() => { $('uDo').value = ''; setTimeout(unityRefresh, 1500); }, fail); };
+$('uDoGo').onclick = uDo; $('uDo').onkeydown = (e) => { if (e.key === 'Enter') uDo(); };

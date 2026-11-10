@@ -1267,10 +1267,10 @@
       <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
        <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
       </section>
-      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. Tell her what to do here, or in her section / the team chat ("walk left", "sit", "be a gorilla in a suit"). A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
+      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
        <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <span id="duState" class="status"></span></span></div>
-       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="e.g. the same goth girl in a red dress / a gorilla in a business suit"><button type="button" id="duApply">Change her look</button></span></div>
-       <div class="setRow"><span>Moves</span><span id="duMoves"></span></div>
+       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
+       <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
       </section>
       <!-- one Save for the whole tab, always in reach at the bottom of the box -->
       <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
@@ -4282,8 +4282,8 @@ function deskUnitySetup() {
   document.getElementById('duOn').onclick = () => NATIVE.call('companion_set', { on: true }).then(refresh, refresh);
   document.getElementById('duOff').onclick = () => NATIVE.call('companion_set', { on: false }).then(refresh, refresh);
   document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; NATIVE.call('companion', { action: 'outfit', look }).then(() => setTimeout(refresh, 1500), (e) => { state.textContent = String(e); }); };
-  const moves = document.getElementById('duMoves');
-  for (const m of ['walk_left', 'walk_right', 'up', 'down', 'come_here', 'sit', 'wave', 'dance', 'turn', 'stop']) { const b = document.createElement('button'); b.type = 'button'; b.textContent = m.replace('_', ' '); b.onclick = () => NATIVE.call('companion', { action: m }).catch(() => {}); moves.append(b, ' '); }
+  const doIt = () => { const t = document.getElementById('duDo').value.trim(); if (!t) return; NATIVE.call('companion', { action: 'do', look: t }).then(() => { document.getElementById('duDo').value = ''; setTimeout(refresh, 1500); }, (e) => { state.textContent = String(e); }); };
+  document.getElementById('duDoGo').onclick = doIt; document.getElementById('duDo').onkeydown = (e) => { if (e.key === 'Enter') doIt(); };
   refresh();
 }
 document.addEventListener('DOMContentLoaded', deskUnitySetup); setTimeout(deskUnitySetup, 0);
