@@ -2982,6 +2982,12 @@ async function run() {
       && /\/\^\(seven_day\|weekly\|7d\)\$\//.test(nodeSrc547) && /\/\^\(five_hour\|5h\|session\)\$\//.test(nodeSrc547),
       `7d ${JSON.stringify(st547.seven_day)}; 5h ${JSON.stringify(st547.five_hour)}`);
 
+    // R549: an old usage reading never blocks: only one from the last 30 minutes refuses a run (else the run that would refresh it is refused forever)
+    const rsHosts549 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'ai_hosts.rs'), 'utf8'), rsUsage549 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'usage.rs'), 'utf8');
+    check('R549', 'a usage cap only counts a fresh reading (the last 30 minutes): a host is never refused for hours on an old number that no run can replace (production bug 2026-11-10: gee-pc refused at "91 %" saved 16 hours earlier while Anthropic said 42 %); the hub (JavaScript and Rust) and the saved windows carry when each reading was taken',
+      [nodesSrc.includes('CAP_FRESH_MS = 30 * 60e3'), nodesSrc.includes('Date.now() - (w.at || 0) < CAP_FRESH_MS'), fs.readFileSync(path.join(BRIDGE, 'usage.js'), 'utf8').includes('status: l.status, at: l.at'),
+        rsHosts549.includes('const CAP_FRESH_MS: f64 = 30.0 * 60_000.0'), rsHosts549.includes('now - a < Self::CAP_FRESH_MS'), rsUsage549.includes('"status": l["status"], "at": l["at"]')].every(Boolean), 'static check of both hubs');
+
     // R152: older AI hosts keep working, and hosts update themselves from the hub
     const oh = { 'X-VR-Host': 'old-node', 'X-VR-Host-Token': OLD_NODE_SECRET, 'Content-Type': 'application/json' };
     // a 2.x host: hello without caps, offering its Claude as "claude-cli"; it knows no login relays (404 "does not lend")

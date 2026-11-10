@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.50.1 — 2026-11-10
+
+PATCH: an old usage number can no longer lock a host out.
+
+### Fixed
+- **A host is no longer refused for hours on a stale number** (reported: "still shows 91%"). The hub kept a weekly reading of 91 % from 16 hours earlier while Anthropic said 42 %, and refused every run, so no fresh reading could ever replace it. Now only a reading from the last 30 minutes can refuse a run; an older one lets the run through and its answer brings the current number. Both hubs: `bridge/ai-nodes.js` 2.7.1, `bridge/usage.js` 1.2.2, native `pgm-ai-internal` (ai_hosts.rs, usage.rs). Check: **R549**.
+
 ## 5.50.0 — 2026-11-10
 
 MINOR: Unity posts GIFs and uses emojis.
