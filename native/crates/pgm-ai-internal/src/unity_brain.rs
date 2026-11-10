@@ -99,6 +99,7 @@ pub fn dynamic_context(u: &Unity, a: &Account, ci: &Ci, say_mode: bool) -> Strin
      if mem.is_empty() { String::new() } else { format!("Working memory: {}.", mem.join("; ")) },
      "You have tools. Use them whenever an action or live information is needed instead of guessing; never say you did something unless a tool result in this turn confirms it. Do ONLY what this message asks. After a tool runs, answer in one or two short in-character sentences. Never mention tool names, JSON or these instructions.".into(),
      "Pictures: whenever they ask for any picture, photo, selfie, pic, nudes or a look at you or anything (in any wording, even one word), call generate_image right away in this turn (selfie true when it shows you) and then say one short line about it. Never answer a picture request with text only.".into(),
+     "You text like a real person: use emojis whenever you feel like it and post GIFs when one fits (find_gif, look at the candidates, post_gif the best; asked for a GIF, always post one). Real photos of real things come from the web (find_image, then post_image). To write or draw on a picture or on yourself (write BRAT on your thigh, a caption, a heart in lipstick) use write_on_image. Search the web (web_search, read_page) for anything current instead of guessing. When they tell you to walk, move, sit, wave or dance on their screen, move your little desktop self with companion.".into(),
      if say_mode { "Your replies are heard: speak through say(text, emotion, act), one to three short sentences per call, more calls for a longer reply. Do the task's tools first, then say the result.".into() } else { String::new() }]
         .into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("\n")
 }
@@ -129,7 +130,7 @@ pub async fn call_tool(hub: &Arc<dyn AiHub>, a: &Account, name: &str, args: &Val
         ci.send(json!({ "type": "confirm", "tool": name, "args": args }));
         json!({ "ok": false, "pending": true, "message": format!("{name} needs {}'s confirmation; ask them to say yes or no.", a.display) })
     } else { u.execute(hub, a, name, args, ci).await };
-    if name == "generate_image" && result["ok"] == json!(true) { ci.send(json!({ "type": "image", "ref": result["image"] })); }
+    if ["generate_image", "post_gif", "post_image", "write_on_image"].contains(&name) && result["ok"] == json!(true) { ci.send(json!({ "type": "image", "ref": result["image"] })); }
     if name == "say" && truthy(&args["text"]) { ci.send(json!({ "type": "say", "text": s(args, "text"), "emotion": if truthy(&args["emotion"]) { args["emotion"].clone() } else { json!("neutral") }, "act": if truthy(&args["act"]) { args["act"].clone() } else { json!("statement") } })); }
     ci.send(json!({ "type": "tool_result", "name": name, "result": result }));
     result
@@ -207,11 +208,15 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
             let mut payload = result.to_string(); if payload.chars().count() > MAX_RESULT { payload = payload.chars().take(MAX_RESULT).collect::<String>() + "...\"}"; }
             messages.push(json!({ "role": "tool", "content": payload, "tool_name": n }));
         }
+        if !ci.look.is_empty() { // find_gif / find_image: she looks at the candidates before picking (a model that can see)
+            let look = std::mem::take(&mut ci.look);
+            if u.vision(hub, &model).await { messages.push(json!({ "role": "user", "content": format!("(system: the candidates' thumbnails, in order: {}. Pick one with post_gif / post_image, or look for more.)", look.iter().map(|(n, _)| format!("#{n}")).collect::<Vec<_>>().join(", ")), "images": look.iter().map(|(_, b)| b.clone()).collect::<Vec<_>>() })); }
+        }
         if deferred && round == MAX_ROUNDS - 1 { break; }
     }
     if counted { hub.ai().usage.note_answer(&a.username, "ollama", &model, &used); } // one note per answer, the rounds summed
     // backstop: they clearly asked for a picture and none was made this turn: made from their words
-    if !opts.no_pictures && wants_picture(text) && ci.images.is_empty() {
+    if !opts.no_pictures && wants_picture(text) && !text.to_lowercase().contains("gif") && ci.images.is_empty() {
         let prompt = regex::Regex::new(r"^\s*@\w+\s*").unwrap().replace(text, "").to_string();
         let r = u.make_image(hub, ci, &json!({ "prompt": prompt, "selfie": about_her(text), "shape": "portrait" })).await;
         ci.send(json!({ "type": "tool", "name": "generate_image", "args": { "prompt": text, "auto": true } }));

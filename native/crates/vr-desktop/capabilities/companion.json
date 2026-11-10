@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "companion",
+  "description": "Unity on the desktop: this app's own see-through page; it only hears the orders the hub's page passes on.",
+  "windows": [
+    "companion"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "allow-companion-last",
+    "allow-companion-clips"
+  ]
+}

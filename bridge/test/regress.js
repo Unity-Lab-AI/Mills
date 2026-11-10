@@ -2993,6 +2993,27 @@ async function run() {
     check('R550', "the team chat's Unity is the team's go-between: her room instructions (JavaScript and Rust hub, local and Claude brain) tell her to do exactly what she is asked, never refuse, and send any picture or selfie asked for, here or in private messages (production bug 2026-11-10: she refused a badge selfie and posted a note to herself)",
       serverSrc.includes("You are the team's go-between: do exactly what they ask") && (rsRoutes550.match(/You are the team's go-between: do exactly what they ask/g) || []).length === 2, 'static check of both hubs');
 
+    // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
+    const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
+    const asrc551 = fs.readFileSync(path.join(BRIDGE, 'assistant.js'), 'utf8'), eng551 = fs.readFileSync(path.join(BRIDGE, 'image-engine.py'), 'utf8');
+    const rsU551 = N551('pgm-ai-internal', 'src', 'unity.rs'), rsW551 = N551('pgm-ai-internal', 'src', 'unity_web.rs'), rsT551 = N551('pgm-ai-internal', 'src', 'unity-tools.json'), rsR551 = N551('pgm-ai-internal', 'src', 'unity_routes.rs');
+    check('R551', 'Unity writes and draws on pictures and posts real web images, on both hubs: write_on_image (a caption top / center / bottom, or words / a shape on a named body part or piece of clothing, sized to fit there, a part not in the picture is an error) through the image engine\'s /caption and /mark; find_image / post_image (Bing Images, she sees the thumbnails, public addresses only, must really be a picture); find_gif / post_gif on the Rust hub too; GIFs / JPEGs served with their own type',
+      ["'/mark': render_mark", "'/caption': render_caption", 'def _face_from_seg', 'is not in the picture'].every((x) => eng551.replace(/"/g, "'").includes(x))
+      && ["tool('write_on_image'", "tool('find_image'", "tool('post_image'", "render(ci, '/mark'", "render(ci, '/caption'"].every((x) => asrc551.includes(x))
+      && ['"find_gif" | "find_image"', '"post_gif" | "post_image"', '"write_on_image" =>', '"/mark"', '"/caption"'].every((x) => rsU551.includes(x))
+      && ['pub async fn image_search', 'pub async fn fetch_bytes', 'photo-animatedgif'].every((x) => rsW551.includes(x))
+      && ['"find_gif"', '"post_gif"', '"find_image"', '"post_image"', '"write_on_image"', '"companion"'].every((x) => rsT551.includes(x))
+      && rsR551.includes('buf.starts_with(b"GIF8") { "image/gif" }'), 'static check of both hubs and the image engine');
+    const host552 = N551('pgm-ai-internal', 'src', 'host', 'runner.rs');
+    check('R552', 'the image engine starts itself: an AI host whose engine is down starts it from engines-start.json (no window, one start at a time) and waits for it before the call goes on, so a picture ask never fails because nobody turned it on (production bug 2026-11-10: the engine was off and Unity covered with refusals)',
+      ['async fn wake_engine', 'engines-start.json', 'static WAKE: tokio::sync::Mutex', 'spawn_detached(program', 'wake_engine(&h, &job.engine, &base).await'].every((x) => host552.includes(x)), 'static check of the AI host');
+    const dm553 = N551('vr-desktop', 'src', 'main.rs'), dj553 = N551('vr-desktop', 'ui', 'companion.js'), page553 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const clips553 = ['idle', 'walk', 'sit', 'wave', 'dance'].every((c) => fs.existsSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'ui', 'companion', c + '.webp')));
+    check('R553', 'Unity on the desktop: in the desktop app a see-through, click-through window lies exactly over the app window (follows it, hidden when it is minimised) with only her in it, head to toe (idle, walk, sit, wave, dance clips); Unity\'s companion tool (both hubs) moves her: walk left / right / up / down, come here, sit, wave, dance, turn, stop, hide; the Unity page passes her orders on; vr-desktop --companion <move> does it from a terminal',
+      clips553 && ['async fn companion(', '.transparent(true)', 'set_ignore_cursor_events(true)', '.parent(&main)', 'fn fit_companion', 'companion_arg(&args)', 'allow-companion'].every((x) => dm553.includes(x))
+      && ["case 'walk_left'", "case 'sit'", "case 'come_here'", "T.event.listen('companion'"].every((x) => dj553.includes(x))
+      && page553.includes("ev.type === 'companion'") && page553.includes("NATIVE.call('companion'") && asrc551.includes("tool('companion'"), 'static check of the desktop app, the page and the hubs');
+
     // R152: older AI hosts keep working, and hosts update themselves from the hub
     const oh = { 'X-VR-Host': 'old-node', 'X-VR-Host-Token': OLD_NODE_SECRET, 'Content-Type': 'application/json' };
     // a 2.x host: hello without caps, offering its Claude as "claude-cli"; it knows no login relays (404 "does not lend")
@@ -6360,7 +6381,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     gfFind.ok === true && (gfFind.candidates || []).length === 2 && gfFind.candidates[0].title === 'Eye & roll' && gfFind.candidates[1].n === 2 && gq.q === 'eye roll' && /animatedgif/.test(gq.qft || '') && gq.first === '1'
       && gfPost.ok === false && /private network|port is not allowed/.test(gfPost.error || '') && !(gfFinal.images || []).length
       && ["images: look.map((x) => x.b)", "vision: (r.capabilities || []).includes('vision')", '!/gif/i.test(text)', 'use emojis whenever you feel like it, and post GIFs',
-        'Extended_Pictographic', "=== 'GIF8' ? 'image/gif'", "!== 'GIF8') return { ok: false"].every((s) => asrc.includes(s)),
+        'Extended_Pictographic', "=== 'GIF8' ? 'image/gif'", 'g.isGif ? !isGif : !isPic'].every((s) => asrc.includes(s)),
     `find ${JSON.stringify(gfFind).slice(0, 200)}; post ${JSON.stringify(gfPost)}; q ${JSON.stringify(gq)}; images ${JSON.stringify(gfFinal.images)}`);
   const pl = await uchat(U, 'PLAYME');
   const plr = toolRes(pl, 'play_youtube'), plf = pl.events.find((e) => e.type === 'final') || {};

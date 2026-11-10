@@ -183,6 +183,99 @@ fn install_here() -> R<String> { install::install() }
 #[tauri::command]
 async fn update_apply(app: AppHandle, st: S<'_>) -> R<bool> { let s = st.store.get(); let r = update::apply(&s.hub, &s.hub_session).await?; if r { app.restart(); } Ok(r) }
 
+/// Unity on the desktop: a see-through, frameless, always-on-top window over the whole screen that never takes a
+/// click (everything under it keeps working), with only her in it. The hub's page passes on what Unity was told to do
+/// (walk left / right / up / down, sit, wave, dance, come here, stop, hide): {action, amount?}.
+#[tauri::command]
+async fn companion(app: AppHandle, action: String, amount: Option<f64>, look: Option<String>) -> R<bool> {
+    clog(&format!("order {action}"));
+    let action: String = action.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(24).collect::<String>().to_lowercase();
+    if action == "outfit" { return companion_outfit(&app, look.unwrap_or_default()); }
+    if action == "hide" { if let Some(w) = app.get_webview_window("companion") { w.hide().map_err(|e| e.to_string())?; } return Ok(true); }
+    let w = match app.get_webview_window("companion") {
+        Some(w) => w,
+        None => {
+            // over the app's own window only: same place and size, kept there when it moves or resizes, above it and
+            // nothing else (its child), hidden while it is minimised
+            let main = app.get_webview_window("main").ok_or("the app window is not open")?;
+            let w = WebviewWindowBuilder::new(&app, "companion", WebviewUrl::App("companion.html".into())).title("Unity")
+                .transparent(true).decorations(false).skip_taskbar(true).shadow(false).resizable(false).focused(false).visible(false)
+                .parent(&main).map_err(|e| e.to_string())?
+                .build().map_err(|e| { clog(&format!("build failed: {e}")); e.to_string() })?;
+            clog("window built");
+            fit_companion(&app);
+            let a2 = app.clone();
+            main.on_window_event(move |ev| match ev {
+                tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. } => fit_companion(&a2),
+                _ => {}
+            });
+            let _ = w.set_ignore_cursor_events(true);
+            w
+        }
+    };
+    fit_companion(&app);
+    let _ = w.show();
+    let _ = w.set_ignore_cursor_events(true);
+    use tauri::Emitter;
+    // a window that was just made is still loading: it asks for the last order itself (companion.js), so keep it
+    *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner()) = json!({ "action": action, "amount": amount.unwrap_or(0.0) });
+    w.emit_to("companion", "companion", json!({ "action": action, "amount": amount.unwrap_or(0.0) })).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+/// Her trail: %TEMP%/vr-companion.log (what she was told and what happened).
+fn clog(m: &str) { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("vr-companion.log")) { let _ = writeln!(f, "{} {m}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)); } }
+/// `vr-desktop --companion <move>`: her moves from a terminal or a script (the running app gets them).
+fn companion_arg(args: &[String]) -> Option<String> { args.iter().position(|a| a == "--companion").map(|i| args.get(i + 1).cloned().unwrap_or_else(|| "show".into())) }
+/// The companion window laid exactly over the app window (its inner area); hidden while the app is minimised.
+fn fit_companion(app: &AppHandle) {
+    let (Some(main), Some(c)) = (app.get_webview_window("main"), app.get_webview_window("companion")) else { return };
+    if main.is_minimized().unwrap_or(false) { let _ = c.hide(); return; }
+    if let (Ok(p), Ok(s)) = (main.inner_position(), main.inner_size()) { let _ = c.set_position(p); let _ = c.set_size(s); }
+}
+/// `--look <text>` with `--companion outfit`.
+fn companion_look(args: &[String]) -> Option<String> { args.iter().position(|a| a == "--look").and_then(|i| args.get(i + 1).cloned()) }
+/// Her clips: this computer's own (a look she was told to wear, in the app's data folder), else the ones built in.
+fn companion_dir(app: &AppHandle) -> std::path::PathBuf { app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller")).join("companion") }
+#[tauri::command]
+fn companion_clips(app: AppHandle) -> Value {
+    let dir = companion_dir(&app); let mut out = serde_json::Map::new();
+    for n in ["idle", "walk", "sit", "wave", "dance"] {
+        if let Ok(b) = std::fs::read(dir.join(format!("{n}.webp"))) { use base64::Engine; out.insert(n.into(), json!(format!("data:image/webp;base64,{}", base64::engine::general_purpose::STANDARD.encode(b)))); }
+    }
+    Value::Object(out)
+}
+/// A new look: companion-look.py (redraw her base, film her moves, cut them out) runs here, hidden, with the image
+/// engine's Python; she keeps her look until all the new clips are there, then the window swaps them.
+static DRESSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn companion_outfit(app: &AppHandle, look: String) -> R<bool> {
+    let look: String = look.chars().filter(|c| !c.is_control()).take(200).collect::<String>().trim().to_string();
+    if look.is_empty() { return Err("What should she wear?".into()); }
+    if DRESSING.swap(true, std::sync::atomic::Ordering::SeqCst) { return Err("She is still changing; one look at a time.".into()); }
+    let dir = companion_dir(app); let _ = std::fs::create_dir_all(&dir);
+    let st = app.state::<App>();
+    let python = gpu::start_cmd(&st.host_dir).map(|(p, _, _)| p).unwrap_or_else(|| "python".into());
+    for (f, body) in [("companion-look.py", include_str!("../companion-look.py")), ("companion-clips.py", include_str!("../companion-clips.py"))] { std::fs::write(dir.join(f), body).map_err(|e| e.to_string())?; }
+    let base = dir.join("base.png");
+    if !base.exists() { std::fs::write(&base, include_bytes!("../ui/companion/base.png")).map_err(|e| e.to_string())?; }
+    clog(&format!("outfit {look} with {python}"));
+    let a = app.clone();
+    std::thread::spawn(move || {
+        let mut c = std::process::Command::new(&python);
+        c.arg(dir.join("companion-look.py")).arg("--look").arg(&look).arg("--base").arg(&base).arg("--out").arg(&dir).current_dir(&dir)
+            .stdout(std::process::Stdio::null()).stderr(std::fs::File::create(dir.join("look.log")).map(std::process::Stdio::from).unwrap_or(std::process::Stdio::null()));
+        #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+        let ok = c.status().map(|s| s.success()).unwrap_or(false);
+        clog(&format!("outfit done: {ok}"));
+        DRESSING.store(false, std::sync::atomic::Ordering::SeqCst);
+        use tauri::Emitter;
+        let _ = a.emit_to("companion", "companion-clips", json!({ "ok": ok }));
+    });
+    Ok(true)
+}
+static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
+#[tauri::command]
+fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }
+
 fn show_main(app: &AppHandle) { if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus(); } }
 fn show_tools(app: &AppHandle) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window("tools") { w.show()?; w.set_focus()?; return Ok(()); }
@@ -207,10 +300,10 @@ fn main() {
     SMOKE.store(smoke, std::sync::atomic::Ordering::SeqCst);
     if smoke { std::thread::spawn(|| { std::thread::sleep(std::time::Duration::from_secs(40)); eprintln!("SMOKE timeout: the Tools page never reported"); std::process::exit(1); }); }
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| { clog(&format!("second start {args:?}")); if let Some(act) = companion_arg(&args) { let a = app.clone(); tauri::async_runtime::spawn(async move { if let Err(e) = companion(a, act, None, companion_look(&args)).await { eprintln!("companion: {e}"); } }); } else { show_main(app) } }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
+        .invoke_handler(tauri::generate_handler![companion, companion_last, companion_clips, app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
             fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here, machine_status, machine_link, machine_act, machine_service])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
@@ -229,7 +322,7 @@ fn main() {
             // the hub's page: only the harmless commands (see the top of this file)
             app.add_capability(tauri::ipc::CapabilityBuilder::new("hub").remote(format!("{hub}/*")).window("main")
                 .permission("core:event:default").permission("allow-app-info").permission("allow-notify").permission("allow-set-badge").permission("allow-set-session").permission("allow-open-tools")
-                .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup"))?;
+                .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup").permission("allow-companion"))?;
             let url: tauri::Url = hub.parse().map_err(|e| format!("bad hub address {hub}: {e}"))?;
             let host = url.host_str().unwrap_or("").to_string();
             let hub_for_perm = hub.clone();
