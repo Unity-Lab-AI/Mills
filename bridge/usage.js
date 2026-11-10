@@ -82,7 +82,7 @@ module.exports = function createUsage({ ROOT, config, readJson, writeJson }) {
     }
     if (changed) save();
   }
-  const windows = (source) => { const L = bucket(source).limits || {}, now = Date.now(), ok = (l) => (l && l.exact && l.resetsAt > now ? { utilization: l.utilization, resetsAt: l.resetsAt, status: l.status } : null); return { five_hour: ok(L.five_hour), seven_day: ok(L.seven_day) }; };
+  const windows = (source) => { const L = bucket(source).limits || {}, now = Date.now(), ok = (l) => (l && l.exact && l.resetsAt > now ? { utilization: l.utilization, resetsAt: l.resetsAt, status: l.status, at: l.at } : null); return { five_hour: ok(L.five_hour), seven_day: ok(L.seven_day) }; };
   function status(acct, source) { // the /api/usage answer for one account: the windows of the source its provider uses
     const b = bucket(source), now = Date.now(), L = b.limits || {};
     const win = (key, start, len) => { // official numbers when Claude Code reported them, otherwise the estimate

@@ -117,7 +117,7 @@ impl Usage {
     pub fn windows(&self, source: &str) -> Value {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner()); let now = now_ms();
         let b = if source.is_empty() || source == "hub" { &*db } else { &db["sources"][source] };
-        let ok = |l: &Value| if l["exact"].as_bool() == Some(true) && l["resetsAt"].as_u64().map(|r| r > now).unwrap_or(false) { json!({ "utilization": l["utilization"], "resetsAt": l["resetsAt"], "status": l["status"] }) } else { Value::Null };
+        let ok = |l: &Value| if l["exact"].as_bool() == Some(true) && l["resetsAt"].as_u64().map(|r| r > now).unwrap_or(false) { json!({ "utilization": l["utilization"], "resetsAt": l["resetsAt"], "status": l["status"], "at": l["at"] }) } else { Value::Null };
         json!({ "five_hour": ok(&b["limits"]["five_hour"]), "seven_day": ok(&b["limits"]["seven_day"]) })
     }
     /// The /api/usage answer: the windows of the source the person's provider uses, and their context (ctx, session).
