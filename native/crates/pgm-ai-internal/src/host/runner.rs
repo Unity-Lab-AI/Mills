@@ -507,6 +507,7 @@ async fn relay_job(h: H, job: Job) {
             (base, None)
         };
         if !path_ok(&job.path) { return Err(Error::status(400, "bad path")); }
+        if !job.engine.starts_with("provider:") { wake_engine(&h, &job.engine, &base).await; }
         let method = reqwest::Method::from_bytes(if job.method.is_empty() { b"GET" } else { job.method.as_bytes() }).map_err(|_| Error::status(400, "bad method"))?;
         let mut rb = h.http.request(method, format!("{}{}", base.trim_end_matches('/'), job.path)).timeout(Duration::from_secs(290));
         if let Some(ct) = job.header("content-type").filter(|s| !s.is_empty()) { rb = rb.header("content-type", ct); }
@@ -518,6 +519,27 @@ async fn relay_job(h: H, job: Job) {
         answer(&h, &job, r, hdrs, false).await
     }.await;
     if let Err(e) = out { h.link.read().await.reply(&job.id, e.code(), &ct_json(), &err_body(&e.to_string())).await; }
+}
+/// One engine start at a time (two picture asks at once start it once).
+static WAKE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// An engine that is down but has a start command in engines-start.json (next to the host's config) is started, with no
+/// window, and waited for (up to 3 minutes) before the call goes on: a picture ask never fails because nobody turned the
+/// image engine on, and one that died comes back by itself.
+async fn wake_engine(h: &H, name: &str, base: &str) {
+    let health = format!("{}/health", base.trim_end_matches('/'));
+    let up = || async { h.http.get(&health).timeout(Duration::from_secs(3)).send().await.map(|r| r.status().is_success()).unwrap_or(false) };
+    if up().await { return; }
+    let dir = h.cfg.path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+    let Some(v) = std::fs::read_to_string(dir.join("engines-start.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return };
+    let Some(program) = v[name]["program"].as_str() else { return };
+    let args: Vec<String> = v[name]["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    let cwd = v[name]["cwd"].as_str().map(std::path::PathBuf::from).unwrap_or_else(|| dir.clone());
+    let _one = WAKE.lock().await;
+    if up().await { return; }
+    println!("[ai-host] the {name} engine is not running: starting it");
+    if let Err(e) = pgm_platform_internal::proc::spawn_detached(program, &args, &cwd, &dir.join(format!("{name}-engine.log"))) { println!("[ai-host] could not start the {name} engine: {e}"); return; }
+    for _ in 0..90 { tokio::time::sleep(Duration::from_secs(2)).await; if up().await { println!("[ai-host] the {name} engine is up"); return; } }
+    println!("[ai-host] the {name} engine did not come up within 3 minutes (see {name}-engine.log)");
 }
 pub fn path_ok(p: &str) -> bool {
     if !p.starts_with('/') || p.chars().any(char::is_whitespace) { return false; }

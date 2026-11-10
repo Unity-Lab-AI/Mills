@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-companion-last"
+description = "Enables the companion_last command without any pre-configured scope."
+commands.allow = ["companion_last"]
+
+[[permission]]
+identifier = "deny-companion-last"
+description = "Denies the companion_last command without any pre-configured scope."
+commands.deny = ["companion_last"]

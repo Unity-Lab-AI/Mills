@@ -739,7 +739,7 @@ function runAgentLocal(target, caller) {
   agent.running = { local: true };
   agentTyping(true); // browsers show "Unity is typing…" while she composes
   Promise.resolve(agentPrompt()).then((prompt) => assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' }))
-    .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join('') + (r.media || []).map((v) => `\n[[youtube:${v}]]`).join(''))
+    .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join('') + (r.media || []).map((v) => (v.startsWith('companion:') ? `\n[[${v}]]` : `\n[[youtube:${v}]]`)).join(''))
     .catch((e) => (/AI host is offline/.test(e.message) ? e.message : `(my brain glitched: ${e.message})`)) // no AI host: say so plainly
     .then((text) => {
       agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);
