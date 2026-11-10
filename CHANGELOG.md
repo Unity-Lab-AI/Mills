@@ -7,6 +7,17 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.50.0 — 2026-11-10
+
+MINOR: Unity posts GIFs and uses emojis.
+
+### Added
+- **Unity posts GIFs** (asked: "she needs to be able to search web and post gifs and use emojis ioif she so chooses too just like she does as ais"; "yeah she can post gifs through websearch and visiual looking and screen results and cycling through results"). New tools find_gif and post_gif: she searches Bing Images with the animated-GIF filter (no key), looks at the candidates' first frames when her brain can see, cycles to the next results when none fits, and the GIF she picks is downloaded (public addresses only, 8 MB cap, must really be a GIF) and attached to her reply in the Unity chat and the team chat. GIFs are served as image/gif, so they move. `bridge/assistant.js` 1.2.0. Check: **R548**.
+
+### Changed
+- **Emojis**: her instructions invite emojis and GIFs whenever she feels like it, and remind her to search the web for anything current; her spoken voice skips emojis. "Send me a gif" no longer falls back to a selfie.
+- Windows and Linux apps: nothing to rebuild; the app shows the same chat, so GIFs and emojis appear there too.
+
 ## 5.49.2 — 2026-11-10
 
 PATCH: the native AI host reads the right weekly number too, and no more black console windows.
