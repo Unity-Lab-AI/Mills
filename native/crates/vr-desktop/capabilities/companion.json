@@ -9,6 +9,7 @@
     "core:default",
     "core:event:default",
     "allow-companion-last",
-    "allow-companion-clips"
+    "allow-companion-clips",
+    "allow-companion-note"
   ]
 }
