@@ -1,12 +1,12 @@
 {
-  "project": "5.54.2",
+  "project": "5.54.3",
   "modules": {
     "bridge/ai-node.js": "3.4.1",
     "bridge/ai-nodes-front.js": "1.0.0",
     "bridge/ai-nodes.js": "2.7.1",
     "bridge/archive.js": "1.0.0",
     "bridge/assistant-tools-mcp.js": "1.0.0",
-    "bridge/assistant.js": "1.4.3",
+    "bridge/assistant.js": "1.4.4",
     "bridge/board-mcp.js": "1.2.0",
     "bridge/board.js": "1.0.0",
     "bridge/calls.js": "1.0.0",
@@ -28,7 +28,7 @@
     "bridge/providers.js": "1.4.0",
     "bridge/restart.js": "1.0.0",
     "bridge/run.js": "1.6.0",
-    "bridge/server.js": "4.3.4",
+    "bridge/server.js": "4.3.5",
     "bridge/set-password.js": "1.0.0",
     "bridge/shares.js": "1.0.0",
     "bridge/team-mcp.js": "1.7.0",
