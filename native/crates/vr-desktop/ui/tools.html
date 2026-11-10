@@ -13,6 +13,7 @@
   <button data-tab="term">Terminal</button>
   <button data-tab="build">Build &amp; run</button>
   <button data-tab="git">Git</button>
+  <button data-tab="unity">Desktop Unity</button>
   <button data-tab="host">AI host</button>
   <button data-tab="machine">Linked machine</button>
   <button data-tab="proxy">API proxy</button>
@@ -47,6 +48,15 @@
     <div class="row"><input id="gClone" placeholder="Clone: https://git.unityailab.com/owner/repo.git"><button id="gCloneBtn">Clone here</button></div>
     <div class="row"><input id="gArgs" placeholder="Any git command: checkout -b my-branch"><button id="gRun">Run git</button></div>
     <pre id="gOut" class="term"></pre>
+  </section>
+  <section id="unity" class="tab">
+    <header><span>Unity on your desktop</span></header>
+    <p class="hint">She stands on the bottom of the VibeRoller window and does what you tell her: here, or tell Unity in her section or the team chat ("walk left", "sit", "put on a red dress", "be a gorilla in a suit"). A new look takes a few minutes on this PC's GPU (her picture is drawn, then her moves are filmed); she keeps her look until the new one is ready.</p>
+    <div id="uState" class="card"></div>
+    <div class="row"><button id="uOn">On</button><button id="uOff">Off</button></div>
+    <div class="row"><input id="uLook" placeholder="how she looks: e.g. the same goth girl in a white blouse and pencil skirt / a gorilla in a business suit / a blonde in a bikini" style="flex:1"><button id="uApply">Change her look</button></div>
+    <div class="row"><button data-move="walk_left">walk left</button><button data-move="walk_right">walk right</button><button data-move="up">up</button><button data-move="down">down</button><button data-move="come_here">come here</button><button data-move="sit">sit</button><button data-move="wave">wave</button><button data-move="dance">dance</button><button data-move="turn">turn</button><button data-move="stop">stop</button></div>
+    <pre id="uOut" class="term small"></pre>
   </section>
   <section id="host" class="tab">
     <header><span>Share this computer's AI with the team</span></header>

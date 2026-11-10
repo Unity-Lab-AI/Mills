@@ -191,6 +191,8 @@ async fn companion(app: AppHandle, action: String, amount: Option<f64>, look: Op
     clog(&format!("order {action}"));
     let action: String = action.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(24).collect::<String>().to_lowercase();
     if action == "outfit" { return companion_outfit(&app, look.unwrap_or_default()); }
+    if action == "show" { set_companion_on(&app, true); }
+    if !companion_on(&app) { clog(&format!("off: {action} dropped")); return Ok(false); }
     if action == "hide" { if let Some(w) = app.get_webview_window("companion") { w.hide().map_err(|e| e.to_string())?; } return Ok(true); }
     let w = match app.get_webview_window("companion") {
         Some(w) => w,
@@ -272,6 +274,25 @@ fn companion_outfit(app: &AppHandle, look: String) -> R<bool> {
     });
     Ok(true)
 }
+/// Desktop Unity on or off, remembered between starts (companion/on.json); off hides her and drops her orders.
+fn companion_on(app: &AppHandle) -> bool { std::fs::read_to_string(companion_dir(app).join("on.json")).map(|t| t.trim() != "false").unwrap_or(true) }
+fn set_companion_on(app: &AppHandle, on: bool) { let d = companion_dir(app); let _ = std::fs::create_dir_all(&d); let _ = std::fs::write(d.join("on.json"), if on { "true" } else { "false" }); }
+#[tauri::command]
+async fn companion_set(app: AppHandle, on: bool) -> R<bool> {
+    set_companion_on(&app, on);
+    if on { companion(app, "show".into(), None, None).await } else { if let Some(w) = app.get_webview_window("companion") { let _ = w.hide(); } Ok(false) }
+}
+/// Her state for the Tools tab: on, what she looks like now, a look being made (its step) and the last error.
+#[tauri::command]
+fn companion_status(app: AppHandle) -> Value {
+    let d = companion_dir(&app);
+    let st: Value = std::fs::read_to_string(d.join("status.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    let err = std::fs::read_to_string(d.join("look.log")).ok().map(|t| t.lines().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")).unwrap_or_default();
+    json!({ "on": companion_on(&app), "dressing": DRESSING.load(std::sync::atomic::Ordering::SeqCst), "status": st, "log": err })
+}
+/// The overlay's own trail (what it loaded, what failed) into vr-companion.log.
+#[tauri::command]
+fn companion_note(m: String) { clog(&format!("page: {}", m.chars().take(400).collect::<String>())); }
 static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 #[tauri::command]
 fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }
@@ -303,7 +324,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| { clog(&format!("second start {args:?}")); if let Some(act) = companion_arg(&args) { let a = app.clone(); tauri::async_runtime::spawn(async move { if let Err(e) = companion(a, act, None, companion_look(&args)).await { eprintln!("companion: {e}"); } }); } else { show_main(app) } }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![companion, companion_last, companion_clips, app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
+        .invoke_handler(tauri::generate_handler![companion, companion_last, companion_clips, companion_set, companion_status, companion_note, app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
             fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here, machine_status, machine_link, machine_act, machine_service])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
@@ -342,9 +363,12 @@ fn main() {
             let gpu_free = MenuItem::with_id(h, "gpu-free", "Free the GPU (unload the AI models)", true, None::<&str>)?;
             let img_on = MenuItem::with_id(h, "image-on", "Image engine: on", true, None::<&str>)?;
             let img_off = MenuItem::with_id(h, "image-off", "Image engine: off", true, None::<&str>)?;
+            let uni_on = MenuItem::with_id(h, "unity-on", "Desktop Unity: on", true, None::<&str>)?;
+            let uni_off = MenuItem::with_id(h, "unity-off", "Desktop Unity: off", true, None::<&str>)?;
+            let uni_set = MenuItem::with_id(h, "unity-settings", "Desktop Unity: her look and settings…", true, None::<&str>)?;
             let upd = MenuItem::with_id(h, "update", "Check for updates", true, None::<&str>)?;
             let quit = MenuItem::with_id(h, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(h, &[&show, &tools, &PredefinedMenuItem::separator(h)?, &host_on, &host_off, &PredefinedMenuItem::separator(h)?, &gpu_free, &img_on, &img_off, &PredefinedMenuItem::separator(h)?, &upd, &quit])?;
+            let menu = Menu::with_items(h, &[&show, &tools, &PredefinedMenuItem::separator(h)?, &host_on, &host_off, &PredefinedMenuItem::separator(h)?, &gpu_free, &img_on, &img_off, &PredefinedMenuItem::separator(h)?, &uni_on, &uni_off, &uni_set, &PredefinedMenuItem::separator(h)?, &upd, &quit])?;
             TrayIconBuilder::with_id("main").icon(app.default_window_icon().cloned().ok_or("no icon")?).tooltip(APP_NAME).menu(&menu).show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| {
                     let st = app.state::<App>();
@@ -361,6 +385,8 @@ fn main() {
                             });
                         }
                         "update" => { let _ = show_tools(app); }
+                        "unity-on" | "unity-off" => { let (a, on) = (app.clone(), ev.id.as_ref() == "unity-on"); tauri::async_runtime::spawn(async move { let _ = companion_set(a, on).await; }); }
+                        "unity-settings" => { let _ = show_tools(app); if let Some(w) = app.get_webview_window("tools") { let _ = w.eval("window.openTab && openTab('unity')"); } }
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -378,6 +404,7 @@ fn main() {
                     });
                 }
             }
+            if companion_dir(app.handle()).join("on.json").exists() && companion_on(app.handle()) { let a = app.handle().clone(); tauri::async_runtime::spawn(async move { tokio::time::sleep(std::time::Duration::from_secs(6)).await; let _ = companion(a, "show".into(), None, None).await; }); }
             // the local API proxy comes back on by itself when it was on
             if s.proxy_on { let h2 = app.handle().clone(); tauri::async_runtime::spawn(async move { let st = h2.state::<App>(); let s = st.store.get(); let _ = st.proxy.start(s.proxy_port, s.hub, s.proxy_key).await; }); }
             // updates: at start (once someone is signed in on the hub's page) and every 6 hours, applied when nothing

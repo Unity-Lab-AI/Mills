@@ -67,8 +67,11 @@ function order(o) {
 draw();
 requestAnimationFrame(tick);
 addEventListener('resize', draw);
+const note = (m) => { try { T.core.invoke('companion_note', { m: String(m) }); } catch {} };
+addEventListener('error', (e) => note('error: ' + e.message));
+her.addEventListener('error', () => note('clip failed to load: ' + String(her.src).slice(0, 60)));
 async function loadClips() {
-  try { const c = await T.core.invoke('companion_clips'); for (const [k, v] of Object.entries(c || {})) CLIPS[k] = v; const was = clip; clip = ''; play(was || 'idle'); } catch {}
+  try { const c = await T.core.invoke('companion_clips'); const n = Object.keys(c || {}); for (const [k, v] of Object.entries(c || {})) CLIPS[k] = v; note('own clips: ' + (n.join(',') || 'none, the built-in look')); const was = clip; clip = ''; play(was || 'idle'); } catch (e) { note('clips: ' + e); }
 }
 if (T) {
   loadClips();
