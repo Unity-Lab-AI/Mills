@@ -74,7 +74,7 @@ fn open_tools(app: AppHandle) -> R<()> { show_tools(&app).map_err(|e| e.to_strin
 #[tauri::command]
 fn open_external(url: String) -> R<()> {
     if !(url.starts_with("https://") || url.starts_with("http://")) { return Err("Only web addresses open in the browser.".into()); }
-    let r = if cfg!(windows) { std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", &url]).spawn() } else if cfg!(target_os = "macos") { std::process::Command::new("open").arg(&url).spawn() } else { std::process::Command::new("xdg-open").arg(&url).spawn() };
+    let r = if cfg!(windows) { { #[allow(unused_mut)] let mut c = std::process::Command::new("rundll32"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["url.dll,FileProtocolHandler", &url]).spawn() } else if cfg!(target_os = "macos") { { #[allow(unused_mut)] let mut c = std::process::Command::new("open"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.arg(&url).spawn() } else { { #[allow(unused_mut)] let mut c = std::process::Command::new("xdg-open"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.arg(&url).spawn() };
     r.map(|_| ()).map_err(|e| e.to_string())
 }
 /// The person's own Ollama (OLLAMA_HOST, else 127.0.0.1:11434), asked from here so no browser CORS limit applies (T-208).

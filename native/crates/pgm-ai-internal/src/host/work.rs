@@ -233,7 +233,8 @@ fn note_usage(h: &H, pid: &str, ev: &Value) {
     if !ev["type"].as_str().unwrap_or("").contains("rate_limit") { return; }
     let info = if ev.get("rate_limit_info").is_some() { &ev["rate_limit_info"] } else if ev.get("rateLimitInfo").is_some() { &ev["rateLimitInfo"] } else { ev };
     let kind = info["rateLimitType"].as_str().or(info["rate_limit_type"].as_str()).or(info["type"].as_str()).unwrap_or("").to_ascii_lowercase();
-    let w = if ["seven", "week", "7d"].iter().any(|k| kind.contains(k)) { "seven_day" } else if ["five", "5h", "session"].iter().any(|k| kind.contains(k)) { "five_hour" } else { return };
+    // only the all-models windows: seven_day_opus / _sonnet / _overage_included are other limits and never stand in for them
+    let w = match kind.as_str() { "seven_day" | "weekly" | "7d" => "seven_day", "five_hour" | "5h" | "session" => "five_hour", _ => return };
     let raw = info.get("utilization").or(info.get("usage")).and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
     let mut all = h.usage.lock().unwrap_or_else(|e| e.into_inner());
     let u = all.entry(pid.to_string()).or_insert_with(|| json!({}));

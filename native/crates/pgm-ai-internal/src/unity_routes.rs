@@ -238,7 +238,7 @@ async fn room_claude(hub: &Arc<dyn AiHub>, prompt: &str, thread: &str) -> String
     if let Some(m) = hub.cfg().get("roomAgentModel").and_then(Value::as_str) { args.push("--model".into()); args.push(m.into()); }
     if !s(&st, "sessionId").is_empty() { args.push("--resume".into()); args.push(s(&st, "sessionId")); }
     let pre: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
-    let mut cmd = tokio::process::Command::new(hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude"));
+    let mut cmd = { #[allow(unused_mut)] let mut c = tokio::process::Command::new(hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude")); #[cfg(windows)] { c.creation_flags(0x0800_0000); } /* CREATE_NO_WINDOW */ c };
     cmd.args(&pre).args(&args).current_dir(hub.mills_dir()).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
     let mut child = match cmd.spawn() { Ok(c) => c, Err(e) => return format!("(I could not start: {e})") };
     if let Some(mut i) = child.stdin.take() { use tokio::io::AsyncWriteExt; let p = prompt.to_string(); tokio::spawn(async move { let _ = i.write_all(p.as_bytes()).await; let _ = i.shutdown().await; }); }

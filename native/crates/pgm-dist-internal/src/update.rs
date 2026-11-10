@@ -101,7 +101,7 @@ pub fn swap_in(exe: &Path, bytes: &[u8], sha256: &str) -> Result<()> {
 }
 /// Starts a downloaded program once with --selftest: it must load and say so, or it is not used.
 pub fn selftest(file: &Path, extra: &[&str]) -> Result<()> {
-    let out = std::process::Command::new(file).arg("--selftest").args(extra).output().map_err(|e| Error::msg(format!("the new version does not start: {e}")))?;
+    let out = { #[allow(unused_mut)] let mut c = std::process::Command::new(file); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.arg("--selftest").args(extra).output().map_err(|e| Error::msg(format!("the new version does not start: {e}")))?;
     if !out.status.success() { return Err(Error::msg(format!("the new version does not start: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("")))); }
     Ok(())
 }

@@ -197,7 +197,7 @@ pub fn board_op_presence(hub: &Hub, op: &str, a: &board::Actor, b: &Value) -> bo
 // ---------- automatic handoffs (T-266): the same for everyone, so whoever picks a task up starts from where it stood ----------
 /// How many uncommitted changes a worktree has (`git status --porcelain`), or None when it is no git checkout.
 fn uncommitted(dir: &str) -> Option<usize> {
-    let o = std::process::Command::new("git").args(["-C", dir, "status", "--porcelain"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    let o = { #[allow(unused_mut)] let mut c = std::process::Command::new("git"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["-C", dir, "status", "--porcelain"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
     if !o.status.success() { return None; }
     Some(String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.trim().is_empty()).count())
 }
