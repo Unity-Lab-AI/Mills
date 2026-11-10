@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.54.5 — 2026-11-10
+
+PATCH: Agent Gen's round-two way of drawing her, whole and nude.
+
+### Fixed
+- **Her desktop self has her arms and legs** (asked: "she is a nuget and has no arms or legs"): her built-in clips are re-filmed from a picture of her standing with her arms at her sides and her legs in frame (the old one was cut at the thighs with her arms behind her back). Windows and Linux app: vr-desktop rebuilt; companion-look.py can film from a given still (--still).
+- **Nude means no panties** (asked: "aand she has panties on... if u check round 2 of the prompts use they show how in agent gen how to prompt no panties"): like Agent Gen's round two, no clothing word appears anywhere in her prompts, not even in the negatives (naming panties to avoid them drew panties); with no clothes asked for, her prompt says fully nude, completely naked, topless, bottomless; and she is "one 22 year old American woman alone, solo", full body, with Agent Gen's negatives. Both hubs (`bridge/assistant.js` 1.4.6, native pgm-ai-internal).
+
 ## 5.54.4 — 2026-11-10
 
 PATCH: her first look is the new her, and nude means nude.
