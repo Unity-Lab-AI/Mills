@@ -773,7 +773,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['menu.js', 'sessions.js', 'queue.js', 'tools.js', 'agents.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['menu.js', 'sessions.js', 'queue.js', 'apisetup.js', 'tools.js', 'agents.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -4147,6 +4147,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   await r526Check();
+  await r565Check(); // T-369 G4: Settings → API access page side (both modes)
   await r527ThemeCheck(); // T-291: the Theme menu on top (both modes)
   if (!process.argv.includes('--only-r546')) await r546Check(); // T-318: Settings in groups, Find a setting, the ways back (both modes)
   if (!process.argv.includes('--only-r528')) await r528r529Check();
@@ -7359,6 +7360,72 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.plain === '[attached: x.txt, y.png] | just text';
     check('R526', 'the Work queue panel (T-188) lists every message still to go in the open session, "Send now" first, then the queue in order, with the attachments named; copy one and copy all give the messages as written (a rule between them) and a refused clipboard says so; cancel one removes just that one, cancel all asks once more and then clears the queue and the "Send now" text; the badge and the summary count the other sessions\' waiting messages too (not archived ones), each a click away; a refresh with nothing changed does not redraw it; hiding it is remembered; the hub serves queue.js and the page loads it with its button and sidebar',
       ok, JSON.stringify(seen));
+  }
+  // R565-R567 (T-369, G4): Settings -> API access, page side. R565 drives web/apisetup.js (pure), R566 reads the served
+  // page (keys list, Create, Revoke, Connect panel, old single key kept), R567 runs the page's key list code on a stand-in.
+  async function r565Check() {
+    const page = await (await fetch(H + '/')).text(), jsr = await fetch(H + '/apisetup.js'), src = jsr.status === 200 ? await jsr.text() : '';
+    const seen = {};
+    let A = null; try { const ctx = { window: {} }; require('vm').runInNewContext(src, ctx); A = ctx.window.APISETUP; } catch (e) { seen.load = e.message; }
+    let ok = false;
+    if (A) {
+      const get = (arr, id) => (arr.find((s) => s.id === id) || {}).text || '';
+      const withKey = A.setups({ origin: 'https://hub.example.org/', key: 'mills_SECRET123', model: 'claude-opus-5-5' });
+      const noKey = A.setups({ origin: 'https://hub.example.org/v1' });
+      const cc = get(withKey, 'claude-code'), cx = get(withKey, 'codex'), jc = get(withKey, 'jcode'), oc = get(withKey, 'opencode'), oa = get(withKey, 'openai'), c1 = get(withKey, 'curl-openai'), c2 = get(withKey, 'curl-anthropic');
+      seen.ids = withKey.map((s) => s.id).join(',');
+      seen.cc = cc.includes('export ANTHROPIC_BASE_URL=https://hub.example.org\n') && cc.includes('export ANTHROPIC_AUTH_TOKEN=mills_SECRET123') && cc.includes('export ANTHROPIC_MODEL=claude-opus-5-5')
+        && cc.includes('$env:ANTHROPIC_BASE_URL = "https://hub.example.org"') && cc.includes('$env:ANTHROPIC_AUTH_TOKEN = "mills_SECRET123"') && cc.includes('$env:ANTHROPIC_MODEL = "claude-opus-5-5"');
+      seen.cx = cx.includes('model_provider = "viberoller"') && cx.includes('[model_providers.viberoller]') && cx.includes('base_url = "https://hub.example.org/v1"') && cx.includes('env_key = "VIBEROLLER_API_KEY"') && cx.includes('wire_api = "chat"') && cx.includes('mills_SECRET123') && cx.includes('model = "claude-opus-5-5"')
+        && /Responses API/.test((withKey.find((s) => s.id === 'codex') || {}).note || '');
+      seen.jc = jc.includes('jcode provider add viberoller') && jc.includes('--base-url https://hub.example.org/v1') && jc.includes('--model claude-opus-5-5') && jc.includes('mills_SECRET123') && jc.includes('--api-key-stdin');
+      let oj = {}; try { oj = JSON.parse(oc); } catch {}
+      seen.oc = ((((oj.provider || {}).viberoller || {}).options || {}).baseURL === 'https://hub.example.org/v1') && oj.provider.viberoller.options.apiKey === 'mills_SECRET123' && !!oj.provider.viberoller.models['claude-opus-5-5'];
+      seen.oa = oa.includes('https://hub.example.org/v1') && oa.includes('mills_SECRET123') && oa.includes('claude-opus-5-5');
+      seen.curl = c1.includes('https://hub.example.org/v1/chat/completions') && c1.includes('Authorization: Bearer mills_SECRET123') && c1.includes('"model":"claude-opus-5-5"')
+        && c2.includes('https://hub.example.org/v1/messages') && c2.includes('x-api-key: mills_SECRET123') && c2.includes('anthropic-version') && c2.includes('"model":"claude-opus-5-5"');
+      seen.noKey = noKey.every((s) => s.text.includes('<your key>') && !/mills_/.test(s.text) && s.text.includes('https://hub.example.org')) && !noKey.some((s) => s.text.includes('/v1/v1') || s.text.includes('org//'));
+      seen.pick = A.pickModel('', ['m1', 'm2']) === 'm1' && A.pickModel('x', ['m1']) === 'x' && A.pickModel('', []) === '' && A.originOf('https://h.org/v1') === 'https://h.org';
+      ok = seen.ids === 'claude-code,codex,jcode,opencode,openai,curl-openai,curl-anthropic' && seen.cc && seen.cx && seen.jc && seen.oc && seen.oa && seen.curl && seen.noKey && seen.pick;
+    }
+    check('R565', 'the "Connect a tool" setups (web/apisetup.js) give, for Claude Code, Codex, jcode, opencode, Cursor / Continue / any OpenAI client and curl (both APIs), a ready-to-paste text with the hub address, the key and the model filled in and the right names (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL in bash and PowerShell forms, a Codex model_providers block with base_url, env_key and wire_api "chat", a jcode provider add, an opencode baseURL, the two curl calls), the address never doubles /v1, and with no key every one says <your key> and never a real-looking key', ok && !!A, JSON.stringify(seen));
+    const i = page.indexOf('<h3>API access</h3>'), sec = i < 0 ? '' : page.slice(i, page.indexOf('</section>', page.indexOf('id="apiConnect"', i)) + 10);
+    const s2 = {
+      served: jsr.status === 200 && /<script src="apisetup\.js(\?[^"]*)?"><\/script>/.test(page),
+      section: sec.includes('id="apiBox"') && sec.includes('id="apiConnect"') && /Connect a tool/.test(sec) && /Claude subscription login serves Claude Code only/.test(sec),
+      icon: /<symbol id="i-copy"/.test(page) && /#i-copy/.test(page),
+      keys: /function renderApiKeys/.test(page) && /\/api\/apikey\/create/.test(page) && /\/api\/apikey\/revoke', \{ method: 'POST', body: JSON\.stringify\(\{ id: k\.id/.test(page) && /Click again to revoke/.test(page) && /Create key/.test(page),
+      oldKept: /Array\.isArray\(st\.keys\)\) renderApiKeys/.test(page) && /\/api\/apikey\/rotate/.test(page) && /\/api\/apikey\/settings/.test(page) && /\/api\/apikey\/revoke', \{ method: 'POST', body: '\{\}' \}/.test(page) && /Rotate key/.test(page) && /Make my key/.test(page),
+    };
+    check('R566', 'the page serves web/apisetup.js and Settings → API access has the key list with Create key and a confirmed Revoke, the "Connect a tool" panel with Copy buttons (SVG icon) and the note that a Claude subscription login serves Claude Code only, while the single-key section (Rotate / Make my key, expiry, provider and model, Revoke) is kept and the key list only shows when the hub sends `keys`', Object.values(s2).every(Boolean), JSON.stringify(s2));
+    // R567: the page's own key-list code on a plain element stand-in
+    const s3 = {};
+    try {
+      const mkEl = (tag) => {
+        const e = { tag, children: [], text: '', className: '', dataset: {}, attrs: {}, value: '', checked: false, onclick: null, type: '',
+          append(...xs) { for (const x of xs) this.children.push(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); }, setAttribute(k, v) { this.attrs[k] = v; } };
+        Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+        return e;
+      };
+      const all = (e, f, out = []) => { if (f(e)) out.push(e); for (const c of e.children || []) all(c, f, out); return out; };
+      const from = page.indexOf('function apiKeyLimits'), to = page.indexOf('// Connect a tool: ready-to-paste');
+      const calls = [], rendered = [];
+      const ctx = { document: { createElement: mkEl }, providerList: [{ id: 'host', label: 'Host', models: ['m-a'] }, { id: 'p2', label: 'Mine', models: ['m-b'] }], Date, Number, JSON,
+        json: async (u, o) => { calls.push(u + ' ' + (o && o.body)); return { key: 'mills_new' }; }, renderApiAccess: (k) => rendered.push(k || '') };
+      require('vm').runInNewContext(page.slice(from, to) + '\nthis.renderApiKeys = renderApiKeys;', ctx);
+      const box = mkEl('div'), info = mkEl('div');
+      ctx.renderApiKeys(box, { keys: [{ id: 'k1', label: 'Laptop', prefix: 'mills_ab', createdAt: 1, expiresDays: 30, lastUsed: 0, calls: 3, enabled: true, models: ['m-a'], maxConcurrent: 2 }, { id: 'k2', label: 'Old', prefix: 'mills_cd', createdAt: 1, calls: 0 }] }, info);
+      const rows = all(box, (e) => /^apiKeyRow/.test(e.className));
+      s3.rows = rows.length === 2 && /Laptop/.test(rows[0].textContent) && /mills_ab/.test(rows[0].textContent) && /3 calls/.test(rows[0].textContent) && /models: m-a/.test(rows[0].textContent) && /2 at once/.test(rows[0].textContent) && /never used/.test(rows[1].textContent);
+      const rv = all(rows[0], (e) => e.tag === 'button')[0];
+      await rv.onclick(); s3.confirm = calls.length === 0 && /again/.test(rv.textContent);
+      await rv.onclick(); await new Promise((r) => setTimeout(r, 0)); s3.revoked = calls.join('|') === '/api/apikey/revoke {"id":"k1"}' && rendered.length === 1;
+      const lab = all(box, (e) => e.tag === 'input' && e.attrs['aria-label'] === 'Key label')[0], go = all(box, (e) => e.tag === 'button' && e.textContent === 'Create key')[0];
+      const mchk = all(box, (e) => e.tag === 'input' && e.type === 'checkbox' && e.value === 'm-b')[0]; lab.value = 'CI'; mchk.checked = true;
+      await go.onclick(); await new Promise((r) => setTimeout(r, 0));
+      s3.created = calls[1] === '/api/apikey/create {"label":"CI","expiresDays":0,"models":["m-b"]}' && rendered[1] === 'mills_new';
+    } catch (e) { s3.err = e.message; }
+    check('R567', 'the key list code of Settings → API access shows each key with its label, prefix, calls, last use and limits; Revoke asks once more and then revokes just that key; Create key sends the label, expiry and only the ticked limits, and shows the new secret once', !!(s3.rows && s3.confirm && s3.revoked && s3.created), JSON.stringify(s3));
   }
   // R544 (T-291; R527, then R535, until 5.46.1 and 5.48.0 took them): the Theme menu opens on top of every panel. The page's placement function (button rect + list size +
   // window -> where the list goes) runs here in vm on wide, narrow, low and tiny windows; the served markup keeps the list

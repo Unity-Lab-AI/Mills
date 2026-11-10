@@ -503,6 +503,18 @@
   .apiBox .row, .provBox .row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
   .apiBox .row button, .provBox .row button { padding: .3rem .6rem; font-size: .8rem; }
   .apiBox .row select, .provBox .row select, .provBox .row input { width: auto; flex: 1; min-width: 9rem; padding: .35rem .5rem; font-size: .85rem; }
+  .apiSub { margin: .4rem 0 0; font-size: .85rem; font-weight: 700; }
+  .apiKeys { display: flex; flex-direction: column; gap: .35rem; }
+  .apiKeyRow { display: flex; flex-wrap: wrap; gap: .3rem .6rem; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 6px; padding: .4rem .55rem; font-size: .82rem; }
+  .apiKeyRow small { color: var(--muted, inherit); opacity: .8; overflow-wrap: anywhere; }
+  .apiKeyRow.off { opacity: .55; }
+  .apiNew { display: flex; flex-direction: column; gap: .4rem; border-top: 1px solid var(--line); padding-top: .5rem; }
+  .apiNew .checks { display: flex; flex-wrap: wrap; gap: .2rem .8rem; font-size: .82rem; }
+  .apiNew .checks label { display: inline-flex; gap: .25rem; align-items: center; }
+  .apiSnip { border: 1px solid var(--line); border-radius: 6px; padding: .3rem .55rem; }
+  .apiSnip summary { cursor: pointer; font-size: .85rem; font-weight: 600; }
+  .apiSnip pre { margin: .4rem 0; padding: .5rem; overflow-x: auto; white-space: pre; font-size: .78rem; background: color-mix(in srgb, var(--text) 8%, transparent); border-radius: 6px; max-width: 100%; }
+  .apiSnip .row small { flex: 1; min-width: 12rem; }
   .apiKeyShow { display: flex; gap: .4rem; align-items: center; } .apiKeyShow input { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
   .provItem { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--line); }
   .provItem:first-child { border-top: 0; } .provItem small { color: var(--muted); }
@@ -1007,6 +1019,7 @@
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h10"/></symbol>
   <symbol id="i-phone" viewBox="0 0 24 24"><path d="M6.2 3.5h2.6l1.9 4.7-2.3 1.5a11.5 11.5 0 0 0 5.9 5.9l1.5-2.3 4.7 1.9v2.6a2 2 0 0 1-2.1 2A16.5 16.5 0 0 1 4.2 5.6a2 2 0 0 1 2-2.1z"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.8l4.4 4.2L19 7.2"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.5M8.8 21h6.4"/></symbol>
   <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M15 9.5V6a3 3 0 0 0-5.6-1.5M9 9v2.5a3 3 0 0 0 4.8 2.4M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 9.6 5.7M12 17.5v3.5M8.8 21h6.4M3.5 3.5l17 17"/></symbol>
@@ -1280,7 +1293,9 @@
       <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
         <div id="hostBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>API access</h3><p class="setHint">Your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.</p>
-        <div id="apiBox" class="apiBox"></div></section>
+        <div id="apiBox" class="apiBox"></div>
+        <h4 class="apiSub">Connect a tool</h4><p class="setHint">Ready-to-paste setups for the tools people use, with this hub&#39;s address and your model filled in. The key itself is filled in only right after you make one; otherwise the setups say &lt;your key&gt;. A provider that is a Claude subscription login serves Claude Code only; other tools need a provider with an API key (the person who shares it can tell).</p>
+        <div id="apiConnect" class="apiBox"></div></section>
       <section class="setGroup"><h3>Signed-in devices</h3><p class="setHint">Tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.</p>
         <div id="devBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My machines</h3><p class="setHint">Your own computers linked to your account (the VibeRoller app or <code>vr-host machine</code>), so your Work runs can use them within the scope you chose ON that machine. Only you see them and only your runs can use them. Pause or unlink one here; its scope and kill switch are set on the machine.</p>
@@ -1635,6 +1650,7 @@
 <script src="menu.js"></script>
 <script src="sessions.js"></script>
 <script src="queue.js"></script>
+<script src="apisetup.js"></script>
 <script src="tools.js"></script>
 <script src="agents.js"></script>
 <script>
@@ -5269,6 +5285,7 @@ async function renderApiAccess(freshKey) {
   const box = $('apiBox'); if (!box) return;
   let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
   try { providerList = (await json('/api/providers')).providers; } catch {}
+  apiFreshKey = freshKey || '';
   box.textContent = '';
   const line = (...kids) => { const d = document.createElement('div'); d.className = 'row'; d.append(...kids); box.append(d); return d; };
   const code = (t) => { const c = document.createElement('code'); c.textContent = t; return c; };
@@ -5303,6 +5320,87 @@ async function renderApiAccess(freshKey) {
   mdl.onchange = () => json('/api/apikey/settings', { method: 'POST', body: JSON.stringify({ model: mdl.value }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
   const pl = document.createElement('span'); pl.textContent = 'Answers come from:';
   line(pl, prov, mdl);
+  // several named keys (hub with the key list): the list and "New key"; an older hub has no `keys`, so only the single key above shows
+  if (Array.isArray(st.keys)) renderApiKeys(box, st, info);
+  renderApiConnect(st);
+}
+let apiFreshKey = '';
+function apiKeyLimits(k) {
+  const bits = [];
+  if (k.providers && k.providers.length) bits.push('providers: ' + k.providers.join(', '));
+  if (k.models && k.models.length) bits.push('models: ' + k.models.join(', '));
+  if (k.maxConcurrent) bits.push(k.maxConcurrent + ' at once');
+  return bits.length ? bits.join(' · ') : 'no extra limits';
+}
+function renderApiKeys(box, st, info) {
+  const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const list = mk('div', 'apiKeys');
+  if (!st.keys.length) list.append(mk('div', 'status', 'No named keys yet.'));
+  for (const k of st.keys) {
+    const r = mk('div', 'apiKeyRow' + (k.enabled === false ? ' off' : ''));
+    const t = mk('div'); t.append(mk('b', '', k.label || 'key'), mk('span', '', ' ' + k.prefix + '…'), document.createElement('br'),
+      mk('small', '', 'made ' + new Date(k.createdAt).toLocaleDateString() + (k.expiresDays ? ' · expires after ' + k.expiresDays + ' days' : ' · never expires') + ' · ' + (k.calls || 0) + ' call' + (k.calls === 1 ? '' : 's') + (k.lastUsed ? ', last ' + new Date(k.lastUsed).toLocaleString() : ', never used') + ' · ' + apiKeyLimits(k)));
+    const rv = mk('button', 'ghost', 'Revoke'); rv.type = 'button';
+    rv.onclick = () => {
+      if (rv.dataset.armed !== '1') { rv.dataset.armed = '1'; rv.textContent = 'Click again to revoke'; return; }
+      json('/api/apikey/revoke', { method: 'POST', body: JSON.stringify({ id: k.id }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+    };
+    r.append(t, rv); list.append(r);
+  }
+  box.append(list);
+  // New key: label, expiry, optional limits chosen from what this person may use
+  const nw = mk('div', 'apiNew');
+  const lab = mk('input'); lab.placeholder = 'Label, e.g. Claude Code on my laptop'; lab.maxLength = 60; lab.setAttribute('aria-label', 'Key label');
+  const exp = mk('select'); exp.setAttribute('aria-label', 'Key expiry');
+  for (const [v, l] of [[0, 'never expires'], [7, 'expires after 7 days'], [30, 'expires after 30 days'], [90, 'expires after 90 days']]) { const o = mk('option', '', l); o.value = v; exp.append(o); }
+  const conc = mk('input'); conc.type = 'number'; conc.min = '1'; conc.max = '64'; conc.placeholder = 'requests at once (optional)'; conc.setAttribute('aria-label', 'Requests at once');
+  const checks = (title, items) => { const w = mk('div', 'checks'); w.append(mk('span', 'status', title)); const boxes = []; for (const it of items) { const l = mk('label'); const c = mk('input'); c.type = 'checkbox'; c.value = it.id; l.append(c, it.label); w.append(l); boxes.push(c); } return { w, boxes }; };
+  const provs = providerList.filter((p) => (p.models || []).length || p.id === 'host');
+  const pc = checks('Only these providers (none ticked = all you may use):', provs.map((p) => ({ id: p.id, label: p.label })));
+  const mset = []; for (const p of providerList) for (const m of p.models || []) if (!mset.includes(m)) mset.push(m);
+  const mc = checks('Only these models (none ticked = all):', mset.map((m) => ({ id: m, label: m })));
+  const go = mk('button', '', 'Create key'); go.type = 'button';
+  go.onclick = async () => {
+    const body = { label: lab.value.trim() || 'key', expiresDays: Number(exp.value) };
+    const pv = pc.boxes.filter((c) => c.checked).map((c) => c.value), md = mc.boxes.filter((c) => c.checked).map((c) => c.value);
+    if (pv.length) body.providers = pv;
+    if (md.length) body.models = md;
+    if (Number(conc.value) > 0) body.maxConcurrent = Number(conc.value);
+    try { const d = await json('/api/apikey/create', { method: 'POST', body: JSON.stringify(body) }); renderApiAccess(d.key); } catch (e) { info.textContent = e.message; }
+  };
+  const row = mk('div', 'row'); row.append(lab, exp, conc, go);
+  nw.append(mk('b', '', 'New key'), row);
+  if (provs.length > 1) nw.append(pc.w);
+  if (mset.length) nw.append(mc.w);
+  box.append(nw);
+}
+// Connect a tool: ready-to-paste setups (web/apisetup.js); the key is filled in only while it is the one just made
+function renderApiConnect(st) {
+  const box = $('apiConnect'); if (!box || typeof APISETUP === 'undefined') return;
+  box.textContent = '';
+  const models = []; for (const p of providerList) for (const m of p.models || []) if (!models.includes(m)) models.push(m);
+  for (const k of st.keys || []) for (const m of k.models || []) if (!models.includes(m)) models.push(m);
+  const sel = document.createElement('select'); sel.setAttribute('aria-label', 'Model for the setups');
+  const o0 = document.createElement('option'); o0.value = ''; o0.textContent = models.length ? 'model: the first' : 'model: (none listed)'; sel.append(o0);
+  for (const m of models) { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.append(o); }
+  sel.value = models.includes(st.model) ? st.model : '';
+  const top = document.createElement('div'); top.className = 'row'; top.append(sel); box.append(top);
+  const holder = document.createElement('div'); holder.className = 'apiKeys'; box.append(holder);
+  const draw = () => {
+    holder.textContent = '';
+    const model = APISETUP.pickModel(sel.value, models);
+    for (const sp of APISETUP.setups({ origin: APISETUP.originOf(st.endpoint, location.origin), key: apiFreshKey, model })) {
+      const d = document.createElement('details'); d.className = 'apiSnip';
+      const sm = document.createElement('summary'); sm.textContent = sp.title; d.append(sm);
+      const pre = document.createElement('pre'); pre.textContent = sp.text; d.append(pre);
+      const r = document.createElement('div'); r.className = 'row';
+      const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'ghost';
+      cp.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg> Copy';
+      cp.onclick = async () => { try { await navigator.clipboard.writeText(sp.text); cp.textContent = 'Copied'; } catch { cp.textContent = 'Select + copy'; } };
+      const n = document.createElement('small'); n.textContent = sp.note; r.append(cp, n); d.append(r); holder.append(d);
+    }
+  };
+  sel.onchange = draw; draw();
 }
 // ── Settings → My AIs: providers this person hooked up (private or shared with the team) ──
 async function renderProviders() {
