@@ -47,7 +47,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const IMAGES_DIR = path.join(MILLS_DIR, 'Images'); // Images/<username>/<id>.png (private) and Images/room/<id>.png (team chat); gitignored
   // Her look in pictures, added after the scene she writes so the moment leads (the engine encodes
   // long prompts in pieces, so neither the scene nor her look is cut).
-  const SELFIE_LOOK = A.selfieLook || '25 year old emo goth woman, black hair with hot pink streaks';
+  const SELFIE_LOOK = A.selfieLook || '25 year old emo goth woman, black hair with hot pink streaks, natural warm skin tone, realistic skin texture, dark eye makeup';
   const MAX_ROUNDS = 6, MAX_RESULT = 3000, HISTORY_KEEP = 40;
 
   // ---------- host services: Ollama + the local model (started on demand, survives hub restarts) ----------
@@ -693,7 +693,9 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     }
     // Backstop: they clearly asked for a picture and none was made this turn, so make it from their words.
     if (opts.pictures !== false && wantsPicture(text) && !/gif/i.test(text) && !(ci.images || []).length) {
-      const r = await makeImage(ci, { prompt: text.replace(/^\s*@\w+\s*/, ''), selfie: aboutHer(text), shape: 'portrait' }).catch((e) => ({ ok: false, error: e.message }));
+      // the look she was just told to take (her desktop self) is the picture too, in her full words; else theirs
+      const lookM = (ci.media || []).map((m) => /^companion:outfit:[^:]*:[^:]*:(.*)$/.exec(m)).find(Boolean), lookTxt = lookM ? decodeURIComponent(lookM[1]) : '';
+      const r = await makeImage(ci, { prompt: lookTxt || text.replace(/^\s*@\w+\s*/, ''), selfie: aboutHer(text), shape: 'portrait' }).catch((e) => ({ ok: false, error: e.message }));
       out({ type: 'tool', name: 'generate_image', args: { prompt: text, auto: true } });
       out({ type: 'tool_result', name: 'generate_image', result: r });
       if (r.ok) out({ type: 'image', ref: r.image });

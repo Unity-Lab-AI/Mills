@@ -214,7 +214,7 @@ pub fn run_agent(hub: &Arc<dyn AiHub>, target: String, caller: String, conv: Str
             let accts = h.accounts();
             let who = accts.iter().find(|a| a.username == if caller.is_empty() { target.clone() } else { caller.clone() }).or_else(|| accts.first()).cloned();
             match who { None => String::new(), Some(who) => match brain::ask(&h, &who, &prompt, ROOM_LOCAL, if target.is_empty() { "room" } else { &target }).await {
-                Ok((t, imgs, media)) => format!("{t}{}{}", imgs.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), media.iter().map(|v| format!("\n[[youtube:{v}]]")).collect::<String>()),
+                Ok((t, imgs, media)) => format!("{t}{}{}", imgs.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), media.iter().map(|v| match v.strip_prefix("companion:") { Some(c) => format!("\n[[companion:{c}]]"), None => format!("\n[[youtube:{v}]]") }).collect::<String>()),
                 Err(e) => if e.contains("AI host is offline") { e } else { format!("(my brain glitched: {e})") },
             } }
         } else { room_claude(&h, &prompt, &if !target.is_empty() { format!("dm:{target}") } else if !conv.is_empty() { format!("conv:{conv}") } else { String::new() }).await };
