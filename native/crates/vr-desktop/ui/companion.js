@@ -60,6 +60,7 @@ function order(o) {
     case 'sit': moving = null; sitting = true; play('sit'); break;
     case 'wave': case 'dance': moving = null; sitting = false; play(a); until = Date.now() + ONCE_MS; break;
     case 'turn': facing = -facing; break;
+    case 'clip': if (o.url) { moving = null; sitting = false; clip = 'custom'; her.src = o.url; until = Date.now() + 2200; } break;
     case 'stop': case 'idle': case 'stand': case 'show': default: moving = null; sitting = false; play('idle');
   }
 }

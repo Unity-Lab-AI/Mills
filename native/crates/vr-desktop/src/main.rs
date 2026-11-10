@@ -191,6 +191,13 @@ async fn companion(app: AppHandle, action: String, amount: Option<f64>, look: Op
     clog(&format!("order {action}"));
     let action: String = action.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(24).collect::<String>().to_lowercase();
     if action == "outfit" { return companion_outfit(&app, look.unwrap_or_default()); }
+    if action == "do" {
+        let what = look.unwrap_or_default();
+        if !companion_on(&app) { return Ok(false); }
+        // walking around and the moves she already has: at once; anything else: a clip made for it (or made before)
+        if let Some((act, n)) = quick_move(&what) { return Box::pin(companion(app, act.into(), n, None)).await; }
+        return companion_do(&app, what);
+    }
     if action == "show" { set_companion_on(&app, true); }
     if !companion_on(&app) { clog(&format!("off: {action} dropped")); return Ok(false); }
     if action == "hide" { if let Some(w) = app.get_webview_window("companion") { w.hide().map_err(|e| e.to_string())?; } return Ok(true); }
@@ -293,6 +300,50 @@ fn companion_status(app: AppHandle) -> Value {
 /// The overlay's own trail (what it loaded, what failed) into vr-companion.log.
 #[tauri::command]
 fn companion_note(m: String) { clog(&format!("page: {}", m.chars().take(400).collect::<String>())); }
+/// A few words that are just a walk or a move she already has ("walk left", "go to the middle", "sit down").
+fn quick_move(what: &str) -> Option<(&'static str, Option<f64>)> {
+    let t = what.to_lowercase(); let words = t.split_whitespace().count();
+    if words == 0 || words > 5 { return None; }
+    let has = |k: &[&str]| k.iter().any(|w| t.split(|c: char| !c.is_alphanumeric()).any(|x| x == *w));
+    let walkish = has(&["walk", "go", "move", "run", "head", "step", "scoot"]) || words <= 2;
+    Some(if walkish && has(&["left"]) { ("walk_left", None) } else if walkish && has(&["right"]) { ("walk_right", None) }
+        else if walkish && has(&["up"]) { ("up", None) } else if walkish && has(&["down"]) && !has(&["sit"]) { ("down", None) }
+        else if has(&["here", "middle", "center", "centre"]) { ("come_here", None) } else if has(&["sit"]) { ("sit", None) }
+        else if has(&["wave"]) && words <= 3 { ("wave", None) } else if has(&["dance"]) && words <= 3 { ("dance", None) }
+        else if has(&["turn"]) && words <= 3 { ("turn", None) } else if has(&["stop", "stand", "idle"]) && words <= 3 { ("stop", None) }
+        else if has(&["hide", "go away"]) { ("hide", None) } else { return None })
+}
+/// A clip made for something she was told, played once in her window.
+fn companion_play(a: &AppHandle, file: &std::path::Path) { use tauri::Emitter; if let Ok(b) = std::fs::read(file) { use base64::Engine; let _ = a.emit_to("companion", "companion", json!({ "action": "clip", "url": format!("data:image/webp;base64,{}", base64::engine::general_purpose::STANDARD.encode(b)) })); } }
+/// Anything else she is told: filmed from her current look (companion-do.py, ~1-2 minutes on this PC), then played once;
+/// the same words again play the clip made before.
+fn companion_do(app: &AppHandle, what: String) -> R<bool> {
+    let what: String = what.chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_string();
+    if what.is_empty() { return Err("What should she do?".into()); }
+    let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); what.to_lowercase().hash(&mut h); format!("do-{:x}", h.finish()) };
+    let dir = companion_dir(app); let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join(format!("{key}.webp"));
+    if file.exists() { clog(&format!("do {what}: from before")); companion_play(app, &file); return Ok(true); }
+    if DRESSING.swap(true, std::sync::atomic::Ordering::SeqCst) { return Err("She is still busy with the last one; a moment.".into()); }
+    let st = app.state::<App>();
+    let python = gpu::start_cmd(&st.host_dir).map(|(p, _, _)| p).unwrap_or_else(|| "python".into());
+    for (f, body) in [("companion-do.py", include_str!("../companion-do.py")), ("companion-clips.py", include_str!("../companion-clips.py"))] { std::fs::write(dir.join(f), body).map_err(|e| e.to_string())?; }
+    let base = dir.join("base.png");
+    if !base.exists() { std::fs::write(&base, include_bytes!("../ui/companion/base.png")).map_err(|e| e.to_string())?; }
+    clog(&format!("do {what}: filming it"));
+    let a = app.clone();
+    std::thread::spawn(move || {
+        let mut c = std::process::Command::new(&python);
+        c.arg(dir.join("companion-do.py")).arg("--do").arg(&what).arg("--name").arg(&key).arg("--out").arg(&dir).current_dir(&dir)
+            .stdout(std::process::Stdio::null()).stderr(std::fs::File::create(dir.join("do.log")).map(std::process::Stdio::from).unwrap_or(std::process::Stdio::null()));
+        #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+        let ok = c.status().map(|s| s.success()).unwrap_or(false);
+        DRESSING.store(false, std::sync::atomic::Ordering::SeqCst);
+        clog(&format!("do {what}: {}", if ok { "done" } else { "failed (do.log)" }));
+        if ok { companion_play(&a, &file); }
+    });
+    Ok(true)
+}
 static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 #[tauri::command]
 fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }

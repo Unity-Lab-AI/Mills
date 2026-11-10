@@ -374,10 +374,11 @@ impl Unity {
             "post_gif" | "post_image" => Ok(self.post_found(ci, args).await),
             "write_on_image" => Ok(self.write_on_image(hub, ci, args).await),
             "companion" => {
-                const OK: [&str; 17] = ["outfit", "walk_left", "walk_right", "up", "down", "come_here", "go_left_edge", "go_right_edge", "sit", "wave", "dance", "turn", "stop", "stand", "show", "hide", "idle"];
-                let act = s(args, "action").to_lowercase().replace([' ', '-'], "_");
+                const OK: [&str; 18] = ["do", "outfit", "walk_left", "walk_right", "up", "down", "come_here", "go_left_edge", "go_right_edge", "sit", "wave", "dance", "turn", "stop", "stand", "show", "hide", "idle"];
+                let what: String = s(args, "do").chars().filter(|c| !c.is_control()).take(300).collect();
+                let act = { let a = s(args, "action").to_lowercase().replace([' ', '-'], "_"); if !s(args, "look").trim().is_empty() && what.trim().is_empty() { "outfit".to_string() } else if !what.trim().is_empty() { "do".to_string() } else { a } };
                 let amount = args["amount"].as_f64().or_else(|| s(args, "amount").parse().ok()).unwrap_or(0.0).clamp(0.0, 4000.0);
-                let look: String = s(args, "look").chars().filter(|c| !c.is_control()).take(200).collect();
+                let look: String = if act == "do" { what.clone() } else { s(args, "look").chars().filter(|c| !c.is_control()).take(200).collect() };
                 Ok(if act == "outfit" && look.trim().is_empty() { json!({ "ok": false, "error": "outfit needs look: what she should wear." }) } else if !OK.contains(&act.as_str()) { json!({ "ok": false, "error": format!("Unknown move {act}; one of: {}.", OK.join(", ")) }) }
                    else if ci.out.is_none() { ci.media.push(format!("companion:{act}:{amount}:{}:{}", ci.user, pgm_core_internal::text::urlencode(&look))); json!({ "ok": true, "did": act, "note": "It happens on their desktop when your reply arrives." }) }
                    else { ci.send(json!({ "type": "companion", "action": act, "amount": amount, "look": look })); json!({ "ok": true, "did": act }) })
