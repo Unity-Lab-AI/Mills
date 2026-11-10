@@ -162,6 +162,12 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
     if !opts.extra_system.is_empty() { system += &format!("\n\n{}", opts.extra_system); }
     let mut user = json!({ "role": "user", "content": if note.is_empty() { text.to_string() } else { format!("{text}\n\n(system note: {note})") } });
     if !opts.photo.is_empty() { if let Some(b) = u.read_picture(&a.username, &opts.photo) { user["images"] = json!([b]); user["content"] = json!(format!("{}\n\n(They sent you a photo, id {}: you can see it. To change it use edit_image / inpaint_image with image \"camera\".)", s(&user, "content"), opts.photo)); } }
+    if user["images"].is_array() && !u.vision(hub, &model).await { // her brain cannot see: a vision model says what the photo shows
+        let imgs: Vec<String> = user["images"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(String::from)).collect();
+        let said = u.describe_images(hub, &imgs, "Describe this photo in detail: who or what is in it, what they wear or do, the setting. Plain, frank, complete.").await;
+        if let Some(o) = user.as_object_mut() { o.remove("images"); }
+        user["content"] = json!(format!("{}\n\n(What the photo shows: {})", s(&user, "content"), said.join(" ")));
+    }
     let mut messages = vec![json!({ "role": "system", "content": system })];
     if !opts.no_history { let h = arr(&u.store(a), "history"); messages.extend(h.iter().skip(h.len().saturating_sub(HISTORY_KEEP)).cloned()); }
     messages.push(user);
@@ -211,6 +217,7 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
         if !ci.look.is_empty() { // find_gif / find_image: she looks at the candidates before picking (a model that can see)
             let look = std::mem::take(&mut ci.look);
             if u.vision(hub, &model).await { messages.push(json!({ "role": "user", "content": format!("(system: the candidates' thumbnails, in order: {}. Pick one with post_gif / post_image, or look for more.)", look.iter().map(|(n, _)| format!("#{n}")).collect::<Vec<_>>().join(", ")), "images": look.iter().map(|(_, b)| b.clone()).collect::<Vec<_>>() })); }
+            else { let said = u.describe_images(hub, &look.iter().map(|(_, b)| b.clone()).collect::<Vec<_>>(), "In one short sentence: what does this picture or GIF frame show?").await; messages.push(json!({ "role": "user", "content": format!("(system: what the candidates show: {}. Pick one with post_gif / post_image, or look for more.)", look.iter().zip(said.iter()).map(|((n, _), d)| format!("#{n}: {d}")).collect::<Vec<_>>().join("; ")) })); }
         }
         if deferred && round == MAX_ROUNDS - 1 { break; }
     }

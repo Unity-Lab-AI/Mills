@@ -508,6 +508,7 @@ async fn relay_job(h: H, job: Job) {
         };
         if !path_ok(&job.path) { return Err(Error::status(400, "bad path")); }
         if !job.engine.starts_with("provider:") { wake_engine(&h, &job.engine, &base).await; }
+        if job.engine == "ollama" && job.path.starts_with("/api/chat") { free_card_for_brain(&h).await; }
         let method = reqwest::Method::from_bytes(if job.method.is_empty() { b"GET" } else { job.method.as_bytes() }).map_err(|_| Error::status(400, "bad method"))?;
         let mut rb = h.http.request(method, format!("{}{}", base.trim_end_matches('/'), job.path)).timeout(Duration::from_secs(290));
         if let Some(ct) = job.header("content-type").filter(|s| !s.is_empty()) { rb = rb.header("content-type", ct); }
@@ -519,6 +520,18 @@ async fn relay_job(h: H, job: Job) {
         answer(&h, &job, r, hdrs, false).await
     }.await;
     if let Err(e) = out { h.link.read().await.reply(&job.id, e.code(), &ct_json(), &err_body(&e.to_string())).await; }
+}
+/// Her brain comes first: a desktop clip being filmed on this card (Agent Gen's video engine) is stopped and the card
+/// freed before she answers (a 16 GB card cannot hold both); the clip is filmed again afterwards (companion-do.py /
+/// companion-look.py wait and retry).
+async fn free_card_for_brain(h: &H) {
+    let video = std::env::var("VR_VIDEO_URL").unwrap_or_else(|_| "http://127.0.0.1:5127".into());
+    let Ok(r) = h.http.get(format!("{video}/health")).timeout(Duration::from_millis(800)).send().await else { return };
+    let v: Value = r.json().await.unwrap_or(Value::Null);
+    let route = if v["busy"] == json!(true) { "/abort" } else if v["loaded"] == json!(true) { "/unload" } else { return };
+    println!("[ai-host] her brain is asked: the video engine {} to free the card", if route == "/abort" { "stops its clip" } else { "unloads" });
+    let _ = h.http.post(format!("{video}{route}")).body("{}").timeout(Duration::from_secs(20)).send().await;
+    if route == "/abort" { tokio::time::sleep(Duration::from_millis(800)).await; }
 }
 /// One engine start at a time (two picture asks at once start it once).
 static WAKE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

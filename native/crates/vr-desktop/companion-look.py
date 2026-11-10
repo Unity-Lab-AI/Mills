@@ -48,6 +48,25 @@ def up(url):
         return False
 
 
+def i2v_retry(body, tries=8):
+    """Film a clip; when her brain took the card meanwhile (the AI host stops the video engine for her answer), wait
+    until she is done and film it again."""
+    last = None
+    for n in range(tries):
+        try:
+            ensure_video()
+            req = urllib.request.Request(a.video + "/i2v", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=900) as r:
+                j = json.loads(r.read())
+            if j.get("path"):
+                return j
+            last = j
+        except Exception as e:
+            last = e
+        time.sleep(25)
+    raise SystemExit("the video engine kept stopping (%s)" % (last,))
+
+
 def ensure_video():
     if up(a.video):
         return
@@ -97,10 +116,7 @@ MOVES = {
 done = 0
 for name, (prompt, seed, start, once) in MOVES.items():
     say("filming the %s (%d of %d)" % (name, done + 1, len(MOVES)))
-    body, _ = post(a.video + "/i2v", {"image_b64": img, "prompt": prompt, "engine": "wan", "width": 480, "height": 960, "seed": seed}, 900)
-    j = json.loads(body)
-    if not j.get("path"):
-        raise SystemExit("the video engine said: %s" % j)
+    j = i2v_retry({"image_b64": img, "prompt": prompt, "engine": "wan", "width": 480, "height": 960, "seed": seed})
     args = [sys.executable, os.path.join(HERE, "companion-clips.py"), j["path"], name + ".next", "--out", a.out, "--from", str(start)]
     if once:
         args.append("--once")
