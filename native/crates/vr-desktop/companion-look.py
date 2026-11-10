@@ -67,7 +67,7 @@ def ensure_video():
 
 say("drawing the new look")
 base = base64.b64encode(open(a.base, "rb").read()).decode()
-# whatever it is told to be: the words are the picture (a goth girl in a blouse, a gorilla in a suit, anything)
+# whatever it is told to be: the words are the picture
 png, ty = post(a.image + "/txt2img", {
     "width": 512, "height": 1024, "seed": int(time.time()) % 100000,
     "prompt": "full body photo head to toe of %s, standing facing the camera, whole body visible from head to feet, feet visible, "
