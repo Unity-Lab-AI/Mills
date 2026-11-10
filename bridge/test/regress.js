@@ -47,6 +47,10 @@ function check(id, label, pass, detail = '') {
 }
 const R489_LABEL = 'The Work session list (T-287) has what it needs: the hub names an untitled session, pins and unpins it, lists the messages waiting in it, shows it working (with the counter and the room per host) and then done with an unseen reply, renames and collapses a folder, archives the session out of the list and brings it back when opened; the page loads web/sessions.js instead of the Past sessions dialog, and its dots differ in colour and in shape for every state with the meaning on hover (a stalled run shows idle with its reason), it groups sessions into pinned, folders, today, earlier, hidden and archived (search opens what matches), counts "3 working · 1 needs you", shows "Gee\'s host 3/5", and builds the one session menu in its order with only what the hub supports';
 const R491_LABEL = 'Two hubs on one machine (live and dev) keep their own full copies and the bridge keeps them the same both ways: the first pairing brings over what live had, a task made on either hub appears on the other, a note written on dev, a Work transcript saved on live and a chat message (with its sender\'s key) reach the other hub, a hub that was down catches up, two edits of one task made apart end equal on both with the losing one kept in full in the task\'s activity, a malformed record sent to /__sync/ is refused and never applied while a kind from a newer build is kept, nothing without the secret (or through a proxy) is accepted, an account made on live signs in on dev with the same password while sessions stay each hub\'s own, /api/status shows the bridge up, and once equal nothing goes back and forth';
+const R532_LABEL = 'agent threads in the page (T-298): t-user sees every message to and from their agent as a thread per agent pair, both directions with who, kind and time, and a message that went into one of their sessions opens that session; with the page open a new message from mills notifies, muting the pair stops the notifications (mills\'s next message is refused) but keeps the messages, Do Not Disturb mutes the notification only (the message is there); "pause my inbox" and "ask me first" change the hub\'s settings; a held hand-off shows an accept / decline card and accepting it makes the hub accept it (the task is re-assigned to t-user); the hub serves agents.js and the page loads it with its button, panel and menu tile';
+const R545_LABEL = 'agent threads in the page, the person\'s own say (T-298): t-user stops a thread from its header and the hub\'s thread is stopped (by a person) while the panel shows it stopped, dashed, with Reopen and no reply; Reopen makes it open again in the hub and the panel; "wake me" off and on changes the hub\'s setting; a question written in the panel\'s composer to Mills with a task ref arrives in Mills\'s thread as a question with that ref, written by t-user as a person, and the panel says it waits because Mills paused their inbox; a hand-off needs its task before it goes, and with one it waits for Mills\'s okay; a reply written in that thread goes into the same thread as a reply; when Mills has muted t-user the composer shows the hub\'s refusal as plain words and the person list says so; rate and hop limits, a stopped thread and an unknown person read as sentences; a hub without stop, reopen, the team list or send shows the controls it can and throws nothing';
+const R532B_LABEL ='agent threads in the page on a hub without /api/agents (an older hub or the JavaScript fallback hub): the panel renders nothing, its button and menu tile stay hidden, a refresh and a render throw nothing and nothing notifies';
+const R531_LABEL = 'VibeRoller\'s menus (T-224) offer only what the person may do and call the page\'s existing actions: someone else\'s chat message has Reply, Copy and their profile but no Edit or Delete, your own adds Edit and Delete (asking twice, not Edit for a voice clip), Pin shows for who may pin and says Unpin when pinned, a moderator deletes in a channel but not in a DM, a deleted message offers no actions; a person, a channel, a group and a server offer what their buttons offer (Message and Mention not for yourself, Edit channel only for who may); a board card held by someone else only opens, goes to Claude and copies its id, a free one claims, completes, moves and assigns through sub-menus (the current column and assignee ticked) and archives when done; a file offers Edit and Run for Work files and only Delete when gone; a Work message is copied and sent again, a queued one cancelled through the queue panel; the chat, Work, the board, notes, files and the session list build their right-click and click / ⋯ menus from these lists';
 const L527 = {
   R538: 'a person on dev sees live\'s AI hosts and their own scopes: the AI hosts\' providers dev offers a person are the ones live offers that person (same ids, owners and models), each marked viaPeer; a model the owner did not allow them is cut on dev too, and a run with it is refused in live\'s words',
   R539: 'a Work run on dev goes through live\'s host: a relayed run\'s model call (dev\'s /llm, and through Headroom on dev) reaches the host\'s login through live and its answer comes back; a 2.x host\'s run (Claude Code on the host) streams its events back to dev; Stop on dev cancels it on the host',
@@ -760,7 +764,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['sessions.js', 'queue.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['menu.js', 'sessions.js', 'queue.js', 'tools.js', 'agents.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -787,9 +791,13 @@ async function run() {
   if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
   if (process.argv.includes('--only-r491') && RUST_HUB) await r491Check(); // development: just R491 (with --stop-after R491)
   if (process.argv.includes('--only-r492')) await r492Check(); // development: just R492 (with --stop-after R492)
+  if (process.argv.includes('--only-r530')) await r530Check(); // development: just R530 and R531 (with --stop-after R531)
   if (process.argv.includes('--only-r493') && RUST_HUB) await r493Check(); // development: just R493 (with --stop-after R493)
   if (process.argv.includes('--only-r495') && RUST_HUB) await r495Check(); // development: just R495 (with --stop-after R495)
+  if (process.argv.includes('--only-r528')) await r528r529Check(); // development: just R528 / R529 (with --stop-after R529)
+  if (process.argv.includes('--only-r532')) { if (RUST_HUB) { await r532Check(); await r545Check(); } await r532bCheck(); } // development: just R532 / R545 / R532b (with --stop-after R532b)
   if (process.argv.includes('--only-r527') && RUST_HUB) await r527Check(); // development: just R538 to R543 (with --stop-after R532)
+  if (process.argv.includes('--only-r546')) await r546Check(); // development: just R546 (with --stop-after R546)
   if (process.argv.includes('--only-r533') && RUST_HUB) await r533Check(); // development: just R533 to R537 (with --stop-after R537)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
@@ -2955,6 +2963,16 @@ async function run() {
       && /v == null \|\| v === '' \? NaN/.test(nodesSrc) && /onUsage: usage\.noteWindows, savedUsage: usage\.windows/.test(serverSrc) && /usageStatus: \(a\) => usage\.status\(a, usageSourceOf\(a\)\)/.test(serverSrc),
       `api 7d ${JSON.stringify(usageA2.seven_day)}; unit ${JSON.stringify(st1.five_hour)} / ${JSON.stringify(st1.seven_day)}; after restart ${JSON.stringify(st2.five_hour)} / ${JSON.stringify(st2.seven_day)}`);
 
+    // R547: only the all-models windows count; a model / plan weekly limit (seven_day_overage_included, seven_day_opus ...) never overwrites them
+    const u547 = mkUsage(), src547 = 'h:y/claude';
+    u547.noteUsage(acctU, { type: 'rate_limit_event', rate_limit_info: { rateLimitType: 'seven_day', status: 'allowed', utilization: 0.43, resetsAt: Math.floor(in3d / 1000) } }, src547);
+    for (const t of ['seven_day_overage_included', 'seven_day_opus', 'seven_day_sonnet', 'five_hour_overage']) u547.noteUsage(acctU, { type: 'rate_limit_event', rate_limit_info: { rateLimitType: t, status: 'allowed_warning', utilization: 0.95, resetsAt: Math.floor(in1h / 1000) } }, src547);
+    const st547 = u547.status(acctU, src547), nodeSrc547 = fs.readFileSync(path.join(BRIDGE, 'ai-node.js'), 'utf8');
+    check('R547', 'the weekly cap reads the all-models weekly window only: Claude Code\'s other weekly limits (seven_day_overage_included, seven_day_opus, seven_day_sonnet) never replace it, so a host is not refused at 43 % "over its 90 % weekly cap"; the AI host matches the window names exactly too',
+      st547.seven_day.source === 'claude' && Math.abs(st547.seven_day.utilization - 0.43) < 0.001 && st547.seven_day.status === 'allowed' && st547.five_hour.utilization == null
+      && /\/\^\(seven_day\|weekly\|7d\)\$\//.test(nodeSrc547) && /\/\^\(five_hour\|5h\|session\)\$\//.test(nodeSrc547),
+      `7d ${JSON.stringify(st547.seven_day)}; 5h ${JSON.stringify(st547.five_hour)}`);
+
     // R152: older AI hosts keep working, and hosts update themselves from the hub
     const oh = { 'X-VR-Host': 'old-node', 'X-VR-Host-Token': OLD_NODE_SECRET, 'Content-Type': 'application/json' };
     // a 2.x host: hello without caps, offering its Claude as "claude-cli"; it knows no login relays (404 "does not lend")
@@ -3613,7 +3631,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
           `list ${JSON.stringify(me481)}; ask ${JSON.stringify(asked && asked.result).slice(0, 120)}; nowait ${JSON.stringify(nowait && nowait.result).slice(0, 80)}; reply later ${later}`);
       } else check('R481', L480.R481, false, built ? `tools missing: ${six.filter((n) => !nativeTools481.includes(n) || !jsTools481.includes(n)).join(', ')}` : 'no /api/agents/* yet');
       // R482: the person's controls
-      const html482 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+      // the page (T-298): index.html and the agent threads panel it loads (web/agents.js, driven by R532)
+      const html482 = ['index.html', 'agents.js'].map((f) => { try { return fs.readFileSync(path.join(MILLS, 'web', f), 'utf8'); } catch { return ''; } }).join('\n');
       const page482 = /\/api\/agents\/threads/.test(html482) && /\/api\/agents\/held/.test(html482) && /\/api\/agents\/settings/.test(html482);
       if (built) {
         await ag('settings', U, { muted: ['t-admin'] });
@@ -3645,7 +3664,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
           && dnd.status === 202 && dnd.data.status !== 'refused',
           `muted ${muted.status} ${(muted.data || {}).why} seen by the muter ${mutedSeen}; paused ${paused.status} ${(paused.data || {}).status} queued ${stillQueued.length} then delivered ${deliveredAfter}; held ${held.status} ${(held.data || {}).status} dm ${!!dm} declined ${declined.status} note ${noted} assignee ${stillAdmin.assignee} -> accepted ${accepted.status} ${nowUser.assignee}; dnd ${dnd.status}`);
       } else check('R482', L480.R482, false, 'no /api/agents/* yet');
-      spec('R482p', L480.R482p, page482, `page ${page482}`);
+      check('R482p', L480.R482p, page482, `page ${page482}`);
       // R483: an external (jcode) agent
       // (jcode is driven over HTTP the way it polls: no jcode binary needed)
       if (built) {
@@ -4108,6 +4127,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   await r526Check();
+  await r527ThemeCheck(); // T-291: the Theme menu on top (both modes)
+  if (!process.argv.includes('--only-r546')) await r546Check(); // T-318: Settings in groups, Find a setting, the ways back (both modes)
+  if (!process.argv.includes('--only-r528')) await r528r529Check();
+  if (RUST_HUB) { if (!process.argv.includes('--only-r532')) { await r532Check(); await r545Check(); } } else { skip('R532', R532_LABEL, 'the Rust hub\'s: --rust-hub runs it'); skip('R545', R545_LABEL, 'the Rust hub\'s: --rust-hub runs it'); }
+  if (!process.argv.includes('--only-r532')) await r532bCheck();
+  if (!process.argv.includes('--only-r530')) await r530Check(); // T-223 / T-224: R530 and R531 (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r491')) await r491Check(); } else skip('R491', R491_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
   if (!process.argv.includes('--only-r492')) await r492Check(); // T-326: the live gate (node only: both modes)
   if (RUST_HUB) { if (!process.argv.includes('--only-r493')) await r493Check(); } else skip('R493', R493_LABEL, 'the Rust hub\'s: --rust-hub runs it');
@@ -4563,7 +4588,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const seen = {
       button: /id="themeBtn"[^>]*aria-haspopup="listbox"[^>]*aria-expanded="false"[^>]*><i class="thSw"><\/i><span id="themeName">/.test(page),
       listbox: /id="themeMenu" role="listbox"/.test(page) && /setAttribute\('role', 'option'\)/.test(page) && /setAttribute\('aria-selected'/.test(page),
-      onTop: /#themeMenu \{ position: fixed; z-index: 1000;/.test(page) && /document\.body\.append\(m\); \/\/ out of the header/.test(page),
+      onTop: /#themeMenu \{ position: fixed; z-index: 5\d;/.test(page) && /\n<div id="themeMenu" role="listbox"[^>]*><\/div>\n<div id="shell"/.test(page), // out of the header (T-291: R527 drives where it goes)
       keyboard: /e\.key === 'ArrowDown'\) go\(i \+ 1\)/.test(page) && /e\.key === 'Escape'[^\n]*applyTheme\(themeBefore\)/.test(page),
       label: /try \{ paintThemeBtn\(\); \} catch \{\}/.test(page),
     };
@@ -6429,7 +6454,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && /if \(document\.visibilityState === 'visible'\) \{ updateBar\(pageUpdate\.build\); return; \}/.test(page169) && /function bootTrouble\(msg\)/.test(page169) && /location\.replace\(HUB_HOST \+ '\/'\)/.test(page169);
     if (RUST_HUB) {
       const ctl = new AbortController();
-      fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ message: 'SLOW attach-r169' }), signal: ctl.signal }).then((r) => r.body && r.body.getReader().read()).catch(() => {});
+      fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + U }, body: JSON.stringify({ message: 'SLOW FULLECHO attach-r169' }), signal: ctl.signal }) // FULLECHO: the hub may append its worktree note, past the plain echo's last 200 characters.then((r) => r.body && r.body.getReader().read()).catch(() => {});
       await sleep(1000); ctl.abort(); // the page goes away mid-reply (a reload): the reply goes on in the hub
       const mid = (await call('/api/work/attach?run=&after=0', U)).data || {};
       let d = mid, all = [...(d.events || [])];
@@ -6442,7 +6467,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       check('R169', 'a Work reply survives a reload: the page that went away mid-reply joins the run again (everything so far, then each event to its end: its id first, the answer, the end), afterwards there is nothing more and no run, and the transcript keeps how far into the run it goes; [static] the page follows a run after a reload or a broken stream, offers an update while you look at it (it takes it in the background), never stays black, and sends the retired GitHub Pages copy to the hub',
         mid.busy === true && /^[0-9a-f]+$/.test(mid.run || '') && (all[0] || {}).type === 'bridge_run' && all.some((e) => e.type === 'result' && /attach-r169/.test(e.result || '')) && all.some((e) => e.type === 'bridge_done') && d.busy === false
         && (again.events || []).length === 0 && again.busy === false && none.run === '' && cur && stat,
-        `mid busy ${mid.busy} run ${mid.run}; events ${all.map((e) => e.type).join(',')}; end busy ${d.busy}; again ${(again.events || []).length}/${again.busy}; none "${none.run}"; current keeps run ${cur}; static ${stat}`);
+        `mid busy ${mid.busy} run ${mid.run}; events ${all.map((e) => e.type).join(',')}; answer "${String((all.find((e) => e.type === 'result') || {}).result || '').slice(0, 120)}"; end busy ${d.busy}; again ${(again.events || []).length}/${again.busy}; none "${none.run}"; current keeps run ${cur}; static ${stat}`);
     } else check('R169', 'the page follows a Work run after a reload, offers updates instead of reloading in front of you, never stays black, sends the GitHub Pages copy to the hub [static; joining a run is the Rust hub\'s: --rust-hub runs it]', stat, `static ${stat}`);
   }
   { // R347 to R349 (T-319): "Done in 0s" four times in a row after Send now
@@ -7194,6 +7219,69 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
     check('R489', R489_LABEL, ok, JSON.stringify(seen));
   }
+  // R546 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control
+  // it had (each id once, inside the Settings box) and every group has a heading and a one-line hint; the page's own Save
+  // app settings body (taken from the served page, run in vm on a stand-in form) goes to /api/prefs as t-user and the hub
+  // keeps what it sent; profile.js's settingsMatch runs in vm on made-up groups and on the served App / Connections groups;
+  // every screen has a title and a ← Menu, and Settings closes one way from Close, a click beside it and Escape.
+  async function r546Check() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text(), pjs = await fetch(H + '/profile.js'), src = pjs.status === 200 ? await pjs.text() : '';
+    const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
+    const ids = ['setNick', 'setColors', 'setSound', 'volMessage', 'volMention', 'volReply', 'volCall', 'volBoard', 'volAsk', 'soundSet', 'setAskAuto', 'setAskMin', 'setAskActivity', 'setAskTts',
+      'setToasts', 'setReopen', 'setEnhance', 'setAutoScroll', 'setTtsAll', 'setTtsUnity', 'setTts', 'ttsVolume', 'ttsTest', 'ttsRate', 'ttsRateVal', 'ttsVoice', 'ttsScope', 'audNoise', 'audEcho', 'audAgc',
+      'callVolume', 'callQuality', 'clipVolume', 'clipAuto', 'ttsStop', 'setAutosave', 'setTheme', 'saveSettings', 'setMsg', 'aboutVibeRoller', 'aboutModules', 'apiBox', 'devBox', 'machBox', 'srcBox',
+      'hostBox', 'provBox', 'fjBox', 'projBox', 'dlVersion', 'dlBody', 'appBox', 'profilePreview', 'profileBox', 'closeSettings', 'setTabs'];
+    seen.missing = ids.filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !box.includes('id="' + id + '"'));
+    const groups = [...box.matchAll(/<section class="setGroup"[^>]*>([\s\S]*?)<\/section>/g)].map((m) => m[1]);
+    seen.groups = groups.length; seen.headless = groups.filter((g) => !/^\s*<h3>[^<]+<\/h3><p class="setHint">[\s\S]+?<\/p>/.test(g)).length;
+    const pane = (n) => (box.match(new RegExp('<div data-setpane="' + n + '"[^>]*>([\\s\\S]*?)\\n     </div>')) || [])[1] || '';
+    const strip = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
+    const served = (n) => [...pane(n).matchAll(/<section class="setGroup"[^>]*>\s*<h3>([^<]+)<\/h3><p class="setHint">([\s\S]*?)<\/p>([\s\S]*?)<\/section>/g)].map((m) => ({ title: m[1], text: m[1] + ' ' + strip(m[2]), rows: [strip(m[3])] }));
+    const app = served('app'), conn = served('connections');
+    seen.appGroups = app.map((g) => g.title).join(','); seen.connGroups = conn.length;
+    // the page's own Save app settings body, on a stand-in form
+    const bodySrc = (page.match(/\$\('saveSettings'\)\.onclick = async \(\) => \{\s*try \{\s*const d = await json\('\/api\/prefs', \{ method: 'POST', body: JSON\.stringify\((\{[\s\S]*?\n    \})\) \}\);/) || [])[1] || '';
+    seen.saveIds = [...bodySrc.matchAll(/\$\('(\w+)'\)/g)].map((m) => m[1]).filter((id) => !box.includes('id="' + id + '"'));
+    const form = { volMessage: '42', soundSet: 'classic', ttsRate: '130', ttsScope: 'mine', setAutoScroll: true, setAutosave: '15', setAskMin: '7', callQuality: 'high', setTheme: 'nord', setTtsAll: true, clipAuto: true };
+    let body = null;
+    try { body = require('vm').runInNewContext('(' + bodySrc + ')', { $: (id) => ({ value: typeof form[id] === 'string' ? form[id] : '50', checked: form[id] === true }), pickedColor: null, Number, Math }); } catch (e) { seen.body = e.message; }
+    // as an account of its own (removed afterwards), so no other check finds settings it did not make
+    const created = (await call('/api/admin/create', A, { username: 't-r534', display: 'R546' })).data || {};
+    const X = created.password ? (await login('t-r534', created.password, 'device-r534-xxxxxxxxxx')).data.token : '';
+    try {
+      if (body && X) {
+        body.nick = 'R546';
+        const r = await call('/api/prefs', X, body), got = ((await call('/api/prefs', X)).data.prefs) || {};
+        seen.saved = r.status; seen.kept = [got.sound && got.sound.message, got.sound && got.sound.set, got.tts && got.tts.rate, got.tts && got.tts.scope, got.autoScroll, got.autosave, got.ask && got.ask.minutes, got.call && got.call.quality, got.theme, got.clips && got.clips.autoplay].join(',');
+      } else seen.account = created.error || 'not made';
+    } finally { if (created.password) await call('/api/admin/delete', A, { username: 't-r534' }); }
+    // Find a setting: the pure filter
+    const fsrc = (src.match(/\n(function settingsMatch\([\s\S]*?\n\})/) || [])[1] || '';
+    let M = null; try { const ctx = {}; require('vm').runInNewContext(fsrc + '\nthis.M = settingsMatch;', ctx); M = ctx.M; } catch (e) { seen.load = e.message; }
+    if (M) {
+      const G = [{ text: 'Sounds A short sound for each kind of news', rows: ['Sound when a chat message arrives', 'Message', 'Sound style Patterns: a distinct motif per kind'] },
+        { text: 'Read aloud Everything VibeRoller says out loud: Unity\'s voice', rows: ['Text to speech: the master switch', 'Voice System default'] },
+        { text: 'Calls and voice clips', rows: ['Echo cancellation', 'Call volume'] }];
+      const shape = (r) => r.groups.map((g) => (g.show ? g.rows.map((x) => (x ? 1 : 0)).join('') : '-')).join(' ') + (r.any ? '' : ' none');
+      seen.empty = shape(M('', G)); seen.echo = shape(M('  ECHO ', G)); seen.voice = shape(M('voice', G)); seen.style = shape(M('style sound', G)); seen.nothing = shape(M('zzz', G));
+      const titles = (q, gs) => { const r = M(q, gs); return gs.filter((g, i) => r.groups[i].show).map((g) => g.title).join(','); };
+      seen.realEcho = titles('echo', app); seen.realTheme = titles('theme', app); seen.realForgejo = titles('forgejo token', conn);
+    }
+    seen.wired = /id="setFind" type="search"/.test(box) && /id="setNone"/.test(box) && /findBox\.addEventListener\('input', \(\) => find\(findBox\.value\)\)/.test(src) && /settingsMatch\(q, groups\.map/.test(src);
+    // every screen: a title and ← Menu, which goes to the menu; Settings: Close, beside it and Escape are one way out
+    const screens = [...page.matchAll(/<div id="(\w+)" class="screen"[^>]*>\s*<header>([\s\S]*?)<\/header>/g), ...page.matchAll(/<div id="(shell)" hidden>\s*<header>([\s\S]*?)<\/header>/g)];
+    seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
+    seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
+    seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
+    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Sounds,When the AI asks,Chat and Work,Read aloud,Calls and voice clips,Appearance' && seen.connGroups === 8
+      && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
+      && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
+      && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.wired
+      && seen.screens >= 9 &&!seen.noWayBack.length && seen.back && seen.close;
+    check('R546', 'Settings keeps every setting it had (each control once, with its id, inside a group that has a heading and a one-line explanation) and the page\'s own Save app settings still saves through /api/prefs, where the hub keeps what it sent; Find a setting shows only the groups and rows that have every word typed (any case; a heading match shows the whole group; nothing matching says so); every screen has a title and a way back to the menu, and Settings closes the same way from Close, a click beside it and Escape',
+      ok, JSON.stringify(seen));
+  }
   // R526 (T-188): the queue panel. The hub serves web/queue.js and the page loads it with its button and sidebar; the
   // panel itself runs here on a plain element stand-in, driven by clicks like a person would, against a page-side queue.
   async function r526Check() {
@@ -7243,6 +7331,585 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.plain === '[attached: x.txt, y.png] | just text';
     check('R526', 'the Work queue panel (T-188) lists every message still to go in the open session, "Send now" first, then the queue in order, with the attachments named; copy one and copy all give the messages as written (a rule between them) and a refused clipboard says so; cancel one removes just that one, cancel all asks once more and then clears the queue and the "Send now" text; the badge and the summary count the other sessions\' waiting messages too (not archived ones), each a click away; a refresh with nothing changed does not redraw it; hiding it is remembered; the hub serves queue.js and the page loads it with its button and sidebar',
       ok, JSON.stringify(seen));
+  }
+  // R544 (T-291; R527, then R535, until 5.46.1 and 5.48.0 took them): the Theme menu opens on top of every panel. The page's placement function (button rect + list size +
+  // window -> where the list goes) runs here in vm on wide, narrow, low and tiny windows; the served markup keeps the list
+  // out of every header (a scrolling, blurred header clips and traps whatever is inside it) on the menu layer.
+  async function r527ThemeCheck() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text();
+    const src = (page.match(/\n(function themeMenuPlace\([\s\S]*?\n\})/) || [])[1] || '';
+    let place = null; try { const ctx = {}; require('vm').runInNewContext(src + '\nthis.place = themeMenuPlace;', ctx); place = ctx.place; } catch (e) { seen.load = e.message; }
+    seen.found = typeof place === 'function';
+    // inside the window (8px edge), never over the button, the list's own size when it fits
+    const fits = (r, w, h, vw, vh) => {
+      const p = place(r, w, h, vw, vh), ww = Math.min(w, p.maxWidth);
+      return p.left >= 8 && p.left + ww <= vw - 8 && p.top >= 8 && p.top + p.maxHeight <= vh - 8 && p.maxHeight > 0 && (p.top >= r.bottom || p.top + p.maxHeight <= r.top);
+    };
+    if (place) {
+      const btn = (left, top, w = 100, h = 32) => ({ left, top, right: left + w, bottom: top + h });
+      const show = (p) => [p.left, p.top, p.maxHeight, p.maxWidth].map(Math.round).join(',');
+      seen.wide = show(place(btn(1200, 8), 240, 400, 1400, 900)); // under the button, its right edge on the button's
+      seen.rightEdge = show(place(btn(1295, 8), 240, 400, 1400, 900)); // pulled in from the window's right edge
+      seen.narrow = show(place(btn(10, 8, 80), 240, 400, 360, 640)); // a phone: kept off the left edge
+      seen.low = show(place(btn(200, 560), 240, 400, 1000, 640)); // no room below (a wrapped header, the desktop app): opens upwards
+      seen.tiny = show(place(btn(10, 8), 240, 400, 360, 300)); // too short for the whole list: it scrolls inside the room below
+      seen.tooWide = show(place(btn(10, 8), 500, 200, 360, 640)); // wider than the window: narrowed to it
+      let all = 0, bad = [];
+      for (const vw of [320, 360, 768, 1024, 1920]) for (const vh of [240, 480, 800, 1200]) for (const fx of [0, 0.5, 1]) for (const fy of [0, 0.5, 0.9]) for (const [w, h] of [[200, 120], [240, 520], [400, 1400]]) {
+        const r = btn(Math.max(0, (vw - 100) * fx), Math.max(0, (vh - 32) * fy)); all++;
+        if (!fits(r, w, h, vw, vh)) bad.push([vw, vh, fx, fy, w, h].join('/'));
+      }
+      seen.sweep = all + ' places, ' + bad.length + ' off screen or over the button' + (bad.length ? ': ' + bad.slice(0, 4).join(' ') : '');
+      seen.sweepOk = bad.length === 0;
+    }
+    // the list is no header's child, it sits on the menu layer (over panels, floating windows and the message menu at 50,
+    // under the real dialogs at 60+), and opening it places it with that function
+    const at = page.indexOf('id="themeMenu"'), headers = [...page.matchAll(/<header>[\s\S]*?<\/header>/g)];
+    seen.outOfHeader = at > 0 && !headers.some((m) => at > m.index && at < m.index + m[0].length) && at < page.indexOf('<div id="shell"');
+    const z = +((page.match(/#themeMenu \{ position: fixed; z-index: (\d+);/) || [])[1] || 0);
+    seen.layer = z >= 50 && z < 60 ? z : 'z-index ' + z;
+    seen.used = /function placeThemeMenu\(\) \{[\s\S]{0,200}?themeMenuPlace\(\$\('themeBtn'\)\.getBoundingClientRect\(\)/.test(page);
+    const ok = seen.found && seen.wide === '1060,46,400,1384' && seen.rightEdge === '1152,46,400,1384' && seen.narrow === '8,46,400,344'
+      && seen.low === '60,154,400,984' && seen.tiny === '8,46,246,344' && seen.tooWide === '8,46,200,344' && seen.sweepOk
+      && seen.outOfHeader && typeof seen.layer === 'number' && seen.used;
+    check('R544', 'the Theme menu opens on top of every panel: the list lives outside every header (a scrolling, blurred header would clip it and trap it under the team chat, the AI chat and floating windows), sits on the menu layer above them and below real dialogs, and is placed from the button: under it, or upwards when there is more room there, pulled inside the window on wide and narrow screens, narrowed and scrolling when the window is too small, never over the button',
+      ok, JSON.stringify(seen));
+  }
+  // R528 / R529 (T-318): the tool calls in the Work transcript. The hub serves web/tools.js and the page loads it; its pure
+  // part (summaries, grouping, the risk of a command) and its view run here on a plain element stand-in, fed a reply as it
+  // streams in and the same conversation restored, clicked like a person would.
+  async function r528r529Check() {
+    const seen = {}, risk = {};
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/tools.js'), src = js.status === 200 ? await js.text() : '';
+    seen.served = js.status === 200 && /<script src="tools\.js(\?[^"]*)?"><\/script>/.test(page) && /typeof TOOLVIEW !== 'undefined'/.test(page);
+    const mkEl = (tag) => {
+      const e = { tag, children: [], text: '', className: '', hidden: false, title: '', dataset: {}, attrs: {}, onclick: null, type: '',
+        appendChild(x) { this.children.push(x); x.parentNode = this; return x; },
+        append(...xs) { for (const x of xs) this.appendChild(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); },
+        setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
+        get lastElementChild() { const l = this.children.filter((c) => c.tag !== '#text'); return l[l.length - 1] || null; },
+        get firstElementChild() { return this.children.find((c) => c.tag !== '#text') || null; } };
+      const cls = () => e.className.split(/\s+/).filter(Boolean);
+      e.classList = { contains: (c) => cls().includes(c), add: (c) => { if (!cls().includes(c)) e.className = cls().concat(c).join(' '); },
+        remove: (c) => { e.className = cls().filter((x) => x !== c).join(' '); }, toggle: (c, on) => { const has = cls().includes(c), want = on === undefined ? !has : !!on; if (want) e.classList.add(c); else e.classList.remove(c); return want; } };
+      Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+      return e;
+    };
+    const all = (e, f, out = []) => { if (e.tag !== '#text' && f(e)) out.push(e); for (const c of e.children || []) all(c, f, out); return out; };
+    const has = (e, c) => e.classList && e.classList.contains(c);
+    let T = null; try { const ctx = { window: {} }; require('vm').runInNewContext(src, ctx); T = ctx.window.TOOLVIEW; } catch (e) { seen.load = e.message; }
+    if (T) {
+      // R528: one line per call, 32 characters whole, longer = the first 15, "…", the last 15
+      seen.s32 = T.summary('Bash  ' + 'a'.repeat(32)) === 'bash ' + 'a'.repeat(32);
+      seen.s36 = T.summary('Bash  0123456789abcdefghijklmnopqrstuvwxyz');
+      seen.sWrap = T.summary("Bash  sh -c 'cd /srv/apps && git status --short'");
+      seen.sLines = T.summary('Bash  ls\n  -la'); seen.sBare = T.summary('TodoWrite'); seen.sOld = T.kindOf('⚙ Read  /a') === 'Read';
+      // grouping by consecutive runs, in arrival order: Read,Read,Edit,Bash,Bash,Bash,Read
+      const seq = ['Read  /a', 'Read  /b', 'Edit  /c', 'Bash  ls', 'Bash  git diff', 'Bash  rm -rf build', 'Read  /d'];
+      const sig = (gs) => gs.map((g) => g.kind + ':' + g.items.length).join(',');
+      seen.pure = sig(T.groups(seq));
+      seen.broken = sig(T.groups([{ cls: 'tool', text: 'Bash  a' }, { cls: 'claude', text: 'hi' }, { cls: 'tool', text: 'Bash  b' }])); // an answer between them: two groups
+      // the view, live: each call added as it streams in (the page's line('tool', …)), an answer bubble in between
+      const kept = {}, o = { document: { createElement: mkEl, createElementNS: (ns, tag) => Object.assign(mkEl(tag), { ns }) }, open: () => kept.open === '1', setOpen: (v) => { kept.open = v ? '1' : '0'; } };
+      const domSig = (log) => log.children.filter((g) => has(g, 'tGroup')).map((g) => g.dataset.kind + ':' + all(g, (x) => has(x, 'tCall')).length).join(',');
+      const live = mkEl('div');
+      for (const t of seq) T.add(live, t, o);
+      const bubbleEl = mkEl('div'); bubbleEl.className = 'msg claude'; live.appendChild(bubbleEl);
+      T.add(live, 'Read  /e', o);
+      seen.live = domSig(live);
+      const groupsOf = (log) => log.children.filter((g) => has(g, 'tGroup'));
+      seen.collapsed = groupsOf(live).every((g) => !has(g, 'open') && all(g, (x) => has(x, 'tgList'))[0].hidden);
+      const bashG = groupsOf(live)[2], head = all(bashG, (x) => has(x, 'tgHead'))[0];
+      seen.head = head.textContent;
+      // the same conversation restored from its transcript: the same groups
+      const tr = seq.map((text) => ({ cls: 'tool', text })).concat([{ cls: 'claude', text: 'x' }, { cls: 'tool', text: '⚙ Read  /e' }]);
+      const back = mkEl('div');
+      for (const t of tr) { if (t.cls === 'tool') T.add(back, t.text, o); else { const b = mkEl('div'); b.className = 'msg claude'; back.appendChild(b); } }
+      seen.restored = domSig(back);
+      // show tools: the head opens the group, each call shows its one line; a click on one shows it whole
+      head.onclick();
+      seen.opened = has(bashG, 'open') && !all(bashG, (x) => has(x, 'tgList'))[0].hidden && /hide tools/.test(head.textContent);
+      seen.rows = all(bashG, (x) => has(x, 'tcSum')).map((x) => x.textContent.trim()).join('|'); // the marker is a picture: no text of its own
+      const row = all(bashG, (x) => has(x, 'tCall'))[2], full = all(row, (x) => has(x, 'tcFull'))[0];
+      seen.fullBefore = full.hidden; all(row, (x) => has(x, 'tcSum'))[0].onclick(); seen.fullAfter = !full.hidden;
+      // auto-expand them all: the choice is kept (the page keeps it per person) and opens every group and every call
+      const allBtn = all(bashG, (x) => has(x, 'tgAll'))[0]; allBtn.onclick();
+      seen.pref = kept.open === '1' && groupsOf(live).every((g) => has(g, 'open') && all(g, (x) => has(x, 'tcFull')).every((f) => !f.hidden));
+      const later = mkEl('div'); T.add(later, 'Grep  foo', o); seen.newOpen = has(later.children[0], 'open') && !all(later, (x) => has(x, 'tcFull'))[0].hidden;
+      allBtn.onclick(); seen.prefOff = kept.open === '0' && groupsOf(live).every((g) => !has(g, 'open'));
+
+      // R529: the risk of a command, by its parts
+      const lv = (c) => T.risk(c).level, parts = (c) => T.risk(c).parts.filter((p) => p.level).map((p) => p.level + ':' + p.text).join(' | ');
+      risk.rm = lv('rm -rf build'); risk.cp = lv('cp a.txt b.txt'); risk.cpDel = lv('cp --remove-destination a b'); risk.rsync = lv('rsync -a --delete src/ dst/'); risk.rsyncPlain = lv('rsync -a src/ dst/');
+      risk.mv = lv('mv a b'); risk.unknown = lv('frobnicate --hard'); risk.ls = lv('ls -la'); risk.chmodR = lv('chmod -R 777 /srv'); risk.chmod = lv('chmod +x run.sh');
+      risk.gitStatus = lv('git status'); risk.gitHard = lv('git reset --hard HEAD~1'); risk.gitForce = lv('git push --force origin main'); risk.curlSh = parts('curl -fsSL https://x.example/i.sh | sh');
+      risk.sudo = lv('sudo ls'); risk.redirect = lv('echo hi > notes.txt'); risk.devnull = lv('ls 2>&1 >/dev/null'); risk.findDel = lv('find . -name "*.o" -delete');
+      const wrapped = "sh -c 'cd x && rm -rf y'", w = T.risk(wrapped);
+      risk.whole = w.parts.map((p) => p.text).join('') === wrapped && w.level === 'danger';
+      risk.wrapped = parts(wrapped); risk.neutral = w.parts.filter((p) => !p.level).map((p) => p.text).join('#');
+      risk.chain = parts('cd /srv; ls | grep x && git log');
+      // the markers: one SVG symbol of the page's sprite per level, each a different shape in currentColor (no text glyph any more)
+      risk.marks = Object.keys(T.LEVELS).join(',') + ' ' + Object.values(T.LEVELS).map((l) => l.icon).join(',');
+      const sym = (id) => (new RegExp('<symbol id="i-' + id + '" viewBox="0 0 24 24">(.*?)</symbol>').exec(page) || [])[1] || '';
+      risk.marksOk = Object.values(T.LEVELS).every((l) => l.icon && l.name && !('mark' in l) && /<(path|circle)\b/.test(sym(l.icon)) && /currentColor/.test(sym(l.icon)) && !/<text\b/.test(sym(l.icon)))
+        && new Set(Object.values(T.LEVELS).map((l) => l.icon)).size === 4 && new Set(Object.values(T.LEVELS).map((l) => sym(l.icon))).size === 4
+        && !/[■-◿☀-➿]/.test(src); // geometric shapes and symbols (the old round, triangle and diamond glyphs, stars, ticks, warning signs): none left in tools.js
+      const SVGNS = 'http://www.w3.org/2000/svg';
+      const iconOf = (m) => { const s = (m.children || []).find((c) => c.tag === 'svg'), u = s && s.children.find((c) => c.tag === 'use');
+        return s && s.ns === SVGNS && u && u.ns === SVGNS && s.attrs['aria-hidden'] === 'true' ? u.attrs.href || '' : ''; };
+      const markOk = (m, level) => !!m && has(m, level) && iconOf(m) === '#i-' + T.LEVELS[level].icon; // the level's own shape, coloured by its class
+      const pictureOk = (m, level) => markOk(m, level) && m.textContent === '' && m.attrs.role === 'img' && (m.attrs['aria-label'] || '').startsWith(T.LEVELS[level].name) && m.title === m.attrs['aria-label'];
+      // the view: the expanded command colours only its parts, each coloured part with its marker (a shape and words, not colour alone)
+      const box = mkEl('div'); T.add(box, 'Bash  ' + wrapped, o); const g = box.children[0];
+      const headMarks = (gr) => all(gr, (x) => has(x, 'tgHead'))[0].children.filter((x) => has(x, 'tkMark'));
+      risk.headMark = headMarks(g).map((x) => iconOf(x) + '/' + x.textContent + '/' + x.title).join(',');
+      const own = (x) => x.children.filter((c) => !has(c, 'tkMark')).map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''); // a part's text without its marker
+      risk.view = all(g, (x) => has(x, 'tk')).map((x) => x.className.replace('tk ', '') + ':' + own(x)).join(' | ');
+      risk.viewMarks = all(g, (x) => has(x, 'tk')).every((x) => { const lv0 = x.className.replace('tk ', ''); return pictureOk(x.children.find((c) => has(c, 'tkMark')), lv0) && /\S/.test(x.title); });
+      // every level, expanded and in its row: its own distinct marker, the words in the label (screen readers) and the tooltip
+      const four = { safe: 'ls -la', unknown: 'frobnicate', caution: 'mv a b', danger: 'rm -rf x' }, seenIcons = new Set();
+      risk.levels = Object.entries(four).every(([level, c]) => {
+        const b = mkEl('div'); T.add(b, 'Bash  ' + c, o);
+        const tk = all(b, (x) => has(x, 'tk'))[0], m = tk && tk.children.find((x) => has(x, 'tkMark')), row = all(b, (x) => has(x, 'tcSum'))[0].children.find((x) => has(x, 'tkMark'));
+        seenIcons.add(iconOf(m));
+        return has(tk, level) && pictureOk(m, level) && pictureOk(row, level);
+      }) && seenIcons.size === 4;
+      // a collapsed group shows its worst marker, with its words: danger over caution over safe; nothing worth a look, no marker
+      const groupOf = (cmds) => { const b = mkEl('div'); for (const c of cmds) T.add(b, 'Bash  ' + c, o); return b.children[0]; };
+      const gD = groupOf(['ls', 'mv a b', 'rm -rf x', 'git status']), gC = groupOf(['ls', 'mv a b', 'git status']), gS = groupOf(['ls', 'frobnicate']);
+      const hd = headMarks(gD), hc = headMarks(gC);
+      risk.worst = !has(gD, 'open') && hd.length === 1 && markOk(hd[0], 'danger') && hd[0].textContent === 'possibly unsafe' && /riskiest/.test(hd[0].title)
+        && hc.length === 1 && markOk(hc[0], 'caution') && hc[0].textContent === 'check it' && headMarks(gS).length === 0;
+      // the legend under a command group: each level's marker with its words
+      const leg = all(gD, (x) => has(x, 'tgLegend'))[0], items = leg ? leg.children.filter((x) => has(x, 'tlItem')) : [];
+      risk.legend = leg ? leg.textContent : '';
+      risk.legendOk = items.length === 4 && Object.keys(T.LEVELS).every((k, i) => markOk(items[i].children.find((x) => has(x, 'tkMark')), k) && items[i].textContent === T.LEVELS[k].name) && /nothing is blocked/.test(risk.legend);
+      // no text glyph anywhere in the view: every marker's own text is its words or nothing
+      risk.noGlyph = [g, gD, gC, gS].every((gr) => all(gr, (x) => has(x, 'tkMark')).every((m) => m.text === '' && m.children.every((c) => c.tag === 'svg' || (c.tag === 'span' && /^[a-z ]+$/.test(c.textContent)))));
+      risk.viewText = all(g, (x) => has(x, 'tcFull'))[0].textContent.includes("sh -c '") && !all(g, (x) => has(x, 'tk')).some((x) => /sh -c/.test(x.textContent));
+      const editBox = mkEl('div'); T.add(editBox, 'Edit  /srv/a.js', o); risk.edit = all(editBox, (x) => has(x, 'tk') || has(x, 'tkMark')).length; // only commands are judged
+      risk.css = /\.tk\.danger \{/.test(page) && /\.tk\.caution \{/.test(page) && /\.tk\.safe \{/.test(page);
+    }
+    const ok528 = seen.served && !!T && seen.s32 && seen.s36 === 'bash 0123456789abcde…lmnopqrstuvwxyz' && seen.sWrap === "bash sh -c 'cd /srv/…status --short'" && seen.sLines === 'bash ls -la' && seen.sBare === 'todowrite' && seen.sOld
+      && seen.pure === 'Read:2,Edit:1,Bash:3,Read:1' && seen.broken === 'Bash:1,Bash:1' && seen.live === 'Read:2,Edit:1,Bash:3,Read:1,Read:1' && seen.restored === seen.live
+      && seen.collapsed && /Bash/.test(seen.head) && /×3/.test(seen.head) && /show tools/.test(seen.head) && seen.opened && seen.rows === 'bash ls|bash git diff|bash rm -rf build'
+      && seen.fullBefore === true && seen.fullAfter && seen.pref && seen.newOpen && seen.prefOff;
+    check('R528', 'the tool calls in the Work transcript (T-318) are collapsed by default behind "show tools", bundled by consecutive runs of the same kind in the order they arrive (Read, Read, Edit, Bash, Bash, Bash, Read is 2 Read, 1 Edit, 3 Bash, 1 Read; an answer in between starts a new group), the same live as on a restored conversation; each call has a one-line summary (32 characters whole, longer the first 15, "…", the last 15); a call opens whole on a click, and "always expand" is kept and opens every group and call; the hub serves tools.js and the page loads it (and works without it)',
+      ok528, JSON.stringify(seen));
+    const ok529 = !!T && risk.rm === 'danger' && risk.cp === 'safe' && risk.cpDel === 'danger' && risk.rsync === 'caution' && risk.rsyncPlain === 'safe' && risk.mv === 'caution' && risk.unknown === 'unknown' && risk.ls === 'safe'
+      && risk.chmodR === 'danger' && risk.chmod === 'caution' && risk.gitStatus === 'safe' && risk.gitHard === 'danger' && risk.gitForce === 'danger' && risk.curlSh === 'danger:curl -fsSL https://x.example/i.sh | danger:sh'
+      && risk.sudo === 'caution' && risk.redirect === 'caution' && risk.devnull === 'safe' && risk.findDel === 'danger'
+      && risk.whole && risk.wrapped === 'safe:cd x | danger:rm -rf y' && risk.neutral === "sh -c '# && #'" && risk.chain === 'safe:cd /srv | safe:ls | safe:grep x | safe:git log'
+      && risk.marks === 'safe,unknown,caution,danger risk-safe,risk-unknown,risk-caution,risk-danger' && risk.marksOk && /^#i-risk-danger\/possibly unsafe\//.test(risk.headMark)
+      && risk.levels && risk.worst && risk.legendOk && risk.noGlyph && risk.view === 'safe:cd x | danger:rm -rf y' && risk.viewMarks && risk.viewText && risk.edit === 0 && risk.css;
+    check('R529', 'an expanded command in the Work transcript (T-318) colours only its parts by risk and marks each with a shape and words, never colour alone (nothing is blocked): each level has its own SVG marker from the page\'s icon sprite (a check in a circle, a question mark in a circle, an exclamation mark in a triangle, a cross in an octagon; no text glyph), hidden from screen readers with the level\'s words in its label and tooltip, also in the row, the legend and a collapsed group\'s head; rm, chmod -R, git reset --hard, git push --force, find -delete and curl piped into sh are possibly unsafe, cp is safe but cp --remove-destination is not, rsync --delete, mv, sudo and a > that writes over a file are to check, ls / cd / grep / git status are safe, anything else is unknown; && ; | and sh -c \'…\' are looked into, so in sh -c \'cd x && rm -rf y\' only the rm part is marked; a collapsed group shows its worst marker',
+      ok529, JSON.stringify(risk));
+  }
+  // R532 / R532b (T-298 = T-294 · 4/6): the agent threads in the page (web/agents.js). The panel runs here on a plain element
+  // stand-in with the page's callbacks, driven by clicks like a person would, against the scratch hub's real /api/agents/*
+  // routes (the Rust hub's) as t-user, while mills writes to t-user's agent. R532b: a hub without the routes.
+  function mkEl532(tag) {
+    const e = { tag, children: [], text: '', className: '', hidden: false, title: '', dataset: {}, attrs: {}, disabled: false, onclick: null, onchange: null, oninput: null, type: '', value: '', checked: false, placeholder: '', rows: 0,
+      append(...xs) { for (const x of xs) this.children.push(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); },
+      setAttribute(k, v) { this.attrs[k] = String(v); }, removeAttribute(k) { delete this.attrs[k]; } };
+    e.classList = { toggle(c, on) { const l = e.className.split(' ').filter(Boolean), has = l.includes(c), want = on === undefined ? !has : !!on; e.className = (want ? [...l.filter((x) => x !== c), c] : l.filter((x) => x !== c)).join(' '); return want; },
+      add(c) { this.toggle(c, true); }, remove(c) { this.toggle(c, false); }, contains(c) { return e.className.split(' ').includes(c); } };
+    Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+    return e;
+  }
+  function all532(e, f, out = []) { if (f(e)) out.push(e); for (const c of e.children || []) all532(c, f, out); return out; }
+  function load532(src) { try { const ctx = { window: {}, setTimeout, clearTimeout, Date, JSON, Math }; require('vm').runInNewContext(src, ctx); return { AG: ctx.window.AGENTS || null }; } catch (e) { return { AG: null, error: e.message }; } }
+  async function r532Check() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/agents.js'), src = js.status === 200 ? await js.text() : '';
+    const sw = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8');
+    seen.served = js.status === 200 && /<script src="agents\.js(\?[^"]*)?"><\/script>/.test(page) && /id="agentsPanel"/.test(page) && /id="agentsBtn"/.test(page) && /id="goAgents"/.test(page) && sw.includes("'agents.js'");
+    const { AG, error } = load532(src); if (error) seen.load = error;
+    const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
+    const built = (await ag('settings', U)).status === 200;
+    if (AG && built) {
+      const set0 = (await ag('settings', U)).data;
+      const sess = async () => (await call('/api/work/sessions', U)).data || {};
+      // t-user's conversations as they are now: the one delivered message below wakes a session (put back afterwards)
+      const s0 = await sess(), keep = []; for (const sid of [...new Set([s0.primary, s0.current].filter(Boolean))]) keep.push({ sid, cur: (await call('/api/work/current?session=' + sid, U)).data || {} });
+      const calm = async () => { for (let i = 0, quiet = 0; i < 160 && quiet < 6; i++) { quiet = (((await sess()).counts || {}).working || 0) === 0 ? quiet + 1 : 0; await sleep(250); } };
+      // 1. mills's agent reports to t-user's: delivered into one of t-user's sessions (a report is not answered)
+      await calm();
+      const rep = await ag('send', D, { to: 't-user', kind: 'report', text: 'r532 REPORT the build is green', wait: false });
+      let into = ''; for (let i = 0; i < 80 && !into; i++) { const m = ((((await ag('thread?id=' + (rep.data || {}).thread, U)).data || {}).messages) || []).find((x) => x.id === (rep.data || {}).id) || {}; into = ['delivered', 'read', 'answered'].includes(m.status) ? (m.to || {}).session || '' : ''; if (!into) await sleep(250); }
+      await calm();
+      // the rest goes to t-user's (and mills's) other tool "r532": it waits in that inbox, so no run is started by it
+      const t1 = await ag('send', D, { to: 't-user/r532', kind: 'ask', text: 'r532 first question from mills', wait: false });
+      const back = await ag('send', U, { to: 'mills/r532', kind: 'report', text: 'r532 answer from t-user', thread: (t1.data || {}).thread, wait: false });
+      // the page's side: t-user signed in, the session list, what it was asked to do
+      const st = { notified: [], opened: [], notes: [], kept: {}, dnd: false };
+      const sids = ((await sess()).sessions || []).map((x) => x.id);
+      const box = mkEl532('aside'), button = mkEl532('button'), badge = mkEl532('span'), tile = mkEl532('button'); button.hidden = tile.hidden = true;
+      const P = AG.mount({ document: { createElement: mkEl532 }, box, button, badge, tile, interval: 0,
+        api: (p, body) => call(p, U, body), me: () => 't-user', nameOf: (u) => (u === 'mills' ? 'Mills' : u), dnd: () => st.dnd,
+        hasSession: (sid) => sids.includes(sid), titleOf: (sid) => 'session ' + sid, open: (sid) => { st.opened.push(sid); },
+        notify: (n) => { st.notified.push(n); }, note: (t, bad) => { st.notes.push((bad ? '!' : '') + t); },
+        store: { get: (k) => (k in st.kept ? st.kept[k] : null), set: (k, v) => { st.kept[k] = v; } } });
+      const acts = (a) => all532(box, (e) => e.dataset && e.dataset.act === a), click = async (b) => { if (b && b.onclick) await b.onclick(); await sleep(0); };
+      const toggle = async (b) => { if (!b) return; b.checked = !b.checked; if (b.onchange) await b.onchange(); await sleep(0); };
+      const texts = () => all532(box, (e) => e.className === 'agText').map((e) => e.textContent);
+      const settings = async () => (await ag('settings', U)).data || {};
+      await P.refresh();
+      seen.shown = P.available() && !button.hidden && !tile.hidden;
+      seen.firstQuiet = st.notified.length === 0; // what was there before the page opened does not notify
+      P.setOpen(true);
+      seen.pairs = acts('pair').map((b) => b.dataset.user).join(',');
+      await click(acts('pair').find((b) => b.dataset.user === 'mills'));
+      const msgs = all532(box, (e) => /^agMsg\b/.test(e.className));
+      const line = (re) => msgs.find((e) => re.test(e.textContent)) || { className: '', textContent: '' };
+      const inMsg = line(/r532 first question/), outMsg = line(/r532 answer from t-user/), repMsg = line(/r532 REPORT/);
+      seen.both = /\bin\b/.test(inMsg.className) && /\bout\b/.test(outMsg.className) && /Mills/.test(inMsg.textContent) && !/You/.test(inMsg.textContent) && /Question/.test(inMsg.textContent) && /You/.test(outMsg.textContent) && /Report/.test(outMsg.textContent)
+        && /\d\d:\d\d/.test(inMsg.textContent);
+      const link = all532(repMsg, (e) => e.dataset && e.dataset.act === 'openSession')[0];
+      await click(link); seen.session = !!into && st.opened[0] === into && sids.includes(into);
+      // 2. a new message from the other agent notifies
+      const n1 = await ag('send', D, { to: 't-user/r532', kind: 'ask', text: 'r532 NOTE one', thread: (t1.data || {}).thread, wait: false });
+      await P.refresh(); seen.notified1 = st.notified.length === 1 && /Mills/.test(st.notified[0].title || '') && /r532 NOTE one/.test(st.notified[0].body || '');
+      // 3. mute the pair: the hub refuses mills's next message, nothing notifies, the messages stay
+      await click(acts('mute').find((b) => b.dataset.user === 'mills'));
+      seen.mutedHub = ((await settings()).muted || []).includes('mills');
+      const m3 = await ag('send', D, { to: 't-user/r532', kind: 'ask', text: 'r532 while muted', thread: (t1.data || {}).thread, wait: false });
+      await P.refresh();
+      seen.muted = m3.status === 403 && st.notified.length === 1 && texts().some((t) => /r532 NOTE one/.test(t)) && texts().some((t) => /r532 first question/.test(t)) && acts('mute').some((b) => b.dataset.user === 'mills' && /Unmute/.test(b.textContent));
+      await click(acts('mute').find((b) => b.dataset.user === 'mills')); seen.unmutedHub = !((await settings()).muted || []).includes('mills');
+      // 4. Do Not Disturb: the message comes in, the notification does not
+      st.dnd = true;
+      const n4 = await ag('send', D, { to: 't-user/r532', kind: 'report', text: 'r532 during dnd', thread: (t1.data || {}).thread, wait: false });
+      await P.refresh(); seen.dnd = n4.status === 202 && st.notified.length === 1 && texts().some((t) => /r532 during dnd/.test(t));
+      st.dnd = false;
+      // 5. pause my inbox and ask me first: the hub's settings change
+      await toggle(acts('pause')[0]); seen.paused = (await settings()).paused === true;
+      await toggle(acts('pause')[0]); seen.resumed = (await settings()).paused === false;
+      await toggle(acts('askFirst').find((b) => b.dataset.kind === 'ask')); seen.askOn = ((await settings()).askFirst || []).includes('ask');
+      await toggle(acts('askFirst').find((b) => b.dataset.kind === 'handoff')); seen.handoffOff = !((await settings()).askFirst || []).includes('handoff');
+      await toggle(acts('askFirst').find((b) => b.dataset.kind === 'handoff')); seen.handoffOn = ((await settings()).askFirst || []).includes('handoff');
+      await toggle(acts('askFirst').find((b) => b.dataset.kind === 'ask')); seen.askOff = !((await settings()).askFirst || []).includes('ask');
+      // 6. a held hand-off: the card, then accepting it re-assigns the task
+      const task = (await call('/api/board/create', D, { title: 'r532 handoff task', status: 'todo', assignee: 'mills' })).data.task || {};
+      const ho = await ag('send', D, { to: 't-user/r532', kind: 'handoff', text: 'r532 please take this one', refs: { task: task.id }, thread: (t1.data || {}).thread });
+      await P.refresh();
+      const card = all532(box, (e) => /\bagCard\b/.test(e.className) && e.dataset.id === (ho.data || {}).id)[0];
+      seen.card = (ho.data || {}).status === 'held' && !!card && /Mills hands you/.test(card.textContent) && new RegExp(task.id).test(card.textContent)
+        && all532(card, (e) => e.dataset.act === 'accept').length === 1 && all532(card, (e) => e.dataset.act === 'decline').length === 1;
+      seen.heldNotified = st.notified.length === 2 && st.notified[1].held === true;
+      seen.badge = !badge.hidden && Number(badge.textContent) >= 1;
+      await click(card && all532(card, (e) => e.dataset.act === 'accept')[0]);
+      const after = ((((await ag('thread?id=' + (ho.data || {}).thread, U)).data || {}).messages) || []).find((x) => x.id === (ho.data || {}).id) || {};
+      const owner = (((await call('/api/board', U)).data.tasks || []).find((x) => x.id === task.id) || {}).assignee;
+      seen.accepted = after.status !== 'held' && owner === 't-user' && !all532(box, (e) => /\bagCard\b/.test(e.className) && e.dataset.id === (ho.data || {}).id).length;
+      seen.hidePanel = (P.setOpen(false), box.hidden === true && button.attrs['aria-expanded'] === 'false');
+      seen.sends = [rep.status, t1.status, back.status, n1.status].join(',');
+      await ag('settings', U, { muted: set0.muted || [], paused: !!set0.paused, askFirst: set0.askFirst || ['handoff'], wake: set0.wake !== false });
+      await calm();
+      for (const k of keep) await call('/api/work/current', U, { session: k.sid, transcript: k.cur.transcript || [], archiveId: k.cur.archiveId || null, archiveTitle: k.cur.archiveTitle || null });
+    }
+    const ok = seen.served && !!AG && built && seen.shown && seen.firstQuiet && /mills/.test(seen.pairs || '') && seen.both && seen.session && seen.notified1 && seen.mutedHub && seen.muted && seen.unmutedHub && seen.dnd
+      && seen.paused && seen.resumed && seen.askOn && seen.handoffOff && seen.handoffOn && seen.askOff && seen.card && seen.heldNotified && seen.badge && seen.accepted && seen.hidePanel && seen.sends === '202,202,202,202';
+    check('R532', R532_LABEL, ok, (built ? '' : 'no /api/agents/* ') + JSON.stringify(seen));
+  }
+  // R545 (T-298): what the person does in the panel themselves: stop / reopen a thread, wake me, and writing to another
+  // person's agent (a new thread from the composer, a reply in a thread), with the hub's refusals as words. t-user's panel
+  // against the real routes; Mills's inbox is paused meanwhile (nothing wakes their sessions), everything is put back.
+  async function r545Check() {
+    const seen = {};
+    const js = await fetch(H + '/agents.js'), { AG, error } = load532(js.status === 200 ? await js.text() : '');
+    if (error) seen.load = error;
+    const ag = (p, tok, body) => call('/api/agents/' + p, tok, body);
+    const built = (await ag('settings', U)).status === 200;
+    if (AG && built) {
+      const setU = (await ag('settings', U)).data, setD = (await ag('settings', D)).data;
+      const sessOf = async (tok) => (await call('/api/work/sessions', tok)).data || {};
+      const keep = [];
+      for (const tok of [U, D]) { const s0 = await sessOf(tok); for (const sid of [...new Set([s0.primary, s0.current].filter(Boolean))]) keep.push({ tok, sid, cur: (await call('/api/work/current?session=' + sid, tok)).data || {} }); }
+      const calm = async () => { for (let i = 0, quiet = 0; i < 160 && quiet < 6; i++) { const w = (((await sessOf(U)).counts || {}).working || 0) + (((await sessOf(D)).counts || {}).working || 0); quiet = w === 0 ? quiet + 1 : 0; await sleep(250); } };
+      await ag('settings', D, { paused: true, askFirst: ['handoff'], muted: (setD.muted || []).filter((u) => u !== 't-user') });
+      const st = { notes: [], kept: {} };
+      const box = mkEl532('aside'), button = mkEl532('button'), badge = mkEl532('span'), tile = mkEl532('button');
+      const mount = (api) => AG.mount({ document: { createElement: mkEl532 }, box, button, badge, tile, interval: 0, api,
+        me: () => 't-user', nameOf: (u) => (u === 'mills' ? 'Mills' : u), dnd: () => false, hasSession: () => false, titleOf: (s) => s, open() {},
+        notify() {}, note: (t, bad) => { st.notes.push((bad ? '!' : '') + t); }, store: { get: (k) => (k in st.kept ? st.kept[k] : null), set: (k, v) => { st.kept[k] = v; } } });
+      const P = mount((p, body) => call(p, U, body));
+      const acts = (a, root = box) => all532(root, (e) => e.dataset && e.dataset.act === a), click = async (b) => { if (b && b.onclick) await b.onclick(); await sleep(0); };
+      const toggle = async (b) => { if (!b) return; b.checked = !b.checked; if (b.onchange) await b.onchange(); await sleep(0); };
+      const settings = async (tok = U) => (await ag('settings', tok)).data || {};
+      const msgLine = () => (all532(box, (e) => /\bagCMsg\b/.test(e.className))[0] || { textContent: '' }).textContent;
+      const threadEl = (id) => all532(box, (e) => /\bagThread\b/.test(e.className) && e.dataset.thread === id)[0];
+      try { // (whatever happens, the settings and the conversations are put back below)
+      await P.refresh(); P.setOpen(true);
+      // 1. wake me: off, then on again
+      await toggle(acts('wake')[0]); seen.wakeOff = (await settings()).wake === false;
+      await toggle(acts('wake')[0]); seen.wakeOn = (await settings()).wake === true;
+      // 2. the composer: the team to pick from, a question with a task ref
+      const task = (await call('/api/board/create', U, { title: 'r533 composer task', status: 'todo', assignee: 't-user' })).data.task || {};
+      await click(acts('compose')[0]);
+      const fill = async (to, kind, ref, text) => {
+        const c = all532(box, (e) => /\bagCompose\b/.test(e.className))[0]; if (!c) return null;
+        const f = (x) => acts(x, c)[0] || {};
+        f('to').value = to; const k = f('kind'); k.value = kind; if (k.onchange) k.onchange();
+        f('task').value = ref; f('text').value = text; for (const x of ['to', 'task', 'text']) { const e = f(x); if (e.oninput) e.oninput(); }
+        await click(acts('send', c)[0]); return c;
+      };
+      const people = all532(box, (e) => e.dataset && e.dataset.act === 'to').flatMap((s) => s.children.map((o) => o.value));
+      seen.people = people.includes('mills') && !people.includes('t-user');
+      seen.kinds = (acts('kind')[0] || { children: [] }).children.map((o) => o.value).join(',');
+      await fill('mills', 'ask', task.id, 'r533 composed question for Mills');
+      const dThreads = async () => { const out = []; for (const t of ((await ag('threads', D)).data || {}).threads || []) out.push(((await ag('thread?id=' + t.id, D)).data || {})); return out; };
+      let th = (await dThreads()).find((t) => (t.messages || []).some((m) => /r533 composed question/.test(m.text || ''))) || { messages: [] };
+      const q = th.messages.find((m) => /r533 composed question/.test(m.text || '')) || {};
+      const tid = (th.thread || {}).id || '';
+      seen.composed = q.kind === 'ask' && (q.refs || {}).task === task.id && (q.from || {}).user === 't-user' && (q.from || {}).source === 'person' && (q.to || {}).user === 'mills';
+      seen.sentNote = /paused/i.test(msgLine()) || st.notes.some((n) => /paused/i.test(n));
+      // 3. a hand-off without its task is not sent; with it, it waits for Mills's okay
+      const nT = (await dThreads()).length;
+      await fill('mills', 'handoff', '', 'r533 take this one');
+      seen.needsTask = /task/i.test(msgLine()) && (await dThreads()).length === nT;
+      await fill('mills', 'handoff', task.id, 'r533 take this one');
+      const ho = (await dThreads()).flatMap((t) => t.messages || []).find((m) => /r533 take this one/.test(m.text || '')) || {};
+      seen.handoff = ho.kind === 'handoff' && ho.status === 'held' && (ho.refs || {}).task === task.id && /okay/i.test(msgLine());
+      // 4. a reply inside the composed thread
+      await P.refresh();
+      await click(acts('pair').find((b) => b.dataset.user === 'mills' && b.attrs['aria-expanded'] !== 'true'));
+      const tEl = threadEl(tid);
+      await click(tEl && acts('reply', tEl)[0]);
+      const tEl2 = threadEl(tid);
+      if (tEl2) { const tx = acts('replyText', tEl2)[0]; if (tx) { tx.value = 'r533 a reply in the same thread'; if (tx.oninput) tx.oninput(); } await click(acts('replySend', tEl2)[0]); }
+      th = ((await ag('thread?id=' + tid, D)).data || {});
+      const rp = (th.messages || []).find((m) => /r533 a reply in the same thread/.test(m.text || '')) || {};
+      seen.reply = !!tid && rp.kind === 'reply' && rp.thread === tid && (rp.from || {}).source === 'person';
+      // 5. stop the thread from its header, then reopen it
+      await click(acts('stop', threadEl(tid) || box).find((b) => b.dataset.thread === tid));
+      const hubT = async () => (((await ag('thread?id=' + tid, U)).data || {}).thread || {});
+      const s5 = await hubT(), e5 = threadEl(tid) || { className: '', textContent: '', children: [] };
+      seen.stopped = s5.status === 'stopped' && s5.why === 'stopped-by-person' && /\bstopped\b/.test(e5.className) && /stopped/i.test(e5.textContent)
+        && acts('reopen', e5).length === 1 && acts('stop', e5).length === 0 && acts('reply', e5).length === 0;
+      await click(acts('reopen', e5)[0]);
+      const s6 = await hubT(), e6 = threadEl(tid) || { className: 'stopped', children: [] };
+      seen.reopened = s6.status === 'open' && !/\bstopped\b/.test(e6.className) && acts('stop', e6).length === 1 && acts('reply', e6).length === 1;
+      // 6. Mills mutes t-user: the composer shows the hub's refusal as words, the person list says it
+      await ag('settings', D, { muted: [...(setD.muted || []).filter((u) => u !== 't-user'), 't-user'] });
+      const cb6 = acts('compose')[0]; await click(cb6 && cb6.attrs['aria-expanded'] === 'true' ? null : cb6);
+      await fill('mills', 'ask', '', 'r533 while Mills muted me');
+      seen.refused = /not taking messages/i.test(msgLine()) && (await dThreads()).flatMap((t) => t.messages || []).filter((m) => /while Mills muted me/.test(m.text || '')).every((m) => m.status === 'refused' && m.why === 'muted'); // (the attempt is the muter's to see)
+      seen.listSays = (acts('to')[0] || { children: [] }).children.some((o) => o.value === 'mills' && /muted you/i.test(o.textContent));
+      await ag('settings', D, { muted: setD.muted || [] });
+      // 7. the other refusals in words (the hub's whys)
+      const R = (status, why, error) => AG.refusalText({ status, data: { why, error } }, 'Mills');
+      seen.words = /too many/i.test(R(429, 'rate', 'slow down: 20 messages an hour between you and @mills')) && /limit/i.test(R(429, 'hops', 'Stopped: the thread reached its limit of 8 hops.'))
+        && /reopen/i.test(R(409, 'stopped', 'This thread is stopped (stopped-by-person); either person can reopen it.')) && /No account called "nobody"/.test(R(400, 'bad', 'No account called "nobody" (agents_list names the team).'))
+        && /hub/i.test(R(0, '', 'fetch failed')) && /support/i.test(R(404, '', 'Unknown endpoint'));
+      // 8. a hub without stop / reopen / list / send (and no "wake" in its settings): no such control, nothing throws
+      let threw = '';
+      try {
+        const old = async (p, body) => { if (/^\/api\/agents\/(stop|reopen|list|send|reply)\b/.test(p)) return { status: 404, data: { error: 'Unknown endpoint' } }; const r = await call(p, U, body); if (/settings/.test(p) && r.data) delete r.data.wake; return r; };
+        P.stop(); box.children = []; const O = mount(old); await O.refresh(); O.setOpen(true);
+        await click(acts('pair').find((b) => b.dataset.user === 'mills' && b.attrs['aria-expanded'] !== 'true'));
+        seen.oldWake = acts('wake').length === 0;
+        await click(acts('stop').find((b) => b.dataset.thread === tid));
+        seen.oldStop = (((await ag('thread?id=' + tid, U)).data || {}).thread || {}).status === 'open' && st.notes.some((n) => /support/i.test(n));
+        await click(acts('compose')[0]);
+        seen.oldCompose = !acts('compose').length || /support/i.test(msgLine());
+        O.stop();
+      } catch (e) { threw = e.message; }
+      seen.oldOk = !threw; if (threw) seen.threw = threw;
+      } catch (e) { seen.error = e.message; }
+      await ag('settings', U, { muted: setU.muted || [], paused: !!setU.paused, askFirst: setU.askFirst || ['handoff'], wake: setU.wake !== false });
+      await ag('settings', D, { muted: setD.muted || [], paused: !!setD.paused, askFirst: setD.askFirst || ['handoff'], wake: setD.wake !== false });
+      await sleep(500); await calm();
+      for (const k of keep) await call('/api/work/current', k.tok, { session: k.sid, transcript: k.cur.transcript || [], archiveId: k.cur.archiveId || null, archiveTitle: k.cur.archiveTitle || null });
+    }
+    const ok = !!AG && built && seen.wakeOff && seen.wakeOn && seen.people && seen.kinds === 'ask,handoff,review,report' && seen.composed && seen.sentNote && seen.needsTask && seen.handoff
+      && seen.reply && seen.stopped && seen.reopened && seen.refused && seen.listSays && seen.words && seen.oldWake && seen.oldStop && seen.oldCompose && seen.oldOk;
+    check('R545', R545_LABEL, ok, (built ? '' : 'no /api/agents/* ') + JSON.stringify(seen));
+  }
+  async function r532bCheck() {
+    const seen = {};
+    const js = await fetch(H + '/agents.js'), { AG, error } = load532(js.status === 200 ? await js.text() : '');
+    if (error) seen.load = error;
+    if (AG) {
+      // the JavaScript hub answers 404 on /api/agents/*; through the Rust hub the same 404 is played by a stand-in
+      const api = RUST_HUB ? async () => ({ status: 404, data: { error: 'Unknown endpoint' } }) : (p, body) => call(p, U, body);
+      const box = mkEl532('aside'), button = mkEl532('button'), badge = mkEl532('span'), tile = mkEl532('button'); button.hidden = tile.hidden = badge.hidden = true;
+      const notified = []; let threw = '';
+      try {
+        const P = AG.mount({ document: { createElement: mkEl532 }, box, button, badge, tile, interval: 0, api, me: () => 't-user', nameOf: (u) => u, dnd: () => false, hasSession: () => false, titleOf: (s) => s, open() {}, notify: (n) => notified.push(n), note() {}, store: { get: () => null, set() {} } });
+        await P.refresh(); P.setOpen(true); P.render(); await P.refresh();
+        seen.unavailable = P.available() === false;
+      } catch (e) { threw = e.message; }
+      seen.nothing = !threw && box.children.length === 0 && box.hidden === true && button.hidden === true && tile.hidden === true && badge.hidden === true && notified.length === 0;
+      if (threw) seen.threw = threw;
+      if (!RUST_HUB) seen.hub404 = (await call('/api/agents/threads', U)).status === 404;
+    }
+    check('R532b', R532B_LABEL, !!AG && seen.unavailable && seen.nothing && (RUST_HUB || seen.hub404), JSON.stringify(seen));
+  }
+  // R530 / R531 (T-223 / T-224, parent T-189): the one menu kit (web/menu.js) and VibeRoller's lists. The hub serves the
+  // file and the page loads it before the session list; the kit itself runs here on a small element stand-in (a tree with
+  // events that bubble, focus, and sizes), driven by right-clicks, keys, a long-press and the ⋯ button like a person would.
+  async function r530Check() {
+    const seen = {};
+    const page = await (await fetch(H + '/')).text(), js = await fetch(H + '/menu.js'), src = js.status === 200 ? await js.text() : '';
+    const sw = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8'), at = (f) => page.search(new RegExp(`<script src="${f.replace('.', '\\.')}(\\?[^"]*)?"></script>`)); // (the hub may add ?v=)
+    seen.served = js.status === 200 && /javascript/.test(js.headers.get('content-type') || '') && at('menu.js') >= 0 && at('menu.js') < at('sessions.js') && /'menu\.js'/.test(sw);
+    // the stand-in: elements in a tree, events bubbling up to the document, a focus, and sizes (a menu is 200 wide, 30 per row)
+    const VW = 1000, VH = 700;
+    const listen = (o) => ({ addEventListener(k, f, c) { (o.ls[k] = o.ls[k] || []).push({ f, c: !!c }); }, removeEventListener(k, f) { o.ls[k] = (o.ls[k] || []).filter((x) => x.f !== f); } });
+    const doc = { activeElement: null, ls: {} }; Object.assign(doc, listen(doc));
+    const mkEl = (tag) => {
+      const e = { tagName: String(tag).toUpperCase(), children: [], parentNode: null, text: '', className: '', style: {}, dataset: {}, attrs: {}, ls: {}, tabIndex: 0, disabled: false, type: '', rect: null,
+        append(...xs) { for (const x of xs) { const n = typeof x === 'string' ? { tagName: '#text', text: x, children: [] } : x; if (n.parentNode) n.parentNode.children.splice(n.parentNode.children.indexOf(n), 1); n.parentNode = e; e.children.push(n); } },
+        remove() { const p = e.parentNode; if (p) { p.children.splice(p.children.indexOf(e), 1); e.parentNode = null; } if (doc.activeElement && e.contains(doc.activeElement)) doc.activeElement = null; },
+        setAttribute(k, v) { e.attrs[k] = String(v); }, getAttribute(k) { return k in e.attrs ? e.attrs[k] : null; },
+        focus() { doc.activeElement = e; }, contains(n) { for (let x = n; x; x = x.parentNode) if (x === e) return true; return false; },
+        get isConnected() { for (let x = e; x; x = x.parentNode) if (x === doc.body) return true; return false; },
+        classList: { add: (c) => { if (!e.classList.contains(c)) e.className = (e.className + ' ' + c).trim(); }, remove: (c) => { e.className = e.className.split(' ').filter((x) => x && x !== c).join(' '); }, contains: (c) => e.className.split(' ').includes(c), toggle: (c, on) => (on === undefined ? !e.classList.contains(c) : on) ? e.classList.add(c) : e.classList.remove(c) },
+        getBoundingClientRect() {
+          if (e.rect) return e.rect;
+          const px = (v) => parseFloat(v) || 0;
+          if (/\bvrMenu\b/.test(e.className)) { const left = px(e.style.left), top = px(e.style.top), h = 8 + 30 * e.children.length; return { left, top, width: 200, height: h, right: left + 200, bottom: top + h }; }
+          const p = e.parentNode; if (p && /\bvrMenu\b/.test(p.className)) { const r = p.getBoundingClientRect(), top = r.top + 4 + 30 * p.children.indexOf(e); return { left: r.left, right: r.right, top, bottom: top + 30, width: 200, height: 30 }; }
+          return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+        } };
+      Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tagName === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+      Object.assign(e, listen(e));
+      return e;
+    };
+    doc.createElement = mkEl; doc.body = mkEl('body'); doc.body.parentNode = doc;
+    // an event as the browser sends it: the capture listeners from the document down, then the others from the target up
+    const fire = (target, type, o = {}) => {
+      const ev = { type, target, key: '', shiftKey: false, button: 0, clientX: 0, clientY: 0, detail: 1, pointerType: 'mouse', ...o, defaultPrevented: false, stopped: false, preventDefault() { ev.defaultPrevented = true; }, stopPropagation() { ev.stopped = true; } };
+      const route = []; for (let x = target; x; x = x.parentNode) route.push(x);
+      for (const [list, cap] of [[route.slice().reverse(), true], [route, false]]) for (const x of list) for (const l of (x.ls && x.ls[type]) || []) if (l.c === cap && !ev.stopped) l.f(ev);
+      return ev;
+    };
+    const win = { document: doc, innerWidth: VW, innerHeight: VH, setTimeout, clearTimeout, addEventListener() {}, navigator: {} };
+    let M = null; try { const ctx = { window: win }; require('vm').runInNewContext(src, ctx); M = ctx.window.MENU; } catch (e) { seen.load = e.message; }
+    if (M) {
+      // where it goes: at the pointer, and at every corner kept inside the screen; a menu bigger than the screen starts at its corner
+      const sz = { w: 200, h: 300 }, view = { w: VW, h: VH }, inside = (p, s) => p.left >= 4 && p.top >= 4 && p.left + s.w <= VW - 4 && p.top + s.h <= VH - 4;
+      const corners = [[10, 10], [990, 10], [10, 690], [990, 690]].map(([x, y]) => M.place(x, y, sz, view));
+      seen.corners = corners.map((p) => p.left + ',' + p.top).join(' ');
+      seen.onScreen = corners.every((p) => inside(p, sz)) && seen.corners === '10,10 790,10 10,390 790,390' && JSON.stringify(M.place(500, 500, { w: 1400, h: 900 }, view)) === '{"left":4,"top":4}';
+      const subR = M.subPlace({ left: 700, right: 900, top: 100 }, { w: 200, h: 150 }, view), subL = M.subPlace({ left: 100, right: 300, top: 650 }, { w: 200, h: 150 }, view);
+      seen.subFlip = subR.flipped === true && subR.left === 502 && subL.flipped === false && subL.left === 298 && subL.top === 546;
+      seen.normal = M.normalize(['-', null, { id: 'a', label: 'A' }, '-', '-', { id: 'b', label: 'B', sub: [null] }, false, { note: 'n' }, '-']).map((x) => x.sep ? '-' : x.note ? 'note:' + x.note : x.id).join('|');
+      // a list with a sub-menu, an item that asks twice, a plain one; right-click near the bottom-right corner
+      const picked = [], ran = [];
+      const items = () => [{ id: 'open', label: 'Open', icon: 'file' }, { id: 'move', label: 'Move to ▸', sub: [{ id: 'move:a', label: 'Alpha', on: true }, { id: 'move:b', label: 'Beta' }] }, '-', { id: 'del', label: 'Delete', danger: true, confirm: 'Click again to delete', run: () => ran.push('del') }];
+      const list = mkEl('div'), row = mkEl('div'), more = mkEl('button'), field = mkEl('input'), link = mkEl('a'), btn2 = mkEl('button');
+      more.className = 'more'; more.rect = { left: 300, top: 40, right: 320, bottom: 60, width: 20, height: 20 }; field.type = 'text'; link.href = 'https://example.org/x'; btn2.rect = more.rect;
+      row.append(more, field, link); list.append(row); doc.body.append(list, btn2);
+      let rowClicks = 0; row.addEventListener('click', () => rowClicks++);
+      M.attach(list, (t) => (t.tagName === 'DIV' && t !== row && t !== list ? null : items()), (id) => picked.push(id), { more: (t) => (t.className === 'more' ? t : null), longPress: 30 });
+      const menus = () => doc.body.children.filter((c) => /\bvrMenu\b/.test(c.className));
+      const labels = (m) => m.children.filter((c) => c.tagName === 'BUTTON').map((c) => c.children[1].textContent).join('|');
+      const focused = () => (doc.activeElement && doc.activeElement.dataset ? doc.activeElement.dataset.id || doc.activeElement.className : '');
+      row.focus();
+      let ev = fire(row, 'contextmenu', { button: 2, clientX: 990, clientY: 690 });
+      const m0 = menus()[0], r0 = m0 && m0.getBoundingClientRect();
+      seen.rightClick = ev.defaultPrevented && menus().length === 1 && labels(m0) === 'Open|Move to|Delete' && r0.right <= VW - 4 && r0.bottom <= VH - 4 && m0.attrs.role === 'menu';
+      const key = (k, o) => fire(doc.activeElement, 'keydown', { key: k, ...o });
+      key('ArrowDown'); const k1 = focused(); key('ArrowDown'); const k2 = focused(); key('ArrowDown'); const k3 = focused(); key('ArrowDown'); const k4 = focused(); key('ArrowUp'); const k5 = focused(); key('End'); const k6 = focused(); key('Home'); const k7 = focused();
+      seen.arrows = [k1, k2, k3, k4, k5, k6, k7].join(',');
+      key('ArrowDown'); key('ArrowRight'); const sub = menus()[1];
+      seen.sub = !!sub && /\bflipped\b/.test(sub.className) && labels(sub) === 'Alpha|Beta' && focused() === 'move:a' && sub.children[0].attrs['aria-checked'] === 'true' && sub.getBoundingClientRect().left < r0.left;
+      key('ArrowLeft'); seen.subBack = menus().length === 1 && focused() === 'move';
+      key('Escape'); seen.escape = menus().length === 0 && doc.activeElement === row;
+      // Enter picks (the menu closes, focus back first); an item that asks twice does it on the second Enter only
+      fire(row, 'contextmenu', { button: 2, clientX: 100, clientY: 100 }); key('ArrowDown'); key('Enter');
+      seen.enter = picked.join(',') === 'open' && menus().length === 0 && doc.activeElement === row;
+      fire(row, 'contextmenu', { button: 2, clientX: 100, clientY: 100 }); key('End'); key('Enter');
+      const armed = menus().length === 1 && menus()[0].children.filter((c) => c.tagName === 'BUTTON')[2].textContent === 'Click again to delete' && !ran.length;
+      key('Enter'); seen.confirm = armed && ran.join() === 'del' && picked.join(',') === 'open,del' && menus().length === 0;
+      // a click on an item picks it too; a pointer down outside closes the menu
+      fire(row, 'contextmenu', { button: 2, clientX: 100, clientY: 100 }); fire(menus()[0].children[0], 'click');
+      fire(row, 'contextmenu', { button: 2, clientX: 100, clientY: 100 }); fire(doc.body, 'pointerdown');
+      seen.clickAndOutside = picked.join(',') === 'open,del,open' && menus().length === 0;
+      // the browser's own menu: Shift + right-click, a text field, nothing to offer
+      ev = fire(row, 'contextmenu', { button: 2, shiftKey: true, clientX: 50, clientY: 50 }); seen.shift = !ev.defaultPrevented && !menus().length;
+      ev = fire(field, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); seen.field = !ev.defaultPrevented && !menus().length && M.textField(field) && !M.textField(row);
+      const plain = mkEl('div'); row.append(plain); ev = fire(plain, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); seen.nothing = !ev.defaultPrevented && !menus().length;
+      // a link: our menu with the link's own items and "Browser menu", which leaves the next right-click to the browser
+      ev = fire(link, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); const lm = menus()[0];
+      seen.link = ev.defaultPrevented && !!lm && /Copy link\|Browser menu$/.test(labels(lm));
+      if (lm) fire(lm.children.filter((c) => c.tagName === 'BUTTON').pop(), 'click');
+      ev = fire(row, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); seen.browserItem = !ev.defaultPrevented && !menus().length;
+      const hint = doc.body.children.find((c) => c.className === 'vrHint'); if (hint) hint.remove();
+      // a long-press on touch opens it at the finger, and the click that ends the press opens nothing else; a moving finger scrolls
+      fire(row, 'pointerdown', { pointerType: 'touch', clientX: 60, clientY: 80 }); await sleep(80);
+      const lp = menus()[0]; fire(row, 'click');
+      seen.longPress = !!lp && lp.style.left === '60px' && lp.style.top === '80px' && rowClicks === 0;
+      fire(doc.body, 'pointerdown');
+      fire(row, 'pointerdown', { pointerType: 'touch', clientX: 60, clientY: 80 }); fire(row, 'pointermove', { pointerType: 'touch', clientX: 60, clientY: 120 }); await sleep(80);
+      seen.scrolls = !menus().length;
+      await sleep(950); // a touch browser's own contextmenu right after a long-press is swallowed for a moment
+      // the ⋯ button and right-click on the same item: the very same list (⋯ under the button, focus on its first item from the keyboard)
+      fire(row, 'contextmenu', { button: 2, clientX: 50, clientY: 50 }); const viaRight = labels(menus()[0]); fire(doc.body, 'pointerdown');
+      fire(more, 'click', { detail: 0 }); const mm = menus()[0], viaMore = mm ? labels(mm) : '';
+      seen.more = viaMore === viaRight && mm.style.left === '300px' && mm.style.top === '60px' && focused() === 'open' && rowClicks === 0;
+      key('Escape'); seen.moreFocus = doc.activeElement === more;
+      M.button(btn2, items, (id) => picked.push('b:' + id)); fire(btn2, 'click', { detail: 1 });
+      seen.button = menus().length === 1 && labels(menus()[0]) === viaRight; M.close();
+    }
+    const ok530 = seen.served && !!M && seen.onScreen && seen.subFlip && seen.normal === 'a|-|note:n' && seen.rightClick && seen.arrows === 'open,move,del,open,del,del,open'
+      && seen.sub && seen.subBack && seen.escape && seen.enter && seen.confirm && seen.clickAndOutside && seen.shift && seen.field && seen.nothing && seen.link && seen.browserItem
+      && seen.longPress && seen.scrolls && seen.more && seen.moreFocus && seen.button;
+    check('R530', 'one menu kit for every product (web/menu.js, T-223): a right-click opens our menu at the pointer and it stays on screen at every corner (a menu bigger than the screen starts at its corner); a sub-menu opens beside its item and flips to the left near the right edge; the arrows, Home and End move, the right arrow opens a sub-menu and the left arrow goes back, Enter picks, Escape closes and focus returns to where it was; an item that deletes asks once more; a click outside closes it; Shift + right-click, a text field and a place with nothing to offer keep the browser\'s own menu, and on a link "Browser menu" leaves the next right-click to the browser; a long-press on touch opens it without also clicking, a moving finger does not; the ⋯ button and right-click on the same item give the very same list; the hub serves menu.js and the page loads it before the session list',
+      ok530, JSON.stringify(seen));
+    if (M) await r531Check(M);
+    else check('R531', R531_LABEL, false, 'web/menu.js did not load');
+  }
+  async function r531Check(M) {
+    const seen = {}, L = M.lists, calls = [];
+    const spy = (...names) => Object.fromEntries(names.map((n) => [n, (...a) => calls.push(n + (a.length ? '(' + a.map((x) => JSON.stringify(x)).join(',') + ')' : ''))]));
+    const ids = (items) => M.normalize(items).filter((x) => x.id).map((x) => x.id).join(',');
+    const pick = (items, id) => { const all = M.normalize(items).flatMap((x) => [x, ...(x.sub || [])]), it = all.find((x) => x.id === id); if (it && it.run) it.run(); return !!(it && it.run); };
+    const msgA = spy('reply', 'copy', 'edit', 'pin', 'jump', 'profile', 'del');
+    const msg = (m) => L.message({ hasText: true, profile: true, author: 'Gee', ...m }, msgA);
+    seen.others = ids(msg({})); seen.own = ids(msg({ mine: true, canPin: true, pinned: true, replyTo: 5 }));
+    seen.clip = ids(msg({ mine: true, audio: true, hasText: false })); seen.mod = ids(msg({ canModerate: true })); seen.modDm = ids(msg({ canModerate: true, private: true })); seen.deleted = ids(msg({ mine: true, deleted: true }));
+    const own = M.normalize(msg({ mine: true, canPin: true, pinned: true, info: 'seen by gee' }));
+    seen.ownLabels = own.map((x) => x.note ? 'note' : x.sep ? '-' : x.label + (x.confirm ? '?' : '')).join('|');
+    seen.noAction = ids(L.message({ mine: true, hasText: true }, { reply: () => {} }));
+    calls.length = 0; pick(msg({ mine: true, canPin: true, pinned: true }), 'pin'); pick(msg({ mine: true }), 'del'); pick(msg({}), 'reply');
+    seen.msgCalls = calls.join(' ');
+    const pA = spy('profile', 'message', 'mention', 'copy', 'member');
+    seen.person = [ids(L.person({ user: 'mills', self: true }, pA)), ids(L.person({ user: 'gee', server: true }, pA)), ids(L.person({ user: 'claude', agent: true }, pA))].join(' / ');
+    seen.places = [ids(L.channel({ canEdit: false }, spy('open', 'edit', 'server'))), ids(L.channel({ canEdit: true, current: true }, spy('open', 'edit', 'server'))), ids(L.group({}, spy('open', 'settings'))), ids(L.server({ canInvite: true, canCreate: false }, spy('open', 'settings', 'invite', 'newChannel')))].join(' / ');
+    const cA = spy('open', 'claim', 'release', 'complete', 'move', 'assign', 'delegate', 'archive', 'restore', 'claude', 'copy', 'del');
+    const ctx = { statuses: [{ id: 'todo', label: 'To do' }, { id: 'doing', label: 'Doing' }, { id: 'done', label: 'Done' }], members: [{ username: 'gee', name: 'Gee' }, { username: 'mills', name: 'Mills' }], archive: true, ai: true };
+    const t = { id: 'T-9', status: 'doing', assignee: 'mills' };
+    seen.cardHeld = ids(L.card(t, { ...ctx, held: true }, cA)); seen.cardFree = ids(L.card(t, ctx, cA)); seen.cardMineDone = ids(L.card({ ...t, status: 'done' }, { ...ctx, mineHeld: true }, cA));
+    seen.cardArchived = ids(L.card({ ...t, status: 'done', archivedAt: 1 }, { ...ctx, ai: false }, cA));
+    const free = M.normalize(L.card(t, ctx, cA));
+    seen.cardSubs = free.filter((x) => x.sub).map((x) => x.id + ':' + x.sub.map((s) => s.label + (s.on ? '*' : '')).join(',')).join(' ');
+    calls.length = 0; pick(L.card(t, ctx, cA), 'move:done'); pick(L.card(t, ctx, cA), 'assign:gee'); pick(L.card(t, ctx, cA), 'assign:'); pick(L.card(t, ctx, cA), 'claim');
+    seen.cardCalls = calls.join(' '); seen.cardDelete = !!(free.find((x) => x.id === 'del') || {}).confirm;
+    const fA = spy('open', 'download', 'edit', 'use', 'run', 'exec', 'copyIn', 'del');
+    seen.files = [ids(L.file({ kind: 'work', editable: true, exec: false }, fA)), ids(L.file({ kind: 'chat', linked: true }, fA)), ids(L.file({ kind: 'chat', linked: false }, fA)), ids(L.file({ kind: 'work', missing: true }, fA))].join(' / ');
+    const wA = spy('copy', 'resend', 'queue', 'cancel');
+    seen.work = [ids(L.work({ kind: 'me', text: 'hi' }, wA)), ids(L.work({ kind: 'claude', text: 'yes' }, wA)), ids(L.work({ kind: 'queued', text: 'later' }, wA))].join(' / ');
+    calls.length = 0; pick(L.work({ kind: 'queued', text: 'later' }, wA), 'cancel'); pick(L.work({ kind: 'me', text: 'hi' }, wA), 'resend'); seen.workCalls = calls.join(' ');
+    seen.notes = [ids(L.note({ open: true }, spy('open', 'rename', 'copy', 'del'))), ids(L.noteFolder({ collapsed: true }, spy('newNote', 'toggle', 'newFolder'))), M.normalize(L.noteFolder({ collapsed: true }, spy('newNote', 'toggle', 'newFolder')))[1].label, ids(L.saved({}, spy('open', 'rename', 'del')))].join(' / ');
+    // the page builds its menus from these lists: one list for both ways in (click / ⋯ and right-click)
+    const rd = (f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8'), html = rd('index.html');
+    const uses = { 'index.html': /MENU\.lists\.message\(/.test(html) && (html.match(/msgMenuItems\(/g) || []).length >= 3 && /MENU\.lists\.work\(/.test(html) && /MENU\.attach\(\$\('roomLog'\)/.test(html) && /MENU\.attach\(log,/.test(html),
+      'guilds.js': /MENU\.lists\.person\(/.test(rd('guilds.js')) && /MENU\.lists\.channel\(/.test(rd('guilds.js')) && /MENU\.lists\.server\(/.test(rd('guilds.js')) && /MENU\.lists\.group\(/.test(rd('guilds.js')),
+      'board.js': /MENU\.lists\.card\(/.test(rd('board.js')), 'notes.js': /MENU\.lists\.note\(/.test(rd('notes.js')) && /MENU\.lists\.noteFolder\(/.test(rd('notes.js')),
+      'library.js': /MENU\.lists\.file\(/.test(rd('library.js')), 'sessions.js': /W\.MENU\.open\(/.test(rd('sessions.js')) && /MENU\.lists\.saved\(/.test(rd('sessions.js')) && /W\.MENU\.button\(more/.test(rd('sessions.js')) };
+    seen.wired = Object.entries(uses).filter(([, v]) => !v).map(([k]) => k).join(' ') || 'all';
+    const ok = seen.others === 'reply,copy,profile' && seen.own === 'reply,copy,edit,pin,jump,profile,del' && seen.clip === 'reply,profile,del' && seen.mod === 'reply,copy,profile,del' && seen.modDm === 'reply,copy,profile' && seen.deleted === 'profile'
+      && seen.ownLabels === 'Reply|Copy text|Edit|Unpin|-|Profile of Gee|Delete?|-|note' && seen.noAction === 'reply' && seen.msgCalls === 'pin(false) del reply'
+      && seen.person === 'profile,copy / profile,message,mention,copy,member / message,mention,copy' && seen.places === 'open,server / edit,server / open,settings / open,settings,invite'
+      && seen.cardHeld === 'open,claude,copy' && seen.cardFree === 'open,claim,complete,move,assign,delegate,claude,copy,del' && seen.cardMineDone === 'open,claim,release,move,assign,delegate,archive,claude,copy,del'
+      && seen.cardArchived === 'open,claim,move,assign,delegate,restore,copy,del' && seen.cardSubs === 'move:To do,Doing*,Done assign:nobody,Gee,Mills*' && seen.cardCalls === 'move("done") assign("gee") assign(null) claim' && seen.cardDelete
+      && seen.files === 'open,download,edit,use,run,exec,del / open,download,copyIn,del / open,download,del / del' && seen.work === 'copy,resend / copy / copy,queue,cancel' && seen.workCalls === 'cancel resend'
+      && seen.notes === 'rename,copy,del / newNote,toggle,newFolder / Expand / open,rename,del' && seen.wired === 'all';
+    check('R531', R531_LABEL, ok, JSON.stringify(seen));
   }
   // R491 (T-324, plans/dev-hub.md § 2): two hubs on one machine (live and dev) keep their own full copies and a bridge keeps
   // them the same both ways. Two Rust hubs of their own (own roots, own ports), paired by config sync (one secret file each),

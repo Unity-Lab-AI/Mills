@@ -92,9 +92,9 @@ const GUILDS = (() => {
       const b = el('button', 'srv' + (s.id === G.server ? ' on' : '')); b.type = 'button';
       b.title = s.name + (s.everyone ? ' · everyone' : ' · ' + s.members.length + ' member' + (s.members.length === 1 ? '' : 's')) + (s.locked ? ' · password locked' : '') + (s.description ? '\n' + s.description : '');
       b.textContent = (s.icon || s.name).slice(0, 2).toUpperCase(); b.style.background = s.color || (s.id === 'mills' ? 'var(--accent)' : colorOf(s.owner || s.createdBy || s.id));
-      const badge = el('span', 'badge'); badge.hidden = true; badge.dataset.serverBadge = s.id; b.append(badge);
-      b.onclick = () => { G.server = s.id; render(); const first = s.channels[0]; if (first && serverOf(currentConv) !== s.id && currentConv !== first.conv) selectConv(first.conv); };
-      b.oncontextmenu = (e) => { e.preventDefault(); G.server = s.id; render(); GSET.openServer(s.id); };
+      const badge = el('span', 'badge'); badge.hidden = true; badge.dataset.serverBadge = s.id; b.append(badge); b.dataset.server = s.id;
+      b.onclick = () => openServer(s);
+      if (typeof MENU === 'undefined') b.oncontextmenu = (e) => { e.preventDefault(); G.server = s.id; render(); GSET.openServer(s.id); }; // else its menu (wireMenus)
       rail.append(b);
     }
     const inv = G.data.invitations || [];
@@ -102,6 +102,7 @@ const GUILDS = (() => {
     const add = el('button', 'srv add'); add.type = 'button'; add.title = 'Make a server'; add.append(ic('plus')); add.onclick = () => GSET.newServer(); rail.append(add);
     const join = el('button', 'srv add'); join.type = 'button'; join.title = 'Join a server with an invite code or link'; join.append(ic('link')); join.onclick = () => GSET.join(); rail.append(join);
   }
+  function openServer(s) { G.server = s.id; render(); const first = s.channels[0]; if (first && serverOf(currentConv) !== s.id && currentConv !== first.conv) selectConv(first.conv); }
   // ── the Direct messages view: open it on the last DM (or group DM) you were in ──
   function openDms() {
     G.server = DM; render();
@@ -149,21 +150,23 @@ const GUILDS = (() => {
     dot.append(ic(ch ? (ch.announce ? 'megaphone' : ch.private ? 'lock' : 'hash') : 'users'));
     const nm = el('span', 'nm', name); const sm = el('small', '', sub); nm.append(sm);
     const badge = el('span', 'badge'); badge.dataset.convBadge = conv; badge.hidden = true;
-    b.append(dot, nm, badge); b.onclick = () => selectConv(conv);
-    if (ch && s && (can(s, 'MANAGE_CHANNELS') || ch.createdBy === me.username)) {
+    b.append(dot, nm, badge); b.onclick = () => selectConv(conv); b.dataset.conv = conv;
+    const old = typeof MENU === 'undefined'; // without the menu kit a right-click opens the settings, as before
+    if (ch && s && canEditChannel(s, ch)) {
       const x = el('button', 'ghost tiny chDel'); x.type = 'button'; x.title = 'Edit channel'; x.append(ic('edit'));
       x.onclick = (e) => { e.stopPropagation(); GSET.editChannel(s, ch); };
       b.append(x);
-      b.oncontextmenu = (e) => { e.preventDefault(); GSET.editChannel(s, ch); };
+      if (old) b.oncontextmenu = (e) => { e.preventDefault(); GSET.editChannel(s, ch); };
     }
     if (g) {
       const x = el('button', 'ghost tiny chDel'); x.type = 'button'; x.title = 'Group settings: rename, people, owner, leave'; x.append(ic('gear'));
       x.onclick = (e) => { e.stopPropagation(); GSET.editGroup(g.id); };
       b.append(x);
-      b.oncontextmenu = (e) => { e.preventDefault(); GSET.editGroup(g.id); };
+      if (old) b.oncontextmenu = (e) => { e.preventDefault(); GSET.editGroup(g.id); };
     }
     return b;
   }
+  const canEditChannel = (s, ch) => can(s, 'MANAGE_CHANNELS') || ch.createdBy === me.username;
   // ── member column ──
   function renderMembers() {
     const box = $('memberList'); if (!box || !me) return;
@@ -189,8 +192,8 @@ const GUILDS = (() => {
       if (s && s.timeouts && s.timeouts[u]) { const t = el('span', 'botTag', 'TIMEOUT'); t.title = 'timed out until ' + new Date(s.timeouts[u]).toLocaleString(); r.append(t); }
       if (s && (s.voiceMuted || []).includes(u)) { const t = el('span', 'botTag', 'MUTED'); t.title = 'muted in calls by a moderator'; r.append(t); }
       r.title = statusOf(u).text + (nick !== nickOf(u) ? ' · ' + nickOf(u) : '');
-      r.dataset.profile = '1'; r.onclick = (ev) => PROFILE.show(u, ev); // their profile card (it has Message)
-      if (s) r.oncontextmenu = (e) => { e.preventDefault(); GSET.openServer(s.id, 'members', u); };
+      r.dataset.profile = '1'; r.dataset.user = u; r.onclick = (ev) => PROFILE.show(u, ev); // their profile card (it has Message)
+      if (s && typeof MENU === 'undefined') r.oncontextmenu = (e) => { e.preventDefault(); GSET.openServer(s.id, 'members', u); };
       return r;
     };
     const section = (title, list) => { if (!list.length) return; box.append(el('div', 'mHead', title + ' — ' + list.length)); for (const u of list) { shown.add(u); box.append(row(u)); } };
@@ -202,7 +205,7 @@ const GUILDS = (() => {
     section('Online', groups.online); section('Away', groups.away); section('Offline', groups.offline);
     if (agent && (f || currentConv === 'room')) { // Unity is in every channel and group
       box.append(el('div', 'mHead', 'Bots — 1'));
-      const r = el('div', 'mRow bot'); r.append(ic('bot', 'lead'), el('span', 'mName', agent.display), el('span', 'botTag', 'BOT')); r.title = '@' + agent.display.toLowerCase() + ' calls her';
+      const r = el('div', 'mRow bot'); r.append(ic('bot', 'lead'), el('span', 'mName', agent.display), el('span', 'botTag', 'BOT')); r.title = '@' + agent.display.toLowerCase() + ' calls her'; r.dataset.user = agent.username;
       r.onclick = () => selectConv('dm:' + [me.username, agent.username].sort().join('|'));
       box.append(r);
     }
@@ -215,5 +218,33 @@ const GUILDS = (() => {
     const u = new URL(location.href); u.searchParams.delete('invite'); history.replaceState(null, '', u.pathname + u.search + u.hash);
     setTimeout(() => GSET.join(code), 300);
   }
+  // ── right-click / long-press menus (web/menu.js, T-224): the rail's servers, the channels and groups, the people in the
+  // DM list and the member column; each item is what the buttons here already do ──
+  function personItems(u, s) {
+    return MENU.lists.person({ user: u, self: u === me.username, agent: !!(memberOf(u) || {}).agent, server: !!s }, {
+      profile: () => PROFILE.show(u), message: () => selectConv(dmConv(u)), mention: () => insertMention(u),
+      copy: () => MENU.copy('@' + u).catch(() => sysRoom('Could not copy to the clipboard.')), member: () => GSET.openServer(s.id, 'members', u) });
+  }
+  function wireMenus() {
+    if (typeof MENU === 'undefined') return;
+    MENU.attach($('serverRail'), (t) => {
+      const b = t.closest('[data-server]'), s = b && G.data && G.data.servers.find((x) => x.id === b.dataset.server); if (!s) return null;
+      return MENU.lists.server({ current: G.server === s.id, canInvite: !s.everyone && can(s, 'CREATE_INVITE'), canCreate: can(s, 'CREATE_CHANNELS') || can(s, 'MANAGE_CHANNELS') }, {
+        open: () => openServer(s), settings: () => { G.server = s.id; render(); GSET.openServer(s.id); }, invite: () => GSET.openServer(s.id, 'invites'), newChannel: () => GSET.newChannel(s) });
+    });
+    MENU.attach($('sideLists'), (t) => {
+      const c = t.closest('[data-conv]');
+      if (!c) { const p = t.closest('.cv[data-user]'); return p ? personItems(p.dataset.user, null) : null; } // a one-to-one DM
+      const conv = c.dataset.conv, f = find(conv); if (!f) return null;
+      if (f.kind === 'grp') return MENU.lists.group({ current: conv === currentConv }, { open: () => selectConv(conv), settings: () => GSET.editGroup(f.group.id) });
+      return MENU.lists.channel({ current: conv === currentConv, canEdit: canEditChannel(f.server, f.channel) }, { open: () => selectConv(conv), edit: () => GSET.editChannel(f.server, f.channel), server: () => GSET.openServer(f.server.id) });
+    });
+    MENU.attach($('memberList'), (t) => {
+      const r = t.closest('[data-user]'); if (!r) return null;
+      const f = find(currentConv), s = f && f.kind === 'ch' ? f.server : currentConv === 'room' && G.data ? G.data.servers.find((x) => x.id === 'mills') : null;
+      return personItems(r.dataset.user, s);
+    });
+  }
+  wireMenus();
   return { DM, isDmConv, openDms, isGuildConv, has, find, label, members, serverOf, refresh, render, renderMembers, renderPins, op, can, current, nickIn, canPost, canPin, canModerate, pinned, pin, mentionsOnly, pendingInvite, colorIn, roleColor, mentionableRoles, roleByHandle, mentionsMyRole, rolesOfUser, state: G };
 })();

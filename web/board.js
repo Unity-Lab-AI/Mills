@@ -453,9 +453,26 @@
     $('input').focus(); $('input').dispatchEvent(new Event('input'));
   }
 
+  // ── a card's menu (right-click / long-press, web/menu.js when the page has it): the detail panel's own actions ──
+  function cardItems(t) {
+    const held = t.claim && t.claim.key !== myKey() && t.claim.key !== myKey() + '#agent', mineHeld = !!t.claim && !held;
+    const end = (status) => B.data.tasks.filter((x) => x.board === t.board && x.status === status && x.id !== t.id).length;
+    return window.MENU.lists.card(t, { held: !!held, mineHeld, statuses: B.data.statuses, members: B.members.map((m) => ({ username: m.username, name: m.nick || m.display })), archive: !!B.data.archive, ai: OPT.ai }, {
+      open: () => openDetail(t.id),
+      claim: () => op('claim', { id: t.id, minutes: 30 }), release: () => op('release', { id: t.id }), complete: () => op('complete', { id: t.id }),
+      move: (status) => op('move', { id: t.id, status, index: end(status) }), // to the end of that column, as a drop there does
+      assign: (u) => op('update', { id: t.id, rev: t.rev, assignee: u }),
+      delegate: () => delegate(t), archive: () => op('archive', { id: t.id }), restore: () => op('restore', { id: t.id }),
+      claude: () => giveToClaude(t),
+      copy: () => window.MENU.copy(t.id).then(() => note('Copied ' + t.id), () => note('Could not copy to the clipboard', true)),
+      del: async () => { if (await op('delete', { id: t.id }) && B.open === t.id) closeDetail(); },
+    });
+  }
+
   // ── wiring ──
   function wire() {
     if (wire.done) return; wire.done = true;
+    if (window.MENU && $('bdCols')) window.MENU.attach($('bdCols'), (x) => { const c = x.closest('.bdCard'), t = c && B.data && B.data.tasks.find((y) => y.id === c.dataset.id); return t ? cardItems(t) : null; });
     $('bdMyDay').onclick = openMyDay; $('calMyDay').onclick = openMyDay; $('mdClose').onclick = () => { $('myDay').hidden = true; };
     if ($('mdClaude')) { if (OPT.ai) $('mdClaude').onclick = planWithClaude; else $('mdClaude').hidden = true; }
     $('myDay').onclick = (e) => { if (e.target.id === 'myDay') $('myDay').hidden = true; };

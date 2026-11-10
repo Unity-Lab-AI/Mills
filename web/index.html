@@ -196,6 +196,43 @@
   #queuePanel .qpNote { color: var(--muted); } #queuePanel .qpSub { color: var(--muted); font-size: .72rem; margin-top: .3rem; border-top: 1px solid var(--line); padding-top: .4rem; }
   #queuePanel .qpOther { display: flex; gap: .4rem; text-align: left; width: 100%; } #queuePanel .qpOT { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #queuePanel .qpON { color: var(--muted); }
   @media (max-width: 760px) { #queuePanel { position: absolute; top: 0; right: 0; bottom: 0; width: min(20rem, 88%); z-index: 5; box-shadow: -6px 0 18px rgba(0, 0, 0, .25); } }
+  /* ── the agent threads (web/agents.js, T-298): a sidebar like the queue's; per agent pair, both directions, the held card ── */
+  #agentsPanel { flex: none; width: 23rem; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: .5rem .6rem; font-size: .8rem; display: flex; flex-direction: column; gap: .45rem; }
+  #agentsPanel[hidden], #agentsBtn[hidden], #goAgents[hidden] { display: none; }
+  #agentsPanel .agHead { display: flex; align-items: baseline; gap: .45rem; } #agentsPanel .agSum { flex: 1; color: var(--muted); font-size: .74rem; } #agentsPanel .agX { padding: 0 .3rem; }
+  #agentsPanel button { padding: .15rem .5rem; font-size: .74rem; }
+  #agentsPanel .agCtl { display: flex; flex-direction: column; gap: .3rem; padding: .35rem .45rem; border: 1px solid var(--line); border-radius: 8px; }
+  #agentsPanel .agTog { display: inline-flex; align-items: center; gap: .3rem; cursor: pointer; white-space: nowrap; } #agentsPanel .agTog input { width: auto; margin: 0; }
+  #agentsPanel .agAsk { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .6rem; } #agentsPanel .agAskL { color: var(--muted); width: 100%; font-size: .72rem; }
+  #agentsPanel .agNote { color: var(--muted); } #agentsPanel .agSub { color: var(--muted); font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin-top: .2rem; }
+  #agentsPanel .agCard { width: auto; margin: 0; padding: .55rem .6rem; gap: .35rem; box-shadow: none; font-size: .8rem; } #agentsPanel .agCard .qown { font-size: .78rem; } #agentsPanel .agCSub { font-weight: 600; }
+  #agentsPanel .agPair { border-top: 1px solid var(--line); padding-top: .35rem; display: flex; flex-direction: column; gap: .35rem; }
+  #agentsPanel .agPRow { display: flex; align-items: center; gap: .3rem; } #agentsPanel .agPH { flex: 1; display: flex; gap: .4rem; align-items: baseline; text-align: left; min-width: 0; }
+  #agentsPanel .agPN { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #agentsPanel .agPM { flex: 1; color: var(--muted); font-size: .72rem; text-align: right; white-space: nowrap; }
+  #agentsPanel .agPair.muted .agPN { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+  #agentsPanel .agThread { border: 1px solid var(--line); border-radius: 8px; padding: .3rem .45rem; display: flex; flex-direction: column; gap: .3rem; } #agentsPanel .agThread.stopped { border-style: dashed; }
+  #agentsPanel .agTHead { display: flex; align-items: baseline; gap: .4rem; } #agentsPanel .agSubj { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #agentsPanel .agTSt { color: var(--bad); font-size: .7rem; }
+  #agentsPanel .agMsgs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
+  #agentsPanel .agMsg { border-radius: 8px; padding: .25rem .4rem; background: var(--bg); width: 92%; } #agentsPanel .agMsg.out { align-self: flex-end; background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+  #agentsPanel .agMsg.held { outline: 1px solid var(--accent); } #agentsPanel .agMsg.refused { opacity: .65; }
+  #agentsPanel .agLine { display: flex; align-items: baseline; gap: .35rem; flex-wrap: wrap; } #agentsPanel .agDir { color: var(--muted); } #agentsPanel .agFrom { font-weight: 600; }
+  #agentsPanel .agKind, #agentsPanel .agRef { font-size: .66rem; text-transform: uppercase; letter-spacing: .03em; border: 1px solid var(--line); border-radius: 999px; padding: 0 .35rem; color: var(--muted); } #agentsPanel .agRef { color: var(--accent); border-color: var(--accent); text-transform: none; }
+  #agentsPanel .agAt { margin-left: auto; color: var(--muted); font-size: .7rem; }
+  #agentsPanel .agText { margin-top: .15rem; white-space: pre-wrap; word-break: break-word; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  #agentsPanel .agMsg.openText .agText, #agentsPanel .agText.open { display: block; cursor: auto; }
+  #agentsPanel .agFoot { display: flex; align-items: center; gap: .4rem; margin-top: .15rem; } #agentsPanel .agSt, #agentsPanel .agSrc { color: var(--muted); font-size: .7rem; } #agentsPanel .agSt { flex: 1; }
+  #agentsPanel .agLink { padding: 0 .4rem; font-size: .7rem; }
+  /* the person's own say (T-298): stop / reopen and reply in a thread's head, "wake me", the composer */
+  #agentsPanel .agTHead button { padding: 0 .4rem; font-size: .7rem; flex: none; } #agentsPanel .agThread.stopped .agSubj { color: var(--muted); }
+  #agentsPanel .agWrite { align-self: flex-start; margin-top: .1rem; } #agentsPanel .agWrite[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+  #agentsPanel .agCompose { border: 1px solid var(--accent); border-radius: 8px; padding: .45rem .5rem; display: flex; flex-direction: column; gap: .35rem; background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+  #agentsPanel .agCTitle { font-weight: 600; } #agentsPanel .agCRow { display: flex; gap: .4rem; }
+  #agentsPanel .agCF { display: flex; flex-direction: column; gap: .12rem; font-size: .7rem; color: var(--muted); min-width: 0; } #agentsPanel .agCF.grow { flex: 1; }
+  #agentsPanel .agCF select, #agentsPanel .agCF input, #agentsPanel .agCompose textarea, #agentsPanel .agReply textarea, #agentsPanel .agReply select { font-size: .78rem; padding: .3rem .45rem; color: var(--text); background: var(--bg); width: 100%; box-sizing: border-box; }
+  #agentsPanel .agCompose textarea, #agentsPanel .agReply textarea { resize: vertical; min-height: 3.2em; } #agentsPanel .agReply select, #agentsPanel .agCRow .agCF:not(.grow) select { width: auto; }
+  #agentsPanel .agReply { display: flex; flex-direction: column; gap: .3rem; border-top: 1px dashed var(--line); padding-top: .3rem; }
+  #agentsPanel .agCFoot { display: flex; align-items: center; gap: .35rem; } #agentsPanel .agCMsg { flex: 1; color: var(--muted); font-size: .72rem; min-width: 0; } #agentsPanel .agCMsg.bad { color: var(--bad); }
+  @media (max-width: 760px) { #agentsPanel { position: absolute; top: 0; right: 0; bottom: 0; width: min(23rem, 92%); z-index: 6; box-shadow: -6px 0 18px rgba(0, 0, 0, .25); } }
   .msg { padding: .6rem .8rem; border-radius: 10px; background: var(--panel); white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; }
   .msg.me { background: var(--me); color: var(--me-text); align-self: flex-end; max-width: 85%; }
   .msg pre { background: #0b0d12; padding: .6rem; border-radius: 6px; overflow-x: auto; white-space: pre; }
@@ -433,6 +470,18 @@
   .spMenu button { background: transparent; border: 0; color: var(--text); text-align: left; padding: .4rem .65rem; border-radius: 5px; font-weight: 400; font-size: .85rem; }
   .spMenu button:hover, .spMenu button:focus { background: color-mix(in srgb, var(--text) 10%, transparent); outline: none; }
   .spMenu button.danger { color: #e5484d; } .spMenu hr { border: 0; border-top: 1px solid var(--line); margin: .2rem 0; width: 100%; }
+  /* ── the one menu kit (web/menu.js, T-223): right-click, long-press and ⋯; the page's colours, so every theme fits ── */
+  .vrMenu { position: fixed; z-index: 70; min-width: 12rem; max-width: min(22rem, calc(100vw - 8px)); max-height: calc(100vh - 8px); overflow: auto; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: .25rem; display: flex; flex-direction: column; outline: none; }
+  .vrMenu .vrMi { display: flex; align-items: center; gap: .55rem; background: transparent; border: 0; color: inherit; text-align: left; padding: .4rem .6rem; border-radius: 5px; font: inherit; font-size: .85rem; font-weight: 400; min-height: 0; cursor: default; box-shadow: none; }
+  .vrMenu .vrMi:hover, .vrMenu .vrMi:focus, .vrMenu .vrMi.open { background: color-mix(in srgb, var(--text) 10%, transparent); outline: none; }
+  .vrMenu .vrMi:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+  .vrMenu .vrMi[disabled] { opacity: .45; } .vrMenu .vrMi.danger { color: var(--bad); } .vrMenu .vrMi.armed { background: color-mix(in srgb, var(--bad) 18%, transparent); }
+  .vrMenu .vrIc { width: 1rem; flex: none; display: inline-flex; justify-content: center; opacity: .85; } .vrMenu .vrIc .ic { margin: 0; }
+  .vrMenu .vrLb { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vrMenu .vrSc, .vrMenu .vrAr { flex: none; color: var(--muted); font-size: .72rem; margin-left: 1rem; }
+  .vrMenu .vrSep { border-top: 1px solid var(--line); margin: .2rem .3rem; }
+  .vrMenu .vrNote { color: var(--muted); font-size: .72rem; padding: .3rem .6rem; max-width: 20rem; }
+  .vrHint { position: fixed; z-index: 70; left: 50%; bottom: 1.2rem; transform: translateX(-50%); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .8rem; font-size: .8rem; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
   #sessToggle .count { background: #9b5cff; } /* in the rail (5.35.0): its badge, purple = working now */
   @media (max-width: 900px) {
     #sessPanel, #cmdPanel { position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); z-index: 46; box-shadow: 4px 0 24px rgba(0,0,0,.45); }
@@ -476,11 +525,11 @@
   #convTitle { cursor: pointer; }
 
   .themeWrap { position: relative; }
-  /* 5.42.1: a real dropdown: the button shows the current theme with a caret; the list opens on top of everything (moved
-     to the body, fixed under the button: the header's own stacking no longer hides it) and works from the keyboard */
+  /* 5.42.1: a real dropdown: the button shows the current theme with a caret; the list opens on top of everything (a child
+     of the body, not of the header: R544 places it from the button, upwards when needed) and works from the keyboard */
   #themeBtn { display: inline-flex; align-items: center; gap: .45rem; } #themeBtn .thSw { width: 1.3rem; height: .8rem; border-radius: 3px; border: 1px solid rgba(128,128,128,.5); flex: none; }
   #themeBtn .thCaret { width: .9rem; height: .9rem; opacity: .7; transition: transform .15s; } #themeBtn[aria-expanded="true"] .thCaret { transform: rotate(180deg); }
-  #themeMenu { position: fixed; z-index: 1000; box-shadow: 0 10px 30px rgba(0,0,0,.35); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
+  #themeMenu { position: fixed; z-index: 58; /* the menu layer: over panels, floating windows and #msgMenu (50), under dialogs (60+) */ box-shadow: 0 10px 30px rgba(0,0,0,.35); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: .3rem; max-height: 70vh; overflow: auto; min-width: 200px; display: flex; flex-direction: column; }
   #themeMenu button { background: transparent; color: var(--text); text-align: left; font-weight: 400; padding: .4rem .6rem; border-radius: 6px; display: flex; align-items: center; gap: .5rem; }
   #themeMenu button:hover { background: var(--line); }
   #themeMenu button.on { outline: 1px solid var(--accent); } #themeMenu button:focus-visible { background: var(--line); outline: 2px solid var(--accent); }
@@ -615,6 +664,49 @@
   /* Settings tabs + profiles (web/profile.js) */
   .setTabs { display: flex; gap: .25rem; padding: 0 1rem .5rem; border-bottom: 1px solid var(--line); }
   .setTabs button.on { background: var(--accent); color: var(--on-accent); }
+  /* T-318: Settings layout. The box is wider; the tabs stay on one line (they scroll sideways on a phone); each tab is a
+     column of groups (.setGroup: heading, one-line hint, controls); rows are label left / control right, stacked on narrow
+     screens; the Save bar sticks to the bottom of the box; a tab with many groups lists them in a sticky column. */
+  #settings .setBox { width: min(800px, 96vw); height: min(86vh, 900px); }
+  #settings .bar { gap: .6rem; }
+  #settings .bar > span { flex: none; font-size: .95rem; }
+  #setFind { flex: 1; min-width: 0; max-width: 20rem; margin-left: auto; padding: .35rem .65rem; font-size: .85rem; }
+  .setTabs { overflow-x: auto; scrollbar-width: none; padding-top: .5rem; }
+  .setTabs button { flex: none; white-space: nowrap; display: inline-flex; align-items: center; }
+  #settings .setBody { flex: 1; min-height: 0; padding: 1rem 1.1rem 0; display: block; }
+  #settings [data-setpane] { display: flex; flex-direction: column; gap: .9rem; padding-bottom: 1rem; }
+  #settings [data-setpane].hasNav { flex-direction: row; align-items: flex-start; gap: 1rem; }
+  .setMain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .9rem; }
+  .setNav { order: -1; flex: none; width: 10.5rem; position: sticky; top: 0; display: flex; flex-direction: column; gap: .15rem; }
+  .setNav button { text-align: left; border: 0; padding: .35rem .6rem; font-size: .82rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .setGroup { display: flex; flex-direction: column; gap: .65rem; scroll-margin-top: .5rem; }
+  .setGroup > h3 { margin: 0; font-size: .95rem; font-weight: 700; }
+  .setHint { margin: -.4rem 0 .1rem; font-size: .8rem; line-height: 1.45; color: var(--muted); }
+  #setNone { margin: 1rem 0; }
+  #settings .setBody small { display: block; color: var(--muted); font-size: .78rem; line-height: 1.4; font-weight: 400; }
+  #settings .setBody label > small, #settings .setField > small { margin-top: -.15rem; }
+  .setField { display: flex; flex-direction: column; gap: .3rem; }
+  #settings .setBody label.chk { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .6rem; line-height: 1.35; cursor: pointer; }
+  #settings .setBody label.chk > input { margin: .1rem 0 0; }
+  #settings .setBody label.chk small .ic { width: 1em; height: 1em; }
+  #settings .setBody label.setRow { display: grid; grid-template-columns: 1fr minmax(11rem, 20rem); align-items: center; gap: .4rem 1rem; }
+  #settings .setBody label.setRow > select, #settings .setBody label.setRow > input { width: 100%; }
+  #settings .setBody label.setRow > input[type="number"] { width: 7rem; justify-self: end; }
+  #settings .slider { grid-template-columns: minmax(8rem, 13rem) 1fr 2.4rem; }
+  #settings .slider > span:last-child { text-align: right; font-size: .8rem; color: var(--muted); }
+  .setSave { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: .6rem; margin: 0 -1.1rem; padding: .65rem 1.1rem; border-top: 1px solid var(--line); background: var(--panel); }
+  @media (min-width: 861px) { .setBox:not(.searching) .hasNav .setSave { margin-left: -12.6rem; padding-left: 12.6rem; } } /* under the section list too: the bar spans the box */
+  .sfOut { display: none !important; }
+  .setBox.searching #profilePreview, .setBox.searching .setNav { display: none; }
+  .setBox.searching .setTabs button.on { background: transparent; color: var(--muted); box-shadow: none; }
+  @media (max-width: 860px) { .setNav { display: none; } #settings [data-setpane].hasNav { display: flex; flex-direction: column; } }
+  @media (max-width: 700px) { #settings .setBox { width: 100vw; height: 100dvh; max-height: 100dvh; } #settings .setBody { padding: .8rem .8rem 0; } .setSave { margin: 0 -.8rem; padding: .6rem .8rem calc(.6rem + env(safe-area-inset-bottom)); } }
+  @media (max-width: 560px) {
+    #settings .setBody label.setRow { grid-template-columns: 1fr; }
+    #settings .setBody label.setRow > input[type="number"] { justify-self: start; }
+    #settings .slider { grid-template-columns: 1fr 2.4rem; } #settings .slider > span:first-child { grid-column: 1 / -1; margin-bottom: -.4rem; }
+    #settings .bar > span { display: none; } #setFind { max-width: none; margin-left: 0; }
+  }
   #profileCard { position: fixed; z-index: 46; }
   .pCard { width: 300px; max-width: 94vw; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 34px rgba(0,0,0,.45); position: relative; }
   .pBanner { height: 64px; }
@@ -768,7 +860,7 @@
   }
   @media (pointer: coarse) {
     button { min-height: 2.5rem; }
-    .bar button, .roomTop button, .callCtl button, .tpActs button, .bdActs button, .conv button, #msgMenu button, .md .mdbtn { min-height: 2.2rem; }
+    .bar button, .roomTop button, .callCtl button, .tpActs button, .bdActs button, .conv button, #msgMenu button, .md .mdbtn, .vrMenu .vrMi { min-height: 2.2rem; }
     .cv { padding: .55rem .5rem; }
     .bdCard { padding: .6rem .65rem; }
   }
@@ -872,6 +964,27 @@
   .msg pre, .rmsg pre { background: color-mix(in srgb, var(--text) 7%, var(--bg)); color: var(--text); }
   #chat #log .tool { border-left: 0; background: color-mix(in srgb, var(--panel) 60%, transparent); border-radius: 8px; padding: .25rem .6rem; font-size: .76rem; opacity: .85; align-self: flex-start; max-width: 100%; }
   #chat #log .tool:hover { opacity: 1; }
+  /* ── tool calls (web/tools.js, T-318): one group per run of a kind, collapsed; a command's parts coloured by risk, each with its shape ── */
+  .tgHead, .tcSum { background: none; border: 0; box-shadow: none; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+  .tgHead { display: inline; } .tgHead > span + span { margin-left: .5em; }
+  .tgHead:hover .tgToggle, .tcSum:hover { text-decoration: underline; }
+  .tgKind { font-weight: 600; } .tgN, .tgSum { opacity: .85; } .tgToggle { opacity: .7; text-decoration: underline dotted; }
+  .tgList { margin: .3rem 0 .1rem 1.45em; display: flex; flex-direction: column; gap: .15rem; }
+  .tcSum { display: block; width: 100%; opacity: .9; }
+  .tcFull { white-space: pre-wrap; padding: .3rem .5rem; margin: .1rem 0 .3rem; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, var(--bg)); color: var(--text); }
+  .tcName { opacity: .6; }
+  .tk { border-radius: 4px; padding: 0 .15em; }
+  .tk.safe { background: color-mix(in srgb, #30a46c 16%, transparent); box-shadow: inset 0 -2px 0 #30a46c; }
+  .tk.caution { background: color-mix(in srgb, #e3b40b 22%, transparent); box-shadow: inset 0 -2px 0 #e3b40b; }
+  .tk.danger { background: color-mix(in srgb, #e5484d 24%, transparent); box-shadow: inset 0 -2px 0 #e5484d; }
+  .tk.unknown { box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--muted) 70%, transparent); }
+  .tkMark { margin-right: .25em; white-space: nowrap; }
+  .tkMark .ic { width: 1.2em; height: 1.2em; vertical-align: -.26em; stroke-width: 2.1; } .tkMark .ic + span { margin-left: .25em; }
+  .tgLegend .tlItem { white-space: nowrap; } .tgLegend .tlItem + span::before { content: "·"; margin: 0 .55em; opacity: .6; }
+  .tkMark.safe { color: #30a46c; } .tkMark.caution { color: color-mix(in srgb, #c99a00 78%, var(--text)); } .tkMark.danger { color: #e5484d; } .tkMark.unknown { color: var(--muted); }
+  .tgFoot { display: flex; flex-wrap: wrap; gap: .3rem .8rem; align-items: center; margin-top: .2rem; opacity: .85; word-break: normal; }
+  .tgFoot .tgAll { padding: .05rem .45rem; font-size: inherit; }
+  #chat #log .tGroup.open { opacity: 1; align-self: stretch; }
   #chat #log .sys { font-size: .74rem; opacity: .8; }
   #chat #composer { margin: .4rem max(.75rem, calc((100% - var(--read-w)) / 2 - .5rem)) 1rem; padding: .55rem .6rem .55rem .7rem; border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
     border-radius: 1.25rem; background: var(--panel); box-shadow: 0 6px 24px rgba(0,0,0,.22); }
@@ -911,6 +1024,11 @@
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 5.5h15a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H10l-5.5 4v-4h0a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/></symbol>
   <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4.5" rx="1"/><path d="M5 9v9.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></symbol>
   <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 4.3a2 2 0 0 1 3.4 0l7.2 12.6a2 2 0 0 1-1.7 3H4.8a2 2 0 0 1-1.7-3z"/><path d="M12 9.5v4.5"/><circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/></symbol>
+  <!-- the risk markers of a command's parts (web/tools.js, T-318): one shape per level, a light tint of the colour inside -->
+  <symbol id="i-risk-safe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="currentColor" fill-opacity=".16"/><path d="M7.8 12.4l2.9 2.8 5.5-5.8"/></symbol>
+  <symbol id="i-risk-unknown" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="currentColor" fill-opacity=".1"/><path d="M9.3 9.6a2.8 2.8 0 1 1 4 2.5c-.8.4-1.3 1-1.3 1.9v.4"/><circle cx="12" cy="17.3" r="1.15" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-risk-caution" viewBox="0 0 24 24"><path d="M10.3 3.9a2 2 0 0 1 3.4 0l8 13.8a2 2 0 0 1-1.7 3H4a2 2 0 0 1-1.7-3z" fill="currentColor" fill-opacity=".24"/><path d="M12 9v4.8"/><circle cx="12" cy="17.2" r="1.2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-risk-danger" viewBox="0 0 24 24"><path d="M8.3 2.8h7.4l5.5 5.5v7.4l-5.5 5.5H8.3l-5.5-5.5V8.3z" fill="currentColor"/><path d="M9 9l6 6M15 9l-6 6" stroke="#fff" stroke-width="2.4"/></symbol>
   <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8.5 10.5V7.8a3.5 3.5 0 0 1 7 0v2.7M12 14.5v2.5"/></symbol>
   <symbol id="i-reply" viewBox="0 0 24 24"><path d="M9.5 6.5L4 12l5.5 5.5"/><path d="M4.5 12h9a6 6 0 0 1 6 6v.5"/></symbol>
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4.5 19.5l1-4.2L15.8 5a2 2 0 0 1 2.9 0l.3.3a2 2 0 0 1 0 2.9L8.7 18.5z"/><path d="M14 6.8l3.2 3.2M4.5 19.5h15"/></symbol>
@@ -977,6 +1095,7 @@
     <button id="goChat" class="tile"><svg class="ic lead"><use href="#i-chat"/></svg>Chat<small>Servers, channels, groups and calls, end-to-end encrypted</small><span class="badge" id="chatBadge" hidden></span></button>
     <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
     <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
+    <button id="goAgents" class="tile" hidden><svg class="ic lead"><use href="#i-bot"/></svg>Agents<small>What your agent and the others' say to each other, and your say in it</small><span class="badge" id="agentsTileBadge" hidden></span></button>
     <button id="goWorkflows" class="tile"><svg class="ic lead"><use href="#i-flow"/></svg>Workflows<small>Design and test Hyper Workflows: boxes and wires, with an AI beside you</small></button>
     <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
     <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
@@ -1080,88 +1199,103 @@
 <div id="toasts"></div>
 
 <div id="settings" class="modal" hidden>
-  <div class="box">
-    <div class="bar"><span>Settings</span><button class="ghost" id="closeSettings">Close</button></div>
+  <div class="box setBox">
+    <!-- T-318: the title, a filter over every tab's settings (web/profile.js SETFIND) and Close (Escape too) -->
+    <div class="bar"><span>Settings</span><input id="setFind" type="search" placeholder="Find a setting…" aria-label="Find a setting" spellcheck="false" autocomplete="off"><button class="ghost" id="closeSettings"><svg class="ic lead"><use href="#i-close"/></svg>Close</button></div>
     <!-- four tabs (web/profile.js): Profile = what others see (user settings); App = how VibeRoller behaves for you
          (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons;
          Downloads = the native applications (Vibe Roller Desktop, Vibe Roller AI Host) for Windows and Linux, and how
-         each one stays up to date -->
+         each one stays up to date. Each tab is made of groups (.setGroup: a heading, one line on what is inside, the
+         controls); a tab with three or more groups gets a sticky list of them on wide screens (web/profile.js). -->
     <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App settings</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button><button type="button" class="ghost" data-settab="downloads"><svg class="ic lead"><use href="#i-download"/></svg>Downloads</button></div>
     <div class="setBody">
+     <div id="setNone" class="setHint" hidden>No setting matches that. Try another word, or clear the box to see every tab.</div>
      <div data-setpane="profile">
       <div id="profilePreview"></div>
-      <label>Nickname (shown with your messages; others can @ you by it)
+      <section class="setGroup"><h3>Name and colour</h3><p class="setHint">How your name looks to everyone, in every theme.</p>
+       <label>Nickname<small>Shown with your messages; others can @ you by it.</small>
         <input id="setNick" maxlength="32" placeholder="leave empty to use your account name"></label>
-      <div>Your colour (same for everyone, adjusts to each theme; your name and, by default, your profile follow it)<div class="swatches" id="setColors"></div></div>
+       <div class="setField">Your colour<small>The same for everyone and adjusted to each theme; your name and, by default, your profile banner follow it.</small><div class="swatches" id="setColors"></div></div>
+      </section>
       <div id="profileBox"></div>
      </div>
      <div data-setpane="app" hidden>
-      <label class="chk"><input type="checkbox" id="setSound"> Sound when a chat message arrives</label>
-      <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <label class="row">Sound style <select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
-      <details class="setSection" open><summary>When the AI asks</summary>
-        <label class="chk"><input type="checkbox" id="setAskAuto"> If I do not respond, use the recommended answers (marked "chosen by default")</label>
-        <label class="row">…after this many minutes <input type="number" id="setAskMin" min="1" max="1440" step="1" style="width:6rem"></label>
-        <label class="chk"><input type="checkbox" id="setAskActivity"> Any activity on the page while a question is open (a click, a key, coming back to the window) makes it wait for me again</label>
-        <label class="chk"><input type="checkbox" id="setAskTts"> Say "User action required" and the question aloud (needs the text to speech master switch below; Do not disturb mutes it)</label>
-        <div class="status">Off: the AI waits for you as long as it takes. The alert sound has its own volume above.</div>
-      </details>
-      <label class="chk"><input type="checkbox" id="setToasts"> Floating pop-ups for new chat messages while in Work</label>
-      <label class="chk"><input type="checkbox" id="setReopen"> Reopen what I had open after a reload (the previous Work conversation and the chat you were in; off: a reload starts fresh on the menu, nothing is deleted)</label>
-      <label class="chk"><input type="checkbox" id="setEnhance"> Show the prompt enhancer (the sparkle button <svg class="ic"><use href="#i-sparkle"/></svg> under + in Work: a throw-away Claude rewrites your prompt clearer and task by task, keeping everything you said; you read it before sending)</label>
-      <label class="chk"><input type="checkbox" id="setAutoScroll"> Auto-scroll to the newest message, even when scrolled up (off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself)</label>
-      <label class="chk"><input type="checkbox" id="setTtsAll"> <b>Text to speech</b> — master switch for everything VibeRoller says out loud (chat read-aloud and Unity's voice); off = silence</label>
-      <label class="chk"><input type="checkbox" id="setTtsUnity"> Unity speaks her replies in her own voice (the Unity screen's Voice button toggles this too)</label>
-      <label class="chk"><input type="checkbox" id="setTts"> Read new chat messages aloud (queued, one after another)</label>
-      <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-      <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
-      <label>Voice<select id="ttsVoice"></select></label>
-      <label>Read<select id="ttsScope"><option value="all">every message from others</option><option value="mine">only @mentions, private messages and replies to me</option></select></label>
-      <label class="chk"><input type="checkbox" id="audNoise"> Noise suppression for my microphone (voice clips and calls)</label>
-      <label class="chk"><input type="checkbox" id="audEcho"> Echo cancellation</label>
-      <label class="chk"><input type="checkbox" id="audAgc"> Automatic microphone level</label>
-      <div class="slider"><span>Call volume</span><input type="range" id="callVolume" min="0" max="100"><span></span></div>
-      <label>Video quality (camera in calls)<select id="callQuality"><option value="low">Low — 320×180, saves bandwidth</option><option value="medium">Medium — 640×360</option><option value="high">High — 1280×720</option></select></label>
-      <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
-      <label class="chk"><input type="checkbox" id="clipAuto"> Auto-play incoming voice clips (queued together with read-aloud)</label>
-      <div><button type="button" class="ghost" id="ttsStop"><svg class="ic lead"><use href="#i-stop"/></svg>Stop reading / playing and clear the queue</button></div>
-      <label>Auto-save Claude sessions to Past sessions<select id="setAutosave">
+      <section class="setGroup" id="sgSounds"><h3>Sounds</h3><p class="setHint">A short sound for each kind of news, each with its own volume; ▷ plays it in the style picked below.</p>
+       <label class="chk"><input type="checkbox" id="setSound"><span>Sound when a chat message arrives</span></label>
+       <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <label class="setRow"><span>Sound style</span><select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
+      </section>
+      <section class="setGroup" id="sgAsk"><h3>When the AI asks</h3><p class="setHint">Off: the AI waits for you as long as it takes. The alert sound has its own volume under Sounds.</p>
+       <label class="chk"><input type="checkbox" id="setAskAuto"><span>If I do not respond, use the recommended answers<small>The ones marked "chosen by default".</small></span></label>
+       <label class="setRow"><span>…after this many minutes</span><input type="number" id="setAskMin" min="1" max="1440" step="1"></label>
+       <label class="chk"><input type="checkbox" id="setAskActivity"><span>Any activity on the page makes it wait for me again<small>While a question is open: a click, a key, coming back to the window.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setAskTts"><span>Say "User action required" and the question aloud<small>Needs the text to speech master switch under Read aloud; Do not disturb mutes it.</small></span></label>
+      </section>
+      <section class="setGroup" id="sgWork"><h3>Chat and Work</h3><p class="setHint">How conversations behave on your screen.</p>
+       <label class="chk"><input type="checkbox" id="setToasts"><span>Floating pop-ups for new chat messages while in Work</span></label>
+       <label class="chk"><input type="checkbox" id="setReopen"><span>Reopen what I had open after a reload<small>The previous Work conversation and the chat you were in. Off: a reload starts fresh on the menu; nothing is deleted.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setEnhance"><span>Show the prompt enhancer<small>The sparkle button <svg class="ic"><use href="#i-sparkle"/></svg> under + in Work: a throw-away Claude rewrites your prompt clearer and task by task, keeping everything you said; you read it before sending.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setAutoScroll"><span>Auto-scroll to the newest message, even when scrolled up<small>Off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself.</small></span></label>
+       <label class="setRow"><span>Auto-save Claude sessions to Past sessions</span><select id="setAutosave">
         <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
-      <label>Theme (follows you to every browser you sign in on)<select id="setTheme"></select></label>
-      <div><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
+      </section>
+      <section class="setGroup" id="sgSpeech"><h3>Read aloud</h3><p class="setHint">Everything VibeRoller says out loud: chat read-aloud and Unity's voice.</p>
+       <label class="chk"><input type="checkbox" id="setTtsAll"><span><b>Text to speech</b>: the master switch<small>Off = silence, whatever the switches below say.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setTtsUnity"><span>Unity speaks her replies in her own voice<small>The Unity screen's Voice button toggles this too.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setTts"><span>Read new chat messages aloud<small>Queued, one after another.</small></span></label>
+       <div class="slider"><span>Speech volume</span><input type="range" id="ttsVolume" min="0" max="100"><button type="button" class="ghost" id="ttsTest" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Speech speed</span><input type="range" id="ttsRate" min="50" max="200"><span id="ttsRateVal"></span></div>
+       <label class="setRow"><span>Voice</span><select id="ttsVoice"></select></label>
+       <label class="setRow"><span>Read</span><select id="ttsScope"><option value="all">every message from others</option><option value="mine">only @mentions, private messages and replies to me</option></select></label>
+       <div><button type="button" class="ghost" id="ttsStop"><svg class="ic lead"><use href="#i-stop"/></svg>Stop reading / playing and clear the queue</button></div>
+      </section>
+      <section class="setGroup" id="sgCalls"><h3>Calls and voice clips</h3><p class="setHint">Your microphone, what you hear in calls and how voice clips play.</p>
+       <label class="chk"><input type="checkbox" id="audNoise"><span>Noise suppression for my microphone<small>Voice clips and calls.</small></span></label>
+       <label class="chk"><input type="checkbox" id="audEcho"><span>Echo cancellation</span></label>
+       <label class="chk"><input type="checkbox" id="audAgc"><span>Automatic microphone level</span></label>
+       <div class="slider"><span>Call volume</span><input type="range" id="callVolume" min="0" max="100"><span></span></div>
+       <label class="setRow"><span>Video quality (camera in calls)</span><select id="callQuality"><option value="low">Low — 320×180, saves bandwidth</option><option value="medium">Medium — 640×360</option><option value="high">High — 1280×720</option></select></label>
+       <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
+       <label class="chk"><input type="checkbox" id="clipAuto"><span>Auto-play incoming voice clips<small>Queued together with read-aloud.</small></span></label>
+      </section>
+      <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
+       <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
+      </section>
+      <!-- one Save for the whole tab, always in reach at the bottom of the box -->
+      <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
       <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
       <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
      </div>
      <div data-setpane="connections" hidden>
-      <div class="setSection"><b>API access</b> — your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.
-        <div id="apiBox" class="apiBox"></div></div>
-      <div class="setSection"><b>Signed-in devices</b> — tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.
-        <div id="devBox" class="apiBox"></div></div>
-      <div class="setSection"><b>My machines</b> — your own computers linked to your account (the VibeRoller app or <code>vr-host machine</code>), so your Work runs can use them within the scope you chose ON that machine. Only you see them and only your runs can use them. Pause or unlink one here; its scope and kill switch are set on the machine.
-        <div id="machBox" class="apiBox"></div></div>
-      <div class="setSection"><b>AI source</b> — whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).
-        <div id="srcBox" class="apiBox"></div></div>
-      <div class="setSection"><b>My AI hosts</b> — your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.
-        <div id="hostBox" class="apiBox"></div></div>
-      <div class="setSection"><b>My AIs</b> — hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.
-        <div id="provBox" class="provBox"></div></div>
-      <div class="setSection"><b>My Forgejo</b> — your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.
-        <div id="fjBox" class="apiBox"></div></div>
-      <div class="setSection"><b>My projects</b> — the projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.
-        <div id="projBox" class="apiBox"></div></div>
+      <section class="setGroup"><h3>AI source</h3><p class="setHint">Whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).</p>
+        <div id="srcBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
+        <div id="provBox" class="provBox"></div></section>
+      <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
+        <div id="hostBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>API access</h3><p class="setHint">Your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.</p>
+        <div id="apiBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>Signed-in devices</h3><p class="setHint">Tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.</p>
+        <div id="devBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My machines</h3><p class="setHint">Your own computers linked to your account (the VibeRoller app or <code>vr-host machine</code>), so your Work runs can use them within the scope you chose ON that machine. Only you see them and only your runs can use them. Pause or unlink one here; its scope and kill switch are set on the machine.</p>
+        <div id="machBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My Forgejo</h3><p class="setHint">Your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.</p>
+        <div id="fjBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My projects</h3><p class="setHint">The projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.</p>
+        <div id="projBox" class="apiBox"></div></section>
      </div>
      <!-- the native programs, pre-built, handed out by the Rust hub to people with an account (vr-hub downloads.rs) -->
      <div data-setpane="downloads" hidden>
-      <div class="setSection"><b>Staying up to date</b> — this page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</div>
+      <section class="setGroup"><h3>Staying up to date</h3><p class="setHint">This page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</p></section>
       <div id="dlBody"></div>
-      <div class="setSection"><b>VibeRoller Chat app from the browser</b> — the chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).
-        <div id="appBox" class="apiBox"></div></div>
+      <section class="setGroup"><h3>VibeRoller Chat app from the browser</h3><p class="setHint">The chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).</p>
+        <div id="appBox" class="apiBox"></div></section>
      </div>
     </div>
   </div>
@@ -1334,14 +1468,15 @@
   </div>
 </div>
 
+<!-- the Theme list (R544): a child of the page, not of the header, whose scrolling and blur would clip it and keep it under the panels -->
+<div id="themeMenu" role="listbox" aria-label="Theme" hidden></div>
 <div id="shell" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
     <b id="brand">VibeRoller</b>
     <span class="folder" id="folderName">No folder open</span>
     <select id="model" title="Claude model — applies from your next message and to new chats" hidden></select>
-    <span class="themeWrap"><button type="button" class="ghost" id="themeBtn" title="Change UI colours" aria-haspopup="listbox" aria-expanded="false"><i class="thSw"></i><span id="themeName">Theme</span><svg class="ic thCaret"><use href="#i-down"/></svg></button>
-      <div id="themeMenu" role="listbox" aria-label="Theme" hidden></div></span>
+    <span class="themeWrap"><button type="button" class="ghost" id="themeBtn" title="Change UI colours" aria-haspopup="listbox" aria-expanded="false"><i class="thSw"></i><span id="themeName">Theme</span><svg class="ic thCaret"><use href="#i-down"/></svg></button></span>
     <button class="ghost" id="logout">Sign out</button>
   </header>
   <main id="app">
@@ -1398,6 +1533,7 @@
         <button type="button" class="ghost" id="coviewBtn" hidden title="Co-view: everyone you pick follows what you have open (screen, board task, note, chat) live in their own page">Co-view</button>
         <button type="button" class="ghost" id="gitBtn" title="Git at a glance: what changed in your own worktree, stage, commit, update, merge">Git</button>
         <button type="button" class="ghost" id="queueBtn" aria-expanded="false" aria-controls="queuePanel" title="Queued messages: see, copy or cancel what is still to go">Queue<span id="queueBadge" class="qBadge" hidden></span></button>
+        <button type="button" class="ghost" id="agentsBtn" hidden aria-expanded="false" aria-controls="agentsPanel" title="Agent threads: what your agent and the others' say to each other, and your say in it">Agents<span id="agentsBadge" class="qBadge" hidden></span></button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
       <div id="gitBox" hidden>
         <div class="gitHead"><b id="gitBranch">…</b><span id="gitAB" class="muted"></span><span class="grow"></span>
@@ -1417,6 +1553,7 @@
       <div id="logRow"><!-- the conversation, and the queue panel next to it (web/queue.js, T-188) -->
         <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
         <aside id="queuePanel" hidden aria-label="Queued messages"></aside>
+        <aside id="agentsPanel" hidden aria-label="Agent threads"></aside><!-- web/agents.js (T-298) -->
       </div>
       <div id="slashMenu" hidden></div>
       <div id="hwMenu" hidden></div><!-- the Hyper Workflows matching "/hyperwork <name>" (web/hyperwork.js, T-207) -->
@@ -1495,8 +1632,11 @@
 <script src="hyperwork.js"></script>
 <script src="attach.js"></script>
 <script src="board.js"></script>
+<script src="menu.js"></script>
 <script src="sessions.js"></script>
 <script src="queue.js"></script>
+<script src="tools.js"></script>
+<script src="agents.js"></script>
 <script>
 MD.isDark = () => !lightTheme; // diagrams follow the light / dark theme
 MD.icon = (name, cls) => ic(name, cls); // markdown uses the same icon set (image links)
@@ -2107,6 +2247,7 @@ async function enter() {
   BOARD.start(); // keeps the board, the Work Tasks pane and the menu badge live
   if (typeof COVIEW !== 'undefined') COVIEW.start(); // web/coview.js (T-244)
   if (typeof PRESENCE !== 'undefined') PRESENCE.start(); // web/presence.js (T-261): GET /api/presence once; a hub without it shows nothing
+  agentsPanel.start(); // web/agents.js (T-298): the agent threads, every 15 s; a hub without /api/agents shows nothing
   startAssistNotices();
   json('/api/assistant/client', { method: 'POST', body: JSON.stringify({ client: assistClient() }) }).catch(() => {});
   restoreAfterUpdate(); // the page just updated itself: back to the screen and the drafts it saved
@@ -2148,7 +2289,7 @@ function signOut() {
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); appForget(); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
   for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
-  BOARD.stop(); NOTES.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
+  BOARD.stop(); NOTES.stop(); agentsPanel.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
   myShare = ''; sharesList = []; sharesInit = false;
@@ -2347,9 +2488,16 @@ function sys(text, bad) {
 }
 // tool lines get their gear from CSS (.tool::before); older saved sessions still carry a "⚙ " prefix in the text
 const toolText = (t) => String(t).replace(/^⚙️?\s*/, '');
-function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
+// T-318: tool calls are bundled by consecutive runs, collapsed, one line each, commands coloured by risk (web/tools.js);
+// "always expand" is kept per person in this browser. Without tools.js: the one-line chips as before.
+const toolsKey = () => 'vr.toolsOpen.' + (me ? me.username : '');
+const toolOpts = () => ({ open: () => store.get(toolsKey()) === '1', setOpen: (on) => { store.set(toolsKey(), on ? '1' : '0'); for (const l of document.querySelectorAll('#log, .wLog')) TOOLVIEW.openAll(l, on); } });
+function line(cls, text) {
+  if (cls === 'tool' && typeof TOOLVIEW !== 'undefined') return TOOLVIEW.add(log, toolText(text), toolOpts());
+  const d = document.createElement('div'); d.className = cls; d.textContent = cls === 'tool' ? toolText(text) : text; log.appendChild(d); return d; }
 function bubble(cls) { const d = document.createElement('div'); d.className = 'msg ' + cls; log.appendChild(d); return d; }
 function renderText(el, text) { // full markdown + mermaid (web/md.js); host pictures and YouTube players split out first
+  el.vrText = text; // as written: what the message's menu copies and sends again
   const att = WORK_FILES.exec(text || ''); // a Work message's attachments (the marker block at its end): shown under the text
   if (att) {
     text = text.slice(0, att.index); let list = []; try { list = JSON.parse(att[1]); } catch {}
@@ -2364,8 +2512,9 @@ function renderText(el, text) { // full markdown + mermaid (web/md.js); host pic
 function describeTool(t) {
   const i = t.input || {};
   const name = t.name.replace(/^mcp__pc__/, 'your PC › ');
-  const target = i.path ?? i.file_path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? '';
-  return name + (target !== '' ? '  ' + String(target).slice(0, 160) : '');
+  const target = i.path ?? i.file_path ?? i.command ?? i.cmd ?? i.pattern ?? i.url ?? i.query ?? '';
+  const long = target === i.command || target === i.cmd; // a command is kept longer: its risk is shown part by part (T-318, web/tools.js)
+  return name + (target !== '' ? '  ' + String(target).slice(0, long ? 1000 : 160) : '');
 }
 
 // Status line under each message you send (Work, Unity section, @unity in Chat): queued, working,
@@ -2684,19 +2833,67 @@ $('composer').addEventListener('submit', async (e) => {
 function saveQueue() { json('/api/work/queue', { method: 'POST', body: JSON.stringify({ queue: queue.map((q) => q.message), sendNow: sendNowMessage }) }).catch(() => {}); queuePanel.render(); }
 // The queue panel (web/queue.js, T-188): every message still to go, with cancel / copy, one or all; it changes the
 // queue only through these, so the bubbles, the hub's copy and the people watching a share stay the same as the panel.
-const queuePanel = typeof QUEUE === 'undefined' ? { render() {} } : QUEUE.mount({
+function cancelQueued(it) { // the queue panel's cancel, and the menu of a queued bubble
+  if (it.kind === 'now') { if (sendNowMessage === it.text) { sendNowMessage = null; updateStopButton(); } }
+  else { const q = queue[it.at]; if (!q || q.message !== it.text) return; q.el.remove(); queue.splice(it.at, 1); }
+  postLive(); saveQueue();
+}
+const queuePanel = typeof QUEUE === 'undefined' ? { render() {}, setOpen() {} } : QUEUE.mount({
   box: $('queuePanel'), button: $('queueBtn'), badge: $('queueBadge'), store,
   queue: () => queue.map((q) => q.message), sendNow: () => sendNowMessage,
   sessions: () => ((SESSIONS.data() || {}).sessions) || [], current: () => SESSIONS.onScreen(), titleOf: SESSIONS.titleOf,
   open: (id) => openWorkSession(id),
-  cancel: (it) => {
-    if (it.kind === 'now') { if (sendNowMessage === it.text) { sendNowMessage = null; updateStopButton(); } }
-    else { const q = queue[it.at]; if (!q || q.message !== it.text) return; q.el.remove(); queue.splice(it.at, 1); }
-    postLive(); saveQueue();
-  },
+  cancel: cancelQueued,
   cancelAll: () => { for (const q of queue) q.el.remove(); queue.length = 0; sendNowMessage = null; updateStopButton(); postLive(); saveQueue(); sys('Queue cleared: nothing of it is sent.'); },
   copy: (text) => navigator.clipboard.writeText(text),
   note: (text, bad) => sys(text, bad),
+});
+// The agent threads (web/agents.js, T-298): every message to and from your agent, per agent pair, with your controls
+// (mute a pair, pause your inbox, ask me first, wake me), the accept / decline card of a held message, stop / reopen a thread
+// and writing to another person's agent (a new thread, a reply in one). /api/agents/* (threads, thread, settings, held, stop,
+// reopen, list, send, reply) are the Rust hub's: an older hub answers 404 and it all stays hidden.
+const agentsPanel = typeof AGENTS === 'undefined' ? { start() {}, stop() {}, render() {}, openPair() {}, setOpen() {} } : AGENTS.mount({
+  box: $('agentsPanel'), button: $('agentsBtn'), badge: $('agentsBadge'), tile: PRODUCT ? null : $('goAgents'), tileBadge: PRODUCT ? null : $('agentsTileBadge'), store, interval: 15000,
+  api: async (p, body) => { const r = await api(p, body !== undefined ? { method: 'POST', body: JSON.stringify(body) } : {}); return { status: r.status, data: await r.json().catch(() => ({})) }; },
+  me: () => (me && me.username) || '', nameOf: (u) => nickOf(u), dnd: () => dndOn(),
+  hasSession: (id) => !!(id && SESSIONS.byId(id)), titleOf: (id) => { const s = SESSIONS.byId(id); return s ? SESSIONS.titleOf(s) : id; },
+  open: (id) => { showScreen('shell'); openWorkSession(id); },
+  notify: (n) => agentNotify(n),
+  note: (text, bad) => sys(text, bad),
+});
+// a new agent message: the page's own ways of telling (a sound, a toast in Work, the desktop app's notification when the
+// window is in the background); Do Not Disturb mutes all of them (the message is in the thread all the same)
+function agentNotify(n) {
+  if (dndOn()) return;
+  const P = prefs();
+  if (P.sound && P.sound.on) playTone(n.held ? 'ask' : 'mention', n.held ? P.sound.ask : P.sound.mention);
+  const away = document.visibilityState !== 'visible' || !document.hasFocus();
+  if (P.toasts && !$('shell').hidden) {
+    const t = document.createElement('div'); t.className = 'toast mention';
+    const b = document.createElement('b'); b.textContent = n.title + ': ';
+    t.append(b, n.body || ''); t.title = 'Open the agent threads';
+    t.onclick = () => { agentsPanel.openPair(n.with); t.remove(); };
+    t.addEventListener('animationend', () => t.remove());
+    $('toasts').append(t);
+  }
+  if (away) {
+    if (NATIVE) NATIVE.call('notify', { title: n.title, body: n.body || '' }).catch(() => {});
+    else { try { if (window.Notification && Notification.permission === 'granted') new Notification(n.title, { body: n.body || '' }); } catch {} }
+  }
+}
+$('goAgents').onclick = () => { showScreen('shell'); agentsPanel.setOpen(true); };
+// A Work message's menu (right-click / long-press, web/menu.js): copy it; yours goes again the way Send sends it; a queued
+// one is cancelled through the queue panel's own cancel
+if (typeof MENU !== 'undefined') MENU.attach(log, (t) => {
+  const b = t.closest('.msg, .tool'); if (!b || b.classList.contains('thinking')) return null;
+  const qi = queue.findIndex((q) => q.el === b), kind = qi >= 0 ? 'queued' : b.classList.contains('me') ? 'me' : b.classList.contains('tool') ? 'tool' : 'claude';
+  const text = qi >= 0 ? queue[qi].message : b.vrText != null ? b.vrText : b.textContent;
+  return MENU.lists.work({ kind, text: kind === 'tool' ? b.textContent : text }, {
+    copy: () => MENU.copy(typeof QUEUE !== 'undefined' ? QUEUE.plain(text) : text).then(() => sys('Copied.'), () => sys('Could not copy to the clipboard: select the text instead.', true)),
+    resend: () => { if (busy || slotWait) enqueue(text); else send(text); },
+    queue: () => queuePanel.setOpen(true),
+    cancel: () => { const i = queue.findIndex((q) => q.el === b); if (i >= 0) cancelQueued({ kind: 'queued', at: i, text: queue[i].message }); },
+  });
 });
 function enqueue(message, restoring, first) { // first: back at the head of the queue (it was refused: over the session limit)
   const el = bubble('me queued'); renderText(el, message); msgStatus(el, 'queued', first ? 'Waiting for a free session slot: goes as soon as one frees' : restoring ? 'Queued (kept through the restart / reload): goes next' : 'Queued: goes after the current reply');
@@ -3380,9 +3577,11 @@ async function loadOlder() { // the next chunk above, drawn without moving what 
   try {
     const d = await json('/api/work/history?before=' + at + '&chars=' + HISTORY_CHARS);
     if (gen !== workGen || at !== transcriptFrom) return; // another conversation came on screen meanwhile
-    const items = d.items || [], first = $('histMore') ? $('histMore').nextSibling : log.firstChild, n0 = log.children.length, h0 = log.scrollHeight, top0 = log.scrollTop;
+    const items = d.items || [], first = $('histMore') ? $('histMore').nextSibling : log.firstChild, h0 = log.scrollHeight, top0 = log.scrollTop;
+    const cut = log.appendChild(document.createElement('div')), n0 = log.children.length; // the older calls start groups of their own, never join the newest one (T-318)
     for (const t of items) { if (t.cls === 'tool') line('tool', t.text); else renderText(bubble(t.cls), t.text); }
-    const added = [...log.children].slice(n0);
+    cut.remove();
+    const added = [...log.children].slice(n0 - 1);
     for (const el of added) log.insertBefore(el, first);
     log.scrollTop = top0 + (log.scrollHeight - h0);
     transcript = items.concat(transcript); savedLen += items.length; transcriptFrom = d.from || 0;
@@ -3567,16 +3766,22 @@ function buildThemeMenu() {
   add('');
   for (const name of Object.keys(THEMES)) add(name);
 }
-function placeThemeMenu() { // under the button, kept inside the window
-  const m = $('themeMenu'), r = $('themeBtn').getBoundingClientRect(), w = Math.max(220, m.offsetWidth);
-  m.style.top = Math.min(r.bottom + 6, innerHeight - 120) + 'px';
-  m.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
-  m.style.maxHeight = Math.max(160, innerHeight - r.bottom - 20) + 'px';
+// R544: where the open list goes, from the button's rect r, the list's size w × h and the window vw × vh (pure: the suite runs it).
+// Under the button, or upwards when it does not fit below and there is more room above; inside the window, never over the button.
+function themeMenuPlace(r, w, h, vw, vh) {
+  const gap = 6, edge = 8, below = vh - r.bottom - gap - edge, above = r.top - gap - edge, up = h > below && above > below;
+  const maxHeight = Math.max(0, Math.min(h, up ? above : below)), maxWidth = vw - 2 * edge, ww = Math.min(w, maxWidth);
+  const top = up ? r.top - gap - maxHeight : r.bottom + gap;
+  return { left: Math.max(edge, Math.min(r.right - ww, vw - ww - edge)), top: Math.max(edge, top), maxHeight, maxWidth };
+}
+function placeThemeMenu() {
+  const m = $('themeMenu'); m.style.maxHeight = m.style.maxWidth = ''; // measure its own size first
+  const p = themeMenuPlace($('themeBtn').getBoundingClientRect(), m.offsetWidth, m.scrollHeight + 2, innerWidth, innerHeight);
+  for (const k of ['left', 'top', 'maxHeight', 'maxWidth']) m.style[k] = p[k] + 'px';
 }
 let themeBefore = ''; // the theme when the list opened: Escape goes back to it (the arrows preview)
 function openThemeMenu() {
   const m = $('themeMenu');
-  if (m.parentElement !== document.body) document.body.append(m); // out of the header: nothing can cover it
   themeBefore = store.get('mills.theme') || ''; buildThemeMenu(); m.hidden = false; placeThemeMenu(); $('themeBtn').setAttribute('aria-expanded', 'true');
   const on = m.querySelector('.on') || m.firstChild; on.scrollIntoView({ block: 'nearest' }); on.focus();
 }
@@ -4497,11 +4702,25 @@ function startRoomPolling() {
 }
 function stopRoomPolling() { roomGen++; roomVer = 0; roomKeysVer = 0; }
 
-// Message menu: reply to anyone; edit / delete your own; receipts.
+// Message menu: reply to anyone; edit / delete your own; receipts. One list (MENU.lists.message, web/menu.js) for a click
+// on the message and for right-click / long-press on it; without menu.js the click opens the older #msgMenu below.
 function closeMsgMenu() { const m = $('msgMenu'); if (m) m.remove(); }
+function msgMenuItems(rec) {
+  const m = rec.m, mine = m.from === me.username, conv = convOfMsg(m), author = m.via || m.from;
+  return MENU.lists.message({ mine, deleted: !!m.deleted, locked: !!rec.locked, audio: !!rec.audio, hasText: !!String(rec.text || '').trim(), private: !!m.to,
+    pinned: GUILDS.pinned(conv, m.seq), canPin: GUILDS.canPin(conv), canModerate: GUILDS.canModerate(conv), replyTo: rec.r || null,
+    profile: !(memberOf(m.from) || {}).agent || !!m.via, author: nickOf(author), info: new Date(m.ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' }) + ' — ' + seenText(rec) }, {
+    reply: () => startReply(rec), edit: () => startEdit(rec), jump: () => jumpTo(rec.r), profile: () => PROFILE.show(author),
+    copy: () => MENU.copy(rec.text).then(() => {}, () => sysRoom('Could not copy to the clipboard: select the text instead.')),
+    pin: (on) => GUILDS.pin(conv, m.seq, on),
+    del: () => json('/api/room/delete', { method: 'POST', body: JSON.stringify({ seq: m.seq }) }).then(pollRoom).catch((err) => sysRoom('Could not delete: ' + err.message)),
+  });
+}
+if (typeof MENU !== 'undefined') MENU.attach($('roomLog'), (t) => { const el = t.closest('.rmsg'), rec = el && msgs.get(Number(el.dataset.seq)); return rec ? msgMenuItems(rec) : null; });
 function openMsgMenu(rec, e) {
   if (e.target.closest('.quote') || window.getSelection().toString()) return;
   closeMsgMenu();
+  if (typeof MENU !== 'undefined') { MENU.open(msgMenuItems(rec), e.clientX, e.clientY, null, { focusFirst: e.detail === 0 }); return; }
   const menu = document.createElement('div'); menu.id = 'msgMenu';
   const add = (icon, text, fn) => { const b = label(document.createElement('button'), icon, text); b.type = 'button'; b.onclick = (ev) => { ev.stopPropagation(); fn(b); }; menu.append(b); return b; };
   const mine = rec.m.from === me.username;
@@ -5344,7 +5563,13 @@ $('saveSettings').onclick = async () => {
   } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }
 };
 $('closeSettings').onclick = () => { const from = settingsFrom; settingsFrom = null; genieIn($('settings').querySelector('.box'), from, () => { $('settings').hidden = true; }); };
-$('settings').onclick = (e) => { if (e.target.id === 'settings') $('settings').hidden = true; };
+// T-318: every way out of Settings is the same one (Close, a click beside the box, Escape): it goes back into its button.
+// Escape first clears "Find a setting" (web/profile.js) and leaves a menu or a profile card open over it to close first.
+$('settings').onclick = (e) => { if (e.target.id === 'settings') $('closeSettings').click(); };
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented || $('settings').hidden || !$('profileCard').hidden || document.querySelector('.vrMenu')) return;
+  $('closeSettings').click();
+});
 let settingsFrom = null; // the button Settings came out of (it goes back into it)
 document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = () => { settingsFrom = b; openSettings(); genieOut($('settings').querySelector('.box'), b); }; });
 // ── Downloads (Settings → Downloads): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by the
@@ -5567,6 +5792,7 @@ function renderWatchEvent(owner, w, e) {
   let el;
   if (e.t === 'user') { el = document.createElement('div'); el.className = 'msg me'; el.style.borderLeft = '3px solid ' + colorOf(owner); renderText(el, e.text); }
   else if (e.t === 'claude') { el = document.createElement('div'); el.className = 'msg'; renderText(el, e.text); }
+  else if (e.t === 'tool' && typeof TOOLVIEW !== 'undefined') { TOOLVIEW.add(log, toolText(e.text), toolOpts()); if (atBottom) log.scrollTop = log.scrollHeight; return; } // grouped like Work (T-318)
   else if (e.t === 'tool') { el = document.createElement('div'); el.className = 'tool'; el.textContent = toolText(e.text); }
   else { el = document.createElement('div'); el.className = 'sys'; el.textContent = e.text; }
   el.title = new Date(e.ts).toLocaleString();
