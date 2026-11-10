@@ -7,6 +7,16 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.54.2 — 2026-11-10
+
+PATCH: pictures as asked, her desktop self named in her reply, and never the same look twice.
+
+### Fixed
+- **What you ask for in a picture is what you get** (asked: "i told her tiots out and she was fully covered"): slang the picture engine does not know (tits out, naked, ...) is put in the words it does (topless, bare breasts, nude) before it draws, and Unity writes her pictures and looks that way, never with clothes that contradict what was asked. Both hubs.
+- **She says what her desktop self is doing** (asked: "she is not saying or mentioning that she is actually updating the model on desktop Unity"): her team-chat reply ends with one line for it ("Desktop Unity: changing into ..., ready in a few minutes").
+- **Herself unless told otherwise** (asked: "why the fuck is she a gorilla all the time, shoe should always be herself unless told other wise"): a look keeps her as herself and only changes what was asked; the test look left on the host PC is gone.
+- **Never the same look twice** (asked: "its not suppose to use the same one all the time, it should never use the sdame one twice"): every start of the desktop app, and every time she is switched on, draws and films a fresh one of her; meanwhile she shows her last one. `bridge/assistant.js` 1.4.3, `bridge/server.js` 4.3.4, native pgm-ai-internal; Windows and Linux app: vr-desktop rebuilt.
+
 ## 5.54.1 — 2026-11-10
 
 PATCH: Unity looks like herself in her selfies.
