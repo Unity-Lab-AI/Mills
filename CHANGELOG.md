@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.53.1 — 2026-11-10
+
+PATCH: what Unity is told in the team chat reaches her desktop self, and her pictures follow the look.
+
+### Fixed
+- **Team-chat orders reach Desktop Unity** (seen: "[[youtube:companion:outfit:…]]" in the chat): the room reply carried them as a YouTube marker, so the app never got them. Now the chat hides them and the asker's app acts on them. Native pgm-ai-internal (unity_routes).
+- **Her picture follows the look she was told** (asked: "image didnt have tits ourt as instructed"): when she takes a look and no picture was made, the picture is drawn from that full look, not from the few words of the message. Both hubs;  1.4.1.
+- **No more pale ghost**: her selfie look asks for a natural warm skin tone and real skin (asked: "she looks like a ples white ghose freak").
+
+### Changed
+- **Her local brain is uncensored**: on the AI host,  is rebuilt on qwen3-abliterated (tools, no refusals), like Agent Gen's; the old one is kept as . (Host model, not in the repo.)
+
 ## 5.53.0 — 2026-11-10
 
 MINOR: Desktop Unity does anything she is told, not a list of moves.

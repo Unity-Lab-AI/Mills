@@ -217,7 +217,10 @@ pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut C
     if counted { hub.ai().usage.note_answer(&a.username, "ollama", &model, &used); } // one note per answer, the rounds summed
     // backstop: they clearly asked for a picture and none was made this turn: made from their words
     if !opts.no_pictures && wants_picture(text) && !text.to_lowercase().contains("gif") && ci.images.is_empty() {
-        let prompt = regex::Regex::new(r"^\s*@\w+\s*").unwrap().replace(text, "").to_string();
+        // the look she was just told to take (her desktop self) is the picture too, in her full words; else theirs
+        let pct = |s: &str| { let b = s.as_bytes(); let mut o = vec![]; let mut i = 0; while i < b.len() { if b[i] == b'%' && i + 2 < b.len() { if let Ok(x) = u8::from_str_radix(&s[i + 1..i + 3], 16) { o.push(x); i += 3; continue; } } o.push(if b[i] == b'+' { b' ' } else { b[i] }); i += 1; } String::from_utf8_lossy(&o).into_owned() };
+        let look = ci.media.iter().find_map(|m| m.strip_prefix("companion:outfit:").and_then(|r| r.splitn(3, ':').nth(2)).map(pct)).filter(|l| !l.trim().is_empty());
+        let prompt = look.unwrap_or_else(|| regex::Regex::new(r"^\s*@\w+\s*").unwrap().replace(text, "").to_string());
         let r = u.make_image(hub, ci, &json!({ "prompt": prompt, "selfie": about_her(text), "shape": "portrait" })).await;
         ci.send(json!({ "type": "tool", "name": "generate_image", "args": { "prompt": text, "auto": true } }));
         ci.send(json!({ "type": "tool_result", "name": "generate_image", "result": r }));
