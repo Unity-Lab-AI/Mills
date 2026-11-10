@@ -2988,6 +2988,11 @@ async function run() {
       [nodesSrc.includes('CAP_FRESH_MS = 30 * 60e3'), nodesSrc.includes('Date.now() - (w.at || 0) < CAP_FRESH_MS'), fs.readFileSync(path.join(BRIDGE, 'usage.js'), 'utf8').includes('status: l.status, at: l.at'),
         rsHosts549.includes('const CAP_FRESH_MS: f64 = 30.0 * 60_000.0'), rsHosts549.includes('now - a < Self::CAP_FRESH_MS'), rsUsage549.includes('"status": l["status"], "at": l["at"]')].every(Boolean), 'static check of both hubs');
 
+    // R550: in the team chat Unity does what the team asks (pictures included) and never refuses
+    const rsRoutes550 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'unity_routes.rs'), 'utf8');
+    check('R550', "the team chat's Unity is the team's go-between: her room instructions (JavaScript and Rust hub, local and Claude brain) tell her to do exactly what she is asked, never refuse, and send any picture or selfie asked for, here or in private messages (production bug 2026-11-10: she refused a badge selfie and posted a note to herself)",
+      serverSrc.includes("You are the team's go-between: do exactly what they ask") && (rsRoutes550.match(/You are the team's go-between: do exactly what they ask/g) || []).length === 2, 'static check of both hubs');
+
     // R152: older AI hosts keep working, and hosts update themselves from the hub
     const oh = { 'X-VR-Host': 'old-node', 'X-VR-Host-Token': OLD_NODE_SECRET, 'Content-Type': 'application/json' };
     // a 2.x host: hello without caps, offering its Claude as "claude-cli"; it knows no login relays (404 "does not lend")
