@@ -49,16 +49,16 @@ pub fn kill_tree(pid: u32) {
     }
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+        let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("taskkill"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/PID", &pid.to_string(), "/T", "/F"]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
     }
 }
 
 /// The shell command for this system, ready to run in `cwd` (no stdin, own process group on Linux).
 pub fn shell_command(cmd: &str, cwd: &Path) -> tokio::process::Command {
     #[cfg(unix)]
-    let mut c = { let mut c = tokio::process::Command::new("sh"); c.arg("-c").arg(cmd); c.process_group(0); c };
+    let mut c = { let mut c = { #[allow(unused_mut)] let mut c = tokio::process::Command::new("sh"); #[cfg(windows)] { c.creation_flags(0x0800_0000); } /* CREATE_NO_WINDOW */ c }; c.arg("-c").arg(cmd); c.process_group(0); c };
     #[cfg(windows)]
-    let mut c = { let mut c = tokio::process::Command::new("cmd"); c.arg("/C").arg(cmd); c.creation_flags(0x0800_0000 /* CREATE_NO_WINDOW */); c };
+    let mut c = { let mut c = { #[allow(unused_mut)] let mut c = tokio::process::Command::new("cmd"); #[cfg(windows)] { c.creation_flags(0x0800_0000); } /* CREATE_NO_WINDOW */ c }; c.arg("/C").arg(cmd); c.creation_flags(0x0800_0000 /* CREATE_NO_WINDOW */); c };
     c.current_dir(cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
     // what a tool's command must not inherit: the app's own settings
     for (k, _) in std::env::vars_os() {

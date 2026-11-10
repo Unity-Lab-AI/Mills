@@ -52,7 +52,8 @@ impl Usage {
         if t.contains("rate_limit") {
             let info = if ev.get("rate_limit_info").is_some() { ev["rate_limit_info"].clone() } else if ev.get("rateLimitInfo").is_some() { ev["rateLimitInfo"].clone() } else { ev.clone() };
             let kind = info["rateLimitType"].as_str().or(info["rate_limit_type"].as_str()).or(info["type"].as_str()).unwrap_or("").to_lowercase();
-            let key = if ["seven", "week", "7d"].iter().any(|k| kind.contains(k)) { Some("seven_day") } else if ["five", "5h", "session"].iter().any(|k| kind.contains(k)) { Some("five_hour") } else { None };
+            // only the all-models windows (not seven_day_opus / _sonnet / _overage_included)
+            let key = match kind.as_str() { "seven_day" | "weekly" | "7d" => Some("seven_day"), "five_hour" | "5h" | "session" => Some("five_hour"), _ => None };
             if let Some(key) = key {
                 self.with_bucket(source, |b| {
                     if !b["limits"].is_object() { b["limits"] = json!({}); }
@@ -170,6 +171,23 @@ pub fn note_context(ctx: &mut Value, ev: &Value, session: &str) {
 mod tests {
     use super::*;
     use pgm_context_internal::ledger::parse_usage;
+
+    #[test]
+    fn only_the_all_models_windows_count_for_the_caps() {
+        // a host refused at 43 % "over its 90 % weekly cap": another weekly limit overwrote the all-models week
+        let root = std::env::temp_dir().join(format!("vr-usage-kinds-{}", std::process::id())); let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(&root).unwrap();
+        let cfg = pgm_core_internal::config::Config { raw: Default::default(), port: 0 };
+        let u = Usage::new(&root, &cfg, false);
+        let at = (now_ms() / 1000 + 86_400) as f64;
+        u.note_event(&json!({ "type": "rate_limit_event", "rate_limit_info": { "rateLimitType": "seven_day", "status": "allowed", "utilization": 0.43, "resetsAt": at } }), "h:x/claude");
+        for k in ["seven_day_overage_included", "seven_day_opus", "seven_day_sonnet", "five_hour_overage"] {
+            u.note_event(&json!({ "type": "rate_limit_event", "rate_limit_info": { "rateLimitType": k, "status": "allowed_warning", "utilization": 0.95, "resetsAt": at } }), "h:x/claude");
+        }
+        let s = u.status("h:x/claude", &json!(null), "");
+        assert!((s["seven_day"]["utilization"].as_f64().unwrap() - 0.43).abs() < 1e-9, "{s}");
+        assert!(s["five_hour"]["utilization"].is_null(), "{s}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn the_window_is_never_below_what_the_session_holds() {

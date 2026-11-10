@@ -22,7 +22,7 @@ pub fn which(name: &str) -> Option<PathBuf> {
 }
 /// A tokio Command for `name` (resolved on the PATH), with no console window on Windows, killed when dropped.
 pub fn command(name: &str) -> tokio::process::Command {
-    let mut c = tokio::process::Command::new(which(name).unwrap_or_else(|| PathBuf::from(name)));
+    let mut c = { #[allow(unused_mut)] let mut c = tokio::process::Command::new(which(name).unwrap_or_else(|| PathBuf::from(name))); #[cfg(windows)] { c.creation_flags(0x0800_0000); } /* CREATE_NO_WINDOW */ c };
     #[cfg(windows)]
     { c.creation_flags(CREATE_NO_WINDOW); }
     c.kill_on_drop(true);
@@ -31,7 +31,7 @@ pub fn command(name: &str) -> tokio::process::Command {
 /// The same for a blocking std Command.
 pub fn std_command(name: &str) -> std::process::Command {
     #[allow(unused_mut)] // only Windows changes it
-    let mut c = std::process::Command::new(which(name).unwrap_or_else(|| PathBuf::from(name)));
+    let mut c = { #[allow(unused_mut)] let mut c = std::process::Command::new(which(name).unwrap_or_else(|| PathBuf::from(name))); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c };
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; c.creation_flags(CREATE_NO_WINDOW); }
     c
@@ -70,7 +70,7 @@ pub fn pid_alive(pid: u32) -> bool {
 #[cfg(unix)]
 pub fn kill_pid(pid: u32) { unsafe { libc::kill(pid as i32, libc::SIGTERM); } }
 #[cfg(not(unix))]
-pub fn kill_pid(pid: u32) { let _ = std::process::Command::new("taskkill").args(["/pid", &pid.to_string(), "/T", "/F"]).spawn(); }
+pub fn kill_pid(pid: u32) { let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("taskkill"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args(["/pid", &pid.to_string(), "/T", "/F"]).spawn(); }
 
 /// Windows: does this program run with administrator rights?
 #[cfg(windows)]
@@ -90,7 +90,7 @@ pub fn run_elevated(exe: &str, args: &str) -> bool {
 /// Starts `exe args` in `dir` in the background, its output appended to `log`, no window, not ended with its parent.
 pub fn spawn_detached(exe: &str, args: &[String], dir: &Path, log: &Path) -> std::io::Result<()> {
     let log = std::fs::OpenOptions::new().create(true).append(true).open(log)?;
-    let mut c = std::process::Command::new(exe);
+    let mut c = { #[allow(unused_mut)] let mut c = std::process::Command::new(exe); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c };
     c.args(args).current_dir(dir).stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log);
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; c.creation_flags(CREATE_NO_WINDOW | 0x0000_0008 /* DETACHED_PROCESS */); }

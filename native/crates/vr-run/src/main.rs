@@ -86,7 +86,7 @@ impl Back {
         if !self.behind { return; }
         let Some(node) = self.node.clone() else { return };
         self.stop().await;
-        let mut c = Command::new(&node);
+        let mut c = { #[allow(unused_mut)] let mut c = Command::new(&node); #[cfg(windows)] { c.creation_flags(0x0800_0000); } /* CREATE_NO_WINDOW */ c };
         c.arg(&self.script).arg("--no-tunnel").current_dir(self.script.parent().unwrap_or(Path::new(".")))
             .env("MILLS_SUPERVISED", "1").env("VR_BACK_PORT", self.port.to_string()).env("VR_FRONT_SECRET", &self.secret).env("VR_FRONT_MODULES", mods)
             .stdin(Stdio::null()).kill_on_drop(true);
@@ -97,7 +97,7 @@ impl Back {
     async fn start_alone(&mut self) {
         let Some(node) = self.node.clone() else { return };
         self.stop().await;
-        let mut c = Command::new(&node);
+        let mut c = { #[allow(unused_mut)] let mut c = Command::new(&node); #[cfg(windows)] { c.creation_flags(0x0800_0000); } /* CREATE_NO_WINDOW */ c };
         c.arg(&self.script).arg("--no-tunnel").current_dir(self.script.parent().unwrap_or(Path::new("."))).env("MILLS_SUPERVISED", "1").env("MILLS_PORT", self.port.to_string()).env("VR_SERVING", serving_label(&Serving::Javascript)).stdin(Stdio::null()).kill_on_drop(true);
         match c.spawn() { Ok(ch) => { log(&format!("the JavaScript hub alone on port {} (pid {})", self.port, ch.id().unwrap_or(0))); self.child = Some(ch); } Err(e) => log(&format!("could not start the JavaScript hub alone: {e}")) }
     }
@@ -121,7 +121,7 @@ fn which(name: &str) -> Option<PathBuf> {
     let names: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), format!("{name}.cmd"), name.into()] } else { vec![name.into()] };
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file())
 }
-fn modules_of(bin: &Path) -> String { std::process::Command::new(bin).arg("--modules").output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default() }
+fn modules_of(bin: &Path) -> String { { #[allow(unused_mut)] let mut c = std::process::Command::new(bin); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.arg("--modules").output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default() }
 
 /// GET /api/status on this machine: 200 within the timeout, or why not.
 async fn health(port: u16, timeout: u64) -> Result<(), String> {
@@ -149,7 +149,7 @@ async fn run_build(o: &Opts, commit: &str, idx: usize, back: Arc<Mutex<Back>>, s
     let mut crashes: VecDeque<Instant> = VecDeque::new();
     let started_fallback = Instant::now();
     loop {
-        let mut c = Command::new(&exe);
+        let mut c = { #[allow(unused_mut)] let mut c = Command::new(&exe); #[cfg(windows)] { c.creation_flags(0x0800_0000); } /* CREATE_NO_WINDOW */ c };
         c.args(["--port", &o.port.to_string()]);
         if o.alone { c.arg("--alone"); } else { c.args(["--back", &o.back.to_string()]); }
         c.args(["--root", &o.root.display().to_string()]).env("MILLS_SUPERVISED", "1").env("VR_FRONT_SECRET", &secret).env("VR_SERVING", &serving).stdin(Stdio::null()).kill_on_drop(true);

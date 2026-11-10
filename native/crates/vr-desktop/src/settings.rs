@@ -65,7 +65,7 @@ impl Store {
         vr_core::settings::private(&tmp);
         std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())?;
         #[cfg(windows)]
-        { let me = std::env::var("USERNAME").unwrap_or_default(); let _ = std::process::Command::new("icacls").args([&self.path.display().to_string(), "/inheritance:r", "/grant:r", &format!("{me}:F")]).output(); }
+        { let me = std::env::var("USERNAME").unwrap_or_default(); let _ = { #[allow(unused_mut)] let mut c = std::process::Command::new("icacls"); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c }.args([&self.path.display().to_string(), "/inheritance:r", "/grant:r", &format!("{me}:F")]).output(); }
         Ok(())
     }
     /// Applies a partial update from the Tools window ({ key: value }); empty secrets keep the stored ones.

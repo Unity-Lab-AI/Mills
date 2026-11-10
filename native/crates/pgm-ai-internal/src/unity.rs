@@ -126,7 +126,7 @@ impl Unity {
         if !self.via_node && up && !model && self.modelfile.exists() {
             println!("[vr-hub] Unity: loading {} into Ollama (one time, a few minutes)...", self.local_model);
             let dir = self.modelfile.parent().map(Path::to_path_buf);
-            let _ = tokio::process::Command::new(&cmd).args(["create", &self.local_model, "-f", &self.modelfile.display().to_string()]).current_dir(dir.unwrap_or_default()).status().await;
+            let _ = { #[allow(unused_mut)] let mut c = tokio::process::Command::new(&cmd); #[cfg(windows)] { c.creation_flags(0x0800_0000); } /* CREATE_NO_WINDOW */ c }.args(["create", &self.local_model, "-f", &self.modelfile.display().to_string()]).current_dir(dir.unwrap_or_default()).status().await;
             models = self.models(hub).await; model = has_brain(&models, &self.local_model);
         }
         let standin = if up && !model { pick_standin(&models, &self.local_model, &self.fallback) } else { String::new() };
@@ -346,7 +346,7 @@ mod brain_tests {
 fn radix36(mut n: u64) -> String { let d = b"0123456789abcdefghijklmnopqrstuvwxyz"; let mut v = vec![]; loop { v.push(d[(n % 36) as usize]); n /= 36; if n == 0 { break; } } v.reverse(); String::from_utf8(v).unwrap() }
 /// A program started in the background, on its own (it outlives the hub).
 fn detached(cmd: &str, args: &[&str], cwd: Option<&Path>) -> std::io::Result<()> {
-    let mut c = std::process::Command::new(cmd);
+    let mut c = { #[allow(unused_mut)] let mut c = std::process::Command::new(cmd); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c };
     c.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     if let Some(d) = cwd { c.current_dir(d); }
     #[cfg(unix)]
