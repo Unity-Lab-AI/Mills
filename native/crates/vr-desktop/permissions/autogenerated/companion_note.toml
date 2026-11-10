@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-companion-note"
+description = "Enables the companion_note command without any pre-configured scope."
+commands.allow = ["companion_note"]
+
+[[permission]]
+identifier = "deny-companion-note"
+description = "Denies the companion_note command without any pre-configured scope."
+commands.deny = ["companion_note"]

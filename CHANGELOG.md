@@ -7,6 +7,17 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.52.0 — 2026-11-10
+
+MINOR: Desktop Unity gets her switch, her settings and any look you ask for.
+
+### Added
+- **On / off and settings for Desktop Unity** (asked: "where the fuck is her setting and on off switch"): the tray has Desktop Unity: on / off and her look and settings; Tools has a Desktop Unity tab (on / off, how she looks + Change her look, her moves, the progress of a look being made). She stays off until switched on again, also after a restart.
+- **Any look, not only clothes** (asked: "if i want he to be a gorilla she should be or anyhting else i determine"): a look is now drawn fresh from the words ("a gorilla in a business suit", "the same goth girl in a red dress"), then filmed; Unity passes your words as the whole look.
+
+### Fixed
+- **A new look now shows**: the desktop window loads the clips made on this computer at start and when a look is ready (she kept the built-in look before), and reports what it loaded to its log. Windows and Linux app: vr-desktop rebuilt;  1.3.1, native pgm-ai-internal (the companion tool's look).
+
 ## 5.51.0 — 2026-11-10
 
 MINOR: Unity on your desktop, writing on pictures, real web photos, and a picture engine that never stays off.

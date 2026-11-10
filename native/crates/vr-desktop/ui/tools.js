@@ -14,6 +14,7 @@ for (const b of document.querySelectorAll('nav button')) b.onclick = () => {
   for (const x of document.querySelectorAll('nav button')) x.classList.toggle('on', x === b);
   for (const s of document.querySelectorAll('.tab')) s.classList.toggle('on', s.id === b.dataset.tab);
   if (b.dataset.tab === 'host') hostRefresh();
+  if (b.dataset.tab === 'unity') unityRefresh();
   if (b.dataset.tab === 'proxy') proxyRefresh();
   if (b.dataset.tab === 'machine') machineRefresh();
   if (b.dataset.tab === 'build') drawSaved();
@@ -164,3 +165,17 @@ $('uApply').onclick = async () => { $('uState').textContent = 'updating…'; try
   // the build check (vr-desktop --smoke): report that this page loaded, ran and reached the app
   if (location.hash === '#smoke') { const h = await call('host_status').catch((e) => ({ error: String(e) })); const p = await call('proxy_status'); await call('notify', { title: 'smoke-ok', body: JSON.stringify({ version: info.version, os: info.os, settings: !!S.hub, host: 'configured' in h || !!h.error, proxy: p.running === false }) }); }
 })();
+
+// ---------- Desktop Unity: on / off, her look, her moves ----------
+window.openTab = (t) => { const b = document.querySelector('nav button[data-tab="' + t + '"]'); if (b) b.click(); };
+async function unityRefresh() {
+  let s; try { s = await call('companion_status'); } catch (e) { return fail(e); }
+  const st = s.status || {};
+  $('uState').textContent = (s.on ? 'On' : 'Off') + (st.look ? ' · look: ' + st.look : ' · look: the built-in one') + (s.dressing ? ' · changing now: ' + (st.step || 'starting') : st.step && st.step !== 'done' ? ' · last change stopped at: ' + st.step : '');
+  $('uOut').textContent = s.dressing || (st.step && st.step !== 'done') ? s.log || '' : '';
+  if (s.dressing && document.querySelector('nav button[data-tab="unity"].on')) setTimeout(unityRefresh, 5000);
+}
+$('uOn').onclick = () => call('companion_set', { on: true }).then(unityRefresh, fail);
+$('uOff').onclick = () => call('companion_set', { on: false }).then(unityRefresh, fail);
+$('uApply').onclick = () => { const look = $('uLook').value.trim(); if (!look) return toast('Say how she should look.', true); call('companion', { action: 'outfit', look }).then(() => { toast('She is changing: a few minutes.'); setTimeout(unityRefresh, 1500); }, fail); };
+for (const b of document.querySelectorAll('[data-move]')) b.onclick = () => call('companion', { action: b.dataset.move }).catch(fail);

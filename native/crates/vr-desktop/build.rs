@@ -5,7 +5,7 @@ const COMMANDS: &[&str] = &[
     "settings_get", "settings_set", "pick_folder", "fs_list", "fs_read", "fs_write", "fs_delete", "fs_mkdir",
     "term_open", "term_write", "term_resize", "term_close", "run_start", "run_stop", "git", "proxy_start", "proxy_stop",
     "proxy_status", "update_check", "update_apply", "install_here",
-    "machine_status", "machine_link", "machine_act", "machine_service", "gpu_status", "gpu_act", "companion", "companion_last", "companion_clips",
+    "machine_status", "machine_link", "machine_act", "machine_service", "gpu_status", "gpu_act", "companion", "companion_last", "companion_clips", "companion_set", "companion_status", "companion_note",
 ];
 fn main() {
     println!("cargo:rustc-env=VR_TARGET={}", std::env::var("TARGET").unwrap_or_default());
