@@ -84,7 +84,7 @@ impl Unity {
             modelfile: p("modelfile", mills.join("..").join("Backrooms").join("models").join("unity-brain").join("Modelfile")), persona_file: root.join("assistant-persona.txt"),
             image_url: clean_url(&a["imageUrl"], "http://127.0.0.1:5124"), voice_url: clean_url(&a["voiceUrl"], "http://127.0.0.1:5123"), ears_url: clean_url(&a["speechUrl"], "http://127.0.0.1:5125"), via_node: a["via"] == json!("node"),
             image_ckpt: p("imageCheckpoint", mills.join("..").join("Unity 3D Equational Model").join("Unity 18+").join("models").join("realistic-vision-v51.safetensors")), images_dir: mills.join("Images"),
-            selfie_look: a["selfieLook"].as_str().unwrap_or("22 year old American college girl with an emo style, black hair with hot pink streaks, side bangs, eyeliner, natural skin tone, healthy glow, light freckles").into(), web: Web::new(&a), root: root.to_path_buf(), mills,
+            selfie_look: a["selfieLook"].as_str().unwrap_or("emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones").into(), web: Web::new(&a), root: root.to_path_buf(), mills,
             ollama_state: Mutex::default(), ollama_lock: tokio::sync::Mutex::new(()), services: tokio::sync::Mutex::new(()), brain_probe: Mutex::default(), stores: Mutex::default(), states: Mutex::default(), clients: Mutex::default(), pending: Mutex::default(), last: Mutex::default(), notices: Mutex::default(),
             runs: Mutex::default(), waiting: Mutex::default(), claude_out: Mutex::default(), caps: Mutex::new(None), secret: pgm_core_internal::crypto::random_hex(24), http: reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().expect("http"), a }
     }
@@ -289,8 +289,11 @@ impl Unity {
         let scene: String = s(a, "prompt").chars().take(1000).collect::<String>().trim().to_string();
         // slang the picture engine does not know, in the words it does ("tits out" drew her dressed)
         let mut scene = scene; for (w, p) in [("tits out","topless, bare breasts"), ("titties out","topless, bare breasts"), ("boobs out","topless, bare breasts"), ("tits","breasts"), ("titties","breasts"), ("boobs","breasts"), ("naked","nude"), ("butt naked","fully nude"), ("ass out","bare buttocks"), ("booty","buttocks"), ("nudes","nude photo")] { scene = regex::Regex::new(&format!(r"(?i)\b{}\b", regex::escape(w))).unwrap().replace_all(&scene, p).to_string(); }
-        let prompt = if truthy(&a["selfie"]) { format!("{scene}, she is a {}, candid photo", self.selfie_look) } else { scene };
-        self.render(hub, ci, "/txt2img", json!({ "prompt": prompt, "width": w, "height": h })).await
+        // her: Agent Gen's way (the likeness and body, then the moment; clothes only if the moment names them)
+        // no clothes named: fully nude (top and bottom); any clothes named: those, and nothing else is added
+        let bare = !regex::Regex::new(r"(?i)\b(wear|wearing|wears|dressed|dress|outfit|clothes|clothing|shirt|t-shirt|tee|top|blouse|hoodie|sweater|jacket|coat|skirt|jeans|pants|shorts|leggings|bikini|swimsuit|lingerie|bra|panties|thong|underwear|stockings|socks|boots|shoes|heels|uniform|suit|costume|robe|towel|apron|corset|bodysuit|onesie|pajamas|covered)\b").unwrap().is_match(&scene);
+        let prompt = if truthy(&a["selfie"]) { format!("photo of a 22 year old American woman, {}, {}{scene}, photorealistic, detailed face, natural light, sharp focus", self.selfie_look, if bare { "fully nude, " } else { "" }) } else { scene };
+        self.render(hub, ci, "/txt2img", json!({ "prompt": prompt, "width": w, "height": h, "steps": 30, "guidance": 7, "negative": "child, teen, underage, childlike, young girl, phone, extra fingers, mutated hands, black sclera, plastic skin, heavy makeup, white face paint, tight close up" })).await
     }
     async fn edit_image(&self, hub: &Arc<dyn AiHub>, ci: &mut Ci, a: &Value, route: &str) -> Value {
         if !self.ensure_image(hub).await { return json!({ "ok": false, "error": "The camera app on the host is not starting (image engine down)." }); }

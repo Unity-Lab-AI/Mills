@@ -25,7 +25,10 @@ ap.add_argument("--agentgen", default=os.environ.get("AGENTGEN_DIR") or r"D:\Age
 a = ap.parse_args()
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(a.out, exist_ok=True)
-LOOK = " ".join(a.look.split())[:200]
+LOOK = " ".join(a.look.split())[:400]
+import re
+# no clothes named: fully nude (top and bottom); any clothes named: those
+BARE = not re.search(r"(?i)\b(wear|wearing|wears|dressed|dress|outfit|clothes|clothing|shirt|t-shirt|tee|top|blouse|hoodie|sweater|jacket|coat|skirt|jeans|pants|shorts|leggings|bikini|swimsuit|lingerie|bra|panties|thong|underwear|stockings|socks|boots|shoes|heels|uniform|suit|costume|robe|towel|apron|corset|bodysuit|onesie|pajamas|covered)\b", LOOK)
 
 
 def say(msg):
@@ -89,9 +92,11 @@ base = base64.b64encode(open(a.base, "rb").read()).decode()
 # whatever it is told to be: the words are the picture
 png, ty = post(a.image + "/txt2img", {
     "width": 512, "height": 1024, "seed": int(time.time()) % 100000,
-    "prompt": "full body photo head to toe of %s, standing facing the camera, whole body visible from head to feet, feet visible, "
-              "plain light grey studio background, even soft light, photorealistic" % LOOK,
-    "negative": "cropped, cut off feet, cut off head, close-up, portrait crop, several people",
+    # Agent Gen's way: a person and their body, then the look; clothes only if the look names them
+    "steps": 30, "guidance": 7,
+    "prompt": "full body photo head to toe, feet visible, %s, " + ("fully nude, " if BARE else "") + "standing facing the camera, plain light grey studio background, photorealistic, detailed face, natural light, sharp focus" % (
+        LOOK if not LOOK.lower().startswith("herself") and not LOOK.startswith("emo hairstyle") else "photo of a 22 year old American woman, " + LOOK.split(":", 1)[-1]),
+    "negative": "child, teen, underage, childlike, young girl, phone, extra fingers, mutated hands, black sclera, plastic skin, heavy makeup, white face paint, tight close up, cropped, cut off feet, cut off head, several people",
 }, 300)
 if "image" not in ty:
     raise SystemExit("the image engine said: %s" % png[:200])

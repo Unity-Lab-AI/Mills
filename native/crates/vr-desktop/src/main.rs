@@ -348,7 +348,7 @@ fn companion_do(app: &AppHandle, what: String) -> R<bool> {
 /// Never the same her twice: the first time she shows in a run of the app, a fresh one of her is drawn and filmed
 /// (she shows her last one meanwhile).
 static FRESHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-const SELF_LOOK: &str = "the same 22 year old American college girl with an emo style, black hair with hot pink streaks, side bangs, eyeliner, natural skin tone, light freckles, in a casual emo outfit she picked today";
+const SELF_LOOK: &str = "emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones";
 fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
 static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 #[tauri::command]
