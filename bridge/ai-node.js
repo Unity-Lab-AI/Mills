@@ -110,7 +110,7 @@ const toMs = (t) => { const n = typeof t === 'number' ? (t < 1e12 ? t * 1000 : t
 function noteUsage(providerId, ev) {
   if (!/rate_limit/.test(String(ev.type || ''))) return;
   const info = ev.rate_limit_info || ev.rateLimitInfo || ev, kind = String(info.rateLimitType || info.rate_limit_type || info.type || '').toLowerCase();
-  const w = /seven|week|7d/.test(kind) ? 'seven_day' : /five|5h|session/.test(kind) ? 'five_hour' : null;
+  const w = /^(seven_day|weekly|7d)$/.test(kind) ? 'seven_day' : /^(five_hour|5h|session)$/.test(kind) ? 'five_hour' : null; // only the all-models windows: seven_day_opus / _sonnet / _overage_included are other limits
   if (!w) return;
   const u = usage[providerId] || (usage[providerId] = {}), prev = u[w] || {}, raw = info.utilization ?? info.usage ?? null, n = raw == null || raw === '' ? NaN : Number(raw);
   u[w] = { status: String(info.status || prev.status || ''), utilization: Number.isFinite(n) ? Math.max(0, Math.min(1, n > 1 ? n / 100 : n)) : prev.utilization ?? null, resetsAt: toMs(info.resetsAt || info.resets_at) || prev.resetsAt || null };

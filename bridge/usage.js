@@ -33,7 +33,7 @@ module.exports = function createUsage({ ROOT, config, readJson, writeJson }) {
     if (/rate_limit/.test(String(ev.type || ''))) { // e.g. { type: "rate_limit_event", rate_limit_info: { rateLimitType, status, utilization, resetsAt } }
       const info = ev.rate_limit_info || ev.rateLimitInfo || ev;
       const kind = String(info.rateLimitType || info.rate_limit_type || info.type || '').toLowerCase();
-      const key = /seven|week|7d/.test(kind) ? 'seven_day' : /five|5h|session/.test(kind) ? 'five_hour' : null;
+      const key = /^(seven_day|weekly|7d)$/.test(kind) ? 'seven_day' : /^(five_hour|5h|session)$/.test(kind) ? 'five_hour' : null; // only the all-models windows (not seven_day_opus / _sonnet / _overage_included)
       if (key) {
         // An event may carry only some fields: keep the last known reset time / utilization for the same
         // window instead of wiping them. Utilization is stored as a fraction 0–1 (a value above 1 is a percentage).
