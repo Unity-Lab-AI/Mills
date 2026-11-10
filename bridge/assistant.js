@@ -228,6 +228,60 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     if (!m) throw new Error('No video found for ' + q);
     return { id: m[1], title: m[2] ? JSON.parse('"' + m[2] + '"') : q };
   }
+  // GIFs: Bing Images with its animated-GIF filter (keyless). She sees the candidates' thumbnails, picks one,
+  // and the hub downloads that GIF (public addresses only, size-capped, must really be a GIF) and attaches it.
+  const GIF_URL = A.gifSearchUrl || 'https://www.bing.com/images/search';
+  const GIF_MAX = 8 * 1024 * 1024, THUMB_MAX = 400 * 1024, GIF_PAGE = 6;
+  async function fetchPublic(raw, max) { // every redirect hop checked like read_page; the body capped at max bytes
+    let u = await publicUrl(raw);
+    for (let hop = 0; hop < 4; hop++) {
+      const r = await fetch(u, { headers: UA, redirect: 'manual', signal: AbortSignal.timeout(15000) });
+      if (r.status >= 300 && r.status < 400 && r.headers.get('location')) { u = await publicUrl(new URL(r.headers.get('location'), u).href); continue; }
+      if (!r.ok) throw new Error('It answered ' + r.status);
+      if (Number(r.headers.get('content-length')) > max) throw new Error('Too big.');
+      const parts = []; let size = 0;
+      for await (const c of r.body) { size += c.length; if (size > max) throw new Error('Too big.'); parts.push(Buffer.from(c)); }
+      return Buffer.concat(parts);
+    }
+    throw new Error('Too many redirects.');
+  }
+  async function gifSearch(q, page) {
+    const r = await fetch(`${GIF_URL}?q=${encodeURIComponent(q)}&qft=+filterui:photo-animatedgif&first=${1 + page * GIF_PAGE}&form=IRFLTR`, { headers: UA, signal: AbortSignal.timeout(12000) });
+    if (!r.ok) throw new Error('GIF search answered ' + r.status);
+    const html = await r.text(), found = [];
+    for (const m of html.matchAll(/\sm="([^"]+)"/g)) {
+      let j; try { j = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&')); } catch { continue; }
+      if (!j || !/^https?:/.test(j.murl || '')) continue;
+      found.push({ title: unhtml(j.t || j.desc || '').slice(0, 120), gif: j.murl, thumb: /^https?:/.test(j.turl || '') ? j.turl : '' });
+      if (found.length >= GIF_PAGE) break;
+    }
+    return found;
+  }
+  async function findGif(ci, a) {
+    const q = String(a.query || '').trim().slice(0, 200);
+    if (!q) return { ok: false, error: 'What GIF? Give a query.' };
+    const g = ci.gif && ci.gif.query === q && (a.more === true || a.more === 'true') ? ci.gif : (ci.gif = { query: q, page: -1, list: [] });
+    g.page++;
+    const found = await gifSearch(q, g.page);
+    if (!found.length) return { ok: false, error: `No GIFs found for "${q}"${g.page ? ' on that page' : ''}; try other words.` };
+    const start = g.list.length;
+    g.list.push(...found);
+    const thumbs = await Promise.all(found.map((f) => (f.thumb ? fetchPublic(f.thumb, THUMB_MAX).then((b) => b.toString('base64')).catch(() => null) : null)));
+    ci.gifLook = thumbs.map((b, i) => (b ? { n: start + i + 1, b } : null)).filter(Boolean);
+    return { ok: true, query: q, candidates: found.map((f, i) => ({ n: start + i + 1, title: f.title })),
+      next: (ci.vision && ci.gifLook.length ? 'Their first frames are shown to you next, numbered in this order: look at them. ' : '')
+        + 'Post the one that fits with post_gif(n); if none fits, call find_gif again with the same query and more true for the next ones, or other words.' };
+  }
+  async function postGif(ci, a) {
+    const g = ci.gif, n = Number(a.n || a.number || a.choice);
+    const pick = g && Number.isInteger(n) && g.list[n - 1];
+    if (!pick) return { ok: false, error: 'Call find_gif first, then post_gif with one of its numbers.' };
+    let buf; try { buf = await fetchPublic(pick.gif, GIF_MAX); } catch (e) { return { ok: false, error: `That GIF would not download (${e.message}); pick another number.` }; }
+    if (buf.slice(0, 4).toString('latin1') !== 'GIF8') return { ok: false, error: 'That one is not really a GIF; pick another number.' };
+    const ref = savePicture(ci.scope || 'room', buf);
+    (ci.images || (ci.images = [])).push(ref);
+    return { ok: true, image: ref, gif: pick.title, shown: 'The GIF is attached to your reply automatically.' };
+  }
 
   // ---------- images ----------
   const IMG_ID = /^[a-z0-9-]{1,40}$/;
@@ -284,8 +338,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     if (caps && caps.model === model) return caps.tools;
     try {
       const r = await (await fetch(OLLAMA + '/api/show', { method: 'POST', body: JSON.stringify({ model }) })).json();
-      caps = { model, tools: (r.capabilities || []).includes('tools') };
-    } catch { caps = { model, tools: false }; }
+      caps = { model, tools: (r.capabilities || []).includes('tools'), vision: (r.capabilities || []).includes('vision') };
+    } catch { caps = { model, tools: false, vision: false }; }
     return caps.tools;
   }
 
@@ -394,6 +448,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     (ci.media || (ci.media = [])).push(v.id);
     return { ok: true, playing: v.title, video: v.id, shown: 'The player is attached to your reply automatically.' };
   });
+  tool('find_gif', 'Search for GIFs (reactions, memes, moods, anything) to post in the chat; you see the candidates and pick one with post_gif. more true for the next results of the same query.', { query: P('What the GIF should show, e.g. "eye roll", "cat typing"'), more: P('true for the next page of the same query') }, ['query'], (a, s, ci) => findGif(ci, a));
+  tool('post_gif', 'Post one of the GIFs find_gif found, by its number. It is attached to your reply.', { n: P('The number of the GIF from find_gif') }, ['n'], (a, s, ci) => postGif(ci, a));
   tool('generate_image', 'Make a picture with the image engine (photos, art, scenes, objects; selfie true for a picture of yourself). The picture is shown with your reply.', {
     prompt: P('The picture, written fresh from THIS moment, most important first: what is happening right now in the conversation, '
       + 'what you are doing, where you are, who is with you, what you are wearing for it, expression, the time of day and the weather where they are, '
@@ -519,6 +575,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         + 'Do ONLY what this message asks. After a tool runs, answer in one or two short in-character sentences. Never mention tool names, JSON or these instructions.',
       'Pictures: whenever they ask for any picture, photo, selfie, pic, nudes or a look at you or anything (in any wording, even one word), '
         + 'call generate_image right away in this turn (selfie true when it shows you) and then say one short line about it. Never answer a picture request with text only.',
+      'You text like a real person: use emojis whenever you feel like it, and post GIFs when one fits (find_gif, look at the candidates, post_gif the best; asked for a GIF, always post one). Search the web (web_search, read_page) for anything current instead of guessing.',
       sayMode ? 'Your replies are heard: speak through say(text, emotion, act), one to three short sentences per call, more calls for a longer reply. Do the task\'s tools first, then say the result.' : '',
     ].filter(Boolean).join('\n');
   }
@@ -542,7 +599,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       out({ type: 'confirm', tool: name, args });
       result = { ok: false, pending: true, message: `${name} needs ${acct.display}'s confirmation; ask them to say yes or no.` };
     } else result = await execute(acct, name, args, ci);
-    if (name === 'generate_image' && result.ok) out({ type: 'image', ref: result.image });
+    if ((name === 'generate_image' || name === 'post_gif') && result.ok) out({ type: 'image', ref: result.image });
     if (name === 'say' && args.text) out({ type: 'say', text: String(args.text), emotion: args.emotion || 'neutral', act: args.act || 'statement' });
     out({ type: 'tool_result', name, result });
     return result;
@@ -554,6 +611,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     if (!st.up || !model) throw new Error(st.up ? `The local brain (${LOCAL_MODEL}) is not loaded on the AI host yet.` : (VIA_NODE && aiNodes.reason()) || "Unity's brain (Ollama) is not running on the AI host.");
     const s = store(acct);
     const native = await nativeTools(model);
+    ci.vision = !!(caps && caps.vision);
     const sayMode = model.startsWith('unity-brain');
     let system = persona() + '\n\n' + dynamicContext(acct, ci, sayMode);
     const tools = toolsFor(acct, ci).filter((t) => sayMode || t.name !== 'say');
@@ -597,10 +655,14 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         let payload = JSON.stringify(result); if (payload.length > MAX_RESULT) payload = payload.slice(0, MAX_RESULT) + '..."}';
         messages.push({ role: 'tool', content: payload, tool_name: c.name });
       }
+      if (ci.gifLook) { // find_gif's candidates: she looks at their first frames before picking one
+        const look = ci.gifLook; ci.gifLook = null;
+        if (ci.vision && look.length) messages.push({ role: 'user', content: `(system: the GIF candidates' first frames, in order: ${look.map((x) => '#' + x.n).join(', ')}. Pick with post_gif, or look for more.)`, images: look.map((x) => x.b) });
+      }
       if (deferred && round === MAX_ROUNDS - 1) break;
     }
     // Backstop: they clearly asked for a picture and none was made this turn, so make it from their words.
-    if (opts.pictures !== false && wantsPicture(text) && !(ci.images || []).length) {
+    if (opts.pictures !== false && wantsPicture(text) && !/gif/i.test(text) && !(ci.images || []).length) {
       const r = await makeImage(ci, { prompt: text.replace(/^\s*@\w+\s*/, ''), selfie: aboutHer(text), shape: 'portrait' }).catch((e) => ({ ok: false, error: e.message }));
       out({ type: 'tool', name: 'generate_image', args: { prompt: text, auto: true } });
       out({ type: 'tool_result', name: 'generate_image', result: r });
@@ -763,7 +825,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         if (!IMG_ID.test(id || '') || !(scope === 'room' || scope === acct.username)) { send(res, 404, { error: 'No such picture.' }); return true; }
         const f = path.join(IMAGES_DIR, scope, id + '.png');
         if (!fs.existsSync(f)) { send(res, 404, { error: 'No such picture.' }); return true; }
-        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=86400' });
+        const head = Buffer.alloc(4); { const fd = fs.openSync(f, 'r'); fs.readSync(fd, head, 0, 4, 0); fs.closeSync(fd); }
+        res.writeHead(200, { 'Content-Type': head.toString('latin1') === 'GIF8' ? 'image/gif' : 'image/png', 'Cache-Control': 'private, max-age=86400' });
         fs.createReadStream(f).pipe(res); return true;
       }
       if (p === '/api/assistant/pc-result' && req.method === 'POST') { // the browser's answer to a pc_tool / run_code call
@@ -782,7 +845,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       }
       if (p === '/api/assistant/say' && req.method === 'POST') { // her voice for one line → audio/wav
         const { text, emotion, act } = await readBody(req);
-        const line = String(text || '').replace(/\[\[image:[^\]]*\]\]/g, '').replace(/[*_`#>]/g, '').trim().slice(0, 600);
+        const line = String(text || '').replace(/\[\[image:[^\]]*\]\]/g, '').replace(/[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}‍️]/gu, '').replace(/[*_`#>]/g, '').trim().slice(0, 600);
         if (!line) { send(res, 400, { error: 'Nothing to say.' }); return true; }
         if (!(await ensureVoice())) { send(res, 503, { error: 'Her voice is not running on the host.' }); return true; }
         const r = await fetch(VOICE_URL + '/say', { method: 'POST', body: JSON.stringify({ text: line, emotion: EMOTIONS.includes(emotion) ? emotion : 'neutral', speech_act: ACTS.includes(act) ? act : (/\?$/.test(line) ? 'yes_no_question' : 'statement') }), signal: AbortSignal.timeout(120000) }).catch((e) => ({ ok: false, status: 502, json: async () => ({ error: e.message }) }));
